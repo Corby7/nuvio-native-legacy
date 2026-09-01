@@ -179,6 +179,21 @@ static void frasePrimeira(char *dst, size_t n, const char *src, size_t maxBytes)
 // Sair da tela nao e erro: e o recorte. O plano recebe x/y negativos e a TV
 // descarta o que passa da borda, que e o unico jeito de tirar da vista uma
 // barra preta que esta DENTRO do quadro.
+//
+// MEDIDO NO APARELHO (OLED65C9, webOS 4.10), ciclando os modos com o fluxo
+// tocando e lendo o que saiu para o ACB em /tmp/nuvio.log:
+//   [video] janela -144,-81  2208x1242 cheia=0   <- Zoom leve   (1.15)
+//   [video] janela -326,-184 2573x1447 cheia=0   <- Zoom cinema (1.34)
+//   [video] janela -528,-297 2976x1674 cheia=0   <- Zoom ultra  (1.55)
+//   [video] janela 0,0       1920x1080 cheia=1   <- de volta ao encaixe
+// Sao exatamente os retangulos que o resolveAspectRender do web produz para um
+// quadro 16:9, ate o pixel. O ACB aceitou os quatro sem reclamar, inclusive os
+// tres com coordenada negativa e tamanho maior que a tela — ou seja, o recorte
+// por retangulo funciona nesta TV, que era a duvida que restava.
+//
+// NAO da para conferir isto por captura de tela: durante a reproducao o
+// /tmp/nuvio-shot.bmp sai PRETO onde esta o video, porque o plano fica atras da
+// superficie GL e o glReadPixels nao o enxerga. A prova e o log, nao a imagem.
 static int    aspecto = PLR_ASP_ORIGINAL;
 static Uint32 toastAte = 0;      // ate quando o aviso de modo fica de pe
 static char   dirPrefs[512];
@@ -805,6 +820,11 @@ void player_desenhar(Uint32 agora) {
     if (video_largura() >= 3840)      snprintf(res, sizeof res, "4K");
     else if (video_largura() >= 1920) snprintf(res, sizeof res, "HD");
     if (res[0]) selos[nSelos++] = res;
+    // MEDIDO nesta TV, linha do proprio log durante a reproducao de um MKV que
+    // o addon anunciava como Dolby Vision:
+    //   [video] HDR do pipeline: HDR10 (fonte afirmava DV=1)
+    // Era exatamente esse o caso em que o selo mentia.
+    //
     // "Dolby Vision" so quando o PIPELINE devolveu DolbyVision no videoInfo —
     // video_tem_dolby_vision nao le mais a afirmacao do addon. Esta MEDIDO que
     // nesta TV um MKV anunciado como DV volta HDR10; o selo dizia Dolby Vision
