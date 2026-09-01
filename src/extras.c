@@ -79,6 +79,9 @@ static struct { char user[40]; char texto[420]; int curtidas; } coment[EX_COMENT
 static int  nComent;
 static struct { char titulo[120], ano[8], imdb[16]; } rel[EX_REL_MAX];
 static int  nRel;
+static struct { int numero; int nEps; struct { int ep, nota; } eps[EX_EP_MAX]; }
+            temps[EX_TEMP_MAX];
+static int  nTemps;
 
 static char idPedido[24], idEmCurso[24];
 static int  serieEmCurso, fioVivo;
@@ -210,6 +213,44 @@ static void *buscar(void *arg) {
     pthread_mutex_unlock(&trava);
   }
 
+  // --- notas por episodio, so em serie ---
+  if (serieEmCurso) {
+    snprintf(url, sizeof url,
+             "https://api.trakt.tv/shows/%s/seasons?extended=episodes,full", id);
+    corpo = rede_baixar_com(url, 20, cab);
+    if (corpo) {
+      int nt = 0;
+      const char *p = strchr(corpo, '[');
+      p = p ? p + 1 : NULL;
+      while (p && nt < EX_TEMP_MAX) {
+        const char *f = js_fim(p);
+        int num = (int)js_num(p, f, "number", -1.0);
+        // Temporada 0 e "especiais"; o web filtra `value > 0`.
+        if (num > 0) {
+          const char *q = js_array(p, f, "episodes");
+          int ne = 0;
+          while (q && ne < EX_EP_MAX) {
+            const char *qf = js_fim(q);
+            int en = (int)js_num(q, qf, "number", -1.0);
+            double r = js_num(q, qf, "rating", 0.0);
+            if (en > 0) {
+              temps[nt].eps[ne].ep = en;
+              temps[nt].eps[ne].nota = (int)(r * 10.0 + 0.5);
+              ne++;
+            }
+            q = js_prox(qf);
+          }
+          if (ne > 0) { temps[nt].numero = num; temps[nt].nEps = ne; nt++; }
+        }
+        p = js_prox(f);
+      }
+      free(corpo);
+      pthread_mutex_lock(&trava);
+      if (!strcmp(id, idPedido)) nTemps = nt;
+      pthread_mutex_unlock(&trava);
+    }
+  }
+
   // --- relacionados ---
   snprintf(url, sizeof url, "https://api.trakt.tv/%s/%s/related?limit=%d",
            tipo, id, EX_REL_MAX);
@@ -250,8 +291,8 @@ static void *buscar(void *arg) {
 
   { int k, q = 0;
     for (k = 0; k < EX_NFONTES; k++) if (notas[k]) q++;
-    printf("[extras] %s -> notas=%d/%d coment=%d rel=%d\n", id, q, EX_NFONTES,
-           nComent, nRel); }
+    printf("[extras] %s -> notas=%d/%d coment=%d rel=%d temps=%d\n", id, q,
+           EX_NFONTES, nComent, nRel, nTemps); }
   fflush(stdout);
   pthread_mutex_lock(&trava);
   fioVivo = 0;
@@ -275,7 +316,7 @@ void extras_pedir(const char *imdb, int serie) {
   pthread_mutex_lock(&trava);
   if (!strcmp(idPedido, imdb)) { pthread_mutex_unlock(&trava); return; }
   snprintf(idPedido, sizeof idPedido, "%s", imdb);
-  notaTrakt = votosTrakt = nComent = nRel = 0;
+  notaTrakt = votosTrakt = nComent = nRel = nTemps = 0;
   memset(notas, 0, sizeof notas);
   if (fioVivo) { pthread_mutex_unlock(&trava); return; }
   snprintf(idEmCurso, sizeof idEmCurso, "%s", imdb);
@@ -298,6 +339,18 @@ const char *extras_comentario_texto(int i) {
 }
 int extras_comentario_curtidas(int i) {
   return (i >= 0 && i < nComent) ? coment[i].curtidas : 0;
+}
+
+int extras_n_temporadas(void) { return nTemps; }
+int extras_temporada_numero(int t) {
+  return (t >= 0 && t < nTemps) ? temps[t].numero : 0;
+}
+int extras_n_eps(int t) { return (t >= 0 && t < nTemps) ? temps[t].nEps : 0; }
+int extras_ep_numero(int t, int i) {
+  return (t >= 0 && t < nTemps && i >= 0 && i < temps[t].nEps) ? temps[t].eps[i].ep : 0;
+}
+int extras_ep_nota(int t, int i) {
+  return (t >= 0 && t < nTemps && i >= 0 && i < temps[t].nEps) ? temps[t].eps[i].nota : 0;
 }
 
 int extras_n_relacionados(void) { return nRel; }

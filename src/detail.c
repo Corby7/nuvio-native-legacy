@@ -55,10 +55,15 @@ static int  nivel = 0;
 // nao e um estado da MESMA pagina: e outra tela, que aparece e sai inteira.
 static int  pessoaAberta;
 static int  pessoaFoco;
+// Primeira LINHA visivel da filmografia. A grade tem 6 por linha e cabem duas
+// linhas na tela; sem isto o resto dos creditos era cortado sem aviso.
+static int  pessoaLinha;
 static int  pedAbrir = -1;
 // Foco DENTRO da aba "Mais como este", que e uma lista vertical propria e nao
 // uma das fileiras horizontais do focus.c.
 static int  relFoco;
+// Temporada escolhida no painel de notas por episodio (indice em extras).
+static int  ratTemp;
 #define PES_FOTO_W   280.0f
 #define PES_FOTO_H   420.0f
 #define PES_COL_X    (NV_DETP_X + PES_FOTO_W + 56.0f)
@@ -228,7 +233,7 @@ void detail_abrir(const HomeItem *it) {
   item = *it;
   aberto = 1; saindo = 0; nivel = 0; botao = 0;
   t = 0.0f; pg = 0.0f; scrollY = 0.0f; abaInfo = 0; pessoaAberta = 0;
-  relFoco = 0; pedAbrir = -1;
+  relFoco = 0; pedAbrir = -1; ratTemp = 0;
   idx = it->indice;
   // Nota do Trakt, comentarios e relacionados. Pedido na ABERTURA e nao no
   // desenho: as abas so aparecem depois que o dado chega, e pedir no desenho
@@ -334,6 +339,15 @@ void detail_evento(const SDL_Event *e) {
     // A aba "Mais como este" e uma LISTA VERTICAL dentro da fileira do elenco.
   // Enquanto ela estiver aberta, cima/baixo andam nela em vez de trocar de
   // fileira — e o mesmo que o web faz, onde a lista tem foco proprio.
+  // No painel de notas por episodio, esquerda/direita trocam de TEMPORADA.
+  if (e->type == SDL_KEYDOWN && foco.fileira == SEC_ELENCO && !pessoaAberta &&
+      abaIdDe(abaInfo) == ABA_AVALIACOES && ehSerie() &&
+      extras_n_temporadas() > 0) {
+    int nt = extras_n_temporadas();
+    if (e->key.keysym.sym == SDLK_RIGHT && ratTemp + 1 < nt) { ratTemp++; return; }
+    if (e->key.keysym.sym == SDLK_LEFT  && ratTemp > 0)      { ratTemp--; return; }
+  }
+
   if (e->type == SDL_KEYDOWN && foco.fileira == SEC_ELENCO &&
       abaIdDe(abaInfo) == ABA_RELACIONADOS && !pessoaAberta) {
     int n = extras_n_relacionados();
@@ -361,9 +375,13 @@ void detail_evento(const SDL_Event *e) {
         case SDLK_RIGHT: if (pessoaFoco + 1 < n) pessoaFoco++; return;
         case SDLK_UP:
           if (pessoaFoco >= PES_POR_LINHA) pessoaFoco -= PES_POR_LINHA;
+          if (pessoaFoco / PES_POR_LINHA < pessoaLinha) pessoaLinha--;
           return;
         case SDLK_DOWN:
           if (pessoaFoco + PES_POR_LINHA < n) pessoaFoco += PES_POR_LINHA;
+          // A grade ROLA quando o foco passa da segunda linha visivel. Duas
+          // linhas cabem na tela; a terceira em diante entra empurrando.
+          if (pessoaFoco / PES_POR_LINHA > pessoaLinha + 1) pessoaLinha++;
           return;
         case SDLK_AC_BACK: pessoaAberta = 0; return;
         case SDLK_RETURN:
@@ -440,6 +458,7 @@ void detail_evento(const SDL_Event *e) {
                      ci->elenco[foco.coluna].foto);
         pessoaAberta = 1;
         pessoaFoco = 0;
+        pessoaLinha = 0;
       }
     } else if (foco.fileira == SEC_ABAS_INFO) {
       abaInfo = foco.coluna;
@@ -1221,6 +1240,72 @@ static void cartaoNota(float x, float y, const char *marca, const char *valor,
 // metacritic, letterboxd. So entra a fonte que TEM nota — o web faz o mesmo
 // (`.filter(([,,value]) => value != null)`), e uma fileira de "-" nao informa
 // nada. IMDb vem do catalogo quando o mdbList nao respondeu por ele.
+// PASTILHA DE NOTA DE EPISODIO. As cores e as faixas sao as do web
+// (ratingToneClass, metaDetailsScreen.js:912, e as regras
+// .series-episode-rating-chip.*): >=9 excelente, >=8 otimo, >=7.5 bom,
+// >=7 misto, >=6 ruim, >0 pessimo. O numero e a nota do Trakt, nao do IMDb.
+static void corDaNota(int notaDec, float *r, float *g, float *b, float *tx) {
+  float rr, gg, bb, t;
+  if      (notaDec >= 90) { rr=0.078f; gg=0.643f; bb=0.302f; t=0.97f; }  /* #14a44d */
+  else if (notaDec >= 80) { rr=0.180f; gg=0.733f; bb=0.404f; t=0.97f; }  /* #2ebb67 */
+  else if (notaDec >= 75) { rr=0.243f; gg=0.722f; bb=0.400f; t=0.97f; }  /* #3eb866 */
+  else if (notaDec >= 70) { rr=0.906f; gg=0.706f; bb=0.196f; t=0.10f; }  /* #e7b432 */
+  else if (notaDec >= 60) { rr=0.906f; gg=0.298f; bb=0.235f; t=0.97f; }  /* #e74c3c */
+  else if (notaDec >  0)  { rr=0.388f; gg=0.224f; bb=0.455f; t=0.97f; }  /* #633974 */
+  else                    { rr=0.925f; gg=0.816f; bb=0.239f; t=0.09f; }  /* #ecd03d */
+  *r = rr; *g = gg; *b = bb; *tx = t;
+}
+
+#define RAT_PIL_W    86.0f
+#define RAT_PIL_H    62.0f
+#define RAT_PIL_GAP  10.0f
+#define RAT_TEMP_H   38.0f
+#define RAT_TEMP_GAP 10.0f
+
+// Painel de SERIE: fileira de temporadas e a grade de pastilhas por episodio.
+// E o renderSeriesRatingsPanel do web, que ate agora nao tinha fonte aqui — a
+// aba de serie caia nos mesmos cartoes do filme.
+static void desenhaNotasEpisodio(float x, float y, float a) {
+  int nt = extras_n_temporadas(), t, i, ne;
+  if (ratTemp >= nt) ratTemp = 0;
+  for (t = 0; t < nt; t++) {
+    char rot[8];
+    float bx = x + t * (58.0f + RAT_TEMP_GAP);
+    GfxRect r = { bx, y, 58.0f, RAT_TEMP_H };
+    int sel = (t == ratTemp);
+    snprintf(rot, sizeof rot, "T%d", extras_temporada_numero(t));
+    gfx_cor(r, 0.5f, 1, 1, 1, (sel ? 0.28f : 0.14f) * a);
+    { TxtLinha l = txt_linha(TXT_DET_META2, rot, 241, 247, 254, 255);
+      txt_desenhar_alpha(l, bx + (58.0f - l.w) * 0.5f,
+                         y + (RAT_TEMP_H - l.h) * 0.5f, a); }
+  }
+  ne = extras_n_eps(ratTemp);
+  { float gy = y + RAT_TEMP_H + 18.0f;
+    for (i = 0; i < ne; i++) {
+      float gx = x + i * (RAT_PIL_W + RAT_PIL_GAP);
+      int nd = extras_ep_nota(ratTemp, i);
+      float cr, cg, cb, tx;
+      char ep[8], nv[8];
+      if (gx + RAT_PIL_W > NV_TELA_W - NV_DETP_X) break;
+      corDaNota(nd, &cr, &cg, &cb, &tx);
+      gfx_cor((GfxRect){ gx, gy, RAT_PIL_W, RAT_PIL_H }, 14.0f / RAT_PIL_H,
+              cr, cg, cb, a);
+      snprintf(ep, sizeof ep, "E%d", extras_ep_numero(ratTemp, i));
+      if (nd > 0) snprintf(nv, sizeof nv, "%.1f", nd / 10.0f);
+      else        snprintf(nv, sizeof nv, "-");
+      // 14/700 no rotulo e 28/800 no valor, do web
+      // (.series-episode-rating-ep e .series-episode-rating-val). TXT_TITULO3 e
+      // 48 e estourava a pastilha de 62 — o "E1" era empurrado para fora dela.
+      { int c = (int)(tx * 255.0f);
+        TxtLinha le = txt_linha(TXT_MINI, ep, c, c, c, 255);
+        TxtLinha lv = txt_linha(TXT_ROW_TITULO, nv, c, c, c, 255);
+        float h = le.h + 2.0f + lv.h;
+        float yb = gy + (RAT_PIL_H - h) * 0.5f;
+        txt_desenhar_alpha(le, gx + (RAT_PIL_W - le.w) * 0.5f, yb, a);
+        txt_desenhar_alpha(lv, gx + (RAT_PIL_W - lv.w) * 0.5f, yb + le.h + 2.0f, a); }
+    } }
+}
+
 static void desenhaAvaliacoes(float x, float y, float a) {
   int i, col = 0;
   for (i = 0; i < EX_NFONTES; i++) {
@@ -1305,7 +1390,13 @@ static void desenhaSecao(int r, float a, Uint32 agora) {
   { int aba = abaIdDe(abaInfo);
     float yAba = NV_DETP_EL_Y - scrollY + 40.0f;
     if (r == SEC_ELENCO && aba == ABA_AVALIACOES) {
-      desenhaAvaliacoes(NV_DETP_X, yAba, a); return;
+      // Serie com notas por episodio mostra o painel do web; o resto (filme, ou
+      // serie sem essa fonte) cai nos cartoes de nota.
+      if (ehSerie() && extras_n_temporadas() > 0)
+        desenhaNotasEpisodio(NV_DETP_X, yAba, a);
+      else
+        desenhaAvaliacoes(NV_DETP_X, yAba, a);
+      return;
     }
     if (r == SEC_ELENCO && aba == ABA_RELACIONADOS) {
       desenhaRelacionados(NV_DETP_X, yAba, a); return;
@@ -1399,7 +1490,8 @@ static void desenhaPessoa(float a) {
     for (i = 0; i < n; i++) {
       int col = i % PES_POR_LINHA, lin = i / PES_POR_LINHA;
       float x = x0 + col * (PES_CARD_W + PES_CARD_GAP);
-      float y = 96.0f + lt.h + 28.0f + lin * (PES_CARD_H + 92.0f);
+      float y = 96.0f + lt.h + 28.0f + (lin - pessoaLinha) * (PES_CARD_H + 92.0f);
+      if (lin < pessoaLinha) continue;
       GfxRect r = { x, y, PES_CARD_W, PES_CARD_H };
       const char *po = pessoa_credito_poster(i);
       GLuint t = po[0] ? tex_obter(po) : 0;

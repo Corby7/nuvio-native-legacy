@@ -49,6 +49,22 @@ const char *extras_comentario_usuario(int i);
 const char *extras_comentario_texto(int i);
 int  extras_comentario_curtidas(int i);
 
+// NOTAS POR EPISODIO, para o painel que o web mostra em SERIE no lugar dos
+// cartoes (renderSeriesRatingsPanel, metaDetailsScreen.js:3843): uma fileira de
+// temporadas e uma grade de pastilhas "E<n> / nota", coloridas por faixa.
+//
+// Vem de UMA chamada: /shows/<id>/seasons?extended=episodes,full devolve todas
+// as temporadas com a nota de cada episodio junto. Pedir episodio a episodio
+// seriam dezenas de chamadas para desenhar uma aba.
+#define EX_TEMP_MAX 12
+#define EX_EP_MAX   30
+int  extras_n_temporadas(void);
+int  extras_temporada_numero(int t);
+int  extras_n_eps(int t);
+int  extras_ep_numero(int t, int i);
+// Nota do episodio em DECIMOS (72 = 7.2); 0 = sem nota.
+int  extras_ep_nota(int t, int i);
+
 // Titulos relacionados, para a aba "Mais como este".
 int  extras_n_relacionados(void);
 const char *extras_relacionado_titulo(int i);
