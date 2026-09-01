@@ -277,12 +277,46 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
   "  gl_FragColor = vec4(c, uCor.a);\n"
   "}\n",
+
+  // GFX_ANEL — contorno, cheio ou tracejado, sem miolo.
+  //
+  // Existe porque o selo de "episodio nao assistido" da pagina de titulo e um
+  // ANEL, e com GFX_COR saia um disco cinza. Pintar o miolo da cor do fundo nao
+  // resolve: ali o veu esta em 0.06 e o fundo aparece atraves dele, entao o
+  // "tampao" ficaria visivel como uma mancha mais clara.
+  //
+  // O SDF ja existente da a distancia com sinal ate a borda; um anel e
+  // simplesmente `abs(d) < espessura`. Por isso este modo custa o mesmo que
+  // GFX_COR e serve para retangulo arredondado tanto quanto para circulo (raio
+  // 0.5 no menor lado = circulo).
+  //
+  // Parametros, reaproveitando uPar para nao criar uniform novo:
+  //   uPar.x = espessura do traco, na mesma escala normalizada de uRaio
+  //   uPar.y = numero de tracos do pontilhado; 0 (ou <0.5) = anel continuo
+  "void main(){\n"
+  "  float d = sdf(vUv, uRaio, uAspect);\n"
+  "  float esp = max(uPar.x, 0.0015);\n"
+  // A borda externa e a interna recebem o mesmo esmaecimento, senao o anel fica
+  // com o lado de dentro serrilhado e o de fora liso.
+  "  float m = smoothstep(esp, esp*0.55, abs(d));\n"
+  "  if (m <= 0.002) discard;\n"
+  "  if (uPar.y > 0.5) {\n"
+  "    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+  "    float t = fract((atan(p.y, p.x) / 6.2831853 + 0.5) * uPar.y);\n"
+  // Ciclo de 50%: metade traco, metade vao, com as pontas suavizadas para o
+  // pontilhado nao cintilar quando o circulo e pequeno.
+  "    m *= smoothstep(0.56, 0.44, t);\n"
+  "    if (m <= 0.002) discard;\n"
+  "  }\n"
+  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "}\n",
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
 static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
   {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
-  {0,1}, {0,1}
+  {0,1}, {0,1},
+  {1,0}    /* GFX_ANEL */
 };
 
 static GLuint compila(GLenum tipo, const char *src) {

@@ -575,10 +575,31 @@ static void *buscarEps(void *u) {
         js_texto(p, f, "thumbnail", e->thumb, sizeof e->thumb);
         { char d[24] = "";
           js_texto(p, f, "released", d, sizeof d);
-          // "2024-04-11T..." -> "11/04/2024"
-          if (strlen(d) >= 10 && d[4] == '-')
-            snprintf(e->data, sizeof e->data, "%c%c/%c%c/%c%c%c%c",
-                     d[8], d[9], d[5], d[6], d[0], d[1], d[2], d[3]); }
+          // "2024-11-15T..." -> "15 de novembro de 2024".
+          //
+          // O web NAO escreve 15/11/2024: usa
+          // `toLocaleDateString(undefined, {month:"long", day:"numeric",
+          // year:"numeric"})` (metaDetailsScreen.js:1387), e no locale do
+          // aparelho isso da a data por extenso. O formato numerico que estava
+          // aqui era invencao do port.
+          //
+          // Por extenso e sempre: quem decide encurtar para so o ano e quem
+          // DESENHA, conforme `showFullReleaseDate` — a preferencia pode mudar
+          // com o app aberto, e a descoberta so roda uma vez. O ano sao os
+          // quatro ultimos caracteres da string.
+          static const char *MES[12] = {
+            "janeiro", "fevereiro", "mar\xc3\xa7o", "abril", "maio", "junho",
+            "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"
+          };
+          if (strlen(d) >= 10 && d[4] == '-') {
+            int mes = (d[5] - '0') * 10 + (d[6] - '0');
+            int dia = (d[8] - '0') * 10 + (d[9] - '0');
+            if (mes >= 1 && mes <= 12)
+              snprintf(e->data, sizeof e->data, "%d de %s de %c%c%c%c",
+                       dia, MES[mes - 1], d[0], d[1], d[2], d[3]);
+            else
+              snprintf(e->data, sizeof e->data, "%c%c%c%c", d[0], d[1], d[2], d[3]);
+          } }
         n++;
       }
       p = js_prox(f);

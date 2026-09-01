@@ -188,7 +188,11 @@
 // Escala tipografica do tvOS em 1080p (1pt = 1px). Os pesos vem do arquivo:
 // a TV so tem Light e Regular da fonte LG, entao o negrito e sintetico.
 #define NV_FT_TITULO1    76
-#define NV_FT_TITULO2    57
+// 56 e nao os 57 da escala do tvOS: hoje este estilo so serve a
+// `.library-page-title` e aos titulos de estado vazio da busca e da biblioteca,
+// e os tres medem 56 no web. O cabecalho da pagina de titulo do app da Apple,
+// que era o dono do 57, nao existe mais no port.
+#define NV_FT_TITULO2    56
 #define NV_FT_TITULO3    48
 #define NV_FT_HEADLINE   38
 // Os corpos pequenos ficam ABAIXO da tabela do tvOS de proposito. A escala

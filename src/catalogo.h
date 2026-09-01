@@ -79,7 +79,14 @@ typedef struct {
   int  temporada, episodio;
   char nome[120];
   char duracao[16];    // "38 min"; vazio quando o Cinemeta nao informa
-  char data[16];       // "27/01/2023"
+  // Data por EXTENSO, como o web: "27 de janeiro de 2023". Ele usa
+  // toLocaleDateString com {month:"long", day:"numeric", year:"numeric"}
+  // (metaDetailsScreen.js:1387) — "27/01/2023" era invencao do port. 16 bytes
+  // nao cabiam: "15 de novembro de 2024" tem 22.
+  //
+  // Quem desenha encurta para so o ano quando `showFullReleaseDate` esta
+  // desligado (ajustes_data_completa()); o ano sao os 4 ultimos caracteres.
+  char data[40];
   char sinopse[420];
   char thumb[512];     // still do episodio; vazio cai na arte do titulo
 } CatEp;

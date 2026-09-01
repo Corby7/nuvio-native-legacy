@@ -28,7 +28,20 @@ typedef enum {
   // parametrizado porque as paradas estao anotadas junto das medidas, e e assim
   // que este shader vem sendo mantido.
   GFX_HERO_CHEIO = 12,
-  GFX_NMODOS = 13
+  // Contorno sem miolo, cheio ou tracejado. Usa o mesmo SDF dos outros modos —
+  // um anel e `abs(d) < espessura` —, entao serve para retangulo arredondado
+  // tanto quanto para circulo (raio 0.5 = circulo).
+  //
+  // Passe a espessura em `parx`, na mesma escala normalizada de `raio`, e o
+  // numero de tracos do pontilhado em `pary` (0 = anel continuo). Exemplo, o
+  // circulo tracejado de "episodio nao assistido":
+  //
+  //   gfx_rect(r, 0, GFX_ANEL, 0, 0.06f, 12.0f, 0.5f, 1,1,1, 0.55f);
+  //
+  // Nao pinte o miolo da cor do fundo para simular anel: onde o veu esta em
+  // 0.06 o fundo aparece atraves dele e o tampao se ve como mancha clara.
+  GFX_ANEL = 13,
+  GFX_NMODOS = 14
 } GfxModo;
 
 typedef struct {

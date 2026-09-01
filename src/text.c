@@ -35,18 +35,37 @@ static unsigned long relogio = 1;
 int    txt_rasterizadas = 0;
 double txt_ms = 0.0;
 
-// Peso por estilo, seguindo a tabela do tvOS: os estilos sao Medium e a versao
-// "emphasized" e Bold. O titulo de um filme aparece emphasized, os cabecalhos
-// e o corpo nao. Antes isto era negrito SINTETICO sobre a fonte da LG, que
-// engorda os tracos sem redesenhar nada — perto de um Bold de verdade a
-// diferenca aparece logo nos titulos grandes.
+// Peso por estilo. Cada peso e um ARQUIVO de verdade da Inter Display
+// (Regular 400, Medium 500, Bold 700) — nao ha passada repetida nem
+// deslocamento sub-pixel para simular peso. O negrito sintetico
+// (TTF_SetFontStyle) so entra nas familias de RESERVA (LG, Droid), que nao tem
+// arquivo Bold proprio; ver o `if (c > 0 && ...)` em txt_iniciar. Isso importa
+// porque negrito sintetico engorda os tracos sem redesenhar nada, e ao lado de
+// um Bold de verdade a diferenca aparece logo nos titulos grandes.
+//
+// COMO O PESO 600 DO WEB E RESOLVIDO, e por que nao ha um valor unico.
+// A Inter embarcada nao tem SemiBold, e acrescentar o arquivo esta fora de
+// questao (o ipk ja tem 166 MB). Sobra escolher entre Medium (erra 100 para
+// baixo) e Bold (erra 100 para cima), e a escolha e OPTICA, nao aritmetica:
+//
+//   texto CLARO sobre fundo escuro parece mais fino do que e  -> Bold
+//   texto ESCURO sobre pilula clara parece mais grosso do que e -> Medium
+//
+// Por isso `.home-row-title` (600, branco no escuro) fica em Bold e
+// `.series-primary-btn` (600, preto na pilula branca de 96px) fica em Medium.
+// Sao dois destinos diferentes para o mesmo 600 de propósito, e nao um
+// descuido — sem a regra escrita aqui, a proxima pessoa "conserta" um dos dois
+// e desalinha a tela.
 enum { PESO_REGULAR, PESO_MEDIUM, PESO_BOLD };
 static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_TITULO1,  PESO_BOLD   },   // titulo do filme na tela de detalhe
-  // O cabecalho da pagina do titulo e LEVE e muito espacado no app da Apple —
-  // conferido lado a lado numa captura do aparelho. Em Bold, como eu tinha,
-  // ele vira um grito no topo da tela em vez de uma etiqueta.
-  { NV_FT_TITULO2,  PESO_REGULAR },  // cabecalho da pagina
+  // ERA PESO_REGULAR, pelo cabecalho espacado da pagina de titulo do app da
+  // Apple. Esse cabecalho NAO EXISTE MAIS: a tela de detalhe do web e um
+  // documento rolavel sem cabecalho fixo, e o do app da Apple saiu do port.
+  // Hoje TXT_TITULO2 e usado so por "Biblioteca" (.library-page-title 56/600) e
+  // pelos titulos de estado vazio da busca e da biblioteca — os TRES em peso
+  // 600 no web. Regular errava 200 para baixo em todos.
+  { NV_FT_TITULO2,  PESO_BOLD    },  // .library-page-title e estados vazios
   { NV_FT_TITULO3,  PESO_BOLD   },   // nome dentro do card destaque
   { NV_FT_HEADLINE, PESO_MEDIUM },   // cabecalho de fileira
   { NV_FT_BODY,     PESO_MEDIUM },   // rotulo de botao, titulo de episodio
