@@ -63,6 +63,14 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_PLR_TITULO, PESO_BOLD    },
   { NV_FT_PLR_CORPO,  PESO_REGULAR },
   { NV_FT_ROW_TITULO, PESO_BOLD    },  // .home-row-title (600)
+  // Tela de detalhe, medidos no app web. O peso 600 do rotulo do botao nao
+  // existe no pacote da Inter embarcada (so Regular, Medium e Bold): fica em
+  // MEDIUM, que erra 100 para baixo, e nao em Bold, que erraria 100 para cima e
+  // engorda visivelmente numa pilula clara de 96px de altura.
+  { NV_FT_DET_BOTAO, PESO_MEDIUM  },
+  { NV_FT_DET_META,  PESO_REGULAR },
+  { NV_FT_DET_SIN,   PESO_REGULAR },
+  { NV_FT_DET_META2, PESO_REGULAR },
 };
 
 int txt_iniciar(const char *dirRecursos) {
@@ -208,6 +216,37 @@ float txt_tracking(TxtEstilo estilo, const char *s, int r, int g, int b,
     larg += l.w + tracking;
   }
   return larg > 0.0f ? larg - tracking : 0.0f;
+}
+
+// Declarada em text.h desde o inicio e NUNCA implementada. Ninguem chamava,
+// entao o link passava; a primeira chamada derrubou o build ARM com
+// "undefined reference". No Mac isso NAO aparece: `cc -fsyntax-only` num
+// arquivo solto nao linka nada.
+TxtLinha txt_linha_corta(TxtEstilo estilo, const char *s, int r, int g, int b,
+                         int a, float maxW) {
+  TxtLinha l = txt_linha(estilo, s, r, g, b, a);
+  if (!s || !*s || (float)l.w <= maxW) return l;
+  char buf[512];
+  size_t n = strlen(s);
+  if (n >= sizeof buf - 4) n = sizeof buf - 4;
+  memcpy(buf, s, n); buf[n] = 0;
+  // Corta por PALAVRA enquanto houver espaco; so quando sobra uma palavra so e
+  // que se corta no meio dela. Cortar sempre por caractere deixa meia palavra
+  // antes das reticencias, e isso se le como texto corrompido, nao como corte.
+  while (n > 0) {
+    size_t corte = n;
+    while (corte > 0 && buf[corte - 1] != ' ') corte--;
+    if (corte > 1) n = corte - 1; else n--;
+    // nunca parar no meio de um caractere UTF-8: meio caractere vira tofu
+    while (n > 0 && ((unsigned char)buf[n] & 0xC0) == 0x80) n--;
+    buf[n] = 0;
+    if (!n) break;
+    char t[520];
+    snprintf(t, sizeof t, "%s\xe2\x80\xa6", buf);
+    l = txt_linha(estilo, t, r, g, b, a);
+    if ((float)l.w <= maxW) return l;
+  }
+  return txt_linha(estilo, "\xe2\x80\xa6", r, g, b, a);
 }
 
 float txt_bloco(TxtEstilo estilo, const char *s, int r, int g, int b,

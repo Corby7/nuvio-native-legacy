@@ -254,7 +254,12 @@ void app_desenhar(Uint32 agora) {
       }
     }
     detail_desenhar(agora);
-    if (menu_visivel()) menu_desenhar(agora);
+    // A rail NAO existe na tela de detalhe do app web: ela e full-bleed e a
+    // coluna de conteudo comeca em x=72, ou seja, DENTRO do que a rail ocuparia.
+    // Com a rail por cima, o logo, o botao "Reproduzir" e a linha de duracao
+    // ficavam cortados pela faixa preta de 144px — foi o primeiro defeito que
+    // apareceu na captura do aparelho depois do port.
+    if (menu_visivel() && !detail_aberto()) menu_desenhar(agora);
   }
   player_desenhar(agora);
   stream_folha_desenhar(agora);

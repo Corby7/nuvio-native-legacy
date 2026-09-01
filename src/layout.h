@@ -160,6 +160,12 @@
 // .home-row-title do web: 26px, peso 600. O nativo usava HEADLINE (38), e era
 // isso que fazia o titulo da fileira invadir o card logo abaixo dele.
 #define NV_FT_ROW_TITULO 26
+// Tela de DETALHE, medidos no app web rodando (getBoundingClientRect e
+// getComputedStyle sobre .series-detail-shell), nao lidos da folha.
+#define NV_FT_DET_BOTAO  25   // .series-primary-btn (peso 600)
+#define NV_FT_DET_META   25   // .series-detail-support e .detail-meta-row
+#define NV_FT_DET_SIN    26   // .series-detail-description
+#define NV_FT_DET_META2  23   // .detail-meta-row.secondary
 #define NV_FT_PLR_TITULO 56   // .player-title
 #define NV_FT_PLR_CORPO  32   // .player-subtitle e .player-time-label
 // Entrelinha (leading) OFICIAL de cada estilo. Usar a altura que o SDL_ttf
@@ -224,6 +230,59 @@
 // mapeada para 1920x1080 exatos; validacao: o centro do cartao caiu em 957 de
 // 960 esperado). Cartao 1674x?? com margem lateral 120 e superior 38 — e ele
 // NAO tem margem inferior: e cortado pela base da tela.
+// ---------------------------------------------------------------------------
+// Tela de DETALHE — layout FULL-BLEED do app web.
+//
+// Tudo MEDIDO no app web rodando em 1920x1080, com o titulo "The Whisper Man"
+// aberto (getBoundingClientRect). O que existia aqui antes — cartao com moldura
+// de 120px, carrossel de vizinhos, tres niveis de zoom — e o padrao do app da
+// Apple TV, e nao o desta variante. O web nao tem cartao: tem o backdrop
+// cobrindo 1920x1080 em (0,0), a vinheta horizontal por cima, e UMA coluna de
+// conteudo ancorada na base.
+//
+//   .detail-hero-section   padding 0 96 32 72, justify-content: flex-end
+//   .series-detail-logo    261x104 em (72, 445)   [altura fixa 104, max-w 710]
+//   .series-detail-actions 1752x108 em (72, 589), padding 6, gap 24
+//     .series-primary-btn  298x96  em (78, 595)  raio 64, fonte 25/600
+//                          padding lateral 48, gap icone-texto 16, icone 36
+//     .series-circle-btn   84x84   em (439|586|734, 601)  raio 999, bg #222
+//   .series-detail-support 1040x36  em (72, 727)  fonte 25/400 rgb(179,179,179)
+//   .series-detail-descr.  1040x117 em (72, 787)  fonte 26/400 branco, lh 39
+//   .detail-meta-stack     1752x120 em (72, 928)  gap 16
+//     .detail-meta-row     y=928 h=49, fonte 25/400 rgb(179,179,179);
+//                          generos a esquerda, ANO empurrado a direita (1824)
+//     .detail-meta-row.sec y=1003 h=45, fonte 23/400 BRANCO; duracao e pais
+//
+// Os espacos entre blocos (30, 24, 24) sao margens do CSS e nao sobra de
+// layout: com a sinopse mais curta o web encolhe pela base, porque a coluna e
+// flex-end. Por isso aqui tambem se empilha DE BAIXO PARA CIMA.
+#define NV_DETW_X          72.0f   // coluna de conteudo
+#define NV_DETW_DIR      1824.0f   // borda direita util (1920 - 96)
+#define NV_DETW_BASE     1048.0f   // base do bloco (1080 - 32 de padding)
+#define NV_DETW_LOGO_H    104.0f
+#define NV_DETW_LOGO_MAXW 710.0f
+#define NV_DETW_LOGO_GAP   40.0f   // base do logo ao topo da linha de acoes
+#define NV_DETW_ACOES_H   108.0f   // inclui os 6px de padding do anel de foco
+#define NV_DETW_BTN_H      96.0f
+#define NV_DETW_BTN_PADX   48.0f
+#define NV_DETW_BTN_GAPI   16.0f   // icone -> rotulo
+#define NV_DETW_BTN_ICONE  36.0f
+#define NV_DETW_CIRC       84.0f
+#define NV_DETW_CIRC_X0   439.0f
+#define NV_DETW_CIRC_PASSO 147.0f  // 586 - 439 (e 734 - 586)
+#define NV_DETW_ANEL        4.0f   // box-shadow 0 0 0 4px #fff do item focado
+#define NV_DETW_GAP_ACOES  30.0f   // acoes -> "Diretor:"
+#define NV_DETW_GAP_SUP    24.0f   // "Diretor:" -> sinopse
+#define NV_DETW_GAP_SIN    24.0f   // sinopse -> pilha de meta
+#define NV_DETW_TEXTO_W  1040.0f   // largura de sinopse e linha de apoio
+#define NV_DETW_LD_SUP     36.0f   // line-height da linha de apoio
+#define NV_DETW_LD_SIN     39.0f   // line-height da sinopse
+#define NV_DETW_SIN_LINHAS    3    // 117 / 39
+#define NV_DETW_META_GAP   26.0f   // gap 16 + margin-top 10 da segunda linha
+#define NV_DETW_LD_META    35.0f
+#define NV_DETW_LD_META2   31.0f
+#define NV_DETW_META_SEP   24.0f   // gap do flex, dos dois lados do ponto
+
 #define NV_DET_MARGEM_X  120.0f
 #define NV_DET_MARGEM_Y   38.0f
 #define NV_DET_PAD        44.0f   // medido: texto a 44px da borda do cartao

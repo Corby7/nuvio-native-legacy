@@ -64,21 +64,56 @@ enxerga. Implementadas com `clamp` no modo `GFX_HERO` de `gfx.c`.
 | subtítulo e tempo | 32, peso 400, `rgba(255,255,255,0.9)` |
 | rótulo de tempo | **um só**, `decorrido / total`, empurrado à direita |
 
-## Detalhe — **ainda não portado**
+## Detalhe — hero portado (sessão DESLOGADA)
+
+> **Aviso de método.** Tudo abaixo foi medido **sem login** ("Continuar sem
+> conta"). Deslogado o app web esconde parte da tela de título: não há lista de
+> episódios, abas de temporada nem progresso. A **geometria do hero** medida
+> aqui não depende disso, mas a tela de série logada tem seções a mais que
+> ainda **não foram medidas** — quando forem, este arquivo tem de crescer.
 
 A tela é **full-bleed**: backdrop 1920×1080 cobrindo tudo, vinheta por cima,
-sem rail e **sem o cartão arredondado** que o port tem hoje. O nativo desenha o
-cartão que voa a partir do pôster, que é o padrão do app da Apple TV.
+sem rail e **sem o cartão arredondado** que o port tinha. Medido com o título
+"The Whisper Man" aberto.
 
 | elemento | valor |
 |---|---|
-| shell / backdrop / vinheta | 1920×1080, x=0, y=0 |
-| coluna de conteúdo | x=**72** (não 248) |
-| logo | 261×104 em (72, 445) |
-| botão primário | 298×96 em (78, 595), raio 64, fonte 25 peso 600, texto preto |
-| botões circulares | 84×84, raio 999, em x=439, 586, 734 (passo ~147), y=601 |
-| pilha de meta | x=72, y=928, 1752×120 |
-| linha de meta | fonte 25, peso 400, `rgb(179,179,179)` |
+| shell / backdrop / vinheta | 1920×1080, x=0, y=0; fundo `#0d0d0d` |
+| backdrop | `background-size: cover`, `position: 100% 0` |
+| seção do hero | `padding: 0 96 32 72`, `justify-content: flex-end` |
+| logo | 261×104 em (72, 445); altura fixa 104, max-width 710 |
+| linha de ações | 1752×108 em (72, 589), padding 6, gap 24 |
+| botão primário | 298×96 em (78, 595), raio 64, fonte **25/600**, texto PRETO em fundo branco, padding lateral 48, ícone 36, gap 16 |
+| botões circulares | 84×84 em x=439, 586, 734 (passo 147), y=601, raio 999, `#222` |
+| foco | **anel** `box-shadow 0 0 0 4px #fff`; `transform: none` — não há escala. O circular focado vira `#f5f5f5` com ícone `#111`; o primário **não muda de cor** |
+| "Diretor: …" | 1040×36 em (72, 727), fonte 25/400, `rgb(179,179,179)`, lh 36.25 |
+| sinopse | 1040×117 em (72, 787), fonte **26**/400, branco, lh 39, 3 linhas |
+| pilha de meta | 1752×120 em (72, 928), gap 16 |
+| meta linha 1 | y=928, caixa h=49, lh 35, fonte 25/400 `rgb(179,179,179)`: **gêneros à esquerda, ANO empurrado à direita** (termina em 1824), com um ponto de 1×14 a 24px de folga |
+| meta linha 2 | y=1003, caixa h=45, lh 31, fonte **23**/400 **BRANCO**: duração • país |
 
-Ordem vertical observada: logo → botões → "Diretor: …" → sinopse → gêneros →
-linha final com duração e país à esquerda e o ano à direita.
+**Correções ao que este arquivo dizia antes:** a linha de meta não é uma só nem
+é toda 25/`rgb(179,179,179)` — são **duas**, e a segunda é 23px e **branca**. E
+o ano fica na **primeira** linha, à direita, não na última.
+
+### Vinheta
+
+`linear-gradient(90deg, …)` de `#0d0d0d` a transparente, com nove paradas —
+0%:1.00 · 7.8%:0.95 · 17.16%:0.84 · 28.08%:0.70 · 40.56%:0.52 · 51.48%:0.34 ·
+60.84%:0.18 · 70.2%:0.07 · 78%:0. Rampas **lineares por partes**, como as do
+hero da home. Implementada no modo `GFX_DETALHE` de `gfx.c`, que já desenha a
+arte e a vinheta **numa passada só** — duas camadas de tela cheia custam caro
+nesta GPU.
+
+Não há pseudo-elementos: `.detail-bottom-shadow` existe no DOM mas com
+`opacity: 0`.
+
+### O que ficou diferente, e por quê
+
+- **Dois botões circulares em vez de três.** O terceiro do web abre o trailer
+  no YouTube, e este app não tem reprodutor de trailer. As posições x dos dois
+  primeiros são as medidas.
+- **A linha de duração não traz o país.** O `CatItem` do catálogo não tem esse
+  campo.
+- **Peso 600 vira Medium.** A Inter embarcada só tem Regular, Medium e Bold.
+

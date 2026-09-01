@@ -40,7 +40,6 @@
 static HomeItem item;
 static int  aberto = 0, saindo = 0;
 static int  idx = 0;                 // titulo atual dentro do acervo
-static float idxAnim = 0.0f;         // posicao continua do carrossel
 static float t = 0.0f;               // 0 = card na home, 1 = cartao aberto
 // Tres niveis, medidos no app da Apple: o primeiro DESCER nao abre a pagina —
 // ele so tira a moldura e leva a arte a tela cheia. So o segundo traz os cards
@@ -53,7 +52,6 @@ static int  pedReproduzir = 0, pedMarcar = 0, pedFontes = 0;
 // toque toca no automatico. Sem guardar o instante nao ha como distinguir os
 // dois, porque o D-pad so avisa "desceu" e "subiu".
 static Uint32 okDesceEm = 0;               // 0 cartao, 1 tela cheia, 2 pagina
-static float ex = 0.0f;              // 0..1: cartao -> tela cheia
 static float pg = 0.0f;              // 0..1: tela cheia -> pagina com cards
 static Foco foco;                    // so vale no estado expandido
 static float animFoco[N_SECOES][N_SUG];  // N_SUG e o maior n de qualquer secao
@@ -69,10 +67,6 @@ static const char *TITULOS[] = {
   "Eternidade", "Falando a Real", "Ruptura", "Silo", "Ted Lasso",
   "Foundation", "For All Mankind", "Servant", "Invasao", "Shrinking"
 };
-// Classificacao indicativa e um BADGE desenhado, nao texto corrido: no app da
-// Apple ela e um quadrado de canto arredondado antes do genero. Como texto ela
-// se confunde com o resto da linha e some.
-static const char *CLASSIF[] = { "16", "14", "16", "12" };
 static const char *GENEROS[] = {
   "Filme  \xc2\xb7  Romance  \xc2\xb7  Comedia",
   "Programa de TV  \xc2\xb7  Comedia",
@@ -83,13 +77,6 @@ static const char *FICHAS[] = {
   "2025  \xc2\xb7  1 h 54 min", "2025  \xc2\xb7  T3, 10 episodios",
   "2024  \xc2\xb7  T2, 10 episodios", "2025  \xc2\xb7  1 h 38 min"
 };
-static const char *SINOPSE[] = {
-  "Apos a morte, chega a hora do encruzilhado, onde todos devem",
-  "decidir como passar a eternidade. Para Joan, isso significa",
-  "escolher entre seu marido de longa data ou seu primeiro amor,",
-  "que morreu quando eles eram recem-casados."
-};
-#define N_SINOPSE (int)(sizeof SINOPSE / sizeof *SINOPSE)
 // A pagina do titulo nao e uma pilha de fileiras iguais: cada secao tem forma
 // propria. Abas de temporada sao pills; episodio e um card alto com miniatura e
 // texto embaixo; elenco sao circulos. Desenhar tudo como card 16:9 foi o que
@@ -189,11 +176,6 @@ static float alturaSecao(int r);
 static float larguraSecao(TipoSecao t);
 static float passoSecao(TipoSecao t);
 
-static int nAcervo(void) {
-  int n = cat_n(); if (n) return n;
-  n = home_n_artes(); return n ? n : 1;
-}
-
 // Texto real quando ha catalogo; as listas fixas ficam como reserva para quando
 // o app roda so com uma pasta de imagens solta.
 static const char *tituloDe(int i) {
@@ -207,10 +189,6 @@ static const char *generoDe(int i) {
 static const char *fichaDe(int i) {
   const CatItem *c = cat_item(i);
   return (c && c->meta[0]) ? c->meta : FICHAS[((i % 4) + 4) % 4];
-}
-static const char *classifDeCat(int i) {
-  const CatItem *c = cat_item(i);
-  return (c && c->classificacao[0]) ? c->classificacao : CLASSIF[((i % 4) + 4) % 4];
 }
 static const char *sinopseDe(int i) {
   const CatItem *c = cat_item(i);
@@ -236,10 +214,10 @@ static float fase2(void) { return suave((t - 0.45f) / 0.55f); }
 void detail_abrir(const HomeItem *it) {
   item = *it;
   aberto = 1; saindo = 0; nivel = 0; botao = 0; arteBorrada = NULL;
-  t = 0.0f; ex = 0.0f; pg = 0.0f; scrollY = 0.0f;
+  t = 0.0f; pg = 0.0f; scrollY = 0.0f;
   // O titulo aberto e o do card, nao o primeiro do catalogo. Estava fixo em 0,
   // e por isso todo filme e serie abria a mesma pagina.
-  idx = it->indice; idxAnim = 0.0f;
+  idx = it->indice;
   // A aba marcada tem de ser a da temporada que os episodios trazem. Comecando
   // sempre em 0, FROM abria mostrando os episodios da 4 com "Temporada 1"
   // aceso — o rotulo desmentia a lista logo abaixo.
@@ -260,18 +238,14 @@ void detail_abrir(const HomeItem *it) {
 int detail_aberto(void) { return aberto; }
 
 int detail_assentado(void) {
-  return aberto && !saindo && t > 0.985f && ex < 0.02f;
+  return aberto && !saindo && t > 0.985f && nivel == 0;
 }
 
 int detail_cobre_tela(void) {
-  // Duas formas de cobrir, e a segunda foi custo puro ate ser vista:
-  //  1. cartao esticado (ex alto) — nao sobra moldura por onde ver a home;
-  //  2. o VEU do fundo ja opaco. Ele virou opaco para o cartao nao boiar sobre
-  //     a tela anterior, e desde entao a home era desenhada por baixo de uma
-  //     camada que a tapava por inteiro — um quadro de trabalho jogado fora,
-  //     todo quadro. Media: pior quadro 42 ms durante a transicao.
-  // `suave(t)` e a mesma conta que o desenho usa para a opacidade do veu.
-  return aberto && (ex > 0.985f || suave(t) > 0.995f);
+  // O backdrop e FULL-BLEED: assim que ele termina de crescer, nao sobra um
+  // pixel da tela anterior. Desenhar a home por baixo disso custava um quadro
+  // inteiro de preenchimento a toa — medido em 42 ms no pior quadro.
+  return aberto && suave(t) > 0.995f;
 }
 
 void detail_evento(const SDL_Event *e) {
@@ -288,15 +262,15 @@ void detail_evento(const SDL_Event *e) {
                                e->key.keysym.sym == SDLK_KP_ENTER)) {
     Uint32 dur = okDesceEm ? SDL_GetTicks() - okDesceEm : 0;
     okDesceEm = 0;
-    if (nivel == 1 && botao == 0) {
+    if (nivel == 0 && botao == 0) {
       if (dur >= NV_HOLD_MS) pedFontes = 1; else pedReproduzir = 1;
-    } else if (nivel == 1 && botao == 1) {
+    } else if (nivel == 0 && botao == 1) {
       pedMarcar = 1;
-    } else if (nivel == 1 && botao == 2) {
+    } else if (nivel == 0 && botao == 2) {
       // O botao "..." e o outro caminho para a lista de fontes, para quem nao
       // descobre que dava para segurar.
       pedFontes = 1;
-    } else if (nivel >= 2 && SECOES[foco.fileira].tipo == SEC_ABAS) {
+    } else if (nivel >= 1 && SECOES[foco.fileira].tipo == SEC_ABAS) {
       // Trocar de aba BUSCA a temporada. Antes so mudava o realce e a lista
       // continuava a mesma, o que fazia a aba parecer quebrada.
       temporada = foco.coluna;
@@ -317,35 +291,33 @@ void detail_evento(const SDL_Event *e) {
     if (nivel > 0) nivel--; else saindo = 1;
     return;
   }
-  if (nivel < 2) {
-    if (k == SDLK_DOWN)      { nivel++; botao = 0; }
-    else if (k == SDLK_UP)   { if (nivel > 0) nivel--; }
-    else if (nivel == 0 && k == SDLK_RIGHT) idx++;   // vizinhos so no nivel 0
-    else if (nivel == 0 && k == SDLK_LEFT)  idx--;
-    // Em tela cheia, esquerda/direita anda entre os botoes — nao troca de
-    // titulo: o carrossel de titulos pertence so ao nivel 0.
-    else if (nivel == 1 && k == SDLK_RIGHT) { if (botao < 2) botao++; }
-    else if (nivel == 1 && k == SDLK_LEFT)  { if (botao > 0) botao--; }
+  // Dois niveis, nao tres. O nivel intermediario "cartao vira tela cheia" so
+  // fazia sentido enquanto havia cartao: no web a tela JA nasce cheia e com o
+  // "Reproduzir" em foco, entao o primeiro DESCER tem de levar direto as
+  // secoes. E LEFT/RIGHT anda entre os botoes desde o comeco — o carrossel de
+  // titulos vizinhos era invencao do port, o web nao tem.
+  if (nivel == 0) {
+    if (k == SDLK_DOWN)       nivel = 1;
+    else if (k == SDLK_RIGHT) { if (botao < 2) botao++; }
+    else if (k == SDLK_LEFT)  { if (botao > 0) botao--; }
     return;
   }
   if (k == SDLK_RIGHT)      focus_mover(&foco, 1, 0);
   else if (k == SDLK_LEFT)  focus_mover(&foco, -1, 0);
   else if (k == SDLK_DOWN)  focus_mover(&foco, 0, 1);
-  else if (k == SDLK_UP)    { if (!focus_mover(&foco, 0, -1)) nivel = 1; }
+  else if (k == SDLK_UP)    { if (!focus_mover(&foco, 0, -1)) nivel = 0; }
 }
 
 void detail_atualizar(float dt, Uint32 agora) {
   (void)agora;
   if (!aberto) return;
   t  = anim_mola(t,  saindo ? 0.0f : 1.0f, dt, NV_MOLA_TELA);
-  ex = anim_mola(ex, nivel >= 1 ? 1.0f : 0.0f, dt, NV_MOLA_TELA);
-  pg = anim_mola(pg, nivel >= 2 ? 1.0f : 0.0f, dt, NV_MOLA_TELA);
-  idxAnim = anim_mola(idxAnim, (float)idx, dt, NV_MOLA_SCROLL);
+  pg = anim_mola(pg, nivel >= 1 ? 1.0f : 0.0f, dt, NV_MOLA_TELA);
   if (saindo && t < 0.02f) { aberto = 0; saindo = 0; t = 0.0f; return; }
 
   for (int r = 0; r < N_SECOES; r++) {
     for (int c = 0; c < secaoN(r); c++) {
-      float alvo = (nivel >= 2 && focus_indice(&foco, r, c)) ? 1.0f : 0.0f;
+      float alvo = (nivel >= 1 && focus_indice(&foco, r, c)) ? 1.0f : 0.0f;
       animFoco[r][c] = anim_mola(animFoco[r][c], alvo, dt,
                                  alvo > animFoco[r][c] ? NV_MOLA_FOCO : NV_MOLA_DESFOCO);
     }
@@ -370,196 +342,190 @@ void detail_atualizar(float dt, Uint32 agora) {
   if (baseSecao - alvoY > NV_TELA_H - 40.0f) alvoY = baseSecao - (NV_TELA_H - 40.0f);
   if (topoSecao - alvoY < limiteTopo)        alvoY = topoSecao - limiteTopo;
   if (alvoY < 0.0f) alvoY = 0.0f;
-  scrollY = anim_mola(scrollY, nivel >= 2 ? alvoY : 0.0f, dt, NV_MOLA_SCROLL);
+  scrollY = anim_mola(scrollY, nivel >= 1 ? alvoY : 0.0f, dt, NV_MOLA_SCROLL);
 }
 
-static float pill(float x, float y, float h, const char *rot, float f, float a, int circular) {
-  TxtLinha l = txt_linha(TXT_BODY, rot, 255, 255, 255, 255);
-  float w = circular ? h : l.w + 76;
-  if (f > 0.01f) {
-    float g = NV_FOCO_SOMBRA * f * 0.6f;
-    GfxRect s = { x - g, y - g * 0.3f, w + g * 2, h + g * 2 };
-    gfx_rect(s, 0, GFX_SOMBRA, f, 0, 0, 0.5f, 0, 0, 0, a);
+// Bloco de conteudo da tela de detalhe, no layout do APP WEB.
+//
+// Nada aqui e sobreposicao num cartao: a tela e full-bleed, a coluna comeca em
+// x=72 e a pilha e ancorada na BASE (`.detail-hero-section` e um flex column
+// com `justify-content: flex-end`). Empilhar de cima para baixo, como a versao
+// anterior fazia, faz o bloco inteiro subir e descer conforme o tamanho da
+// sinopse — no web ele fica preso na base e so o topo se move.
+//
+// A ordem, medida: logo -> botoes -> "Diretor: ..." -> sinopse -> generos e ano
+// -> duracao. Nao ha badge de classificacao, nem nota, nem selos de formato,
+// nem coluna de creditos a direita: esses vieram do app da Apple TV.
+static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, float a) {
+  // Foco no web NAO e escala nem sombra: e um anel branco de 4px por fora
+  // (box-shadow 0 0 0 4px #fff) e a troca de cor do circulo. Medido nas duas
+  // classes; o `transform` continua `none` nos dois estados.
+  if (focado) {
+    GfxRect anel = { r.x - NV_DETW_ANEL, r.y - NV_DETW_ANEL,
+                     r.w + NV_DETW_ANEL * 2, r.h + NV_DETW_ANEL * 2 };
+    gfx_cor(anel, NV_RAIO_PILL, 1, 1, 1, a);
   }
-  float lum = 0.18f + 0.78f * f;
-  GfxRect r = { x, y, w, h };
-  gfx_cor(r, NV_RAIO_PILL, lum, lum, lum, (0.30f + 0.68f * f) * a);
-  int cor = f > 0.5f ? 24 : 235;
-  TxtLinha t2 = txt_linha(TXT_BODY, rot, cor, cor, cor, 255);
-  txt_desenhar_alpha(t2, x + (w - t2.w) * 0.5f, y + (h - t2.h) * 0.5f, a);
-  return w;
+  int circular = (rot == NULL);
+  if (circular) {
+    // #222 sem foco, #f5f5f5 com foco.
+    float lum = focado ? 0.961f : 0.133f;
+    gfx_cor(r, NV_RAIO_PILL, lum, lum, lum, a);
+    // Sem glifo: o "+" e o "..." sao desenhados, porque a familia embarcada
+    // nao garante os simbolos e um quadrado no lugar e pior que nada.
+    float ic = focado ? 0.067f : 1.0f;   // #111 com foco, branco sem
+    float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
+    if (icone == 1) {                    // "+"
+      // O raio do SDF e uma fracao da ALTURA, nao do menor lado: num retangulo
+      // 5x44 pedir 0.5 faz `b.x` ficar negativo e a forma colapsa — foi o que
+      // deixou a barra vertical do "+" reduzida a um toco na primeira captura.
+      // O teto e 0.5 * (w/h) quando o retangulo e mais alto que largo.
+      GfxRect h = { cx - 22, cy - 2.5f, 44, 5 };
+      GfxRect v = { cx - 2.5f, cy - 22, 5, 44 };
+      gfx_cor(h, 0.5f, ic, ic, ic, a);
+      gfx_cor(v, 0.5f * (v.w / v.h), ic, ic, ic, a);
+    } else {                             // "..."
+      for (int k = -1; k <= 1; k++) {
+        GfxRect p = { cx + k * 15.0f - 3.5f, cy - 3.5f, 7, 7 };
+        gfx_cor(p, 0.5f, ic, ic, ic, a);
+      }
+    }
+    return;
+  }
+  // Primario: branco com texto preto nos DOIS estados — o foco so acrescenta o
+  // anel. Isto foi conferido tirando a classe `focused` no web: a cor nao muda.
+  gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
+  TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
+  float x = r.x + NV_DETW_BTN_PADX;
+  GfxRect tri = { x + NV_DETW_BTN_ICONE * 0.16f,
+                  r.y + (r.h - NV_DETW_BTN_ICONE) * 0.5f,
+                  NV_DETW_BTN_ICONE * 0.72f, NV_DETW_BTN_ICONE * 0.84f };
+  gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
+  txt_desenhar_alpha(l, x + NV_DETW_BTN_ICONE + NV_DETW_BTN_GAPI,
+                     r.y + (r.h - l.h) * 0.5f, a);
 }
 
-// Metadados sobrepostos na arte, no quadrante inferior esquerdo, mais creditos
-// alinhados a direita. So no cartao central e so enquanto ele NAO esta esticado.
-static void bloco(GfxRect c, int i, float a) {
+// Largura do botao primario: padding 48 + icone 36 + gap 16 + texto. Medido
+// 298 para "Reproduzir"; a conta e a do CSS, entao um rotulo maior cresce a
+// pilula em vez de estourar por baixo do texto.
+static float larguraPrimario(const char *rot) {
+  TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
+  return NV_DETW_BTN_PADX * 2 + NV_DETW_BTN_ICONE + NV_DETW_BTN_GAPI + l.w;
+}
+
+// Ano solto do campo `meta` ("2025 · 1 h 54 min" -> "2025" e "1 h 54 min").
+// O web tem os dois campos separados; aqui eles chegam numa linha so, e cortar
+// no primeiro separador e o que permite empurrar o ano para a direita como la.
+static void partirMeta(const char *meta, char *ano, size_t na, char *resto, size_t nr) {
+  ano[0] = 0; resto[0] = 0;
+  if (!meta || !meta[0]) return;
+  const char *sep = strstr(meta, "\xc2\xb7");        // U+00B7
+  if (!sep) { snprintf(ano, na, "%s", meta); return; }
+  size_t n = (size_t)(sep - meta);
+  while (n && (meta[n-1] == ' ')) n--;
+  if (n >= na) n = na - 1;
+  memcpy(ano, meta, n); ano[n] = 0;
+  const char *r = sep + 2;
+  while (*r == ' ') r++;
+  snprintf(resto, nr, "%s", r);
+}
+
+static void heroWeb(float a) {
   if (a <= 0.005f) return;
-  float esq = c.x + NV_DET_PAD;
-  // A base do bloco e ancorada na TELA, nao no cartao: como o cartao passa da
-  // borda inferior, medir a partir dele jogaria o botao para fora. Medido: o
-  // botao termina a 163px da base da tela.
-  float base = c.y + c.h - NV_DET_PAD;
-  if (base > NV_TELA_H - NV_DET_BASE) base = NV_TELA_H - NV_DET_BASE;
+  const CatItem *ci = cat_item(idx);
+
+  char ano[32], dur[64];
+  partirMeta(fichaDe(idx), ano, sizeof ano, dur, sizeof dur);
+
+  char sup[192] = "";
+  if (ci && ci->direcao[0]) snprintf(sup, sizeof sup, "Diretor: %s", ci->direcao);
+
+  const char *sin = sinopseDe(idx);
+
+  // --- empilhamento de BAIXO para cima, como o flex-end do web ---------------
+  float yMeta2 = NV_DETW_BASE - 45.0f;                       // 1003
+  float yMeta1 = yMeta2 - NV_DETW_META_GAP - 49.0f;          // 928
+  float hSin = 0.0f;
+  if (sin) hSin = txt_bloco(TXT_DET_SIN, sin, 255, 255, 255, -1.0f, 0.0f,
+                            NV_DETW_TEXTO_W, NV_DETW_LD_SIN, 0.0f,
+                            NV_DETW_SIN_LINHAS);
+  float ySin = yMeta1 - NV_DETW_GAP_SIN - hSin;              // 787
+  float ySup = sup[0] ? ySin - NV_DETW_GAP_SUP - NV_DETW_LD_SUP : ySin;  // 727
+  float yAcoes = ySup - NV_DETW_GAP_ACOES - NV_DETW_ACOES_H; // 589
+
+  // Sobe alguns pixels enquanto entra: continua o movimento da arte em vez de
+  // aparecer pronto no lugar.
   float sobe = (1.0f - a) * 26.0f;
+  yMeta2 += sobe; yMeta1 += sobe; ySin += sobe; ySup += sobe; yAcoes += sobe;
 
-  TxtLinha gen = txt_linha(TXT_CALLOUT, generoDe(i), 228, 229, 234, 255);
-  TxtLinha fic = txt_linha(TXT_CAPTION2, fichaDe(i), 176, 178, 186, 255);
-
-  // O "titulo" no app da Apple e o LOGO do titulo, nao o nome em texto: e por
-  // isso que ele aparece com tipografia propria de cada producao. Quando o
-  // catalogo traz o logo, ele entra aqui; sem logo, o nome em texto e a reserva.
-  const char *arqLogo = logoDe(i);
+  // --- logo -----------------------------------------------------------------
+  const char *arqLogo = logoDe(idx);
   GLuint texLogo = arqLogo ? tex_obter(arqLogo) : 0;
-  float hTit, wTit = 0.0f;
-  TxtLinha tit = { 0, 0, 0 };
   if (texLogo) {
     float asp = tex_aspecto(arqLogo);
-    if (asp <= 0.0f) asp = 4.0f;
-    hTit = NV_LOGO_H;
-    wTit = hTit * asp;
-    // logos muito largos (nomes longos) nao podem invadir a coluna de creditos
-    if (wTit > NV_LOGO_MAX_W) { wTit = NV_LOGO_MAX_W; hTit = wTit / asp; }
-  } else {
-    tit = txt_linha(TXT_TITULO1, tituloDe(i), 255, 255, 255, 255);
-    hTit = (float)tit.h;
-    wTit = (float)tit.w;
-  }
-
-  // Sinopse real, quebrada pela largura disponivel — com texto de verdade nao
-  // da para contar linhas na mao: "CODA" e "Assassinos da Lua das Flores" tem
-  // sinopses de tamanhos muito diferentes.
-  const char *sin = sinopseDe(i);
-  float largSin = c.w * 0.42f;
-  float hSin = sin ? txt_bloco(TXT_CAPTION2, sin, 198, 200, 208, -1, 0, largSin,
-                               NV_LD_CAPTION2, 0.0f, 4)
-                   : N_SINOPSE * NV_LD_CAPTION2;
-
-  float alt = hTit + 12 + gen.h + 16 + hSin + 12 + fic.h + 26 + NV_DET_BOTAO_H;
-  float y = base - alt + sobe;
-
-  if (texLogo) {
-    GfxRect r = { esq, y, wTit, hTit };
+    if (asp <= 0.0f) asp = 2.5f;
+    float h = NV_DETW_LOGO_H, w = h * asp;
+    if (w > NV_DETW_LOGO_MAXW) { w = NV_DETW_LOGO_MAXW; h = w / asp; }
+    GfxRect r = { NV_DETW_X, yAcoes - NV_DETW_LOGO_GAP - h, w, h };
     gfx_tex_aspect_atual = 0.0f;   // o logo ja vem na proporcao certa
     gfx_rect(r, texLogo, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, a);
   } else {
-    txt_desenhar_alpha(tit, esq, y, a);
+    // Sem logo, o NOME. A altura da caixa continua sendo a do logo, para que a
+    // linha de botoes nao pule de lugar entre um titulo com logo e outro sem.
+    TxtLinha t2 = txt_linha_corta(TXT_TITULO1, tituloDe(idx), 255, 255, 255, 255,
+                                  NV_DETW_LOGO_MAXW);
+    txt_desenhar_alpha(t2, NV_DETW_X,
+                       yAcoes - NV_DETW_LOGO_GAP - NV_DETW_LOGO_H
+                              + (NV_DETW_LOGO_H - t2.h) * 0.5f, a);
   }
-  y += hTit + 12;
 
-  TxtLinha cl = txt_linha(TXT_CAPTION2, classifDeCat(i), 236, 237, 242, 255);
-  float bw = cl.w + 18, bh = cl.h + 8;
-  GfxRect bg = { esq, y + (gen.h - bh) * 0.5f, bw, bh };
-  gfx_cor(bg, 0.18f, 0.62f, 0.62f, 0.66f, 0.55f * a);
-  txt_desenhar_alpha(cl, esq + 9, bg.y + 4, a);
-  float xg = esq + bw + 16;
-  txt_desenhar_alpha(gen, xg, y, a);
-  // Logo do servico onde o titulo esta, no fim da linha de genero.
-  const CatItem *cp = cat_item(i);
-  if (cp && cp->provLogo[0]) {
-    GLuint tp = tex_obter(cp->provLogo);
-    if (tp) {
-      float ap = tex_aspecto(cp->provLogo);
-      if (ap <= 0.0f) ap = 1.0f;
-      float hp = gen.h * 1.05f, wp = hp * ap;
-      GfxRect rp = { xg + gen.w + 18, y + (gen.h - hp) * 0.5f, wp, hp };
-      gfx_tex_aspect_atual = 0.0f;
-      gfx_rect(rp, tp, GFX_CARD, 0, 0, 0, 0.22f, 0, 0, 0, a);
-    }
+  // --- botoes ---------------------------------------------------------------
+  // O web tem tres circulares (lista, "nao me interessa", trailer). Aqui sao
+  // DOIS: lista e fontes. O terceiro nao entra porque nao existe reprodutor de
+  // trailer neste app, e um botao que nao faz nada e pior que a ausencia dele —
+  // as posicoes x dos dois primeiros continuam sendo as medidas.
+  float yBtn  = yAcoes + 6.0f;
+  float yCirc = yAcoes + 12.0f;
+  float wp = larguraPrimario("Reproduzir");
+  GfxRect rp = { NV_DETW_X + 6.0f, yBtn, wp, NV_DETW_BTN_H };
+  desenhaBotao(rp, "Reproduzir", 0, nivel == 0 && botao == 0, a);
+  for (int k = 0; k < 2; k++) {
+    GfxRect rc = { NV_DETW_CIRC_X0 + k * NV_DETW_CIRC_PASSO, yCirc,
+                   NV_DETW_CIRC, NV_DETW_CIRC };
+    desenhaBotao(rc, NULL, k + 1, nivel == 0 && botao == k + 1, a);
   }
-  y += gen.h + 16;
 
-  if (sin) {
-    y += txt_bloco(TXT_CAPTION2, sin, 198, 200, 208, esq, y, largSin,
-                   NV_LD_CAPTION2, a * 0.95f, 4);
-  } else {
-    for (int k = 0; k < N_SINOPSE; k++) {
-      TxtLinha l = txt_linha(TXT_CAPTION2, SINOPSE[k], 198, 200, 208, 255);
-      txt_desenhar_alpha(l, esq, y, a * 0.95f); y += NV_LD_CAPTION2;
-    }
+  // --- "Diretor: ..." -------------------------------------------------------
+  if (sup[0]) {
+    TxtLinha l = txt_linha_corta(TXT_DET_META, sup, 179, 179, 179, 255,
+                                 NV_DETW_TEXTO_W);
+    txt_desenhar_alpha(l, NV_DETW_X, ySup + (NV_DETW_LD_SUP - l.h) * 0.5f, a);
   }
-  y += 8;
-  // Linha tecnica: ano/duracao, nota da critica e os selos de formato. No app
-  // da Apple e uma linha so, e e ela que diz "vale a pena" antes do texto.
-  float xf = esq;
-  txt_desenhar_alpha(fic, xf, y, a * 0.9f);
-  xf += fic.w + 22;
-  if (cp && cp->nota > 0) {
-    // Circulo colorido pela nota: verde alto, amarelo medio, vermelho baixo.
-    float n01 = cp->nota / 100.0f;
-    float cr = n01 > 0.6f ? (1.0f - n01) * 2.2f : 0.92f;
-    float cg = n01 > 0.4f ? 0.78f : n01 * 1.6f;
-    GfxRect ci2 = { xf, y + fic.h * 0.5f - 9.0f, 18, 18 };
-    gfx_cor(ci2, 0.5f, cr > 1 ? 1 : cr, cg, 0.16f, 0.95f * a);
-    char pc[16]; snprintf(pc, sizeof pc, "%d%%", cp->nota);
-    TxtLinha ln2 = txt_linha(TXT_CAPTION2, pc, 226, 227, 233, 255);
-    txt_desenhar_alpha(ln2, xf + 26, y, a * 0.92f);
-    xf += 26 + ln2.w + 22;
-  }
-  // Selos do que a MELHOR fonte disponivel oferece. Antes eram tres constantes
-  // e todo titulo anunciava 4K Dolby Vision Atmos, inclusive os que so tinham
-  // 1080p — e e exatamente por esse selo que se decide o que assistir.
-  const char *selos[3];
-  int nSelos = 0;
-  { int k2, alt = 0, dv = 0, atm = 0;
-    for (k2 = 0; k2 < stream_n(); k2++) {
-      const Stream *s = stream_item(k2);
-      if (!s) continue;
-      if (s->altura > alt) alt = s->altura;
-      dv |= s->dolbyVision;
-      atm |= s->dolbyAtmos;
-    }
-    if (alt >= 2160)      selos[nSelos++] = "4K";
-    else if (alt >= 1080) selos[nSelos++] = "HD";
-    if (dv)  selos[nSelos++] = "Dolby Vision";
-    if (atm) selos[nSelos++] = "Dolby Atmos"; }
-  for (int k = 0; k < nSelos; k++) {
-    TxtLinha ls = txt_linha(TXT_MINI, selos[k], 236, 237, 242, 255);
-    GfxRect bs = { xf, y + (fic.h - ls.h) * 0.5f - 2, ls.w + 12, ls.h + 4 };
-    gfx_cor(bs, 0.22f, 0.72f, 0.72f, 0.76f, 0.30f * a);
-    txt_desenhar_alpha(ls, xf + 6, bs.y + 2, a * 0.9f);
-    xf += bs.w + 12;
-  }
-  y += fic.h + 26;
 
-  // No nivel 0 NENHUM botao esta em foco: ali o foco e o carrossel de titulos,
-  // e o Reproduzir aceso desde a abertura dava a impressao de que o OK ia
-  // reproduzir. Ele so acende quando o cartao vira tela cheia (nivel 1) — que
-  // e quando o foco realmente entra na linha de botoes.
-  float fBotoes = (i == idx) ? ex : 0.0f;
-  float bx = esq;
-  bx += pill(bx, y, NV_DET_BOTAO_H, "\xe2\x96\xb6  Reproduzir",
-             botao == 0 ? fBotoes : 0.0f, a, 0) + 26;
-  bx += pill(bx, y + (NV_DET_BOTAO_H - 65.0f) * 0.5f, 65.0f, "+",
-             botao == 1 ? fBotoes : 0.0f, a, 1) + 26;
-  pill(bx, y + (NV_DET_BOTAO_H - 65.0f) * 0.5f, 65.0f, "\xc2\xb7\xc2\xb7\xc2\xb7",
-       botao == 2 ? fBotoes : 0.0f, a, 1);
+  // --- sinopse --------------------------------------------------------------
+  if (sin) txt_bloco(TXT_DET_SIN, sin, 255, 255, 255, NV_DETW_X, ySin,
+                     NV_DETW_TEXTO_W, NV_DETW_LD_SIN, a, NV_DETW_SIN_LINHAS);
 
-  // Creditos reais do catalogo, alinhados a direita e quebrados pela largura:
-  // com nomes de verdade nao da para fixar as linhas na mao — "Assassinos da
-  // Lua das Flores" tem elenco que nao cabe numa linha e "CODA" cabe sobrando.
-  const CatItem *ci = cat_item(i);
-  float dir = c.x + c.w - 70.0f, cy = base - 96.0f + sobe;
-  if (ci && ci->nElenco) {
-    char nomes[400];
-    snprintf(nomes, sizeof nomes, "Estrelando  %s", ci->elenco[0].nome);
-    for (int k = 1; k < ci->nElenco && k < 3; k++) {
-      size_t u = strlen(nomes);
-      snprintf(nomes + u, sizeof nomes - u, ", %s", ci->elenco[k].nome);
-    }
-    float larg = 420.0f;
-    float usado = txt_bloco_dir(TXT_CAPTION2, nomes, 224, 225, 231, dir, cy,
-                                larg, NV_LD_CAPTION2, a * 0.92f, 3);
-    cy += usado + 4;
-    if (ci->direcao[0]) {
-      char dd[200];
-      snprintf(dd, sizeof dd, "Direcao  %s", ci->direcao);
-      txt_bloco_dir(TXT_CAPTION2, dd, 224, 225, 231, dir, cy, larg,
-                    NV_LD_CAPTION2, a * 0.92f, 2);
+  // --- generos a esquerda, ano empurrado a direita --------------------------
+  {
+    TxtLinha lg = txt_linha_corta(TXT_DET_META, generoDe(idx), 179, 179, 179, 255,
+                                  NV_DETW_DIR - NV_DETW_X - 240.0f);
+    txt_desenhar_alpha(lg, NV_DETW_X, yMeta1 + (NV_DETW_LD_META - lg.h) * 0.5f, a);
+    if (ano[0]) {
+      TxtLinha la = txt_linha(TXT_DET_META, ano, 179, 179, 179, 255);
+      float xa = NV_DETW_DIR - la.w;
+      txt_desenhar_alpha(la, xa, yMeta1 + (NV_DETW_LD_META - la.h) * 0.5f, a);
+      // O ponto separador do web: 1x14, a 24px de folga de cada lado.
+      GfxRect pt = { xa - NV_DETW_META_SEP - 1.0f,
+                     yMeta1 + (NV_DETW_LD_META - 14.0f) * 0.5f, 1, 14 };
+      gfx_cor(pt, 0.0f, 0.70f, 0.70f, 0.70f, 0.55f * a);
     }
   }
-  // Sem elenco no catalogo nao se escreve nada. O texto fixo que estava aqui
-  // creditava "Miles Teller, Elizabeth Olsen" em TODO titulo — um credito
-  // errado e pior que credito nenhum.
+
+  // --- duracao (o web tambem poe o pais; o catalogo daqui nao tem) ----------
+  if (dur[0]) {
+    TxtLinha ld = txt_linha(TXT_DET_META2, dur, 255, 255, 255, 255);
+    txt_desenhar_alpha(ld, NV_DETW_X, yMeta2 + (NV_DETW_LD_META2 - ld.h) * 0.5f, a);
+  }
 }
 
 // --- medidas de cada tipo de secao ---
@@ -590,13 +556,6 @@ static float larguraSecao(TipoSecao t) {
 static float passoSecao(TipoSecao t) {
   if (t == SEC_ABAS) return NV_ABA_PITCH;          // medido texto a texto
   return larguraSecao(t) + (t == SEC_ELENCO ? 34.0f : NV_CARD_GAP);
-}
-
-static void sombraFoco(GfxRect r, float f, float a, float raio) {
-  if (f < 0.01f) return;
-  float g = NV_FOCO_SOMBRA * f;
-  GfxRect sh = { r.x - g, r.y - g + NV_SOMBRA_DY * f, r.w + g * 2, r.h + g * 2 };
-  gfx_rect(sh, 0, GFX_SOMBRA, f, 0, 0, raio, 0, 0, 0, a * NV_SOMBRA_ALFA);
 }
 
 // Numero REAL da temporada na posicao `c`. Serie que comeca na 2 (o que
@@ -893,109 +852,46 @@ void detail_desenhar(Uint32 agora) {
   if (!aberto) return;
   float s = suave(t), a2 = fase2();
 
-  // A home escurece, mas continua visivel pela moldura: e isso que faz o
-  // detalhe se ler como camada. Quando estica, o veu fecha de vez.
-  //
-  // A cor e o CINZA do app e nao preto: em volta do cartao grande, preto puro
-  // fazia a arte parecer recortada no vazio. No app da Apple o que cerca o
-  // cartao e o mesmo neutro do resto da interface, e e ele que faz o cartao
-  // parecer uma ficha sobre a mesa em vez de um buraco.
-  // OPACO, nao translucido. Com 62% a home continuava legivel por tras e o
-  // cartao parecia flutuar sobre a tela anterior; o que se quer e uma camada
-  // nova, com o cartao sobre um neutro liso. O `s` mantem a entrada suave.
+  // O que cerca a tela ENQUANTO ela cresce. Assim que o backdrop cobre tudo
+  // isto some, e a home nem chega a ser desenhada (detail_cobre_tela).
   if (!detail_cobre_tela()) {
     GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
-    gfx_cor(tela, 0.0f, NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, s);
+    gfx_cor(tela, 0.0f, 0.051f, 0.051f, 0.051f, s);   // #0d0d0d, o fundo do web
   }
   gfx_sem_recorte();
 
-  // Estouro de escala na entrada: o cartao passa um pouco do tamanho final e
-  // assenta. E o que da a impressao de que ele vem para a frente, em vez de
-  // simplesmente aparecer maior.
-  float estouro = 1.0f + sinf(s * 3.14159f) * NV_DET_ESTOURO * (1.0f - ex);
-
-  float mx = anim_mistura(NV_DET_MARGEM_X, 0.0f, ex);
-  float my = anim_mistura(NV_DET_MARGEM_Y, 0.0f, ex);
-  // O cartao tem margem em cima e nos lados, mas NAO embaixo: ele e cortado
-  // pela base da tela. Medido no aparelho — e o que faz a proxima secao
-  // aparecer espremida na borda inferior, convidando a descer.
-  float cw = (NV_TELA_W - mx * 2) * estouro;
-  float ch = (NV_TELA_H - my) * estouro;
-  float cx0 = (NV_TELA_W - cw) * 0.5f, cy0 = my;
-  float passoCartao = NV_TELA_W - NV_DET_MARGEM_X * 2 + NV_DET_GAP;
-
-  int n = nAcervo();
-  for (int d = -1; d <= 1; d++) {
-    int i = idx + d;
-    float off = ((float)i - idxAnim) * passoCartao * (1.0f - ex);
-    // vizinho so existe enquanto o cartao tem moldura; ao esticar, ele sai
-    if (d != 0 && ex > 0.35f) continue;
-
-    // Ao esticar, a arte deixa de ser "a foto" e vira FUNDO: cresce muito alem
-    // da tela, entao o que se ve sao manchas de cor, nao um retrato nitido. Sem
-    // isso os cards das secoes ficam boiando por cima de uma foto legivel, e a
-    // pagina nao se le como uma coisa so.
-    float zoom = 1.0f + NV_DET_ZOOM_FUNDO * pg;
-    float zw = cw * zoom, zh = ch * zoom;
-    GfxRect fim = { cx0 + off - (zw - cw) * 0.5f, cy0 - (zh - ch) * 0.5f, zw, zh };
-    GfxRect alvo = fim;
-    if (d == 0) {  // o cartao central vem do card real da home
-      alvo.x = anim_mistura(item.rect.x, fim.x, s);
-      alvo.y = anim_mistura(item.rect.y, fim.y, s);
-      alvo.w = anim_mistura(item.rect.w, fim.w, s);
-      alvo.h = anim_mistura(item.rect.h, fim.h, s);
+  // --- backdrop full-bleed --------------------------------------------------
+  // A tela de detalhe do web e uma imagem de 1920x1080 em (0,0) com a vinheta
+  // horizontal por cima; nao ha cartao, nem moldura, nem titulos vizinhos. O
+  // unico movimento que sobra do port anterior e a ORIGEM: o retangulo cresce
+  // a partir do card que estava em foco na home, o que da continuidade a troca
+  // de tela. No repouso ele e exatamente a tela inteira.
+  GfxRect cheia = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect alvo = {
+    anim_mistura(item.rect.x, cheia.x, s), anim_mistura(item.rect.y, cheia.y, s),
+    anim_mistura(item.rect.w, cheia.w, s), anim_mistura(item.rect.h, cheia.h, s),
+  };
+  const char *arte = arteDe(idx);
+  GLuint tex = arte ? tex_obter(arte) : 0;
+  if (tex) {
+    gfx_tex_aspect_atual = tex_aspecto(arte);
+    // Enquanto o desfoque da pagina ainda e parcial as duas camadas convivem,
+    // para a foto assentar em vez de piscar. Opaco, a de baixo e invisivel — e
+    // pintar a tela inteira duas vezes por quadro custava mais que tudo o mais.
+    if (pg <= 0.985f)
+      gfx_rect(alvo, tex, GFX_DETALHE, 0, 0, 0, 0.0f, 0, 0, 0, 1.0f);
+    if (pg > 0.01f) {
+      if (arte != arteBorrada) { gfx_borrao_gerar(0, tex, tex_aspecto(arte)); arteBorrada = arte; }
+      gfx_borrao_desenhar(0, alvo, pg);
+      gfx_cor(alvo, 0.0f, 0, 0, 0, pg * NV_DET_ESCURO_FUNDO);
     }
-    if (alvo.x > NV_TELA_W || alvo.x + alvo.w < 0) continue;
-
-    const char *arte = arteDe(i);
-    GLuint tex = arte ? tex_obter(arte) : 0;
-    float aArte = (d == 0) ? 1.0f : s * 0.85f;
-    // O ponto do movimento: quem desliza e a MOLDURA, nao a arte. A arte anda
-    // uma fracao do caminho, entao ela parece ficar parada enquanto a janela
-    // corre por cima — o efeito daqueles paineis de feira em que a pessoa poe o
-    // rosto e o quadro troca. Deslizar arte e moldura juntas produz a leitura
-    // errada: um panorama unico passando, "troca de quadro de filme".
-    // Baseado no desvio RESIDUAL (i - idxAnim), que vai a zero quando o
-    // carrossel assenta: a arte se atrasa durante o movimento e volta ao centro
-    // no fim. Amarrar ao offset absoluto empurraria a uv para fora de [0,1], e
-    // o clamp do shader esticaria o pixel da borda num rastro feio.
-    float parx = -((float)i - idxAnim) * NV_DET_PARALLAX;
-    if (tex) {
-      gfx_tex_aspect_atual = tex_aspecto(arte);
-      // Enquanto o desfoque ainda e parcial as duas camadas convivem, para a
-      // foto assentar em vez de piscar. Assim que ele fica opaco, a arte nitida
-      // por baixo e invisivel — e pintar a tela inteira duas vezes por quadro
-      // custava mais caro que tudo o mais junto.
-      int desfoqueOpaco = (d == 0 && pg > 0.985f);
-      if (!desfoqueOpaco)
-        gfx_rect(alvo, tex, GFX_CARD, 0, parx, 0, NV_RAIO_CARD * (1.0f - ex),
-                 0, 0, 0, aArte);
-      if (d == 0 && pg > 0.01f) {
-        // O borrao e regerado so quando a arte muda: e um desenho num alvo de
-        // poucos pixels, mas repeti-lo a cada quadro seria trabalho a toa.
-        if (arte != arteBorrada) { gfx_borrao_gerar(0, tex, tex_aspecto(arte)); arteBorrada = arte; }
-        gfx_borrao_desenhar(0, alvo, pg);
-      }
-      gfx_tex_aspect_atual = 0.0f;
-    } else {
-      gfx_cor(alvo, NV_RAIO_CARD, 0.10f, 0.10f, 0.12f, aArte);
-    }
-    // Veu e metadados valem para TODO cartao, com a intensidade caindo conforme
-    // ele se afasta do centro. Trocar o texto de golpe quando o indice muda
-    // denuncia que ha uma tela so trocando de conteudo; cada cartao carregando
-    // o proprio texto e o que faz o carrossel parecer uma pilha de fichas.
-    float perto = 1.0f - fabsf((float)i - idxAnim);
-    if (perto < 0.0f) perto = 0.0f;
-    if (perto > 0.01f && pg < 0.985f) {
-      gfx_rect(alvo, 0, GFX_VEU, 0, 0, 0, NV_RAIO_CARD * (1.0f - ex),
-               0, 0, 0, 0.94f * s * perto);
-      if (d == 0 && pg > 0.01f) gfx_cor(alvo, 0.0f, 0, 0, 0, pg * NV_DET_ESCURO_FUNDO);
-      // Titulo, sinopse e botoes acompanham a arte ate a tela cheia: o primeiro
-      // DESCER so amplia a imagem, nao troca de conteudo. Eles saem de cena
-      // apenas quando a pagina toma o lugar (pg), no segundo passo.
-      bloco(alvo, i, a2 * (1.0f - pg) * perto);
-    }
+    gfx_tex_aspect_atual = 0.0f;
+  } else {
+    gfx_cor(alvo, 0.0f, 0.051f, 0.051f, 0.051f, 1.0f);
   }
+
+  // Coluna de conteudo. Sai de cena quando a pagina toma o lugar.
+  heroWeb(a2 * (1.0f - pg));
 
   if (pg <= 0.01f) return;
 
