@@ -51,4 +51,49 @@ void player_desenhar(Uint32 agora);
 int  player_quer_sair(void);  // 1 assim que o Back foi apertado
 void player_encerrar(void);
 
+// --- MODOS DE PROPORCAO -----------------------------------------------------
+// Os OITO modos do app web, na mesma ordem e com os mesmos fatores
+// (js/core/player/playerAspect.js). A ordem importa: e ela que o ciclo percorre,
+// e trocar a ordem aqui muda o que o dono encontra ao apertar a tecla.
+//
+// POR QUE ZOOM, e nao object-fit: a barra preta de um filme widescreen esta
+// EMBUTIDA no quadro. Um 2.39:1 entregue como 3840x2160 tem proporcao de quadro
+// 1.778 — a mesma da tela — entao "encaixar" e "preencher" dao exatamente a
+// mesma imagem e nenhum dos dois corta coisa alguma. Cortar exige AMPLIAR e
+// deixar o excesso sair da tela.
+//
+// Os fatores sao 16/9 dividido pela proporcao do filme, nao numeros escolhidos
+// a gosto:  2.35:1 -> 1.32,  2.39:1 -> 1.34,  2.76:1 -> 1.55. O ULTRA existe
+// porque o CINEMA (1.34) ainda deixa barra visivel num 2.76:1 — observado na
+// TV do dono, nao deduzido.
+//
+// No nativo o video NAO e um elemento HTML: e um plano de hardware atras da
+// superficie GL, posicionado por video_janela(). Entao cada modo vira um
+// RETANGULO, e o "excesso que sai da viewport" do web vira um retangulo com
+// coordenadas negativas e tamanho maior que a tela.
+typedef enum {
+  PLR_ASP_ORIGINAL = 0,   // "Fit (Original)"  contain, sem zoom  — PADRAO
+  PLR_ASP_CROP,           // "Crop"            cover
+  PLR_ASP_ESTICAR,        // "Stretch"         fill
+  PLR_ASP_ZOOM_LEVE,      // "Slight Zoom"     cover x 1.15
+  PLR_ASP_ZOOM_CINEMA,    // "Cinema Zoom"     cover x 1.34
+  PLR_ASP_ZOOM_ULTRA,     // "Ultra Zoom"      contain x 1.55
+  PLR_ASP_FIT_ALTURA,     // "Fit Height"      cover
+  PLR_ASP_FIT_LARGURA,    // "Fit Width"       contain
+  PLR_ASP_N
+} PlrAspecto;
+
+// Fatores de zoom, iguais aos do resolveAspectScale do web.
+#define PLR_ZOOM_LEVE    1.15f
+#define PLR_ZOOM_CINEMA  1.34f
+#define PLR_ZOOM_ULTRA   1.55f
+// Quanto tempo o aviso de troca de modo fica na tela. 1400ms e o setTimeout do
+// showAspectToast do web.
+#define PLR_TOAST_MS     1400u
+
+int         player_aspecto(void);              // modo atual (PlrAspecto)
+const char *player_aspecto_rotulo(int modo);   // "Cinema Zoom", "Encaixar"...
+void        player_aspecto_definir(int modo);  // aplica e grava
+void        player_aspecto_ciclar(void);       // proximo modo + aviso na tela
+
 #endif

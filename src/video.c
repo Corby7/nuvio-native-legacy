@@ -33,7 +33,9 @@ void video_escolher_legenda(int i) { (void)i; }
 void video_legenda_externa(const char *u) { (void)u; }
 int  video_tem_atmos(void) { return 0; }
 int  video_tem_dolby_vision(void) { return 0; }
+const char *video_hdr(void) { return "none"; }
 int  video_largura(void) { return 0; }
+int  video_altura(void) { return 0; }
 void video_encerrar(void) {}
 #else
 #include <dlfcn.h>
@@ -788,11 +790,27 @@ void video_buscar(double segundos) {
   posSeg = segundos;
 }
 
+// O retangulo do plano de hardware. E por AQUI que os modos de zoom acontecem:
+// o video nao e um elemento com `transform: scale()` como no app web — e um
+// plano atras da superficie GL, e ampliar significa mandar um retangulo MAIOR
+// que a tela, com x/y negativos, e deixar o excedente sair pela borda. E o
+// mesmo resultado do transform do web: a barra preta embutida no quadro sai da
+// area visivel em vez de ser (impossivelmente) recortada por object-fit.
+//
+// Por isso o retangulo NAO e restringido a tela. O flag de tela cheia so pode
+// ser ligado no caso exato 0,0,1920,1080: ligado com um retangulo diferente, o
+// ACB ignora as coordenadas e volta para tela cheia — que era o zoom nao ter
+// efeito nenhum.
 void video_janela(int x, int y, int w, int h) {
   long tarefa = 0;
+  int cheia = (x == 0 && y == 0 && w == 1920 && h == 1080);
+  if (w < 1 || h < 1) return;
+  if (x == janX && y == janY && w == janW && h == janH) return;  // sem repetir o mesmo rect a cada quadro
   janX = x; janY = y; janW = w; janH = h;
   if (!ligado || !acb || !midia[0]) return;   // sem midia presa, aplicar seria no vazio
-  acbJanela(acb, x, y, w, h, (x == 0 && y == 0 && w == 1920 && h == 1080), &tarefa);
+  printf("[video] janela %d,%d %dx%d cheia=%d\n", x, y, w, h, cheia);
+  fflush(stdout);
+  acbJanela(acb, x, y, w, h, cheia, &tarefa);
 }
 
 double video_pos(void)      { return posSeg; }
@@ -813,12 +831,27 @@ const VideoFaixa *video_legenda(int i) { return (i >= 0 && i < nLeg) ? &faixaLeg
 int  video_audio_atual(void)   { return audioAtual; }
 int  video_legenda_atual(void) { return legAtual; }
 int  video_tem_atmos(void)        { return vidAtmos; }
-// HDR10 e Dolby Vision sao os dois HEVC main-10: o que separa e o que a FONTE
-// (o addon que descreveu o arquivo) afirmou sobre esta URL — setado por
-// video_definir_dv e lido pelo bind. Nao existe sinal do pipeline que
-// distingua; afirmar sem fonte e mentira na cara do dono.
-int  video_tem_dolby_vision(void) { return vidDV; }
+// O SELO agora sai do PIPELINE, nao da afirmacao da fonte.
+//
+// `vidDV` e o que o addon AFIRMOU sobre a URL, e continua sendo o que o bind
+// descreve ao tv.display (montarVideoData le vidDV, nao esta funcao) — la a
+// afirmacao e a unica informacao disponivel antes de haver imagem, e sem ela
+// nao ha como pedir Dolby Vision. Mas para o SELO ela e a fonte errada: esta
+// MEDIDO nesta TV que um MKV anunciado como DV volta com hdrType "HDR10" no
+// videoInfo. Ligar o selo na afirmacao fazia a tela anunciar Dolby Vision em
+// cima de um fluxo HDR10 — e selo que mente e pior que selo ausente, porque e
+// nele que o dono confia para saber se pegou a versao boa.
+//
+// Antes do videoInfo chegar, vidHdr e "none" e a resposta e 0: nenhum selo por
+// alguns segundos e honesto; um selo que aparece e depois se desmente, nao.
+int  video_tem_dolby_vision(void) {
+  return !strcasecmp(vidHdr, "DolbyVision") || !strcasecmp(vidHdr, "dolby_vision");
+}
+// hdrType cru do pipeline, para a tela poder dizer "HDR10" quando for HDR10 em
+// vez de calar. "none" quando o fluxo e SDR ou ainda nao se sabe.
+const char *video_hdr(void)       { return vidHdr; }
 int  video_largura(void)          { return vidW; }
+int  video_altura(void)           { return vidH; }
 
 void video_definir_dv(int dv) { dvPedido = dv ? 1 : 0; }
 

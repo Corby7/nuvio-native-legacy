@@ -76,8 +76,14 @@ void video_legenda_externa(const char *url);
 
 // Verdade sobre o fluxo, para os selos da tela nao mentirem.
 int  video_tem_atmos(void);
+// 1 so quando o hdrType do PIPELINE diz DolbyVision. A afirmacao da fonte
+// (video_definir_dv) nao entra aqui de proposito: ver o comentario em video.c.
 int  video_tem_dolby_vision(void);
+const char *video_hdr(void);   // hdrType cru: "none", "HDR10", "DolbyVision"...
+// Dimensoes do QUADRO decodificado, do videoInfo. Sao elas que dao a proporcao
+// usada pelos modos de zoom do player.
 int  video_largura(void);
+int  video_altura(void);
 
 void video_encerrar(void);
 

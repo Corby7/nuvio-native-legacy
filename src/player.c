@@ -35,6 +35,7 @@
 #include "trakt.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>   // strcasecmp, para comparar o hdrType do pipeline
 #include <math.h>
 
 // Quanto tempo os controles ficam de pe sem receber tecla. Medido a olho no
@@ -92,7 +93,10 @@
 // A fileira de BOTOES, na ordem do foco. E o transporte do aparelho: retroceder
 // 10s, pausar/retomar, avancar 10s — e no canto direito, onde ficam no app da
 // Apple, as duas portas para a folha de audio e legenda.
-enum { PLR_VOLTAR, PLR_PLAY, PLR_AVANCAR, PLR_CC, PLR_AUDIO, PLR_NBTNS };
+// PLR_ASPECTO e o ultimo: no web ele mora dentro do "More Actions", ou seja,
+// depois de tudo. Aqui a fileira e curta e cabe inteira, entao ele fica visivel
+// — esconder atras de um submenu so acrescentaria um passo sem esconder nada.
+enum { PLR_VOLTAR, PLR_PLAY, PLR_AVANCAR, PLR_CC, PLR_AUDIO, PLR_ASPECTO, PLR_NBTNS };
 
 static int   aberto = 0, saindo = 0, pediuSair = 0;
 static int   idx = 0;
@@ -162,6 +166,150 @@ static void frasePrimeira(char *dst, size_t n, const char *src, size_t maxBytes)
   if (src[i] && src[i] != '.') strncat(dst, "\xe2\x80\xa6", n - strlen(dst) - 1);
 }
 
+// --- MODOS DE PROPORCAO ------------------------------------------------------
+// A porta do web para o nativo. No web o modo mexe em duas coisas do elemento
+// <video>: o `object-fit` e um `transform: scale()`. Aqui nao ha elemento — ha
+// um plano de hardware posicionado por video_janela() — entao os dois viram UMA
+// coisa so: o retangulo do plano.
+//
+// A traducao e literal e nesta ordem, igual ao resolveAspectRender do web:
+//   1. o retangulo que o object-fit do modo produziria (contain/cover/fill);
+//   2. multiplicado pela escala do modo (resolveAspectScale), em torno do
+//      CENTRO da tela — que e o `transform-origin: center center` de la.
+// Sair da tela nao e erro: e o recorte. O plano recebe x/y negativos e a TV
+// descarta o que passa da borda, que e o unico jeito de tirar da vista uma
+// barra preta que esta DENTRO do quadro.
+static int    aspecto = PLR_ASP_ORIGINAL;
+static Uint32 toastAte = 0;      // ate quando o aviso de modo fica de pe
+static char   dirPrefs[512];
+
+// Rotulos em portugues. Os do web sao "Fit (Original)", "Crop", "Stretch",
+// "Slight/Cinema/Ultra Zoom", "Fit Height", "Fit Width" — o resto do app fala
+// portugues, entao traduzir aqui e o que mantem a tela coerente.
+static const char *ASP_ROTULO[PLR_ASP_N] = {
+  "Original", "Recortar", "Esticar", "Zoom leve",
+  "Zoom cinema", "Zoom ultra", "Ajustar altura", "Ajustar largura"
+};
+
+const char *player_aspecto_rotulo(int modo) {
+  if (modo < 0 || modo >= PLR_ASP_N) modo = PLR_ASP_ORIGINAL;
+  return ASP_ROTULO[modo];
+}
+int player_aspecto(void) { return aspecto; }
+
+// Onde o modo escolhido fica gravado. Mesmo diretorio que o main.c passa para o
+// resto do app (SDL_GetBasePath()+"art", com /tmp/art de reserva). O web guarda
+// isso em DeviceLocalPlayerPreferences, por aparelho: escolher "Zoom cinema" e
+// reencontrar "Original" no filme seguinte transformaria o modo em brinquedo.
+static const char *prefsArquivo(void) {
+  static char caminho[600];
+  if (!dirPrefs[0]) {
+    char *base = SDL_GetBasePath();
+    if (base) { snprintf(dirPrefs, sizeof dirPrefs, "%sart", base); SDL_free(base); }
+    else      snprintf(dirPrefs, sizeof dirPrefs, "/tmp/art");
+  }
+  snprintf(caminho, sizeof caminho, "%s/player.txt", dirPrefs);
+  return caminho;
+}
+
+static void prefsLer(void) {
+  FILE *f = fopen(prefsArquivo(), "r");
+  char chave[64]; int v;
+  if (!f) return;
+  while (fscanf(f, "%63s %d", chave, &v) == 2)
+    // Valor de outra versao (ou arquivo editado a mao) cai no padrao em vez de
+    // indexar fora do vetor de rotulos.
+    if (!strcmp(chave, "aspecto") && v >= 0 && v < PLR_ASP_N) aspecto = v;
+  fclose(f);
+}
+
+static void prefsGravar(void) {
+  FILE *f = fopen(prefsArquivo(), "w");
+  if (!f) return;
+  fprintf(f, "aspecto %d\n", aspecto);
+  fclose(f);
+}
+
+// Proporcao do QUADRO decodificado. Sem videoInfo ainda, 16:9 — que e a
+// proporcao de quase todo arquivo entregue, e a suposicao que faz "Original"
+// abrir em tela cheia em vez de piscar uma faixa errada por um segundo.
+static float aspectoQuadro(void) {
+  int w = video_largura(), h = video_altura();
+  if (w > 0 && h > 0) return (float)w / (float)h;
+  return NV_TELA_W / NV_TELA_H;
+}
+
+typedef struct { float x, y, w, h; } PlrRect;
+
+static PlrRect aspectoRect(int modo) {
+  const float tela = NV_TELA_W / NV_TELA_H;
+  float q = aspectoQuadro();
+  float bw, bh, sx = 1.0f, sy = 1.0f;
+  PlrRect r;
+  if (q <= 0.0f) q = tela;
+
+  // 1) o object-fit do modo. Os tres casos sao os do ASPECT_MODE_DEFINITIONS.
+  switch (modo) {
+    case PLR_ASP_ESTICAR:                       // fill
+      bw = NV_TELA_W; bh = NV_TELA_H;
+      break;
+    case PLR_ASP_CROP:                          // cover
+    case PLR_ASP_ZOOM_LEVE:
+    case PLR_ASP_ZOOM_CINEMA:
+    case PLR_ASP_FIT_ALTURA:
+      if (q > tela) { bh = NV_TELA_H; bw = bh * q; }
+      else          { bw = NV_TELA_W; bh = bw / q; }
+      break;
+    default:                                    // contain
+      if (q > tela) { bw = NV_TELA_W; bh = bw / q; }
+      else          { bh = NV_TELA_H; bw = bh * q; }
+      break;
+  }
+
+  // 2) a escala do modo, copiada linha a linha do resolveAspectScale.
+  switch (modo) {
+    case PLR_ASP_CROP:        sx = sy = (q > tela) ? q / tela : tela / q; break;
+    case PLR_ASP_ESTICAR:     if (q > tela) sy = q / tela; else sx = tela / q; break;
+    case PLR_ASP_ZOOM_LEVE:   sx = sy = PLR_ZOOM_LEVE;   break;
+    case PLR_ASP_ZOOM_CINEMA: sx = sy = PLR_ZOOM_CINEMA; break;
+    case PLR_ASP_ZOOM_ULTRA:  sx = sy = PLR_ZOOM_ULTRA;  break;
+    case PLR_ASP_FIT_ALTURA:  if (q > tela) sx = sy = q / tela; break;
+    case PLR_ASP_FIT_LARGURA: if (q < tela) sx = sy = tela / q; break;
+    default: break;   // ORIGINAL: contain e nada mais
+  }
+
+  r.w = bw * sx;
+  r.h = bh * sy;
+  r.x = (NV_TELA_W - r.w) * 0.5f;
+  r.y = (NV_TELA_H - r.h) * 0.5f;
+  return r;
+}
+
+// Manda o retangulo ao plano de hardware. Chamado na abertura, na troca de modo
+// e quando o videoInfo chega — antes dele a proporcao do quadro e chute, e o
+// modo calculado com o chute estaria errado justamente nos filmes widescreen,
+// que sao o motivo de tudo isto existir.
+static void aplicarAspecto(void) {
+  PlrRect r;
+  if (!comVideo) return;
+  r = aspectoRect(aspecto);
+  video_janela((int)(r.x + (r.x < 0 ? -0.5f : 0.5f)),
+               (int)(r.y + (r.y < 0 ? -0.5f : 0.5f)),
+               (int)(r.w + 0.5f), (int)(r.h + 0.5f));
+}
+
+void player_aspecto_definir(int modo) {
+  if (modo < 0 || modo >= PLR_ASP_N) modo = PLR_ASP_ORIGINAL;
+  aspecto = modo;
+  prefsGravar();
+  aplicarAspecto();
+}
+
+void player_aspecto_ciclar(void) {
+  player_aspecto_definir((aspecto + 1) % PLR_ASP_N);
+  toastAte = SDL_GetTicks() + PLR_TOAST_MS;
+}
+
 void player_abrir(int indiceCatalogo, const char *url) {
   int n = cat_n(); if (n < 1) n = 1;
   idx = ((indiceCatalogo % n) + n) % n;
@@ -172,8 +320,12 @@ void player_abrir(int indiceCatalogo, const char *url) {
   posSeg = 0.0f;
   ultimoInput = SDL_GetTicks();
   esperandoFonte = (url == NULL);
+  // O modo de proporcao e do APARELHO, nao da sessao: reler aqui e o que faz
+  // "Zoom cinema" continuar valendo no filme seguinte, como no web.
+  prefsLer();
+  toastAte = 0;
   comVideo = (url && *url && video_tocar(url));
-  if (comVideo) video_janela(0, 0, (int)NV_TELA_W, (int)NV_TELA_H);
+  aplicarAspecto();
 
   const CatItem *c = item();
   float d = c ? duracaoDeMeta(c->meta) : 0.0f;
@@ -199,7 +351,7 @@ void player_definir_fonte(const char *url) {
   if (!aberto || !url || !*url) return;
   esperandoFonte = 0;
   comVideo = video_tocar(url);
-  if (comVideo) video_janela(0, 0, (int)NV_TELA_W, (int)NV_TELA_H);
+  aplicarAspecto();
 }
 
 // Consome o pedido de abrir a folha de faixas: quem le, zera.
@@ -258,6 +410,13 @@ void player_evento(const SDL_Event *e) {
   // CONTROLES ESCONDIDOS: qualquer direcao so acorda a interface. O OK direto
   // pausa/retoma sem navegar nada — e o gesto do aparelho: um toque no centro
   // e o video obedece, sem passos no meio.
+  // A TECLA DE PROPORCAO vale sempre, com controles em pe ou escondidos. No web
+  // o modo so se troca por um botao dentro de "More Actions" — dois passos com
+  // um cursor que aqui nao existe. Numa TV o gesto tem que ser um toque, e o
+  // aviso que sobe na troca ja diz em que modo se entrou, entao a tecla nem
+  // precisa da interface aberta. O 0 e a tecla livre no controle da LG.
+  if (k == SDLK_0 || k == SDLK_KP_0) { player_aspecto_ciclar(); return; }
+
   if (!visivel) {
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
       alternarTocando(); acordar(); return;
@@ -273,6 +432,7 @@ void player_evento(const SDL_Event *e) {
       case PLR_PLAY:    alternarTocando(); break;
       case PLR_VOLTAR:  saltar(-1);        break;
       case PLR_AVANCAR: saltar(1);         break;
+      case PLR_ASPECTO: player_aspecto_ciclar(); break;
       default:          pedFaixas = 1;     break;   // CC e audio abrem a folha
     }
     acordar();
@@ -299,6 +459,16 @@ void player_atualizar(float dt, Uint32 agora) {
   // animacoes. O relogio somado continua existindo para quando nao ha video
   // (no Mac, ou se a fonte falhar): sem ele a barra ficaria parada em zero e a
   // tela mentiria dizendo que nada acontece.
+  // O retangulo depende da proporcao do QUADRO, e ela so existe quando o
+  // videoInfo chega — segundos depois da abertura. Sem esta releitura o modo
+  // ficaria calculado com o chute de 16:9 para sempre, e num arquivo 3840x1606
+  // (que e o caso real medido nesta TV) o "Original" cortaria a imagem.
+  if (comVideo) {
+    static int ultLarg, ultAlt;
+    int lw = video_largura(), lh = video_altura();
+    if (lw != ultLarg || lh != ultAlt) { ultLarg = lw; ultAlt = lh; aplicarAspecto(); }
+  }
+
   if (comVideo && video_ativo()) {
     double d = video_duracao();
     posSeg = (float)video_pos();
@@ -384,6 +554,20 @@ static void iconeAudio(float cx, float cy, float a, float lum) {
   }
 }
 
+// Moldura de proporcao: um retangulo VAZADO, quatro barras finas. Nao da para
+// desenhar o miolo com a cor do botao — ela muda com o foco — entao o glifo e a
+// borda em si, e o que aparece por dentro e o proprio circulo.
+static void iconeAspecto(float cx, float cy, float a, float lum) {
+  float w = PLR_ICONE_H * 0.92f, h = PLR_ICONE_H * 0.60f, e = 3.0f;
+  float x = cx - w * 0.5f, y = cy - h * 0.5f;
+  GfxRect lados[4] = {
+    { x, y, w, e }, { x, y + h - e, w, e },
+    { x, y, e, h }, { x + w - e, y, e, h }
+  };
+  int i;
+  for (i = 0; i < 4; i++) gfx_cor(lados[i], 0.0f, lum, lum, lum, a * 0.94f);
+}
+
 // Um botao circular do transporte: translucido quando solto, branco quando em
 // foco, e o glifo sempre com o contraste certo contra o fundo dele.
 static void botaoCirculo(float cx, float cy, float f, float a, int sel) {
@@ -412,7 +596,22 @@ void player_desenhar(Uint32 agora) {
   // a arte 16:9 de esticar quando a tela nao for exatamente 16:9.
   GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
   if (player_com_video()) {
-    gfx_furo(tela);
+    // O furo acompanha o MESMO retangulo que foi ao plano de hardware, cortado
+    // na tela. Furar sempre a tela inteira, como antes, deixava faixa preta nos
+    // modos que nao ocupam tudo ("Original" num 2.39:1 entregue como 2.39:1):
+    // o furo mostrava o nada atras do plano em vez de mostrar o plano.
+    PlrRect r = aspectoRect(aspecto);
+    GfxRect furo;
+    furo.x = r.x < 0.0f ? 0.0f : r.x;
+    furo.y = r.y < 0.0f ? 0.0f : r.y;
+    furo.w = (r.x + r.w > NV_TELA_W ? NV_TELA_W : r.x + r.w) - furo.x;
+    furo.h = (r.y + r.h > NV_TELA_H ? NV_TELA_H : r.y + r.h) - furo.y;
+    // Fora do furo fica PRETO, e nao a arte-chave: e o que a TV mostra ao lado
+    // do plano de video, e pintar outra coisa ali criaria uma borda que nao
+    // existe no aparelho.
+    if (furo.w < NV_TELA_W - 0.5f || furo.h < NV_TELA_H - 0.5f)
+      gfx_cor(tela, 0.0f, 0, 0, 0, 1.0f);
+    if (furo.w > 0.0f && furo.h > 0.0f) gfx_furo(furo);
   } else {
     const char *arte = (c && c->backdrop[0]) ? c->backdrop : NULL;
     GLuint tex = arte ? tex_obter(arte) : 0;
@@ -441,6 +640,29 @@ void player_desenhar(Uint32 agora) {
     { TxtLinha lc = txt_linha(TXT_CALLOUT, "Abrindo fonte", 236, 237, 242, 255);
       txt_desenhar_alpha(lc, NV_TELA_W * 0.5f - lc.w * 0.5f,
                          NV_TELA_H * 0.5f + 34, 0.85f * entrada); }
+  }
+
+  // --- aviso de troca de modo de proporcao ---------------------------------
+  // O #playerAspectToast do web, com as medidas do bloco de TV do CSS:
+  //   top min(8.33vw,160px)=160  altura min(6.67vw,128px)=128
+  //   padding lateral min(3.33vw,64px)=64  fonte min(2.92vw,56px)=56
+  //   fundo rgba(9,13,20,0.88), borda rgba(255,255,255,0.18), raio 999 (pilula)
+  // Ele e desenhado ANTES do corte por `a`: a tecla de proporcao funciona com
+  // os controles escondidos, e um aviso que so aparecesse com a barra em pe
+  // deixaria a troca sem nenhuma confirmacao no caso mais comum.
+  if (toastAte > agora) {
+    // Some com fade nos ultimos 200ms, que e a `transition: opacity 200ms` do
+    // bloco de TV. Aparecer e sumir de estalo le como falha de desenho.
+    float resta = (float)(toastAte - agora);
+    float at = (resta < 200.0f ? resta / 200.0f : 1.0f) * entrada;
+    TxtLinha l = txt_linha(TXT_PLR_TITULO, player_aspecto_rotulo(aspecto),
+                           243, 248, 255, 242);
+    float pw = (float)l.w + 128.0f, ph = 128.0f;
+    GfxRect pil = { (NV_TELA_W - pw) * 0.5f, 160.0f, pw, ph };
+    // Raio e FRACAO do menor lado (ver gfx.h): 0.5 e a pilula completa.
+    gfx_cor(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.88f * at);
+    txt_desenhar_alpha(l, pil.x + (pw - l.w) * 0.5f,
+                       pil.y + (ph - (float)l.h) * 0.5f, at);
   }
 
   float a = anim * entrada;
@@ -539,7 +761,8 @@ void player_desenhar(Uint32 agora) {
     float passo = PLR_BTN_D + PLR_BTN_GAP;
     float x0    = bx + PLR_BTN_D * 0.5f;
     const float cxs[PLR_NBTNS] = { x0, x0 + passo, x0 + passo * 2,
-                                   x0 + passo * 3, x0 + passo * 4 };
+                                   x0 + passo * 3, x0 + passo * 4,
+                                   x0 + passo * 5 };
     for (int i = 0; i < PLR_NBTNS; i++) {
       float f = focoB[i];
       int sel = (botao == i);
@@ -550,6 +773,7 @@ void player_desenhar(Uint32 agora) {
         case PLR_PLAY:    iconePlayPause(cxs[i], cyBotoes, a, tocando, lum); break;
         case PLR_AVANCAR: iconeSalto(cxs[i], cyBotoes, a, 1, lum); break;
         case PLR_CC:      iconeLegendas(cxs[i], cyBotoes, a, lum); break;
+        case PLR_ASPECTO: iconeAspecto(cxs[i], cyBotoes, a, lum); break;
         default:          iconeAudio(cxs[i], cyBotoes, a, lum); break;
       }
     }
@@ -581,7 +805,14 @@ void player_desenhar(Uint32 agora) {
     if (video_largura() >= 3840)      snprintf(res, sizeof res, "4K");
     else if (video_largura() >= 1920) snprintf(res, sizeof res, "HD");
     if (res[0]) selos[nSelos++] = res;
-    if (video_tem_dolby_vision()) selos[nSelos++] = "Dolby Vision";
+    // "Dolby Vision" so quando o PIPELINE devolveu DolbyVision no videoInfo —
+    // video_tem_dolby_vision nao le mais a afirmacao do addon. Esta MEDIDO que
+    // nesta TV um MKV anunciado como DV volta HDR10; o selo dizia Dolby Vision
+    // por cima de um fluxo HDR10, e o dono confia nele justamente para saber se
+    // pegou a versao boa. Quando o pipeline diz HDR10, o selo diz HDR10 — calar
+    // seria esconder metade da resposta.
+    if (video_tem_dolby_vision())                  selos[nSelos++] = "Dolby Vision";
+    else if (!strcasecmp(video_hdr(), "HDR10"))    selos[nSelos++] = "HDR10";
     if (video_tem_atmos())        selos[nSelos++] = "Dolby Atmos";
     { float sy = PLR_PAD_Y + desce;
       int i;
