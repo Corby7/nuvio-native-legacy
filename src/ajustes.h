@@ -31,4 +31,18 @@ int ajustes_idioma_ingles(void);
 // a fonte de video mostrar exatamente o que o usuario escolheu.
 const char *ajustes_qualidade(void);
 
+// --- LAYOUT ------------------------------------------------------------------
+// As mesmas chaves de js/data/local/layoutPreferences.js do app web, com os
+// mesmos efeitos. Nao sao preferencias inventadas para o port: o dono ja as
+// muda na tela de Ajustes do web, e a home dele depende delas.
+int   ajustes_rail_recolhida(void);     // collapseSidebar
+int   ajustes_hero_ligado(void);        // heroSectionEnabled
+int   ajustes_hero_cheio(void);         // modernHeroFullScreenBackdropEnabled
+int   ajustes_cw_estilo(void);          // continueWatchingCardStyle: 0 card, 1 largo, 2 poster
+int   ajustes_rotulos_poster(void);     // posterLabelsEnabled
+int   ajustes_posteres_deitados(void);  // modernLandscapePostersEnabled
+// x onde o conteudo comeca. Nao e constante: o recuo e sempre 104 e a rail
+// soma os 144 dela quando esta fixa.
+float ajustes_conteudo_x(void);
+
 #endif

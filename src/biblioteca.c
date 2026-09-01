@@ -17,6 +17,7 @@
 #include "focus.h"
 #include "anim.h"
 #include "layout.h"
+#include "ajustes.h"
 #include "catalogo.h"
 #include <stdio.h>
 #include <string.h>
@@ -306,7 +307,7 @@ void biblioteca_desenhar(Uint32 agora) {
         // tabelas oficiais de Top Shelf, que publicam os dois tamanhos.
         float esc = 1.0f + NV_FOCO_ESCALA_P * f;
         float w = NV_POSTER_W * esc, h = NV_POSTER_H * esc;
-        float cx = NV_LEGACY_CONTENT_X + c * passoC + NV_POSTER_W * 0.5f;
+        float cx = ajustes_conteudo_x() + c * passoC + NV_POSTER_W * 0.5f;
         float cy = topo + NV_POSTER_H * 0.5f - NV_FOCO_LIFT * f;
         GfxRect card = { cx - w * 0.5f, cy - h * 0.5f, w, h };
 

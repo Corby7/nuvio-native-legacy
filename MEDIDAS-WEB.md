@@ -92,9 +92,20 @@ tela cheia, e `continueWatchingCardStyle: "card"` que dá os cards landscape.
 | card "Continuar assistindo" | — | **432×247**, raio 24, passo **492** |
 | passo entre fileiras | 416 | **415.2**; a de "Continuar assistindo" usa **358.2** |
 
-**PENDÊNCIA PARA O DONO:** o port deve seguir o layout do perfil dele
-(full-bleed, sem rail, x=104) ou o padrão (faixa, rail, x=248)? Não mudei a
-home por conta disso — é escolha, não medida.
+**RESOLVIDO NO FONTE, não era pergunta.** `js/data/local/layoutPreferences.js`
+tem os padrões de fábrica, e o perfil do dono só difere neles:
+
+```
+collapseSidebar: true                        <- a rail não some, ela é RECOLHIDA
+modernHeroFullScreenBackdropEnabled: true    <- troca a faixa por tela cheia
+continueWatchingCardStyle: "card"            <- os cards landscape
+modernLandscapePostersEnabled: true
+```
+
+Não são dois layouts: é **uma** tela dirigida por preferência. E a regra do
+recuo fica óbvia quando se olha assim — o conteúdo tem **sempre 104** de recuo,
+e a rail acrescenta os 144 dela quando está fixa (104 recolhida, 248 fixa). O
+port passou a ler as preferências e a expô-las em Ajustes.
 
 ## Foco — MEDIDO, e corrige um defeito real
 
@@ -312,3 +323,72 @@ falta é a home parar de cravar a lista e passar a perguntar.
 (mesmo aparelho, outro processo — e o app web mantém o arquivo aberto, como já
 aconteceu com o progresso), ou receber a lista pela rede junto com o acervo?
 Não inventei uma ordem.
+
+
+## Preferências de layout — a fonte, e o que o port faz com elas
+
+`js/data/local/layoutPreferences.js`, `DEFAULTS` (padrão de fábrica):
+
+| chave | padrão | perfil do dono | port |
+|---|---|---|---|
+| `homeLayout` | `"modern"` | `"modern"` | só o moderno existe; não exposto |
+| `collapseSidebar` | `false` | **`true`** | ✅ "Barra lateral" |
+| `heroSectionEnabled` | `true` | `true` | ✅ "Destaque na home" |
+| `modernHeroFullScreenBackdropEnabled` | `false` | **`true`** | ✅ "Destaque em tela cheia" |
+| `continueWatchingCardStyle` | `"card"` | `"card"` | ✅ "Estilo do Continuar assistindo" (card/largo/pôster) |
+| `posterLabelsEnabled` | `true` | `true` | ✅ "Rótulos nos pôsteres" |
+| `modernLandscapePostersEnabled` | `false` | **`true`** | ✅ exposto; o desenho landscape ainda não |
+| `posterCardWidthDp` / `posterCardCornerRadiusDp` | 126 / 12 | 120 / 12 | ver abaixo |
+| `cardDepth*`, `focusedPosterBackdropExpand*` | — | ligados | **não portados** |
+
+### O tamanho do pôster NÃO vem de `posterCardWidthDp`
+
+Vale corrigir uma suposição razoável mas errada. `buildModernHomeSizingStyle`
+(homeScreen.js:521) calcula, com `dpToPx = 2`:
+
+```
+portraitWidth  = round(dp * 0.84 * 1.08 * 2)   // 120 -> 218
+portraitHeight = round(dp * 1.5 * 0.84 * 1.08 * 2)  // 120 -> 327
+radius         = round(radiusDp * 2)           // 12  -> 24
+```
+
+E de fato `--home-poster-width: 218px` / `--home-poster-height: 327px`. **Mas o
+card medido é 212×322.** A razão está no CSS do layout moderno, que ignora a
+variável:
+
+```css
+.home-screen-shell.home-layout-modern .home-poster-card:not(.is-landscape)
+  { min-width: 212px; max-width: 212px; flex-basis: 212px }
+.home-screen-shell.home-layout-modern .home-poster-card:not(.is-landscape)
+  .home-poster-frame { height: 318px }
+```
+
+212 de largura, moldura de 318 mais 2px de borda em cima e embaixo = **322**. As
+variáveis `--home-poster-*` são do layout **clássico**. Ou seja: 212×322 é
+constante do layout moderno e **não** muda com `posterCardWidthDp` — só o raio
+(24) sai da preferência. O `layout.h` pode manter os números, desde que diga
+isso.
+
+Outras larguras da mesma folha, ainda não portadas:
+
+- `.home-poster-card.is-landscape` — **318** de largura, moldura 178.875 (16:9).
+  É o `modernLandscapePostersEnabled`.
+- `.home-poster-card.is-expanded` — **563.92** de largura, moldura 318. É o
+  `focusedPosterBackdropExpandEnabled`: o pôster em foco **cresce sozinho depois
+  de 3s** (`focusedPosterBackdropExpandDelaySeconds`) e mostra o backdrop com um
+  gradiente. É comportamento visível e o port não tem.
+
+### Hero em tela cheia — as rampas
+
+MEDIDO nos pseudo-elementos de `.home-modern-hero-media` com a preferência
+ligada (1920×1062 em 0,0, imagem `cover` com `object-position: 100% 0`):
+
+- `::before` — horizontal, cobre os **1248px esquerdos de 1920** (65%):
+  `#0d0d0d` → 0.90 em 22% → 0.80 em 46% → 0.42 em 76% → 0
+- `::after` — vertical, altura toda:
+  0 até **64%** → 0.35 em 74.8% → 0.75 em 85.6% → sólido no fim
+
+As paradas percentuais são **as mesmas** do hero em faixa; o que muda é a
+cobertura (65% da largura contra 45%) e a profundidade. Faz sentido: com a arte
+ocupando a tela toda, o texto precisa de mais fundo escuro sob ele.
+Implementadas em `GFX_HERO_CHEIO`, ao lado de `GFX_HERO`.

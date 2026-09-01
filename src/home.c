@@ -8,6 +8,7 @@
 #include "focus.h"
 #include "anim.h"
 #include "layout.h"
+#include "ajustes.h"
 #include "catalogo.h"
 #include <stdio.h>
 #include <string.h>
@@ -187,7 +188,11 @@ static void sincronizarFileiras(void) {
     fileiras[r].titulo = cf->titulo;
     // "Continuar assistindo" e a unica landscape: e o
     // `continueWatchingCardStyle: "card"` do perfil. Todo o resto e poster 2:3.
-    fileiras[r].tipo = (r == 0 && !strcmp(cf->chave, "continue_watching"))
+    // `continueWatchingCardStyle`: "card" e "largo" desenham landscape, "poster"
+    // usa o mesmo 2:3 das outras fileiras. E a preferencia, nao o tipo da
+    // fileira, que decide a forma.
+    fileiras[r].tipo = (r == 0 && !strcmp(cf->chave, "continue_watching")
+                        && ajustes_cw_estilo() != 2)
                      ? FILEIRA_CONTINUE : FILEIRA_NORMAL;
     fileiras[r].n   = cf->n > MAX_CARDS ? MAX_CARDS : cf->n;
     fileiras[r].ini = cf->ini;
@@ -235,7 +240,7 @@ void home_atualizar(float dt, Uint32 agora) {
       float passo = passoDe(fileiras[r].tipo), lw = larguraDe(fileiras[r].tipo);
       float esq = (float)foco.coluna * passo;
       float dir = esq + lw;
-      float util = NV_TELA_W - NV_LEGACY_CONTENT_X - NV_LEGACY_CONTENT_RIGHT;
+      float util = NV_TELA_W - ajustes_conteudo_x() - NV_LEGACY_CONTENT_RIGHT;
       float alvo = scrollX[r];
       // a folga cobre o crescimento do foco: o card cresce para os dois lados,
       // e sem reservar essa metade ele encosta na borda ao ficar em foco
@@ -282,7 +287,13 @@ static void desenhaHero(Uint32 agora) {
   // MEDIDO no app web: .home-modern-hero-media fica em x=555, y=0, 1421x670.
   // A conta que estava aqui (0.28*W - 56 = 481,6 de largura 1438) vinha de
   // proporcao estimada e punha a arte 73px a esquerda do lugar.
-  GfxRect r = { NV_HERO_ARTE_X, 0, NV_HERO_ARTE_W, NV_HERO_ARTE_H };
+  // Faixa ou tela cheia, conforme `modernHeroFullScreenBackdropEnabled`. Sao os
+  // dois estados da MESMA tela, nao dois layouts — e cada um tem a sua rampa de
+  // degrade, medida separadamente (ver GFX_HERO e GFX_HERO_CHEIO em gfx.c).
+  int cheio = ajustes_hero_cheio();
+  GfxModo modoHero = cheio ? GFX_HERO_CHEIO : GFX_HERO;
+  GfxRect r = cheio ? (GfxRect){ 0, 0, NV_TELA_W, NV_HERO_CHEIO_H }
+                    : (GfxRect){ NV_HERO_ARTE_X, 0, NV_HERO_ARTE_W, NV_HERO_ARTE_H };
 
   const CatItem *ci = cat_item(heroAtual);
   const char *arteA = (ci && ci->backdrop[0]) ? ci->backdrop : bd[heroAtual];
@@ -293,11 +304,11 @@ static void desenhaHero(Uint32 agora) {
   GLuint tAtu = tex_obter(arteA);
   if (heroFade < 1.0f && tAnt) {
     gfx_tex_aspect_atual = tex_aspecto(arteB);
-    gfx_rect(r, tAnt, GFX_HERO, 0, 0, 0, 0.0f, 0, 0, 0, aArte);
+    gfx_rect(r, tAnt, modoHero, 0, 0, 0, 0.0f, 0, 0, 0, aArte);
   }
   if (tAtu) {
     gfx_tex_aspect_atual = tex_aspecto(arteA);
-    gfx_rect(r, tAtu, GFX_HERO, 0, 0, 0, 0.0f, 0, 0, 0, heroFade * aArte);
+    gfx_rect(r, tAtu, modoHero, 0, 0, 0, 0.0f, 0, 0, 0, heroFade * aArte);
   }
   gfx_tex_aspect_atual = 0.0f;
 
@@ -328,7 +339,7 @@ static void desenhaHero(Uint32 agora) {
     if (wTit > NV_LOGO_HERO_MAX_W) { wTit = NV_LOGO_HERO_MAX_W; hTit = wTit / ap; }
     // O logo cresce para CIMA a partir da base da caixa reservada, para que um
     // logo baixo e largo nao flutue no meio dela.
-    GfxRect rl = { NV_LEGACY_CONTENT_X,
+    GfxRect rl = { ajustes_conteudo_x(),
                    NV_HERO_LOGO_Y + (NV_LOGO_HERO_H - hTit), wTit, hTit };
     gfx_tex_aspect_atual = 0.0f;
     gfx_rect(rl, tlogo, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, aTexto * heroFade);
@@ -336,7 +347,7 @@ static void desenhaHero(Uint32 agora) {
     // Sem logo o web usa .home-hero-title-text: 76px, peso 600. TITULO1 e 76.
     TxtLinha tit = txt_linha(TXT_TITULO1, (ci && ci->titulo[0]) ? ci->titulo
                              : TITULOS_DEMO[heroAtual % 10], 255, 255, 255, 255);
-    txt_desenhar_alpha(tit, NV_LEGACY_CONTENT_X,
+    txt_desenhar_alpha(tit, ajustes_conteudo_x(),
                        NV_HERO_LOGO_Y + (NV_LOGO_HERO_H - (float)tit.h),
                        aTexto * heroFade);
   }
@@ -344,20 +355,20 @@ static void desenhaHero(Uint32 agora) {
   float y = NV_HERO_META_Y;
   if (tserv) {
     float hs = sub.h * 1.15f;
-    GfxRect rs = { NV_LEGACY_CONTENT_X, y + (sub.h - hs) * 0.5f, wServ - 14.0f, hs };
+    GfxRect rs = { ajustes_conteudo_x(), y + (sub.h - hs) * 0.5f, wServ - 14.0f, hs };
     gfx_tex_aspect_atual = 0.0f;
     gfx_rect(rs, tserv, GFX_CARD, 0, 0, 0, 0.5f, 0, 0, 0, aTexto * heroFade);
   }
-  txt_desenhar_alpha(sub, NV_LEGACY_CONTENT_X + wServ, y, aTexto * heroFade);
+  txt_desenhar_alpha(sub, ajustes_conteudo_x() + wServ, y, aTexto * heroFade);
   if (ci && ci->classificacao[0]) {
     char cl[8]; snprintf(cl, sizeof cl, "A%s", ci->classificacao);
     TxtLinha lb = txt_linha(TXT_MINI, cl, 255, 255, 255, 255);
-    GfxRect bg = { NV_LEGACY_CONTENT_X + wServ + sub.w + 14, y + (sub.h - lb.h) * 0.5f,
+    GfxRect bg = { ajustes_conteudo_x() + wServ + sub.w + 14, y + (sub.h - lb.h) * 0.5f,
                    lb.w + 8, lb.h + 2 };
     gfx_cor(bg, 0.20f, 0.80f, 0.34f, 0.10f, 0.92f * aTexto * heroFade);
     txt_desenhar_alpha(lb, bg.x + 4, bg.y + 1, aTexto * heroFade);
   }
-  txt_bloco(TXT_CAPTION, sinopse, 206, 208, 216, NV_LEGACY_CONTENT_X,
+  txt_bloco(TXT_CAPTION, sinopse, 206, 208, 216, ajustes_conteudo_x(),
             NV_HERO_SIN_Y, largSin,
             NV_LD_CAPTION, aTexto * heroFade * 0.95f, 2);
 }
@@ -374,7 +385,7 @@ static void desenhaFundo(void) {
 
 void home_desenhar(Uint32 agora) {
   desenhaFundo();
-  desenhaHero(agora);
+  if (ajustes_hero_ligado()) desenhaHero(agora);
 
   float y = NV_SHELF_TOP - scrollY;
   for (int r = 0; r < nFileiras; r++) {
@@ -388,7 +399,7 @@ void home_desenhar(Uint32 agora) {
 
     if (y < NV_TELA_H + 200 && y + NV_LEGACY_ROW_HEAD_H + lh > -200) {
       TxtLinha tl = txt_linha(TXT_ROW_TITULO, fileiras[r].titulo, 255, 255, 255, 255);
-      txt_desenhar(tl, NV_LEGACY_CONTENT_X, y);
+      txt_desenhar(tl, ajustes_conteudo_x(), y);
 
       for (int passe = 1; passe < 2; passe++) {
         for (int c = 0; c < fileiras[r].n; c++) {
@@ -396,7 +407,7 @@ void home_desenhar(Uint32 agora) {
           if (passe == 0 && f < 0.01f) continue;
           float esc = 1.0f + escalaDe(tipo) * f;
           float w = lw * esc, h = artH * esc;
-          float cx = NV_LEGACY_CONTENT_X + c * passo - scrollX[r] + lw * 0.5f;
+          float cx = ajustes_conteudo_x() + c * passo - scrollX[r] + lw * 0.5f;
           // Sem levantamento: no web o card focado nao sai do lugar.
           float cy = cardY + artH * 0.5f;
           if (cx < -lw * 1.5f || cx > NV_TELA_W + lw) continue;

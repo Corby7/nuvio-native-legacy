@@ -23,7 +23,12 @@ typedef enum {
   // duas camadas de tela CHEIA — nesta GPU o custo e de preenchimento, e a
   // segunda passada sozinha derrubava o quadro.
   GFX_DETALHE = 11,
-  GFX_NMODOS = 12
+  // Hero em tela cheia. Mesma ideia do GFX_HERO, com as rampas do OUTRO estado
+  // da preferencia: cobrem mais da tela e sao mais fundas. Dois modos e nao um
+  // parametrizado porque as paradas estao anotadas junto das medidas, e e assim
+  // que este shader vem sendo mantido.
+  GFX_HERO_CHEIO = 12,
+  GFX_NMODOS = 13
 } GfxModo;
 
 typedef struct {

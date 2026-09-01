@@ -247,12 +247,42 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "  c = mix(c, bg, clamp(a,0.0,1.0));\n"
   "  gl_FragColor = vec4(c, uCor.a);\n"
   "}\n",
+
+  // GFX_HERO_CHEIO — hero ocupando a tela inteira.
+  //
+  // MEDIDO nos pseudo-elementos de .home-modern-hero-media com
+  // `modernHeroFullScreenBackdropEnabled` ligado (1920x1062 em 0,0):
+  //
+  //   ::before  horizontal, cobrindo os 1248px ESQUERDOS de 1920 (= 65%):
+  //             #0d0d0d -> 0.90 em 22% -> 0.80 em 46% -> 0.42 em 76% -> 0
+  //   ::after   vertical, altura toda:
+  //             0 ate 64% -> 0.35 em 74.8% -> 0.75 em 85.6% -> solido no fim
+  //
+  // As paradas percentuais sao as MESMAS do hero em faixa; o que muda e a
+  // cobertura (65% da largura em vez de 45%) e a profundidade. Faz sentido: com
+  // a arte ocupando a tela toda, o texto precisa de mais fundo escuro sob ele.
+  "void main(){\n"
+  "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
+  "  vec3 bg = vec3(0.051,0.051,0.051);\n"
+  "  float y = vUv.y;\n"
+  "  float av = clamp((y-0.640)/0.108,0.0,1.0)*0.35\n"
+  "           + clamp((y-0.748)/0.108,0.0,1.0)*0.40\n"
+  "           + clamp((y-0.856)/0.144,0.0,1.0)*0.25;\n"
+  "  float t = vUv.x/0.65;\n"
+  "  float ah = 1.0 - clamp(t/0.22,0.0,1.0)*0.10\n"
+  "                 - clamp((t-0.22)/0.24,0.0,1.0)*0.10\n"
+  "                 - clamp((t-0.46)/0.30,0.0,1.0)*0.38\n"
+  "                 - clamp((t-0.76)/0.24,0.0,1.0)*0.42;\n"
+  "  ah *= step(vUv.x, 0.65);\n"
+  "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
+  "  gl_FragColor = vec4(c, uCor.a);\n"
+  "}\n",
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
 static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
   {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
-  {0,1}
+  {0,1}, {0,1}
 };
 
 static GLuint compila(GLenum tipo, const char *src) {

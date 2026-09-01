@@ -16,6 +16,18 @@
 #define NV_LEGACY_RAIL_W        144.0f
 #define NV_LEGACY_CONTENT_X     248.0f
 #define NV_LEGACY_CONTENT_RIGHT 104.0f
+// A regra de verdade, medida nos dois estados: o conteudo tem SEMPRE 104 de
+// recuo, e a rail acrescenta os 144 dela quando esta aberta. Nao sao dois
+// layouts — e `collapseSidebar` em layoutPreferences.js, que o perfil do dono
+// tem em true. Com ela recolhida a home comeca em 104.
+#define NV_CONTENT_PAD          104.0f
+
+// Hero em TELA CHEIA (`modernHeroFullScreenBackdropEnabled`, tambem true no
+// perfil do dono). MEDIDO: .home-modern-hero-media 1920x1062 em (0,0), imagem
+// em `object-fit: cover` com `object-position: 100% 0`. O bloco de texto
+// continua com 640 de largura, mas em x = NV_CONTENT_PAD e comecando em y=40.
+#define NV_HERO_CHEIO_H        1062.0f
+#define NV_HERO_CHEIO_COPY_Y     40.0f
 
 // Scancode do BACK no SDL da LG (SDL_SCANCODE_WEBOS_BACK). Nao esta no
 // SDL_scancode.h padrao, por isso vem como numero.

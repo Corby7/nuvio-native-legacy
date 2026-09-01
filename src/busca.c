@@ -19,6 +19,7 @@
 #include "focus.h"
 #include "anim.h"
 #include "layout.h"
+#include "ajustes.h"
 #include "catalogo.h"
 #include <string.h>
 #include <stdio.h>
@@ -30,7 +31,7 @@
 #define BUSCA_TECLA_GAP  12.0f
 #define BUSCA_KB_COLS     6
 #define BUSCA_KB_FILEIRAS 7            // 6 fileiras de A-Z/0-9 + 1 de espaco/apagar
-#define BUSCA_KB_X       NV_LEGACY_CONTENT_X
+#define BUSCA_KB_X       ajustes_conteudo_x()
 #define BUSCA_KB_PASSO   (BUSCA_TECLA_W + BUSCA_TECLA_GAP)
 #define BUSCA_KB_W       (BUSCA_KB_COLS * BUSCA_TECLA_W + (BUSCA_KB_COLS - 1) * BUSCA_TECLA_GAP)
 #define BUSCA_CAMPO_Y   132.0f

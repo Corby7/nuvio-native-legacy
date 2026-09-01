@@ -23,7 +23,10 @@
 #define AJ_LINHA_GAP      8.0f
 #define AJ_SEC_GAP       46.0f    // fim de uma secao ao cabecalho da proxima
 #define AJ_SEC_CABEC     44.0f    // altura reservada ao cabecalho da secao
-#define AJ_LISTA_X      NV_LEGACY_CONTENT_X
+// Nao e constante: acompanha a rail, como todo o resto do conteudo. Com a
+// barra recolhida a lista tambem comeca em 104 — deixar 248 cravado aqui fazia
+// a tela de Ajustes ser a unica desalinhada das outras.
+#define AJ_LISTA_X      ajustes_conteudo_x()
 #define AJ_LISTA_W     1120.0f
 #define AJ_PAD           34.0f    // borda da linha ao texto
 #define AJ_TOPO        (NV_MARGEM_Y + 118.0f)   // abaixo do titulo da tela
@@ -32,13 +35,25 @@
 // 12px sobre 88 de altura, que e o canto que o tvOS usa nas linhas de ajuste.
 #define AJ_RAIO           0.14f
 
-typedef enum { AJ_QUALIDADE, AJ_DV, AJ_ATMOS, AJ_IDIOMA, AJ_ANIM,
+typedef enum { AJ_QUALIDADE, AJ_DV, AJ_ATMOS,
+               // Layout, com os MESMOS nomes e efeitos do app web. Nao sao
+               // invencao desta tela: sao chaves de layoutPreferences.js, e o
+               // dono ja mexe nelas na tela de Ajustes do web. Um port que le a
+               // preferencia mas nao deixa mudar deixa metade do trabalho.
+               AJ_RAIL, AJ_HERO, AJ_HERO_CHEIO, AJ_CW_ESTILO, AJ_ROTULOS,
+               AJ_LANDSCAPE,
+               AJ_IDIOMA, AJ_ANIM,
                AJ_VERSAO_I, AJ_ESPACO, AJ_N } OpcaoId;
 
 static const char *V_QUALIDADE[] = { "Automática", "4K", "1080p", "720p" };
 static const char *V_LIGA[]      = { "Ligado", "Desligado" };
 static const char *V_IDIOMA[]    = { "Português", "English" };
 static const char *V_ANIM[]      = { "Completas", "Reduzidas" };
+// `collapseSidebar`: recolhida = a rail some e o conteudo comeca em 104.
+static const char *V_RAIL[]      = { "Recolhida", "Fixa" };
+// `continueWatchingCardStyle`, validado em layoutPreferences.js contra
+// exatamente estes tres valores.
+static const char *V_CW[]        = { "Card", "Largo", "P\xc3\xb4ster" };
 
 typedef struct {
   const char  *rotulo;
@@ -50,10 +65,28 @@ static const Opcao OPCOES[AJ_N] = {
   { "Qualidade máxima",        V_QUALIDADE, 4 },
   { "Dolby Vision",            V_LIGA,      2 },
   { "Dolby Atmos",             V_LIGA,      2 },
+  { "Barra lateral",           V_RAIL,      2 },   // collapseSidebar
+  { "Destaque na home",        V_LIGA,      2 },   // heroSectionEnabled
+  { "Destaque em tela cheia",  V_LIGA,      2 },   // modernHeroFullScreenBackdropEnabled
+  { "Estilo do \"Continuar assistindo\"", V_CW, 3 }, // continueWatchingCardStyle
+  { "Rótulos nos pôsteres",    V_LIGA,      2 },   // posterLabelsEnabled
+  { "Pôsteres deitados",       V_LIGA,      2 },   // modernLandscapePostersEnabled
   { "Idioma",                  V_IDIOMA,    2 },
   { "Animações",               V_ANIM,      2 },
   { "Versão",                  NULL,        0 },
   { "Espaço usado por imagens",NULL,        0 },
+};
+
+// Nome de cada opcao no arquivo. O formato era POSICIONAL — uma linha por
+// opcao, na ordem do enum — e por isso acrescentar uma opcao no meio fazia o
+// arquivo de quem ja tinha o app aplicar os valores errados, em silencio. Com
+// chave por linha, opcao nova nasce no padrao e as antigas continuam onde
+// estavam. Os nomes seguem os do app web onde existe correspondente.
+static const char *CHAVE[AJ_N] = {
+  "qualidade", "dolbyVision", "dolbyAtmos",
+  "collapseSidebar", "heroSectionEnabled", "modernHeroFullScreenBackdropEnabled",
+  "continueWatchingCardStyle", "posterLabelsEnabled", "modernLandscapePostersEnabled",
+  "idioma", "animacoes", "-versao", "-espaco",
 };
 
 // Onde cada secao comeca e quantas opcoes ela tem. Secao e um agrupamento
@@ -61,6 +94,7 @@ static const Opcao OPCOES[AJ_N] = {
 // parar neles, como no aparelho.
 static const struct { const char *titulo; int ini, n; } SECOES[] = {
   { "Reprodução", AJ_QUALIDADE,  3 },
+  { "Layout",     AJ_RAIL,       6 },
   { "Interface",  AJ_IDIOMA,     2 },
   { "Sobre",      AJ_VERSAO_I,   2 },
 };
@@ -69,7 +103,20 @@ static const struct { const char *titulo; int ini, n; } SECOES[] = {
 // Valor escolhido de cada opcao; os indices de leitura ficam em 0 e nao sao
 // usados. Os padroes sao os do aparelho recem-configurado: qualidade
 // automatica, tudo ligado, animacoes completas.
-static int valor[AJ_N] = { 0, 0, 0, 0, 0, 0, 0 };
+// Padroes. Os de layout sao os DEFAULTS de layoutPreferences.js, com uma
+// excecao anotada: `collapseSidebar` nasce recolhida e o destaque nasce em tela
+// cheia porque e o estado do perfil do dono, que e o que ele ve hoje. As duas
+// sao trocaveis aqui, que era o ponto.
+static int valor[AJ_N] = {
+  0, 0, 0,          /* qualidade, DV, Atmos */
+  0,                /* barra lateral: recolhida */
+  0,                /* destaque na home: ligado */
+  0,                /* destaque em tela cheia: ligado */
+  0,                /* continuar assistindo: card */
+  0,                /* rotulos nos posteres: ligado */
+  1,                /* posteres deitados: desligado (DEFAULT do web) */
+  0, 0, 0, 0,
+};
 static int focoOp = 0;
 // Uma lista de UMA coluna nao precisa do focus.h: a memoria de coluna que ele
 // existe para resolver nao tem o que lembrar aqui, e o indice cru deixa o
@@ -82,6 +129,18 @@ int ajustes_animacoes_reduzidas(void) { return valor[AJ_ANIM]   == 1; }
 int ajustes_dolby_vision(void)        { return valor[AJ_DV]      == 0; }
 int ajustes_dolby_atmos(void)         { return valor[AJ_ATMOS]   == 0; }
 int ajustes_idioma_ingles(void)       { return valor[AJ_IDIOMA]  == 1; }
+int ajustes_rail_recolhida(void)      { return valor[AJ_RAIL]    == 0; }
+int ajustes_hero_ligado(void)         { return valor[AJ_HERO]    == 0; }
+int ajustes_hero_cheio(void)          { return valor[AJ_HERO_CHEIO] == 0; }
+int ajustes_cw_estilo(void)           { return valor[AJ_CW_ESTILO]; }
+int ajustes_rotulos_poster(void)      { return valor[AJ_ROTULOS] == 0; }
+int ajustes_posteres_deitados(void)   { return valor[AJ_LANDSCAPE] == 0; }
+// A regra do web, e nao dois layouts: o conteudo tem sempre 104 de recuo e a
+// rail acrescenta os 144 dela quando esta fixa.
+float ajustes_conteudo_x(void) {
+  return ajustes_rail_recolhida() ? NV_CONTENT_PAD
+                                  : NV_LEGACY_RAIL_W + NV_CONTENT_PAD;
+}
 const char *ajustes_qualidade(void)   { return V_QUALIDADE[valor[AJ_QUALIDADE]]; }
 
 // Onde os ajustes ficam. Ate agora nada era gravado: mexer numa opcao valia so
@@ -97,18 +156,17 @@ void ajustes_dir(const char *dir) {
   snprintf(caminho, sizeof caminho, "%s/ajustes.txt", dirAjustes);
   f = fopen(caminho, "r");
   if (!f) return;
-  { int i = 0;
-    while (i < AJ_N && fgets(linha, sizeof linha, f)) {
-      int v = atoi(linha);
-      // Ficheiro de uma versao com mais ou menos opcoes nao pode deixar um
-      // indice fora do vetor de valores.
-      if (OPCOES[i].valores) {
-        int n = 0;
-        while (OPCOES[i].valores[n]) n++;
-        valor[i] = (v >= 0 && v < n) ? v : 0;
-      }
-      i++;
-    } }
+  while (fgets(linha, sizeof linha, f)) {
+    char chave[64]; int v, i;
+    if (sscanf(linha, "%63s %d", chave, &v) != 2) continue;
+    for (i = 0; i < AJ_N; i++) {
+      if (strcmp(CHAVE[i], chave) || !OPCOES[i].valores) continue;
+      // Valor fora da faixa (arquivo de outra versao, ou editado a mao) cai no
+      // padrao em vez de indexar fora do vetor.
+      if (v >= 0 && v < OPCOES[i].n) valor[i] = v;
+      break;
+    }
+  }
   fclose(f);
 }
 
@@ -121,7 +179,8 @@ static void gravar(void) {
   snprintf(tmp, sizeof tmp, "%s/ajustes.tmp", dirAjustes);
   f = fopen(tmp, "w");
   if (!f) return;
-  for (i = 0; i < AJ_N; i++) fprintf(f, "%d\n", valor[i]);
+  for (i = 0; i < AJ_N; i++)
+    if (OPCOES[i].valores) fprintf(f, "%s %d\n", CHAVE[i], valor[i]);
   fclose(f);
   rename(tmp, caminho);
 }
@@ -252,7 +311,7 @@ void ajustes_desenhar(Uint32 agora) {
   gfx_cor(tela, 0.0f, NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
 
   TxtLinha tit = txt_linha(TXT_TITULO1, "Ajustes", 255, 255, 255, 255);
-  txt_desenhar(tit, NV_LEGACY_CONTENT_X, NV_MARGEM_Y);
+  txt_desenhar(tit, AJ_LISTA_X, NV_MARGEM_Y);
 
   float y = AJ_TOPO - scrollY;
   for (int s = 0; s < AJ_N_SECOES; s++) {

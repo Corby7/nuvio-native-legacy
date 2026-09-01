@@ -259,7 +259,12 @@ void app_desenhar(Uint32 agora) {
     // Com a rail por cima, o logo, o botao "Reproduzir" e a linha de duracao
     // ficavam cortados pela faixa preta de 144px — foi o primeiro defeito que
     // apareceu na captura do aparelho depois do port.
-    if (menu_visivel() && !detail_aberto()) menu_desenhar(agora);
+    // A rail some com o detalhe aberto (o web nao a tem nessa tela) e some
+    // tambem quando `collapseSidebar` esta ligado, que e o estado do perfil do
+    // dono. Recolhida ela nao ocupa largura nenhuma: o conteudo passa a comecar
+    // em 104, e quem devolve esse x e ajustes_conteudo_x().
+    if (menu_visivel() && !detail_aberto() && !ajustes_rail_recolhida())
+      menu_desenhar(agora);
   }
   player_desenhar(agora);
   stream_folha_desenhar(agora);
