@@ -10,6 +10,10 @@
 #include "layout.h"
 #include "ajustes.h"
 #include "catalogo.h"
+// Declarado a mao em vez de incluir detail.h: aquele header inclui ESTE (por
+// causa do HomeItem), e o ciclo so nao explode por causa das guardas. Uma
+// funcao de uma linha nao vale amarrar os dois arquivos.
+float detail_progresso(void);
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
@@ -468,7 +472,22 @@ void home_desenhar(Uint32 agora) {
   desenhaFundo();
   if (ajustes_hero_ligado()) desenhaHero(agora);
 
-  float y = NV_SHELF_TOP - scrollY;
+  // ABERTURA DO DETALHE: as fileiras DESCEM e apagam; a arte de fundo fica.
+  //
+  // E o movimento que o dono descreveu — "so os posters descem e mantem o
+  // background". O detalhe ja nao voa mais a partir do card: a arte dele entra
+  // em tela cheia ganhando opacidade, entao o que o olho segue e a saida das
+  // fileiras. Descer 8% da altura da tela e o bastante para ler como saida sem
+  // que a ultima fileira suma antes da hora.
+  //
+  // O `pd` vem da MESMA mola que o detalhe usa para desenhar (detail_progresso),
+  // e nao de um relogio proprio: dois relogios descasariam e a home sairia
+  // adiantada ou atrasada em relacao a arte que entra.
+  float pd = detail_progresso();
+  float descida = pd * NV_TELA_H * 0.08f;
+  if (pd >= 0.996f) return;   // detalhe assentado: nada da home aparece
+
+  float y = NV_SHELF_TOP - scrollY + descida;
   for (int r = 0; r < nFileiras; r++) {
     TipoFileira tipo = fileiras[r].tipo;
     float lw = larguraDe(tipo), lh = alturaDe(tipo), passo = passoDe(tipo);

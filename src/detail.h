@@ -10,7 +10,9 @@
 #include "home.h"
 
 void detail_abrir(const HomeItem *item);
-int  detail_aberto(void);        // 1 enquanto a tela existe, inclusive saindo
+int  detail_aberto(void);
+// 0..1 de quanto o detalhe tomou a tela; a home usa para descer as fileiras.
+float detail_progresso(void);        // 1 enquanto a tela existe, inclusive saindo
 // 1 quando o cartao ja cobre a tela inteira e desenhar a home por baixo e
 // trabalho jogado fora. Medido: a home custa o hero em tela cheia mais ~20
 // cards, e sem este corte a pagina de detalhe rodava a 20fps.

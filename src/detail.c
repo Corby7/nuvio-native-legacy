@@ -191,6 +191,12 @@ void detail_abrir(const HomeItem *it) {
 
 int detail_aberto(void) { return aberto; }
 
+// 0..1 de quanto o detalhe ja tomou a tela. A home le isto para DESCER as
+// fileiras enquanto ele entra: e o movimento que o dono descreve como "so os
+// posters descem". Fica aqui e nao numa variavel compartilhada porque a mola
+// que o produz e a mesma do desenho — dois relogios diferentes descasariam.
+float detail_progresso(void) { return aberto ? suave(t) : 0.0f; }
+
 // Temporada e episodio EM FOCO, para quem for pedir fonte.
 //
 // Sem isto o addons_buscar recebia so o imdb da serie e cravava ":1:1" — e por
@@ -477,7 +483,17 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
     return;
   }
   // Primario: branco com texto preto nos DOIS estados — o foco so acrescenta o
-  // anel. Conferido tirando a classe `focused` no web: a cor nao muda.
+  // anel de 4px (components.css:17610, `box-shadow: 0 0 0 4px #fff`). A cor de
+  // fundo e a do texto sao as mesmas focado ou nao, conferido na regra final
+  // (22646): background #ffffff, color #000000.
+  //
+  // O anel FALTAVA: o bloco de foco existia so no secundario, entao o botao
+  // principal nao dava sinal nenhum de estar selecionado.
+  if (focado) {
+    GfxRect anel = { r.x - NV_DETW_ANEL, r.y - NV_DETW_ANEL,
+                     r.w + NV_DETW_ANEL * 2, r.h + NV_DETW_ANEL * 2 };
+    gfx_cor(anel, NV_RAIO_PILL, 1, 1, 1, a);
+  }
   gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
   TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
   float x = r.x + NV_DETW_BTN_PADX;
@@ -1063,15 +1079,20 @@ void detail_desenhar(Uint32 agora) {
   gfx_sem_recorte();
 
   // --- backdrop full-bleed --------------------------------------------------
-  // A tela de detalhe do web e uma imagem de 1920x1080 em (0,0) com a vinheta
-  // horizontal por cima; nao ha cartao, nem moldura, nem titulos vizinhos. O
-  // unico movimento que sobra do port anterior e a ORIGEM: o retangulo cresce a
-  // partir do card que estava em foco na home.
+  // A tela de detalhe e uma imagem de 1920x1080 em (0,0) com a vinheta por cima;
+  // nao ha cartao, nem moldura, nem titulos vizinhos.
+  //
+  // O BACKDROP NAO CRESCE A PARTIR DO CARD. Era o ultimo resto do voo do app da
+  // Apple: o retangulo saia de item.rect e se abria ate a tela. O dono descreveu
+  // o comportamento certo — "so os posters descem e mantem o background, e o
+  // background e a arte do filme selecionado" — e voar o retangulo e o oposto
+  // disso: a arte entra pequena e cresce, em vez de ja estar la.
+  //
+  // Agora a arte ocupa a tela desde o primeiro quadro e so ganha opacidade. Quem
+  // se move sao as fileiras da home, que descem (ver home_desenhar, que le o
+  // detail_progresso).
   GfxRect cheia = { 0, 0, NV_TELA_W, NV_TELA_H };
-  GfxRect alvo = {
-    anim_mistura(item.rect.x, cheia.x, s), anim_mistura(item.rect.y, cheia.y, s),
-    anim_mistura(item.rect.w, cheia.w, s), anim_mistura(item.rect.h, cheia.h, s),
-  };
+  GfxRect alvo = cheia;
   const char *arte = arteDe(idx);
   // Backdrop em tela cheia: pede o teto de 1920. Com o teto comum de 960 a arte
   // era decodificada com metade da resolucao e ampliada ao dobro na tela.
