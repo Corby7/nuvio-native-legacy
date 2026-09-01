@@ -327,36 +327,42 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   // largura por 0.32 de altura, que e a proporcao do glifo do web.
   "  float d = max(length(p - vec2(0.0, 0.62)) - 0.78,\n"
   "                length(p + vec2(0.0, 0.62)) - 0.78);\n"
-  "  float esp = 0.038;\n"
+  // Traco de 0.055 e nao 0.038: ao lado de um "+" de 5px o contorno fino fazia
+  // o olho parecer de outra familia de icone. A iris tambem cresceu.
+  "  float esp = 0.055;\n"
   "  float m = smoothstep(esp, esp*0.45, abs(d));\n"
-  "  m = max(m, smoothstep(0.145, 0.125, length(p)));\n"
+  "  m = max(m, smoothstep(0.185, 0.160, length(p)));\n"
   // O risco: apaga um sulco no olho e desenha a barra dentro dele, para que o
   // traco se leia por cima da lente como no SVG (que usa dois caminhos).
+  // O risco atravessa o olho inteiro, com um sulco de fundo para ele se
+  // destacar por cima da lente — e o que o SVG faz com dois caminhos.
   "  if (uPar.x > 0.5) {\n"
   "    float r = (p.x - p.y) * 0.7071;\n"
-  "    m *= smoothstep(0.030, 0.052, abs(r));\n"
-  "    float lim = step(max(abs(p.x), abs(p.y)), 0.46);\n"
-  "    m = max(m, smoothstep(0.030, 0.018, abs(r)) * lim);\n"
+  "    m *= smoothstep(0.045, 0.075, abs(r));\n"
+  "    float lim = step(max(abs(p.x), abs(p.y) * 1.6), 0.60);\n"
+  "    m = max(m, smoothstep(0.045, 0.026, abs(r)) * lim);\n"
   "  }\n"
   "  if (m <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
   "}\n",
 
-  // GFX_TRAILER — glifo do YouTube: placa de cantos arredondados com o
-  // triangulo VAZADO (o triangulo e furo, nao desenho por cima, senao ele
-  // some quando o botao ganha foco e a cor se inverte).
+  // GFX_FONTES — tres barras empilhadas, a de baixo mais curta: e o simbolo de
+  // "lista de fontes". Substituiu o glifo do YouTube no terceiro botao redondo:
+  // o app nao toca trailer do YouTube, e um botao que promete o que nao faz e
+  // pior que um botao com outra funcao.
   "void main(){\n"
   "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
-  // Placa 0.92 x 0.64, cantos de 0.16 — a proporcao 14:10 do logo.
-  "  vec2 q = abs(p) - vec2(0.46, 0.32) + 0.16;\n"
-  "  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.16;\n"
-  "  float m = smoothstep(0.012, -0.012, d);\n"
-  "  if (m <= 0.002) discard;\n"
-  // Triangulo apontando para a direita, inscrito na placa.
-  "  vec2 t = (p - vec2(-0.10, 0.0)) / vec2(0.30, 0.20);\n"
-  "  float dy = abs(t.y);\n"
-  "  float tri = smoothstep(-0.06, 0.06, (1.0 - dy) - t.x) * step(-1.0, t.x);\n"
-  "  m *= 1.0 - tri;\n"
+  // Tres barras de 0.12 de altura, centradas em -0.28, 0 e +0.28. A de baixo
+  // tem metade da largura, que e o que faz o simbolo ler como lista e nao como
+  // grade.
+  "  float m = 0.0;\n"
+  "  for (int i = 0; i < 3; i++) {\n"
+  "    float cy = (float(i) - 1.0) * 0.28;\n"
+  "    float larg = (i == 2) ? 0.24 : 0.46;\n"
+  "    vec2 q = abs(p - vec2(0.0, cy)) - vec2(larg, 0.06) + 0.06;\n"
+  "    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.06;\n"
+  "    m = max(m, smoothstep(0.012, -0.012, d));\n"
+  "  }\n"
   "  if (m <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
   "}\n",
@@ -368,7 +374,7 @@ static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
   {0,1}, {0,1},
   {1,0},   /* GFX_ANEL */
   {0,0},   /* GFX_OLHO    — SDF proprio, nao o do retangulo */
-  {0,0}    /* GFX_TRAILER — idem */
+  {0,0}    /* GFX_FONTES  — idem */
 };
 
 static GLuint compila(GLenum tipo, const char *src) {

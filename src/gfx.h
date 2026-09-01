@@ -49,8 +49,11 @@ typedef enum {
   // GFX_OLHO — "marcar como assistido". Lente (dois arcos), iris cheia e, com
   // `parx > 0.5`, o risco na diagonal do estado "nao assistido".
   GFX_OLHO = 14,
-  // GFX_TRAILER — o glifo do YouTube: placa arredondada com o triangulo vazado.
-  GFX_TRAILER = 15,
+  // GFX_FONTES — tres barras empilhadas, simbolo de "lista de fontes". Ocupou o
+  // lugar do glifo do YouTube: este app nao toca trailer do YouTube (nao ha
+  // extrator de stream), e um botao que promete o que nao faz e pior que um
+  // botao com outra funcao. Fontes e coisa que o app SABE fazer.
+  GFX_FONTES = 15,
   GFX_NMODOS = 16
 } GfxModo;
 

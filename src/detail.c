@@ -74,6 +74,8 @@ static int  ratTemp;
 
 static int  botao = 0;      // botao em foco no hero
 static int  pedReproduzir = 0, pedMarcar = 0, pedFontes = 0;
+// Marcar como ASSISTIDO. Separado de pedMarcar, que e "adicionar a lista".
+static int  pedAssistido = 0;
 static int  pedDoInicio = 0;         // botao "Reproduzir desde o inicio"
 static Uint32 okDesceEm = 0;
 static float pg = 0.0f;              // 0..1: hero -> pagina rolada
@@ -434,12 +436,16 @@ void detail_evento(const SDL_Event *e) {
     dur = SDL_GetTicks() - okDesceEm;
     okDesceEm = 0;
     if (nivel == 0) {
-      // Ordem FIXA agora que o botao de texto extra saiu: primario, adicionar a
-      // lista, marcar como visto, trailer.
+      // Ordem FIXA: primario, adicionar a lista, marcar como visto, fontes.
+      //
+      // O botao do olho caia no `else` e abria a folha de FONTES — ele nunca
+      // marcou nada, apesar do icone. Agora tem pedido proprio.
       if (botao == 0) {
         if (dur >= NV_HOLD_MS) pedFontes = 1; else pedReproduzir = 1;
       } else if (botao == 1) {
         pedMarcar = 1;
+      } else if (botao == 2) {
+        pedAssistido = 1;
       } else {
         pedFontes = 1;
       }
@@ -606,6 +612,12 @@ void detail_atualizar(float dt, Uint32 agora) {
 // com `justify-content: flex-end`). Empilhar de cima para baixo faz o bloco
 // inteiro subir e descer conforme o tamanho da sinopse; no web ele fica preso
 // na base e so o topo se move.
+// Quanto do titulo ja foi assistido, 0..100. 0 quando nunca comecou.
+static int progressoDe(int i) {
+  const CatItem *c = cat_item(i);
+  return c ? c->progresso : 0;
+}
+
 static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, float a) {
   // Foco no web NAO e escala nem sombra: e um anel branco de 4px por fora
   // (box-shadow 0 0 0 4px #fff) e a troca de cor do fundo. `transform` continua
@@ -621,7 +633,7 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
     gfx_cor(r, NV_RAIO_PILL, lum, lum, lum, a);
     // Os tres glifos do web: biblioteca (+), assistido (olho) e trailer
     // (placa do YouTube). Sao SVG la e nao existem na familia embarcada, entao
-    // vem do shader — ver GFX_OLHO e GFX_TRAILER. Antes eram "+" e dois "...",
+    // vem do shader — ver GFX_OLHO e GFX_FONTES. Antes eram "+" e dois "...",
     // que nao diziam o que os botoes faziam.
     float ic = focado ? 0.067f : 1.0f;      // #111 com foco, branco sem
     float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
@@ -644,9 +656,9 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
       // desenha dentro dela e o risco vem em `parx`.
       GfxRect o = { cx - g * 0.225f, cy - g * 0.16f, g * 0.45f, g * 0.32f };
       gfx_rect(o, 0, GFX_OLHO, 0, 1.0f, 0, 0.0f, ic, ic, ic, a);
-    } else {                                // trailer: glifo do YouTube
-      GfxRect y = { cx - g * 0.345f, cy - g * 0.24f, g * 0.69f, g * 0.48f };
-      gfx_rect(y, 0, GFX_TRAILER, 0, 0, 0, 0.0f, ic, ic, ic, a);
+    } else {                                // fontes: tres barras
+      GfxRect y = { cx - g * 0.25f, cy - g * 0.25f, g * 0.50f, g * 0.50f };
+      gfx_rect(y, 0, GFX_FONTES, 0, 0, 0, 0.0f, ic, ic, ic, a);
     }
     return;
   }
@@ -662,7 +674,26 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
                      r.w + NV_DETW_ANEL * 2, r.h + NV_DETW_ANEL * 2 };
     gfx_cor(anel, NV_RAIO_PILL, 1, 1, 1, a);
   }
-  gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
+  // O PROPRIO BOTAO E A BARRA DE PROGRESSO quando o titulo ja foi comecado.
+  // Pedido do dono. Trilho cinza claro, parte assistida branca, recortada na
+  // largura do progresso — as duas claras o bastante para o rotulo preto
+  // continuar legivel por cima das duas.
+  //
+  // 0.78 e nao 0.62: com o cinza mais fundo o botao lia como DESABILITADO, e
+  // nao como "falta este tanto". O contraste com o branco continua visivel.
+  //
+  // O trilho e CINZA OPACO e nao branco com alfa: o anel de foco e uma pilula
+  // branca desenhada ATRAS do botao, entao qualquer transparencia aqui deixava
+  // o branco do anel atravessar e o progresso sumia justo no botao em foco.
+  { int pc = rot ? progressoDe(idx) : 0;
+    if (pc > 0 && pc < 100) {
+      gfx_cor(r, NV_RAIO_PILL, 0.78f, 0.78f, 0.78f, a);
+      gfx_recorte(r.x, r.y, r.w * (float)pc / 100.0f, r.h);
+      gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
+      gfx_sem_recorte();
+    } else {
+      gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
+    } }
   TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
   float x = r.x + NV_DETW_BTN_PADX;
   GfxRect tri = { x + NV_DETW_BTN_ICONE * 0.16f,
@@ -1605,6 +1636,7 @@ void detail_desenhar(Uint32 agora) {
 int detail_indice(void) { return idx; }
 int detail_pediu_reproduzir(void) { int v = pedReproduzir; pedReproduzir = 0; return v; }
 int detail_pediu_abrir(void) { int v = pedAbrir; pedAbrir = -1; return v; }
+int detail_pediu_assistido(void) { int v = pedAssistido; pedAssistido = 0; return v; }
 int detail_pediu_marcar(void)     { int v = pedMarcar;     pedMarcar = 0;     return v; }
 int detail_pediu_fontes(void)     { int v = pedFontes;     pedFontes = 0;     return v; }
 // "Reproduzir desde o inicio" ainda cai no mesmo caminho do primario: o

@@ -24,6 +24,7 @@
 #include "video.h"
 #include "addons.h"
 #include "descoberta.h"
+#include "trakt.h"
 #include "faixas.h"
 #include <pthread.h>
 
@@ -147,13 +148,38 @@ void app_evento(const SDL_Event *e) {
 // filmografia de um ator, um item de "Mais como este"). Quem troca e aqui, e
 // nao ela: reabrir a si mesma no meio do proprio desenho e o tipo de coisa que
 // quebra em silencio, e o roteador ja e o unico lugar que sabe abrir titulo.
+// O botao do olho: marcar como ASSISTIDO. Grava progresso cheio no arquivo do
+// app e avisa o Trakt, que e a fonte que o dono usa nos outros aparelhos. Fica
+// no roteador pelo mesmo motivo de tudo mais: e ele que conhece catalogo e
+// Trakt, e a tela de detalhe nao precisa conhecer nenhum dos dois.
+static void marcarAssistidoSeSolicitado(void) {
+  const CatItem *c;
+  int i;
+  if (!detail_pediu_assistido()) return;
+  i = detail_indice();
+  c = cat_item(i);
+  if (!c) return;
+  // Duracao desconhecida aqui; o que importa para "assistido" e a POSICAO no
+  // fim, e o Trakt trata >=80% como visto.
+  { double dur = 1.0, pos = 1.0;
+    cat_salvar_progresso(i, pos, dur);
+    if (c->imdb[0]) trakt_marcar(c->imdb, pos, dur); }
+  printf("[app] marcado como assistido: %s\n", c->titulo); fflush(stdout);
+}
+
 static void trocaDeTituloSeSolicitada(void) {
   int alvo = detail_pediu_abrir();
-  if (alvo >= 0) abrirPorIndice(alvo);
+  if (alvo >= 0) { abrirPorIndice(alvo); return; }
+  // Titulo que veio de FORA do catalogo: a descoberta buscou o meta num fio e
+  // avisa aqui quando ele entrou. Abrir no fio da rede seria mexer na tela de
+  // outro fio; este e o unico lugar que abre titulo.
+  { int novo = desc_titulo_pronto();
+    if (novo >= 0) abrirPorIndice(novo); }
 }
 
 void app_atualizar(float dt, Uint32 agora) {
   trocaDeTituloSeSolicitada();
+  marcarAssistidoSeSolicitado();
   // Fora da home, o Back tem para onde voltar: a home. So nela ele fecha o app.
   if (tela != TELA_HOME) {
     int fechar = (tela == TELA_BUSCA      && busca_quer_sair())
