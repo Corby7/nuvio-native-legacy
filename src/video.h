@@ -26,6 +26,10 @@ int  video_iniciar(void);
 // devolver mediaId e nunca buscar o arquivo — falha silenciosa.
 int  video_tocar(const char *url);
 
+// Chamar UMA VEZ POR QUADRO. Hoje serve ao prazo do recuo de Dolby Vision
+// (ver o comentario em video.c): sem esta batida, um arquivo que a TV recusa
+// com DolbyHdrInfo ficaria sem imagem ate o usuario desistir e sair.
+void video_bombear(void);
 void video_parar(void);
 void video_pausar(int pausado);
 void video_buscar(double segundos);

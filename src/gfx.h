@@ -18,7 +18,12 @@ typedef enum {
   GFX_SNAP   = 8,  // imagem ja pronta: sem SDF, sem efeito, so o quad
   GFX_PLAY   = 9,  // triangulo de "reproduzir", apontando para a direita
   GFX_BLUR   = 10, // uma passada de desfoque gaussiano; uPar da a direcao
-  GFX_NMODOS = 11
+  // Fundo da tela de DETALHE: a arte em "cover" ja fundida na vinheta
+  // horizontal do app web. Um modo so, e nao arte + veu por cima, porque sao
+  // duas camadas de tela CHEIA — nesta GPU o custo e de preenchimento, e a
+  // segunda passada sozinha derrubava o quadro.
+  GFX_DETALHE = 11,
+  GFX_NMODOS = 12
 } GfxModo;
 
 typedef struct {

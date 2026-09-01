@@ -221,6 +221,9 @@ void app_atualizar(float dt, Uint32 agora) {
     if (player_aberto()) player_encerrar();
     player_abrir(detail_indice(), s ? s->url : NULL);
   }
+  // Prazo do recuo de Dolby Vision: se a declaracao nao render imagem, o video
+  // recarrega sozinho sem ela. Precisa bater todo quadro (ver video.h).
+  video_bombear();
   if (player_pediu_faixas()) faixas_abrir();
   faixas_atualizar(dt, agora);
   stream_folha_atualizar(dt, agora);

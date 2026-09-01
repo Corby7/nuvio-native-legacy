@@ -219,11 +219,40 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "  c += (texture2D(uTex, vUv + uPar*4.0).rgb    + texture2D(uTex, vUv - uPar*4.0).rgb)    * 0.0477;\n"
   "  gl_FragColor = vec4(c, 1.0);\n"
   "}\n",
+
+  // GFX_DETALHE — backdrop da tela de titulo, ja com a vinheta.
+  //
+  // MEDIDO no app web (getComputedStyle em .series-detail-vignette, nao leitura
+  // de folha): um linear-gradient(90deg) de #0d0d0d indo a transparente, com
+  // NOVE paradas — 0%:1.00  7.8%:0.95  17.16%:0.84  28.08%:0.70  40.56%:0.52
+  // 51.48%:0.34  60.84%:0.18  70.2%:0.07  78%:0. Depois de 78% a arte aparece
+  // limpa. Como no hero da home, sao rampas LINEARES POR PARTES: um smoothstep
+  // unico erra o miolo, que e justamente onde o texto branco se apoia.
+  //
+  // A arte entra em "cover" com ancoragem CENTRAL, que e o que o web faz na
+  // pratica: a regra e `background-position:100% 0`, mas o backdrop e 16:9 num
+  // quadro 16:9 e nao sobra nada para deslocar.
+  "void main(){\n"
+  "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
+  "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
+  "  float x = vUv.x;\n"
+  "  float a = 1.0 - clamp(x/0.0780,0.0,1.0)*0.05\n"
+  "                - clamp((x-0.0780)/0.0936,0.0,1.0)*0.11\n"
+  "                - clamp((x-0.1716)/0.1092,0.0,1.0)*0.14\n"
+  "                - clamp((x-0.2808)/0.1248,0.0,1.0)*0.18\n"
+  "                - clamp((x-0.4056)/0.1092,0.0,1.0)*0.18\n"
+  "                - clamp((x-0.5148)/0.0936,0.0,1.0)*0.16\n"
+  "                - clamp((x-0.6084)/0.0936,0.0,1.0)*0.11\n"
+  "                - clamp((x-0.7020)/0.0780,0.0,1.0)*0.07;\n"
+  "  c = mix(c, bg, clamp(a,0.0,1.0));\n"
+  "  gl_FragColor = vec4(c, uCor.a);\n"
+  "}\n",
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
 static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
-  {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}
+  {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
+  {0,1}
 };
 
 static GLuint compila(GLenum tipo, const char *src) {

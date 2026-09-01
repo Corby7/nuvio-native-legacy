@@ -10,6 +10,7 @@
 // app compilar e rodar igual, so sem imagem em movimento.
 int  video_iniciar(void) { return 0; }
 int  video_tocar(const char *u) { (void)u; return 0; }
+void video_bombear(void) {}
 void video_parar(void) {}
 void video_pausar(int p) { (void)p; }
 void video_buscar(double s) { (void)s; }
@@ -95,6 +96,10 @@ static long      seiBrancoX, seiBrancoY, seiMinLum, seiMaxLum;
 static long      seiMaxCLL, seiMaxFALL;
 static int       vuiPrim = 2, vuiTrans = 2, vuiMatriz = 2;
 static int       vidAtmos, vidDV;
+// Estado do recuo de Dolby Vision (ver o bloco em video_tocar). Declarados
+// AQUI e nao junto da funcao porque o parser do videoInfo, bem acima, marca
+// viuVideo — e no C a ordem de declaracao manda.
+static int       dvNaCarga, dvRecuado, viuVideo;
 
 // Faixas lidas do sourceInfo. Guardadas porque a tela precisa delas a cada
 // quadro e reprocessar o JSON no desenho seria desperdicio.
@@ -417,6 +422,7 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
   }
 
   if (strstr(p, "videoInfo")) {
+    viuVideo = 1;   // fecha o prazo do recuo de DV
     double v;
     v = numeroDe(p, "\"width\":");      if (v > 0) vidW = (int)v;
     v = numeroDe(p, "\"height\":");     if (v > 0) vidH = (int)v;
@@ -610,10 +616,60 @@ int video_iniciar(void) {
   return 1;
 }
 
+// --- recuo automatico do Dolby Vision ---------------------------------------
+//
+// MEDIDO na OLED65C9, dois arquivos DV em MKV:
+//   arquivo A: sem DolbyHdrInfo toca em HDR10; COM o bloco engata Dolby Vision.
+//   arquivo B: sem o bloco toca normal (HDR10, com imagem); COM o bloco fica
+//              SO O AUDIO, e o pipeline nunca reporta videoInfo.
+// Testado 8/"single" e 7/"dual" no arquivo B: os dois quebram igual.
+//
+// Como nao demuxamos, nao ha como saber de antemao em qual dos dois casos a
+// fonte cai — declarar as cegas ganha DV num arquivo e perde a IMAGEM no outro,
+// que e troca ruim. Entao a declaracao vira uma APOSTA COM PRAZO: se o pipeline
+// nao reportar videoInfo em NV_DV_PRAZO_MS, recarrega a mesma URL sem o bloco.
+// O custo e alguns segundos no arquivo que nao aceita; o ganho e nunca ficar
+// sem imagem por causa de uma afirmacao nossa.
+#define NV_DV_PRAZO_MS 7000
+
+static char  urlAtual[1024];
+static long  msDoLoad = 0;
+
+static long agoraMs(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int tocarInterno(const char *url, int comDV);
+
 int video_tocar(const char *url) {
+  dvRecuado = 0;
+  snprintf(urlAtual, sizeof urlAtual, "%s", url ? url : "");
+  return tocarInterno(url, 1);
+}
+
+// Chamado uma vez por quadro. So existe para o prazo acima: sem ele o recuo
+// dependeria de o usuario perceber que nao ha imagem e sair da tela.
+void video_bombear(void) {
+  // O recuo por prazo foi REMOVIDO por nao funcionar: o gatilho era "o pipeline
+  // nao reportou videoInfo", e o uMS reporta videoInfo, sourceInfo e
+  // loadCompleted normalmente mesmo nos arquivos que ficam sem imagem. Medido:
+  // videoInfo 3840x1606 hdrType=DolbyVision e loadCompleted em 3212ms, tela
+  // preta com audio correndo. Nao ha no uMS sinal de QUADRO EXIBIDO — o
+  // currentTime avanca puxado pelo audio.
+  //
+  // A funcao fica porque a batida por quadro e util assim que existir um sinal
+  // melhor (contador de quadros, ou o proprio perfil lido do MKV).
+  (void)dvNaCarga; (void)dvRecuado; (void)viuVideo;
+  (void)msDoLoad; (void)urlAtual; (void)agoraMs; (void)tocarInterno;
+}
+
+static int tocarInterno(const char *url, int comDV) {
   char carga[2048];
   if (!ligado && !video_iniciar()) return 0;
   video_parar();
+  viuVideo = 0;
   posSeg = durSeg = bufferSeg = 0; tocando = pronto = 0; midia[0] = 0;
   nAudio = nLeg = 0; audioAtual = 0; legAtual = -1; vidAtmos = 0;
   snprintf(vidHdr, sizeof vidHdr, "none");
@@ -644,15 +700,54 @@ int video_tocar(const char *url) {
   // isso os valores sao ajustaveis por variavel de ambiente para poder testar
   // 7/"dual" contra 8/"single" no mesmo arquivo sem recompilar.
   char dolby[192] = "";
-  if (dvPedido) {
+  dvNaCarga = 0;
+  if (dvPedido && comDV) {
+    // Os valores tambem saem de /tmp/nuvio-dv.conf ("<perfil> <trilha>", ex:
+    // "7 dual"), porque o app e lancado pelo SAM e nao da para passar variavel
+    // de ambiente por ali. Sem o arquivo, valem o ambiente e depois o padrao.
+    static char pArq[16], tArq[16];
     const char *perfil = getenv("NUVIO_DV_PROFILE");
     const char *trilha = getenv("NUVIO_DV_TRACK");
-    snprintf(dolby, sizeof dolby,
-             "\"externalStreamingInfo\":{\"contents\":{\"DolbyHdrInfo\":{"
-             "\"encryptionType\":\"clear\",\"profileId\":%s,\"trackType\":\"%s\"}}},",
-             (perfil && *perfil) ? perfil : "8",
-             (trilha && *trilha) ? trilha : "single");
-    printf("[video] DolbyHdrInfo declarado: %s\n", dolby); fflush(stdout);
+    { FILE *f = fopen("/tmp/nuvio-dv.conf", "r");
+      if (f) {
+        pArq[0] = tArq[0] = 0;
+        if (fscanf(f, "%15s %15s", pArq, tArq) >= 1) {
+          if (pArq[0]) perfil = pArq;
+          if (tArq[0]) trilha = tArq;
+        }
+        fclose(f);
+      } }
+    // DESLIGADO POR PADRAO, e a razao esta medida:
+    //
+    //   arquivo A: sem o bloco toca em HDR10; COM o bloco engata Dolby Vision.
+    //   varios outros: sem o bloco tocam normal; COM o bloco ficam SEM IMAGEM
+    //                  (um chegou a mostrar o primeiro quadro e congelar, com o
+    //                  audio correndo).
+    //
+    // Ganhar DV num arquivo e perder a imagem em varios e troca ruim. E nao ha
+    // como escolher sozinho: tentei um prazo que recarregaria sem o bloco caso
+    // o pipeline nao reportasse video, e ele NAO SERVE — o uMS reporta videoInfo
+    // (3840x1606, hdrType DolbyVision) e loadCompleted normalmente mesmo quando
+    // nenhum quadro chega ao plano. "Reportou" nao e "exibiu", e nao existe no
+    // uMS um sinal de quadro avancando: currentTime anda com o audio.
+    //
+    // Entao vira OPT-IN, para experimentar arquivo a arquivo:
+    //   echo "8 single" > /tmp/nuvio-dv.conf   (ou "7 dual")
+    //   rm /tmp/nuvio-dv.conf                  volta ao seguro
+    // O caminho definitivo e saber o perfil real do arquivo antes de afirmar
+    // qualquer coisa: ler o cabecalho do MKV por HTTP Range e achar o
+    // BlockAdditionMapping com dvcC/dvvC, que e onde o Matroska guarda isso.
+    if (!perfil || !*perfil || !strcmp(perfil, "off")) {
+      /* sem declaracao: comportamento conhecido e seguro */
+    } else {
+      snprintf(dolby, sizeof dolby,
+               "\"externalStreamingInfo\":{\"contents\":{\"DolbyHdrInfo\":{"
+               "\"encryptionType\":\"clear\",\"profileId\":%s,\"trackType\":\"%s\"}}},",
+               (perfil && *perfil) ? perfil : "8",
+               (trilha && *trilha) ? trilha : "single");
+      printf("[video] DolbyHdrInfo declarado: %s\n", dolby); fflush(stdout);
+      dvNaCarga = 1;
+    }
   }
   snprintf(carga, sizeof carga,
       "{\"payload\":{\"option\":{\"useSeekableRanges\":true,"
@@ -662,6 +757,7 @@ int video_tocar(const char *url) {
       "\"windowId\":\"window_id_dummy\"}},"
       "\"uri\":\"%s\",\"type\":\"media\"}", dolby, url);
   printf("[video] URL: %s\n", url); fflush(stdout);
+  msDoLoad = agoraMs();
   chamar("load", carga, aoCarregar);
   return 1;
 }

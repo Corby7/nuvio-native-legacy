@@ -15,7 +15,15 @@ typedef enum {
   // Os dois do player vem do app web, nao da escala do tvOS. Ficam no FIM do
   // enum de proposito: a tabela ESTILOS em text.c e indexada por esta ordem, e
   // inserir no meio desloca todos os estilos seguintes em silencio.
-  TXT_PLR_TITULO, TXT_PLR_CORPO, TXT_ROW_TITULO, TXT_NFONTES
+  TXT_PLR_TITULO, TXT_PLR_CORPO, TXT_ROW_TITULO,
+  // Tela de DETALHE, medidos no app web. Nao reaproveitam nenhum estilo do
+  // tvOS porque nenhum bate: a sinopse la e 26/400 e o TXT_CAPTION daqui e
+  // 22/400 — quatro pixels que mudam quantas linhas cabem no bloco.
+  TXT_DET_BOTAO,   // .series-primary-btn      25 / 600
+  TXT_DET_META,    // .series-detail-support   25 / 400
+  TXT_DET_SIN,     // .series-detail-description 26 / 400
+  TXT_DET_META2,   // .detail-meta-row.secondary 23 / 400
+  TXT_NFONTES
 } TxtEstilo;
 
 typedef struct { GLuint tex; int w, h; } TxtLinha;
