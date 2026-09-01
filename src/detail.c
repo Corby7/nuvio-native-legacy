@@ -490,22 +490,34 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
   if (circular) {
     float lum = focado ? 0.961f : 0.133f;   // #f5f5f5 / #222
     gfx_cor(r, NV_RAIO_PILL, lum, lum, lum, a);
-    // Sem glifo: o "+" e o "..." sao desenhados, porque a familia embarcada nao
-    // garante os simbolos e um quadrado no lugar e pior que nada.
+    // Os tres glifos do web: biblioteca (+), assistido (olho) e trailer
+    // (placa do YouTube). Sao SVG la e nao existem na familia embarcada, entao
+    // vem do shader — ver GFX_OLHO e GFX_TRAILER. Antes eram "+" e dois "...",
+    // que nao diziam o que os botoes faziam.
     float ic = focado ? 0.067f : 1.0f;      // #111 com foco, branco sem
     float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-    if (icone == 1) {                       // "+"
+    // Proporcao glifo/circulo MEDIDA na referencia do dono (circulo de 96 na
+    // captura dele): "+" 0.36, olho 0.45, placa do YouTube 0.69 de largura por
+    // 0.48 de altura. Sobre o circulo de 84 desta tela dao 30, 38 e 58x40 — a
+    // conta pelo font-size (32) acertava o olho e deixava a placa do YouTube
+    // pequena demais, porque no SVG ela e mais larga que a caixa da fonte.
+    float g = NV_DETW_CIRC;
+    if (icone == 1) {                       // biblioteca: "+"
       // O raio do SDF e fracao da ALTURA: num retangulo 5x44 pedir 0.5 faz
       // `b.x` ficar negativo e a forma colapsa.
-      GfxRect h = { cx - 22, cy - 2.5f, 44, 5 };
-      GfxRect v = { cx - 2.5f, cy - 22, 5, 44 };
+      float b = g * 0.36f;
+      GfxRect h = { cx - b * 0.5f, cy - 2.5f, b, 5 };
+      GfxRect v = { cx - 2.5f, cy - b * 0.5f, 5, b };
       gfx_cor(h, 0.5f, ic, ic, ic, a);
       gfx_cor(v, 0.5f * (v.w / v.h), ic, ic, ic, a);
-    } else {                                // "..."
-      for (int k = -1; k <= 1; k++) {
-        GfxRect p = { cx + k * 15.0f - 3.5f, cy - 3.5f, 7, 7 };
-        gfx_cor(p, 0.5f, ic, ic, ic, a);
-      }
+    } else if (icone == 2) {                // assistido: olho, com risco
+      // A caixa e mais larga que alta porque a amendoa e deitada; o shader
+      // desenha dentro dela e o risco vem em `parx`.
+      GfxRect o = { cx - g * 0.225f, cy - g * 0.16f, g * 0.45f, g * 0.32f };
+      gfx_rect(o, 0, GFX_OLHO, 0, 1.0f, 0, 0.0f, ic, ic, ic, a);
+    } else {                                // trailer: glifo do YouTube
+      GfxRect y = { cx - g * 0.345f, cy - g * 0.24f, g * 0.69f, g * 0.48f };
+      gfx_rect(y, 0, GFX_TRAILER, 0, 0, 0, 0.0f, ic, ic, ic, a);
     }
     return;
   }

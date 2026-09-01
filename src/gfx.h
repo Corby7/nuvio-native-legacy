@@ -41,7 +41,17 @@ typedef enum {
   // Nao pinte o miolo da cor do fundo para simular anel: onde o veu esta em
   // 0.06 o fundo aparece atraves dele e o tampao se ve como mancha clara.
   GFX_ANEL = 13,
-  GFX_NMODOS = 14
+  // Icones dos botoes redondos da tela de titulo. Existem como SDF pelo mesmo
+  // motivo do GFX_PLAY: os glifos sao SVG no web e a familia embarcada nao
+  // garante simbolo nenhum. Antes os tres botoes eram "+" e dois "...", que nao
+  // dizem o que fazem.
+  //
+  // GFX_OLHO — "marcar como assistido". Lente (dois arcos), iris cheia e, com
+  // `parx > 0.5`, o risco na diagonal do estado "nao assistido".
+  GFX_OLHO = 14,
+  // GFX_TRAILER — o glifo do YouTube: placa arredondada com o triangulo vazado.
+  GFX_TRAILER = 15,
+  GFX_NMODOS = 16
 } GfxModo;
 
 typedef struct {

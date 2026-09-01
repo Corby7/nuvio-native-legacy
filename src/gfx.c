@@ -310,13 +310,65 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "  }\n"
   "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
   "}\n",
+
+  // GFX_OLHO — o olho de "marcar assistido".
+  //
+  // A lente e a INTERSECCAO de dois discos de raio grande deslocados para cima
+  // e para baixo; e a construcao classica da forma de amendoa, e sai mais
+  // barata (duas distancias) que tentar dois arcos de Bezier. O contorno e
+  // `abs(d) < esp`, como no GFX_ANEL, e a iris e um disco cheio no centro.
+  //
+  // uPar.x > 0.5 acrescenta o risco na diagonal (estado "nao assistido"): uma
+  // faixa em torno da reta y = x, com a borda apagada dos dois lados para o
+  // traco nao serrilhar.
+  "void main(){\n"
+  "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+  // Centros a +-0.62 e raio 0.78: a amendoa resultante tem cerca de 1.0 de
+  // largura por 0.32 de altura, que e a proporcao do glifo do web.
+  "  float d = max(length(p - vec2(0.0, 0.62)) - 0.78,\n"
+  "                length(p + vec2(0.0, 0.62)) - 0.78);\n"
+  "  float esp = 0.038;\n"
+  "  float m = smoothstep(esp, esp*0.45, abs(d));\n"
+  "  m = max(m, smoothstep(0.145, 0.125, length(p)));\n"
+  // O risco: apaga um sulco no olho e desenha a barra dentro dele, para que o
+  // traco se leia por cima da lente como no SVG (que usa dois caminhos).
+  "  if (uPar.x > 0.5) {\n"
+  "    float r = (p.x - p.y) * 0.7071;\n"
+  "    m *= smoothstep(0.030, 0.052, abs(r));\n"
+  "    float lim = step(max(abs(p.x), abs(p.y)), 0.46);\n"
+  "    m = max(m, smoothstep(0.030, 0.018, abs(r)) * lim);\n"
+  "  }\n"
+  "  if (m <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "}\n",
+
+  // GFX_TRAILER — glifo do YouTube: placa de cantos arredondados com o
+  // triangulo VAZADO (o triangulo e furo, nao desenho por cima, senao ele
+  // some quando o botao ganha foco e a cor se inverte).
+  "void main(){\n"
+  "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+  // Placa 0.92 x 0.64, cantos de 0.16 — a proporcao 14:10 do logo.
+  "  vec2 q = abs(p) - vec2(0.46, 0.32) + 0.16;\n"
+  "  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.16;\n"
+  "  float m = smoothstep(0.012, -0.012, d);\n"
+  "  if (m <= 0.002) discard;\n"
+  // Triangulo apontando para a direita, inscrito na placa.
+  "  vec2 t = (p - vec2(-0.10, 0.0)) / vec2(0.30, 0.20);\n"
+  "  float dy = abs(t.y);\n"
+  "  float tri = smoothstep(-0.06, 0.06, (1.0 - dy) - t.x) * step(-1.0, t.x);\n"
+  "  m *= 1.0 - tri;\n"
+  "  if (m <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "}\n",
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
 static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
   {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
   {0,1}, {0,1},
-  {1,0}    /* GFX_ANEL */
+  {1,0},   /* GFX_ANEL */
+  {0,0},   /* GFX_OLHO    — SDF proprio, nao o do retangulo */
+  {0,0}    /* GFX_TRAILER — idem */
 };
 
 static GLuint compila(GLenum tipo, const char *src) {

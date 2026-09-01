@@ -269,6 +269,13 @@
 #define NV_FT_DET_META2  23   // .detail-meta-row.secondary
 #define NV_FT_PLR_TITULO 56   // .player-title
 #define NV_FT_PLR_CORPO  32   // .player-subtitle e .player-time-label
+// Canto superior do player. O relogio e o "Termina as" vem do bloco ATV
+// (components.css:15282), ja convertidos para o canvas de 1920; o guia
+// parental nao e refeito la e fica com os 22 da regra base.
+#define NV_FT_PG_RELOGIO 26   // .player-clock
+#define NV_FT_PG_FIM     20   // .player-ends-at
+#define NV_FT_PG_ROTULO  22   // .player-parental-label
+#define NV_FT_PG_GRAV    22   // .player-parental-severity
 // Entrelinha (leading) OFICIAL de cada estilo. Usar a altura que o SDL_ttf
 // devolve nao e a mesma coisa: ela varia com os acentos da linha, entao um
 // paragrafo fica com espacamento irregular linha a linha.

@@ -34,6 +34,8 @@
 #include "layout.h"
 #include "catalogo.h"
 #include "trakt.h"
+#include "parental.h"
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>   // strcasecmp, para comparar o hdrType do pipeline
@@ -67,28 +69,48 @@
 //   .player-progress-shell  margin-top 12
 //   .player-controls-row    margin-top 16
 //   .player-controls-gradient-top/bottom   150 / 200
+//
+// MAS ESSES SAO OS VALORES BASE, E NAO OS DESTA TELA. O bloco `#playerUiRoot`
+// (components.css:15251) e o port do player do Android TV e refaz quase todos
+// com a conversao x2 que o repositorio usa para o canvas de 1920 ("ATV 6dp ->
+// 12px"). O que estava aqui era metade do tamanho certo em quase tudo — a
+// barra, o vao dos botoes, o respiro da fileira e os dois degrades. Os que o
+// bloco ATV NAO refaz (padding 64/48, margin-top 12 da barra) ficam como estao.
+//
+//   .player-progress-track  12 -> 20 com foco, radius 6
+//   .player-control-buttons gap 8
+//   .player-controls-row    margin-top 32
+//   .player-control-icon    48
+//   gradientes              300 (topo) / 400 (base)
 #define PLR_PAD_X         64.0f
 #define PLR_PAD_Y         48.0f
 #define PLR_BTN_D         96.0f
-#define PLR_BTN_GAP        4.0f
-// 6px em repouso, 10px com foco — as duas do web. A barra PASSOU a receber
+#define PLR_BTN_GAP        8.0f
+// 12px em repouso, 20px com foco — as duas do bloco ATV. A barra PASSOU a receber
 // foco (CIMA a partir da fileira de botoes); antes so os botoes recebiam, e por
 // isso nao havia como procurar no filme pela barra.
-#define PLR_TRILHO_H       6.0f
-// 10px com foco, medido em `.player-progress-shell.focused`.
-#define PLR_TRILHO_H_FOCO 10.0f
-#define PLR_TRILHO_R       3.0f
+#define PLR_TRILHO_H      12.0f
+// 20px com foco (`min(1.04vw, 20px)` em .player-progress-shell.focused).
+#define PLR_TRILHO_H_FOCO 20.0f
+#define PLR_TRILHO_R       6.0f
 #define PLR_GAP_BARRA     12.0f   // meta -> barra
-#define PLR_GAP_ROW       16.0f   // barra -> fileira de botoes
-#define PLR_GRAD_BAIXO   200.0f
-#define PLR_GRAD_TOPO    150.0f
+#define PLR_GAP_ROW       32.0f   // barra -> fileira de botoes
+#define PLR_GRAD_BAIXO   400.0f
+#define PLR_GRAD_TOPO    300.0f
 // #f5f5f5 = --secondary-color, que e o que preenche a barra no web.
 #define PLR_FILL_C      (245.0f / 255.0f)
 
-#define PLR_ICONE_H       46.0f
+#define PLR_ICONE_H       48.0f
 // De quanto o bloco desliza para baixo quando escondido. Pequeno de proposito:
 // o que faz o movimento ser lido nao e a distancia, e a mola somada ao fade.
 #define PLR_DESLIZE       46.0f
+// Guia parental (.player-parental-*): barra de 6, lista recuada 20, linha de
+// 36 com 4 de vao. Nao passam pela conversao x2 do bloco ATV — a regra base
+// nao e refeita la.
+#define PG_BARRA_W         6.0f
+#define PG_LISTA_PADX     20.0f
+#define PG_LINHA_H        36.0f
+#define PG_LINHA_GAP       4.0f
 // O veu virou os dois degrades do web (PLR_GRAD_TOPO/BAIXO). Ele existe para o
 // texto ler sobre a imagem — sem ele, uma cena clara apaga o nome do titulo.
 
@@ -398,6 +420,10 @@ void player_abrir(int indiceCatalogo, const char *url) {
   int n = cat_n(); if (n < 1) n = 1;
   idx = ((indiceCatalogo % n) + n) % n;
   aberto = 1; saindo = 0; pediuSair = 0; barraFoco = 0;
+  // Guia parental do titulo: pedido AQUI e nao no desenho, para que a resposta
+  // ja tenha chegado quando os controles aparecerem pela primeira vez.
+  { const CatItem *ci = cat_item(idx);
+    if (ci && ci->imdb[0]) parental_pedir(ci->imdb); }
   tocando = 1; visivel = 0; anim = 0.0f; entrada = 0.0f;
   botao = PLR_PLAY;
   memset(focoB, 0, sizeof focoB);
@@ -927,7 +953,35 @@ void player_desenhar(Uint32 agora) {
     if (video_tem_dolby_vision())                  selos[nSelos++] = "Dolby Vision";
     else if (!strcasecmp(video_hdr(), "HDR10"))    selos[nSelos++] = "HDR10";
     if (video_tem_atmos())        selos[nSelos++] = "Dolby Atmos";
-    { float sy = PLR_PAD_Y + desce;
+
+    // RELOGIO e "Termina as", que sao o que o web poe neste canto
+    // (.player-controls-top, playerScreen.js:5846). Os selos de qualidade sao
+    // acrescimo do port e passam a ficar ABAIXO deles, nao no lugar.
+    //
+    //   .player-clock    26/600 branco 96%
+    //   .player-ends-at  20/400 branco 78%, logo abaixo
+    float yRel = PLR_PAD_Y + desce;
+    {
+      time_t agoraT = time(NULL);
+      struct tm lt;
+      char hora[8], fim[32];
+      localtime_r(&agoraT, &lt);
+      strftime(hora, sizeof hora, "%H:%M", &lt);
+      { double falta = duracaoSeg - posSeg;
+        time_t t2 = agoraT + (time_t)(falta > 0.0 ? falta : 0.0);
+        struct tm lf; char h2[8];
+        localtime_r(&t2, &lf);
+        strftime(h2, sizeof h2, "%H:%M", &lf);
+        snprintf(fim, sizeof fim, "Termina \xc3\xa0" "s %s", h2); }
+      TxtLinha lh = txt_linha(TXT_PG_RELOGIO, hora, 255, 255, 255, 255);
+      TxtLinha lf = txt_linha(TXT_PG_FIM, fim, 255, 255, 255, 255);
+      txt_desenhar_alpha(lh, NV_TELA_W - PLR_PAD_X - lh.w, yRel, a * 0.96f);
+      txt_desenhar_alpha(lf, NV_TELA_W - PLR_PAD_X - lf.w, yRel + lh.h + 2.0f,
+                         a * 0.78f);
+      yRel += lh.h + 2.0f + lf.h;
+    }
+
+    { float sy = yRel + 16.0f;
       int i;
       for (i = 0; i < nSelos; i++) {
         TxtLinha l = txt_linha(TXT_MINI, selos[i], 236, 237, 242, 255);
@@ -936,22 +990,41 @@ void player_desenhar(Uint32 agora) {
       } }
   }
 
-  // Classificacao com o motivo ao lado, tambem conferido na foto: o badge
-  // sozinho nao diz por que, e no aparelho ele vem sempre acompanhado.
-  if (c && c->classificacao[0]) {
-    char cl[8]; snprintf(cl, sizeof cl, "A%s", c->classificacao);
-    TxtLinha lb = txt_linha(TXT_CAPTION2, cl, 255, 255, 255, 255);
-    float by = PLR_PAD_Y + desce;
-    GfxRect bg = { PLR_PAD_X, by, lb.w + 18, lb.h + 8 };
-    gfx_cor(bg, 0.16f, 0.85f, 0.36f, 0.10f, 0.95f * a);
-    txt_desenhar_alpha(lb, bg.x + 9, by + 4, a);
-    // O motivo vem do genero do titulo — "Violencia" fixo aparecia em comedia.
-    if (c->genero[0]) {
-      const char *g = strrchr(c->genero, '\xb7');
-      const char *rot = g ? g + 1 : c->genero;
-      while (*rot == ' ') rot++;
-      { TxtLinha lm = txt_linha(TXT_MINI, rot, 226, 228, 236, 255);
-        txt_desenhar_alpha(lm, bg.x + bg.w + 12, by + (bg.h - lm.h) * 0.5f, a * 0.85f); }
+  // GUIA PARENTAL, canto superior esquerdo (.player-parental-guide).
+  //
+  // Aqui havia um selo de classificacao com o GENERO do titulo ao lado, que
+  // nao existe no app web — genero nao e advertencia de conteudo, e "Drama"
+  // dentro de um selo laranja se le como aviso. O web mostra ate cinco linhas
+  // "Categoria · Gravidade" vindas do guia parental do IMDb, com uma barra
+  // vertical de 6px na cor de destaque encostada a esquerda.
+  //
+  //   .player-parental-guide  left 64, top 48
+  //   .player-parental-line   6 de largura, raio 3, altura = a da lista
+  //   .player-parental-list   padding-left 20, gap 4
+  //   .player-parental-item   36 de altura
+  //   rotulo 22/600 branco 85% · separador 22/400 branco 40% ·
+  //   gravidade 22/400 branco 50%
+  {
+    int np = parental_n();
+    if (np > 0) {
+      float lin = PG_LINHA_H, gap = PG_LINHA_GAP;
+      float alt = np * lin + (np - 1) * gap;
+      float y0 = PLR_PAD_Y + desce;
+      GfxRect barra = { PLR_PAD_X, y0, PG_BARRA_W, alt };
+      gfx_cor(barra, 0.5f * (PG_BARRA_W / alt),
+              PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, a);
+      float xt = PLR_PAD_X + PG_BARRA_W + PG_LISTA_PADX;
+      for (int i = 0; i < np; i++) {
+        float yl = y0 + i * (lin + gap);
+        TxtLinha lr = txt_linha(TXT_PG_ROTULO, parental_rotulo(i), 255, 255, 255, 255);
+        TxtLinha ls = txt_linha(TXT_PG_GRAV, "\xc2\xb7", 255, 255, 255, 255);
+        TxtLinha lg = txt_linha(TXT_PG_GRAV, parental_gravidade(i), 255, 255, 255, 255);
+        float cy = yl + (lin - lr.h) * 0.5f;
+        float x = xt;
+        txt_desenhar_alpha(lr, x, cy, a * 0.85f);  x += lr.w;
+        txt_desenhar_alpha(ls, x, yl + (lin - ls.h) * 0.5f, a * 0.40f); x += ls.w;
+        txt_desenhar_alpha(lg, x, yl + (lin - lg.h) * 0.5f, a * 0.50f);
+      }
     }
   }
 }

@@ -95,6 +95,10 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_DET_META2, PESO_REGULAR },
   { NV_FT_HERO_META, PESO_MEDIUM  },   // .home-modern-hero-meta-line (21/500)
   { NV_FT_HERO_SIN,  PESO_REGULAR },   // .home-hero-description (22/400)
+  { NV_FT_PG_RELOGIO, PESO_MEDIUM  },  // .player-clock (26/600)
+  { NV_FT_PG_FIM,     PESO_REGULAR },  // .player-ends-at (20/400)
+  { NV_FT_PG_ROTULO,  PESO_MEDIUM  },  // .player-parental-label (22/600)
+  { NV_FT_PG_GRAV,    PESO_REGULAR },  // .player-parental-severity (22/400)
 };
 
 int txt_iniciar(const char *dirRecursos) {

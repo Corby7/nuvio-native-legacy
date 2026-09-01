@@ -30,6 +30,12 @@ typedef enum {
   // Sinopse do hero: .home-hero-description, 22/400 branco cheio. O TXT_CAPTION
   // tem o mesmo corpo mas e cinza — a cor vem de quem desenha, o estilo nao.
   TXT_HERO_SIN,
+  // Canto superior do PLAYER, do bloco #playerUiRoot do web:
+  //   .player-clock          26 / 600
+  //   .player-ends-at        20 / 400
+  //   .player-parental-label 22 / 600
+  //   .player-parental-severity e .player-parental-separator 22 / 400
+  TXT_PG_RELOGIO, TXT_PG_FIM, TXT_PG_ROTULO, TXT_PG_GRAV,
   TXT_NFONTES
 } TxtEstilo;
 
