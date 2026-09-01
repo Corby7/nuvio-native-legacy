@@ -31,4 +31,16 @@ int  desc_buscando(void);
 // vezes a mesma coisa nao refaz a busca.
 void desc_episodios(int indiceItem, int temporada);
 
+// Busca o meta de um titulo que o catalogo NAO tem e o acrescenta ao fim.
+// Nao bloqueia. Serve ao credito de um ator e ao item de "Mais como este":
+// sem isto, tudo que estivesse fora do catalogo do dono nao abria.
+void desc_pedir_titulo(const char *imdb);
+// Mesma coisa a partir do id do TMDB, que e o que o credito de um ator traz.
+// `tipo` e "movie" ou "tv". Resolve o IMDb por external_ids antes de pedir o
+// meta — uma chamada a mais, so quando o dono abre o credito.
+void desc_pedir_titulo_tmdb(long tmdbId, const char *tipo);
+// Indice do titulo que acabou de entrar, ou -1. CONSOME o resultado.
+int  desc_titulo_pronto(void);
+int  desc_titulo_buscando(void);
+
 #endif

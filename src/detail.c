@@ -343,8 +343,10 @@ void detail_evento(const SDL_Event *e) {
       case SDLK_UP:   if (relFoco > 0)     { relFoco--; return; } break;
       case SDLK_RETURN:
       case SDLK_KP_ENTER: {
-        int alvo = cat_indice_por_imdb(extras_relacionado_imdb(relFoco));
+        const char *id = extras_relacionado_imdb(relFoco);
+        int alvo = cat_indice_por_imdb(id);
         if (alvo >= 0) pedAbrir = alvo;
+        else if (id[0]) desc_pedir_titulo(id);
         return; }
       default: break;
     }
@@ -373,8 +375,19 @@ void detail_evento(const SDL_Event *e) {
           // sem meta nao ha episodios, elenco nem fonte, e uma tela de detalhe
           // vazia e pior que o botao nao responder. Buscar meta sob demanda e
           // trabalho a parte.
-          int alvo = cat_indice_por_imdb(pessoa_credito_imdb(pessoaFoco));
+          const char *id = pessoa_credito_imdb(pessoaFoco);
+          int alvo = id[0] ? cat_indice_por_imdb(id) : -1;
           if (alvo >= 0) { pedAbrir = alvo; pessoaAberta = 0; }
+          // Nao esta no catalogo: busca o meta e abre quando chegar. Quem
+          // termina o trabalho e o roteador, que ja acompanha o resultado.
+          // O credito quase nunca traz imdb_id, entao o caminho normal e pelo
+          // id do TMDB.
+          else if (id[0]) { desc_pedir_titulo(id); pessoaAberta = 0; }
+          else if (pessoa_credito_tmdb(pessoaFoco) > 0) {
+            desc_pedir_titulo_tmdb(pessoa_credito_tmdb(pessoaFoco),
+                                   pessoa_credito_tipo(pessoaFoco));
+            pessoaAberta = 0;
+          }
           return; }
         default: break;
       } }
@@ -1238,10 +1251,8 @@ static void desenhaRelacionados(float x, float y, float a) {
   for (i = 0; i < n && i < 8; i++) {
     float yl = y + i * 52.0f;
     int aceso = naLista && i == relFoco;
-    // O titulo que ESTA no catalogo abre; o que nao esta fica apagado, para o
-    // foco nao prometer uma acao que nao existe.
-    int temMeta = cat_indice_por_imdb(extras_relacionado_imdb(i)) >= 0;
-    int c = aceso ? 255 : (temMeta ? 225 : 150);
+    // Todos abrem: o que nao esta no catalogo tem o meta buscado na hora.
+    int c = aceso ? 255 : 225;
     if (aceso) {
       GfxRect faixa = { x - 16.0f, yl - 8.0f, 940.0f, 48.0f };
       gfx_cor(faixa, 10.0f / 48.0f, 1, 1, 1, 0.12f * a);

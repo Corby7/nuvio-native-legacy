@@ -124,8 +124,13 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
 // caractere fora do ASCII nao existir na fonte principal. Titulo misto
 // "Deadpool & ウルヴァリン" sairia todo na reserva, o que e feio mas legivel —
 // e o caso raro; o comum e a linha ser toda de uma escrita so.
-static TTF_Font *reservas[TXT_NFONTES];
-static char caminhoReserva[512];
+// Uma reserva POR ESCRITA. A primeira versao tinha um arquivo so, escolhido
+// como "o CJK", e o nome de uma atriz iraniana continuava em quadradinhos: a
+// DroidSansFallback nao tem arabe. A TV traz arquivo separado para cada
+// familia de escrita, e e por isso que a escolha e por faixa de codepoint.
+typedef enum { ESC_CJK, ESC_ARABE, ESC_CIRILICO_ETC, ESC_N } Escrita;
+static TTF_Font *reservas[ESC_N][TXT_NFONTES];
+static char caminhoReserva[ESC_N][512];
 
 // Primeiro codepoint FORA do ASCII, ou 0. Decodifica UTF-8 na mao porque e o
 // unico ponto do app que precisa disso e puxar uma biblioteca por causa de tres
@@ -144,19 +149,33 @@ static Uint32 primeiroNaoAscii(const char *s) {
   return 0;
 }
 
+// Qual reserva cobre este codepoint. As faixas sao as usuais do Unicode; o que
+// nao for arabe/hebraico nem CJK cai na terceira, que e a DroidSansFallback (ela
+// cobre cirilico, grego, tailandes e mais).
+static Escrita escritaDe(Uint32 cp) {
+  if (cp >= 0x0590 && cp <= 0x07FF) return ESC_ARABE;       // hebraico + arabe
+  if (cp >= 0xFB50 && cp <= 0xFEFF) return ESC_ARABE;       // formas de apresentacao
+  if (cp >= 0x2E80 && cp <= 0x9FFF) return ESC_CJK;
+  if (cp >= 0xAC00 && cp <= 0xD7AF) return ESC_CJK;         // hangul
+  if (cp >= 0xF900 && cp <= 0xFAFF) return ESC_CJK;
+  return ESC_CIRILICO_ETC;
+}
+
 // Fonte com que a linha `s` deve ser desenhada. Devolve a principal quando ela
 // da conta — que e o caso da esmagadora maioria das linhas.
 static TTF_Font *fonteDe(TxtEstilo estilo, const char *s) {
   Uint32 cp = primeiroNaoAscii(s);
+  Escrita e;
   if (!cp || cp >= 0x10000) return fontes[estilo];
   // Acentos do portugues e do espanhol estao na Inter; so cai na reserva o que
   // ela realmente nao tem.
   if (TTF_GlyphIsProvided(fontes[estilo], (Uint16)cp)) return fontes[estilo];
-  if (!caminhoReserva[0]) return fontes[estilo];
-  if (!reservas[estilo])
-    reservas[estilo] = TTF_OpenFont(caminhoReserva,
-                                    (int)(ESTILOS[estilo].corpo * escalaTxt + 0.5f));
-  return reservas[estilo] ? reservas[estilo] : fontes[estilo];
+  e = escritaDe(cp);
+  if (!caminhoReserva[e][0]) return fontes[estilo];
+  if (!reservas[e][estilo])
+    reservas[e][estilo] = TTF_OpenFont(caminhoReserva[e],
+                                       (int)(ESTILOS[estilo].corpo * escalaTxt + 0.5f));
+  return reservas[e][estilo] ? reservas[e][estilo] : fontes[estilo];
 }
 
 int txt_iniciar(const char *dirRecursos, float escala) {
@@ -198,16 +217,29 @@ int txt_iniciar(const char *dirRecursos, float escala) {
 
   // Caminho da reserva CJK. Na TV e a DroidSansFallback; no Mac, a fonte do
   // sistema que cobre CJK — ali isto e so para a previa nao mentir.
-  { const char *cand[] = {
-      "/usr/share/fonts/DroidSansFallback.ttf",
-      "/System/Library/Fonts/Hiragino Sans GB.ttc",
-      "/System/Library/Fonts/PingFang.ttc",
-      NULL };
-    for (int i = 0; cand[i]; i++) {
-      FILE *fr = fopen(cand[i], "rb");
-      if (fr) { fclose(fr); snprintf(caminhoReserva, sizeof caminhoReserva, "%s", cand[i]); break; }
-    }
-    printf("reserva CJK: %s\n", caminhoReserva[0] ? caminhoReserva : "nenhuma"); }
+  { const char *cand[ESC_N][4] = {
+      /* ESC_CJK          */ { "/usr/share/fonts/LG_Display_JP.ttf",
+                               "/usr/share/fonts/DroidSansFallback.ttf",
+                               "/System/Library/Fonts/Hiragino Sans GB.ttc", NULL },
+      /* ESC_ARABE        */ { "/usr/share/fonts/DroidNaskh-Regular.ttf",
+                               "/usr/share/fonts/LG_Display_Urdu.ttf",
+                               "/System/Library/Fonts/Supplemental/GeezaPro.ttc",
+                               "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", NULL },
+      /* ESC_CIRILICO_ETC */ { "/usr/share/fonts/DroidSansFallback.ttf",
+                               "/usr/share/fonts/DroidSans.ttf",
+                               "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", NULL },
+    };
+    const char *nomeEsc[ESC_N] = { "CJK", "arabe", "resto" };
+    for (int e = 0; e < ESC_N; e++) {
+      for (int i = 0; cand[e][i]; i++) {
+        FILE *fr = fopen(cand[e][i], "rb");
+        if (fr) { fclose(fr);
+                  snprintf(caminhoReserva[e], sizeof caminhoReserva[e], "%s", cand[e][i]);
+                  break; }
+      }
+      printf("reserva %s: %s\n", nomeEsc[e],
+             caminhoReserva[e][0] ? caminhoReserva[e] : "nenhuma");
+    } }
 
   for (int c = 0; c < 3; c++) {
     int todas = 1;
@@ -230,7 +262,8 @@ void txt_encerrar(void) {
     if (cache[i].ocupado && cache[i].linha.tex) glDeleteTextures(1, &cache[i].linha.tex);
   for (int i = 0; i < TXT_NFONTES; i++) {
     if (fontes[i]) TTF_CloseFont(fontes[i]);
-    if (reservas[i]) TTF_CloseFont(reservas[i]);
+    for (int e = 0; e < ESC_N; e++)
+      if (reservas[e][i]) TTF_CloseFont(reservas[e][i]);
   }
   TTF_Quit();
 }

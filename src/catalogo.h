@@ -112,6 +112,11 @@ const CatItem *cat_item(int i);
 // busca nao haveria como saber se aquele titulo e um dos que ja temos meta.
 int cat_indice_por_imdb(const char *imdb);
 
+// Acrescenta um titulo ao FIM e devolve o indice, ou -1. Para o titulo que veio
+// de fora do catalogo (filmografia de ator, "Mais como este"). Ver a nota sobre
+// a troca de bloco em catalogo.c.
+int cat_acrescentar(const CatItem *item);
+
 // Grava onde o dono parou NESTE app. Ate agora o progresso so era LIDO (do app
 // web); sem isto, assistir pelo app nativo nao mudava nada na tela.
 //

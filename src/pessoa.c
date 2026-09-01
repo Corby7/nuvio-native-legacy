@@ -13,6 +13,12 @@
 // temporaria do mesmo tipo, e struct anonima nao permite declarar outra.
 typedef struct {
   char t[120], p[80], y[8], po[160], im[16];
+  // O credito de combined_credits NAO tem imdb_id — esse campo so existe no
+  // endpoint detalhado do titulo. Sem guardar o id do TMDB e o tipo, nao havia
+  // como traduzir o credito em nada que o Cinemeta entenda, e o OK nao fazia
+  // coisa nenhuma (o `im` ficava sempre vazio).
+  long tmdb;
+  char tipo[8];          // "movie" ou "tv"
   double pop;
 } Credito;
 static Credito cred[PES_MAX];
@@ -95,6 +101,9 @@ static void *buscar(void *arg) {
           snprintf(ach[k].po, sizeof ach[k].po,
                    "https://image.tmdb.org/t/p/w342%s", caminho);
         js_texto(p, fim, "imdb_id", ach[k].im, sizeof ach[k].im);
+        ach[k].tmdb = (long)js_num(p, fim, "id", 0.0);
+        ach[k].tipo[0] = 0;
+        js_texto(p, fim, "media_type", ach[k].tipo, sizeof ach[k].tipo);
         ach[k].pop = js_num(p, fim, "popularity", 0.0);
         if (ach[k].t[0]) k++;
         p = js_prox(fim);
@@ -123,6 +132,8 @@ static void *buscar(void *arg) {
         snprintf(cred[i].y,    sizeof cred[i].y,    "%s", ach[i].y);
         snprintf(cred[i].po, sizeof cred[i].po, "%s", ach[i].po);
         snprintf(cred[i].im,   sizeof cred[i].im,   "%s", ach[i].im);
+        cred[i].tmdb = ach[i].tmdb;
+        snprintf(cred[i].tipo, sizeof cred[i].tipo, "%s", ach[i].tipo);
       }
       nCred = k;
       pronta = 1;
@@ -178,4 +189,10 @@ const char *pessoa_credito_poster(int i) {
 }
 const char *pessoa_credito_imdb(int i) {
   return (i >= 0 && i < nCred) ? cred[i].im : "";
+}
+long pessoa_credito_tmdb(int i) {
+  return (i >= 0 && i < nCred) ? cred[i].tmdb : 0;
+}
+const char *pessoa_credito_tipo(int i) {
+  return (i >= 0 && i < nCred) ? cred[i].tipo : "";
 }

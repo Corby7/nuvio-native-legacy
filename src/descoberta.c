@@ -658,3 +658,102 @@ void desc_episodios(int indiceItem, int temporada) {
   if (pthread_create(&fioEp, NULL, buscarEps, NULL) != 0) fioEpVivo = 0;
   else pthread_detach(fioEp);
 }
+
+// --- TITULO SOB DEMANDA -------------------------------------------------------
+//
+// Abrir um credito da filmografia de um ator, ou um item de "Mais como este",
+// exige meta de um titulo que o catalogo do dono NAO tem. Antes esses itens
+// ficavam apagados e nao abriam, o que deixava a filmografia decorativa.
+//
+// O meta vem do Cinemeta, a mesma fonte do resto do catalogo, e o item entra no
+// FIM do vetor (cat_acrescentar). O tipo nao e conhecido de antemao — o TMDB
+// diz "movie"/"tv" no credito, mas o relacionado do Trakt nao —, entao tenta-se
+// filme e, se nao houver, serie. Duas chamadas no pior caso, uma no comum.
+static char sobId[24];
+static long sobTmdb;          // quando > 0, o id do IMDb ainda precisa ser resolvido
+static char sobTipo[8];
+static int  sobIndice = -1;   // resultado, consumido por desc_titulo_pronto
+static int  sobFioVivo;
+static pthread_t sobFio;
+
+static void *buscarTitulo(void *arg) {
+  char url[200], id[24], *corpo;
+  int achou = -1, passo;
+  (void)arg;
+  snprintf(id, sizeof id, "%s", sobId);
+
+  // O credito de um ator chega com o id do TMDB, nao com o do IMDb — o
+  // combined_credits nao traz imdb_id. `external_ids` faz a traducao, e e uma
+  // chamada so, feita apenas quando o dono abre o credito.
+  if (sobTmdb > 0) {
+    const char *chave = desc_chave_tmdb();
+    id[0] = 0;
+    if (chave && chave[0]) {
+      snprintf(url, sizeof url, "%s/%s/%ld/external_ids?api_key=%s", TMDB,
+               strcmp(sobTipo, "tv") ? "movie" : "tv", sobTmdb, chave);
+      corpo = rede_baixar(url, 15);
+      if (corpo) { js_texto(corpo, NULL, "imdb_id", id, sizeof id); free(corpo); }
+    }
+    if (!id[0] || id[0] != 't') {
+      printf("[desc] sob demanda tmdb %ld -> sem imdb\n", sobTmdb); fflush(stdout);
+      sobIndice = -1; sobFioVivo = 0; return NULL;
+    }
+    // Ja temos? Entao e so abrir.
+    { int j = cat_indice_por_imdb(id);
+      if (j >= 0) { sobIndice = j; sobFioVivo = 0; return NULL; } }
+  }
+
+  for (passo = 0; passo < 2 && achou < 0; passo++) {
+    const char *tipo = passo ? "series" : "movie";
+    snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA, tipo, id);
+    corpo = rede_baixar(url, 20);
+    if (!corpo) continue;
+    { const char *m = strstr(corpo, "\"meta\"");
+      CatItem it;
+      if (m && deMeta(m, NULL, tipo, &it)) {
+        // O id do proprio pedido manda: o Cinemeta as vezes devolve o campo
+        // vazio, e sem ele o titulo entraria no catalogo sem chave e nao
+        // poderia ser reaberto nem casar com progresso.
+        if (!it.imdb[0]) snprintf(it.imdb, sizeof it.imdb, "%s", id);
+        achou = cat_acrescentar(&it);
+      } }
+    free(corpo);
+  }
+  printf("[desc] sob demanda %s -> indice %d\n", id, achou); fflush(stdout);
+  sobIndice = achou;
+  sobFioVivo = 0;
+  return NULL;
+}
+
+void desc_pedir_titulo_tmdb(long tmdbId, const char *tipo) {
+  if (tmdbId <= 0 || sobFioVivo) return;
+  sobTmdb = tmdbId;
+  snprintf(sobTipo, sizeof sobTipo, "%s", tipo ? tipo : "movie");
+  sobId[0] = 0;
+  sobIndice = -1;
+  sobFioVivo = 1;
+  if (pthread_create(&sobFio, NULL, buscarTitulo, NULL) != 0) sobFioVivo = 0;
+  else pthread_detach(sobFio);
+}
+
+void desc_pedir_titulo(const char *imdb) {
+  char id[24];
+  const char *dp;
+  if (!imdb || imdb[0] != 't' || sobFioVivo) return;
+  // Corta o sufixo de episodio, se vier: o meta e do TITULO.
+  dp = strchr(imdb, ':');
+  if (dp) { size_t k = (size_t)(dp - imdb);
+            if (k >= sizeof id) k = sizeof id - 1;
+            memcpy(id, imdb, k); id[k] = 0; }
+  else snprintf(id, sizeof id, "%s", imdb);
+  if (cat_indice_por_imdb(id) >= 0) return;   // ja temos
+  snprintf(sobId, sizeof sobId, "%s", id);
+  sobTmdb = 0;
+  sobIndice = -1;
+  sobFioVivo = 1;
+  if (pthread_create(&sobFio, NULL, buscarTitulo, NULL) != 0) sobFioVivo = 0;
+  else pthread_detach(sobFio);
+}
+
+int desc_titulo_pronto(void) { int v = sobIndice; sobIndice = -1; return v; }
+int desc_titulo_buscando(void) { return sobFioVivo; }

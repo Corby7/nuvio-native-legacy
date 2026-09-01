@@ -340,6 +340,38 @@ const CatFileira *cat_fileira(int r) {
   return (r >= 0 && r < nFils) ? &fils[r] : NULL;
 }
 
+// ACRESCENTA UM titulo ao fim do catalogo e devolve o indice dele.
+//
+// Existe para o titulo que veio de FORA: um credito na filmografia de um ator
+// ou um item de "Mais como este" que o catalogo do dono nao tem. Sem isto o
+// item ficava apagado e nao abria, o que deixava a filmografia decorativa.
+//
+// Usa a MESMA troca de bloco de cat_definir_tudo, pelo mesmo motivo (leitor no
+// fio de desenho dentro do bloco antigo), com duas diferencas:
+//   - acrescenta no FIM, entao as janelas (ini,n) das fileiras continuam
+//     valendo e nao precisam ser derrubadas;
+//   - `n` NAO e zerado: subir a contagem depois que o bloco novo ja esta
+//     publicado e seguro, e zerar faria a home piscar a cada titulo aberto.
+int cat_acrescentar(const CatItem *item) {
+  static CatItem *lixoAcr;
+  CatItem *novo;
+  int novoN;
+  if (!item || n < 1) return -1;
+  if (n >= CAT_MAX) return -1;
+  novoN = n + 1;
+  novo = malloc(sizeof(CatItem) * (size_t)novoN);
+  if (!novo) return -1;
+  memcpy(novo, itens, sizeof(CatItem) * (size_t)n);
+  memcpy(&novo[n], item, sizeof(CatItem));
+  free(lixoAcr);
+  lixoAcr = itens;
+  itens = novo;
+  nAlocado = novoN;
+  n = novoN;
+  garantirFaixas(nAlocado);
+  return novoN - 1;
+}
+
 void cat_definir(const CatItem *lista, int qtd) {
   cat_definir_tudo(lista, qtd, NULL, 0);
 }

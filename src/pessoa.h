@@ -29,5 +29,9 @@ const char *pessoa_credito_poster(int i);
 // IMDb id do titulo, quando o TMDB informa; vazio quando nao. Sem ele nao ha
 // como abrir a pagina do titulo, entao o cartao fica so como informacao.
 const char *pessoa_credito_imdb(int i);
+// Id do titulo no TMDB e "movie"/"tv". O credito de combined_credits NAO traz
+// imdb_id; e por estes dois que se chega ao id que o Cinemeta entende.
+long pessoa_credito_tmdb(int i);
+const char *pessoa_credito_tipo(int i);
 
 #endif
