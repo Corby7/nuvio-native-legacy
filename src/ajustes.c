@@ -519,7 +519,6 @@ static void desenhaLinha(int op, float y, float f) {
   float a = anim_clamp((y - (AJ_TOPO - 70.0f)) / 60.0f, 0.0f, 1.0f);
   if (a <= 0.005f) return;
 
-  int leitura = soLeitura(op);
   int desligada = inativa(op);
   int podeMudar = mutavel(op);
   GfxRect linha = { AJ_LISTA_X, y, AJ_LISTA_W, AJ_LINHA_H };

@@ -805,13 +805,13 @@ static void desenhaEpisodio(GfxRect r, int c, float f, float a, Uint32 agora) {
 
   float tx = r.x + NV_DETP_EP_PAD;
 
-  // Circulo tracejado de "ainda nao assistido": 48x48 em (24,24) do card, borda
-  // de 2px rgba(179,179,179,0.9). O port desenha um anel continuo — o SDF nao
-  // faz tracejado — e e a unica liberdade deste selo.
-  { GfxRect fora = { r.x + 24, r.y + 24, NV_DETP_EP_STATUS, NV_DETP_EP_STATUS };
-    GfxRect dentro = { fora.x + 2, fora.y + 2, fora.w - 4, fora.h - 4 };
-    gfx_cor(fora, 0.5f, 0.70f, 0.70f, 0.70f, 0.90f * a);
-    gfx_cor(dentro, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f); }
+  // O circulo TRACEJADO de "ainda nao assistido" (48x48 em (24,24), borda de
+  // 2px rgba(179,179,179,0.9)) NAO e desenhado. Um anel exige furar o meio, e o
+  // shader so sabe preencher: a primeira tentativa saiu um disco cinza chapado
+  // no canto da miniatura, que le como defeito e nao como selo. O meio nao pode
+  // ser pintado da cor do fundo porque ali o veu esta em 0.06 — o que aparece
+  // atras e a propria arte do episodio. Fica de fora ate gfx.c ganhar um modo
+  // de anel, e gfx.c e arquivo de outro agente nesta sessao.
 
   // Selo "EPISODIO n": 163x44, raio 12, fundo rgba(0,0,0,0.42), 20/600 com
   // caixa alta.
@@ -836,17 +836,19 @@ static void desenhaEpisodio(GfxRect r, int c, float f, float a, Uint32 agora) {
   // Meta: relogio + duracao + data, 20/400 rgb(179,179,179), com 38 de folga
   // entre os dois blocos.
   { float x = tx, y = r.y + NV_DETP_EP_META_Y;
-    // Relogio de 28x28: aro e dois ponteiros. Sem glifo, pelo mesmo motivo do
-    // "+" dos botoes circulares.
-    GfxRect aro = { x, y, NV_DETP_EP_ICONE, NV_DETP_EP_ICONE };
-    GfxRect miolo = { x + 3, y + 3, NV_DETP_EP_ICONE - 6, NV_DETP_EP_ICONE - 6 };
-    gfx_cor(aro, 0.5f, 0.70f, 0.70f, 0.70f, a);
-    gfx_cor(miolo, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f);
+    // Relogio de 28x28. O glifo do web e um disco CHEIO em rgb(179,179,179) com
+    // os ponteiros VAZADOS — o `path` do SVG recorta o L do ponteiro do disco.
+    // Aqui o vazado sai pintando os ponteiros de preto por cima: naquele ponto
+    // da miniatura o veu ja esta em 0.95, entao o que estaria atras do recorte e
+    // praticamente preto. Desenhar os ponteiros na MESMA cor do disco, como
+    // estava, some com eles e deixa so uma bolinha cinza.
     float cx = x + NV_DETP_EP_ICONE * 0.5f, cy = y + NV_DETP_EP_ICONE * 0.5f;
-    GfxRect pv = { cx - 1, cy - 8, 2, 9 };
-    GfxRect ph = { cx - 1, cy - 1, 7, 2 };
-    gfx_cor(pv, 0.0f, 0.70f, 0.70f, 0.70f, a);
-    gfx_cor(ph, 0.0f, 0.70f, 0.70f, 0.70f, a);
+    GfxRect aro = { x, y, NV_DETP_EP_ICONE, NV_DETP_EP_ICONE };
+    gfx_cor(aro, 0.5f, 0.70f, 0.70f, 0.70f, a);
+    GfxRect pv = { cx - 1.5f, cy - 8, 3, 9.5f };
+    GfxRect ph = { cx - 1.5f, cy - 1.5f, 8, 3 };
+    gfx_cor(pv, 0.0f, 0.0f, 0.0f, 0.0f, 0.92f * a);
+    gfx_cor(ph, 0.0f, 0.0f, 0.0f, 0.0f, 0.92f * a);
     x += NV_DETP_EP_ICONE + 8.0f;
     TxtLinha ld = txt_linha(TXT_CAPTION2, epDur, 179, 179, 179, 255);
     txt_desenhar_alpha(ld, x, y, a);

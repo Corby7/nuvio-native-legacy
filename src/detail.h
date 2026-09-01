@@ -44,7 +44,17 @@ int  detail_pediu_do_inicio(void);
 // logo centralizado no topo (isso era do app da Apple TV). As secoes ficam em
 // coordenadas ABSOLUTAS de documento, e rolar e so subtrair scrollY.
 #define NV_DETP_X             96.0f   // gutter das fileiras (--tv-safe-gutter-wide)
-#define NV_DETP_FIM         2144.0f   // fim do conteudo: elenco (2024) + 120 de padding
+// Fim do documento rolavel. NAO e onde o elenco termina (2024): e o que o web
+// tem de altura rolavel, porque abaixo do elenco ele ainda monta as secoes de
+// comentarios e de produtoras, que este port nao tem.
+//
+// O numero sai da medida, nao da conta: com o elenco focado o web para em
+// scrollTop 1393, e para o topo do grupo (1749) cair nos 33% da tela (356) o
+// documento precisa ter pelo menos 1393 + 1080 = 2473. Com os 2144 da conta
+// "elenco + padding" a rolagem batia no teto em 1064 e a fileira de elenco
+// ficava em y=693 em vez de y=364 — meio ecra fora do lugar, e foi assim que
+// apareceu na primeira captura do aparelho.
+#define NV_DETP_FIM         2473.0f
 // Regra de rolagem do web, achada no fonte e conferida com quatro medidas:
 // o topo do GRUPO focado vai para 33% da altura util (40% nas abas). Constantes
 // DETAIL_ROW_FOCUS_TARGET / DETAIL_TAB_FOCUS_TARGET de metaDetailsScreen.js.
