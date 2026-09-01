@@ -245,7 +245,18 @@ void detail_evento(const SDL_Event *e) {
   }
   if (e->type == SDL_KEYUP && (e->key.keysym.sym == SDLK_RETURN ||
                                e->key.keysym.sym == SDLK_KP_ENTER)) {
-    Uint32 dur = okDesceEm ? SDL_GetTicks() - okDesceEm : 0;
+    Uint32 dur;
+    // SOLTAR sem ter PRESSIONADO nao e clique. Sem esta guarda o detalhe
+    // reproduzia sozinho ao ser aberto: o OK apertado na home entrega o KEYDOWN
+    // a home (que abre o detalhe) e o KEYUP JA CHEGA AQUI, com nivel 0 e botao
+    // 0 — que e exatamente "Reproduzir". Da para ver como o dono descreveu:
+    // "clica num titulo e ele ja clica duas vezes e inicia".
+    //
+    // Antes isto nao aparecia porque o botao morava no nivel 1 e o KEYUP orfao
+    // caia em nenhum caso. Passar os botoes para o nivel 0 (que e onde o web os
+    // poe) descobriu o defeito que ja existia.
+    if (!okDesceEm) return;
+    dur = SDL_GetTicks() - okDesceEm;
     okDesceEm = 0;
     if (nivel == 0) {
       // A ordem dos botoes muda com o estado: com progresso entra o secundario
@@ -332,9 +343,35 @@ static float xItem(int r, int c) {
   return x;
 }
 
+// Reconta as colunas de cada secao a cada quadro.
+//
+// O focus_iniciar do detail_abrir congela nColunas com o que EXISTE NA HORA da
+// abertura — e os episodios, as temporadas e o elenco chegam DA REDE, segundos
+// depois. Com a contagem parada em zero o focus_mover recusa qualquer passo
+// lateral (`novo < nColunas[fileira]` nunca passa), que e o defeito relatado:
+// "a lista de episodios nao mexe para os lados".
+//
+// Sai cedo quando nada mudou, entao custa N comparacoes de inteiro. Mesmo
+// padrao do sincronizarFileiras() da home, pela mesma razao: quem preenche o
+// catalogo e outro fio.
+static void sincronizarColunas(void) {
+  int r, mudou = 0;
+  for (r = 0; r < N_SECOES; r++) {
+    int n = secaoN(r);
+    if (foco.nColunas[r] != n) { foco.nColunas[r] = n; mudou = 1; }
+  }
+  if (!mudou) return;
+  // A coluna corrente pode ter ficado fora da faixa (a lista encolheu ao trocar
+  // de temporada). Puxar para dentro evita desenhar foco em item inexistente.
+  if (foco.coluna >= foco.nColunas[foco.fileira])
+    foco.coluna = foco.nColunas[foco.fileira] > 0
+                ? foco.nColunas[foco.fileira] - 1 : 0;
+}
+
 void detail_atualizar(float dt, Uint32 agora) {
   (void)agora;
   if (!aberto) return;
+  sincronizarColunas();
   t  = anim_mola(t,  saindo ? 0.0f : 1.0f, dt, NV_MOLA_TELA);
   // Rigidez propria: o web leva 0.8s para apagar o backdrop (cubic-bezier
   // .4,0,.2,1), e a mola de NV_MOLA_TELA assenta em ~330ms.

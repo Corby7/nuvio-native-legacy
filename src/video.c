@@ -15,6 +15,15 @@ void video_parar(void) {}
 void video_pausar(int p) { (void)p; }
 void video_buscar(double s) { (void)s; }
 void video_janela(int x,int y,int w,int h) { (void)x;(void)y;(void)w;(void)h; }
+// Coto que FALTAVA: a funcao existia so no ramo do aparelho, entao o build do
+// Mac quebrava no link com "_video_janela_fonte, referenced from
+// _aplicarAspecto". E o espelho da armadilha ja conhecida — o Mac nao compila a
+// metade do pipeline, e por isso nao valida `video.c`; aqui ele cobra a
+// declaracao que a outra metade nao tem. Toda funcao nova de video precisa
+// aparecer NOS DOIS ramos.
+void video_janela_fonte(int sx,int sy,int sw,int sh,int dx,int dy,int dw,int dh) {
+  (void)sx;(void)sy;(void)sw;(void)sh;(void)dx;(void)dy;(void)dw;(void)dh;
+}
 double video_pos(void) { return 0; }
 double video_duracao(void) { return 0; }
 double video_buffer_fim(void) { return 0; }

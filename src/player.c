@@ -71,11 +71,12 @@
 #define PLR_PAD_Y         48.0f
 #define PLR_BTN_D         96.0f
 #define PLR_BTN_GAP        4.0f
-// 6px e a altura de repouso. O web tem 10px para .player-progress-shell.focused,
-// que aqui nao existe: o foco anda so pelos cinco botoes, a barra nunca o
-// recebe. A constante nao entra porque constante que ninguem usa vira mentira
-// na proxima leitura.
+// 6px em repouso, 10px com foco — as duas do web. A barra PASSOU a receber
+// foco (CIMA a partir da fileira de botoes); antes so os botoes recebiam, e por
+// isso nao havia como procurar no filme pela barra.
 #define PLR_TRILHO_H       6.0f
+// 10px com foco, medido em `.player-progress-shell.focused`.
+#define PLR_TRILHO_H_FOCO 10.0f
 #define PLR_TRILHO_R       3.0f
 #define PLR_GAP_BARRA     12.0f   // meta -> barra
 #define PLR_GAP_ROW       16.0f   // barra -> fileira de botoes
@@ -105,6 +106,11 @@ static int   tocando = 1;
 // Botao em foco na fileira de transporte. Comeca no PLAY porque e a resposta
 // que nove de cada dez aberturas quer: o dedo para no centro e o OK decide.
 static int   botao = PLR_PLAY;
+// A barra de progresso e um alvo de foco, como no web: `.player-progress-shell`
+// engorda de 6 para 10px e clareia o trilho quando focada. Fica FORA do enum
+// dos botoes porque nao e um botao — o OK nela nao 'aperta' nada, e o
+// ESQUERDA/DIREITA muda de significado (procura, em vez de trocar de foco).
+static int   barraFoco = 0;
 static int   visivel = 0;          // alvo dos controles (1 = em pe)
 static float anim = 0.0f;          // 0..1 seguindo `visivel`, por mola
 static float focoB[PLR_NBTNS];     // mola de foco de cada botao
@@ -391,7 +397,7 @@ void player_aspecto_ciclar(void) {
 void player_abrir(int indiceCatalogo, const char *url) {
   int n = cat_n(); if (n < 1) n = 1;
   idx = ((indiceCatalogo % n) + n) % n;
-  aberto = 1; saindo = 0; pediuSair = 0;
+  aberto = 1; saindo = 0; pediuSair = 0; barraFoco = 0;
   tocando = 1; visivel = 0; anim = 0.0f; entrada = 0.0f;
   botao = PLR_PLAY;
   memset(focoB, 0, sizeof focoB);
@@ -508,6 +514,9 @@ void player_evento(const SDL_Event *e) {
 
   // CONTROLES EM PE: o foco anda pelos botoes e o OK aperta o botao em foco.
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+    // Na barra o OK pausa/retoma: e o que sobra de util, ja que a barra nao
+    // tem acao propria no web.
+    if (barraFoco) { alternarTocando(); acordar(); return; }
     switch (botao) {
       case PLR_PLAY:    alternarTocando(); break;
       case PLR_VOLTAR:  saltar(-1);        break;
@@ -518,10 +527,29 @@ void player_evento(const SDL_Event *e) {
     acordar();
     return;
   }
-  // CIMA abre a folha de audio e legenda — e o unico caminho sem cursor. No
-  // aparelho e assim: pra cima revela legendas e audio, sempre, de qualquer
-  // botao em que o foco esteja.
-  if (k == SDLK_UP) { pedFaixas = 1; acordar(); return; }
+  // CIMA sobe para a BARRA, que no web e um alvo de foco de verdade
+  // (`.player-progress-shell.focused` engorda o trilho de 6 para 10px). Sem
+  // isso nao havia como adiantar o filme pela barra — so os saltos de 10s dos
+  // botoes, que e o defeito que o dono relatou.
+  //
+  // A folha de faixas NAO se perde: ela continua no CIMA, um nivel acima. Da
+  // fileira de botoes o primeiro CIMA pega a barra e o segundo abre a folha.
+  // Trocar o gesto por outro (um botao a mais, um menu) seria pior: no aparelho
+  // "pra cima revela legendas e audio" e o que a mao ja sabe.
+  if (k == SDLK_UP) {
+    if (!barraFoco) barraFoco = 1; else pedFaixas = 1;
+    acordar();
+    return;
+  }
+  if (barraFoco) {
+    // Na barra, ESQUERDA e DIREITA procuram no filme em vez de trocar de botao.
+    if (k == SDLK_LEFT)       saltar(-1);
+    else if (k == SDLK_RIGHT) saltar(1);
+    else if (k == SDLK_DOWN)  barraFoco = 0;
+    acordar();
+    return;
+  }
+  if (k == SDLK_DOWN) { acordar(); return; }
   // Sem rotacao nas pontas: a fileira e curta e cabe inteira no olhar; dar a
   // volta no fim le como erro, nao como atalho.
   if (k == SDLK_LEFT  && botao > 0)          botao--;
@@ -775,17 +803,20 @@ void player_desenhar(Uint32 agora) {
   // so pelos botoes, entao ela fica sempre em 6.
   float bx = PLR_PAD_X, bw = NV_TELA_W - PLR_PAD_X * 2;
   float frac = duracaoSeg > 0.0f ? anim_clamp(posSeg / duracaoSeg, 0.0f, 1.0f) : 0.0f;
-  GfxRect trilho = { bx, yBarra, bw, PLR_TRILHO_H };
-  GfxRect andado = { bx, yBarra, bw * frac, PLR_TRILHO_H };
-  // rgba(255,255,255,0.3) do .player-progress-track.
-  gfx_cor(trilho, PLR_TRILHO_R, 1, 1, 1, 0.30f * a);
+  // Com foco o trilho engorda de 6 para 10 e clareia de 0.30 para 0.45, e ele
+  // cresce para BAIXO a partir da mesma linha de base — subir moveria tambem a
+  // meta e o titulo, que estao ancorados nela.
+  float hTrilho = barraFoco ? PLR_TRILHO_H_FOCO : PLR_TRILHO_H;
+  GfxRect trilho = { bx, yBarra, bw, hTrilho };
+  GfxRect andado = { bx, yBarra, bw * frac, hTrilho };
+  gfx_cor(trilho, PLR_TRILHO_R, 1, 1, 1, (barraFoco ? 0.45f : 0.30f) * a);
   // O buffer do pipeline, entre o andado e o fim: e o que mostra que o video
   // esta a frente do relogio. Sem dado do pipeline o segmento nao existe —
   // inventar "quase todo carregado" seria pior que a barra simples. No web ele
   // e a MESMA cor do preenchimento a 0.35 (.player-progress-buffered).
   { float bufFrac = duracaoSeg > 0.0f ? anim_clamp(video_buffer_fim() / duracaoSeg, 0.0f, 1.0f) : 0.0f;
     if (bufFrac > frac + 0.004f) {
-      GfxRect buf = { bx + bw * frac, yBarra, bw * (bufFrac - frac), PLR_TRILHO_H };
+      GfxRect buf = { bx + bw * frac, yBarra, bw * (bufFrac - frac), hTrilho };
       gfx_cor(buf, PLR_TRILHO_R, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, 0.35f * a);
     } }
   if (andado.w > 1.0f)
