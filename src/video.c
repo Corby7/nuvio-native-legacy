@@ -84,6 +84,9 @@ static long      acb;
 // Retangulo pedido pela UI. Guardado porque o ACB so aceita a janela depois do
 // loadCompleted, que chega muito depois de quem pediu.
 static int       janX, janY, janW = 1920, janH = 1080;
+// Ultimo par fonte/destino aplicado pelo setDisplayWindow do uMS, para nao
+// repetir a mesma chamada a cada quadro. fonX = -1 quer dizer "nada aplicado".
+static int       fonX = -1, fonY, fonW, fonH, dstX = -1, dstY, dstW, dstH;
 // Caracteristicas do fluxo, tiradas do evento videoInfo da assinatura do uMS.
 // O ACB precisa delas para descrever o video ao pipeline de exibicao.
 static int       vidW = 1920, vidH = 1080, vidTaxa = 30;
@@ -672,6 +675,11 @@ static int tocarInterno(const char *url, int comDV) {
   if (!ligado && !video_iniciar()) return 0;
   video_parar();
   viuVideo = 0;
+  // O retangulo aplicado e da SESSAO: sem zerar, uma sessao nova que calcule o
+  // mesmo rect cairia no "ja e esse" e nunca chegaria a mandar nada ao plano.
+  // (semUms NAO zera: se esta TV nao entende o recorte de fonte, nao passa a
+  // entender no titulo seguinte, e insistir so arrisca a imagem de novo.)
+  fonX = -1; dstX = dstY = dstW = dstH = -1;
   posSeg = durSeg = bufferSeg = 0; tocando = pronto = 0; midia[0] = 0;
   nAudio = nLeg = 0; audioAtual = 0; legAtual = -1; vidAtmos = 0;
   snprintf(vidHdr, sizeof vidHdr, "none");
@@ -822,14 +830,32 @@ void video_janela(int x, int y, int w, int h) {
   acbJanela(acb, x, y, w, h, cheia, &tarefa);
 }
 
-// A resposta do uMS ao setDisplayWindow, LOGADA. Sem ler a resposta, um payload
-// com a assinatura errada falha calado e o sintoma que sobra e "tela preta" —
-// exatamente o que custou a descobrir que o caminho do ACB nao recortava.
+// A resposta do uMS ao setDisplayWindow, LOGADA — e AGIDA.
+//
+// A assinatura source/destination ainda nao foi confirmada nesta TV (o
+// ls-monitor ficou para depois, a TV estava ocupada). Se ela estiver errada, o
+// pedido e recusado e o plano fica com o retangulo de antes — ou seja, o
+// sintoma seria de novo "tela preta no zoom", que e exatamente o erro que esta
+// rodada corrigiu. Entao a recusa nao pode passar calada: ao primeiro
+// returnValue:false o modulo DESISTE do caminho do uMS e volta ao acbJanela em
+// tela cheia. Perde-se o zoom, que e um recurso; nao se perde a imagem, que e o
+// filme. Errar para o lado de continuar mostrando video e a unica escolha
+// defensavel enquanto isto nao foi medido.
+static int semUms;   // 1 depois que o uMS recusou o setDisplayWindow
+
 static int aoJanela(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m);
   (void)h; (void)u;
   printf("[video] setDisplayWindow -> %s\n", p ? p : "(nulo)");
   fflush(stdout);
+  if (p && strstr(p, "\"returnValue\":false")) {
+    long tarefa = 0;
+    semUms = 1;
+    printf("[video] uMS recusou o recorte de fonte; voltando a tela cheia pelo ACB\n");
+    fflush(stdout);
+    janX = janY = 0; janW = 1920; janH = 1080;
+    if (acb) acbJanela(acb, 0, 0, 1920, 1080, 1, &tarefa);
+  }
   return 1;
 }
 
@@ -843,13 +869,14 @@ static int aoJanela(LSHandle *h, LSMessage *m, void *u) {
 // que calculada do lado certo do escalonador.
 //
 // Mantem o acbJanela para o caso de tela cheia sem recorte, que ja funcionava.
-static int fonX = -1, fonY, fonW, fonH, dstX, dstY, dstW, dstH;
-
 void video_janela_fonte(int sx, int sy, int sw, int sh,
                         int dx, int dy, int dw, int dh) {
   char b[420];
   int cheia;
   if (sw < 2 || sh < 2 || dw < 1 || dh < 1) return;
+  // O uMS ja recusou uma vez nesta sessao: nao insistir. Cada tentativa nova
+  // seria outra chance de deixar o plano num estado sem imagem.
+  if (semUms) { video_janela(dx, dy, dw, dh); return; }
   // Destino preso a tela: o mesmo limite que vale para o acbJanela.
   if (dx < 0) { dw += dx; dx = 0; }
   if (dy < 0) { dh += dy; dy = 0; }
