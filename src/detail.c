@@ -839,25 +839,34 @@ static void heroWeb(float a, float desloc) {
 
   const char *sin = sinopseDe(idx);
 
-  // --- empilhamento de BAIXO para cima, como o flex-end do web ---------------
-  float yMeta2 = NV_DETW_BASE - NV_DETW_SELO_H - 14.0f;       // 989
-  float yMeta1 = yMeta2 - NV_DETW_META_GAP - 74.0f;           // 889
+  // --- ORDEM DA COLUNA, como a referencia do dono -----------------------------
+  //
+  // De cima para baixo: logo, linha de meta (ano, temporadas, classificacao),
+  // generos, quem dirigiu, sinopse, linha de retomada e por fim os BOTOES.
+  //
+  // Antes os botoes vinham logo abaixo do logo e generos/classificacao caiam no
+  // rodape, o que separava a informacao do titulo em dois blocos com a acao no
+  // meio. Na referencia tudo que DESCREVE o titulo vem junto e a acao fecha o
+  // bloco — foi isso que o dono pediu ao comparar as duas telas.
+  //
+  // Continua ancorado na BASE: a sinopse muda de altura conforme o texto, e
+  // ancorar no topo faria o botao dancar de titulo para titulo.
+  float yAcoes = NV_DETW_BASE - NV_DETW_ACOES_H;
+  float temRetom = (ci && ci->progresso > 0) ? 1.0f : 0.0f;
+  float yRetom = yAcoes - NV_DETW_GAP_RETOM - NV_DETW_RETOM_H;
   float hSin = 0.0f;
   if (sin) hSin = txt_bloco(TXT_DET_SIN, sin, 255, 255, 255, -1.0f, 0.0f,
                             NV_DETW_TEXTO_W, NV_DETW_LD_SIN, 0.0f,
                             NV_DETW_SIN_LINHAS);
-  float ySin = yMeta1 - NV_DETW_GAP_SIN - hSin;              // 748
-  float ySup = sup[0] ? ySin - NV_DETW_GAP_SUP - NV_DETW_LD_SUP : ySin;  // 688
-  // A linha de retomada continua ligada ao PROGRESSO, nao ao botao que saiu.
-  float temRetom = (ci && ci->progresso > 0) ? 1.0f : 0.0f;
-  float yRetom = ySup - NV_DETW_GAP_SUP - NV_DETW_RETOM_H;
-  float yAcoes = (temRetom ? yRetom - NV_DETW_GAP_RETOM
-                           : ySup - NV_DETW_GAP_ACOES) - NV_DETW_ACOES_H;
+  float ySin = (temRetom ? yRetom : yAcoes) - NV_DETW_GAP_SIN - hSin;
+  float ySup = sup[0] ? ySin - NV_DETW_GAP_SUP - NV_DETW_LD_SUP : ySin;
+  float yGen = ySup - NV_DETW_GAP_SUP - NV_DETW_LD_META;
+  float yMeta1 = yGen - NV_DETW_META_GAP - NV_DETW_SELO_H;
 
   // Sobe alguns pixels enquanto entra: continua o movimento da arte em vez de
   // aparecer pronto no lugar. `desloc` e a rolagem do documento.
   float sobe = (1.0f - a) * 26.0f + desloc;
-  yMeta2 += sobe; yMeta1 += sobe; ySin += sobe; ySup += sobe;
+  yMeta1 += sobe; yGen += sobe; ySin += sobe; ySup += sobe;
   yRetom += sobe; yAcoes += sobe;
 
   // --- logo -----------------------------------------------------------------
@@ -871,7 +880,7 @@ static void heroWeb(float a, float desloc) {
     if (asp <= 0.0f) asp = 2.5f;
     float h = NV_DETW_LOGO_H, w = h * asp;
     if (w > NV_DETW_LOGO_MAXW) { w = NV_DETW_LOGO_MAXW; h = w / asp; }
-    GfxRect r = { NV_DETW_X, yAcoes - NV_DETW_LOGO_GAP - h, w, h };
+    GfxRect r = { NV_DETW_X, yMeta1 - NV_DETW_LOGO_GAP - h, w, h };
     gfx_tex_aspect_atual = 0.0f;   // o logo ja vem na proporcao certa
     gfx_rect(r, texLogo, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, a);
   } else {
@@ -880,7 +889,7 @@ static void heroWeb(float a, float desloc) {
     TxtLinha t2 = txt_linha_corta(TXT_TITULO1, tituloDe(idx), 255, 255, 255, 255,
                                   NV_DETW_LOGO_MAXW);
     txt_desenhar_alpha(t2, NV_DETW_X,
-                       yAcoes - NV_DETW_LOGO_GAP - NV_DETW_LOGO_H
+                       yMeta1 - NV_DETW_LOGO_GAP - NV_DETW_LOGO_H
                               + (NV_DETW_LOGO_H - t2.h) * 0.5f, a);
   }
 
@@ -941,47 +950,39 @@ static void heroWeb(float a, float desloc) {
   if (sin) txt_bloco(TXT_DET_SIN, sin, 255, 255, 255, NV_DETW_X, ySin,
                      NV_DETW_TEXTO_W, NV_DETW_LD_SIN, a, NV_DETW_SIN_LINHAS);
 
-  // --- meta 1: generos a esquerda; ano e selo IMDb empurrados a direita ------
-  // A linha cresce de 49 para 74 de altura quando o selo IMDb existe — foi ele
-  // que empurrou a pilha inteira para cima na sessao logada.
+  // --- meta: ano, temporadas e classificacao, tudo NUMA LINHA -----------------
+  // A referencia junta "2023  3 Seasons  [TV-MA]" numa linha so; o port
+  // espalhava isso por duas linhas em pontas opostas da tela. O selo do IMDb
+  // fica na direita da mesma linha, que e o unico lugar onde ele nao compete
+  // com o resto.
   {
-    float yc = yMeta1 + 37.0f;
-    float xDir = NV_DETW_DIR;
-    float usado = desenhaSeloImdb(xDir, yc, ci ? ci->nota : 0, a);
-    if (usado > 0.0f) {
-      xDir -= usado + NV_DETP_SEP;
-      desenhaPonto(xDir, yc, a);
-      xDir -= NV_DETP_SEP;
-    }
+    float x = NV_DETW_X, yc = yMeta1 + NV_DETW_SELO_H * 0.5f;
     if (ano[0]) {
-      TxtLinha la = txt_linha(TXT_DET_META, ano, 179, 179, 179, 255);
-      txt_desenhar_alpha(la, xDir - la.w, yc - la.h * 0.5f, a);
-      xDir -= la.w + NV_DETP_SEP;
-      desenhaPonto(xDir, yc, a);
-      xDir -= NV_DETP_SEP;
-    }
-    TxtLinha lg = txt_linha_corta(TXT_DET_META, generoDe(idx), 179, 179, 179, 255,
-                                  xDir - NV_DETW_X);
-    txt_desenhar_alpha(lg, NV_DETW_X, yc - lg.h * 0.5f, a);
-  }
-
-  // --- meta 2: selo, duracao, pais ------------------------------------------
-  // O web abre a linha com o selo de STATUS ("RETURNING SERIES") e/ou o de
-  // classificacao indicativa. Status nao existe no CatItem — o catalogo nativo
-  // nao traz esse campo do Cinemeta —, entao aqui o selo e o de classificacao,
-  // que existe e ocupa o mesmo lugar na mesma linha do web.
-  {
-    float x = NV_DETW_X, yc = yMeta2 + NV_DETW_SELO_H * 0.5f;
-    if (ci && ci->classificacao[0]) {
-      x += desenhaSeloMeta(x, yMeta2, ci->classificacao, a) + NV_DETP_SEP;
-      desenhaPonto(x, yc, a);
-      x += NV_DETP_SEP;
+      TxtLinha la = txt_linha(TXT_DET_META, ano, 235, 238, 245, 255);
+      txt_desenhar_alpha(la, x, yc - la.h * 0.5f, a);
+      x += la.w + NV_DETW_META_SEP;
     }
     if (dur[0]) {
-      TxtLinha ld = txt_linha(TXT_DET_META2, dur, 255, 255, 255, 255);
+      TxtLinha ld = txt_linha(TXT_DET_META, dur, 235, 238, 245, 255);
       txt_desenhar_alpha(ld, x, yc - ld.h * 0.5f, a);
+      x += ld.w + NV_DETW_META_SEP;
     }
+    if (ci && ci->classificacao[0])
+      x += desenhaSeloMeta(x, yMeta1, ci->classificacao, a) + NV_DETW_META_SEP;
+    if (ci && ci->pais[0]) {
+      TxtLinha lp = txt_linha(TXT_DET_META2, ci->pais, 150, 154, 163, 255);
+      txt_desenhar_alpha(lp, x, yc - lp.h * 0.5f, a * 0.9f);
+    }
+    desenhaSeloImdb(NV_DETW_DIR, yc, ci ? ci->nota : 0, a);
   }
+
+  // --- generos, em linha propria ---------------------------------------------
+  {
+    TxtLinha lg = txt_linha_corta(TXT_DET_META, generoDe(idx), 179, 179, 179,
+                                  255, NV_DETW_TEXTO_W);
+    txt_desenhar_alpha(lg, NV_DETW_X, yGen + (NV_DETW_LD_META - lg.h) * 0.5f, a);
+  }
+
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,12 +1024,18 @@ static void desenhaTemporada(GfxRect r, int c, float f, float a) {
   char rot[32]; rotuloTemporada(c, rot, sizeof rot);
   int sel = (c == temporada);
   float raio = NV_RAIO_PILL;
-  GfxRect borda = { r.x - 1, r.y - 1, r.w + 2, r.h + 2 };
-  gfx_cor(borda, raio, 1, 1, 1, 0.16f * a * (1.0f - f));
-  float base = sel ? 0.176f : 0.133f;         // #2d2d2d / #222
-  float lum  = base + (0.961f - base) * f;    // -> #f5f5f5 com foco
-  gfx_cor(r, raio, lum, lum, lum, a);
-  int alvo = sel ? 255 : 179;
+  // Sem contorno: na referencia a temporada nao escolhida e texto puro. O
+  // contorno so existia para separar duas pilulas claras vizinhas, que nao ha
+  // mais.
+  (void)0;
+  // ESCOLHIDA = pilula ESCURA com texto branco; as outras sao so texto sobre o
+  // fundo. E a referencia do dono, e inverte o que estava aqui (a escolhida era
+  // a mais clara). O foco continua clareando a pilula ate #f5f5f5, que e o
+  // unico sinal de foco desta fileira.
+  float base = sel ? 0.145f : 0.0f;           // #252525 / transparente
+  float lum  = base + (0.961f - base) * f;
+  gfx_cor(r, raio, lum, lum, lum, (sel || f > 0.01f) ? a : 0.0f);
+  int alvo = sel ? 255 : 155;
   int cor = (int)(alvo + (17 - alvo) * f);    // -> #111 com foco
   TxtLinha l = txt_linha(TXT_PLR_CORPO, rot, cor, cor, cor, 255);
   // 500 de peso na Inter Regular: uma segunda passada meio pixel a direita.
@@ -1142,7 +1149,13 @@ static void desenhaEpisodio(GfxRect r, int c, float f, float a, Uint32 agora) {
 
   // Selo "EPISODIO n": 163x44, raio 12, fundo rgba(0,0,0,0.42), 20/600 com
   // caixa alta.
-  { char cab[24]; snprintf(cab, sizeof cab, "EPISODIO %d", epNum);
+  // "T2E4" e nao "EPISODIO 4": a referencia do dono usa a forma curta, que cabe
+  // no canto sem competir com o titulo e ainda diz de que TEMPORADA e — coisa
+  // que "EPISODIO 4" nao dizia, com o card fora da lista da temporada.
+  { char cab[24];
+    if (ep && ep->temporada > 0) snprintf(cab, sizeof cab, "T%dE%d",
+                                          ep->temporada, epNum);
+    else snprintf(cab, sizeof cab, "EPISODIO %d", epNum);
     TxtLinha l = txt_linha(TXT_CAPTION2, cab, 255, 255, 255, 255);
     float w = l.w + NV_DETP_EP_SELO_PADX * 2;
     GfxRect s = { tx, r.y + NV_DETP_EP_SELO_Y, w, NV_DETP_EP_SELO_H };
@@ -1179,9 +1192,10 @@ static void desenhaEpisodio(GfxRect r, int c, float f, float a, Uint32 agora) {
     x += NV_DETP_EP_ICONE + 8.0f;
     TxtLinha ld = txt_linha(TXT_CAPTION2, epDur, 179, 179, 179, 255);
     txt_desenhar_alpha(ld, x, y, a);
-    x += ld.w + NV_DETP_SEP;
-    TxtLinha lf = txt_linha(TXT_CAPTION2, epData, 179, 179, 179, 255);
-    txt_desenhar_alpha(lf, x, y, a); }
+    // A DATA vai para a direita do card, como na referencia: a esquerda fica so
+    // a duracao, e as duas deixam de disputar a mesma linha corrida.
+    { TxtLinha lf = txt_linha(TXT_CAPTION2, epData, 179, 179, 179, 255);
+      txt_desenhar_alpha(lf, r.x + r.w - NV_DETP_EP_PAD - lf.w, y, a); } }
 
   // Barra de progresso: 576x8 a 16px da base da miniatura, trilho
   // rgba(0,0,0,0.45) e preenchimento rgb(158,158,158). So aparece entre 2% e
@@ -1551,6 +1565,19 @@ static void desenhaSecao(int r, float a, Uint32 agora) {
     default:             y = NV_DETP_EL_Y;   break;
   }
   y -= scrollY;
+
+  // TITULO DA SECAO ("Temporadas", "Elenco"), como a referencia. O port nao
+  // tinha cabecalho nenhum e as fileiras apareciam soltas, sem dizer o que
+  // eram. Fica ACIMA da fileira e some junto com ela na rolagem.
+  // So "Temporadas". A fileira de elenco ja e rotulada pela ABA acima dela
+  // ("Criador e elenco"), e um cabecalho "Elenco" logo abaixo dela dizia a
+  // mesma coisa duas vezes — na primeira tentativa os dois ainda se
+  // sobrepunham.
+  { const char *cab = (r == SEC_TEMPORADAS) ? "Temporadas" : NULL;
+    if (cab) {
+      TxtLinha lc = txt_linha(TXT_HEADLINE, cab, 245, 248, 255, 255);
+      txt_desenhar_alpha(lc, NV_DETP_X, y - lc.h - 22.0f, a);
+    } }
   float alt = (r == SEC_EPISODIOS) ? NV_DETP_EP_H
             : (r == SEC_ELENCO)    ? 257.0f
             : NV_DETP_TEMP_H;

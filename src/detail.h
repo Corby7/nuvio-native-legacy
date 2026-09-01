@@ -92,7 +92,7 @@ int  detail_pediu_do_inicio(void);
 
 // Abas de temporada: 269x80 em x=96, passo 321 (gap 52), raio 40, fonte 32/500.
 // A largura sai do texto + padding, e nao e constante: "Especiais" mede 219.
-#define NV_DETP_TEMP_Y      1100.0f
+#define NV_DETP_TEMP_Y      1160.0f
 #define NV_DETP_TEMP_H        80.0f
 #define NV_DETP_TEMP_PADX     40.0f
 #define NV_DETP_TEMP_GAP      52.0f
@@ -100,7 +100,7 @@ int  detail_pediu_do_inicio(void);
 // Episodio: card 640x422 em x=96, passo 726, raio 32. A diferenca estrutural
 // com o port anterior (que era do app da Apple TV) e que o TEXTO FICA DENTRO da
 // miniatura, sobre um degrade vertical, e nao abaixo dela.
-#define NV_DETP_EP_Y        1226.0f
+#define NV_DETP_EP_Y        1286.0f
 #define NV_DETP_EP_W         640.0f
 #define NV_DETP_EP_H         422.0f
 #define NV_DETP_EP_PASSO     726.0f
@@ -129,14 +129,14 @@ int  detail_pediu_do_inicio(void);
 // Abas "Criador e elenco | Avaliacoes | Mais como este | Trailer": fonte 32/500,
 // selecionada branca, as outras #808080; o divisor "|" e 32/700 #808080, com 20
 // de folga de cada lado.
-#define NV_DETP_ABA_Y       1698.0f
+#define NV_DETP_ABA_Y       1758.0f
 #define NV_DETP_ABA_H         51.0f
 #define NV_DETP_ABA_SEP       20.0f
 
 // Elenco: card de 220 de largura, passo 270; avatar 140x140 ALINHADO A
 // ESQUERDA do card (nao centralizado); nome 26/500 rgb(179,179,179) e papel
 // 21/400 rgb(128,128,128) abaixo.
-#define NV_DETP_EL_Y        1757.0f
+#define NV_DETP_EL_Y        1817.0f
 #define NV_DETP_EL_W         220.0f
 #define NV_DETP_EL_PASSO     270.0f
 #define NV_DETP_EL_AVATAR    140.0f
