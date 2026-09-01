@@ -1,10 +1,12 @@
 // Tela de Ajustes: lista vertical de opcoes em secoes, rotulo a esquerda e
 // valor a direita.
 //
-// Os valores ficam em MEMORIA, sem persistencia. E deliberado: gravar em disco
-// e uma decisao de plataforma (onde grava no webOS, o que acontece na primeira
-// execucao) que nao pertence a tela — e uma tela que le seus proprios valores
-// de getters continua funcionando igual no dia em que a persistencia entrar.
+// As chaves de LAYOUT sao as mesmas de js/data/local/layoutPreferences.js do app
+// web, com os mesmos nomes, os mesmos padroes de fabrica e — onde o port desenha
+// a tela — o mesmo efeito. Nao sao preferencias inventadas para o port: o dono
+// ja as muda na tela de Ajustes do web, e a home dele depende delas.
+//
+// Os valores sao gravados em <dir>/ajustes.txt, uma chave por linha.
 #ifndef NV_AJUSTES_H
 #define NV_AJUSTES_H
 #include <SDL2/SDL.h>
@@ -31,18 +33,71 @@ int ajustes_idioma_ingles(void);
 // a fonte de video mostrar exatamente o que o usuario escolheu.
 const char *ajustes_qualidade(void);
 
-// --- LAYOUT ------------------------------------------------------------------
-// As mesmas chaves de js/data/local/layoutPreferences.js do app web, com os
-// mesmos efeitos. Nao sao preferencias inventadas para o port: o dono ja as
-// muda na tela de Ajustes do web, e a home dele depende delas.
+// --- LAYOUT: estrutura da home ----------------------------------------------
 int   ajustes_rail_recolhida(void);     // collapseSidebar
+int   ajustes_rail_moderna(void);       // modernSidebar
+int   ajustes_rail_moderna_blur(void);  // modernSidebarBlur
 int   ajustes_hero_ligado(void);        // heroSectionEnabled
 int   ajustes_hero_cheio(void);         // modernHeroFullScreenBackdropEnabled
-int   ajustes_cw_estilo(void);          // continueWatchingCardStyle: 0 card, 1 largo, 2 poster
-int   ajustes_rotulos_poster(void);     // posterLabelsEnabled
 int   ajustes_posteres_deitados(void);  // modernLandscapePostersEnabled
+int   ajustes_gradiente_foco_classico(void); // classicFocusGradientEnabled
 // x onde o conteudo comeca. Nao e constante: o recuo e sempre 104 e a rail
 // soma os 144 dela quando esta fixa.
 float ajustes_conteudo_x(void);
+
+// --- LAYOUT: rotulos e metadados --------------------------------------------
+int   ajustes_rotulos_poster(void);     // posterLabelsEnabled
+int   ajustes_nome_addon(void);         // catalogAddonNameEnabled
+int   ajustes_sufixo_tipo(void);        // catalogTypeSuffixEnabled
+int   ajustes_ocultar_nao_lancados(void);   // hideUnreleasedContent
+int   ajustes_data_completa(void);      // showFullReleaseDate
+// homeImdbRatingsVisibility: 0 SHOW_ALL, 1 HIDE_ALL
+int   ajustes_notas_home(void);
+// discoverLocation: 0 in_search, 1 in_sidebar, 2 off
+int   ajustes_local_descobrir(void);
+int   ajustes_descobrir_na_busca(void); // searchDiscoverEnabled (derivado)
+
+// --- LAYOUT: continuar assistindo -------------------------------------------
+int   ajustes_cw_ligado(void);          // continueWatchingEnabled
+int   ajustes_cw_estilo(void);          // 0 card, 1 largo (wide), 2 poster
+int   ajustes_cw_thumb_episodio(void);  // useEpisodeThumbnailsInCw
+int   ajustes_cw_desfocar_proximo(void);// blurContinueWatchingNextUp
+int   ajustes_cw_do_episodio_mais_alto(void); // nextUpFromFurthestEpisode
+int   ajustes_cw_mostrar_nao_exibidos(void);  // showUnairedNextUp
+// continueWatchingSortMode: 0 default, 1 streaming_style, 2 split_upcoming
+int   ajustes_cw_ordem(void);
+
+// --- LAYOUT: pagina de detalhe (efeito vive em detail.c) ---------------------
+int   ajustes_desfocar_nao_assistidos(void); // blurUnwatchedEpisodes
+int   ajustes_botao_trailer(void);           // detailPageTrailerButtonEnabled
+int   ajustes_meta_externo(void);            // preferExternalMetaAddonDetail
+
+// --- LAYOUT: foco no poster --------------------------------------------------
+int   ajustes_expandir_poster(void);         // focusedPosterBackdropExpandEnabled
+float ajustes_expandir_poster_atraso(void);  // em segundos
+int   ajustes_navegacao_horizontal_rapida(void); // fastHorizontalNavigationEnabled
+
+// --- LAYOUT: profundidade dos cartoes ---------------------------------------
+int   ajustes_profundidade(void);            // cardDepthEnabled
+float ajustes_profundidade_borda(void);      // 0..1 (cardDepthEdgeStrength/100)
+float ajustes_profundidade_brilho(void);     // 0..1 (cardDepthSheenStrength/100)
+float ajustes_profundidade_cobertura(void);  // 0..1 (cardDepthEdgeCoverage/100)
+int   ajustes_profundidade_posters(void);
+int   ajustes_profundidade_cw(void);
+int   ajustes_profundidade_episodios(void);
+int   ajustes_profundidade_elenco(void);
+int   ajustes_profundidade_trailers(void);
+
+// --- LAYOUT: tamanho do item -------------------------------------------------
+// ATENCAO, e a armadilha que ja custou uma medida errada: no layout MODERNO
+// `posterCardWidthDp` NAO muda o tamanho do poster. `buildModernHomeSizingStyle`
+// gera --home-poster-width: 218px para 120dp, mas a folha do layout moderno
+// redefine a variavel para 212px em .home-screen-shell.home-layout-modern
+// (components.css:6462) e e ela que vence — CONFERIDO no app rodando: mudar a
+// variavel inline de 218 para 300 nao mexeu um pixel no card. O que sai da
+// preferencia e so o RAIO.
+int   ajustes_largura_poster_dp(void);
+int   ajustes_raio_poster_dp(void);
+float ajustes_raio_poster_px(void);   // raio em px (dp x 2)
 
 #endif

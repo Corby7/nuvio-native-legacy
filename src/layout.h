@@ -120,6 +120,45 @@
 // card, sobrando 48 de respiro entre uma fileira e a proxima.
 #define NV_FILEIRA_GAP  48.0f
 
+// POSTER DEITADO (`modernLandscapePostersEnabled`). MEDIDO no app web com a
+// preferencia ligada: `.home-poster-card.is-landscape` = 318 de largura, moldura
+// 314x178.875 (16:9) com 2px de borda em volta -> caixa 318x182.9.
+//
+// De onde sai o 318: a folha do layout moderno define
+// `--home-landscape-poster-width: calc(var(--home-poster-width) * 1.5)` e
+// `--home-landscape-poster-height: calc(... * 0.5625)` sobre o
+// `--home-poster-width: 212px` do proprio layout moderno (components.css:6462).
+// NAO sai de `posterCardWidthDp`: a variavel inline que
+// `buildModernHomeSizingStyle` escreve (399x225 para 120dp) e sobrescrita, e
+// isso foi CONFERIDO no app rodando — trocar a variavel para 300px nao moveu um
+// pixel do card.
+//
+// A fileira deitada tambem aperta o passo vertical: `--home-row-gap` cai de 32
+// para 24 em `.home-modern-landscape-posters` (components.css:6473).
+#define NV_CARD_LAND_W   318.0f
+#define NV_CARD_LAND_H   182.9f   // 178.875 de moldura + 2px de borda em cima e embaixo
+#define NV_CARD_LAND_ART 178.875f
+#define NV_FILEIRA_GAP_LAND 24.0f
+// A legenda do card deitado fica DENTRO da moldura: left/right 14, bottom 12,
+// largura maxima 76% do card, sobre um degrade que cobre 54% da altura.
+#define NV_LAND_COPY_PAD  14.0f
+#define NV_LAND_COPY_BASE 12.0f
+#define NV_LAND_COPY_MAXW 0.76f
+#define NV_LAND_VEU       0.54f
+
+// Rotulo abaixo do poster (`posterLabelsEnabled`). `.home-poster-copy`: padding
+// 8px 2px 0, altura fixa `--home-poster-copy-height: 74px`, titulo 16/500 e
+// subtitulo 13/400 rgba(255,255,255,0.7).
+//
+// ATENCAO: no layout MODERNO a folha esconde este bloco —
+// `.home-screen-shell.home-layout-modern .home-poster-copy { display: none }`
+// (components.css:7334) — e por isso a tela de Ajustes do web nem mostra a
+// opcao quando o layout e moderno (`!isModernLayout` em settingsScreen.js:4050).
+// O port desenha o bloco quando a preferencia esta ligada; ver a nota em home.c.
+#define NV_POSTER_COPY_H   74.0f
+#define NV_POSTER_COPY_PADT 8.0f
+#define NV_POSTER_COPY_PADX 2.0f
+
 #define NV_POSTER_W      212.0f
 #define NV_POSTER_H      322.0f
 // O Top 10 reserva espaco abaixo do poster para o rotulo de genero.
@@ -313,6 +352,103 @@
 #define NV_DETW_LD_META    35.0f
 #define NV_DETW_LD_META2   31.0f
 #define NV_DETW_META_SEP   24.0f   // gap do flex, dos dois lados do ponto
+
+// ---------------------------------------------------------------------------
+// Tela de BUSCA — MEDIDA no app web rodando (perfil do dono, 1920x1080).
+//
+// O port tinha um TECLADO EM GRADE 6x7 a esquerda e uma grade de resultados a
+// direita. O web nao tem teclado nenhum: tem um campo de texto largo no topo
+// (o sistema da TV abre o teclado dele) e os resultados vem em FILEIRAS
+// horizontais, uma por catalogo de addon, com titulo e a origem embaixo dele.
+//
+//   .search-header        y=22  h=110, padding 0 104
+//     .search-discover-btn 110x110 em (104,22)  bg #222, borda 1px #333, raio 22
+//     .search-voice-btn    110x110 em (262,22)  -> passo 158 (gap 48)
+//     .search-input-field  1396x110 em (420,22) bg #222, raio 22, 34/500,
+//                          padding 0 32; focado: borda #f5f5f5 e
+//                          box-shadow 0 0 0 2px rgba(245,245,245,.22)
+//   .search-empty-state   y=148 h=400, centrado: icone 136 em y=220.5,
+//                          titulo 56/600 em y=378.5, apoio 24/400 em y=446.7
+//   .search-results-row   titulo 48/600 lh 51.84; subtitulo 20/400 rgb(179)
+//                          com margin-top 4; trilho 88.3 abaixo do titulo
+//     .search-result-card  248 de largura, poster 248x372 raio 22 borda 2px
+//                          nome 28/500 lh 33.6 (margin-top 8)
+//                          data 20/400 rgb(179) (margin-top 4)
+//                          passo horizontal 280 (248 + 32)
+//   passo entre fileiras 562.4
+#define NV_BUSCA_HEAD_Y     22.0f
+#define NV_BUSCA_HEAD_H    110.0f
+#define NV_BUSCA_BTN       110.0f
+#define NV_BUSCA_BTN_GAP    48.0f
+#define NV_BUSCA_BTN_ICONE  54.0f
+#define NV_BUSCA_RAIO       22.0f
+#define NV_BUSCA_CAMPO_PADX 32.0f
+#define NV_BUSCA_VAZIO_Y   148.0f
+#define NV_BUSCA_VAZIO_ICO 136.0f
+#define NV_BUSCA_VAZIO_TIT 378.5f
+#define NV_BUSCA_VAZIO_SUB 446.7f
+#define NV_BUSCA_ROW_SUB    55.8f   // topo do titulo -> topo do subtitulo
+#define NV_BUSCA_ROW_TRILHO 92.3f   // topo do titulo -> topo dos cards
+#define NV_BUSCA_ROW_PASSO 562.4f
+#define NV_BUSCA_CARD_W    248.0f
+#define NV_BUSCA_CARD_PASSO 280.0f
+#define NV_BUSCA_POSTER_H  372.0f
+#define NV_BUSCA_NOME_GAP    8.0f
+#define NV_BUSCA_DATA_GAP    4.0f
+
+// ---------------------------------------------------------------------------
+// Tela de BIBLIOTECA — MEDIDA no app web rodando.
+//
+// O port tinha tres abas centralizadas ("Minha Lista", "Comprados", "Generos") e
+// uma grade de 6 colunas de 212. O web tem: titulo a esquerda com um selo de
+// origem a direita, DUAS pilulas de modo ("Salvos" / "Nuvem") e DOIS seletores
+// largos ("Tipo" e "Ordenar"), e so entao a grade.
+//
+//   .library-main       padding 48 96 64 -> conteudo em x=96, y=48, largura 1728
+//   .library-page-title 56/600, letter-spacing 1px, em (96,48)
+//   .library-page-source 28/500 rgb(128,128,128) ls 4px, alinhado a direita (1824)
+//   .library-view-mode-row y=136 h=56, gap 16: pilulas 150x56 raio 999,
+//                        14/24 de padding, 21/400; escolhida bg #303030 borda
+//                        2px #fff; as outras bg #222 borda 2px #333
+//   .library-picker-row  y=212 h=110: dois seletores 840x110 em x=96 e x=984,
+//                        raio 36, padding 18/28; focado bg #303030 borda 1px
+//                        #fff, os outros bg #222 borda 1px rgba(255,255,255,.1)
+//     .library-picker-title 19/500 rgb(128,128,128) ls 0.45 lh 24
+//     .library-picker-value 30/500 branco ls 0.3 lh 40, margin-top 4
+//   .library-empty-state y=354, padding-top 38, gap 18: titulo 46/500 lh 49.68,
+//                        apoio 28/400 rgb(179,179,179) lh 35
+//   .library-grid       6 colunas de 268 (auto-fill sobre minimo 252 em 1728,
+//                        com 24 de gutter), poster 2:3 = 268x402 raio 24 com
+//                        borda de 4px POR DENTRO, titulo 32/500 lh 1.18 a 16 do
+//                        poster; passo de linha 487.8 (455.8 + 32)
+#define NV_BIB_X            96.0f
+#define NV_BIB_Y            48.0f
+#define NV_BIB_W          1728.0f
+#define NV_BIB_DIR        1824.0f
+#define NV_BIB_MODO_Y      136.0f
+#define NV_BIB_MODO_W      150.0f
+#define NV_BIB_MODO_H       56.0f
+#define NV_BIB_MODO_PASSO  182.0f
+#define NV_BIB_PICK_Y      212.0f
+#define NV_BIB_PICK_W      840.0f
+#define NV_BIB_PICK_H      110.0f
+#define NV_BIB_PICK_PASSO  888.0f
+#define NV_BIB_PICK_RAIO    36.0f
+#define NV_BIB_PICK_PADX    28.0f
+#define NV_BIB_PICK_PADY    18.0f
+#define NV_BIB_VAZIO_Y     354.0f
+#define NV_BIB_GRADE_Y     354.0f
+#define NV_BIB_COLUNAS         6
+#define NV_BIB_CARD_W      268.0f
+#define NV_BIB_CARD_GAP     24.0f
+#define NV_BIB_POSTER_H    402.0f
+#define NV_BIB_POSTER_BORDA  4.0f
+#define NV_BIB_TIT_GAP      16.0f
+#define NV_BIB_LINHA_PASSO 487.8f
+// `.library-grid-card.focused { transform: scale(1.02) }` com origem no topo —
+// e a UNICA escala de foco que sobrou em qualquer tela deste app, e ela e do
+// web: as outras eram das tabelas de Top Shelf do tvOS e foram removidas.
+#define NV_BIB_FOCO_ESCALA  0.02f
 
 #define NV_DET_MARGEM_X  120.0f
 #define NV_DET_MARGEM_Y   38.0f

@@ -86,10 +86,18 @@ static void carregaDir(const char *dir, char destino[][512], int *n, const char 
   closedir(d);
 }
 
+// A forma do card sai de DUAS preferencias, e nao do tipo da fileira:
+//
+//   `modernLandscapePostersEnabled` troca o poster 2:3 (212x322) pelo card
+//   deitado 16:9 (318x182.9). MEDIDO no app web com a preferencia ligada.
+//
+//   `continueWatchingCardStyle` decide a fileira de "Continuar assistindo":
+//   "card" e "largo" desenham deitado, "poster" usa o mesmo 2:3 das outras.
 static float larguraDe(TipoFileira t) {
   switch (t) {
     case FILEIRA_CONTINUE: return NV_DESTAQUE_W;
-    default:               return NV_CARD_W;
+    default:               return ajustes_posteres_deitados() ? NV_CARD_LAND_W
+                                                              : NV_CARD_W;
   }
 }
 // Quantos titulos o hero percorre. Vem do catalogo quando existe.
@@ -98,8 +106,22 @@ static int nAcervoHero(void) { int n = cat_n(); if (n) return n; return nBd ? nB
 static float alturaDe(TipoFileira t) {
   switch (t) {
     case FILEIRA_CONTINUE: return NV_DESTAQUE_H;
-    default:               return NV_CARD_H;
+    default:               return ajustes_posteres_deitados() ? NV_CARD_LAND_H
+                                                              : NV_CARD_H;
   }
+}
+// Altura TOTAL que a fileira ocupa: a arte mais o bloco de rotulo, quando ele
+// existe. Sem somar o rotulo aqui, a fileira seguinte sobe por cima do texto —
+// foi o mesmo defeito que o titulo de fileira ja tinha tido sobre os cards.
+static int temRotulo(TipoFileira t) {
+  // O rotulo abaixo do poster so existe no poster EM PE. No card deitado o web
+  // poe a legenda DENTRO da moldura (.home-poster-landscape-copy) e esconde o
+  // bloco de fora (.home-poster-card.is-landscape .home-poster-copy{display:none}).
+  return t != FILEIRA_CONTINUE && ajustes_rotulos_poster()
+      && !ajustes_posteres_deitados();
+}
+static float alturaTotalDe(TipoFileira t) {
+  return alturaDe(t) + (temRotulo(t) ? NV_POSTER_COPY_H : 0.0f);
 }
 // O gap do tvOS e fixo em 40px e ja foi dimensionado para caber o crescimento
 // do foco: um card de 410 crescendo 9% invade 18px de cada lado. O card
@@ -108,6 +130,46 @@ static float alturaDe(TipoFileira t) {
 static float gapDe(TipoFileira t) {
   (void)t;
   return NV_CARD_GAP;
+}
+// Passo vertical entre fileiras. `.home-modern-landscape-posters` aperta o
+// `--home-row-gap` de 32 para 24 (components.css:6473) — a fileira deitada e
+// mais baixa e o respiro do poster em pe sobraria nela.
+static float fileiraGap(void) {
+  return ajustes_posteres_deitados() ? NV_FILEIRA_GAP_LAND : NV_FILEIRA_GAP;
+}
+// Raio do card, em fracao do menor lado (o SDF do shader e normalizado). Este e
+// o UNICO numero do card moderno que sai mesmo de `posterCardCornerRadiusDp`:
+// 12dp x 2 = 24px, conferido no app rodando. A largura NAO sai de la (ver a
+// nota em ajustes.h).
+static float raioDe(float w, float h) {
+  float menor = w < h ? w : h;
+  if (menor <= 0.0f) return NV_RAIO_CARD;
+  return ajustes_raio_poster_px() / menor;
+}
+
+// --- Profundidade dos cartoes (`cardDepth*`) ---------------------------------
+// O web faz isto com dois pseudo-elementos sobre a arte: um brilho na borda de
+// CIMA com opacidade `--card-depth-edge` e uma faixa clara e discreta —
+// `--card-depth-sheen` — atravessando a parte alta do cartao. `--card-depth-
+// coverage` engorda a banda da borda: `12 + round(18 * coverage)` px
+// (layoutPreferences.js:181). Sao os mesmos tres numeros da tela de Ajustes.
+static void desenhaProfundidade(GfxRect card, float raio, int ligadaAqui) {
+  if (!ajustes_profundidade() || !ligadaAqui) return;
+  float borda = ajustes_profundidade_borda();
+  float brilho = ajustes_profundidade_brilho();
+  float cobertura = ajustes_profundidade_cobertura();
+  if (borda > 0.001f) {
+    float h = 12.0f + 18.0f * cobertura;
+    GfxRect faixa = { card.x, card.y, card.w, h };
+    // Raio proporcional: a faixa e muito mais baixa que o card, entao repetir a
+    // fracao do card arredondaria demais e a borda descolaria do canto.
+    gfx_cor(faixa, raio * (card.h / (h > 0.0f ? h : 1.0f)) * 0.5f,
+            1.0f, 1.0f, 1.0f, borda * 0.55f);
+  }
+  if (brilho > 0.001f) {
+    GfxRect refl = { card.x, card.y + card.h * 0.06f, card.w, card.h * 0.28f };
+    gfx_cor(refl, raio, 1.0f, 1.0f, 1.0f, brilho * 0.18f);
+  }
 }
 // ZERO. MEDIDO no app web (sessao logada, perfil do dono): o card em foco tem
 // `transform: none`, `scale: none` e o mesmo getBoundingClientRect do card ao
@@ -179,26 +241,44 @@ void home_evento(const SDL_Event *e) {
 // descoberta roda noutro fio e pode trocar o catalogo a qualquer momento; sai
 // cedo quando nada mudou, entao custa uma comparacao de inteiro.
 static int filsAplicadas = -1;
+// Assinatura das preferencias que MUDAM a lista de fileiras. Sem isto, desligar
+// "Continuar assistindo" em Ajustes so valia depois que a rede trocasse o
+// catalogo — a comparacao de `nCat` saia cedo e a fileira continuava na tela.
+static int prefsAplicadas = -1;
+static int assinaturaPrefs(void) {
+  return (ajustes_cw_ligado() ? 1 : 0)
+       | (ajustes_cw_estilo() << 1)
+       | (ajustes_posteres_deitados() ? 8 : 0)
+       | (ajustes_rotulos_poster() ? 16 : 0);
+}
 static void sincronizarFileiras(void) {
-  int nCat = cat_n_fileiras(), r;
-  if (nCat < 1 || nCat == filsAplicadas) return;
-  for (r = 0; r < nCat && r < MAX_FIL; r++) {
+  int nCat = cat_n_fileiras(), r, destino = 0;
+  int assin = assinaturaPrefs();
+  if (nCat < 1 || (nCat == filsAplicadas && assin == prefsAplicadas)) return;
+  for (r = 0; r < nCat && destino < MAX_FIL; r++) {
     const CatFileira *cf = cat_fileira(r);
     if (!cf) break;
-    fileiras[r].titulo = cf->titulo;
+    // `continueWatchingEnabled: false` tira a fileira da home inteira — nao a
+    // esvazia, tira. E o que renderModernHomeLayout faz quando
+    // computeContinueWatchingRenderState devolve a fileira desligada.
+    if (!strcmp(cf->chave, "continue_watching") && !ajustes_cw_ligado()) continue;
+    fileiras[destino].titulo = cf->titulo;
     // "Continuar assistindo" e a unica landscape: e o
     // `continueWatchingCardStyle: "card"` do perfil. Todo o resto e poster 2:3.
     // `continueWatchingCardStyle`: "card" e "largo" desenham landscape, "poster"
     // usa o mesmo 2:3 das outras fileiras. E a preferencia, nao o tipo da
     // fileira, que decide a forma.
-    fileiras[r].tipo = (r == 0 && !strcmp(cf->chave, "continue_watching")
-                        && ajustes_cw_estilo() != 2)
-                     ? FILEIRA_CONTINUE : FILEIRA_NORMAL;
-    fileiras[r].n   = cf->n > MAX_CARDS ? MAX_CARDS : cf->n;
-    fileiras[r].ini = cf->ini;
+    fileiras[destino].tipo = (!strcmp(cf->chave, "continue_watching")
+                              && ajustes_cw_estilo() != 2)
+                           ? FILEIRA_CONTINUE : FILEIRA_NORMAL;
+    fileiras[destino].n   = cf->n > MAX_CARDS ? MAX_CARDS : cf->n;
+    fileiras[destino].ini = cf->ini;
+    destino++;
   }
-  nFileiras = r;
+  nFileiras = destino;
   filsAplicadas = nCat;
+  prefsAplicadas = assin;
+  if (nFileiras < 1) return;
   {
     int cols[MAX_FIL], k;
     for (k = 0; k < nFileiras; k++) cols[k] = fileiras[k].n;
@@ -259,9 +339,9 @@ void home_atualizar(float dt, Uint32 agora) {
     int r = foco.fileira;
     float topo = NV_SHELF_TOP;
     for (int i = 0; i < r; i++) {
-      topo += NV_LEGACY_ROW_HEAD_H + alturaDe(fileiras[i].tipo) + NV_FILEIRA_GAP;
+      topo += NV_LEGACY_ROW_HEAD_H + alturaTotalDe(fileiras[i].tipo) + fileiraGap();
     }
-    float hFoco = alturaDe(fileiras[r].tipo);
+    float hFoco = alturaTotalDe(fileiras[r].tipo);
     float cardTopo = topo + NV_LEGACY_ROW_HEAD_H;
     float viewportTop = NV_SHELF_TOP + NV_LEGACY_ROW_HEAD_H;
     float viewportBottom = NV_TELA_H - NV_MARGEM_Y;
@@ -397,6 +477,8 @@ void home_desenhar(Uint32 agora) {
     // sobre a arte da anterior quando a fileira tem cards altos.
     float cardY = y + NV_LEGACY_ROW_HEAD_H;
 
+    int deitado = (tipo != FILEIRA_CONTINUE) && ajustes_posteres_deitados();
+    int rotuloFora = temRotulo(tipo);
     if (y < NV_TELA_H + 200 && y + NV_LEGACY_ROW_HEAD_H + lh > -200) {
       TxtLinha tl = txt_linha(TXT_ROW_TITULO, fileiras[r].titulo, 255, 255, 255, 255);
       txt_desenhar(tl, ajustes_conteudo_x(), y);
@@ -424,7 +506,11 @@ void home_desenhar(Uint32 agora) {
           const int idxCat = fileiras[r].ini + c;
           const CatItem *cItem = cat_item(idxCat);
           const char *caminho;
-          if (tipo == FILEIRA_CONTINUE)
+          // Card DEITADO pede arte deitada. No web o poster do card landscape sai
+          // de `landscapePoster` -> `background` -> `backdrop` -> `poster`
+          // (homeScreen.js:3155), nao do poster 2:3 — usar o retrato aqui faria o
+          // shader recortar a cabeca de todo mundo para caber em 16:9.
+          if (tipo == FILEIRA_CONTINUE || deitado)
             caminho = (cItem && cItem->backdrop[0]) ? cItem->backdrop
                     : (cItem && cItem->poster[0]) ? cItem->poster
                     : (nBd ? bd[idxCat % nBd] : NULL);
@@ -451,9 +537,10 @@ void home_desenhar(Uint32 agora) {
           // e a unica cor saturada da home e puxa o olho para a moldura em vez
           // do cartaz. Com a escala do foco removida, este anel passou a ser o
           // UNICO sinal de foco, e por isso ele tem de ser o do original.
+          float raio = raioDe(w, h);
           if (f > 0.01f) {
             GfxRect borda = { px - 2.0f, py - 2.0f, w + 4.0f, h + 4.0f };
-            gfx_cor(borda, NV_RAIO_CARD, 0.961f, 0.961f, 0.961f, f);
+            gfx_cor(borda, raio, 0.961f, 0.961f, 0.961f, f);
           }
           GfxRect card = { px, py, w, h };
           if (t) {
@@ -461,10 +548,52 @@ void home_desenhar(Uint32 agora) {
             gfx_tex_aspect_atual = tex_aspecto(caminho);
             gfx_rect(card, t, GFX_CARD, f,
                      sinf(fase) * 0.010f * f, cosf(fase * 0.8f) * 0.006f * f,
-                     NV_RAIO_CARD, 0, 0, 0, 1);
+                     raio, 0, 0, 0, 1);
             gfx_tex_aspect_atual = 0.0f;
           } else {
-            gfx_cor(card, NV_RAIO_CARD, 0.14f, 0.14f, 0.16f, 1.0f);
+            gfx_cor(card, raio, 0.14f, 0.14f, 0.16f, 1.0f);
+          }
+          // `cardDepthEnabled` mais o interruptor por secao: `cardDepthPosters`
+          // nas fileiras de catalogo, `cardDepthContinueWatching` na primeira.
+          desenhaProfundidade(card, raio,
+                              tipo == FILEIRA_CONTINUE ? ajustes_profundidade_cw()
+                                                       : ajustes_profundidade_posters());
+
+          // --- posterLabelsEnabled ---------------------------------------
+          // Card DEITADO: a legenda vai DENTRO da moldura, sobre um degrade que
+          // cobre 54% da altura, com 14 de recuo lateral e 12 da base
+          // (.home-poster-landscape-copy). Card EM PE: vai ABAIXO do poster, num
+          // bloco de 74 de altura com 8 de padding no topo (.home-poster-copy).
+          if (tipo != FILEIRA_CONTINUE && ajustes_rotulos_poster() && cItem) {
+            const char *nome = cItem->titulo[0] ? cItem->titulo : NULL;
+            const char *sub  = cItem->genero[0] ? cItem->genero : NULL;
+            if (deitado && nome) {
+              GfxRect veu = { px, py + h * (1.0f - NV_LAND_VEU), w, h * NV_LAND_VEU };
+              gfx_rect(veu, 0, GFX_VEU, 0, 0, 0, raio, 0, 0, 0, 0.80f);
+              float maxW = w * NV_LAND_COPY_MAXW;
+              float bx = px + NV_LAND_COPY_PAD;
+              TxtLinha tn = txt_linha_corta(TXT_CAPTION, nome, 245, 246, 250, 255, maxW);
+              if (sub) {
+                TxtLinha ts = txt_linha_corta(TXT_MINI, sub, 200, 202, 210, 255, maxW);
+                txt_desenhar_alpha(ts, bx, py + h - NV_LAND_COPY_BASE - ts.h, 0.85f);
+                txt_desenhar_alpha(tn, bx,
+                                   py + h - NV_LAND_COPY_BASE - ts.h - 4.0f - tn.h, 0.98f);
+              } else {
+                txt_desenhar_alpha(tn, bx, py + h - NV_LAND_COPY_BASE - tn.h, 0.98f);
+              }
+            } else if (rotuloFora && nome) {
+              float bx = px + NV_POSTER_COPY_PADX;
+              float by = py + h + NV_POSTER_COPY_PADT;
+              float maxW = w - NV_POSTER_COPY_PADX * 2.0f;
+              // 16/500 e 13/400 rgba(255,255,255,.7) — os corpos de
+              // .home-poster-title e .home-poster-subtitle.
+              TxtLinha tn = txt_linha_corta(TXT_CAPTION2, nome, 245, 246, 250, 255, maxW);
+              txt_desenhar_alpha(tn, bx, by, 0.98f);
+              if (sub) {
+                TxtLinha ts = txt_linha_corta(TXT_MINI, sub, 255, 255, 255, 255, maxW);
+                txt_desenhar_alpha(ts, bx, by + tn.h + 2.0f, 0.70f);
+              }
+            }
           }
 
           // O ranking legacy usa a mesma carta retrato das demais fileiras;
@@ -558,7 +687,7 @@ void home_desenhar(Uint32 agora) {
         }
       }
     }
-    y += NV_LEGACY_ROW_HEAD_H + lh + NV_FILEIRA_GAP;
+    y += NV_LEGACY_ROW_HEAD_H + alturaTotalDe(tipo) + fileiraGap();
   }
 }
 
