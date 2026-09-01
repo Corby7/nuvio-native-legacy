@@ -159,11 +159,70 @@ Apple TV, custa duas passadas de tela cheia por quadro e mata a cor da arte.
 `exp(-k·t)`, 95% do caminho em 800ms → **k ≈ 3.8** (`NV_MOLA_PAGINA`). Com a
 rigidez de troca de tela (9.0) a arte apagava em ~330ms, menos da metade.
 
-**AINDA NÃO MEDIDO:** a ordem exata da saída dos componentes da home quando o
-detalhe abre (todos juntos ou escalonados; se o conteúdo do detalhe entra
-durante a saída ou depois). Tentei amostrar por `requestAnimationFrame` e o
-painel do navegador estrangula o rAF — só chegaram 10 amostras em 2s. Precisa
-de outro método (gravação de vídeo, ou `element.getAnimations()`).
+## A saída da home quando o detalhe abre — **MEDIDO, e a resposta é "não há"**
+
+Ficava aqui um "AINDA NÃO MEDIDO" sobre o escalonamento da saída. Medido em
+2026-09-01 com `MutationObserver` + `document.getAnimations()` + `getTiming()`
+amostrado por `setTimeout` (o rAF do painel é estrangulado; `setTimeout` não é,
+com a aba visível). Método reprodutível: instrumentar, clicar num
+`.home-poster-card[data-action=openDetail]`, amostrar em 0/20/40/…/1300ms.
+
+**Não existe animação de saída.** O que a instrumentação viu:
+
+| t (ms) | o que aconteceu |
+|---|---|
+| 1 | `#home` recebe `style="display:none"` **e** `#detail` recebe `style="display:block"`, no mesmo lote de mutação |
+| 2…1300 | nenhuma animação nem transição em nenhum nó da home ou do detalhe |
+
+As três perguntas em aberto, respondidas:
+
+1. **Juntos ou em cascata?** Nem um nem outro — a home é escondida por
+   `display`, num quadro só. `display` não é animável, então a
+   `transition: 0.14s` de `.screen` nunca chega a rodar.
+2. **O conteúdo do detalhe entra durante a saída ou depois?** No **mesmo
+   quadro**. As duas trocas de `display` saem no mesmo lote.
+3. **`homeRouteEnter` 0.24s `translateY(2%)`?** **Não roda neste runtime.**
+
+Por que: o app carrega com `<body class="performance-constrained legacy-webos
+no-flex-gap no-aspect-ratio no-css-math no-backdrop-filter">`, e a folha tem
+
+```css
+/* components.css:18190 */
+.performance-constrained * {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 140ms !important;
+  transition-delay: 0ms !important;
+}
+/* components.css:18245 */
+.performance-constrained .home-route-content-enter,
+.performance-constrained .search-route-enter,
+.performance-constrained .library-route-enter,
+.performance-constrained .settings-route-enter { animation: none !important }
+```
+
+Consequências que valem para o port inteiro, não só para esta transição:
+
+- **Não pode haver escalonamento em lugar nenhum**: `transition-delay: 0ms
+  !important` vale para `*`. Qualquer cascata que o port inventar é invenção.
+- `homeRouteEnter` (0.24s, `translateY(2%)`) e `searchRouteEnter` (0.35s) estão
+  na folha mas **não rodam**. As linhas da tabela de "Movimento" acima que os
+  citam descrevem o CSS, não o comportamento nesta TV.
+- Transições sem `!important` próprio caem para **140ms**. Confirmado medindo
+  `getComputedStyle` na tela de detalhe aberta: `.series-primary-btn` computa
+  `0.14s` (a folha declara .22s) e `.detail-bottom-shadow` computa `0.14s`.
+- As que sobrevivem (têm `!important` próprio), medidas na mesma tela:
+  `.series-detail-backdrop` **0.8s** `cubic-bezier(.4,0,.2,1)` — confirma o
+  `NV_MOLA_PAGINA` 3.8; `.detail-hero-body` **0.6s**; `.series-detail-content`
+  **0.25s** (a tabela acima dizia .4s — **corrigir**).
+- Foco de card da home neste runtime é **200ms
+  `cubic-bezier(0.22, 0.61, 0.36, 1)`** (components.css:18258), e não os .12s/.14s
+  que a folha declara.
+
+Ou seja: a descrição do dono ("a arte do background PERMANECE e os componentes
+saem como se descessem") corresponde ao que a folha *pretende*, não ao que a TV
+*executa*. Na TV a arte permanece porque o detalhe desenha o próprio backdrop, e
+os componentes não descem: eles somem no mesmo quadro.
 
 
 ## Player
@@ -369,6 +428,71 @@ constante do layout moderno e **não** muda com `posterCardWidthDp` — só o ra
 (24) sai da preferência. O `layout.h` pode manter os números, desde que diga
 isso.
 
+**CONFIRMADO POR EXPERIMENTO (2026-09-01), não mais por leitura.** Na home
+aberta, troquei a variável inline no shell:
+
+```
+--home-modern-portrait-poster-width: 218px -> 300px   card continuou 212
+--home-modern-portrait-poster-height: 327px -> 400px  moldura continuou 318
+```
+
+Ou seja `posterCardWidthDp` **não dimensiona nada** no layout moderno. Da
+preferência sai só o raio.
+
+### Três armadilhas a mais, descobertas no fonte
+
+**1. `posterLabelsEnabled` não tem efeito no layout moderno — por decisão da
+folha.**
+
+```css
+/* components.css:7334 */
+.home-screen-shell.home-layout-modern .home-poster-copy { display: none }
+```
+
+E é por isso que a tela de Ajustes do web **esconde a opção** quando o layout é
+moderno: `settingsScreen.js:4050` embrulha a linha em `!isModernLayout`. O port
+desenha o rótulo quando a preferência está ligada (foi o pedido explícito do
+dono); para ficar pixel a pixel com o web hoje, basta desligá-la.
+
+**2. `modernLandscapePostersEnabled` está QUEBRADO no web, e a quebra é uma
+chave errada.** O perfil do dono tem a preferência em `true`, o shell recebe
+`.home-modern-landscape-posters` — e mesmo assim **todos os pôsteres de catálogo
+medem 212×322 em pé**. Os únicos `.is-landscape` na tela são cards de coleção
+(`is-collection-landscape`), cuja forma vem do `tileShape` da coleção.
+
+A causa está no reconciliador:
+
+```js
+// homeScreen.js:11922, reconcileHomeCatalogRows()
+showPosterLabels: this.layoutPrefs?.showPosterLabels !== false,
+showCatalogTypeSuffix: this.layoutPrefs?.showCatalogTypeSuffix !== false,
+preferLandscapePosters: Boolean(this.layoutPrefs?.preferLandscapePosters),
+```
+
+`layoutPrefs` **não tem** `preferLandscapePosters` (a chave é
+`modernLandscapePostersEnabled`), nem `showPosterLabels`/`showCatalogTypeSuffix`
+(são `posterLabelsEnabled`/`catalogTypeSuffixEnabled`). O render completo em
+`renderModernHomeLayout` passa as chaves certas, mas o reconciliador roda a cada
+fileira que chega da rede e reescreve tudo com `false`. O card deitado aparece
+por um instante no primeiro render e morre no primeiro reconcile.
+
+O port implementa o efeito pretendido (o dono pediu "implemente o efeito das
+duas"). **Se o objetivo for igualar a tela de hoje, a correção é do lado do web**:
+trocar as três chaves em `homeScreen.js:11920-11922`.
+
+**3. `focusedPosterBackdropExpandEnabled` está desligado no código, de
+propósito.** `homeScreen.js:6812`:
+
+```js
+const HOME_POSTER_EXPAND_DISABLED = true;
+const shouldExpand = HOME_POSTER_EXPAND_DISABLED ? false : ...;
+```
+
+com um comentário do próprio dono explicando a decisão ("o hero já mostra arte,
+título e sinopse do item focado"). Portanto **o pôster focado NÃO cresce para
+563.92 depois de 3s** no app que ele usa. O port guarda a preferência e o atraso,
+mas não desenha o crescimento — desenhá-lo seria divergir da tela real.
+
 Outras larguras da mesma folha, ainda não portadas:
 
 - `.home-poster-card.is-landscape` — **318** de largura, moldura 178.875 (16:9).
@@ -392,3 +516,84 @@ As paradas percentuais são **as mesmas** do hero em faixa; o que muda é a
 cobertura (65% da largura contra 45%) e a profundidade. Faz sentido: com a arte
 ocupando a tela toda, o texto precisa de mais fundo escuro sob ele.
 Implementadas em `GFX_HERO_CHEIO`, ao lado de `GFX_HERO`.
+
+
+## Busca — MEDIDA (sessão LOGADA, 2026-09-01). Nunca tinha sido comparada.
+
+Fundo `#0d0d0d`. Rail recolhida (x=-48), conteúdo em 104, como a home.
+
+| elemento | valor |
+|---|---|
+| `.search-header` | y=22, h=110, padding `0 104` |
+| `.search-discover-btn` | 110×110 em (104,22), `#222`, borda 1px `#333`, raio 22, ícone 54 |
+| `.search-voice-btn` | 110×110 em (262,22) — passo **158** (gap 48) |
+| `.search-input-field` | 1396×110 em (420,22) → borda direita 1816; `#222`, raio 22, fonte **34/500**, padding `0 32`; placeholder "Buscar filmes e séries" |
+| campo em foco | borda `#f5f5f5` + `box-shadow 0 0 0 2px rgba(245,245,245,.22)` |
+| `.search-empty-state` | y=148, h=400, centrado; ícone 136×136 em y=220.5 |
+| título do vazio | 56/600 branco, lh 58.24, y=378.5 |
+| apoio do vazio | 24/400 `rgb(179,179,179)`, lh 28.8, y=446.7 |
+
+Os resultados **não são uma grade**: são fileiras horizontais, uma por catálogo.
+
+| elemento | valor |
+|---|---|
+| `.search-results-title` | 48/600 branco, lh 51.84, padding `0 104` |
+| `.search-results-subtitle` | 20/400 `rgb(179,179,179)`, margin-top 4 → +55.8 do título |
+| `.search-results-track` | +88.3 do título; cards +4 do trilho (→ +92.3) |
+| `.search-result-card` | 248 de largura; x = 104, 384, 664 → passo **280** |
+| `.search-result-poster-wrap` | 248×**372**, raio 22, `#222`, borda 2px |
+| `.search-result-name` | 28/500 branco, lh 33.6, margin-top 8 |
+| `.search-result-date` | 20/400 `rgb(179,179,179)`, margin-top 4 |
+| passo entre fileiras | **562.4** (546.4 de altura quando há data; 523.9 sem) |
+| `.search-seeall-card` | mesma caixa 248×440.1, no fim do trilho |
+
+**O web não tem teclado na tela**: o `<input>` é servido pelo IME do sistema da
+TV. O port é SDL puro e não tem IME — o teclado em grade fica, e é a única
+divergência deliberada desta tela.
+
+
+## Biblioteca — MEDIDA (sessão LOGADA, 2026-09-01). Nunca tinha sido comparada.
+
+`.library-main` tem `padding: 48px 96px 64px` → conteúdo em x=**96**, y=48,
+largura **1728**. (Note que é 96, e não os 104 da home e da busca.)
+
+| elemento | valor |
+|---|---|
+| `.library-page-title` | "Biblioteca" 56/600, letter-spacing **1px**, em (96,48), h=56 |
+| `.library-page-source` | selo "NUVIO" 28/500 `rgb(128,128,128)`, ls **4px**, padding-top 10, alinhado à direita (termina em 1824) |
+| `.library-view-mode-row` | y=136, h=56, gap 16 |
+| `.library-view-mode-button` | 150×56, raio 999, padding `14 24`, fonte 21/400; x = 96, 278 → passo **182** |
+| — escolhida | `#303030`, borda 2px `#fff` |
+| — as outras | `#222`, borda 2px `#333` |
+| `.library-picker-row` | y=212, h=110 |
+| `.library-picker-anchor` | **840×110** em x=96 e x=**984** (passo 888), raio 36, padding `18 28` |
+| — em foco | `#303030`, borda 1px `#fff` |
+| — fora de foco | `#222`, borda 1px `rgba(255,255,255,.1)` |
+| `.library-picker-title` | 19/500 `rgb(128,128,128)`, ls 0.45, lh 24 |
+| `.library-picker-value` | 30/500 branco, ls 0.3, lh 40, margin-top 4 |
+| `.library-picker-icon` | 40×40 (svg 32) encostado à direita |
+| `.library-empty-state` | y=354, padding-top 38, gap 18 |
+| — título | 46/500 branco, lh 49.68 |
+| — apoio | 28/400 `rgb(179,179,179)`, lh 35 |
+
+Grade (`.library-grid`), lida da folha e conferida na largura útil:
+
+```css
+grid-template-columns: repeat(auto-fill, minmax(var(--library-poster-width, 252px), 1fr));
+gap: 32px 24px;
+```
+
+1728 úteis com mínimo 252 e gutter 24 → **6 colunas de 268**. Pôster 2:3 →
+268×**402**, raio 24, com `border: 4px solid transparent` (a borda de foco é
+**por dentro**). Título 32/500, lh 1.18 (37.8), a **16** do pôster. Altura do
+card 455.8; passo de linha **487.8**.
+
+Foco: `transform: scale(1.02)` com `transform-origin: center top`, borda vai
+para `--focus-color`, e `box-shadow: none` — a folha comenta: *"Android TV uses
+the inside focus border, not an outer halo"*. É a **única** escala de foco que
+sobrou em qualquer tela do web; as outras (9%, 14%) eram das tabelas de Top
+Shelf do tvOS e não desta interface.
+
+As três abas do port ("Minha Lista", "Comprados", "Gêneros") não existem no web.
+O que existe são **duas** dimensões: o modo (Salvos/Nuvem) e os dois seletores
+(Tipo, Ordenar).
