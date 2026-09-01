@@ -11,6 +11,10 @@
 #define NV_FAIXAS_H
 #include <SDL2/SDL.h>
 
+// Zera o que e da SESSAO e nao do aparelho — hoje, qual legenda externa esta
+// valendo. Chamada pelo player quando uma reproducao nova comeca.
+void faixas_reiniciar(void);
+
 void faixas_abrir(void);
 int  faixas_aberta(void);
 void faixas_evento(const SDL_Event *e);

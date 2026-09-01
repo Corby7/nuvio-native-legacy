@@ -26,6 +26,7 @@
 //      congelado sem saber o que houve.
 #include "player.h"
 #include "video.h"
+#include "faixas.h"
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
@@ -335,6 +336,8 @@ void player_abrir(int indiceCatalogo, const char *url) {
   posSeg = 0.0f;
   ultimoInput = SDL_GetTicks();
   esperandoFonte = (url == NULL);
+  // Legenda externa e da sessao que acabou, nao desta.
+  faixas_reiniciar();
   // O modo de proporcao e do APARELHO, nao da sessao: reler aqui e o que faz
   // "Zoom cinema" continuar valendo no filme seguinte, como no web.
   prefsLer();

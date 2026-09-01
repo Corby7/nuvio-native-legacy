@@ -14,12 +14,39 @@
 
 static int aberta, coluna, foco[2];
 static float anim;
+// Qual legenda EXTERNA (OpenSubtitles) esta valendo, em indice da lista
+// combinada — ou -1 quando a ativa e embutida ou nao ha nenhuma.
+//
+// Isto vive aqui e nao no video.c porque o pipeline nao devolve essa
+// informacao: video_legenda_externa manda o setSubtitleSource com a URL e o
+// legAtual do video.c fica intocado, apontando para a legenda EMBUTIDA de
+// antes. Sem esta variavel, escolher uma legenda do OpenSubtitles fazia a
+// marca de "ativa" ficar em outra linha (ou em "Desativada") e a folha
+// reabria com o foco no lugar errado — a legenda certa tocava, so a folha
+// mentia sobre qual era.
+static int legExterna = -1;
+
+// Chamada quando uma sessao de reproducao nova comeca: a legenda externa e da
+// sessao, nao do aparelho. Sem isto o titulo seguinte abriria a folha marcando
+// como ativa uma legenda que nao foi escolhida para ele.
+void faixas_reiniciar(void) { legExterna = -1; aberta = 0; }
+
+static int nLinhas(int col);
 
 void faixas_abrir(void) {
+  int n;
   aberta = 1; coluna = 0; foco[0] = video_audio_atual();
   // A legenda pode estar desligada (-1); a primeira linha da coluna e sempre
   // "Desativada", entao o indice da lista e deslocado em um.
-  foco[1] = video_legenda_atual() + 1;
+  foco[1] = (legExterna >= 0 ? legExterna : video_legenda_atual()) + 1;
+  // Clamp nas duas colunas. A lista de legendas CRESCE durante a sessao (as do
+  // OpenSubtitles chegam depois) e a de audio so existe apos o sourceInfo:
+  // guardar um indice de antes e reabrir sem conferir poe o foco fora do vetor.
+  { int c; for (c = 0; c < 2; c++) {
+      n = nLinhas(c);
+      if (foco[c] >= n) foco[c] = n > 0 ? n - 1 : 0;
+      if (foco[c] < 0)  foco[c] = 0;
+    } }
 }
 
 int faixas_aberta(void) { return aberta; }
@@ -55,11 +82,13 @@ static void aplicar(void) {
   } else {
     int i = foco[1] - 1;
     int emb = video_n_legenda();
-    if (i < 0) video_escolher_legenda(-1);
-    else if (i < emb) video_escolher_legenda(i);
+    if (i < 0)        { video_escolher_legenda(-1); legExterna = -1; }
+    else if (i < emb) { video_escolher_legenda(i);  legExterna = -1; }
     else {
       const Legenda *l = addons_legenda(i - emb);
-      if (l) video_legenda_externa(l->url);
+      // So marca como ativa se houve o que aplicar: sem a URL o uMS nao recebe
+      // nada, e a folha diria "ativa" sobre uma legenda que nunca subiu.
+      if (l) { video_legenda_externa(l->url); legExterna = i; }
     }
   }
 }
@@ -114,7 +143,8 @@ static void coluna_desenhar(int col, float x, float larg, float y0, float a) {
       } }
     // Marca do que esta ativo agora.
     { int ativo = (col == 0) ? (i == video_audio_atual())
-                             : (i - 1 == video_legenda_atual());
+                 : (legExterna >= 0 ? (i - 1 == legExterna)
+                                    : (i - 1 == video_legenda_atual()));
       if (ativo) {
         GfxRect pt = { x - 26, y + 12, 8, 8 };
         gfx_cor(pt, 0.5f, 1, 1, 1, 0.9f * a);
