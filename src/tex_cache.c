@@ -67,7 +67,28 @@ static int acharIndice(const char *caminho, unsigned long h) {
 
 // Escolhe vitima LRU entre os PRONTOS. Nunca descarta o que esta em voo, senao
 // a thread escreveria em cima de um slot reaproveitado.
+// Quantos pedidos podem estar EM VOO ao mesmo tempo.
+//
+// Sem teto, uma tela cheia de arte nova pede ~90 imagens de uma vez, os slots
+// enchem de PENDENTE e o slotLivre passa a descartar textura PRONTA para dar
+// lugar a mais pendente — a tela FICA EM BRANCO e nao volta, porque o que
+// termina e jogado fora antes de aparecer.
+//
+// So aparece com o cache de disco FRIO (primeira execucao, ou logo depois de
+// reinstalar o app, que apaga art/cache junto). Foi assim que apareceu aqui: eu
+// tinha acabado de apagar o cache a mao e o dono viu a home sem poster nenhum.
+//
+// Um terco dos slots mantem o fio de decodificacao ocupado e ainda deixa dois
+// tercos para o que ja esta na tela.
+static int emVoo(void) {
+  int n = 0;
+  for (int i = 0; i < nMax; i++)
+    if (itens[i].estado == PENDENTE || itens[i].estado == DECODIFICADO) n++;
+  return n;
+}
+
 static int slotLivre(void) {
+  if (emVoo() >= nMax / 3) return -1;   // pede de novo no proximo quadro
   for (int i = 0; i < nMax; i++) if (itens[i].estado == VAZIO) return i;
   int melhor = -1; unsigned long menor = ~0UL;
   for (int i = 0; i < nMax; i++) {
