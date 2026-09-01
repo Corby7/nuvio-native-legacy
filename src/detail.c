@@ -312,7 +312,10 @@ void detail_atualizar(float dt, Uint32 agora) {
   (void)agora;
   if (!aberto) return;
   t  = anim_mola(t,  saindo ? 0.0f : 1.0f, dt, NV_MOLA_TELA);
-  pg = anim_mola(pg, nivel >= 1 ? 1.0f : 0.0f, dt, NV_MOLA_TELA);
+  // Rigidez propria, e nao a de troca de tela: o web leva 0.8s para apagar o
+  // backdrop (cubic-bezier .4,0,.2,1), e a mola de NV_MOLA_TELA assenta em
+  // ~330ms. exp(-3.8*0.8) = 0.05, ou seja 95% do caminho em 800ms.
+  pg = anim_mola(pg, nivel >= 1 ? 1.0f : 0.0f, dt, NV_MOLA_PAGINA);
   if (saindo && t < 0.02f) { aberto = 0; saindo = 0; t = 0.0f; return; }
 
   for (int r = 0; r < N_SECOES; r++) {
@@ -450,12 +453,18 @@ static void heroWeb(float a) {
                             NV_DETW_SIN_LINHAS);
   float ySin = yMeta1 - NV_DETW_GAP_SIN - hSin;              // 787
   float ySup = sup[0] ? ySin - NV_DETW_GAP_SUP - NV_DETW_LD_SUP : ySin;  // 727
-  float yAcoes = ySup - NV_DETW_GAP_ACOES - NV_DETW_ACOES_H; // 589
+  // A linha de retomada so ocupa espaco quando existe; sem ela a pilha e a
+  // mesma de um titulo nunca aberto.
+  float temRetom = (ci && ci->progresso > 0) ? 1.0f : 0.0f;
+  float yRetom = ySup - NV_DETW_GAP_SUP - NV_DETW_RETOM_H;
+  float yAcoes = (temRetom ? yRetom - NV_DETW_GAP_RETOM
+                           : ySup - NV_DETW_GAP_ACOES) - NV_DETW_ACOES_H;
 
   // Sobe alguns pixels enquanto entra: continua o movimento da arte em vez de
   // aparecer pronto no lugar.
   float sobe = (1.0f - a) * 26.0f;
-  yMeta2 += sobe; yMeta1 += sobe; ySin += sobe; ySup += sobe; yAcoes += sobe;
+  yMeta2 += sobe; yMeta1 += sobe; ySin += sobe; ySup += sobe;
+  yRetom += sobe; yAcoes += sobe;
 
   // --- logo -----------------------------------------------------------------
   const char *arqLogo = logoDe(idx);
@@ -479,19 +488,44 @@ static void heroWeb(float a) {
   }
 
   // --- botoes ---------------------------------------------------------------
+  // Em FLUXO, com 63px entre vizinhos. As posicoes 439/586/734 que eu tinha
+  // fixado nao sao constantes do desenho: sao o resultado dessa conta com o
+  // rotulo "Reproduzir". Num titulo em progresso o rotulo vira "Retomar T2E3",
+  // o primario passa de 298 para 334, e tudo a direita anda 36px — medido na
+  // sessao logada, com Silo.
+  //
   // O web tem tres circulares (lista, "nao me interessa", trailer). Aqui sao
   // DOIS: lista e fontes. O terceiro nao entra porque nao existe reprodutor de
-  // trailer neste app, e um botao que nao faz nada e pior que a ausencia dele —
-  // as posicoes x dos dois primeiros continuam sendo as medidas.
+  // trailer neste app, e um botao que nao faz nada e pior que a ausencia dele.
   float yBtn  = yAcoes + 6.0f;
   float yCirc = yAcoes + 12.0f;
-  float wp = larguraPrimario("Reproduzir");
-  GfxRect rp = { NV_DETW_X + 6.0f, yBtn, wp, NV_DETW_BTN_H };
-  desenhaBotao(rp, "Reproduzir", 0, nivel == 0 && botao == 0, a);
+  // "Retomar" e o rotulo do web quando ha progresso; nele o icone continua o
+  // mesmo triangulo, so o texto muda.
+  const char *rot = (ci && ci->progresso > 0) ? "Retomar" : "Reproduzir";
+  float bx = NV_DETW_X + 6.0f;
+  GfxRect rp = { bx, yBtn, larguraPrimario(rot), NV_DETW_BTN_H };
+  desenhaBotao(rp, rot, 0, nivel == 0 && botao == 0, a);
+  bx += rp.w + NV_DETW_BTN_GAP;
   for (int k = 0; k < 2; k++) {
-    GfxRect rc = { NV_DETW_CIRC_X0 + k * NV_DETW_CIRC_PASSO, yCirc,
-                   NV_DETW_CIRC, NV_DETW_CIRC };
+    GfxRect rc = { bx, yCirc, NV_DETW_CIRC, NV_DETW_CIRC };
     desenhaBotao(rc, NULL, k + 1, nivel == 0 && botao == k + 1, a);
+    bx += NV_DETW_CIRC + NV_DETW_BTN_GAP;
+  }
+
+  // --- linha de retomada ----------------------------------------------------
+  // So existe com progresso, e e ela que empurra tudo o que vem acima. Medida
+  // no web logado: "Retomada disponivel · 45% · Episodio S2E3 · 30m restantes",
+  // 22.66/400 em rgba(255,255,255,0.82).
+  if (ci && ci->progresso > 0) {
+    char ln[160];
+    if (ci->temporada > 0)
+      snprintf(ln, sizeof ln, "Retomada disponivel   %d%%   Episodio T%dE%d",
+               ci->progresso, ci->temporada, ci->episodio);
+    else
+      snprintf(ln, sizeof ln, "Retomada disponivel   %d%%", ci->progresso);
+    TxtLinha l = txt_linha(TXT_CAPTION, ln, 255, 255, 255, 255);
+    txt_desenhar_alpha(l, NV_DETW_X, yRetom + (NV_DETW_RETOM_H - l.h) * 0.5f,
+                       a * 0.82f);
   }
 
   // --- "Diretor: ..." -------------------------------------------------------
@@ -873,22 +907,25 @@ void detail_desenhar(Uint32 agora) {
   };
   const char *arte = arteDe(idx);
   GLuint tex = arte ? tex_obter(arte) : 0;
+  // Ao rolar para as secoes, o web NAO desfoca a arte: ele a APAGA. MEDIDO na
+  // folha, em `.series-detail-shell.detail-scrolled` — o backdrop vai a
+  // `opacity: 0.15` e a vinheta a 0, ambos em 0.8s cubic-bezier(.4,0,.2,1). O
+  // desfoque gaussiano com escurecimento que estava aqui e do app da Apple TV,
+  // custa duas passadas de tela cheia por quadro, e some com a cor da arte —
+  // que no web continua la, so que fraca.
+  if (pg > 0.01f) {
+    GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
+    gfx_cor(tela, 0.0f, 0.051f, 0.051f, 0.051f, pg);
+  }
   if (tex) {
     gfx_tex_aspect_atual = tex_aspecto(arte);
-    // Enquanto o desfoque da pagina ainda e parcial as duas camadas convivem,
-    // para a foto assentar em vez de piscar. Opaco, a de baixo e invisivel — e
-    // pintar a tela inteira duas vezes por quadro custava mais que tudo o mais.
-    if (pg <= 0.985f)
-      gfx_rect(alvo, tex, GFX_DETALHE, 0, 0, 0, 0.0f, 0, 0, 0, 1.0f);
-    if (pg > 0.01f) {
-      if (arte != arteBorrada) { gfx_borrao_gerar(0, tex, tex_aspecto(arte)); arteBorrada = arte; }
-      gfx_borrao_desenhar(0, alvo, pg);
-      gfx_cor(alvo, 0.0f, 0, 0, 0, pg * NV_DET_ESCURO_FUNDO);
-    }
+    gfx_rect(alvo, tex, GFX_DETALHE, 0, 0, 0, 0.0f, 0, 0, 0,
+             1.0f - 0.85f * pg);
     gfx_tex_aspect_atual = 0.0f;
   } else {
     gfx_cor(alvo, 0.0f, 0.051f, 0.051f, 0.051f, 1.0f);
   }
+  (void)arteBorrada;
 
   // Coluna de conteudo. Sai de cena quando a pagina toma o lugar.
   heroWeb(a2 * (1.0f - pg));

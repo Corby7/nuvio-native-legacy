@@ -101,10 +101,18 @@ static float gapDe(TipoFileira t) {
   (void)t;
   return NV_CARD_GAP;
 }
-// Poster 2:3 cresce mais que card 16:9 — numeros das tabelas oficiais.
+// ZERO. MEDIDO no app web (sessao logada, perfil do dono): o card em foco tem
+// `transform: none`, `scale: none` e o mesmo getBoundingClientRect do card ao
+// lado — 212x322 nos dois, mesma linha, mesmo topo. A escala de 9% e o
+// levantamento de 8px vinham das tabelas de Top Shelf do tvOS, e nao desta
+// interface. Eram eles que faziam o card focado subir 22px e encostar no titulo
+// da fileira, que fica 15px acima dos cards (titulo 518..549, cards em 564).
+//
+// O foco no web se marca por um ANEL de 2px `#f5f5f5` desenhado por dentro e
+// por fora da arte (box-shadow inset + outset), com o card mantendo a caixa.
 static float escalaDe(TipoFileira t) {
   (void)t;
-  return NV_FOCO_ESCALA;
+  return 0.0f;
 }
 static float passoDe(TipoFileira t) {
   return larguraDe(t) + gapDe(t);
@@ -353,7 +361,8 @@ void home_desenhar(Uint32 agora) {
           float esc = 1.0f + escalaDe(tipo) * f;
           float w = lw * esc, h = artH * esc;
           float cx = NV_LEGACY_CONTENT_X + c * passo - scrollX[r] + lw * 0.5f;
-          float cy = cardY + artH * 0.5f - NV_FOCO_LIFT * f;
+          // Sem levantamento: no web o card focado nao sai do lugar.
+          float cy = cardY + artH * 0.5f;
           if (cx < -lw * 1.5f || cx > NV_TELA_W + lw) continue;
           float px = cx - w * 0.5f, py = cy - h * 0.5f;
 
@@ -389,9 +398,15 @@ void home_desenhar(Uint32 agora) {
             temItemFoco = 1;
           }
           GLuint t = tex_obter(caminho);
+          // Anel de foco. MEDIDO no app web: `box-shadow` de 2px em `#f5f5f5`,
+          // por dentro e por fora da arte — cinza quase branco, nao o azul de
+          // 3px que estava aqui. O azul nao sai de lugar nenhum da interface:
+          // e a unica cor saturada da home e puxa o olho para a moldura em vez
+          // do cartaz. Com a escala do foco removida, este anel passou a ser o
+          // UNICO sinal de foco, e por isso ele tem de ser o do original.
           if (f > 0.01f) {
-            GfxRect borda = { px - 3.0f, py - 3.0f, w + 6.0f, h + 6.0f };
-            gfx_cor(borda, NV_RAIO_CARD, 0.20f, 0.62f, 0.96f, 0.88f * f);
+            GfxRect borda = { px - 2.0f, py - 2.0f, w + 4.0f, h + 4.0f };
+            gfx_cor(borda, NV_RAIO_CARD, 0.961f, 0.961f, 0.961f, f);
           }
           GfxRect card = { px, py, w, h };
           if (t) {

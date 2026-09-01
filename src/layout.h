@@ -217,6 +217,12 @@
 #define NV_MOLA_DESFOCO   8.5f    // saindo dele
 #define NV_MOLA_SCROLL    8.0f
 #define NV_MOLA_TELA      9.0f
+// Abertura da PAGINA de secoes do detalhe. MEDIDO na folha do app web:
+// `.series-detail-shell.detail-scrolled .series-detail-backdrop` vai a
+// `opacity: 0.15` em 0.8s cubic-bezier(0.4, 0, 0.2, 1). exp(-3.8*0.8) = 0.05,
+// ou seja 95% do caminho em 800ms. Com NV_MOLA_TELA (9.0) a mola assenta em
+// ~330ms e a arte apaga num piscar, que e menos da metade do tempo do web.
+#define NV_MOLA_PAGINA    3.8f
 
 // Tela de detalhe: um CARTAO da arte cobrindo quase tudo, com a home aparecendo
 // pela moldura. O voo do card usa NV_MOLA_TELA, mais lenta que a do foco de
@@ -265,11 +271,19 @@
 #define NV_DETW_ACOES_H   108.0f   // inclui os 6px de padding do anel de foco
 #define NV_DETW_BTN_H      96.0f
 #define NV_DETW_BTN_PADX   48.0f
-#define NV_DETW_BTN_GAPI   16.0f   // icone -> rotulo
+// 34 e nao os 16 que o `gap` do flex declara. MEDIDO nos dois estados: o icone
+// comeca em 126 e o rotulo em 196, e o icone tem 36 de largura — sobra 34. A
+// folha mente aqui, como mentia no corpo do titulo do player.
+#define NV_DETW_BTN_GAPI   34.0f   // icone -> rotulo
 #define NV_DETW_BTN_ICONE  36.0f
 #define NV_DETW_CIRC       84.0f
-#define NV_DETW_CIRC_X0   439.0f
-#define NV_DETW_CIRC_PASSO 147.0f  // 586 - 439 (e 734 - 586)
+// Os botoes ficam em FLUXO, com 63px entre um e o outro. As posicoes
+// x=439/586/734 que estavam aqui nao sao constantes: sao o que da a conta
+// quando o rotulo e "Reproduzir" e nao ha botao secundario. Medido em duas
+// telas diferentes (Whisper Man deslogado, Silo logado): em ambas o vao entre
+// botoes vizinhos e 63, e o primario muda de largura com o rotulo — "Retomar
+// T2E3" da 334 no lugar de 298, e tudo a direita anda junto.
+#define NV_DETW_BTN_GAP    63.0f
 #define NV_DETW_ANEL        4.0f   // box-shadow 0 0 0 4px #fff do item focado
 #define NV_DETW_GAP_ACOES  30.0f   // acoes -> "Diretor:"
 #define NV_DETW_GAP_SUP    24.0f   // "Diretor:" -> sinopse
@@ -279,6 +293,11 @@
 #define NV_DETW_LD_SIN     39.0f   // line-height da sinopse
 #define NV_DETW_SIN_LINHAS    3    // 117 / 39
 #define NV_DETW_META_GAP   26.0f   // gap 16 + margin-top 10 da segunda linha
+// Linha de retomada, so quando o titulo tem progresso. MEDIDA na sessao logada
+// (Silo, 45%): 1720x37 em (72,633), fonte 22.66/400 rgba(255,255,255,0.82),
+// entre a linha de acoes e a linha de apoio.
+#define NV_DETW_RETOM_H    37.0f
+#define NV_DETW_GAP_RETOM  22.0f   // acoes -> retomada (633 - 611)
 #define NV_DETW_LD_META    35.0f
 #define NV_DETW_LD_META2   31.0f
 #define NV_DETW_META_SEP   24.0f   // gap do flex, dos dois lados do ponto
