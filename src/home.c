@@ -480,7 +480,27 @@ void home_desenhar(Uint32 agora) {
     int deitado = (tipo != FILEIRA_CONTINUE) && ajustes_posteres_deitados();
     int rotuloFora = temRotulo(tipo);
     if (y < NV_TELA_H + 200 && y + NV_LEGACY_ROW_HEAD_H + lh > -200) {
-      TxtLinha tl = txt_linha(TXT_ROW_TITULO, fileiras[r].titulo, 255, 255, 255, 255);
+      // `catalogTypeSuffixEnabled`. formatCatalogRowTitle (homeUtils.js:62) faz
+      // `if (!showTypeSuffix) return base;` — devolve o nome capitalizado e
+      // pronto. Aqui o sufixo e tirado no DESENHO e nao na descoberta, senao a
+      // preferencia so valeria depois que a rede trouxesse os catalogos de
+      // novo — ou seja, so no proximo arranque.
+      const char *rotFil = fileiras[r].titulo;
+      char semSufixo[96];
+      if (!ajustes_sufixo_tipo() && rotFil) {
+        const char *corte = strstr(rotFil, " - ");
+        const char *ultimo = NULL;
+        while (corte) { ultimo = corte; corte = strstr(corte + 3, " - "); }
+        if (ultimo && (!strcmp(ultimo + 3, "Filme")
+                       || !strcmp(ultimo + 3, "S\xc3\xa9rie"))) {
+          size_t n = (size_t)(ultimo - rotFil);
+          if (n >= sizeof semSufixo) n = sizeof semSufixo - 1;
+          memcpy(semSufixo, rotFil, n);
+          semSufixo[n] = 0;
+          rotFil = semSufixo;
+        }
+      }
+      TxtLinha tl = txt_linha(TXT_ROW_TITULO, rotFil, 255, 255, 255, 255);
       txt_desenhar(tl, ajustes_conteudo_x(), y);
 
       for (int passe = 1; passe < 2; passe++) {
