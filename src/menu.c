@@ -19,6 +19,7 @@
 #include "text.h"
 #include "anim.h"
 #include "layout.h"
+#include "ajustes.h"
 
 // Larguras: a recolhida cabe so o icone; a aberta e a da barra do tvOS, larga o
 // bastante para o rotulo mais comprido ("Biblioteca") nao encostar na borda.
@@ -220,7 +221,12 @@ void menu_desenhar(Uint32 agora) {
   (void)agora;
   // Rail fixa sempre presente, como no shell legacy. O overlay expandido só
   // entra em cena quando o menu foi solicitado.
-  if (!aberto) desenhaRailFixa();
+  // `collapseSidebar`: com a barra RECOLHIDA o web nao desenha rail nenhuma —
+  // `.home-nav-list` fica com largura 0 e nao ocupa fluxo; ela so aparece como
+  // camada quando ganha foco. O port ja movia o conteudo para 104 nesse caso
+  // (ajustes_conteudo_x), mas continuava pintando os 144px da rail por baixo
+  // dele: uma faixa escura sob o primeiro card, sem nada em cima.
+  if (!aberto && !ajustes_rail_recolhida()) desenhaRailFixa();
   if (!aberto && desliza < 0.002f) return;
 
   float w = anim_mistura(NV_MENU_W_ICONE, NV_MENU_W_ABERTO, expande);
