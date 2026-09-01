@@ -102,6 +102,11 @@ void gfx_tamanho_alvo(int w, int h);   // drawable real, para restaurar viewport
 int  gfx_iniciar(void);
 void gfx_encerrar(void);
 
+// O gfx_rect lembra a ultima textura que ele mesmo bindou e pula rebinds
+// repetidos. Quem binda ou destroi textura POR FORA dele precisa avisar:
+// passe o nome destruido, ou 0 para "esqueca tudo" (apos um upload).
+void gfx_tex_esquecer(GLuint tex);
+
 // Desenha um retangulo. `foco` 0..1 controla especular/sombra; `parx/pary`
 // deslocam a arte dentro do card (parallax); `raio` em fracao do menor lado.
 void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,

@@ -1,5 +1,6 @@
 #include "tex_cache.h"
 #include "rede.h"
+#include "gfx.h"
 #include <sys/stat.h>
 #include <stdlib.h>
 #include "layout.h"
@@ -16,6 +17,7 @@ typedef enum { VAZIO=0, PENDENTE, DECODIFICADO, PRONTO } Estado;
 
 typedef struct {
   char caminho[512];
+  unsigned long hash;  // FNV-1a do caminho, para pular o strcmp na busca
   Estado estado;
   SDL_Surface *sup;   // preenchida pela thread; consumida no bombear
   GLuint tex;
@@ -47,9 +49,19 @@ static long orcamento = 0;
 static int fila[MAX_FILA];
 static int filaIni = 0, filaFim = 0;
 
-static int acharIndice(const char *caminho) {
+// FNV-1a do caminho. A busca abaixo roda para cada card visivel em cada
+// quadro, contra ate 96 slots; comparar um inteiro primeiro reduz o strcmp a
+// so os candidatos com o mesmo hash (na pratica, o proprio item).
+static unsigned long hashCaminho(const char *s) {
+  unsigned long h = 2166136261UL;
+  for (; *s; s++) { h ^= (unsigned char)*s; h *= 16777619UL; }
+  return h;
+}
+
+static int acharIndice(const char *caminho, unsigned long h) {
   for (int i = 0; i < nMax; i++)
-    if (itens[i].estado != VAZIO && strcmp(itens[i].caminho, caminho) == 0) return i;
+    if (itens[i].estado != VAZIO && itens[i].hash == h &&
+        strcmp(itens[i].caminho, caminho) == 0) return i;
   return -1;
 }
 
@@ -63,7 +75,7 @@ static int slotLivre(void) {
     if (itens[i].uso < menor) { menor = itens[i].uso; melhor = i; }
   }
   if (melhor >= 0) {
-    if (itens[melhor].tex) glDeleteTextures(1, &itens[melhor].tex);
+    if (itens[melhor].tex) { gfx_tex_esquecer(itens[melhor].tex); glDeleteTextures(1, &itens[melhor].tex); }
     bytesUsados -= (long)itens[melhor].w * itens[melhor].h * 4;
     if (bytesUsados < 0) bytesUsados = 0;
     memset(&itens[melhor], 0, sizeof(Item));
@@ -80,7 +92,7 @@ static void podar(void) {
       if (itens[i].uso < menor) { menor = itens[i].uso; melhor = i; }
     }
     if (melhor < 0) break;          // so restou o que esta em voo
-    if (itens[melhor].tex) glDeleteTextures(1, &itens[melhor].tex);
+    if (itens[melhor].tex) { gfx_tex_esquecer(itens[melhor].tex); glDeleteTextures(1, &itens[melhor].tex); }
     bytesUsados -= (long)itens[melhor].w * itens[melhor].h * 4;
     if (bytesUsados < 0) bytesUsados = 0;
     memset(&itens[melhor], 0, sizeof(Item));
@@ -243,8 +255,9 @@ void tex_encerrar(void) {
 static GLuint tex_obter_limite(const char *caminho, int limite) {
   if (!caminho || !*caminho) return 0;
   GLuint saida = 0;
+  unsigned long h = hashCaminho(caminho);
   SDL_LockMutex(mtx);
-  int i = acharIndice(caminho);
+  int i = acharIndice(caminho, h);
   if (i >= 0) {
     itens[i].uso = ++relogio;
     // PROMOCAO: a mesma arte pode ser pedida como poster (960) e depois como
@@ -266,6 +279,7 @@ static GLuint tex_obter_limite(const char *caminho, int limite) {
     int novo = slotLivre();
     if (novo >= 0) {
       strncpy(itens[novo].caminho, caminho, sizeof itens[novo].caminho - 1);
+      itens[novo].hash = h;
       itens[novo].limite = limite;
       itens[novo].estado = PENDENTE;
       itens[novo].uso = ++relogio;
@@ -292,8 +306,9 @@ GLuint tex_obter_hero(const char *caminho) {
 float tex_aspecto(const char *caminho) {
   if (!caminho || !*caminho) return 0.0f;
   float a = 0.0f;
+  unsigned long h = hashCaminho(caminho);
   SDL_LockMutex(mtx);
-  int i = acharIndice(caminho);
+  int i = acharIndice(caminho, h);
   if (i >= 0 && itens[i].estado == PRONTO && itens[i].h > 0)
     a = (float)itens[i].w / (float)itens[i].h;
   SDL_UnlockMutex(mtx);
@@ -328,6 +343,7 @@ int tex_bombear(int max_por_quadro) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    gfx_tex_esquecer(0);  // o bind do upload passou por fora do gfx_rect
 
     SDL_LockMutex(mtx);
     itens[alvo].tex = t; itens[alvo].w = sup->w; itens[alvo].h = sup->h;

@@ -435,20 +435,39 @@ void gfx_encerrar(void) {
   progAtual = -1;
 }
 
+// Ultima textura vista no bind. O driver ate ignora rebind do mesmo nome, mas
+// so depois de pagar a entrada na chamada — e num quadro cheio de texto a
+// MESMA textura de glifo e desenhada varias vezes seguida.
+static GLuint texAtual = 0;
+
+// Chamar quando uma textura e destruida (o nome pode ser reutilizado por
+// glGenTextures) ou quando alguem deu glBindTexture por fora do gfx_rect
+// (upload de arte, raster de glifo) — nos dois casos o cache mentiria.
+// tex = 0 significa "esqueca tudo": e o que os uploads usam.
+void gfx_tex_esquecer(GLuint tex) { if (tex == 0 || texAtual == tex) texAtual = 0; }
+
 void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,
               float parx, float pary, float raio,
               float cr, float cg, float cb, float ca) {
   if ((int)modo < 0 || (int)modo >= GFX_NMODOS) return;
   const Programa *P = &progs[modo];
   if (progAtual != (int)modo) { glUseProgram(P->prog); progAtual = (int)modo; }
+  // Uniform que o shader do modo nao declara volta como -1 do link; passar -1
+  // ao glUniform e no-op valido mas ainda paga a travessia da chamada GL. Num
+  // quadro tipico da home sao centenas de gfx_rect, a maioria em modos que nao
+  // usam foco/parallax/texAsp, entao o teste barato aqui poupa a chamada cara.
   glUniform4f(P->rect, r.x, r.y, r.w, r.h);
-  glUniform1f(P->foco, foco);
-  glUniform2f(P->par, parx, pary);
-  glUniform1f(P->raio, raio);
-  glUniform1f(P->asp, r.h > 0 ? r.w / r.h : 1.0f);
-  glUniform1f(P->texAsp, gfx_tex_aspect_atual);
-  glUniform4f(P->cor, cr, cg, cb, ca);
-  if (tex) { glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex); }
+  if (P->foco >= 0)   glUniform1f(P->foco, foco);
+  if (P->par >= 0)    glUniform2f(P->par, parx, pary);
+  if (P->raio >= 0)   glUniform1f(P->raio, raio);
+  if (P->asp >= 0)    glUniform1f(P->asp, r.h > 0 ? r.w / r.h : 1.0f);
+  if (P->texAsp >= 0) glUniform1f(P->texAsp, gfx_tex_aspect_atual);
+  if (P->cor >= 0)    glUniform4f(P->cor, cr, cg, cb, ca);
+  if (tex && tex != texAtual) {
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    texAtual = tex;
+  }
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
@@ -481,6 +500,7 @@ int gfx_snap_iniciar(int w, int h) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  gfx_tex_esquecer(0);  // o bind acima foi por fora do gfx_rect
   glGenFramebuffers(1, &snapFbo);
   glBindFramebuffer(GL_FRAMEBUFFER, snapFbo);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, snapTex, 0);
@@ -547,6 +567,7 @@ static int criaAlvo(int i, int w, int h) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  gfx_tex_esquecer(0);  // o bind acima foi por fora do gfx_rect
   glGenFramebuffers(1, &borFbo[i]);
   glBindFramebuffer(GL_FRAMEBUFFER, borFbo[i]);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, borTex[i], 0);

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
@@ -52,13 +53,13 @@ static void consome(const char *caminho) {
   FILE *f = fopen(caminho, "w");
   if (f) fclose(f);
 }
+// stat() e nao fopen+fseek: esta sondagem roda para TRES arquivos em TODO
+// quadro, e cada fopen paga alocacao de FILE e dois syscalls a mais so para
+// descobrir o tamanho. O stat responde a mesma pergunta com um syscall.
 static long tamanhoDe(const char *caminho) {
-  FILE *f = fopen(caminho, "rb");
-  if (!f) return -1;
-  fseek(f, 0, SEEK_END);
-  long n = ftell(f);
-  fclose(f);
-  return n;
+  struct stat st;
+  if (stat(caminho, &st) != 0) return -1;
+  return (long)st.st_size;
 }
 
 // KEYUP adiado de uma tecla segurada.

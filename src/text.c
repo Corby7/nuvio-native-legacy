@@ -184,23 +184,43 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
   { const char *p = chave;
     for (; *p; p++) { h ^= (unsigned char)*p; h *= 16777619UL; } }
 
-  int livre = -1; unsigned long menor = ~0UL; int vitima = -1;
-  for (int i = 0; i < MAX_LINHAS; i++) {
-    if (cache[i].ocupado && cache[i].hash == h &&
-        strcmp(cache[i].chave, chave) == 0) {
+  // Sondagem a partir de h % MAX_LINHAS, e nao varredura das 256 entradas.
+  // Esta busca roda para CADA linha de CADA quadro; a varredura completa
+  // custava em media 128 comparacoes por acerto. Sondando do ponto do hash o
+  // acerto sai nas primeiras casas, e a busca PARA no primeiro slot vazio:
+  // quem foi inserido por esta mesma regra nunca esta depois de um buraco.
+  //
+  // O despejo LRU pode abrir um buraco no meio de uma corrente antiga; o
+  // efeito e no maximo uma rerasterizacao daquela linha (que entra de novo
+  // mais perto do hash), nunca resultado errado — a chave e conferida por
+  // strcmp de qualquer forma.
+  int livre = -1;
+  for (int k = 0; k < MAX_LINHAS; k++) {
+    int i = (int)((h + (unsigned long)k) % MAX_LINHAS);
+    if (!cache[i].ocupado) { livre = i; break; }
+    if (cache[i].hash == h && strcmp(cache[i].chave, chave) == 0) {
       cache[i].uso = ++relogio; return cache[i].linha;
     }
-    if (!cache[i].ocupado && livre < 0) livre = i;
-    if (cache[i].ocupado && cache[i].uso < menor) { menor = cache[i].uso; vitima = i; }
   }
 
   // Orcamento estourado: devolve vazio e tenta de novo no proximo quadro. A
   // linha aparece com um quadro de atraso em vez de travar o atual.
   if (rastNesteQuadro >= TXT_POR_QUADRO) return vazia;
   rastNesteQuadro++;
-  int slot = livre >= 0 ? livre : vitima;
+  int slot = livre;
+  if (slot < 0) {
+    // Tabela cheia: so agora vale a varredura completa atras do LRU. Isso
+    // acontece no maximo TXT_POR_QUADRO vezes por quadro, nao por linha.
+    unsigned long menor = ~0UL;
+    for (int i = 0; i < MAX_LINHAS; i++)
+      if (cache[i].uso < menor) { menor = cache[i].uso; slot = i; }
+  }
   if (slot < 0) return vazia;
-  if (cache[slot].ocupado && cache[slot].linha.tex) glDeleteTextures(1, &cache[slot].linha.tex);
+  if (cache[slot].ocupado && cache[slot].linha.tex) {
+    // avisa o gfx: o nome pode ser reutilizado pelo glGenTextures logo abaixo
+    gfx_tex_esquecer(cache[slot].linha.tex);
+    glDeleteTextures(1, &cache[slot].linha.tex);
+  }
 
   Uint64 t0 = SDL_GetPerformanceCounter();
   SDL_Color cor = { (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a };
@@ -216,6 +236,7 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  gfx_tex_esquecer(0);  // o bind do upload passou por fora do gfx_rect
 
   cache[slot].ocupado = 1;
   cache[slot].hash = h;
