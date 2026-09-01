@@ -40,4 +40,10 @@ void trakt_marcar(const char *imdb, double posSeg, double durSeg);
 // "watchlist" ou "collection". BLOQUEIA — chamar do fio de descoberta.
 int  trakt_lista(const char *qual, CatItem *saida, int max);
 
+// Acrescenta ou tira o titulo da WATCHLIST do dono. Nao bloqueia. O estado de
+// leitura ja vem em CatItem.naLista, preenchido por trakt_lista na descoberta —
+// o que faltava era escrever de volta: o botao "+" so mexia num vetor local e a
+// lista nos outros aparelhos nunca sabia.
+void trakt_watchlist(const char *imdb, int adicionar);
+
 #endif

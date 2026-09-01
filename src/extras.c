@@ -78,7 +78,13 @@ const char *extras_caminho_marca(int fonte) {
 }
 static struct { char user[40]; char texto[420]; int curtidas; } coment[EX_COMENT_MAX];
 static int  nComent;
-static struct { char titulo[120], ano[8], imdb[16]; } rel[EX_REL_MAX];
+static struct { char titulo[120], ano[8], imdb[16], poster[200]; } rel[EX_REL_MAX];
+// Vistos: um bit por episodio, ate 40 episodios em 20 temporadas. Vetor fixo
+// porque a consulta acontece no DESENHO de cada card, a cada quadro — uma
+// busca em lista ali custaria mais que a resposta.
+#define EX_VIS_T 20
+#define EX_VIS_E 40
+static unsigned char vistos[EX_VIS_T][EX_VIS_E];
 static int  nRel;
 static struct { int numero; int nEps; struct { int ep, nota; } eps[EX_EP_MAX]; }
             temps[EX_TEMP_MAX];
@@ -256,14 +262,66 @@ static void *buscar(void *arg) {
     }
   }
 
+  // --- episodios ja assistidos (so serie) ---
+  if (serieEmCurso) {
+    snprintf(url, sizeof url,
+             "https://api.trakt.tv/shows/%s/progress/watched", id);
+    corpo = rede_baixar_com(url, 20, cab);
+    if (corpo) {
+      unsigned char novo[EX_VIS_T][EX_VIS_E];
+      const char *p = js_array(corpo, NULL, "seasons");
+      memset(novo, 0, sizeof novo);
+      while (p) {
+        const char *f = js_fim(p);
+        int t = (int)js_num(p, f, "number", -1.0);
+        if (t >= 0 && t < EX_VIS_T) {
+          const char *q = js_array(p, f, "episodes");
+          while (q) {
+            const char *qf = js_fim(q);
+            int en = (int)js_num(q, qf, "number", -1.0);
+            // "completed" e booleano; js_num nao le true/false, entao a leitura
+            // e pelo texto — foi assim que a primeira versao marcou tudo como
+            // nao visto sem erro nenhum.
+            const char *c = strstr(q, "\"completed\"");
+            int visto = 0;
+            if (c && c < qf) { const char *v = c + 12;
+                               while (*v == ' ' || *v == ':') v++;
+                               visto = (*v == 't'); }
+            if (visto && en > 0 && en < EX_VIS_E) novo[t][en] = 1;
+            q = js_prox(qf);
+          }
+        }
+        p = js_prox(f);
+      }
+      free(corpo);
+      pthread_mutex_lock(&trava);
+      if (!strcmp(id, idPedido)) memcpy(vistos, novo, sizeof vistos);
+      pthread_mutex_unlock(&trava);
+    }
+  }
+
   // --- colecao (so filme, e so quando ja sabemos o id do TMDB) ---
-  if (!serieEmCurso && tmdbEmCurso > 0) {
+  if (!serieEmCurso) {
     const char *chave = desc_chave_tmdb();
-    long idCol = 0;
+    long idCol = 0, idFilme = tmdbEmCurso;
     char nome[80] = "";
-    if (chave && chave[0]) {
+    // O id do TMDB so fica no catalogo DEPOIS do enriquecimento do elenco; na
+    // PRIMEIRA abertura de um titulo ele ainda e 0, e a aba nao apareceria
+    // justamente na visita em que o dono esta olhando. /find resolve na hora.
+    if (chave && chave[0] && idFilme <= 0) {
+      snprintf(url, sizeof url,
+               "https://api.themoviedb.org/3/find/%s?api_key=%s"
+               "&external_source=imdb_id", id, chave);
+      corpo = rede_baixar(url, 15);
+      if (corpo) {
+        const char *v = js_array(corpo, NULL, "movie_results");
+        if (v) idFilme = (long)js_num(v, js_fim(v), "id", 0.0);
+        free(corpo);
+      }
+    }
+    if (chave && chave[0] && idFilme > 0) {
       snprintf(url, sizeof url, "%s/movie/%ld?api_key=%s&language=pt-BR",
-               "https://api.themoviedb.org/3", tmdbEmCurso, chave);
+               "https://api.themoviedb.org/3", idFilme, chave);
       corpo = rede_baixar(url, 15);
       if (corpo) {
         const char *b = strstr(corpo, "\"belongs_to_collection\"");
@@ -313,11 +371,12 @@ static void *buscar(void *arg) {
   }
 
   // --- relacionados ---
-  snprintf(url, sizeof url, "https://api.trakt.tv/%s/%s/related?limit=%d",
+  snprintf(url, sizeof url,
+           "https://api.trakt.tv/%s/%s/related?limit=%d&extended=images",
            tipo, id, EX_REL_MAX);
   corpo = rede_baixar_com(url, 15, cab);
   if (corpo) {
-    struct { char t[120], a[8], i[16]; } achado[EX_REL_MAX];
+    struct { char t[120], a[8], i[16], po[200]; } achado[EX_REL_MAX];
     int n = 0;
     // p+1 e nao js_prox: js_prox recebe o FIM do elemento anterior, e aqui
     // ainda nao ha anterior. Com js_prox o primeiro item era pulado e, em
@@ -330,6 +389,25 @@ static void *buscar(void *arg) {
       achado[n].t[0] = achado[n].i[0] = 0;
       js_texto(p, f, "title", achado[n].t, sizeof achado[n].t);
       js_texto(p, f, "imdb", achado[n].i, sizeof achado[n].i);
+      // Procurar "poster" no item inteiro pega o campo ERRADO: o Trakt manda
+      // `"colors":{"poster":["#D8D5CB",...]}` ANTES de
+      // `"images":{"poster":[...]}`, e o log da primeira versao mostrou
+      // `poster=https://#D8D5CB` — a cor media da arte, nao a arte. A busca
+      // comeca dentro do objeto `images`.
+      { const char *img = strstr(p, "\"images\"");
+        const char *v = (img && img < f) ? js_array(img, f, "poster") : NULL;
+        achado[n].po[0] = 0;
+        if (v && *v == '"') {
+          const char *e = strchr(v + 1, '"');
+          size_t k = e ? (size_t)(e - v - 1) : 0;
+          // O Trakt devolve o caminho SEM esquema ("media.trakt.tv/..."); sem o
+          // https o cache de textura trata como arquivo local e nao acha nada.
+          if (k > 0 && k + 9 < sizeof achado[n].po) {
+            memcpy(achado[n].po, "https://", 8);
+            memcpy(achado[n].po + 8, v + 1, k);
+            achado[n].po[8 + k] = 0;
+          }
+        } }
       ano = js_num(p, f, "year", 0.0);
       if (ano > 1800.0) snprintf(achado[n].a, sizeof achado[n].a, "%d", (int)ano);
       else achado[n].a[0] = 0;
@@ -344,6 +422,7 @@ static void *buscar(void *arg) {
         snprintf(rel[k].titulo, sizeof rel[k].titulo, "%s", achado[k].t);
         snprintf(rel[k].ano, sizeof rel[k].ano, "%s", achado[k].a);
         snprintf(rel[k].imdb, sizeof rel[k].imdb, "%s", achado[k].i);
+        snprintf(rel[k].poster, sizeof rel[k].poster, "%s", achado[k].po);
       }
       nRel = n;
     }
@@ -354,7 +433,8 @@ static void *buscar(void *arg) {
     for (k = 0; k < EX_NFONTES; k++) if (notas[k]) q++;
     printf("[extras] %s -> notas=%d/%d coment=%d rel=%d temps=%d\n", id, q,
            EX_NFONTES, nComent, nRel, nTemps); }
-  printf("[extras] colecao \"%s\" -> %d\n", colNome, nCol); fflush(stdout);
+  printf("[extras] colecao \"%s\" -> %d | rel[0] poster=%s\n", colNome, nCol,
+         nRel ? rel[0].poster : "(sem)"); fflush(stdout);
   fflush(stdout);
   pthread_mutex_lock(&trava);
   fioVivo = 0;
@@ -380,6 +460,7 @@ void extras_pedir(const char *imdb, int serie, long tmdbId) {
   snprintf(idPedido, sizeof idPedido, "%s", imdb);
   notaTrakt = votosTrakt = nComent = nRel = nTemps = nCol = 0;
   colNome[0] = 0;
+  memset(vistos, 0, sizeof vistos);
   memset(notas, 0, sizeof notas);
   if (fioVivo) { pthread_mutex_unlock(&trava); return; }
   snprintf(idEmCurso, sizeof idEmCurso, "%s", imdb);
@@ -436,4 +517,13 @@ const char *extras_relacionado_ano(int i) {
 }
 const char *extras_relacionado_imdb(int i) {
   return (i >= 0 && i < nRel) ? rel[i].imdb : "";
+}
+const char *extras_relacionado_poster(int i) {
+  return (i >= 0 && i < nRel) ? rel[i].poster : "";
+}
+
+int extras_ep_visto(int temporada, int episodio) {
+  if (temporada < 0 || temporada >= EX_VIS_T) return 0;
+  if (episodio < 0 || episodio >= EX_VIS_E) return 0;
+  return vistos[temporada][episodio];
 }

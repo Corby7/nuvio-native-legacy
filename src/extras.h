@@ -78,10 +78,18 @@ const char *extras_colecao_titulo(int i);
 const char *extras_colecao_ano(int i);
 long extras_colecao_tmdb(int i);
 
+// EPISODIOS JA ASSISTIDOS, do Trakt (/shows/<id>/progress/watched). O card do
+// episodio ganha uma mascara e um check quando o dono ja viu. Sem isto, quem
+// acompanha uma serie nao tinha como saber onde parou olhando a lista.
+int  extras_ep_visto(int temporada, int episodio);
+
 // Titulos relacionados, para a aba "Mais como este".
 int  extras_n_relacionados(void);
 const char *extras_relacionado_titulo(int i);
 const char *extras_relacionado_ano(int i);
 const char *extras_relacionado_imdb(int i);
+// Poster do relacionado (URL). Vem de `extended=images` do Trakt, que devolve o
+// caminho sem esquema — o https e acrescentado aqui.
+const char *extras_relacionado_poster(int i);
 
 #endif

@@ -352,6 +352,11 @@ const CatFileira *cat_fileira(int r) {
 //     valendo e nao precisam ser derrubadas;
 //   - `n` NAO e zerado: subir a contagem depois que o bloco novo ja esta
 //     publicado e seguro, e zerar faria a home piscar a cada titulo aberto.
+void cat_definir_na_lista(int i, int naLista) {
+  if (n <= 0 || i < 0 || i >= n) return;
+  itens[i].naLista = naLista ? 1 : 0;
+}
+
 int cat_acrescentar(const CatItem *item) {
   static CatItem *lixoAcr;
   CatItem *novo;

@@ -121,6 +121,11 @@ int cat_indice_por_imdb(const char *imdb);
 // a troca de bloco em catalogo.c.
 int cat_acrescentar(const CatItem *item);
 
+// Atualiza o espelho local de "esta na watchlist". A verdade e o Trakt, mas
+// esperar o proximo ciclo de descoberta para o botao mudar de cara faria o
+// toque parecer sem efeito.
+void cat_definir_na_lista(int i, int naLista);
+
 // Grava onde o dono parou NESTE app. Ate agora o progresso so era LIDO (do app
 // web); sem isto, assistir pelo app nativo nao mudava nada na tela.
 //

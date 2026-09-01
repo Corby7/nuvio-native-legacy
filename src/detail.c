@@ -356,10 +356,14 @@ void detail_evento(const SDL_Event *e) {
       (abaIdDe(abaInfo) == ABA_RELACIONADOS || abaIdDe(abaInfo) == ABA_COLECAO)) {
     int col = (abaIdDe(abaInfo) == ABA_COLECAO);
     int n = col ? extras_n_colecao() : extras_n_relacionados();
-    if (n > (col ? 7 : 8)) n = col ? 7 : 8;
+    if (n > 7) n = 7;
     switch (e->key.keysym.sym) {
-      case SDLK_DOWN: if (relFoco + 1 < n) { relFoco++; return; } break;
-      case SDLK_UP:   if (relFoco > 0)     { relFoco--; return; } break;
+      // "Mais como este" e uma fileira de cartazes: anda na HORIZONTAL. A
+      // colecao continua em lista vertical.
+      case SDLK_RIGHT: if (!col && relFoco + 1 < n) { relFoco++; return; } break;
+      case SDLK_LEFT:  if (!col && relFoco > 0)     { relFoco--; return; } break;
+      case SDLK_DOWN: if (col && relFoco + 1 < n) { relFoco++; return; } break;
+      case SDLK_UP:   if (col && relFoco > 0)     { relFoco--; return; } break;
       case SDLK_RETURN:
       case SDLK_KP_ENTER: {
         if (col) {
@@ -653,14 +657,27 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
     // conta pelo font-size (32) acertava o olho e deixava a placa do YouTube
     // pequena demais, porque no SVG ela e mais larga que a caixa da fonte.
     float g = NV_DETW_CIRC;
-    if (icone == 1) {                       // biblioteca: "+"
-      // O raio do SDF e fracao da ALTURA: num retangulo 5x44 pedir 0.5 faz
-      // `b.x` ficar negativo e a forma colapsa.
+    if (icone == 1) {                       // biblioteca: "+" ou "ja esta"
+      // O botao MOSTRA O ESTADO: com o titulo ja na watchlist, o "+" vira um
+      // disco cheio. Sem isso ele convidava a adicionar de novo o que ja estava
+      // la — o estado vem de ci->naLista, que a descoberta preenche com a lista
+      // de verdade do Trakt.
+      const CatItem *ci = cat_item(idx);
+      int dentro = ci && ci->naLista;
       float b = g * 0.36f;
-      GfxRect h = { cx - b * 0.5f, cy - 2.5f, b, 5 };
-      GfxRect v = { cx - 2.5f, cy - b * 0.5f, 5, b };
-      gfx_cor(h, 0.5f, ic, ic, ic, a);
-      gfx_cor(v, 0.5f * (v.w / v.h), ic, ic, ic, a);
+      if (dentro) {
+        gfx_rect((GfxRect){ cx - b * 0.5f, cy - b * 0.5f, b, b }, 0, GFX_ANEL,
+                 0, 0.09f, 0, 0.5f, ic, ic, ic, a);
+        gfx_cor((GfxRect){ cx - b * 0.22f, cy - b * 0.22f, b * 0.44f, b * 0.44f },
+                0.5f, ic, ic, ic, a);
+      } else {
+        // O raio do SDF e fracao da ALTURA: num retangulo 5x44 pedir 0.5 faz
+        // `b.x` ficar negativo e a forma colapsa.
+        GfxRect h = { cx - b * 0.5f, cy - 2.5f, b, 5 };
+        GfxRect v = { cx - 2.5f, cy - b * 0.5f, 5, b };
+        gfx_cor(h, 0.5f, ic, ic, ic, a);
+        gfx_cor(v, 0.5f * (v.w / v.h), ic, ic, ic, a);
+      }
     } else if (icone == 2) {                // assistido: olho, com risco
       // A caixa e mais larga que alta porque a amendoa e deitada; o shader
       // desenha dentro dela e o risco vem em `parx`.
@@ -679,56 +696,42 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
   //
   // O anel FALTAVA: o bloco de foco existia so no secundario, entao o botao
   // principal nao dava sinal nenhum de estar selecionado.
+  // O foco do primario e um ANEL, nao uma pilula branca cheia atras do botao.
+  // Com progresso a pilula cheia virava uma moldura grossa e branca em volta de
+  // um botao escuro — o dono apontou o contorno da pilula de temporada como
+  // referencia, que e fino. O anel guarda o sinal de foco sem virar bloco.
   if (focado) {
     GfxRect anel = { r.x - NV_DETW_ANEL, r.y - NV_DETW_ANEL,
                      r.w + NV_DETW_ANEL * 2, r.h + NV_DETW_ANEL * 2 };
-    gfx_cor(anel, NV_RAIO_PILL, 1, 1, 1, a);
+    gfx_rect(anel, 0, GFX_ANEL, 0, NV_DETW_ANEL / anel.h, 0, NV_RAIO_PILL,
+             1, 1, 1, a);
   }
-  // O PROPRIO BOTAO E A BARRA DE PROGRESSO quando o titulo ja foi comecado.
-  // Pedido do dono, com o acabamento que ele apontou depois: a parte que FALTA
-  // fica igual a pilula de temporada nao escolhida (fundo #222 com a borda de
-  // 1px a 16%), e nao um cinza claro — assim o botao pertence ao mesmo conjunto
-  // visual do resto da tela em vez de parecer um botao desabilitado.
+  // O PROPRIO BOTAO E A BARRA DE PROGRESSO, na forma que o dono escolheu depois
+  // de ver duas tentativas: a pilula fica BRANCA com texto e triangulo pretos —
+  // igual a referencia dele — e a parte que FALTA recebe um veu escuro por
+  // cima, um multiplicador.
   //
-  // Isso obriga a desenhar o ROTULO DUAS VEZES, cada uma recortada no seu lado:
-  // preto sobre o branco da parte assistida, claro sobre o escuro da parte que
-  // falta. Com uma passada so, metade do rotulo sumia — e um problema que so
-  // aparece porque as duas metades tem luminancia oposta.
-  float corte = 0.0f;
+  // Por que multiplicar e nao pintar duas metades: com duas metades de
+  // luminancia oposta o rotulo tinha de ser desenhado duas vezes, recortado, e
+  // a leitura mudava no meio da palavra. Escurecendo de leve, o preto continua
+  // legivel nos dois lados e o texto e desenhado UMA vez.
+  gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
   { int pc = rot ? progressoDe(idx) : 0;
-    if (pc > 0 && pc < 100) corte = r.x + r.w * (float)pc / 100.0f;
-    if (corte > 0.0f) {
-      gfx_cor(r, NV_RAIO_PILL, 0.133f, 0.133f, 0.133f, a);
-      // A borda e um ANEL, nao duas faixas: faixa reta atravessa as pontas
-      // arredondadas e o contorno aparecia sobrando dos dois lados da pilula.
-      gfx_rect(r, 0, GFX_ANEL, 0, 1.0f / r.h, 0, NV_RAIO_PILL, 1, 1, 1, 0.16f * a);
-      gfx_recorte(r.x, r.y, corte - r.x, r.h);
-      gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
+    if (pc > 0 && pc < 100) {
+      float corte = r.x + r.w * (float)pc / 100.0f;
+      gfx_recorte(corte, r.y, r.x + r.w - corte, r.h);
+      gfx_cor(r, NV_RAIO_PILL, 0, 0, 0, 0.30f * a);
       gfx_sem_recorte();
-    } else {
-      gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
     } }
 
   { float x = r.x + NV_DETW_BTN_PADX;
     GfxRect tri = { x + NV_DETW_BTN_ICONE * 0.16f,
                     r.y + (r.h - NV_DETW_BTN_ICONE) * 0.5f,
                     NV_DETW_BTN_ICONE * 0.72f, NV_DETW_BTN_ICONE * 0.84f };
-    float xr = x + NV_DETW_BTN_ICONE + NV_DETW_BTN_GAPI;
-    TxtLinha lp = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);          /* sobre o branco */
-    TxtLinha lc = txt_linha(TXT_DET_BOTAO, rot, 235, 235, 240, 255);    /* sobre o escuro */
-    float yr = r.y + (r.h - lp.h) * 0.5f;
-    if (corte > 0.0f) {
-      gfx_recorte(r.x, r.y, corte - r.x, r.h);
-      gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
-      txt_desenhar_alpha(lp, xr, yr, a);
-      gfx_recorte(corte, r.y, r.x + r.w - corte, r.h);
-      gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0.92f, 0.92f, 0.94f, a);
-      txt_desenhar_alpha(lc, xr, yr, a);
-      gfx_sem_recorte();
-    } else {
-      gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
-      txt_desenhar_alpha(lp, xr, yr, a);
-    } }
+    TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
+    gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
+    txt_desenhar_alpha(l, x + NV_DETW_BTN_ICONE + NV_DETW_BTN_GAPI,
+                       r.y + (r.h - l.h) * 0.5f, a); }
 }
 
 // Botao secundario: 345x96, raio 64, fundo #222 e texto branco; focado, fundo
@@ -1096,6 +1099,30 @@ static void desenhaEpisodio(GfxRect r, int c, float f, float a, Uint32 agora) {
   } else gfx_cor(th, raioTh, 0.133f, 0.133f, 0.133f, a);
   veuEpisodio(th, a);
 
+  // EPISODIO JA ASSISTIDO, segundo o Trakt: mascara escura sobre a miniatura e
+  // um check no canto. Pedido do dono, e resolve uma pergunta que a lista nao
+  // respondia — onde ele parou.
+  //
+  // A mascara vem DEPOIS do veu de texto de proposito: ela precisa cobrir a
+  // miniatura inteira, inclusive a parte ja escurecida, senao o card visto e o
+  // nao visto ficam parecidos justo em cima do texto.
+  if (ep && extras_ep_visto(ep->temporada, ep->episodio)) {
+    float d = 36.0f;
+    GfxRect selo = { th.x + th.w - d - 16.0f, th.y + 16.0f, d, d };
+    gfx_cor(th, raioTh, 0.0f, 0.0f, 0.0f, 0.55f * a);
+    gfx_cor(selo, 0.5f, 1, 1, 1, 0.92f * a);
+    // O check e feito de dois tracos; sem rotacao no gfx, dois retangulos finos
+    // em degraus dao a mesma leitura no tamanho de um selo.
+    { float cx2 = selo.x + d * 0.5f, cy2 = selo.y + d * 0.5f;
+      int k;
+      for (k = 0; k < 4; k++)
+        gfx_cor((GfxRect){ cx2 - 9.0f + k * 2.0f, cy2 - 1.0f + k * 2.0f, 3, 3 },
+                0.4f, 0.05f, 0.05f, 0.05f, a);
+      for (k = 0; k < 6; k++)
+        gfx_cor((GfxRect){ cx2 - 1.0f + k * 2.0f, cy2 + 5.0f - k * 2.0f, 3, 3 },
+                0.4f, 0.05f, 0.05f, 0.05f, a); }
+  }
+
   int e = c % (int)(sizeof EPISODIOS / sizeof *EPISODIOS);
   const char *epNome = ep && ep->nome[0] ? ep->nome : EPISODIOS[e][0];
   const char *epDur  = ep && ep->duracao[0] ? ep->duracao : EPISODIOS[e][1];
@@ -1388,25 +1415,44 @@ static void desenhaAvaliacoes(float x, float y, float a) {
 // buscar poster para doze titulos so para pintar esta aba custaria doze
 // pedidos de rede a cada abertura. O que a aba precisa responder e "o que mais
 // se parece com isto", e o nome responde.
+// "Mais como este" em CARTAZES, e nao em lista de texto: e assim que o web
+// mostra (renderPreviewRail) e e o que o dono pediu ao ver a lista crua. O
+// poster vem do proprio Trakt, com `extended=images` no /related — buscar arte
+// noutro servico seria um pedido por titulo so para pintar esta aba.
+#define REL_CARD_W  212.0f
+#define REL_CARD_H  318.0f
+#define REL_CARD_GAP 32.0f
 static void desenhaRelacionados(float x, float y, float a) {
   int n = extras_n_relacionados(), i;
   int naLista = (foco.fileira == SEC_ELENCO);
-  for (i = 0; i < n && i < 8; i++) {
-    float yl = y + i * 52.0f;
+  for (i = 0; i < n && i < 7; i++) {
+    float cx = x + i * (REL_CARD_W + REL_CARD_GAP);
+    GfxRect r = { cx, y, REL_CARD_W, REL_CARD_H };
     int aceso = naLista && i == relFoco;
-    // Todos abrem: o que nao esta no catalogo tem o meta buscado na hora.
-    int c = aceso ? 255 : 225;
+    const char *po = extras_relacionado_poster(i);
+    GLuint t = po[0] ? tex_obter(po) : 0;
+    float raio = NV_RAIO_CARD / REL_CARD_W;
+    if (cx + REL_CARD_W > NV_TELA_W - NV_DETP_X) break;
     if (aceso) {
-      GfxRect faixa = { x - 16.0f, yl - 8.0f, 940.0f, 48.0f };
-      gfx_cor(faixa, 10.0f / 48.0f, 1, 1, 1, 0.12f * a);
+      GfxRect anel = { r.x - 4, r.y - 4, r.w + 8, r.h + 8 };
+      gfx_cor(anel, raio, 1, 1, 1, a);
     }
-    { TxtLinha lt = txt_linha_corta(TXT_DET_META, extras_relacionado_titulo(i),
-                                    c, c, c, 255, 900.0f);
-      txt_desenhar_alpha(lt, x, yl, a);
+    if (t) {
+      gfx_tex_aspect_atual = tex_aspecto(po);
+      gfx_rect(r, t, GFX_CARD, aceso ? 1.0f : 0.0f, 0, 0, raio, 0, 0, 0, a);
+      gfx_tex_aspect_atual = 0.0f;
+    } else {
+      gfx_cor(r, raio, 0.133f, 0.133f, 0.133f, a);
+    }
+    { int c = aceso ? 255 : 225;
+      TxtLinha lt = txt_linha_corta(TXT_DET_META2, extras_relacionado_titulo(i),
+                                    c, c, c, 255, REL_CARD_W);
+      txt_desenhar_alpha(lt, cx, y + REL_CARD_H + 12.0f, a);
       { const char *ano = extras_relacionado_ano(i);
         if (ano[0]) {
-          TxtLinha la = txt_linha(TXT_DET_META2, ano, 150, 154, 163, 255);
-          txt_desenhar_alpha(la, x + lt.w + 18.0f, yl + 2.0f, a * 0.9f);
+          TxtLinha la = txt_linha(TXT_MINI, ano, 140, 144, 153, 255);
+          txt_desenhar_alpha(la, cx, y + REL_CARD_H + 12.0f + lt.h + 6.0f,
+                             a * 0.9f);
         } } }
   }
 }

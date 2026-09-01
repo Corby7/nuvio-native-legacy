@@ -269,3 +269,56 @@ void trakt_marcar(const char *imdb, double posSeg, double durSeg) {
   if (pthread_create(&fioMarca, NULL, enviarMarca, NULL) != 0) fioMarcaVivo = 0;
   else pthread_detach(fioMarca);
 }
+
+// --- WATCHLIST: escrever e ler ------------------------------------------------
+//
+// O botao "+" da tela de titulo so mexia num vetor local (biblioteca.c), entao
+// a lista do dono nos outros aparelhos nunca soube. Agora ele fala com o Trakt,
+// que ja e a fonte de verdade do resto do app.
+//
+// O ESTADO tambem importa: sem ler de volta, o botao mostrava "+" mesmo para um
+// titulo que ja estava na lista, e um segundo toque adicionaria de novo.
+// ci->naLista ja e preenchido por trakt_lista na descoberta; o que faltava era
+// manter esse campo em dia depois de uma escrita nossa.
+static char alvoLista[24];
+static int  alvoAdicionar, fioListaVivo;
+static pthread_t fioLista;
+
+static void *enviarLista(void *u) {
+  const char *cab[4];
+  char aut[200], chave[140], url[120], corpo[200], id[24], tipo[8];
+  char *resp;
+  (void)u;
+  snprintf(id, sizeof id, "%s", alvoLista);
+  snprintf(tipo, sizeof tipo, "%s", alvoAdicionar ? "" : "/remove");
+  if (!trakt_cabecalhos(cab, aut, sizeof aut, chave, sizeof chave)) {
+    fioListaVivo = 0; return NULL;
+  }
+  // O Trakt aceita o titulo por ids.imdb tanto em movies quanto em shows; mandar
+  // nos DOIS vetores e o que evita ter de saber o tipo aqui — o que nao existe
+  // e simplesmente ignorado.
+  snprintf(corpo, sizeof corpo,
+           "{\"movies\":[{\"ids\":{\"imdb\":\"%s\"}}],"
+           "\"shows\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id, id);
+  snprintf(url, sizeof url, "https://api.trakt.tv/sync/watchlist%s", tipo);
+  resp = rede_postar(url, 20, cab, corpo);
+  printf("[trakt] watchlist %s %s -> %s\n", alvoAdicionar ? "add" : "del", id,
+         resp ? "ok" : "falhou");
+  fflush(stdout);
+  free(resp);
+  fioListaVivo = 0;
+  return NULL;
+}
+
+void trakt_watchlist(const char *imdb, int adicionar) {
+  const char *dp;
+  if (!ligado || !imdb || imdb[0] != 't' || fioListaVivo) return;
+  dp = strchr(imdb, ':');
+  { size_t k = dp ? (size_t)(dp - imdb) : strlen(imdb);
+    if (k >= sizeof alvoLista) k = sizeof alvoLista - 1;
+    memcpy(alvoLista, imdb, k); alvoLista[k] = 0; }
+  alvoAdicionar = adicionar;
+  fioListaVivo = 1;
+  if (pthread_create(&fioLista, NULL, enviarLista, NULL) != 0) fioListaVivo = 0;
+  else pthread_detach(fioLista);
+}

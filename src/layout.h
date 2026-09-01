@@ -373,8 +373,15 @@
 #define NV_DETW_X          72.0f   // coluna de conteudo
 #define NV_DETW_DIR      1824.0f   // borda direita util (1920 - 96)
 #define NV_DETW_BASE     1048.0f   // base do bloco (1080 - 32 de padding)
-#define NV_DETW_LOGO_H    104.0f
-#define NV_DETW_LOGO_MAXW 710.0f
+// 104x710 era o MEDIDO no app web (.series-detail-logo 261x104 em 72,445), mas
+// aquela medida saiu de uma janela estreita. Na tela de 1920 a arte do titulo
+// ficava ocupando um quarto da largura e o dono apontou lado a lado com a
+// referencia dele, onde ela toma mais de dois tercos. 200x1000 dobra o tamanho
+// sem deixar o logo dominar a coluna de texto que vem abaixo.
+//
+// DIVERGENCIA DELIBERADA da medida do web, e nao descuido.
+#define NV_DETW_LOGO_H    200.0f
+#define NV_DETW_LOGO_MAXW 1000.0f
 #define NV_DETW_LOGO_GAP   40.0f   // base do logo ao topo da linha de acoes
 #define NV_DETW_ACOES_H   108.0f   // inclui os 6px de padding do anel de foco
 #define NV_DETW_BTN_H      96.0f

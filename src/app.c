@@ -257,7 +257,16 @@ void app_atualizar(float dt, Uint32 agora) {
       }
       aguardandoFonte = 1;
     }
-    if (detail_pediu_marcar())     biblioteca_alternar_lista(detail_indice());
+    if (detail_pediu_marcar()) {
+      // Alterna no Trakt E no espelho local. O estado de partida vem de
+      // ci->naLista, que a descoberta preencheu com a watchlist de verdade;
+      // sem ele o botao adicionava de novo um titulo que ja estava la.
+      int i = detail_indice();
+      const CatItem *c = cat_item(i);
+      biblioteca_alternar_lista(i);
+      if (c && c->imdb[0]) trakt_watchlist(c->imdb, !c->naLista);
+      if (c) cat_definir_na_lista(i, !c->naLista);
+    }
     if (detail_pediu_fontes())     stream_folha_abrir();
   }
   // Escolher uma fonte na folha inicia a reproducao DELA. Trocar de fonte com o
