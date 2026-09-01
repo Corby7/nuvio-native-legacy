@@ -1,15 +1,24 @@
-// Detalhe do titulo, no formato do app da Apple (conferido em dois videos do
-// aparelho, 2026-08-30). Sao TRES comportamentos, e cada um deles eu tinha
-// errado antes de ver o video:
+// Tela de detalhe do titulo, no layout do APP WEB (sessao LOGADA).
 //
-//   1. O detalhe nao e uma tela: e um CARTAO que vem para a frente, com margem
-//      por onde a home aparece atras. Ele entra com um leve estouro de escala —
-//      a sensacao que o dono descreveu como "sair da TV".
-//   2. Os titulos VIZINHOS existem como cartoes ao lado, cortados pelas bordas.
-//      Esquerda/direita troca de titulo deslizando o carrossel; nao ha volta a
-//      home no meio do caminho.
-//   3. Descer NAO rola a pagina: ESTICA o cartao para a tela inteira. A arte
-//      perde os metadados sobrepostos, vira fundo, e entram as secoes.
+// O port comecou copiando o app da Apple TV, e cada pedaco dessa heranca foi
+// sendo devolvido a medida que o web era MEDIDO. O que restava dela ate agora
+// era tudo o que fica abaixo da dobra — pilulas de temporada de 236x63, card de
+// episodio com o texto ABAIXO da miniatura, secoes "Trailers", "Como assistir"
+// e "Sobre". Nada disso existe no web. O que existe, medido em 1920x1080 na
+// serie "Silo" com o perfil do dono:
+//
+//   1. A tela e UM documento rolavel de 2144px de altura. O hero ocupa os
+//      primeiros 1080 e ROLA junto: nao ha cabecalho fixo nem logo centralizado
+//      no topo. Descer nao "estica" nada — apenas rola.
+//   2. As secoes sao quatro: abas de temporada (269x80), fileira de episodios
+//      (cards 640x422 com o texto DENTRO da miniatura), abas de informacao
+//      ("Criador e elenco | Avaliacoes | Mais como este | Trailer") e a fileira
+//      de elenco (avatar 140 redondo).
+//   3. Rolar leva o topo do grupo focado a 33% da altura util (40% nas abas de
+//      informacao). Isto esta no fonte do web (DETAIL_ROW_FOCUS_TARGET) e foi
+//      conferido medindo o scrollTop nos quatro grupos.
+//   4. Ao rolar, a arte de fundo NAO desfoca: ela vai a 15% de opacidade em
+//      0.8s. O desfoque gaussiano era do app da Apple TV.
 #include "detail.h"
 #include "streams.h"
 #include "descoberta.h"
@@ -24,44 +33,32 @@
 #include <string.h>
 #include <math.h>
 
-#define N_SUG      8
-#define N_SECOES   7
-// 8, nao 3. Era um numero de exemplo: FROM tem 4 temporadas e a quarta nao
-// cabia, entao a serie parecia ter menos do que tem. 8 e o teto do vetor de
-// animacoes (N_SUG), que e o limite real.
-// Posicao da fileira de similares no vetor SECOES. Fica como constante porque
-// o desenho precisa distinguir essa fileira da de trailers, e as duas sao
-// SEC_CARDS.
-#define SEC_SIMILARES 4
-
-#define N_TEMPORADAS 8
-#define N_ELENCO   6
+// Teto de itens por secao. 24 e nao 8: uma temporada de "Silo" tem 10
+// episodios e o vetor de 8 escondia os dois ultimos — a lista parecia menor do
+// que a serie e.
+#define N_ITENS    24
+#define N_SECOES    4
+#define N_ELENCO    6
 
 static HomeItem item;
 static int  aberto = 0, saindo = 0;
 static int  idx = 0;                 // titulo atual dentro do acervo
-static float t = 0.0f;               // 0 = card na home, 1 = cartao aberto
-// Tres niveis, medidos no app da Apple: o primeiro DESCER nao abre a pagina —
-// ele so tira a moldura e leva a arte a tela cheia. So o segundo traz os cards
-// e desfoca o fundo. Juntar os dois num passo so foi o que fez os cards
-// parecerem "aparecer por cima" da foto em vez de continuar o movimento.
+static float t = 0.0f;               // 0 = card na home, 1 = tela cheia
+// Dois estados, nao tres: o hero (nivel 0) e a pagina rolada (nivel 1). O
+// nivel intermediario "cartao vira tela cheia" so fazia sentido enquanto havia
+// cartao; no web a tela ja nasce cheia.
 static int  nivel = 0;
-static int  botao = 0;      // botao em foco quando o cartao esta em tela cheia
+static int  botao = 0;      // botao em foco no hero
 static int  pedReproduzir = 0, pedMarcar = 0, pedFontes = 0;
-// Instante em que o OK foi pressionado. Segurar abre a lista de fontes; um
-// toque toca no automatico. Sem guardar o instante nao ha como distinguir os
-// dois, porque o D-pad so avisa "desceu" e "subiu".
-static Uint32 okDesceEm = 0;               // 0 cartao, 1 tela cheia, 2 pagina
-static float pg = 0.0f;              // 0..1: tela cheia -> pagina com cards
-static Foco foco;                    // so vale no estado expandido
-static float animFoco[N_SECOES][N_SUG];  // N_SUG e o maior n de qualquer secao
-static float scrollSec[N_SECOES];
-static float scrollY = 0.0f;
-static const char *arteBorrada = NULL;  // de quem e o borrao que esta no alvo
-// Qual temporada esta escolhida. Diferente do foco: a pilula da temporada
-// escolhida continua la depois que o foco desce para os episodios — no app da
-// Apple da para ver as duas coisas ao mesmo tempo.
-static int temporada = 0;
+static int  pedDoInicio = 0;         // botao "Reproduzir desde o inicio"
+static Uint32 okDesceEm = 0;
+static float pg = 0.0f;              // 0..1: hero -> pagina rolada
+static Foco foco;
+static float animFoco[N_SECOES][N_ITENS];
+static float scrollSec[N_SECOES];    // rolagem HORIZONTAL de cada fileira
+static float scrollY = 0.0f;         // rolagem VERTICAL do documento
+static int temporada = 0;            // temporada ESCOLHIDA (nao a focada)
+static int abaInfo = 0;              // aba de informacao escolhida
 
 static const char *TITULOS[] = {
   "Eternidade", "Falando a Real", "Ruptura", "Silo", "Ted Lasso",
@@ -77,81 +74,22 @@ static const char *FICHAS[] = {
   "2025  \xc2\xb7  1 h 54 min", "2025  \xc2\xb7  T3, 10 episodios",
   "2024  \xc2\xb7  T2, 10 episodios", "2025  \xc2\xb7  1 h 38 min"
 };
-// A pagina do titulo nao e uma pilha de fileiras iguais: cada secao tem forma
-// propria. Abas de temporada sao pills; episodio e um card alto com miniatura e
-// texto embaixo; elenco sao circulos. Desenhar tudo como card 16:9 foi o que
-// deixou a pagina parecendo uma home dentro do detalhe.
-typedef enum { SEC_ABAS, SEC_EPISODIOS, SEC_CARDS, SEC_ELENCO, SEC_ONDE, SEC_SOBRE } TipoSecao;
-// Quantos itens a secao mostra AGORA. So a de episodios varia: uma serie de 6
-// episodios listando 8 repetiria os dois primeiros, e o vetor fixo de exemplo
-// esconderia que a lista real acabou.
-static int secaoN(int r);
-static int temporadaEm(int c);
 
-// --- onde assistir: tiers de verdade, na ordem do app da Apple ---------------
-// Assinatura primeiro, aluguel, compra. Cada tier so existe com nome do
-// provedor; sem dado, o card NAO aparece e a secao encolhe.
-static const char *ONDE_SUB[3] = { "Assinatura", "Alugar", "Comprar" };
-
-static int ondeContar(const CatItem *ci) {
-  const char *nomes[3] = { ci->provNome, ci->alugNome, ci->compNome };
-  int n = 0;
-  for (int k = 0; k < 3 && n < 2; k++) if (nomes[k][0]) n++;
-  return n;
-}
-static int ondeCard(const CatItem *ci, int c, const char **nome, const char **sub,
-                    const char **logo) {
-  const char *nomes[3] = { ci->provNome, ci->alugNome, ci->compNome };
-  const char *logos[3] = { ci->provLogo, ci->alugLogo, ci->compLogo };
-  for (int k = 0; k < 3; k++) {
-    if (!nomes[k][0]) continue;
-    if (c == 0) { *nome = nomes[k]; *sub = ONDE_SUB[k]; *logo = logos[k]; return 1; }
-    c--;
-  }
-  return 0;
-}
-
-static const struct { const char *titulo; TipoSecao tipo; int n; } SECOES[N_SECOES] = {
-  { NULL,                      SEC_ABAS,      N_TEMPORADAS },
-  { NULL,                      SEC_EPISODIOS, N_SUG },
-  { "Trailers",                SEC_CARDS,     N_SUG },
-  { "Elenco e equipe",         SEC_ELENCO,    N_ELENCO },
-  { "Voce tambem pode gostar", SEC_CARDS,     N_SUG },   // indice SEC_SIMILARES
-  { "Como assistir",           SEC_ONDE,      2 },
-  { "Sobre",                   SEC_SOBRE,     1 },
+// As quatro secoes do web, com o topo do GRUPO em coordenada de documento — e
+// nao uma pilha de alturas somadas, que era o modelo do app da Apple TV. As
+// posicoes sao fixas porque no web tambem sao: o documento tem tamanho
+// conhecido e a rolagem so muda o quanto dele se enxerga.
+typedef enum { SEC_TEMPORADAS, SEC_EPISODIOS, SEC_ABAS_INFO, SEC_ELENCO } TipoSecao;
+static const struct { float grupo, alvo; } SECOES[N_SECOES] = {
+  { NV_DETP_G_TEMP,   NV_DETP_ALVO_FILEIRA },
+  { NV_DETP_G_EP,     NV_DETP_ALVO_FILEIRA },
+  { NV_DETP_G_ABAS,   NV_DETP_ALVO_ABAS    },
+  { NV_DETP_G_ELENCO, NV_DETP_ALVO_FILEIRA },
 };
-static const char *SOBRE[] = {
-  "Uma serie de comedia dramatica sobre luto, amizade e os limites",
-  "do que um terapeuta pode fazer quando decide dizer a verdade.",
-  "Vencedora de tres premios da critica.",
+static const char *ABAS_INFO[] = {
+  "Criador e elenco", "Avaliacoes", "Mais como este", "Trailer"
 };
-static int secaoN(int r) {
-  if (r < 0 || r >= N_SECOES) return 0;
-  if (SECOES[r].tipo == SEC_EPISODIOS) {
-    int q = cat_n_episodios(idx);
-    if (q > 0) return q < N_SUG ? q : N_SUG;   // N_SUG e o teto das animacoes
-  }
-  if (SECOES[r].tipo == SEC_ELENCO) {
-    const CatItem *ce = cat_item(idx);
-    if (ce && ce->nElenco > 0) return ce->nElenco;
-  }
-  if (SECOES[r].tipo == SEC_ABAS) {
-    // Filme nao tem temporada: a secao some em vez de mostrar abas que nao
-    // levam a lugar nenhum.
-    const CatItem *ci = cat_item(idx);
-    if (ci && ci->tipo[0] && strcmp(ci->tipo, "series")) return 0;
-    if (ci && ci->nTemporadas > 0)
-      return ci->nTemporadas < N_TEMPORADAS ? ci->nTemporadas : N_TEMPORADAS;
-  }
-  if (SECOES[r].tipo == SEC_ONDE) {
-    const CatItem *ci = cat_item(idx);
-    // "Como assistir" sem dado nenhum NAO existe: um titulo vazio seria uma
-    // promessa sem card. E com so um tier, e UM card — nao completo o par com
-    // o "Comprar R$ 29,90" inventado que estava aqui.
-    return ci ? ondeContar(ci) : 0;
-  }
-  return SECOES[r].n;
-}
+#define N_ABAS_INFO 4
 
 static const char *EPISODIOS[][3] = {
   { "Cara ou coroa",        "38 min", "27/01/2023" },
@@ -172,9 +110,10 @@ static const char *ELENCO[][2] = {
   { "Luke Tennie",    "Sean" },   { "Michael Urie",   "Brian" },
 };
 
-static float alturaSecao(int r);
-static float larguraSecao(TipoSecao t);
-static float passoSecao(TipoSecao t);
+static int  secaoN(int r);
+static int  temporadaEm(int c);
+static float larguraTemporada(int c);
+static float larguraAbaInfo(int i);
 
 // Texto real quando ha catalogo; as listas fixas ficam como reserva para quando
 // o app roda so com uma pasta de imagens solta.
@@ -204,6 +143,12 @@ static const char *arteDe(int i) {
   int n = home_n_artes();
   return n ? home_arte(((i % n) + n) % n) : NULL;
 }
+static int ehSerie(void) {
+  const CatItem *ci = cat_item(idx);
+  if (!ci) return 0;
+  if (ci->tipo[0]) return strcmp(ci->tipo, "series") == 0;
+  return cat_n_episodios(idx) > 0;
+}
 
 static float suave(float x) {
   x = anim_clamp(x, 0.0f, 1.0f);
@@ -211,16 +156,25 @@ static float suave(float x) {
 }
 static float fase2(void) { return suave((t - 0.45f) / 0.55f); }
 
+// A Inter embarcada so tem Regular, Medium e Bold, e a pagina pede 500, 600 e
+// 800 em corpos (32, 26, 21) que so existem em Regular na tabela de text.c —
+// que e arquivo de outro agente nesta sessao. Engrossar redesenhando a mesma
+// linha com deslocamentos sub-pixel e o que sobra, e e o que os rasterizadores
+// chamam de "faux bold": custa uma textura so, porque a linha vem do cache.
+static void txt_peso(TxtLinha l, float x, float y, float a, float grossura) {
+  txt_desenhar_alpha(l, x, y, a);
+  if (grossura > 0.05f) txt_desenhar_alpha(l, x + grossura * 0.5f, y, a);
+  if (grossura > 0.9f)  txt_desenhar_alpha(l, x + grossura, y, a);
+}
+
 void detail_abrir(const HomeItem *it) {
   item = *it;
-  aberto = 1; saindo = 0; nivel = 0; botao = 0; arteBorrada = NULL;
-  t = 0.0f; pg = 0.0f; scrollY = 0.0f;
-  // O titulo aberto e o do card, nao o primeiro do catalogo. Estava fixo em 0,
-  // e por isso todo filme e serie abria a mesma pagina.
+  aberto = 1; saindo = 0; nivel = 0; botao = 0;
+  t = 0.0f; pg = 0.0f; scrollY = 0.0f; abaInfo = 0;
   idx = it->indice;
   // A aba marcada tem de ser a da temporada que os episodios trazem. Comecando
-  // sempre em 0, FROM abria mostrando os episodios da 4 com "Temporada 1"
-  // aceso — o rotulo desmentia a lista logo abaixo.
+  // sempre em 0, uma serie cujo primeiro episodio carregado e da 4 abria com
+  // "Temporada 1" aceso — o rotulo desmentia a lista logo abaixo.
   temporada = 0;
   { const CatEp *e0 = cat_episodio(idx, 0);
     const CatItem *ci0 = cat_item(idx);
@@ -243,16 +197,47 @@ int detail_assentado(void) {
 
 int detail_cobre_tela(void) {
   // O backdrop e FULL-BLEED: assim que ele termina de crescer, nao sobra um
-  // pixel da tela anterior. Desenhar a home por baixo disso custava um quadro
-  // inteiro de preenchimento a toa — medido em 42 ms no pior quadro.
+  // pixel da tela anterior. Desenhar a home por baixo custava um quadro inteiro
+  // de preenchimento a toa — medido em 42 ms no pior quadro.
   return aberto && suave(t) > 0.995f;
 }
+
+static int secaoN(int r) {
+  const CatItem *ci = cat_item(idx);
+  switch (r) {
+    case SEC_TEMPORADAS:
+      // Filme nao tem temporada: a fileira SOME em vez de mostrar abas que nao
+      // levam a lugar nenhum. E o que o web faz — a `.series-season-row` so
+      // existe no layout de serie.
+      if (!ehSerie()) return 0;
+      if (ci && ci->nTemporadas > 0)
+        return ci->nTemporadas < N_ITENS ? ci->nTemporadas : N_ITENS;
+      return 0;
+    case SEC_EPISODIOS: {
+      int q = cat_n_episodios(idx);
+      if (q <= 0) return 0;
+      return q < N_ITENS ? q : N_ITENS;
+    }
+    case SEC_ABAS_INFO: return N_ABAS_INFO;
+    case SEC_ELENCO:
+      if (ci && ci->nElenco > 0) return ci->nElenco;
+      return N_ELENCO;
+  }
+  return 0;
+}
+
+// Quantos botoes o hero tem AGORA. O secundario ("Reproduzir desde o inicio")
+// so existe quando ha progresso — no web ele e renderizado dentro do mesmo
+// `if` que a linha de retomada.
+static int temSecundario(void) {
+  const CatItem *ci = cat_item(idx);
+  return ci && ci->progresso > 0;
+}
+static int nBotoes(void) { return temSecundario() ? 4 : 3; }
 
 void detail_evento(const SDL_Event *e) {
   if (saindo) return;
 
-  // O OK so decide o que fazer quando SOBE: ate la nao se sabe se foi toque ou
-  // pressao longa.
   if (e->type == SDL_KEYDOWN && (e->key.keysym.sym == SDLK_RETURN ||
                                  e->key.keysym.sym == SDLK_KP_ENTER)) {
     if (!okDesceEm) okDesceEm = SDL_GetTicks();
@@ -262,19 +247,35 @@ void detail_evento(const SDL_Event *e) {
                                e->key.keysym.sym == SDLK_KP_ENTER)) {
     Uint32 dur = okDesceEm ? SDL_GetTicks() - okDesceEm : 0;
     okDesceEm = 0;
-    if (nivel == 0 && botao == 0) {
-      if (dur >= NV_HOLD_MS) pedFontes = 1; else pedReproduzir = 1;
-    } else if (nivel == 0 && botao == 1) {
-      pedMarcar = 1;
-    } else if (nivel == 0 && botao == 2) {
-      // O botao "..." e o outro caminho para a lista de fontes, para quem nao
-      // descobre que dava para segurar.
-      pedFontes = 1;
-    } else if (nivel >= 1 && SECOES[foco.fileira].tipo == SEC_ABAS) {
+    if (nivel == 0) {
+      // A ordem dos botoes muda com o estado: com progresso entra o secundario
+      // ENTRE o primario e os circulares, como no `renderHeroSection` do web.
+      int sec = temSecundario();
+      if (botao == 0) {
+        if (dur >= NV_HOLD_MS) pedFontes = 1; else pedReproduzir = 1;
+      } else if (sec && botao == 1) {
+        // O roteador (app.c) ainda so sabe "abrir o player deste titulo", e
+        // app.c e arquivo de outro agente nesta sessao. O pedido fica marcado
+        // para quando existir o caminho de "ignorar o ponto salvo", mas o botao
+        // JA reproduz — um botao que nao faz nada e pior que um que faz quase.
+        pedDoInicio = 1; pedReproduzir = 1;
+      } else if (botao == (sec ? 2 : 1)) {
+        pedMarcar = 1;
+      } else {
+        pedFontes = 1;
+      }
+    } else if (foco.fileira == SEC_TEMPORADAS) {
       // Trocar de aba BUSCA a temporada. Antes so mudava o realce e a lista
       // continuava a mesma, o que fazia a aba parecer quebrada.
       temporada = foco.coluna;
       desc_episodios(idx, temporadaEm(temporada));
+    } else if (foco.fileira == SEC_ABAS_INFO) {
+      abaInfo = foco.coluna;
+    } else if (foco.fileira == SEC_EPISODIOS) {
+      // No web e `openEpisodeStreams`. Aqui a folha de fontes ainda e a do
+      // titulo: `stream_folha_abrir()` nao recebe episodio. Melhor abrir a
+      // folha que existe do que nao responder ao OK.
+      pedFontes = 1;
     }
     return;
   }
@@ -282,23 +283,20 @@ void detail_evento(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
 
-  // Varias teclas contam como "voltar": no aparelho e o Back do controle, e no
-  // teclado cada um alcanca uma diferente — Esc, Delete ou a seta de apagar.
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
       k == SDLK_DELETE) {
-    // Back desfaz UM nivel por vez; so na base ele volta para a home. Fechar
-    // direto de dentro da pagina perderia o lugar.
-    if (nivel > 0) nivel--; else saindo = 1;
+    if (nivel > 0) nivel = 0; else saindo = 1;
     return;
   }
-  // Dois niveis, nao tres. O nivel intermediario "cartao vira tela cheia" so
-  // fazia sentido enquanto havia cartao: no web a tela JA nasce cheia e com o
-  // "Reproduzir" em foco, entao o primeiro DESCER tem de levar direto as
-  // secoes. E LEFT/RIGHT anda entre os botoes desde o comeco — o carrossel de
-  // titulos vizinhos era invencao do port, o web nao tem.
   if (nivel == 0) {
-    if (k == SDLK_DOWN)       nivel = 1;
-    else if (k == SDLK_RIGHT) { if (botao < 2) botao++; }
+    if (k == SDLK_DOWN) {
+      // Descer do hero cai na PRIMEIRA fileira que existe. Num filme nao ha
+      // temporadas nem episodios, e parar numa fileira vazia deixava o D-pad
+      // sem resposta.
+      for (int r = 0; r < N_SECOES; r++)
+        if (secaoN(r) > 0) { foco.fileira = r; foco.coluna = 0; nivel = 1; break; }
+    }
+    else if (k == SDLK_RIGHT) { if (botao < nBotoes() - 1) botao++; }
     else if (k == SDLK_LEFT)  { if (botao > 0) botao--; }
     return;
   }
@@ -308,61 +306,90 @@ void detail_evento(const SDL_Event *e) {
   else if (k == SDLK_UP)    { if (!focus_mover(&foco, 0, -1)) nivel = 0; }
 }
 
+// Largura do item e passo horizontal de cada fileira. Temporada e aba de
+// informacao tem largura VARIAVEL (saem do texto), e por isso o passo delas nao
+// e uma constante como a do episodio.
+static float larguraItem(int r, int c) {
+  switch (r) {
+    case SEC_TEMPORADAS:  return larguraTemporada(c);
+    case SEC_EPISODIOS:   return NV_DETP_EP_W;
+    case SEC_ABAS_INFO:   return larguraAbaInfo(c);
+    default:              return NV_DETP_EL_W;
+  }
+}
+// x do item `c` DENTRO da fileira (antes da rolagem horizontal).
+static float xItem(int r, int c) {
+  float x = NV_DETP_X;
+  for (int k = 0; k < c; k++) {
+    if (r == SEC_EPISODIOS) { x += NV_DETP_EP_PASSO; continue; }
+    if (r == SEC_ELENCO)    { x += NV_DETP_EL_PASSO; continue; }
+    if (r == SEC_TEMPORADAS) x += larguraTemporada(k) + NV_DETP_TEMP_GAP;
+    else x += larguraAbaInfo(k) + NV_DETP_ABA_SEP * 2 + 9.0f;  // 9 = largura do "|"
+  }
+  return x;
+}
+
 void detail_atualizar(float dt, Uint32 agora) {
   (void)agora;
   if (!aberto) return;
   t  = anim_mola(t,  saindo ? 0.0f : 1.0f, dt, NV_MOLA_TELA);
-  // Rigidez propria, e nao a de troca de tela: o web leva 0.8s para apagar o
-  // backdrop (cubic-bezier .4,0,.2,1), e a mola de NV_MOLA_TELA assenta em
-  // ~330ms. exp(-3.8*0.8) = 0.05, ou seja 95% do caminho em 800ms.
+  // Rigidez propria: o web leva 0.8s para apagar o backdrop (cubic-bezier
+  // .4,0,.2,1), e a mola de NV_MOLA_TELA assenta em ~330ms.
   pg = anim_mola(pg, nivel >= 1 ? 1.0f : 0.0f, dt, NV_MOLA_PAGINA);
   if (saindo && t < 0.02f) { aberto = 0; saindo = 0; t = 0.0f; return; }
 
-  for (int r = 0; r < N_SECOES; r++) {
-    for (int c = 0; c < secaoN(r); c++) {
+  for (int r = 0; r < N_SECOES; r++)
+    for (int c = 0; c < secaoN(r) && c < N_ITENS; c++) {
       float alvo = (nivel >= 1 && focus_indice(&foco, r, c)) ? 1.0f : 0.0f;
       animFoco[r][c] = anim_mola(animFoco[r][c], alvo, dt,
                                  alvo > animFoco[r][c] ? NV_MOLA_FOCO : NV_MOLA_DESFOCO);
     }
-    if (r == foco.fileira) {
-      float passo = passoSecao(SECOES[r].tipo);
-      float alvo = foco.coluna * passo - larguraSecao(SECOES[r].tipo) * 0.25f;
-      if (alvo < 0) alvo = 0;
+
+  // --- rolagem HORIZONTAL da fileira focada ---------------------------------
+  // Duas regras, as duas do fonte do web (`getHorizontalTrackScrollLeft`): a
+  // fileira de episodios ENCOSTA o card focado na margem esquerda; as demais so
+  // rolam o necessario, com 24px de folga nas bordas.
+  { int r = foco.fileira;
+    if (r >= 0 && r < N_SECOES && secaoN(r) > 0) {
+      float x = xItem(r, foco.coluna) - NV_DETP_X;
+      float w = larguraItem(r, foco.coluna);
+      float vista = NV_TELA_W - NV_DETP_X * 2;
+      float alvo = scrollSec[r];
+      if (r == SEC_EPISODIOS) alvo = x;
+      else {
+        if (foco.coluna == 0) alvo = 0.0f;
+        else if (x + w > alvo + vista - 24.0f) alvo = x + w - vista + 24.0f;
+        else if (x < alvo + 24.0f)             alvo = x - 24.0f;
+      }
+      if (alvo < 0.0f) alvo = 0.0f;
       scrollSec[r] = anim_mola(scrollSec[r], alvo, dt, NV_MOLA_SCROLL);
-    }
+    } }
+
+  // --- rolagem VERTICAL -----------------------------------------------------
+  // O topo do grupo focado vai para 33% da altura util (40% nas abas). E a
+  // regra do web, e nao um "rola o necessario": conferida nos quatro grupos.
+  float alvoY = 0.0f;
+  if (nivel >= 1 && foco.fileira >= 0 && foco.fileira < N_SECOES) {
+    alvoY = SECOES[foco.fileira].grupo - NV_TELA_H * SECOES[foco.fileira].alvo;
+    float maxY = NV_DETP_FIM - NV_TELA_H;
+    if (alvoY > maxY) alvoY = maxY;
+    if (alvoY < 0.0f) alvoY = 0.0f;
   }
-  // Rola so o necessario para a secao focada caber na area util. Alinhar a
-  // secao focada ao topo, como estava, empurrava as abas para fora da tela
-  // assim que o foco descia para os episodios — no app da Apple elas continuam
-  // visiveis, porque ele so rola quando o conteudo nao cabe mais.
-  float topoSecao = NV_PG_TOPO + 42.0f + NV_PG_TIT_ABAS;
-  for (int r = 0; r < foco.fileira; r++)
-    topoSecao += alturaSecao(r) +
-                 (((r + 1 < N_SECOES) && SECOES[r + 1].titulo) ? NV_PG_ENTRE_SEC : 26.0f);
-  float baseSecao = topoSecao + alturaSecao(foco.fileira);
-  float limiteTopo = NV_PG_TOPO + 78.0f;      // abaixo do cabecalho fixo
-  float alvoY = scrollY;
-  if (baseSecao - alvoY > NV_TELA_H - 40.0f) alvoY = baseSecao - (NV_TELA_H - 40.0f);
-  if (topoSecao - alvoY < limiteTopo)        alvoY = topoSecao - limiteTopo;
-  if (alvoY < 0.0f) alvoY = 0.0f;
-  scrollY = anim_mola(scrollY, nivel >= 1 ? alvoY : 0.0f, dt, NV_MOLA_SCROLL);
+  scrollY = anim_mola(scrollY, alvoY, dt, NV_MOLA_SCROLL);
 }
 
-// Bloco de conteudo da tela de detalhe, no layout do APP WEB.
-//
+// ---------------------------------------------------------------------------
+// HERO
+// ---------------------------------------------------------------------------
 // Nada aqui e sobreposicao num cartao: a tela e full-bleed, a coluna comeca em
 // x=72 e a pilha e ancorada na BASE (`.detail-hero-section` e um flex column
-// com `justify-content: flex-end`). Empilhar de cima para baixo, como a versao
-// anterior fazia, faz o bloco inteiro subir e descer conforme o tamanho da
-// sinopse — no web ele fica preso na base e so o topo se move.
-//
-// A ordem, medida: logo -> botoes -> "Diretor: ..." -> sinopse -> generos e ano
-// -> duracao. Nao ha badge de classificacao, nem nota, nem selos de formato,
-// nem coluna de creditos a direita: esses vieram do app da Apple TV.
+// com `justify-content: flex-end`). Empilhar de cima para baixo faz o bloco
+// inteiro subir e descer conforme o tamanho da sinopse; no web ele fica preso
+// na base e so o topo se move.
 static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, float a) {
   // Foco no web NAO e escala nem sombra: e um anel branco de 4px por fora
-  // (box-shadow 0 0 0 4px #fff) e a troca de cor do circulo. Medido nas duas
-  // classes; o `transform` continua `none` nos dois estados.
+  // (box-shadow 0 0 0 4px #fff) e a troca de cor do fundo. `transform` continua
+  // `none` nos dois estados.
   if (focado) {
     GfxRect anel = { r.x - NV_DETW_ANEL, r.y - NV_DETW_ANEL,
                      r.w + NV_DETW_ANEL * 2, r.h + NV_DETW_ANEL * 2 };
@@ -370,23 +397,20 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
   }
   int circular = (rot == NULL);
   if (circular) {
-    // #222 sem foco, #f5f5f5 com foco.
-    float lum = focado ? 0.961f : 0.133f;
+    float lum = focado ? 0.961f : 0.133f;   // #f5f5f5 / #222
     gfx_cor(r, NV_RAIO_PILL, lum, lum, lum, a);
-    // Sem glifo: o "+" e o "..." sao desenhados, porque a familia embarcada
-    // nao garante os simbolos e um quadrado no lugar e pior que nada.
-    float ic = focado ? 0.067f : 1.0f;   // #111 com foco, branco sem
+    // Sem glifo: o "+" e o "..." sao desenhados, porque a familia embarcada nao
+    // garante os simbolos e um quadrado no lugar e pior que nada.
+    float ic = focado ? 0.067f : 1.0f;      // #111 com foco, branco sem
     float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-    if (icone == 1) {                    // "+"
-      // O raio do SDF e uma fracao da ALTURA, nao do menor lado: num retangulo
-      // 5x44 pedir 0.5 faz `b.x` ficar negativo e a forma colapsa — foi o que
-      // deixou a barra vertical do "+" reduzida a um toco na primeira captura.
-      // O teto e 0.5 * (w/h) quando o retangulo e mais alto que largo.
+    if (icone == 1) {                       // "+"
+      // O raio do SDF e fracao da ALTURA: num retangulo 5x44 pedir 0.5 faz
+      // `b.x` ficar negativo e a forma colapsa.
       GfxRect h = { cx - 22, cy - 2.5f, 44, 5 };
       GfxRect v = { cx - 2.5f, cy - 22, 5, 44 };
       gfx_cor(h, 0.5f, ic, ic, ic, a);
       gfx_cor(v, 0.5f * (v.w / v.h), ic, ic, ic, a);
-    } else {                             // "..."
+    } else {                                // "..."
       for (int k = -1; k <= 1; k++) {
         GfxRect p = { cx + k * 15.0f - 3.5f, cy - 3.5f, 7, 7 };
         gfx_cor(p, 0.5f, ic, ic, ic, a);
@@ -395,7 +419,7 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
     return;
   }
   // Primario: branco com texto preto nos DOIS estados — o foco so acrescenta o
-  // anel. Isto foi conferido tirando a classe `focused` no web: a cor nao muda.
+  // anel. Conferido tirando a classe `focused` no web: a cor nao muda.
   gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
   TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
   float x = r.x + NV_DETW_BTN_PADX;
@@ -407,17 +431,36 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
                      r.y + (r.h - l.h) * 0.5f, a);
 }
 
-// Largura do botao primario: padding 48 + icone 36 + gap 16 + texto. Medido
-// 298 para "Reproduzir"; a conta e a do CSS, entao um rotulo maior cresce a
-// pilula em vez de estourar por baixo do texto.
+// Botao secundario: 345x96, raio 64, fundo #222 e texto branco; focado, fundo
+// #f5f5f5 e texto #111, com o mesmo anel de 4px. Nao tem icone — no web e so o
+// rotulo, e por isso a largura sai de `texto + 2 x 34` e nao da conta do
+// primario.
+static void desenhaSecundario(GfxRect r, const char *rot, int focado, float a) {
+  if (focado) {
+    GfxRect anel = { r.x - NV_DETW_ANEL, r.y - NV_DETW_ANEL,
+                     r.w + NV_DETW_ANEL * 2, r.h + NV_DETW_ANEL * 2 };
+    gfx_cor(anel, NV_RAIO_PILL, 1, 1, 1, a);
+  }
+  float lum = focado ? 0.961f : 0.133f;
+  gfx_cor(r, NV_RAIO_PILL, lum, lum, lum, a);
+  int cor = focado ? 17 : 255;
+  TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, cor, cor, cor, 255);
+  txt_desenhar_alpha(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a);
+}
+
+// Largura do botao primario: padding 48 + icone 36 + vao 34 + texto. A conta e
+// a do CSS, entao um rotulo maior cresce a pilula em vez de estourar por baixo
+// do texto — e e o que faz "Retomar T2E3" (334) e "Reproduzir" (298) baterem.
 static float larguraPrimario(const char *rot) {
   TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
   return NV_DETW_BTN_PADX * 2 + NV_DETW_BTN_ICONE + NV_DETW_BTN_GAPI + l.w;
 }
+static float larguraSecundario(const char *rot) {
+  TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 255, 255, 255, 255);
+  return NV_DETW_BTN2_PADX * 2 + l.w;
+}
 
 // Ano solto do campo `meta` ("2025 · 1 h 54 min" -> "2025" e "1 h 54 min").
-// O web tem os dois campos separados; aqui eles chegam numa linha so, e cortar
-// no primeiro separador e o que permite empurrar o ano para a direita como la.
 static void partirMeta(const char *meta, char *ano, size_t na, char *resto, size_t nr) {
   ano[0] = 0; resto[0] = 0;
   if (!meta || !meta[0]) return;
@@ -432,37 +475,84 @@ static void partirMeta(const char *meta, char *ano, size_t na, char *resto, size
   snprintf(resto, nr, "%s", r);
 }
 
-static void heroWeb(float a) {
+// Selo do IMDb: 109x60, sem fundo — o logo amarelo de 60x60 e a nota a direita,
+// em 20.7/400 rgb(179,179,179). O logo do web e `assets/icons/imdb_logo_2016.svg`
+// e este app nao empacota SVG (nem daria para acrescentar o arquivo sem
+// reinstalar o ipk de 166MB), entao ele e DESENHADO: retangulo amarelo #f5c518
+// com "IMDb" preto dentro, que e a forma da marca. Fica anotado como o unico
+// ponto do selo que nao e 1:1.
+static float desenhaSeloImdb(float xDir, float yCentro, int nota, float a) {
+  if (nota <= 0) return 0.0f;
+  char txt[8];
+  snprintf(txt, sizeof txt, "%.1f", nota / 10.0f);
+  TxtLinha l = txt_linha(TXT_CAPTION2, txt, 179, 179, 179, 255);
+  float larg = NV_DETW_IMDB_H + 20.0f + l.w;
+  float x = xDir - larg;
+  GfxRect marca = { x, yCentro - 15.0f, NV_DETW_IMDB_H, 30.0f };
+  gfx_cor(marca, 0.14f, 0.961f, 0.773f, 0.094f, a);   // #f5c518
+  TxtLinha lm = txt_linha(TXT_MINI, "IMDb", 10, 10, 10, 255);
+  txt_peso(lm, marca.x + (marca.w - lm.w) * 0.5f,
+           marca.y + (marca.h - lm.h) * 0.5f, a, 0.8f);
+  txt_desenhar_alpha(l, xDir - l.w, yCentro - l.h * 0.5f, a);
+  return larg;
+}
+
+// Selo de texto da segunda linha de meta ("RETURNING SERIES", classificacao
+// indicativa): 45 de altura, raio 8, SEM fundo, com borda de 1px
+// rgba(179,179,179,0.55) e texto branco 23/400. A borda e desenhada como um
+// retangulo de fundo 1px maior, porque o shader nao tem contorno.
+static float desenhaSeloMeta(float x, float y, const char *txt, float a) {
+  TxtLinha l = txt_linha(TXT_DET_META2, txt, 255, 255, 255, 255);
+  float w = l.w + NV_DETW_SELO_PADX * 2;
+  float raio = 8.0f / NV_DETW_SELO_H;
+  GfxRect borda = { x - 1, y - 1, w + 2, NV_DETW_SELO_H + 2 };
+  gfx_cor(borda, raio, 0.70f, 0.70f, 0.70f, 0.55f * a);
+  GfxRect dentro = { x, y, w, NV_DETW_SELO_H };
+  gfx_cor(dentro, raio, 0.051f, 0.051f, 0.051f, 0.0f);   // furo: so a borda
+  txt_desenhar_alpha(l, x + NV_DETW_SELO_PADX,
+                     y + (NV_DETW_SELO_H - l.h) * 0.5f, a);
+  return w;
+}
+
+// O ponto separador do web: 1x14 em rgba(179,179,179,0.55), com 38 de folga de
+// cada lado (medido borda a borda em seis ocorrencias).
+static void desenhaPonto(float x, float yCentro, float a) {
+  GfxRect pt = { x, yCentro - 7.0f, 1, 14 };
+  gfx_cor(pt, 0.0f, 0.70f, 0.70f, 0.70f, 0.55f * a);
+}
+
+static void heroWeb(float a, float desloc) {
   if (a <= 0.005f) return;
   const CatItem *ci = cat_item(idx);
 
   char ano[32], dur[64];
   partirMeta(fichaDe(idx), ano, sizeof ano, dur, sizeof dur);
 
+  // Em serie o web escreve "Roteirista:"/"Criador:"; em filme, "Diretor:".
   char sup[192] = "";
-  if (ci && ci->direcao[0]) snprintf(sup, sizeof sup, "Diretor: %s", ci->direcao);
+  if (ci && ci->direcao[0])
+    snprintf(sup, sizeof sup, "%s: %s", ehSerie() ? "Roteirista" : "Diretor",
+             ci->direcao);
 
   const char *sin = sinopseDe(idx);
 
   // --- empilhamento de BAIXO para cima, como o flex-end do web ---------------
-  float yMeta2 = NV_DETW_BASE - 45.0f;                       // 1003
-  float yMeta1 = yMeta2 - NV_DETW_META_GAP - 49.0f;          // 928
+  float yMeta2 = NV_DETW_BASE - NV_DETW_SELO_H - 14.0f;       // 989
+  float yMeta1 = yMeta2 - NV_DETW_META_GAP - 74.0f;           // 889
   float hSin = 0.0f;
   if (sin) hSin = txt_bloco(TXT_DET_SIN, sin, 255, 255, 255, -1.0f, 0.0f,
                             NV_DETW_TEXTO_W, NV_DETW_LD_SIN, 0.0f,
                             NV_DETW_SIN_LINHAS);
-  float ySin = yMeta1 - NV_DETW_GAP_SIN - hSin;              // 787
-  float ySup = sup[0] ? ySin - NV_DETW_GAP_SUP - NV_DETW_LD_SUP : ySin;  // 727
-  // A linha de retomada so ocupa espaco quando existe; sem ela a pilha e a
-  // mesma de um titulo nunca aberto.
-  float temRetom = (ci && ci->progresso > 0) ? 1.0f : 0.0f;
+  float ySin = yMeta1 - NV_DETW_GAP_SIN - hSin;              // 748
+  float ySup = sup[0] ? ySin - NV_DETW_GAP_SUP - NV_DETW_LD_SUP : ySin;  // 688
+  float temRetom = temSecundario();
   float yRetom = ySup - NV_DETW_GAP_SUP - NV_DETW_RETOM_H;
   float yAcoes = (temRetom ? yRetom - NV_DETW_GAP_RETOM
                            : ySup - NV_DETW_GAP_ACOES) - NV_DETW_ACOES_H;
 
   // Sobe alguns pixels enquanto entra: continua o movimento da arte em vez de
-  // aparecer pronto no lugar.
-  float sobe = (1.0f - a) * 26.0f;
+  // aparecer pronto no lugar. `desloc` e a rolagem do documento.
+  float sobe = (1.0f - a) * 26.0f + desloc;
   yMeta2 += sobe; yMeta1 += sobe; ySin += sobe; ySup += sobe;
   yRetom += sobe; yAcoes += sobe;
 
@@ -479,7 +569,7 @@ static void heroWeb(float a) {
     gfx_rect(r, texLogo, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, a);
   } else {
     // Sem logo, o NOME. A altura da caixa continua sendo a do logo, para que a
-    // linha de botoes nao pule de lugar entre um titulo com logo e outro sem.
+    // linha de botoes nao pule entre um titulo com logo e outro sem.
     TxtLinha t2 = txt_linha_corta(TXT_TITULO1, tituloDe(idx), 255, 255, 255, 255,
                                   NV_DETW_LOGO_MAXW);
     txt_desenhar_alpha(t2, NV_DETW_X,
@@ -488,34 +578,43 @@ static void heroWeb(float a) {
   }
 
   // --- botoes ---------------------------------------------------------------
-  // Em FLUXO, com 63px entre vizinhos. As posicoes 439/586/734 que eu tinha
-  // fixado nao sao constantes do desenho: sao o resultado dessa conta com o
-  // rotulo "Reproduzir". Num titulo em progresso o rotulo vira "Retomar T2E3",
-  // o primario passa de 298 para 334, e tudo a direita anda 36px — medido na
-  // sessao logada, com Silo.
+  // Em FLUXO, com 63px entre vizinhos. As posicoes x=439/586/734 que o arquivo
+  // de medidas trazia nao sao constantes do desenho: sao o resultado dessa
+  // conta com o rotulo "Reproduzir" e SEM o botao secundario.
   //
-  // O web tem tres circulares (lista, "nao me interessa", trailer). Aqui sao
-  // DOIS: lista e fontes. O terceiro nao entra porque nao existe reprodutor de
-  // trailer neste app, e um botao que nao faz nada e pior que a ausencia dele.
+  // O web tem ate tres circulares (lista, "assistido", trailer). Aqui sao DOIS:
+  // lista e fontes. O de trailer nao entra porque este app nao tem reprodutor
+  // de trailer, e um botao que nao faz nada e pior que a ausencia dele.
   float yBtn  = yAcoes + 6.0f;
   float yCirc = yAcoes + 12.0f;
-  // "Retomar" e o rotulo do web quando ha progresso; nele o icone continua o
-  // mesmo triangulo, so o texto muda.
-  const char *rot = (ci && ci->progresso > 0) ? "Retomar" : "Reproduzir";
+  // Dois estados do rotulo, medidos: "Retomar T2E3" quando ha progresso,
+  // "Reproduzir" quando nao ha. (O web tem um terceiro, "Proximo T2E4", que sai
+  // do proximo episodio nao assistido — o catalogo nativo nao guarda quais
+  // episodios ja foram vistos, entao esse estado nao tem de onde vir.)
+  char rot[48];
+  if (ci && ci->progresso > 0 && ci->temporada > 0)
+    snprintf(rot, sizeof rot, "Retomar T%dE%d", ci->temporada, ci->episodio);
+  else if (ci && ci->progresso > 0) snprintf(rot, sizeof rot, "Retomar");
+  else snprintf(rot, sizeof rot, "Reproduzir");
+
+  int nb = 0;
   float bx = NV_DETW_X + 6.0f;
   GfxRect rp = { bx, yBtn, larguraPrimario(rot), NV_DETW_BTN_H };
-  desenhaBotao(rp, rot, 0, nivel == 0 && botao == 0, a);
-  bx += rp.w + NV_DETW_BTN_GAP;
-  for (int k = 0; k < 2; k++) {
+  desenhaBotao(rp, rot, 0, nivel == 0 && botao == nb, a);
+  bx += rp.w + NV_DETW_BTN_GAP; nb++;
+  if (temSecundario()) {
+    const char *rs = "Reproduzir desde o inicio";
+    GfxRect rs2 = { bx, yBtn, larguraSecundario(rs), NV_DETW_BTN_H };
+    desenhaSecundario(rs2, rs, nivel == 0 && botao == nb, a);
+    bx += rs2.w + NV_DETW_BTN_GAP; nb++;
+  }
+  for (int k = 0; k < 2; k++, nb++) {
     GfxRect rc = { bx, yCirc, NV_DETW_CIRC, NV_DETW_CIRC };
-    desenhaBotao(rc, NULL, k + 1, nivel == 0 && botao == k + 1, a);
+    desenhaBotao(rc, NULL, k + 1, nivel == 0 && botao == nb, a);
     bx += NV_DETW_CIRC + NV_DETW_BTN_GAP;
   }
 
   // --- linha de retomada ----------------------------------------------------
-  // So existe com progresso, e e ela que empurra tudo o que vem acima. Medida
-  // no web logado: "Retomada disponivel · 45% · Episodio S2E3 · 30m restantes",
-  // 22.66/400 em rgba(255,255,255,0.82).
   if (ci && ci->progresso > 0) {
     char ln[160];
     if (ci->temporada > 0)
@@ -528,7 +627,7 @@ static void heroWeb(float a) {
                        a * 0.82f);
   }
 
-  // --- "Diretor: ..." -------------------------------------------------------
+  // --- "Roteirista: ..." / "Diretor: ..." ------------------------------------
   if (sup[0]) {
     TxtLinha l = txt_linha_corta(TXT_DET_META, sup, 179, 179, 179, 255,
                                  NV_DETW_TEXTO_W);
@@ -539,113 +638,163 @@ static void heroWeb(float a) {
   if (sin) txt_bloco(TXT_DET_SIN, sin, 255, 255, 255, NV_DETW_X, ySin,
                      NV_DETW_TEXTO_W, NV_DETW_LD_SIN, a, NV_DETW_SIN_LINHAS);
 
-  // --- generos a esquerda, ano empurrado a direita --------------------------
+  // --- meta 1: generos a esquerda; ano e selo IMDb empurrados a direita ------
+  // A linha cresce de 49 para 74 de altura quando o selo IMDb existe — foi ele
+  // que empurrou a pilha inteira para cima na sessao logada.
   {
-    TxtLinha lg = txt_linha_corta(TXT_DET_META, generoDe(idx), 179, 179, 179, 255,
-                                  NV_DETW_DIR - NV_DETW_X - 240.0f);
-    txt_desenhar_alpha(lg, NV_DETW_X, yMeta1 + (NV_DETW_LD_META - lg.h) * 0.5f, a);
+    float yc = yMeta1 + 37.0f;
+    float xDir = NV_DETW_DIR;
+    float usado = desenhaSeloImdb(xDir, yc, ci ? ci->nota : 0, a);
+    if (usado > 0.0f) {
+      xDir -= usado + NV_DETP_SEP;
+      desenhaPonto(xDir, yc, a);
+      xDir -= NV_DETP_SEP;
+    }
     if (ano[0]) {
       TxtLinha la = txt_linha(TXT_DET_META, ano, 179, 179, 179, 255);
-      float xa = NV_DETW_DIR - la.w;
-      txt_desenhar_alpha(la, xa, yMeta1 + (NV_DETW_LD_META - la.h) * 0.5f, a);
-      // O ponto separador do web: 1x14, a 24px de folga de cada lado.
-      GfxRect pt = { xa - NV_DETW_META_SEP - 1.0f,
-                     yMeta1 + (NV_DETW_LD_META - 14.0f) * 0.5f, 1, 14 };
-      gfx_cor(pt, 0.0f, 0.70f, 0.70f, 0.70f, 0.55f * a);
+      txt_desenhar_alpha(la, xDir - la.w, yc - la.h * 0.5f, a);
+      xDir -= la.w + NV_DETP_SEP;
+      desenhaPonto(xDir, yc, a);
+      xDir -= NV_DETP_SEP;
+    }
+    TxtLinha lg = txt_linha_corta(TXT_DET_META, generoDe(idx), 179, 179, 179, 255,
+                                  xDir - NV_DETW_X);
+    txt_desenhar_alpha(lg, NV_DETW_X, yc - lg.h * 0.5f, a);
+  }
+
+  // --- meta 2: selo, duracao, pais ------------------------------------------
+  // O web abre a linha com o selo de STATUS ("RETURNING SERIES") e/ou o de
+  // classificacao indicativa. Status nao existe no CatItem — o catalogo nativo
+  // nao traz esse campo do Cinemeta —, entao aqui o selo e o de classificacao,
+  // que existe e ocupa o mesmo lugar na mesma linha do web.
+  {
+    float x = NV_DETW_X, yc = yMeta2 + NV_DETW_SELO_H * 0.5f;
+    if (ci && ci->classificacao[0]) {
+      x += desenhaSeloMeta(x, yMeta2, ci->classificacao, a) + NV_DETP_SEP;
+      desenhaPonto(x, yc, a);
+      x += NV_DETP_SEP;
+    }
+    if (dur[0]) {
+      TxtLinha ld = txt_linha(TXT_DET_META2, dur, 255, 255, 255, 255);
+      txt_desenhar_alpha(ld, x, yc - ld.h * 0.5f, a);
     }
   }
-
-  // --- duracao (o web tambem poe o pais; o catalogo daqui nao tem) ----------
-  if (dur[0]) {
-    TxtLinha ld = txt_linha(TXT_DET_META2, dur, 255, 255, 255, 255);
-    txt_desenhar_alpha(ld, NV_DETW_X, yMeta2 + (NV_DETW_LD_META2 - ld.h) * 0.5f, a);
-  }
 }
 
-// --- medidas de cada tipo de secao ---
-// Recebe o INDICE da secao e nao o tipo porque uma secao pode encolher a zero
-// sem dados (SEC_ONDE sem provedor nenhum): a secao some do layout em vez de
-// deixar um vazio com o titulo dela pendurado.
-static float alturaSecao(int r) {
-  TipoSecao t = SECOES[r].tipo;
-  switch (t) {
-    case SEC_ABAS:      return NV_ABA_H;
-    case SEC_EPISODIOS: return NV_EP_H;
-    case SEC_ELENCO:    return NV_AVATAR + 92.0f;
-    case SEC_ONDE:      return secaoN(r) > 0 ? NV_ONDE_H : 0.0f;
-    case SEC_SOBRE:     return NV_SOBRE_H;
-    default:            return NV_CARD_H;
-  }
-}
-static float larguraSecao(TipoSecao t) {
-  switch (t) {
-    case SEC_ABAS:      return NV_ABA_W;
-    case SEC_EPISODIOS: return NV_CARD_W;
-    case SEC_ELENCO:    return NV_AVATAR;
-    case SEC_ONDE:      return NV_ONDE_W;
-    case SEC_SOBRE:     return NV_TELA_W - NV_MARGEM_X * 2;
-    default:            return NV_CARD_W;
-  }
-}
-static float passoSecao(TipoSecao t) {
-  if (t == SEC_ABAS) return NV_ABA_PITCH;          // medido texto a texto
-  return larguraSecao(t) + (t == SEC_ELENCO ? 34.0f : NV_CARD_GAP);
-}
+// ---------------------------------------------------------------------------
+// PAGINA: temporadas, episodios, abas de informacao, elenco
+// ---------------------------------------------------------------------------
 
 // Numero REAL da temporada na posicao `c`. Serie que comeca na 2 (o que
-// acontece quando o Cinemeta nao tem a 1) mostrava "Temporada 1" apontando
-// para a 2, e a lista abaixo nao batia com o rotulo.
+// acontece quando o Cinemeta nao tem a 1) mostrava "Temporada 1" apontando para
+// a 2, e a lista abaixo nao batia com o rotulo.
 static int temporadaEm(int c) {
   const CatItem *ci = cat_item(idx);
   if (ci && ci->nTemporadas > 0)
     return (c >= 0 && c < ci->nTemporadas) ? ci->temporadas[c] : ci->temporadas[0];
   return c + 1;
 }
-
-static void desenhaAba(GfxRect r, int c, float f, float a) {
-  char rot[32]; snprintf(rot, sizeof rot, "Temporada %d", temporadaEm(c));
-  int sel = (c == temporada);
-  // Escolhida sem foco = pilula translucida; com foco = pilula clara e texto
-  // escuro. Sem o estado de escolha, o usuario perde de vista em que temporada
-  // esta assim que desce para a lista.
-  float base = sel ? 0.30f : 0.0f;
-  float lum = 0.62f + 0.34f * f;
-  gfx_cor(r, NV_RAIO_PILL, lum, lum, lum, (base + 0.66f * f) * a);
-  int cor = f > 0.55f ? 24 : (sel ? 250 : 196);
-  TxtLinha l = txt_linha(TXT_BODY, rot, cor, cor, cor, 255);
-  txt_desenhar_alpha(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a);
+static void rotuloTemporada(int c, char *dst, size_t n) {
+  int s = temporadaEm(c);
+  if (s == 0) snprintf(dst, n, "Especiais");
+  else snprintf(dst, n, "Temporada %d", s);
+}
+static float larguraTemporada(int c) {
+  char rot[32]; rotuloTemporada(c, rot, sizeof rot);
+  TxtLinha l = txt_linha(TXT_PLR_CORPO, rot, 255, 255, 255, 255);
+  return l.w + NV_DETP_TEMP_PADX * 2;
+}
+static float larguraAbaInfo(int i) {
+  TxtLinha l = txt_linha(TXT_PLR_CORPO, ABAS_INFO[i], 255, 255, 255, 255);
+  return l.w;
 }
 
-// Card de episodio: miniatura em cima, texto embaixo. A duracao fica DENTRO da
-// miniatura, no canto, como no app da Apple — fora dela o card ganha uma linha
-// so para isso e a coluna estica.
+// Aba de temporada: 80 de altura, raio 40 (pilula), borda de 1px
+// rgba(255,255,255,0.16). Tres estados MEDIDOS, e nao dois:
+//   normal      #222     texto rgb(179,179,179)
+//   escolhida   #2d2d2d  texto branco
+//   com foco    #f5f5f5  texto #111, sem borda
+// Sem o estado do meio, o usuario perde de vista em que temporada esta assim
+// que o foco desce para a lista.
+static void desenhaTemporada(GfxRect r, int c, float f, float a) {
+  char rot[32]; rotuloTemporada(c, rot, sizeof rot);
+  int sel = (c == temporada);
+  float raio = NV_RAIO_PILL;
+  GfxRect borda = { r.x - 1, r.y - 1, r.w + 2, r.h + 2 };
+  gfx_cor(borda, raio, 1, 1, 1, 0.16f * a * (1.0f - f));
+  float base = sel ? 0.176f : 0.133f;         // #2d2d2d / #222
+  float lum  = base + (0.961f - base) * f;    // -> #f5f5f5 com foco
+  gfx_cor(r, raio, lum, lum, lum, a);
+  int alvo = sel ? 255 : 179;
+  int cor = (int)(alvo + (17 - alvo) * f);    // -> #111 com foco
+  TxtLinha l = txt_linha(TXT_PLR_CORPO, rot, cor, cor, cor, 255);
+  // 500 de peso na Inter Regular: uma segunda passada meio pixel a direita.
+  txt_peso(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a, 0.5f);
+}
+
+// O degrade do `.series-episode-overlay`: linear vertical de rgba(0,0,0,0.06)
+// a 0.95, com paradas em 22% (0.18), 52% (0.62) e 82% (0.86). O shader nao tem
+// modo para ele — gfx.c e arquivo de outro agente — e o GFX_VEU que existe
+// escurece TAMBEM a esquerda, o que aqui apagaria a metade do card.
+//
+// Sai em faixas ancoradas na BASE: cada faixa e um retangulo arredondado que
+// vai de uma altura ate o fim da miniatura, com o mesmo raio absoluto. Assim os
+// cantos de baixo acompanham a miniatura (uma faixa de cantos retos poria dois
+// dentes escuros fora do arredondamento) e o empilhamento reproduz a rampa,
+// porque compor N camadas de alfa `d` da 1-(1-d)^n.
+static void veuEpisodio(GfxRect th, float a) {
+  static const float PARADA[5] = { 0.00f, 0.22f, 0.52f, 0.82f, 1.00f };
+  static const float ALFA[5]   = { 0.06f, 0.18f, 0.62f, 0.86f, 0.95f };
+  const int PASSOS = 14;
+  float acum = 0.0f;
+  for (int i = 0; i <= PASSOS; i++) {
+    float u = (float)i / PASSOS;
+    // Alvo interpolado linearmente por partes, como o `linear-gradient`.
+    float alvo = ALFA[4];
+    for (int k = 0; k < 4; k++)
+      if (u <= PARADA[k + 1]) {
+        float d = PARADA[k + 1] - PARADA[k];
+        alvo = ALFA[k] + (ALFA[k + 1] - ALFA[k]) * (d > 0 ? (u - PARADA[k]) / d : 0);
+        break;
+      }
+    // Quanto ESTA faixa precisa acrescentar para que o acumulado bata no alvo.
+    float d = (alvo - acum) / (1.0f - acum);
+    if (d <= 0.001f) continue;
+    acum = alvo;
+    float topo = th.y + th.h * u;
+    GfxRect faixa = { th.x, topo, th.w, th.y + th.h - topo };
+    if (faixa.h < 2.0f) continue;
+    float raio = NV_DETP_EP_RAIO / (faixa.w < faixa.h ? faixa.w : faixa.h);
+    if (raio > 0.5f) raio = 0.5f;
+    gfx_cor(faixa, raio, 0, 0, 0, d * a);
+  }
+}
+
+// Card de episodio: 640x422, com a miniatura de 640x414 e TODO o texto dentro
+// dela, sobre o degrade. E a diferenca estrutural com o que estava aqui antes
+// (miniatura em cima, texto embaixo, que e o app da Apple TV).
 static void desenhaEpisodio(GfxRect r, int c, float f, float a, Uint32 agora) {
-  // Episodio REAL do titulo aberto (Cinemeta), quando existe. O vetor fixo
-  // continua de reserva: filme nao tem episodio, e serie que o Cinemeta nao
-  // conhece cairia numa secao vazia, pior que uma lista de exemplo.
+  (void)agora;
   const CatEp *ep = cat_episodio(idx, c);
-  float thumbH = r.w * 9.0f / 16.0f;
-  GfxRect th = { r.x, r.y, r.w, thumbH };
-  // Still do proprio episodio quando o Cinemeta tem; senao a arte do titulo.
-  // Um retangulo cinza no lugar da miniatura seria pior que a arte repetida.
+  GfxRect th = { r.x, r.y, r.w, NV_DETP_EP_THUMB_H };
+  float raioTh = NV_DETP_EP_RAIO / NV_DETP_EP_THUMB_H;
+
+  // Anel de foco: no web e um box-shadow na MINIATURA, nao no card, e nao ha
+  // escala nenhuma (`transform: none`).
+  if (f > 0.01f) {
+    GfxRect anel = { th.x - NV_DETP_ANEL, th.y - NV_DETP_ANEL,
+                     th.w + NV_DETP_ANEL * 2, th.h + NV_DETP_ANEL * 2 };
+    gfx_cor(anel, raioTh, 1, 1, 1, f * a);
+  }
+
   const char *arte = (ep && ep->thumb[0]) ? ep->thumb : home_arte(c * 2 + 3);
   GLuint t2 = arte ? tex_obter(arte) : 0;
   if (t2) {
     gfx_tex_aspect_atual = tex_aspecto(arte);
-    float fase = agora / 1000.0f + c * 0.6f;
-    gfx_rect(th, t2, GFX_CARD, f, sinf(fase) * 0.010f * f, 0, NV_RAIO_CARD, 0, 0, 0, a);
+    gfx_rect(th, t2, GFX_CARD, 0, 0, 0, raioTh, 0, 0, 0, a);
     gfx_tex_aspect_atual = 0.0f;
-  } else gfx_cor(th, NV_RAIO_CARD, 0.14f, 0.14f, 0.16f, a);
-
-  // Painel claro atras do texto quando o episodio esta em foco. Medido no
-  // aparelho: 428x284 para uma coluna de 410 (ou seja, sangra ~9px para cada
-  // lado), branco a ~15%. E o que amarra miniatura e texto num objeto so.
-  if (f > 0.01f) {
-    // O painel cobre TODO o bloco de texto, inclusive a data e o selo — no
-    // app da Apple nada do texto fica de fora dele.
-    GfxRect pn = { r.x - 12, r.y + thumbH + 6, r.w + 24, r.h - thumbH - 6 };
-    gfx_cor(pn, 0.06f, 1, 1, 1, 0.19f * f * a);
-  }
+  } else gfx_cor(th, raioTh, 0.133f, 0.133f, 0.133f, a);
+  veuEpisodio(th, a);
 
   int e = c % (int)(sizeof EPISODIOS / sizeof *EPISODIOS);
   const char *epNome = ep && ep->nome[0] ? ep->nome : EPISODIOS[e][0];
@@ -654,99 +803,89 @@ static void desenhaEpisodio(GfxRect r, int c, float f, float a, Uint32 agora) {
   const char *epSin  = ep && ep->sinopse[0] ? ep->sinopse : SIN_EP;
   int epNum = ep ? ep->episodio : c + 1;
 
-  // Duracao sobre a arte, SEM pilula de fundo — o app da Apple usa so o texto
-  // com o triangulo e, quando ha progresso, uma barrinha entre os dois. A
-  // pilula que eu tinha posto pesava o canto e nao existe no original.
-  TxtLinha ld = txt_linha(TXT_CAPTION2, epDur, 255, 255, 255, 255);
-  float dx = th.x + 20, dy = th.y + thumbH - ld.h - 18;
-  GfxRect tri = { dx, dy + ld.h * 0.5f - 8, 14, 16 };
-  gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 1, 1, 1, 0.96f * a);
-  float px2 = dx + 26;
-  if (c == 0) {   // so o episodio comecado mostra progresso
-    GfxRect tr = { px2, dy + ld.h * 0.5f - 2, 46, 4 };
-    GfxRect at = { px2, dy + ld.h * 0.5f - 2, 17, 4 };
-    gfx_cor(tr, 0.5f, 1, 1, 1, 0.34f * a);
-    gfx_cor(at, 0.5f, 1, 1, 1, 0.96f * a);
-    px2 += 60;
-  }
-  txt_desenhar_alpha(ld, px2, dy, a);
+  float tx = r.x + NV_DETP_EP_PAD;
 
-  char cab[24]; snprintf(cab, sizeof cab, "EPISODIO %d", epNum);
-  float y = th.y + thumbH + NV_EP_THUMB_GAP;
-  // Sobre o painel claro do foco, o cinza do texto perde contraste — no app da
-  // Apple o bloco focado fica visivelmente mais legivel, nao mais apagado.
-  int cz = (int)(178 + 46 * f), cb2 = (int)(188 + 40 * f);
-  TxtLinha lc = txt_linha(TXT_CAPTION2, cab, cz, cz + 2, cb2, 255);
-  txt_desenhar_alpha(lc, r.x, y, a * 0.95f); y += lc.h + 6;
-  TxtLinha ln = txt_linha(TXT_BODY, epNome, 255, 255, 255, 255);
-  txt_desenhar_alpha(ln, r.x, y, a); y += ln.h + 8;
-  int cs = (int)(198 + 42 * f);
-  y += txt_bloco(TXT_CAPTION2, epSin, cs, cs + 2, cs + 10, r.x, y, r.w,
-                 NV_LD_CAPTION2, a * 0.92f, 5);
-  y += 8;
-  TxtLinha lf = txt_linha(TXT_CAPTION2, epData, cz, cz + 2, cb2, 255);
-  txt_desenhar_alpha(lf, r.x, y, a * 0.9f);
-  // Badge de classificacao indicativa ao lado da data, em laranja — no app da
-  // Apple ele fecha a linha e e o unico ponto de cor do bloco.
-  TxtLinha lb = txt_linha(TXT_MINI, "A14", 255, 255, 255, 255);
-  // Menor e menos saturado que eu tinha: no original ele e um selo discreto ao
-  // lado da data, nao um rotulo que disputa atencao com o titulo.
-  GfxRect bg = { r.x + lf.w + 11, y + (lf.h - lb.h) * 0.5f, lb.w + 6, lb.h };
-  gfx_cor(bg, 0.20f, 0.72f, 0.36f, 0.12f, 0.85f * a);
-  txt_desenhar_alpha(lb, bg.x + 3, bg.y, a * 0.95f);
-}
+  // Circulo tracejado de "ainda nao assistido": 48x48 em (24,24) do card, borda
+  // de 2px rgba(179,179,179,0.9). O port desenha um anel continuo — o SDF nao
+  // faz tracejado — e e a unica liberdade deste selo.
+  { GfxRect fora = { r.x + 24, r.y + 24, NV_DETP_EP_STATUS, NV_DETP_EP_STATUS };
+    GfxRect dentro = { fora.x + 2, fora.y + 2, fora.w - 4, fora.h - 4 };
+    gfx_cor(fora, 0.5f, 0.70f, 0.70f, 0.70f, 0.90f * a);
+    gfx_cor(dentro, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f); }
 
-// Elenco: retrato recortado em circulo (raio 0.5 no SDF), nome e papel abaixo.
-// "Como assistir": cartao com o nome do provedor e o tipo de acesso embaixo.
-static void desenhaOnde(GfxRect r, int c, float f, float a) {
-  const CatItem *ci = cat_item(idx);
-  const char *nome = "", *sub = "", *logo = "";
-  // Tier DE VERDADE, na ordem assinatura > aluguel > compra. Sem dado nesta
-  // posicao a secao nem chega aqui (secaoN/alturaSecao ja encolheram), mas o
-  // guard e o que impede um card vazio se os dados chegarem parcialmente.
-  if (!ci || !ondeCard(ci, c, &nome, &sub, &logo)) return;
-  float lum = 0.18f + 0.72f * f;
-  gfx_cor(r, 0.10f, lum, lum, lum, (0.22f + 0.72f * f) * a);
-  int cor = f > 0.5f ? 24 : 236;
-  TxtLinha ln = txt_linha(TXT_BODY, nome, cor, cor, cor, 255);
-  TxtLinha lt = txt_linha(TXT_CAPTION2, sub,
-                          f > 0.5f ? 90 : 168, f > 0.5f ? 90 : 170, f > 0.5f ? 96 : 178, 255);
-  float tx = r.x + 30;
-  if (logo[0]) {
-    GLuint tl = tex_obter(logo);
-    if (tl) {
-      GfxRect rl = { r.x + 22, r.y + r.h * 0.5f - 20, 40, 40 };
-      gfx_tex_aspect_atual = 1.0f;   // as logos do TMDB sao quadradas
-      gfx_rect(rl, tl, GFX_CARD, 0, 0, 0, 9.0f, 0, 0, 0, a);
-      gfx_tex_aspect_atual = 0.0f;
-      tx = r.x + 74;
-    }
-  }
-  txt_desenhar_alpha(ln, tx, r.y + r.h * 0.5f - ln.h + 2, a);
-  txt_desenhar_alpha(lt, tx, r.y + r.h * 0.5f + 6, a * 0.95f);
-}
+  // Selo "EPISODIO n": 163x44, raio 12, fundo rgba(0,0,0,0.42), 20/600 com
+  // caixa alta.
+  { char cab[24]; snprintf(cab, sizeof cab, "EPISODIO %d", epNum);
+    TxtLinha l = txt_linha(TXT_CAPTION2, cab, 255, 255, 255, 255);
+    float w = l.w + NV_DETP_EP_SELO_PADX * 2;
+    GfxRect s = { tx, r.y + NV_DETP_EP_SELO_Y, w, NV_DETP_EP_SELO_H };
+    gfx_cor(s, 12.0f / NV_DETP_EP_SELO_H, 0, 0, 0, 0.42f * a);
+    txt_peso(l, s.x + NV_DETP_EP_SELO_PADX,
+             s.y + (NV_DETP_EP_SELO_H - l.h) * 0.5f, a, 1.0f); }
 
-// "Sobre": bloco de texto corrido, sem card. Ele existe para fechar a pagina —
-// no app da Apple e a ultima secao antes do fim do scroll.
-static void desenhaSobre(GfxRect r, float a) {
-  // A sinopse do titulo aberto, nao tres frases fixas que falavam de uma serie
-  // de comedia dramatica em cima de qualquer filme.
-  const CatItem *ci = cat_item(idx);
-  if (ci && ci->sinopse[0]) {
-    txt_bloco(TXT_CAPTION, ci->sinopse, 202, 204, 212, r.x, r.y,
-              NV_TELA_W - NV_MARGEM_X * 2, NV_LD_CAPTION, a * 0.92f, 6);
-    return;
-  }
-  { float y = r.y;
-    int k;
-    for (k = 0; k < (int)(sizeof SOBRE / sizeof *SOBRE); k++) {
-      TxtLinha l = txt_linha(TXT_CAPTION, SOBRE[k], 202, 204, 212, 255);
-      txt_desenhar_alpha(l, r.x, y, a * 0.92f);
-      y += NV_LD_CAPTION;
+  // Titulo: 32/800. O 800 nao existe na familia embarcada e o 32 so existe em
+  // Regular na tabela de estilos, entao vem de tres passadas.
+  { TxtLinha l = txt_linha_corta(TXT_PLR_CORPO, epNome, 255, 255, 255, 255,
+                                 NV_DETP_EP_TEXTO_W);
+    txt_peso(l, tx, r.y + NV_DETP_EP_TIT_Y, a, 1.4f); }
+
+  // Sinopse: 28/400 em rgba(255,255,255,0.9), duas linhas.
+  txt_bloco(TXT_DET_SIN, epSin, 255, 255, 255, tx, r.y + NV_DETP_EP_SIN_Y,
+            NV_DETP_EP_TEXTO_W, NV_DETP_EP_LD_SIN, a * 0.9f, 2);
+
+  // Meta: relogio + duracao + data, 20/400 rgb(179,179,179), com 38 de folga
+  // entre os dois blocos.
+  { float x = tx, y = r.y + NV_DETP_EP_META_Y;
+    // Relogio de 28x28: aro e dois ponteiros. Sem glifo, pelo mesmo motivo do
+    // "+" dos botoes circulares.
+    GfxRect aro = { x, y, NV_DETP_EP_ICONE, NV_DETP_EP_ICONE };
+    GfxRect miolo = { x + 3, y + 3, NV_DETP_EP_ICONE - 6, NV_DETP_EP_ICONE - 6 };
+    gfx_cor(aro, 0.5f, 0.70f, 0.70f, 0.70f, a);
+    gfx_cor(miolo, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f);
+    float cx = x + NV_DETP_EP_ICONE * 0.5f, cy = y + NV_DETP_EP_ICONE * 0.5f;
+    GfxRect pv = { cx - 1, cy - 8, 2, 9 };
+    GfxRect ph = { cx - 1, cy - 1, 7, 2 };
+    gfx_cor(pv, 0.0f, 0.70f, 0.70f, 0.70f, a);
+    gfx_cor(ph, 0.0f, 0.70f, 0.70f, 0.70f, a);
+    x += NV_DETP_EP_ICONE + 8.0f;
+    TxtLinha ld = txt_linha(TXT_CAPTION2, epDur, 179, 179, 179, 255);
+    txt_desenhar_alpha(ld, x, y, a);
+    x += ld.w + NV_DETP_SEP;
+    TxtLinha lf = txt_linha(TXT_CAPTION2, epData, 179, 179, 179, 255);
+    txt_desenhar_alpha(lf, x, y, a); }
+
+  // Barra de progresso: 576x8 a 16px da base da miniatura, trilho
+  // rgba(0,0,0,0.45) e preenchimento rgb(158,158,158). So aparece entre 2% e
+  // 98% — e o mesmo intervalo do web, e e o que faz um episodio recem-comecado
+  // nao ganhar uma barra de largura zero.
+  { int prog = 0;
+    const CatItem *ci = cat_item(idx);
+    if (ci && ci->progresso > 0 && ep && ci->temporada == ep->temporada &&
+        ci->episodio == ep->episodio) prog = ci->progresso;
+    if (prog > 2 && prog < 98) {
+      GfxRect tr = { tx, r.y + NV_DETP_EP_BARRA_Y, NV_DETP_EP_TEXTO_W,
+                     NV_DETP_EP_BARRA_H };
+      GfxRect at = { tr.x, tr.y, tr.w * (prog / 100.0f), tr.h };
+      gfx_cor(tr, 0.5f, 0, 0, 0, 0.45f * a);
+      gfx_cor(at, 0.5f, 0.62f, 0.62f, 0.62f, a);
     } }
 }
 
-static void desenhaElenco(GfxRect r, int c, float f, float a) {
+// Abas de informacao: texto puro, sem pilula. Escolhida (ou focada) em branco,
+// as outras em #808080; o divisor "|" e 32/700 #808080. O foco no web e
+// `transform: scale(1.03)` — o unico lugar desta tela que escala.
+static void desenhaAbaInfo(float x, float y, int i, float f, float a) {
+  int sel = (i == abaInfo);
+  int base = sel ? 255 : 128;
+  int cor = (int)(base + (255 - base) * f);
+  TxtLinha l = txt_linha(TXT_PLR_CORPO, ABAS_INFO[i], cor, cor, cor, 255);
+  txt_peso(l, x, y + (NV_DETP_ABA_H - l.h) * 0.5f, a, 0.5f + f * 0.6f);
+}
+
+// Elenco: avatar redondo de 140 ALINHADO A ESQUERDA do card de 220 (nao
+// centralizado, que era o desenho anterior), nome 26/500 rgb(179,179,179) e
+// papel 21/400 rgb(128,128,128) abaixo dele.
+static void desenhaElenco(float x, float y, int c, float f, float a) {
   const CatItem *ci = cat_item(idx);
   const char *nome = NULL, *papel = NULL, *foto = NULL;
   if (ci && c < ci->nElenco) {
@@ -754,140 +893,103 @@ static void desenhaElenco(GfxRect r, int c, float f, float a) {
     papel = ci->elenco[c].papel;
     if (ci->elenco[c].foto[0]) foto = ci->elenco[c].foto;
   }
-  // Havendo elenco de verdade, mostrar SO ele. Completar com o vetor de exemplo
-  // punha tres atores reais ao lado de tres inventados na mesma fileira, o que
-  // e pior que uma fileira curta.
-  { const CatItem *ce = cat_item(idx);
-    if (ce && ce->nElenco > 0 && c >= ce->nElenco) return; }
+  if (ci && ci->nElenco > 0 && c >= ci->nElenco) return;
   if (!nome) { int e = c % N_ELENCO; nome = ELENCO[e][0]; papel = ELENCO[e][1]; }
 
+  GfxRect av = { x, y, NV_DETP_EL_AVATAR, NV_DETP_EL_AVATAR };
+  if (f > 0.01f) {
+    GfxRect anel = { av.x - NV_DETP_ANEL, av.y - NV_DETP_ANEL,
+                     av.w + NV_DETP_ANEL * 2, av.h + NV_DETP_ANEL * 2 };
+    gfx_cor(anel, 0.5f, 1, 1, 1, f * a);
+  }
   GLuint t2 = foto ? tex_obter(foto) : 0;
   if (t2) {
     gfx_tex_aspect_atual = tex_aspecto(foto);
-    gfx_rect(r, t2, GFX_CARD, f, 0, 0, 0.5f, 0, 0, 0, a);
+    gfx_rect(av, t2, GFX_CARD, 0, 0, 0, 0.5f, 0, 0, 0, a);
     gfx_tex_aspect_atual = 0.0f;
   } else {
-    // Sem foto, um circulo com a inicial — melhor que um buraco cinza, e e o
-    // que a propria Apple mostra quando o ator nao tem retrato.
-    gfx_cor(r, 0.5f, 0.20f, 0.20f, 0.23f, a);
+    // Sem foto, a inicial sobre #222 (#303030 com foco) — e o que o web faz
+    // com `.movie-cast-avatar-fallback`.
+    float lum = 0.133f + 0.055f * f;
+    gfx_cor(av, 0.5f, lum, lum, lum, a);
     char ini[5] = {0};
     for (int k = 0; k < 4 && nome[k] && (unsigned char)nome[k] >= 0x20; k++) {
       ini[k] = nome[k];
       if ((nome[k] & 0xC0) != 0x80) { if (k) { ini[k] = 0; break; } }
     }
     TxtLinha li = txt_linha(TXT_TITULO3, ini, 210, 212, 220, 255);
-    txt_desenhar_alpha(li, r.x + (r.w - li.w) * 0.5f, r.y + (r.h - li.h) * 0.5f, a * 0.9f);
+    txt_desenhar_alpha(li, av.x + (av.w - li.w) * 0.5f,
+                       av.y + (av.h - li.h) * 0.5f, a * 0.9f);
   }
-  TxtLinha ln = txt_linha(TXT_CAPTION2, nome, 255, 255, 255, 255);
-  TxtLinha lp = txt_linha(TXT_CAPTION2, papel && papel[0] ? papel : " ", 165, 167, 175, 255);
-  txt_desenhar_alpha(ln, r.x + (r.w - ln.w) * 0.5f, r.y + r.h + 14, a);
-  txt_desenhar_alpha(lp, r.x + (r.w - lp.w) * 0.5f, r.y + r.h + 14 + ln.h + 4, a * 0.9f);
+  float yn = y + NV_DETP_EL_AVATAR + NV_DETP_EL_NOME_DY;
+  TxtLinha ln = txt_linha_corta(TXT_CALLOUT, nome, 179, 179, 179, 255, NV_DETP_EL_W);
+  txt_desenhar_alpha(ln, x, yn, a);
+  if (papel && papel[0]) {
+    TxtLinha lp = txt_linha_corta(TXT_CAPTION2, papel, 128, 128, 128, 255,
+                                  NV_DETP_EL_W);
+    txt_desenhar_alpha(lp, x, yn + NV_DETP_EL_PAPEL_DY, a * 0.95f);
+  }
 }
 
-static void secao(int r, float y, float a, Uint32 agora) {
-  TipoSecao tipo = SECOES[r].tipo;
-  // Secao sem itens: o titulo desenharia uma promessa sem card embaixo dela.
-  if (tipo == SEC_ONDE && secaoN(r) == 0) return;
-  // O que sobe para baixo do cabecalho fixo desaparece antes de cruza-lo. Sem
-  // isso, as abas subiam ate a linha do titulo e os dois textos se liam um
-  // sobre o outro — a faixa escura sozinha nao resolvia.
-  float somem = anim_clamp((y - (NV_PG_TOPO + 34.0f)) / 90.0f, 0.0f, 1.0f);
-  a *= somem;
-  if (a <= 0.005f) return;
-  float lh = alturaSecao(r), lw = larguraSecao(tipo), passo = passoSecao(tipo);
-  if (y > NV_TELA_H || y + lh < -80) return;
-
-  if (SECOES[r].titulo) {
-    TxtLinha tl = txt_linha(TXT_HEADLINE, SECOES[r].titulo, 255, 255, 255, 255);
-    txt_desenhar_alpha(tl, NV_MARGEM_X, y - tl.h - NV_PG_SEC_CARDS, a);
+static void desenhaSecao(int r, float a, Uint32 agora) {
+  int n = secaoN(r);
+  if (n <= 0) return;
+  float y;
+  switch (r) {
+    case SEC_TEMPORADAS: y = NV_DETP_TEMP_Y; break;
+    case SEC_EPISODIOS:  y = NV_DETP_EP_Y;   break;
+    case SEC_ABAS_INFO:  y = NV_DETP_ABA_Y;  break;
+    default:             y = NV_DETP_EL_Y;   break;
   }
-  for (int passe = 0; passe < 2; passe++)
-    for (int c = 0; c < secaoN(r); c++) {
-      float f = animFoco[r][c];
-      if (passe == 0 && f < 0.01f) continue;
-      // "Sobre" e um bloco de texto, nao um objeto: crescer com o foco empurra
-      // a coluna inteira para fora da margem esquerda, porque a largura dela e
-      // a tela inteira menos as margens.
-      float esc = (tipo == SEC_SOBRE) ? 1.0f
-                : 1.0f + (tipo == SEC_ELENCO ? NV_FOCO_ESCALA_P : NV_FOCO_ESCALA) * f;
-      float w = lw * esc;
-      float cx = NV_MARGEM_X + c * passo - scrollSec[r] + lw * 0.5f;
-      if (cx < -lw || cx > NV_TELA_W + lw) continue;
-      // Altura do OBJETO focavel, que nem sempre e a altura da secao: no
-      // episodio so a miniatura recebe foco e sombra, nao o bloco de texto
-      // embaixo dela. Usar a altura da secao aqui punha a sombra atras do texto.
-      float hObj;
-      switch (tipo) {
-        case SEC_ABAS:      hObj = NV_ABA_H * esc;        break;
-        case SEC_ELENCO:    hObj = lw * esc;              break;   // circulo
-        case SEC_ONDE:      hObj = NV_ONDE_H * esc;       break;
-        case SEC_EPISODIOS: hObj = w * 9.0f / 16.0f;      break;   // so a miniatura
-        case SEC_SOBRE:     hObj = NV_SOBRE_H;            break;
-        default:            hObj = NV_CARD_H * esc;       break;
-      }
-      // O item em foco sobe alguns px: no tvOS o objeto nao so cresce, ele se
-      // levanta em direcao ao espectador, e a sombra cai por baixo.
-      float px = cx - w * 0.5f, py = y - NV_FOCO_LIFT * f;
-      GfxRect r2 = { px, py, w, hObj };
-      // NENHUMA secao da pagina usa sombra. A sombra e feita para separar um
-      // card claro de um fundo escuro — que e o caso da home. Aqui o fundo e a
-      // arte desfocada, quase sempre clara, e a mancha escura em volta do item
-      // focado le como halo sujo. O foco se marca por escala, pelo painel do
-      // episodio e pelo brilho do proprio card.
-      if (passe == 0) continue;
+  y -= scrollY;
+  float alt = (r == SEC_EPISODIOS) ? NV_DETP_EP_H
+            : (r == SEC_ELENCO)    ? 257.0f
+            : NV_DETP_TEMP_H;
+  if (y > NV_TELA_H || y + alt < -40.0f) return;
 
-      switch (tipo) {
-        case SEC_ABAS:      desenhaAba(r2, c, f, a); break;
-        case SEC_EPISODIOS: { GfxRect e = { px, py, w, lh }; desenhaEpisodio(e, c, f, a, agora); break; }
-        case SEC_ELENCO:    desenhaElenco(r2, c, f, a); break;
-        case SEC_ONDE:      desenhaOnde(r2, c, f, a); break;
-        case SEC_SOBRE:     desenhaSobre(r2, a); break;
-        default: {
-          // "Voce tambem pode gostar" mostra titulos DE VERDADE parecidos com
-          // o aberto; "Trailers" continua com arte do acervo, porque nao ha
-          // trailer nenhum para mostrar e fingir um seria pior.
-          const char *caminho;
-          const CatItem *simItem = NULL;
-          if (r == SEC_SIMILARES) {
-            static int sims[N_SUG];
-            static int nSims, simDe = -1;
-            if (simDe != idx) { nSims = cat_similares(idx, sims, N_SUG); simDe = idx; }
-            if (c < nSims) simItem = cat_item(sims[c]);
-          }
-          caminho = (simItem && simItem->backdrop[0]) ? simItem->backdrop
-                  : home_arte(r * 5 + c * 3);
-          GLuint tc = caminho ? tex_obter(caminho) : 0;
-          if (tc) {
-            float fase = agora / 1000.0f + (r * 3 + c) * 0.6f;
-            gfx_tex_aspect_atual = tex_aspecto(caminho);
-            gfx_rect(r2, tc, GFX_CARD, f, sinf(fase) * 0.010f * f,
-                     cosf(fase * 0.8f) * 0.006f * f, NV_RAIO_CARD, 0, 0, 0, a);
-            gfx_tex_aspect_atual = 0.0f;
-          } else gfx_cor(r2, NV_RAIO_CARD, 0.14f, 0.14f, 0.16f, a);
-          // Logo do titulo sobre a arte, como na home: sem ele o card de
-          // similar e uma imagem sem nome, e o dono nao sabe o que esta vendo.
-          // O veu na base e o que mantem o logo legivel em arte clara.
-          if (simItem && simItem->logo[0]) {
-            GLuint tl = tex_obter(simItem->logo);
-            if (tl) {
-              float lw2 = w * 0.52f, lh2 = hObj * 0.30f;
-              GfxRect rl = { r2.x + 16, r2.y + hObj - lh2 - 14, lw2, lh2 };
-              gfx_rect(r2, 0, GFX_VEU, 0, 0, 0, NV_RAIO_CARD, 0, 0, 0, 0.5f * a);
-              gfx_tex_aspect_atual = 0.0f;   // o logo ja vem na proporcao certa
-              gfx_rect(rl, tl, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, a);
-            }
-          }
-        }
+  for (int c = 0; c < n && c < N_ITENS; c++) {
+    float f = animFoco[r][c];
+    float x = xItem(r, c) - scrollSec[r];
+    float w = larguraItem(r, c);
+    if (x > NV_TELA_W || x + w < -w) continue;
+    switch (r) {
+      case SEC_TEMPORADAS: {
+        GfxRect b = { x, y, w, NV_DETP_TEMP_H };
+        desenhaTemporada(b, c, f, a); break;
       }
+      case SEC_EPISODIOS: {
+        GfxRect b = { x, y, NV_DETP_EP_W, NV_DETP_EP_H };
+        desenhaEpisodio(b, c, f, a, agora); break;
+      }
+      case SEC_ABAS_INFO: {
+        desenhaAbaInfo(x, y, c, f, a);
+        if (c + 1 < n) {
+          TxtLinha d = txt_linha(TXT_PLR_CORPO, "|", 128, 128, 128, 255);
+          txt_peso(d, x + w + NV_DETP_ABA_SEP,
+                   y + (NV_DETP_ABA_H - d.h) * 0.5f, a, 1.4f);
+        }
+        break;
+      }
+      default: desenhaElenco(x, y, c, f, a); break;
     }
+  }
+
+  // Aba de informacao que nao seja "Criador e elenco": o web troca o conteudo
+  // da secao (avaliacoes por episodio, fileira de similares, trailer). Nenhum
+  // desses dados existe no catalogo nativo — e inventar uma fileira seria pior
+  // que dizer que nao ha. O web mostra exatamente esta linha quando o dado
+  // falta (`.series-insight-empty`).
+  if (r == SEC_ELENCO && abaInfo != 0) {
+    TxtLinha l = txt_linha(TXT_DET_SIN, "Sem informacao para esta aba.",
+                           128, 128, 128, 255);
+    txt_desenhar_alpha(l, NV_DETP_X, y + 40.0f, a);
+  }
 }
 
 void detail_desenhar(Uint32 agora) {
   if (!aberto) return;
   float s = suave(t), a2 = fase2();
 
-  // O que cerca a tela ENQUANTO ela cresce. Assim que o backdrop cobre tudo
-  // isto some, e a home nem chega a ser desenhada (detail_cobre_tela).
   if (!detail_cobre_tela()) {
     GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
     gfx_cor(tela, 0.0f, 0.051f, 0.051f, 0.051f, s);   // #0d0d0d, o fundo do web
@@ -897,9 +999,8 @@ void detail_desenhar(Uint32 agora) {
   // --- backdrop full-bleed --------------------------------------------------
   // A tela de detalhe do web e uma imagem de 1920x1080 em (0,0) com a vinheta
   // horizontal por cima; nao ha cartao, nem moldura, nem titulos vizinhos. O
-  // unico movimento que sobra do port anterior e a ORIGEM: o retangulo cresce
-  // a partir do card que estava em foco na home, o que da continuidade a troca
-  // de tela. No repouso ele e exatamente a tela inteira.
+  // unico movimento que sobra do port anterior e a ORIGEM: o retangulo cresce a
+  // partir do card que estava em foco na home.
   GfxRect cheia = { 0, 0, NV_TELA_W, NV_TELA_H };
   GfxRect alvo = {
     anim_mistura(item.rect.x, cheia.x, s), anim_mistura(item.rect.y, cheia.y, s),
@@ -907,12 +1008,9 @@ void detail_desenhar(Uint32 agora) {
   };
   const char *arte = arteDe(idx);
   GLuint tex = arte ? tex_obter(arte) : 0;
-  // Ao rolar para as secoes, o web NAO desfoca a arte: ele a APAGA. MEDIDO na
-  // folha, em `.series-detail-shell.detail-scrolled` — o backdrop vai a
-  // `opacity: 0.15` e a vinheta a 0, ambos em 0.8s cubic-bezier(.4,0,.2,1). O
-  // desfoque gaussiano com escurecimento que estava aqui e do app da Apple TV,
-  // custa duas passadas de tela cheia por quadro, e some com a cor da arte —
-  // que no web continua la, so que fraca.
+  // Ao rolar, o web NAO desfoca a arte: ele a APAGA. Medido em
+  // `.series-detail-shell.detail-scrolled` — o backdrop vai a `opacity: 0.15` e
+  // a vinheta a 0, ambos em 0.8s cubic-bezier(.4,0,.2,1).
   if (pg > 0.01f) {
     GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
     gfx_cor(tela, 0.0f, 0.051f, 0.051f, 0.051f, pg);
@@ -925,63 +1023,21 @@ void detail_desenhar(Uint32 agora) {
   } else {
     gfx_cor(alvo, 0.0f, 0.051f, 0.051f, 0.051f, 1.0f);
   }
-  (void)arteBorrada;
 
-  // Coluna de conteudo. Sai de cena quando a pagina toma o lugar.
-  heroWeb(a2 * (1.0f - pg));
+  // O hero ROLA com o documento: ele nao some nem e substituido por um
+  // cabecalho fixo. Era isso que fazia a pagina do port parecer outra tela em
+  // vez da mesma tela rolada.
+  heroWeb(a2, -scrollY);
 
-  if (pg <= 0.01f) return;
-
-  // --- pagina esticada: titulo centralizado no topo e as secoes ---
-  // Faixa escura no topo, sob o cabecalho. O cabecalho e fixo e o conteudo
-  // rola por baixo dele; sem a faixa, as abas subiam e cruzavam o titulo, e as
-  // duas coisas ficavam ilegiveis uma sobre a outra.
-  // A faixa so precisa existir quando algo esta subindo por baixo do
-  // cabecalho. Fixa e opaca, como estava, ela punha uma barra preta no topo de
-  // uma pagina que no original e clara ali.
-  float precisaFaixa = anim_clamp(scrollY / 120.0f, 0.0f, 1.0f);
-  if (precisaFaixa > 0.01f) {
-    GfxRect faixa = { 0, 0, NV_TELA_W, NV_PG_TOPO + 78.0f };
-    gfx_rect(faixa, 0, GFX_VEU_TOPO, 0, 0, 0, 0.0f, 0, 0, 0, pg * 0.80f * precisaFaixa);
-  }
-
-  // Cabecalho da pagina: o LOGO do titulo, centralizado — igual ao cartao. O
-  // texto em maiusculas com tracking so entra quando o titulo nao tem logo; ele
-  // imita a forma, mas nao a identidade de cada producao.
-  const char *logoCab = logoDe(idx);
-  GLuint texCab = logoCab ? tex_obter(logoCab) : 0;
-  if (texCab) {
-    float asp = tex_aspecto(logoCab);
-    if (asp <= 0.0f) asp = 4.0f;
-    float h = NV_LOGO_CAB_H, w = h * asp;
-    if (w > NV_LOGO_CAB_MAX_W) { w = NV_LOGO_CAB_MAX_W; h = w / asp; }
-    GfxRect r = { (NV_TELA_W - w) * 0.5f, NV_PG_TOPO, w, h };
-    gfx_tex_aspect_atual = 0.0f;
-    gfx_rect(r, texCab, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, pg);
-  } else {
-    char cab[64]; int k = 0;
-    for (const char *q = tituloDe(idx); *q && k < 62; q++, k++)
-      cab[k] = (*q >= 'a' && *q <= 'z') ? (char)(*q - 32) : *q;
-    cab[k] = 0;
-    float lcab = txt_tracking(TXT_TITULO2, cab, 255, 255, 255, -1, 0, 0, NV_TRACKING_CAB);
-    txt_tracking(TXT_TITULO2, cab, 255, 255, 255,
-                 (NV_TELA_W - lcab) * 0.5f, NV_PG_TOPO, pg, NV_TRACKING_CAB);
-  }
-  // As secoes entram subindo: continuam o movimento do cartao esticando, em
-  // vez de piscarem no lugar final ja formadas.
-  float y = NV_PG_TOPO + 42.0f + NV_PG_TIT_ABAS + (1.0f - pg) * 300.0f - scrollY;
-  for (int r = 0; r < N_SECOES; r++) {
-    secao(r, y, pg, agora);
-    // O espaco grande pertence a secao SEGUINTE (e o respiro antes do
-    // cabecalho dela), nao a atual. Medindo pela atual, a fileira de episodios
-    // — que nao tem cabecalho proprio — colava no titulo "Trailers".
-    int proxTemTitulo = (r + 1 < N_SECOES) && SECOES[r + 1].titulo;
-    y += alturaSecao(r) + (proxTemTitulo ? NV_PG_ENTRE_SEC : 26.0f);
-  }
+  if (pg <= 0.01f && scrollY < 1.0f) return;
+  for (int r = 0; r < N_SECOES; r++) desenhaSecao(r, pg, agora);
 }
 
 int detail_indice(void) { return idx; }
 int detail_pediu_reproduzir(void) { int v = pedReproduzir; pedReproduzir = 0; return v; }
 int detail_pediu_marcar(void)     { int v = pedMarcar;     pedMarcar = 0;     return v; }
-
-int detail_pediu_fontes(void) { int v = pedFontes; pedFontes = 0; return v; }
+int detail_pediu_fontes(void)     { int v = pedFontes;     pedFontes = 0;     return v; }
+// "Reproduzir desde o inicio" ainda cai no mesmo caminho do primario: o
+// roteador so sabe abrir o player no ponto salvo. Consumir o pedido aqui evita
+// que ele fique pendurado.
+int detail_pediu_do_inicio(void)  { int v = pedDoInicio;   pedDoInicio = 0;   return v; }
