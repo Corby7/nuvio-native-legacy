@@ -36,6 +36,29 @@
 // A sinopse fica em 411 nos DOIS modos; so o que esta acima dela se desloca.
 #define NV_HERO_CHEIO_LOGO_Y     65.0f
 #define NV_HERO_CHEIO_META_Y    257.0f
+// Em tela cheia o logo pode ser BEM maior: 640 de largura contra os 440 do hero
+// de faixa. MEDIDO na sessao logada (.home-hero-logo = 640x160 em 104,65). O
+// port limitava a 440 nos dois modos, e era isso que deixava a arte do titulo
+// pequena — um dos pontos que o dono levantou olhando a referencia.
+#define NV_LOGO_HERO_CHEIO_MAX_W 640.0f
+// LINHA SECUNDARIA, que so existe em tela cheia: "2H RESTANTES • 6.3 • EN".
+// y=341, altura 38, fonte 18 peso 600, rgba(255,255,255,0.88). Fica ENTRE a
+// linha de meta (257) e a sinopse (411); sem ela sobrava um vao no meio do
+// bloco, que e parte do que se lia como espacamento errado.
+#define NV_HERO_CHEIO_SEC_Y     341.0f
+// Respiro entre a base do bloco de texto do hero e o titulo da primeira
+// fileira, e entre as linhas do proprio bloco. Vem da diferenca medida nas
+// capturas: a sinopse termina ~48px acima do titulo da fileira, e as linhas do
+// bloco se separam por ~52.
+// Bloco de texto do hero, LIDO do CSS do app web e nao estimado das capturas.
+// `.home-modern-hero-copy` (components.css:6723) e um flex column com
+// justify-content:flex-end e gap:16 — ou seja ANCORADO NA BASE, e as linhas se
+// separam por 16, nao pelos 52/84 que eu tinha deduzido de imagem. A base:
+//   bottom: var(--modern-rows-viewport-height) + var(--modern-hero-copy-bottom-gap)
+//         = 52% de 1080 + 40 = 601,6  ->  base do bloco em y = 478,4
+// e o topo das fileiras cai nos mesmos 518,4 que NV_SHELF_TOP ja usa.
+#define NV_HERO_COPY_GAP        40.0f   // --modern-hero-copy-bottom-gap
+#define NV_HERO_COPY_LINHA      16.0f   // gap do flex column
 
 // Scancode do BACK no SDL da LG (SDL_SCANCODE_WEBOS_BACK). Nao esta no
 // SDL_scancode.h padrao, por isso vem como numero.
@@ -82,8 +105,12 @@
 #define NV_HERO_ARTE_X   555.0f
 #define NV_HERO_ARTE_W  1421.0f
 #define NV_HERO_ARTE_H   670.0f
-// MEDIDO no app web: .home-hero-logo ocupa 440x160 em x=248, y=135.
-#define NV_LOGO_HERO_H   160.0f
+// CSS (components.css:6755): .home-hero-logo em modern tem height E max-height
+// --modern-hero-logo-max-height (200px), width min(100%, 440px), object-fit
+// contain com object-position LEFT TOP. Ou seja a caixa mede sempre 440x200 e
+// a arte encosta no TOPO dela — nao cresce a partir da base, que era o que o
+// port fazia. 160 era medida de uma arte concreta, nao da caixa.
+#define NV_LOGO_HERO_H   200.0f
 #define NV_LOGO_HERO_MAX_W 440.0f
 // Posicoes ABSOLUTAS do bloco de texto do hero, medidas no app web com a home
 // no topo. Antes isto era ancorado na BASE (base = 1080 - NV_HERO_BASE) e
@@ -97,7 +124,14 @@
 #define NV_HERO_LOGO_Y   135.0f
 #define NV_HERO_META_Y   327.0f
 #define NV_HERO_SIN_Y    411.0f
+// 560 e o valor do tema padrao; a TV cai na regra `.legacy-webos`
+// (components.css:19171), que devolve 640 para meta, secundaria E sinopse — com
+// 560 a linha de meta de um episodio quebrava em duas ou tres linhas.
 #define NV_HERO_SIN_W    640.0f
+// line-height do CSS: sinopse 22*1.35, meta 21*1.25, secundaria 18*1.35.
+#define NV_LD_HERO_SIN   30
+#define NV_LD_HERO_META  26
+#define NV_LD_HERO_SEC   24
 // MEDIDO no app web: o titulo da primeira fileira fica em y=518 e os cards em
 // y=564. A regra dos "2/3 da tela" que estava aqui e do productTemplate do
 // tvOS, e nao e a nossa: no web as fileiras sobem por cima da parte de baixo da
@@ -223,6 +257,10 @@
 // .home-row-title do web: 26px, peso 600. O nativo usava HEADLINE (38), e era
 // isso que fazia o titulo da fileira invadir o card logo abaixo dele.
 #define NV_FT_ROW_TITULO 26
+// .home-modern-hero-secondary: 18/600 na sessao logada.
+#define NV_FT_HERO_SEC   18   // --modern-hero-secondary-size (212*0.085)
+#define NV_FT_HERO_META  21   // --modern-hero-meta-size (212*0.1), peso 500
+#define NV_FT_HERO_SIN   22   // --modern-hero-description-size, peso 400
 // Tela de DETALHE, medidos no app web rodando (getBoundingClientRect e
 // getComputedStyle sobre .series-detail-shell), nao lidos da folha.
 #define NV_FT_DET_BOTAO  25   // .series-primary-btn (peso 600)

@@ -82,6 +82,9 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_PLR_TITULO, PESO_BOLD    },
   { NV_FT_PLR_CORPO,  PESO_REGULAR },
   { NV_FT_ROW_TITULO, PESO_BOLD    },  // .home-row-title (600)
+  // Linha secundaria do hero em tela cheia. 600 sobre fundo escuro: Bold,
+  // pela mesma regra optica ja escrita acima.
+  { NV_FT_HERO_SEC,   PESO_BOLD    },
   // Tela de detalhe, medidos no app web. O peso 600 do rotulo do botao nao
   // existe no pacote da Inter embarcada (so Regular, Medium e Bold): fica em
   // MEDIUM, que erra 100 para baixo, e nao em Bold, que erraria 100 para cima e
@@ -90,6 +93,8 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_DET_META,  PESO_REGULAR },
   { NV_FT_DET_SIN,   PESO_REGULAR },
   { NV_FT_DET_META2, PESO_REGULAR },
+  { NV_FT_HERO_META, PESO_MEDIUM  },   // .home-modern-hero-meta-line (21/500)
+  { NV_FT_HERO_SIN,  PESO_REGULAR },   // .home-hero-description (22/400)
 };
 
 int txt_iniciar(const char *dirRecursos) {

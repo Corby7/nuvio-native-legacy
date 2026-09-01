@@ -357,26 +357,25 @@ void home_atualizar(float dt, Uint32 agora) {
     }
   }
 
-  // O viewport legacy começa abaixo do hero. Quando o foco desce, a camera move
-  // apenas o mínimo para manter a fileira dentro da metade inferior.
+  // A FILEIRA EM FOCO FICA SEMPRE NO MESMO Y, e as de cima SOMEM.
+  //
+  // Observado nas duas capturas de referencia do dono: com o foco em "Continuar
+  // assistindo" esse titulo aparece na mesma altura em que, ao descer uma
+  // fileira, aparece "For You - Filme". A fileira anterior nao sobe — ela deixa
+  // de ser desenhada. Palavras dele: "quando desce uma linha as coisas somem e
+  // nao sobem".
+  //
+  // O que estava aqui era uma CAMERA: mantinha a fileira em foco dentro de um
+  // viewport e rolava o minimo necessario. Isso desliza tudo para cima, e foi o
+  // que fez o texto do hero passar por cima do titulo da fileira.
+  //
+  // O deslocamento e a soma das fileiras ANTES da que tem foco, entao o topo da
+  // focada cai exatamente em NV_SHELF_TOP. Continua com mola: o salto seco
+  // entre fileiras de alturas diferentes le como corte, nao como navegacao.
   float alvoY = 0.0f;
-  if (foco.fileira > 0) {
-    int r = foco.fileira;
-    float topo = NV_SHELF_TOP;
-    for (int i = 0; i < r; i++) {
-      topo += NV_LEGACY_ROW_HEAD_H + alturaTotalDe(fileiras[i].tipo) + fileiraGap();
-    }
-    float hFoco = alturaTotalDe(fileiras[r].tipo);
-    float cardTopo = topo + NV_LEGACY_ROW_HEAD_H;
-    float viewportTop = NV_SHELF_TOP + NV_LEGACY_ROW_HEAD_H;
-    float viewportBottom = NV_TELA_H - NV_MARGEM_Y;
-    float alvo = scrollY;
-    if (cardTopo - alvo < viewportTop) alvo = cardTopo - viewportTop;
-    if (cardTopo + hFoco - alvo > viewportBottom) {
-      alvo = cardTopo + hFoco - viewportBottom;
-    }
-    if (alvo < 0.0f) alvo = 0.0f;
-    alvoY = alvo;
+  { int r = foco.fileira;
+    for (int i = 0; i < r && i < nFileiras; i++)
+      alvoY += NV_LEGACY_ROW_HEAD_H + alturaTotalDe(fileiras[i].tipo) + fileiraGap();
   }
   scrollY = anim_mola(scrollY, alvoY, dt, NV_MOLA_SCROLL);
 }
@@ -397,7 +396,6 @@ static void desenhaHero(Uint32 agora) {
   // degrade, medida separadamente (ver GFX_HERO e GFX_HERO_CHEIO em gfx.c).
   int cheio = ajustes_hero_cheio();
   // Em tela cheia o bloco sobe 70px (ver layout.h).
-  float logoY = cheio ? NV_HERO_CHEIO_LOGO_Y : NV_HERO_LOGO_Y;
   GfxModo modoHero = cheio ? GFX_HERO_CHEIO : GFX_HERO;
   GfxRect r = cheio ? (GfxRect){ 0, 0, NV_TELA_W, NV_HERO_CHEIO_H }
                     : (GfxRect){ NV_HERO_ARTE_X, 0, NV_HERO_ARTE_W, NV_HERO_ARTE_H };
@@ -422,63 +420,135 @@ static void desenhaHero(Uint32 agora) {
 
   float aTexto = 1.0f;
 
-  TxtLinha sub = txt_linha(TXT_CAPTION, (ci && ci->genero[0]) ? ci->genero
-                           : "Programa de TV  \xc2\xb7  Suspense", 226, 228, 233, 255);
-  // A linha de genero comeca com o LOGO DO SERVICO e termina com a
-  // classificacao — e nessa ordem que ela aparece no aparelho.
-  float wServ = 0.0f;
-  GLuint tserv = (ci && ci->provLogo[0]) ? tex_obter(ci->provLogo) : 0;
-  if (tserv) {
-    float ap = tex_aspecto(ci->provLogo);
-    if (ap <= 0.0f) ap = 1.0f;
-    wServ = sub.h * 1.15f * ap + 14.0f;
-  }
-  const char *sinopse = (ci && ci->sinopse[0]) ? ci->sinopse : "Novos episodios as sextas.";
-  float largSin = NV_HERO_SIN_W;
+  // BLOCO DE TEXTO DO HERO — transcrito do CSS do app web, nao deduzido de
+  // captura. `.home-modern-hero-copy` e um flex column com justify-content
+  // flex-end e gap 16, ancorado numa base fixa; os filhos, na ordem:
+  //   .home-hero-brand         caixa do logo, 440x200, arte no topo-esquerda
+  //   .home-modern-hero-meta-line   21/500 #b3b3b3, tokens separados por •
+  //   .home-modern-hero-secondary   18/600 branco 88%, com selos e o IMDb
+  //   .home-hero-description        22/400 branco, largura 560, leading 30
+  // Cada bloco vazio some (`.is-empty { display: none }`), e e por isso que a
+  // altura do conjunto muda de titulo para titulo — nao por posicao absoluta.
+  //
+  // O conteudo de cada linha vem de buildModernHeroPresentation
+  // (homeScreen.js:2497), que separa o caso "continuar assistindo" do resto.
+  int contHero = (ci && ci->progresso > 0 && ci->restanteMin > 0);
 
-  // logo do titulo; nome em texto so quando o titulo nao tem logo. Ancorado no
-  // TOPO (NV_HERO_LOGO_Y), como o web — nao empilhado a partir da base.
+  // Linha de meta. No web sao tokens juntados por "•"; ci->genero ja chega
+  // como "Filme · Terror", que e o par (tipo, primeiro genero) do web.
+  char metaLinha[288];
+  metaLinha[0] = 0;
+  if (contHero && ci->temporada > 0) {
+    char cab[64];
+    snprintf(cab, sizeof cab, "S%d E%d", ci->temporada, ci->episodio);
+    snprintf(metaLinha, sizeof metaLinha, "%s%s%s", cab,
+             (ci->genero[0] ? "  \xc2\xb7  " : ""), ci->genero);
+  } else if (ci && ci->genero[0]) {
+    snprintf(metaLinha, sizeof metaLinha, "%s", ci->genero);
+  }
+  if (ci && ci->meta[0]) {
+    size_t n = strlen(metaLinha);
+    snprintf(metaLinha + n, sizeof metaLinha - n, "%s%s",
+             n ? "   \xe2\x80\xa2   " : "", ci->meta);
+  }
+
+  // Linha secundaria: destaque de progresso, selos e a nota do IMDb. O web so
+  // mostra o IMDb aqui quando ja existe destaque ou selo (showImdbSecondary);
+  // no outro caso ele vai para o fim da linha de meta.
+  char destaque[64];
+  destaque[0] = 0;
+  if (contHero) snprintf(destaque, sizeof destaque, "%d MINUTOS RESTANTES",
+                         ci->restanteMin);
+  const char *selo = (ci && ci->classificacao[0] && !contHero) ? ci->classificacao : NULL;
+  char nota[8];
+  nota[0] = 0;
+  if (ci && ci->nota > 0) snprintf(nota, sizeof nota, "%.1f", ci->nota / 10.0f);
+  int temSec = (destaque[0] || selo || nota[0]);
+
+  const char *sinopse = (ci && ci->sinopse[0]) ? ci->sinopse : "";
+
+  // --- empilhamento de baixo para cima, como o flex-end do CSS ---
+  float base = NV_SHELF_TOP - NV_HERO_COPY_GAP;
+  float hSin = sinopse[0] ? txt_bloco(TXT_HERO_SIN, sinopse, 255, 255, 255, -1, 0,
+                                      NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, 3)
+                          : 0.0f;
+  float ySin  = base - hSin;
+  float ySec  = temSec ? (ySin - (sinopse[0] ? NV_HERO_COPY_LINHA : 0.0f)
+                          - NV_LD_HERO_SEC) : ySin;
+  float yMeta = ySec - ((temSec || sinopse[0]) ? NV_HERO_COPY_LINHA : 0.0f)
+                - (metaLinha[0] ? NV_LD_HERO_META : 0.0f);
+  float logoY = yMeta - NV_HERO_COPY_LINHA - NV_LOGO_HERO_H;
+  float x = ajustes_conteudo_x();
+
+  // Logo do titulo, ou o nome em texto quando nao ha logo
+  // (.home-hero-title-text, 56/600 no modern — nao os 76 do TXT_TITULO1).
   GLuint tlogo = (ci && ci->logo[0]) ? tex_obter(ci->logo) : 0;
   if (tlogo) {
     float ap = tex_aspecto(ci->logo);
     if (ap <= 0.0f) ap = 4.0f;
-    float hTit = NV_LOGO_HERO_H;
-    float wTit = hTit * ap;
-    if (wTit > NV_LOGO_HERO_MAX_W) { wTit = NV_LOGO_HERO_MAX_W; hTit = wTit / ap; }
-    // O logo cresce para CIMA a partir da base da caixa reservada, para que um
-    // logo baixo e largo nao flutue no meio dela.
-    GfxRect rl = { ajustes_conteudo_x(),
-                   logoY + (NV_LOGO_HERO_H - hTit), wTit, hTit };
+    float hTit = NV_LOGO_HERO_H, wTit = hTit * ap;
+    float maxW = cheio ? NV_LOGO_HERO_CHEIO_MAX_W : NV_LOGO_HERO_MAX_W;
+    if (wTit > maxW) { wTit = maxW; hTit = wTit / ap; }
+    // object-position: left top — a arte encosta no TOPO da caixa.
+    GfxRect rl = { x, logoY, wTit, hTit };
     gfx_tex_aspect_atual = 0.0f;
     gfx_rect(rl, tlogo, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, aTexto * heroFade);
   } else {
-    // Sem logo o web usa .home-hero-title-text: 76px, peso 600. TITULO1 e 76.
+    // .legacy-webos .home-hero-title-text: 76px (components.css:19164), nao os
+    // 56 do tema padrao.
     TxtLinha tit = txt_linha(TXT_TITULO1, (ci && ci->titulo[0]) ? ci->titulo
                              : TITULOS_DEMO[heroAtual % 10], 255, 255, 255, 255);
-    txt_desenhar_alpha(tit, ajustes_conteudo_x(),
-                       NV_HERO_LOGO_Y + (NV_LOGO_HERO_H - (float)tit.h),
+    txt_desenhar_alpha(tit, x, logoY + NV_LOGO_HERO_H - (float)tit.h,
                        aTexto * heroFade);
   }
 
-  float y = cheio ? NV_HERO_CHEIO_META_Y : NV_HERO_META_Y;
-  if (tserv) {
-    float hs = sub.h * 1.15f;
-    GfxRect rs = { ajustes_conteudo_x(), y + (sub.h - hs) * 0.5f, wServ - 14.0f, hs };
-    gfx_tex_aspect_atual = 0.0f;
-    gfx_rect(rs, tserv, GFX_CARD, 0, 0, 0, 0.5f, 0, 0, 0, aTexto * heroFade);
+  if (metaLinha[0]) {
+    TxtLinha lm = txt_linha_corta(TXT_HERO_META, metaLinha, 179, 179, 179, 255,
+                                  NV_HERO_SIN_W);
+    txt_desenhar_alpha(lm, x, yMeta, aTexto * heroFade);
   }
-  txt_desenhar_alpha(sub, ajustes_conteudo_x() + wServ, y, aTexto * heroFade);
-  if (ci && ci->classificacao[0]) {
-    char cl[8]; snprintf(cl, sizeof cl, "A%s", ci->classificacao);
-    TxtLinha lb = txt_linha(TXT_MINI, cl, 255, 255, 255, 255);
-    GfxRect bg = { ajustes_conteudo_x() + wServ + sub.w + 14, y + (sub.h - lb.h) * 0.5f,
-                   lb.w + 8, lb.h + 2 };
-    gfx_cor(bg, 0.20f, 0.80f, 0.34f, 0.10f, 0.92f * aTexto * heroFade);
-    txt_desenhar_alpha(lb, bg.x + 4, bg.y + 1, aTexto * heroFade);
+
+  if (temSec) {
+    float cx = x;
+    float a = aTexto * heroFade;
+    if (destaque[0]) {
+      // .home-modern-hero-highlight: branco cheio, peso 600, tracking 0.04em.
+      cx += txt_tracking(TXT_HERO_SEC, destaque, 255, 255, 255, cx, ySec, a,
+                         NV_FT_HERO_SEC * 0.04f);
+      cx += 14.0f;
+    }
+    if (selo) {
+      // .home-modern-hero-badge: 40 de altura, raio 12, so a BORDA na cor de
+      // foco a 55%. Sem helper de contorno, a borda sai de quatro faixas.
+      TxtLinha lb = txt_linha(TXT_HERO_SEC, selo, 235, 235, 240, 255);
+      float bw = lb.w + 36.0f, bh = 40.0f, by = ySec - (bh - lb.h) * 0.5f;
+      float br = 0.35f, bg = 0.60f, bb = 1.00f, ba = 0.55f * a;
+      gfx_cor((GfxRect){ cx, by, bw, 2 }, 0, br, bg, bb, ba);
+      gfx_cor((GfxRect){ cx, by + bh - 2, bw, 2 }, 0, br, bg, bb, ba);
+      gfx_cor((GfxRect){ cx, by, 2, bh }, 0, br, bg, bb, ba);
+      gfx_cor((GfxRect){ cx + bw - 2, by, 2, bh }, 0, br, bg, bb, ba);
+      txt_desenhar_alpha(lb, cx + 18.0f, ySec, a);
+      cx += bw + 14.0f;
+    }
+    if (nota[0]) {
+      // .home-hero-imdb: o selo amarelo de 40px e a nota logo depois, com 10
+      // de respiro. O SVG do IMDb nao esta empacotado aqui; o retangulo
+      // amarelo com as letras pretas e a mesma leitura a esta escala.
+      TxtLinha ls = txt_linha(TXT_MINI, "IMDb", 8, 8, 8, 255);
+      float sw = 40.0f, sh = ls.h + 6.0f;
+      gfx_cor((GfxRect){ cx, ySec + (NV_LD_HERO_SEC - sh) * 0.5f, sw, sh },
+              0.12f, 0.96f, 0.78f, 0.06f, a);
+      txt_desenhar_alpha(ls, cx + (sw - ls.w) * 0.5f,
+                         ySec + (NV_LD_HERO_SEC - sh) * 0.5f + 3.0f, a);
+      cx += sw + 10.0f;
+      TxtLinha ln = txt_linha(TXT_HERO_SEC, nota, 179, 179, 179, 255);
+      txt_desenhar_alpha(ln, cx, ySec, a);
+    }
   }
-  txt_bloco(TXT_CAPTION, sinopse, 206, 208, 216, ajustes_conteudo_x(),
-            NV_HERO_SIN_Y, largSin,
-            NV_LD_CAPTION, aTexto * heroFade * 0.95f, 2);
+
+  if (sinopse[0])
+    txt_bloco(TXT_HERO_SIN, sinopse, 255, 255, 255, x, ySin, NV_HERO_SIN_W,
+              NV_LD_HERO_SIN, aTexto * heroFade, 3);
 }
 
 // Fundo CINZA, e so. Eu tinha posto aqui a arte do titulo em destaque
@@ -510,6 +580,13 @@ void home_desenhar(Uint32 agora) {
   float descida = pd * NV_TELA_H * 0.08f;
   if (pd >= 0.996f) return;   // detalhe assentado: nada da home aparece
 
+  // VIEWPORT DAS FILEIRAS. `.home-modern-rows-viewport` (components.css:6929) e
+  // um bloco absoluto com bottom:0, height 52% e overflow-y:auto — ou seja as
+  // fileiras rolam DENTRO dos 52% de baixo e o que sobe alem disso e CLIPADO.
+  // O port desenhava as fileiras soltas sobre a tela inteira, e por isso a
+  // fileira que saia por cima aparecia atravessada no bloco do hero em vez de
+  // sumir. O hero nao rola: so o conteudo dele muda com o foco.
+  gfx_recorte(0, NV_SHELF_TOP, NV_TELA_W, NV_TELA_H - NV_SHELF_TOP);
   float y = NV_SHELF_TOP - scrollY + descida;
   for (int r = 0; r < nFileiras; r++) {
     TipoFileira tipo = fileiras[r].tipo;
@@ -752,6 +829,7 @@ void home_desenhar(Uint32 agora) {
     }
     y += NV_LEGACY_ROW_HEAD_H + alturaTotalDe(tipo) + fileiraGap();
   }
+  gfx_sem_recorte();
 }
 
 void home_encerrar(void) {}
