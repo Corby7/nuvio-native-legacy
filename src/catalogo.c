@@ -1,0 +1,456 @@
+#include "catalogo.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+// Alocado conforme chega, nao dimensionado por um numero chutado.
+static CatItem *itens;
+static int nAlocado;
+
+// Garante espaco para `quero` itens. Devolve 0 se nao deu (e o chamador segue
+// com o que ja tinha, que e melhor que perder tudo).
+static void garantirFaixas(int quantos);
+
+static int garantirEspaco(int quero) {
+  CatItem *novo;
+  int alvo;
+  if (quero <= nAlocado) return 1;
+  if (quero > CAT_MAX) quero = CAT_MAX;
+  alvo = nAlocado ? nAlocado * 2 : 64;
+  while (alvo < quero) alvo *= 2;
+  novo = realloc(itens, sizeof(CatItem) * (size_t)alvo);
+  if (!novo) return 0;
+  memset(novo + nAlocado, 0, sizeof(CatItem) * (size_t)(alvo - nAlocado));
+  itens = novo;
+  nAlocado = alvo;
+  return 1;
+}
+static char dirGravacao[512];
+
+// Episodios de todos os titulos num vetor unico, com faixa por titulo. Uma
+// matriz [titulo][episodio] gastaria memoria pelo pior caso em 40 titulos dos
+// quais a maioria e filme e nao tem episodio nenhum.
+#define CAT_EP_MAX 600
+static CatEp eps[CAT_EP_MAX];
+// Faixas de episodio por titulo, do mesmo tamanho do vetor de itens — que
+// agora cresce, entao estes tambem.
+static int  *epIni, *epQtd, nEps;
+
+static void garantirFaixas(int quantos) {
+  int *a, *b;
+  if (quantos < 1) return;
+  a = realloc(epIni, sizeof(int) * (size_t)quantos);
+  b = realloc(epQtd, sizeof(int) * (size_t)quantos);
+  if (a) epIni = a;
+  if (b) epQtd = b;
+  if (epIni) memset(epIni, 0, sizeof(int) * (size_t)quantos);
+  if (epQtd) memset(epQtd, 0, sizeof(int) * (size_t)quantos);
+}
+static int n = 0;
+
+// Copia o campo ate o proximo '|' (ou fim de linha), sem estourar o destino.
+static const char *campo(const char *p, char *destino, size_t tam) {
+  size_t k = 0;
+  while (*p && *p != '|' && *p != '\n') {
+    if (k + 1 < tam) destino[k++] = *p;
+    p++;
+  }
+  destino[k] = 0;
+  return (*p == '|') ? p + 1 : p;
+}
+
+int cat_carregar(const char *dirArte) {
+  char caminho[600];
+  snprintf(caminho, sizeof caminho, "%s/catalogo.txt", dirArte);
+  FILE *f = fopen(caminho, "r");
+  if (!f) { printf("catalogo: %s ausente, seguindo sem ele\n", caminho); return 0; }
+
+  char linha[2048];
+  n = 0;
+  while (n < CAT_MAX && garantirEspaco(n + 1) && fgets(linha, sizeof linha, f)) {
+    if (linha[0] == '\n' || linha[0] == '#') continue;
+    CatItem *it = &itens[n];
+    char rel[512];
+    const char *p = linha;
+    p = campo(p, rel, sizeof rel);
+    // os caminhos no arquivo sao relativos a pasta de arte
+    if (rel[0]) snprintf(it->backdrop, sizeof it->backdrop, "%s/%s", dirArte, rel);
+    else it->backdrop[0] = 0;
+    p = campo(p, rel, sizeof rel);
+    if (rel[0]) snprintf(it->poster, sizeof it->poster, "%s/%s", dirArte, rel);
+    else it->poster[0] = 0;
+    p = campo(p, rel, sizeof rel);
+    if (rel[0]) snprintf(it->logo, sizeof it->logo, "%s/%s", dirArte, rel);
+    else it->logo[0] = 0;
+    p = campo(p, it->titulo, sizeof it->titulo);
+    p = campo(p, it->genero, sizeof it->genero);
+    p = campo(p, it->meta, sizeof it->meta);
+    p = campo(p, it->classificacao, sizeof it->classificacao);
+    campo(p, it->sinopse, sizeof it->sinopse);
+    it->imdb[0] = 0;
+    snprintf(it->tipo, sizeof it->tipo, "movie");
+    n++;
+  }
+  fclose(f);
+
+  // ids.txt e um arquivo A PARTE, uma linha "tt1234567<TAB>movie|series" por
+  // titulo, na mesma ordem. Ficou fora de catalogo.txt para nao mexer na ordem
+  // das colunas de um arquivo que ja tem parser e dados. Sem ele o app roda
+  // igual, so nao consegue perguntar fontes aos addons.
+  snprintf(caminho, sizeof caminho, "%s/ids.txt", dirArte);
+  f = fopen(caminho, "r");
+  if (f) {
+    int i = 0;
+    while (i < n && fgets(linha, sizeof linha, f)) {
+      char *tab = strchr(linha, '\t');
+      char *fim;
+      if (tab) {
+        *tab = 0;
+        snprintf(itens[i].tipo, sizeof itens[i].tipo, "%s", tab + 1);
+        fim = itens[i].tipo + strlen(itens[i].tipo);
+        while (fim > itens[i].tipo && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0;
+      }
+      snprintf(itens[i].imdb, sizeof itens[i].imdb, "%s", linha);
+      { char *e = itens[i].imdb + strlen(itens[i].imdb);
+        while (e > itens[i].imdb && (e[-1] == '\n' || e[-1] == '\r')) *--e = 0; }
+      i++;
+    }
+    fclose(f);
+    printf("catalogo: %d ids\n", i);
+  }
+
+  // Elenco vem num arquivo separado, uma linha por titulo, na mesma ordem:
+  // "nome~papel~foto;nome~papel~foto|direcao". Separado porque tem tamanho bem
+  // diferente do resto e mudaria a linha do catalogo a cada ator a mais.
+  snprintf(caminho, sizeof caminho, "%s/elenco.txt", dirArte);
+  FILE *fe = fopen(caminho, "r");
+  if (fe) {
+    for (int i = 0; i < n && fgets(linha, sizeof linha, fe); i++) {
+      char *barra = strchr(linha, '|');
+      if (barra) {
+        *barra = 0;
+        char *d = barra + 1, *fim = d + strlen(d);
+        while (fim > d && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0;
+        snprintf(itens[i].direcao, sizeof itens[i].direcao, "%s", d);
+      }
+      char *p2 = linha;
+      while (*p2 && itens[i].nElenco < 6) {
+        char *pv = strchr(p2, ';');
+        if (pv) *pv = 0;
+        char *t1 = strchr(p2, '~');
+        if (t1) {
+          *t1 = 0;
+          char *t2 = strchr(t1 + 1, '~');
+          if (t2) *t2 = 0;
+          int k = itens[i].nElenco;
+          snprintf(itens[i].elenco[k].nome, 64, "%s", p2);
+          snprintf(itens[i].elenco[k].papel, 64, "%s", t1 + 1);
+          if (t2 && t2[1] && t2[1] != '\n')
+            snprintf(itens[i].elenco[k].foto, 512, "%s/%s", dirArte, t2 + 1);
+          itens[i].nElenco++;
+        }
+        if (!pv) break;
+        p2 = pv + 1;
+      }
+    }
+    fclose(fe);
+  }
+
+  // extra.txt: "nota|logoProv|nomeProv|progresso|temporada|episodio|restanteMin", na
+  // mesma ordem. O progresso entrou como QUARTA coluna para nao invalidar
+  // arquivos antigos: faltando, o campo fica 0 e a barra some, que e o
+  // comportamento certo para quem nunca comecou o titulo.
+  snprintf(caminho, sizeof caminho, "%s/extra.txt", dirArte);
+  FILE *fx = fopen(caminho, "r");
+  if (fx) {
+    for (int i = 0; i < n && fgets(linha, sizeof linha, fx); i++) {
+      char c1[32] = "", c2[512] = "", c3[64] = "", c4[16] = "";
+      char c5[16] = "", c6[16] = "", c7[16] = "";
+      const char *q = linha;
+      q = campo(q, c1, sizeof c1);
+      q = campo(q, c2, sizeof c2);
+      q = campo(q, c3, sizeof c3);
+      q = campo(q, c4, sizeof c4);
+      q = campo(q, c5, sizeof c5);
+      q = campo(q, c6, sizeof c6);
+      campo(q, c7, sizeof c7);
+      itens[i].nota = atoi(c1);
+      itens[i].progresso = atoi(c4);
+      itens[i].temporada = atoi(c5);
+      itens[i].episodio  = atoi(c6);
+      itens[i].restanteMin = atoi(c7);
+      if (c2[0]) snprintf(itens[i].provLogo, sizeof itens[i].provLogo, "%s/%s", dirArte, c2);
+      snprintf(itens[i].provNome, sizeof itens[i].provNome, "%s", c3);
+    }
+    fclose(fx);
+  }
+
+  // progresso.txt: "tt1234567<TAB>posicaoSeg<TAB>duracaoSeg" por linha, o que
+  // ESTE app gravou. Vem depois de extra.txt de proposito — o que se assistiu
+  // aqui e mais recente que o retrato trazido do app web.
+  snprintf(caminho, sizeof caminho, "%s/progresso.txt", dirArte);
+  { FILE *fp = fopen(caminho, "r");
+    int aplicados = 0;
+    if (fp) {
+      while (fgets(linha, sizeof linha, fp)) {
+        char id[24]; double pos, dur; int i;
+        if (sscanf(linha, "%23s %lf %lf", id, &pos, &dur) != 3 || dur <= 1.0) continue;
+        for (i = 0; i < n; i++) {
+          // O id do catalogo pode trazer episodio ("tt123:4:9"); comparar so o
+          // prefixo do titulo, que e o que identifica a obra.
+          if (!strncmp(itens[i].imdb, id, strlen(id)) &&
+              (itens[i].imdb[strlen(id)] == 0 || itens[i].imdb[strlen(id)] == ':')) {
+            itens[i].progresso = (int)(100.0 * pos / dur);
+            itens[i].restanteMin = (int)((dur - pos) / 60.0 + 0.5);
+            aplicados++;
+            break;
+          }
+        }
+      }
+      fclose(fp);
+      if (aplicados) printf("catalogo: %d progressos deste app\n", aplicados);
+    }
+    snprintf(dirGravacao, sizeof dirGravacao, "%s", dirArte);
+  }
+
+  // episodios.txt: "indice|temporada|episodio|nome|duracao|data|sinopse".
+  // Indice na frente porque so parte dos titulos tem episodio — uma linha por
+  // titulo, como nos outros arquivos, desperdicaria a maioria das linhas.
+  snprintf(caminho, sizeof caminho, "%s/episodios.txt", dirArte);
+  { FILE *fe2 = fopen(caminho, "r");
+    nEps = 0;
+    garantirFaixas(nAlocado);
+    if (fe2) {
+      while (nEps < CAT_EP_MAX && fgets(linha, sizeof linha, fe2)) {
+        char c1[8], c2[8], c3[8];
+        const char *q = linha;
+        int alvo;
+        CatEp *ep = &eps[nEps];
+        memset(ep, 0, sizeof *ep);
+        q = campo(q, c1, sizeof c1);
+        alvo = atoi(c1);
+        if (alvo < 0 || alvo >= n) continue;
+        q = campo(q, c2, sizeof c2);
+        q = campo(q, c3, sizeof c3);
+        ep->temporada = atoi(c2);
+        ep->episodio  = atoi(c3);
+        q = campo(q, ep->nome, sizeof ep->nome);
+        q = campo(q, ep->duracao, sizeof ep->duracao);
+        q = campo(q, ep->data, sizeof ep->data);
+        q = campo(q, ep->sinopse, sizeof ep->sinopse);
+        { char rel[512] = "";
+          campo(q, rel, sizeof rel);
+          if (rel[0]) snprintf(ep->thumb, sizeof ep->thumb, "%s/%s", dirArte, rel); }
+        if (!epQtd[alvo]) epIni[alvo] = nEps;
+        epQtd[alvo]++;
+        nEps++;
+      }
+      fclose(fe2);
+      printf("catalogo: %d episodios\n", nEps);
+    }
+  }
+
+  int comElenco = 0;
+  for (int i = 0; i < n; i++) if (itens[i].nElenco) comElenco++;
+  printf("catalogo: %d titulos, %d com elenco (item0: %d atores, dir='%s')\n",
+         n, comElenco, n ? itens[0].nElenco : 0, n ? itens[0].direcao : "");
+  return n;
+}
+
+int cat_n(void) { return n; }
+
+const CatItem *cat_item(int i) {
+  if (n <= 0) return NULL;
+  return &itens[((i % n) + n) % n];
+}
+
+void cat_salvar_progresso(int indice, double posSeg, double durSeg) {
+  char caminho[600], tmp[600], linha[256];
+  FILE *e, *s;
+  const CatItem *it;
+  int i;
+  if (durSeg <= 1.0 || !dirGravacao[0]) return;
+  i = cat_n(); if (i < 1) return;
+  indice = ((indice % i) + i) % i;
+  it = &itens[indice];
+  if (!it->imdb[0]) return;
+
+  // Reescreve o arquivo inteiro trocando a linha deste titulo. E um arquivo de
+  // dezenas de linhas: ler tudo e regravar custa nada e evita duplicata, que
+  // um simples append acumularia.
+  snprintf(caminho, sizeof caminho, "%s/progresso.txt", dirGravacao);
+  snprintf(tmp, sizeof tmp, "%s/progresso.tmp", dirGravacao);
+  s = fopen(tmp, "w");
+  if (!s) return;
+  e = fopen(caminho, "r");
+  if (e) {
+    while (fgets(linha, sizeof linha, e)) {
+      char id[24];
+      if (sscanf(linha, "%23s", id) == 1 && !strcmp(id, it->imdb)) continue;
+      fputs(linha, s);
+    }
+    fclose(e);
+  }
+  fprintf(s, "%s\t%.0f\t%.0f\n", it->imdb, posSeg, durSeg);
+  fclose(s);
+  // Gravar em temporario e renomear: um corte de energia no meio da escrita
+  // deixaria o arquivo pela metade e o app subiria sem progresso nenhum.
+  rename(tmp, caminho);
+
+  itens[indice].progresso = (int)(100.0 * posSeg / durSeg);
+  itens[indice].restanteMin = (int)((durSeg - posSeg) / 60.0 + 0.5);
+}
+
+int cat_n_episodios(int indiceItem) {
+  int m = cat_n();
+  if (m < 1) return 0;
+  indiceItem = ((indiceItem % m) + m) % m;
+  return epQtd[indiceItem];
+}
+
+const CatEp *cat_episodio(int indiceItem, int i) {
+  int m = cat_n();
+  if (m < 1) return NULL;
+  indiceItem = ((indiceItem % m) + m) % m;
+  if (i < 0 || i >= epQtd[indiceItem]) return NULL;
+  return &eps[epIni[indiceItem] + i];
+}
+
+void cat_definir(const CatItem *lista, int qtd) {
+  int i;
+  if (!lista || qtd < 1) return;
+  // TROCA DE BLOCO, sem realloc no lugar.
+  //
+  // cat_definir roda no fio da descoberta enquanto o desenho le itens[] no fio
+  // principal. Com realloc, o bloco antigo e LIBERADO e o desenho passa a ler
+  // memoria morta — foi assim que o app comecou a morrer em home_desenhar
+  // assim que o catalogo cresceu de 40 para 303. Enquanto era vetor estatico o
+  // endereco nunca mudava e o problema nao existia.
+  //
+  // A ordem das tres linhas abaixo e o que torna isto seguro sem trava:
+  // zerar `n` primeiro faz o desenho tratar o catalogo como vazio por um
+  // quadro (nao desenha nada), e so depois o ponteiro e a contagem sobem. O
+  // bloco antigo NAO e liberado aqui: um leitor pode estar dentro dele neste
+  // instante. Ele morre na proxima troca, quando ninguem mais o alcanca.
+  {
+    int novoN = qtd > CAT_MAX ? CAT_MAX : qtd;
+    CatItem *novo = malloc(sizeof(CatItem) * (size_t)novoN);
+    static CatItem *lixo;
+    if (!novo) return;
+    memcpy(novo, lista, sizeof(CatItem) * (size_t)novoN);
+    n = 0;
+    free(lixo);
+    lixo = itens;
+    itens = novo;
+    nAlocado = novoN;
+    n = novoN;
+  }
+  // Episodios do catalogo anterior nao valem para o novo: os indices mudaram.
+  nEps = 0;
+  garantirFaixas(nAlocado);
+  (void)0;
+  // O progresso vem de arquivo e e por imdb, entao sobrevive a troca — mas
+  // precisa ser reaplicado, porque os itens novos nasceram zerados.
+  if (dirGravacao[0]) {
+    char caminho[600], linha[256];
+    FILE *fp;
+    snprintf(caminho, sizeof caminho, "%s/progresso.txt", dirGravacao);
+    fp = fopen(caminho, "r");
+    if (fp) {
+      while (fgets(linha, sizeof linha, fp)) {
+        char id[24]; double pos, dur;
+        if (sscanf(linha, "%23s %lf %lf", id, &pos, &dur) != 3 || dur <= 1.0) continue;
+        for (i = 0; i < n; i++) {
+          size_t L = strlen(id);
+          if (!strncmp(itens[i].imdb, id, L) &&
+              (itens[i].imdb[L] == 0 || itens[i].imdb[L] == ':')) {
+            itens[i].progresso = (int)(100.0 * pos / dur);
+            itens[i].restanteMin = (int)((dur - pos) / 60.0 + 0.5);
+            break;
+          }
+        }
+      }
+      fclose(fp);
+    }
+  }
+}
+
+void cat_definir_episodios(int indiceItem, const CatEp *lista, int qtd) {
+  int m = cat_n();
+  if (!lista || qtd < 1 || m < 1) return;
+  indiceItem = ((indiceItem % m) + m) % m;
+  if (qtd > 30) qtd = 30;
+  // Anexa no fim do vetor comum. Trocar de temporada varias vezes acumula, mas
+  // o teto de CAT_EP_MAX segura e o custo de compactar nao se paga.
+  if (nEps + qtd > CAT_EP_MAX) nEps = 0;
+  memcpy(&eps[nEps], lista, sizeof(CatEp) * (size_t)qtd);
+  epIni[indiceItem] = nEps;
+  epQtd[indiceItem] = qtd;
+  nEps += qtd;
+}
+
+void cat_atualizar_item(int indice, const CatItem *novo) {
+  int m = cat_n();
+  if (!novo || m < 1) return;
+  indice = ((indice % m) + m) % m;
+  itens[indice] = *novo;
+}
+
+// Generos de um item, como uma lista de trechos separados por " · ". O primeiro
+// campo e sempre "Filme"/"Programa de TV" e nao conta como genero.
+static int compartilhaGenero(const CatItem *a, const CatItem *b) {
+  const char *p = a->genero;
+  int primeiro = 1;
+  while (p && *p) {
+    const char *sep = strstr(p, "\xc2\xb7");
+    char termo[64];
+    size_t n;
+    if (!sep) break;
+    p = sep + 2;
+    while (*p == ' ') p++;
+    sep = strstr(p, "\xc2\xb7");
+    n = sep ? (size_t)(sep - p) : strlen(p);
+    while (n && (p[n - 1] == ' ')) n--;
+    if (n && n < sizeof termo) {
+      memcpy(termo, p, n);
+      termo[n] = 0;
+      if (strstr(b->genero, termo)) return 1;
+    }
+    primeiro = 0;
+    if (!sep) break;
+  }
+  (void)primeiro;
+  return 0;
+}
+
+int cat_similares(int indice, int *saida, int max) {
+  int m = cat_n(), i, k = 0;
+  const CatItem *base;
+  if (m < 1 || !saida || max < 1) return 0;
+  indice = ((indice % m) + m) % m;
+  base = &itens[indice];
+  for (i = 0; i < m && k < max; i++) {
+    if (i == indice) continue;
+    if (base->tipo[0] && itens[i].tipo[0] && strcmp(base->tipo, itens[i].tipo)) continue;
+    if (!compartilhaGenero(base, &itens[i])) continue;
+    saida[k++] = i;
+  }
+  // Sem nenhum genero em comum a fileira ficaria vazia; ai vale mais mostrar os
+  // vizinhos do mesmo tipo que sumir com a secao.
+  for (i = 0; i < m && k < max; i++) {
+    int j, ja = 0;
+    if (i == indice) continue;
+    for (j = 0; j < k; j++) if (saida[j] == i) { ja = 1; break; }
+    if (ja) continue;
+    if (base->tipo[0] && itens[i].tipo[0] && strcmp(base->tipo, itens[i].tipo)) continue;
+    saida[k++] = i;
+  }
+  // Nota alta primeiro.
+  { int a, b, t;
+    for (a = 0; a < k; a++)
+      for (b = a + 1; b < k; b++)
+        if (itens[saida[b]].nota > itens[saida[a]].nota) {
+          t = saida[a]; saida[a] = saida[b]; saida[b] = t;
+        } }
+  return k;
+}

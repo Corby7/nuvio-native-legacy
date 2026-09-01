@@ -1,0 +1,18 @@
+{
+  "id": "space.nuvio.native.legacy",
+  "version": "1.0.1",
+  "vendor": "iqui27",
+  "type": "native",
+  "main": "nuvio-proto",
+  "title": "Nuvio 1.0.1 Legacy Native",
+  "icon": "icon.png",
+  "largeIcon": "icon.png",
+  "resolution": "1920x1080",
+  "bgColor": "#141416",
+  "iconColor": "#141416",
+  "disableBackHistoryAPI": true,
+  "requiredPermissions": [
+    "all"
+  ],
+  "nativeLifeCycleInterfaceVersion": 2
+}

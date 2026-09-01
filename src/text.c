@@ -1,0 +1,297 @@
+#include "text.h"
+#include "gfx.h"
+#include "layout.h"
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
+#include <string.h>
+#include <stdio.h>
+
+#define MAX_LINHAS 256
+
+typedef struct {
+  char chave[288];
+  unsigned long hash;   // FNV-1a da chave, para pular o strcmp
+  TxtLinha linha;
+  unsigned long uso;
+  int ocupado;
+} Entrada;
+
+static TTF_Font *fontes[TXT_NFONTES];
+static Entrada cache[MAX_LINHAS];
+
+// Quantas linhas NOVAS podem ser rasterizadas por quadro.
+//
+// Medido no aparelho: entrar na pagina de detalhe rasteriza 12 linhas de uma
+// vez e custa 12 ms — um quadro inteiro, e o tranco aparece exatamente na
+// transicao que se quer suave. Rasterizar em conta-gotas faz o texto assentar
+// um ou dois quadros depois, o que ninguem ve; o tranco, todo mundo ve.
+// 2 e nao 4: com 4 o pior quadro media 6 ms so de texto, e o objetivo aqui e
+// que NENHUMA parte sozinha coma mais que um terco do quadro.
+#define TXT_POR_QUADRO 2
+static int rastNesteQuadro;
+
+void txt_novo_quadro(void) { rastNesteQuadro = 0; }
+static unsigned long relogio = 1;
+int    txt_rasterizadas = 0;
+double txt_ms = 0.0;
+
+// Peso por estilo, seguindo a tabela do tvOS: os estilos sao Medium e a versao
+// "emphasized" e Bold. O titulo de um filme aparece emphasized, os cabecalhos
+// e o corpo nao. Antes isto era negrito SINTETICO sobre a fonte da LG, que
+// engorda os tracos sem redesenhar nada — perto de um Bold de verdade a
+// diferenca aparece logo nos titulos grandes.
+enum { PESO_REGULAR, PESO_MEDIUM, PESO_BOLD };
+static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
+  { NV_FT_TITULO1,  PESO_BOLD   },   // titulo do filme na tela de detalhe
+  // O cabecalho da pagina do titulo e LEVE e muito espacado no app da Apple —
+  // conferido lado a lado numa captura do aparelho. Em Bold, como eu tinha,
+  // ele vira um grito no topo da tela em vez de uma etiqueta.
+  { NV_FT_TITULO2,  PESO_REGULAR },  // cabecalho da pagina
+  { NV_FT_TITULO3,  PESO_BOLD   },   // nome dentro do card destaque
+  { NV_FT_HEADLINE, PESO_MEDIUM },   // cabecalho de fileira
+  { NV_FT_BODY,     PESO_MEDIUM },   // rotulo de botao, titulo de episodio
+  { NV_FT_CALLOUT,  PESO_MEDIUM },   // linha de genero
+  { NV_FT_CAPTION,  PESO_REGULAR },  // sinopse, texto corrido
+  { NV_FT_CAPTION2, PESO_REGULAR },  // creditos, datas, rotulos
+  // Abaixo do minimo de 23px que o tvOS estabelece para TEXTO — mas isto nao e
+  // texto para ler, e um selo de classificacao indicativa, que no aparelho tem
+  // mesmo o tamanho de um icone.
+  { NV_FT_MINI,     PESO_BOLD    },  // badge de classificacao
+  // Player, do app web: titulo em 700 e o corpo em 400 (.player-title tem
+  // font-weight 700; .player-subtitle e .player-time-label nao declaram peso e
+  // herdam o normal).
+  { NV_FT_PLR_TITULO, PESO_BOLD    },
+  { NV_FT_PLR_CORPO,  PESO_REGULAR },
+  { NV_FT_ROW_TITULO, PESO_BOLD    },  // .home-row-title (600)
+};
+
+int txt_iniciar(const char *dirRecursos) {
+  if (TTF_Init() != 0) { printf("TTF_Init: %s\n", TTF_GetError()); return 0; }
+  // A fonte da propria LG e a que a interface da TV usa; DroidSans e a reserva.
+  // A Inter vai EMBARCADA no pacote. A TV so tem as fontes da LG e as do app da
+  // Netflix — nada proximo da SF Pro do tvOS. A Inter foi desenhada como
+  // alternativa livre com metricas parecidas, e e o que aproxima o desenho das
+  // letras do original. As fontes da LG ficam de reserva: se o pacote for
+  // instalado sem a pasta fonts/, o app continua legivel em vez de morrer.
+  char base[512] = "";
+  if (dirRecursos && *dirRecursos) {
+    snprintf(base, sizeof base, "%s/", dirRecursos);
+  } else {
+    char *bp = SDL_GetBasePath();
+    if (bp) { snprintf(base, sizeof base, "%s", bp); SDL_free(bp); }
+  }
+
+  char inter[3][512];
+  snprintf(inter[PESO_REGULAR], 512, "%sfonts/InterDisplay-Regular.ttf", base);
+  snprintf(inter[PESO_MEDIUM],  512, "%sfonts/InterDisplay-Medium.ttf",  base);
+  snprintf(inter[PESO_BOLD],    512, "%sfonts/InterDisplay-Bold.ttf",    base);
+
+  const char *lg[3] = { "/usr/share/fonts/LG_Display-Light.ttf",
+                        "/usr/share/fonts/LG_Display-Regular.ttf",
+                        "/usr/share/fonts/LG_Display-Regular.ttf" };
+  const char *droid[3] = { "/usr/share/fonts/DroidSans.ttf",
+                           "/usr/share/fonts/DroidSans.ttf",
+                           "/usr/share/fonts/DroidSans.ttf" };
+
+  const char *familias[3][3] = {
+    { inter[0], inter[1], inter[2] },
+    { lg[0], lg[1], lg[2] },
+    { droid[0], droid[1], droid[2] },
+  };
+  const char *nomes[3] = { "Inter (embarcada)", "LG Display", "DroidSans" };
+
+  for (int c = 0; c < 3; c++) {
+    int todas = 1;
+    for (int i = 0; i < TXT_NFONTES; i++) {
+      fontes[i] = TTF_OpenFont(familias[c][ESTILOS[i].peso], ESTILOS[i].corpo);
+      if (!fontes[i]) { todas = 0; break; }
+      // negrito sintetico so na reserva, que nao tem arquivo Bold proprio
+      if (c > 0 && ESTILOS[i].peso == PESO_BOLD) TTF_SetFontStyle(fontes[i], TTF_STYLE_BOLD);
+    }
+    if (todas) { printf("fonte: %s\n", nomes[c]); return 1; }
+    for (int i = 0; i < TXT_NFONTES; i++) { if (fontes[i]) TTF_CloseFont(fontes[i]); fontes[i] = NULL; }
+  }
+  printf("txt: nenhuma fonte carregou\n");
+  return 0;
+}
+
+void txt_encerrar(void) {
+  for (int i = 0; i < MAX_LINHAS; i++)
+    if (cache[i].ocupado && cache[i].linha.tex) glDeleteTextures(1, &cache[i].linha.tex);
+  for (int i = 0; i < TXT_NFONTES; i++) if (fontes[i]) TTF_CloseFont(fontes[i]);
+  TTF_Quit();
+}
+
+TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) {
+  TxtLinha vazia = {0, 0, 0};
+  if (!s || !*s || estilo < 0 || estilo >= TXT_NFONTES || !fontes[estilo]) return vazia;
+
+  char chave[288];
+  snprintf(chave, sizeof chave, "%d|%02x%02x%02x|%.240s", (int)estilo, r & 255, g & 255, b & 255, s);
+
+  // Hash da chave para evitar o strcmp em quase todas as entradas: a busca
+  // roda para CADA linha de CADA quadro, e comparar 288 bytes centenas de
+  // vezes por quadro custa mais que o desenho.
+  unsigned long h = 2166136261UL;
+  { const char *p = chave;
+    for (; *p; p++) { h ^= (unsigned char)*p; h *= 16777619UL; } }
+
+  int livre = -1; unsigned long menor = ~0UL; int vitima = -1;
+  for (int i = 0; i < MAX_LINHAS; i++) {
+    if (cache[i].ocupado && cache[i].hash == h &&
+        strcmp(cache[i].chave, chave) == 0) {
+      cache[i].uso = ++relogio; return cache[i].linha;
+    }
+    if (!cache[i].ocupado && livre < 0) livre = i;
+    if (cache[i].ocupado && cache[i].uso < menor) { menor = cache[i].uso; vitima = i; }
+  }
+
+  // Orcamento estourado: devolve vazio e tenta de novo no proximo quadro. A
+  // linha aparece com um quadro de atraso em vez de travar o atual.
+  if (rastNesteQuadro >= TXT_POR_QUADRO) return vazia;
+  rastNesteQuadro++;
+  int slot = livre >= 0 ? livre : vitima;
+  if (slot < 0) return vazia;
+  if (cache[slot].ocupado && cache[slot].linha.tex) glDeleteTextures(1, &cache[slot].linha.tex);
+
+  Uint64 t0 = SDL_GetPerformanceCounter();
+  SDL_Color cor = { (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a };
+  SDL_Surface *sf = TTF_RenderUTF8_Blended(fontes[estilo], s, cor);
+  if (!sf) return vazia;
+  SDL_Surface *cv = SDL_ConvertSurfaceFormat(sf, SDL_PIXELFORMAT_ABGR8888, 0);
+  SDL_FreeSurface(sf);
+  if (!cv) return vazia;
+
+  GLuint t; glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, cv->w, cv->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, cv->pixels);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+  cache[slot].ocupado = 1;
+  cache[slot].hash = h;
+  strncpy(cache[slot].chave, chave, sizeof cache[slot].chave - 1);
+  cache[slot].linha.tex = t; cache[slot].linha.w = cv->w; cache[slot].linha.h = cv->h;
+  txt_rasterizadas++;
+  txt_ms += (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+  cache[slot].uso = ++relogio;
+  SDL_FreeSurface(cv);
+  return cache[slot].linha;
+}
+
+void txt_desenhar(TxtLinha l, float x, float y) { txt_desenhar_alpha(l, x, y, 1.0f); }
+
+void txt_desenhar_alpha(TxtLinha l, float x, float y, float alpha) {
+  if (!l.tex) return;
+  GfxRect r = { x, y, (float)l.w, (float)l.h };
+  gfx_rect(r, l.tex, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, alpha);
+}
+
+float txt_tracking(TxtEstilo estilo, const char *s, int r, int g, int b,
+                   float x, float y, float alpha, float tracking) {
+  if (!s || !*s) return 0.0f;
+  float larg = 0.0f;
+  // Percorre por CARACTERE UTF-8, nao por byte: cortar no meio de um acento
+  // produz um glifo invalido, e a fonte da LG devolve um retangulo vazio.
+  for (const unsigned char *p = (const unsigned char *)s; *p; ) {
+    int n = 1;
+    if      ((*p & 0xF8) == 0xF0) n = 4;
+    else if ((*p & 0xF0) == 0xE0) n = 3;
+    else if ((*p & 0xE0) == 0xC0) n = 2;
+    char c[5]; int k = 0;
+    while (k < n && p[k]) { c[k] = (char)p[k]; k++; }
+    c[k] = 0; p += k ? k : 1;
+
+    TxtLinha l = txt_linha(estilo, c, r, g, b, 255);
+    if (x >= 0.0f && l.w) txt_desenhar_alpha(l, x + larg, y, alpha);
+    larg += l.w + tracking;
+  }
+  return larg > 0.0f ? larg - tracking : 0.0f;
+}
+
+float txt_bloco(TxtEstilo estilo, const char *s, int r, int g, int b,
+                float x, float y, float larg, float leading, float alpha, int maxLinhas) {
+  if (!s || !*s) return 0.0f;
+  char linha[512]; linha[0] = 0;
+  float usado = 0.0f;
+  int nLinhas = 0;
+  const char *p = s;
+  while (*p && (maxLinhas <= 0 || nLinhas < maxLinhas)) {
+    // pega a proxima palavra
+    const char *ini = p;
+    while (*p && *p != ' ') p++;
+    size_t np = (size_t)(p - ini);
+    while (*p == ' ') p++;
+
+    char tentativa[512];
+    size_t nl = strlen(linha);
+    if (nl + np + 2 >= sizeof tentativa) break;
+    memcpy(tentativa, linha, nl);
+    if (nl) tentativa[nl++] = ' ';
+    memcpy(tentativa + nl, ini, np);
+    tentativa[nl + np] = 0;
+
+    TxtLinha m = txt_linha(estilo, tentativa, r, g, b, 255);
+    if (m.w > larg && linha[0]) {
+      // nao coube: fecha a linha atual e recomeca com a palavra
+      TxtLinha l = txt_linha(estilo, linha, r, g, b, 255);
+      txt_desenhar_alpha(l, x, y + usado, alpha);
+      usado += leading; nLinhas++;
+      if (maxLinhas > 0 && nLinhas >= maxLinhas) return usado;
+      memcpy(linha, ini, np); linha[np] = 0;
+    } else {
+      memcpy(linha, tentativa, nl + np + 1);
+    }
+  }
+  if (linha[0] && (maxLinhas <= 0 || nLinhas < maxLinhas)) {
+    TxtLinha l = txt_linha(estilo, linha, r, g, b, 255);
+    txt_desenhar_alpha(l, x, y + usado, alpha);
+    usado += leading;
+  }
+  return usado;
+}
+
+// Quebra igual a txt_bloco, mas posiciona cada linha pela BORDA DIREITA. A
+// duplicacao com txt_bloco e pequena e proposital: unificar as duas exigiria um
+// parametro de alinhamento em todas as chamadas, e so este caso precisa.
+float txt_bloco_dir(TxtEstilo estilo, const char *s, int r, int g, int b,
+                    float xDir, float y, float larg, float leading,
+                    float alpha, int maxLinhas) {
+  if (!s || !*s) return 0.0f;
+  char linha[512]; linha[0] = 0;
+  float usado = 0.0f;
+  int nLinhas = 0;
+  const char *p = s;
+  while (*p && (maxLinhas <= 0 || nLinhas < maxLinhas)) {
+    const char *ini = p;
+    while (*p && *p != ' ') p++;
+    size_t np = (size_t)(p - ini);
+    while (*p == ' ') p++;
+
+    char tentativa[512];
+    size_t nl = strlen(linha);
+    if (nl + np + 2 >= sizeof tentativa) break;
+    memcpy(tentativa, linha, nl);
+    if (nl) tentativa[nl++] = ' ';
+    memcpy(tentativa + nl, ini, np);
+    tentativa[nl + np] = 0;
+
+    TxtLinha m = txt_linha(estilo, tentativa, r, g, b, 255);
+    if (m.w > larg && linha[0]) {
+      TxtLinha l = txt_linha(estilo, linha, r, g, b, 255);
+      if (xDir >= 0.0f) txt_desenhar_alpha(l, xDir - l.w, y + usado, alpha);
+      usado += leading; nLinhas++;
+      if (maxLinhas > 0 && nLinhas >= maxLinhas) return usado;
+      memcpy(linha, ini, np); linha[np] = 0;
+    } else {
+      memcpy(linha, tentativa, nl + np + 1);
+    }
+  }
+  if (linha[0] && (maxLinhas <= 0 || nLinhas < maxLinhas)) {
+    TxtLinha l = txt_linha(estilo, linha, r, g, b, 255);
+    if (xDir >= 0.0f) txt_desenhar_alpha(l, xDir - l.w, y + usado, alpha);
+    usado += leading;
+  }
+  return usado;
+}

@@ -1,0 +1,5 @@
+nuvio-proto
+nuvio-proto.arm
+*.ipk
+deploy/app/nuvio-proto
+deploy/app/art/cache/
