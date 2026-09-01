@@ -627,12 +627,40 @@ int video_tocar(const char *url) {
   clock_gettime(CLOCK_MONOTONIC, &t0Pedido);
   // windowId "window_id_dummy" NAO e enfeite: com string vazia o load responde
   // returnValue:true, aloca mediaId e nunca busca o arquivo. Falha muda.
+  // DolbyHdrInfo: e assim que o Kodi anuncia Dolby Vision a este mesmo pipeline
+  // (xbmc/cores/VideoPlayer/MediaPipelineWebOS.cpp):
+  //   contents["DolbyHdrInfo"]["encryptionType"] = "clear"
+  //   contents["DolbyHdrInfo"]["profileId"]      = dovi.dv_profile
+  //   contents["DolbyHdrInfo"]["trackType"]      = el_present_flag ? "dual" : "single"
+  //
+  // DIFERENCA QUE PODE INVALIDAR TUDO ISTO, e por isso e um EXPERIMENTO: o Kodi
+  // demuxa com ffmpeg e ENTREGA BUFFERS por option.externalStreamingInfo, onde
+  // esse bloco vive. Nos passamos uma URI e a TV faz HTTP, demux e decode.
+  // Declarar o bloco no modo URI pode ser ignorado em silencio — e a unica forma
+  // de saber e medir o hdrType que volta.
+  //
+  // profileId 8 / "single" e o que o Kodi declara DEPOIS de converter o perfil 7,
+  // nao o que o arquivo tem. Como nao demuxamos, nao sabemos o perfil real; por
+  // isso os valores sao ajustaveis por variavel de ambiente para poder testar
+  // 7/"dual" contra 8/"single" no mesmo arquivo sem recompilar.
+  char dolby[192] = "";
+  if (dvPedido) {
+    const char *perfil = getenv("NUVIO_DV_PROFILE");
+    const char *trilha = getenv("NUVIO_DV_TRACK");
+    snprintf(dolby, sizeof dolby,
+             "\"externalStreamingInfo\":{\"contents\":{\"DolbyHdrInfo\":{"
+             "\"encryptionType\":\"clear\",\"profileId\":%s,\"trackType\":\"%s\"}}},",
+             (perfil && *perfil) ? perfil : "8",
+             (trilha && *trilha) ? trilha : "single");
+    printf("[video] DolbyHdrInfo declarado: %s\n", dolby); fflush(stdout);
+  }
   snprintf(carga, sizeof carga,
       "{\"payload\":{\"option\":{\"useSeekableRanges\":true,"
       "\"appId\":\"space.nuvio.native.legacy\","
+      "%s"
       "\"bufferControl\":{\"userBufferCtrl\":false},"
       "\"windowId\":\"window_id_dummy\"}},"
-      "\"uri\":\"%s\",\"type\":\"media\"}", url);
+      "\"uri\":\"%s\",\"type\":\"media\"}", dolby, url);
   printf("[video] URL: %s\n", url); fflush(stdout);
   chamar("load", carga, aoCarregar);
   return 1;
