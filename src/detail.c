@@ -87,10 +87,41 @@ static const struct { float grupo, alvo; } SECOES[N_SECOES] = {
   { NV_DETP_G_ABAS,   NV_DETP_ALVO_ABAS    },
   { NV_DETP_G_ELENCO, NV_DETP_ALVO_FILEIRA },
 };
-static const char *ABAS_INFO[] = {
-  "Criador e elenco", "Avaliacoes", "Mais como este", "Trailer"
-};
-#define N_ABAS_INFO 4
+// As abas sao DINAMICAS, como no web: renderSeriesInsightSection
+// (metaDetailsScreen.js:3751) so acrescenta "Mais como este", "Trailer" e
+// "Colecao" quando a lista correspondente tem itens, e esconde a barra inteira
+// quando sobra uma aba so. O port cravava as quatro e as tres ultimas caiam
+// todas em "Sem informacao para esta aba." — que e exatamente o que o web
+// evita nao mostrando a aba.
+//
+// Aqui existem duas: elenco (sempre) e avaliacoes (quando ha nota). Similares
+// e trailer nao tem fonte neste port; quando tiverem, entram nesta tabela.
+typedef enum { ABA_ELENCO, ABA_AVALIACOES, ABA_NFIXAS } AbaInfoId;
+static const char *ABA_ROTULO[ABA_NFIXAS] = { "Criador e elenco", "Avaliacoes" };
+
+// Nota do IMDb do titulo aberto, 0 quando nao ha.
+static int notaDe(int i) {
+  const CatItem *ci = cat_item(i);
+  return ci ? ci->nota : 0;
+}
+static int abaDisponivel(int id) {
+  switch (id) {
+    case ABA_ELENCO:     return 1;
+    case ABA_AVALIACOES: return notaDe(idx) > 0;
+    default:             return 0;
+  }
+}
+// Traduz a posicao visivel `c` para o id da aba.
+static int abaIdDe(int c) {
+  for (int id = 0, v = 0; id < ABA_NFIXAS; id++)
+    if (abaDisponivel(id) && v++ == c) return id;
+  return ABA_ELENCO;
+}
+static int nAbasInfo(void) {
+  int n = 0;
+  for (int id = 0; id < ABA_NFIXAS; id++) if (abaDisponivel(id)) n++;
+  return n;
+}
 
 static const char *EPISODIOS[][3] = {
   { "Cara ou coroa",        "38 min", "27/01/2023" },
@@ -243,7 +274,8 @@ static int secaoN(int r) {
       if (q <= 0) return 0;
       return q < N_ITENS ? q : N_ITENS;
     }
-    case SEC_ABAS_INFO: return N_ABAS_INFO;
+    // Uma aba so = barra escondida, como o `tabItems.length > 1` do web.
+    case SEC_ABAS_INFO: { int n = nAbasInfo(); return n > 1 ? n : 0; }
     case SEC_ELENCO:
       if (ci && ci->nElenco > 0) return ci->nElenco;
       return N_ELENCO;
@@ -774,7 +806,7 @@ static float larguraTemporada(int c) {
   return l.w + NV_DETP_TEMP_PADX * 2;
 }
 static float larguraAbaInfo(int i) {
-  TxtLinha l = txt_linha(TXT_PLR_CORPO, ABAS_INFO[i], 255, 255, 255, 255);
+  TxtLinha l = txt_linha(TXT_PLR_CORPO, ABA_ROTULO[abaIdDe(i)], 255, 255, 255, 255);
   return l.w;
 }
 
@@ -949,7 +981,7 @@ static void desenhaAbaInfo(float x, float y, int i, float f, float a) {
   int sel = (i == abaInfo);
   int base = sel ? 255 : 128;
   int cor = (int)(base + (255 - base) * f);
-  TxtLinha l = txt_linha(TXT_PLR_CORPO, ABAS_INFO[i], cor, cor, cor, 255);
+  TxtLinha l = txt_linha(TXT_PLR_CORPO, ABA_ROTULO[abaIdDe(i)], cor, cor, cor, 255);
   txt_peso(l, x, y + (NV_DETP_ABA_H - l.h) * 0.5f, a, 0.5f + f * 0.6f);
 }
 
@@ -1002,6 +1034,50 @@ static void desenhaElenco(float x, float y, int c, float f, float a) {
   }
 }
 
+// Aba "Avaliacoes". No web (metaDetailsScreen.js:3699) sao dois cartoes lado a
+// lado, IMDb e TMDB: .movie-rating-card de 160x120, raio 14, fundo
+// rgba(18,23,31,.9) com borda de 1px a 16%, logo de 56x28 em cima e o valor em
+// 34/800 embaixo; quando o dado falta o cartao mostra "-".
+//
+// DIVERGENCIA ANOTADA: em SERIE o web troca isto por um painel de avaliacoes
+// POR EPISODIO (renderSeriesRatingsPanel), com seletor de temporada. Este port
+// nao tem nota por episodio em fonte nenhuma — o Cinemeta nao devolve — entao
+// serie mostra os mesmos dois cartoes do filme. Nao e a tela do web; e o que o
+// dado permite, e mostrar dois cartoes certos e melhor que uma grade vazia.
+#define AVAL_CARD_W  160.0f
+#define AVAL_CARD_H  120.0f
+#define AVAL_CARD_GAP 16.0f
+static void cartaoNota(float x, float y, const char *fonte, const char *valor,
+                       float a) {
+  GfxRect card = { x, y, AVAL_CARD_W, AVAL_CARD_H };
+  gfx_cor(card, 14.0f, 0.071f, 0.090f, 0.122f, 0.90f * a);
+  // Borda de 1px a 16%: quatro faixas, que e como o resto desta tela desenha
+  // contorno (nao ha helper de borda no gfx).
+  float b = 0.16f * a;
+  gfx_cor((GfxRect){ x, y, AVAL_CARD_W, 1 }, 0, 1, 1, 1, b);
+  gfx_cor((GfxRect){ x, y + AVAL_CARD_H - 1, AVAL_CARD_W, 1 }, 0, 1, 1, 1, b);
+  gfx_cor((GfxRect){ x, y, 1, AVAL_CARD_H }, 0, 1, 1, 1, b);
+  gfx_cor((GfxRect){ x + AVAL_CARD_W - 1, y, 1, AVAL_CARD_H }, 0, 1, 1, 1, b);
+
+  // O SVG das duas marcas nao esta empacotado; o nome em maiusculas ocupa o
+  // mesmo lugar do logo de 56x28 e diz a mesma coisa.
+  TxtLinha lf = txt_linha(TXT_CAPTION2, fonte, 200, 205, 214, 255);
+  TxtLinha lv = txt_linha(TXT_TITULO3, valor, 245, 248, 255, 255);
+  float hBloco = lf.h + 8.0f + lv.h;
+  float yb = y + (AVAL_CARD_H - hBloco) * 0.5f;
+  txt_desenhar_alpha(lf, x + (AVAL_CARD_W - lf.w) * 0.5f, yb, a * 0.9f);
+  txt_desenhar_alpha(lv, x + (AVAL_CARD_W - lv.w) * 0.5f, yb + lf.h + 8.0f, a);
+}
+
+static void desenhaAvaliacoes(float x, float y, float a) {
+  char imdb[8] = "-";
+  int n = notaDe(idx);
+  if (n > 0) snprintf(imdb, sizeof imdb, "%.1f", n / 10.0f);
+  cartaoNota(x, y, "IMDb", imdb, a);
+  // TMDB nao vem no catalogo; o web escreve "-" no cartao quando falta.
+  cartaoNota(x + AVAL_CARD_W + AVAL_CARD_GAP, y, "TMDB", "-", a);
+}
+
 static void desenhaSecao(int r, float a, Uint32 agora) {
   int n = secaoN(r);
   // Aba de informacao que nao seja "Criador e elenco": o web TROCA o conteudo
@@ -1011,10 +1087,8 @@ static void desenhaSecao(int r, float a, Uint32 agora) {
   //
   // Trocar, e nao sobrepor: na primeira captura do aparelho a mensagem saia POR
   // CIMA dos avatares do elenco, e as duas coisas ficavam ilegiveis.
-  if (r == SEC_ELENCO && abaInfo != 0) {
-    TxtLinha l = txt_linha(TXT_DET_SIN, "Sem informacao para esta aba.",
-                           128, 128, 128, 255);
-    txt_desenhar_alpha(l, NV_DETP_X, NV_DETP_EL_Y - scrollY + 40.0f, a);
+  if (r == SEC_ELENCO && abaIdDe(abaInfo) == ABA_AVALIACOES) {
+    desenhaAvaliacoes(NV_DETP_X, NV_DETP_EL_Y - scrollY + 40.0f, a);
     return;
   }
   if (n <= 0) return;

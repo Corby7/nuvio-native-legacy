@@ -70,6 +70,11 @@ double js_num(const char *ini, const char *fim, const char *chave, double padrao
     q = pula(p + n);
     if (*q == ':') {
       q = pula(q + 1);
+      // O valor pode vir ENTRE ASPAS. O Cinemeta manda `"imdbRating": "8.1"`
+      // como string, e recusar a aspa aqui fazia js_num devolver o padrao —
+      // por isso a nota era sempre 0: nem o selo do IMDb no hero nem a aba de
+      // avaliacoes chegavam a aparecer, sem erro nenhum no caminho.
+      if (*q == '"') q++;
       if ((*q >= '0' && *q <= '9') || *q == '-' || *q == '.') return atof(q);
     }
     p += n;
