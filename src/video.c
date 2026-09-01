@@ -74,6 +74,15 @@ static int  (*acbSink)(long, int);
 static int  (*acbMidia)(long, const char *);
 static int  (*acbEstado)(long, int, int, long *);
 static int  (*acbJanela)(long, long, long, long, long, int, long *);
+// Janela CUSTOMIZADA: recorte de fonte + retangulo de destino. E o caminho com
+// permissao. Chamar luna://com.webos.service.tv.display/setCustomDisplayWindow
+// direto e RECUSADO pelo hub — "Not permitted to send to
+// com.webos.service.tv.display" —, porque o app se registra como
+// com.webos.media.client.nuvio e esse papel nao alcanca o servico de display.
+// A libAcbAPI alcanca: ela expoe AcbAPI_setCustomDisplayWindow e fala com o
+// tv.display por dentro, que e como o proprio navegador da TV faz.
+static int  (*acbJanelaCustom)(long, long, long, long, long,
+                               long, long, long, long, int, long *);
 static void (*acbDestruir)(long);
 // O navegador da TV chama isto e nos nao chamavamos: sem o connect o plano de
 // video existe, decodifica e toca o audio, mas nao e ligado a saida — tela
@@ -539,6 +548,24 @@ static void chamar(const char *metodo, const char *carga, Filtro cb) {
     printf("[video] %s falhou\n", metodo);
 }
 
+// Chamada a OUTRO servico. O recorte de fonte NAO mora no com.webos.media: ele
+// respondeu `Unknown method "setDisplayWindow" for category "/"`, e a lista do
+// `ls-monitor -i com.webos.media` confirma que nao existe ali. Quem tem os
+// metodos de janela e o com.webos.service.tv.display:
+//
+//   "setDisplayWindow":       {"provides":["tv.management","private","tv.settings","all","public"]}
+//   "setCustomDisplayWindow": idem
+//
+// setCustomDisplayWindow e o que aceita a fonte junto do destino, que e o
+// recorte de que o zoom precisa.
+static void chamarEm(const char *servico, const char *metodo,
+                     const char *carga, Filtro cb) {
+  char uri[160]; unsigned long tok = 0;
+  snprintf(uri, sizeof uri, "luna://%s/%s", servico, metodo);
+  if (!lsCall(bus, uri, carga, cb, NULL, &tok, ERRO))
+    printf("[video] %s/%s falhou\n", servico, metodo);
+}
+
 static int aoCarregar(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m), *q;
   char b[256];
@@ -603,6 +630,10 @@ int video_iniciar(void) {
   SIM(A, acbMidia,    "AcbAPI_setMediaId");
   SIM(A, acbEstado,   "AcbAPI_setState");
   SIM(A, acbJanela,   "AcbAPI_setDisplayWindow");
+  // NAO usa SIM: se a lib desta TV nao tiver o simbolo, o app segue sem zoom
+  // em vez de nao iniciar. O recorte e util, mas nao vale o app inteiro.
+  *(void **)(&acbJanelaCustom) = dlsym(A, "AcbAPI_setCustomDisplayWindow");
+  if (!acbJanelaCustom) printf("[video] sem AcbAPI_setCustomDisplayWindow; zoom fica indisponivel\n");
   SIM(A, acbDestruir, "AcbAPI_destroy");
   SIM(A, acbConectar, "AcbAPI_connectDass");
   SIM(A, acbVideoData, "AcbAPI_setMediaVideoData");
@@ -899,16 +930,28 @@ void video_janela_fonte(int sx, int sy, int sw, int sh,
   dstX = dx; dstY = dy; dstW = dw; dstH = dh;
   janX = dx; janY = dy; janW = dw; janH = dh;   // o reaplicar do bind usa estes
   if (!ligado || !midia[0]) return;
+  // Formato do com.webos.service.tv.display: `sourceInput` e o recorte no
+  // quadro decodificado, `displayOutput` o retangulo na tela, `sink` MAIN
+  // porque o video vai para o plano principal (o secundario e o PIP).
   snprintf(b, sizeof b,
-           "{\"mediaId\":\"%s\","
-           "\"source\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d},"
-           "\"destination\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d},"
-           "\"isFullScreen\":%s}",
-           midia, sx, sy, sw, sh, dx, dy, dw, dh, cheia ? "true" : "false");
+           "{\"sink\":\"MAIN\",\"fullScreen\":%s,"
+           "\"sourceInput\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d},"
+           "\"displayOutput\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}}",
+           cheia ? "true" : "false", sx, sy, sw, sh, dx, dy, dw, dh);
   printf("[video] fonte %d,%d %dx%d -> destino %d,%d %dx%d\n",
          sx, sy, sw, sh, dx, dy, dw, dh);
   fflush(stdout);
-  chamar("setDisplayWindow", b, aoJanela);
+  // O caminho e o ACB, nao o luna direto: o hub recusa o app no tv.display.
+  if (acbJanelaCustom && acb) {
+    long tarefa = 0;
+    int r = acbJanelaCustom(acb, sx, sy, sw, sh, dx, dy, dw, dh, cheia, &tarefa);
+    printf("[video] acb janela custom -> %d\n", r); fflush(stdout);
+    if (r) return;
+    printf("[video] acb recusou o recorte; voltando a tela cheia\n"); fflush(stdout);
+  }
+  semUms = 1;
+  video_janela(dx, dy, dw, dh);
+  (void)b; (void)aoJanela;
 }
 
 double video_pos(void)      { return posSeg; }
