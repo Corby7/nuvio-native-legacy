@@ -293,13 +293,34 @@ static void sincronizarFileiras(void) {
 
 void home_atualizar(float dt, Uint32 agora) {
   sincronizarFileiras();
-  // O carrossel fica ativo enquanto a home está visível. A troca é lenta e
-  // independente do foco, igual à rotação automática do hero legacy.
-  if (agora >= heroTrocaEm) {
-    heroAnterior = heroAtual;
-    heroAtual = (heroAtual + 1) % nAcervoHero();
-    heroFade = 0.0f;
-    heroTrocaEm = agora + NV_HERO_INTERVALO_MS;
+
+  // O HERO SEGUE O FOCO. Pedido do dono, e e uma DIVERGENCIA DELIBERADA do app
+  // web: medi duas vezes com o foco andando de verdade (o card mudou de "54
+  // minutos restantes" para "1h 12m restantes") e a arte do
+  // `.home-hero-backdrop` continuou a mesma — no web ela nao acompanha a
+  // selecao. Fica registrado para ninguem "corrigir" isto de volta achando que
+  // e desvio: e melhoria escolhida, nao erro.
+  //
+  // Enquanto ha foco num card, o carrossel automatico nao roda: duas fontes
+  // mexendo na mesma arte dariam trocas em cima da escolha do usuario.
+  {
+    int alvo = -1;
+    if (foco.fileira >= 0 && foco.fileira < nFileiras) {
+      int i = fileiras[foco.fileira].ini + foco.coluna;
+      if (i >= 0 && i < cat_n()) alvo = i;
+    }
+    if (alvo >= 0 && alvo != heroAtual) {
+      heroAnterior = heroAtual;
+      heroAtual = alvo;
+      heroFade = 0.0f;                       // recomeca o crossfade
+      heroTrocaEm = agora + NV_HERO_INTERVALO_MS;
+    } else if (alvo < 0 && agora >= heroTrocaEm) {
+      // Sem card em foco (acervo vazio, por exemplo) o carrossel volta a girar.
+      heroAnterior = heroAtual;
+      heroAtual = (heroAtual + 1) % nAcervoHero();
+      heroFade = 0.0f;
+      heroTrocaEm = agora + NV_HERO_INTERVALO_MS;
+    }
   }
   if (heroFade < 1.0f) {
     heroFade += dt * (1000.0f / NV_HERO_FADE_MS);
@@ -375,6 +396,8 @@ static void desenhaHero(Uint32 agora) {
   // dois estados da MESMA tela, nao dois layouts — e cada um tem a sua rampa de
   // degrade, medida separadamente (ver GFX_HERO e GFX_HERO_CHEIO em gfx.c).
   int cheio = ajustes_hero_cheio();
+  // Em tela cheia o bloco sobe 70px (ver layout.h).
+  float logoY = cheio ? NV_HERO_CHEIO_LOGO_Y : NV_HERO_LOGO_Y;
   GfxModo modoHero = cheio ? GFX_HERO_CHEIO : GFX_HERO;
   GfxRect r = cheio ? (GfxRect){ 0, 0, NV_TELA_W, NV_HERO_CHEIO_H }
                     : (GfxRect){ NV_HERO_ARTE_X, 0, NV_HERO_ARTE_W, NV_HERO_ARTE_H };
@@ -425,7 +448,7 @@ static void desenhaHero(Uint32 agora) {
     // O logo cresce para CIMA a partir da base da caixa reservada, para que um
     // logo baixo e largo nao flutue no meio dela.
     GfxRect rl = { ajustes_conteudo_x(),
-                   NV_HERO_LOGO_Y + (NV_LOGO_HERO_H - hTit), wTit, hTit };
+                   logoY + (NV_LOGO_HERO_H - hTit), wTit, hTit };
     gfx_tex_aspect_atual = 0.0f;
     gfx_rect(rl, tlogo, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, aTexto * heroFade);
   } else {
@@ -437,7 +460,7 @@ static void desenhaHero(Uint32 agora) {
                        aTexto * heroFade);
   }
 
-  float y = NV_HERO_META_Y;
+  float y = cheio ? NV_HERO_CHEIO_META_Y : NV_HERO_META_Y;
   if (tserv) {
     float hs = sub.h * 1.15f;
     GfxRect rs = { ajustes_conteudo_x(), y + (sub.h - hs) * 0.5f, wServ - 14.0f, hs };

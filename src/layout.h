@@ -28,6 +28,14 @@
 // continua com 640 de largura, mas em x = NV_CONTENT_PAD e comecando em y=40.
 #define NV_HERO_CHEIO_H        1062.0f
 #define NV_HERO_CHEIO_COPY_Y     40.0f
+// Com o hero em TELA CHEIA o bloco de texto sobe: o web poe o logo em y=65 e a
+// linha de meta em 257, contra 135 e 327 do hero de faixa. MEDIDO na sessao
+// logada, que e a que tem `modernHeroFullScreenBackdropEnabled`. O port usava os
+// numeros da faixa nos dois modos, e por isso o texto todo ficava 70px baixo
+// demais — foi o que o dono descreveu como margem errada.
+// A sinopse fica em 411 nos DOIS modos; so o que esta acima dela se desloca.
+#define NV_HERO_CHEIO_LOGO_Y     65.0f
+#define NV_HERO_CHEIO_META_Y    257.0f
 
 // Scancode do BACK no SDL da LG (SDL_SCANCODE_WEBOS_BACK). Nao esta no
 // SDL_scancode.h padrao, por isso vem como numero.
