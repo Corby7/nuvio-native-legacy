@@ -131,7 +131,22 @@ static void podar(void) {
 // ENCOSTADO no teto de 72 MB (medido: 71,4 MB com 29 texturas), despejando e
 // rebaixando sem parar — o que aparece como 30fps com jank em todo quadro
 // depois de alguns minutos de uso. A 960 a mesma cena cabe com folga.
-#define NV_TEX_LARG_MAX 960
+// Teto de decodificacao das artes de CARD.
+//
+// Era 960 para tudo, e a maior arte de card que a tela desenha e a miniatura de
+// episodio, com 640 (NV_DETP_EP_W). Um poster de 212 de largura era decodificado
+// a 960x1440 e custava 5 MB de textura — vinte deles ja passam do orcamento
+// inteiro de 96 MB.
+//
+// Foi o que o dono viu: mexendo nas fileiras, e principalmente ao ABRIR UM
+// FILME (que pede backdrop de 1920 mais miniaturas, posteres de relacionados e
+// fotos de elenco de uma vez), o total estourava e o podar despejava tudo que
+// estava na tela — ficava cinza e nao voltava.
+//
+// 640 cobre a maior arte de card sem sobra e divide o custo por 2,25: o mesmo
+// poster passa a custar 2,2 MB. O hero continua com teto proprio de 1920, pela
+// promocao.
+#define NV_TEX_LARG_MAX 640
 #define NV_TEX_HERO_LARG_MAX 1920
 
 static char dirCache[512];
