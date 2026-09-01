@@ -1183,11 +1183,12 @@ static void desenhaAvaliacoes(float x, float y, float a) {
   for (i = 0; i < EX_NFONTES; i++) {
     int v = extras_nota(i);
     char txt[8];
+    // Sem mdbList o IMDb ainda vem do catalogo, que guarda 0..100; no vetor a
+    // escala e "cru x 10", e para o imdb o cru e 0..10.
     if (i == EX_IMDB && !v) v = notaDe(idx);
     if (!v) continue;
-    // Tomatoes, Audience e Metacritic sao porcentagem; o resto e nota de 0 a 10.
-    if (i == EX_TOMATOES || i == EX_AUDIENCE || i == EX_METACRITIC)
-      snprintf(txt, sizeof txt, "%d%%", v);
+    if (extras_fonte_percentual(i))
+      snprintf(txt, sizeof txt, "%d%%", (v + 5) / 10);
     else
       snprintf(txt, sizeof txt, "%.1f", v / 10.0f);
     cartaoNota(x + col * (AVAL_CARD_W + AVAL_CARD_GAP), y,

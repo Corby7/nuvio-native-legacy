@@ -18,18 +18,29 @@ static const char *FONTE[EX_NFONTES] = {
   "trakt", "imdb", "tmdb", "tomatoes", "audience", "metacritic", "letterboxd"
 };
 
-// O mdbList devolve a nota em escalas diferentes por provedor: 0..10 no IMDb,
-// TMDB, Trakt e Letterboxd; 0..100 no Tomatoes, Audience e Metacritic. Aqui
-// tudo vira 0..100, que e a escala que o resto do app ja usa.
-static int centesimos(int fonte, double v) {
-  int n;
-  if (fonte == EX_TOMATOES || fonte == EX_AUDIENCE || fonte == EX_METACRITIC)
-    n = (int)(v + 0.5);
-  else
-    n = (int)(v * 10.0 + 0.5);
+// A ESCALA MUDA POR PROVEDOR, e nao do jeito que parece. CONFERIDO na api com
+// tt9737326: imdb=6.2 (0..10), mas trakt=66 e tmdb=70 — os dois em PORCENTAGEM,
+// junto com tomatoes=59, audience=46 e metacritic=53. Eu tinha suposto que
+// trakt e tmdb viessem em 0..10 como o imdb, e o resultado era "10.0" nos dois
+// (66 x 10 estourava o teto e grudava no maximo).
+//
+// Guardamos o valor CRU multiplicado por 10, para o imdb caber em inteiro sem
+// perder a casa decimal; quem desenha divide de novo conforme o provedor.
+//
+// DIVERGENCIA ANOTADA: o web nao reescala nada — formatMdbListRating
+// (metaDetailsScreen.js:732) imprime o numero como veio, entao la o TMDB
+// aparece como "70.0" ao lado de um IMDb "6.2". Aqui o TMDB vira "70%", que e
+// o que o numero de fato e.
+static int emDecimos(double v) {
+  int n = (int)(v * 10.0 + 0.5);
   if (n < 0) n = 0;
-  if (n > 100) n = 100;
+  if (n > 1000) n = 1000;
   return n;
+}
+
+// 1 quando a nota da fonte e uma PORCENTAGEM; 0 quando e nota de 0 a 10.
+int extras_fonte_percentual(int fonte) {
+  return fonte != EX_IMDB && fonte != EX_LETTERBOXD;
 }
 
 void extras_carregar(const char *dirArte) {
@@ -120,7 +131,11 @@ static void *buscar(void *arg) {
       // Sem chave do mdbList esta e a UNICA nota do Trakt que teremos; com
       // chave, o passo seguinte sobrescreve com a que o mdbList devolver, que
       // e a mesma fonte que o web mostra.
-      if (!notas[EX_TRAKT]) notas[EX_TRAKT] = n;
+      // notaTrakt esta em 0..100 (a api do Trakt devolve 0..10). No vetor a
+      // escala e "cru x 10" e a fonte trakt e percentual, entao 6.7 -> 67% ->
+      // 670. Sem esta conversao o cartao mostrava 6.7% quando nao havia
+      // mdbList.
+      if (!notas[EX_TRAKT]) notas[EX_TRAKT] = n * 10;
     }
     pthread_mutex_unlock(&trava);
   }
@@ -148,7 +163,7 @@ static void *buscar(void *arg) {
       { double v = js_num(rp, NULL, "rating", -1.0);
         free(rp);
         if (v >= 0.0) {
-          int c = centesimos(k, v);
+          int c = emDecimos(v);
           pthread_mutex_lock(&trava);
           if (!strcmp(id, idPedido)) notas[k] = c;
           pthread_mutex_unlock(&trava);
@@ -233,7 +248,10 @@ static void *buscar(void *arg) {
     pthread_mutex_unlock(&trava);
   }
 
-  printf("[extras] %s -> nota=%d coment=%d rel=%d\n", id, notaTrakt, nComent, nRel);
+  { int k, q = 0;
+    for (k = 0; k < EX_NFONTES; k++) if (notas[k]) q++;
+    printf("[extras] %s -> notas=%d/%d coment=%d rel=%d\n", id, q, EX_NFONTES,
+           nComent, nRel); }
   fflush(stdout);
   pthread_mutex_lock(&trava);
   fioVivo = 0;

@@ -33,9 +33,11 @@ typedef enum {
 // Le art/mdblist.txt. Sem ele o modulo funciona com Trakt e IMDb apenas.
 void extras_carregar(const char *dirArte);
 
-// Nota da fonte em 0..100; 0 = nao ha. O arquivo de marca correspondente esta
-// em art/marcas/<extras_fonte_marca(i)>.png.
+// Nota da fonte, CRUA multiplicada por 10 (o imdb vem com uma casa decimal e
+// precisa caber em inteiro). 0 = nao ha. Divida por 10 e use
+// extras_fonte_percentual() para saber se o resultado e "6.2" ou "66%".
 int  extras_nota(int fonte);
+int  extras_fonte_percentual(int fonte);
 const char *extras_fonte_marca(int fonte);
 // Caminho ABSOLUTO do arquivo de marca. Ver a nota em extras.c: relativo nao
 // funciona porque o diretorio de trabalho do app nao e a pasta da arte.

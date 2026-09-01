@@ -3,3 +3,12 @@ nuvio-proto.arm
 *.ipk
 deploy/app/nuvio-proto
 deploy/app/art/cache/
+
+# SEGREDOS do dono. NAO versionar: sao chaves de conta, nao configuracao.
+# tmdb.txt e trakt.txt JA ESTAVAM rastreados e sairam do indice com
+# `git rm --cached`; o historico antigo ainda os contem (commit 4ea949d em
+# diante). Repositorio e local, sem remoto — se um dia ganhar remoto, girar as
+# chaves antes.
+deploy/app/art/tmdb.txt
+deploy/app/art/trakt.txt
+deploy/app/art/mdblist.txt
