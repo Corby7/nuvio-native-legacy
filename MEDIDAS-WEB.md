@@ -276,3 +276,39 @@ existe no web.** O que existe, medido:
 | `.series-insight-tabs` | y=1680; "Criador e elenco \| Avaliações \| Trailer", fonte 32/500; escolhida branca, as outras `#808080`; divisor "\|" fonte 32/700 `#808080` |
 | elenco | avatar **140×140** raio 999, nome fonte **26/500** `rgb(179,179,179)`, card 220 de largura, passo **270**, a partir de x=96 |
 
+
+## Catálogos da home — de onde sai a lista (MEDIDO, **não portado**)
+
+O port declara quatro fileiras num array estático em `src/home.c`
+(`"Continue Assistindo"`, `"Popular - Movie"`, `"Popular - Series"`,
+`"Em alta"`). No web nada disso é fixo. A fonte de verdade é
+`localStorage.homeCatalogPrefs`, escopado por perfil:
+
+```json
+{ "__profileScoped": true, "version": 1,
+  "profiles": { "1": { "order": [...], "disabled": [...], "customTitles": {...} } } }
+```
+
+- **`order`** — a ordem das fileiras, por chave. Duas formas de chave:
+  `<addonId>_<tipo>_<catalogoId>` (ex.
+  `app.xperience.<uuid>_movie_recs_movies_for_you`) e `collection_<uuid>`
+  para as coleções do próprio usuário. No perfil do dono são **mais de 30**.
+- **`disabled`** — as que o perfil desligou (vazio hoje). É isto que responde
+  "o que acontece com uma que o perfil desativou": ela sai da home.
+- **`customTitles`** — renomeação por fileira; sem entrada, o título vem do
+  manifesto do addon.
+- **`installedAddonEnabledStates`** — 3 addons instalados; um addon desligado
+  leva junto os catálogos dele.
+
+"Continuar assistindo" **não** está em `order`: é uma fileira sintética, sempre
+primeira quando há itens, montada de `continueWatchingItems` /
+`watchProgressItems`.
+
+Do lado nativo já existem `addons.c` (lê `addons.txt`, com coluna dizendo se o
+addon fornece catálogo) e `descoberta.c` (monta o acervo pela rede). O que
+falta é a home parar de cravar a lista e passar a perguntar.
+
+**PENDÊNCIA PARA O DONO:** o nativo deve ler `homeCatalogPrefs` do app web
+(mesmo aparelho, outro processo — e o app web mantém o arquivo aberto, como já
+aconteceu com o progresso), ou receber a lista pela rede junto com o acervo?
+Não inventei uma ordem.
