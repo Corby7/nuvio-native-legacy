@@ -385,7 +385,20 @@ void home_atualizar(float dt, Uint32 agora) {
 // A mídia ocupa a direita dos 650px superiores; o texto fica no bloco esquerdo
 // e as fileiras rolam em um viewport independente abaixo. O hero não captura
 // foco: a navegação espacial começa no primeiro card, como no DOM legacy.
-static void desenhaHero(Uint32 agora) {
+// Rect da ARTE do hero no ultimo quadro. A tela de detalhe le isto para
+// comecar o backdrop dela EXATAMENTE onde a arte ja estava, em vez de aparecer
+// do nada: o fundo e o mesmo do titulo, entao ele nao deve piscar nem crescer.
+static GfxRect heroArteRect = { 0, 0, NV_TELA_W, NV_TELA_H };
+void home_hero_rect(float *x, float *y, float *w, float *h) {
+  *x = heroArteRect.x; *y = heroArteRect.y;
+  *w = heroArteRect.w; *h = heroArteRect.h;
+}
+
+// `saida` = 0..1 de quanto o detalhe ja tomou a tela. So o TEXTO do hero sai
+// (desce e apaga); a arte fica parada, porque e a mesma arte que o detalhe vai
+// usar. Era isso que faltava para a abertura ler como rearranjo de layout e
+// nao como troca de tela.
+static void desenhaHero(Uint32 agora, float saida) {
   (void)agora;
   float aArte = 1.0f;
   // MEDIDO no app web: .home-modern-hero-media fica em x=555, y=0, 1421x670.
@@ -417,8 +430,11 @@ static void desenhaHero(Uint32 agora) {
     gfx_rect(r, tAtu, modoHero, 0, 0, 0, 0.0f, 0, 0, 0, heroFade * aArte);
   }
   gfx_tex_aspect_atual = 0.0f;
+  heroArteRect = r;
 
-  float aTexto = 1.0f;
+  float aTexto = 1.0f - saida;
+  float descidaCopy = saida * NV_TELA_H * 0.06f;
+  if (aTexto <= 0.004f) return;
 
   // BLOCO DE TEXTO DO HERO — transcrito do CSS do app web, nao deduzido de
   // captura. `.home-modern-hero-copy` e um flex column com justify-content
@@ -468,7 +484,7 @@ static void desenhaHero(Uint32 agora) {
   const char *sinopse = (ci && ci->sinopse[0]) ? ci->sinopse : "";
 
   // --- empilhamento de baixo para cima, como o flex-end do CSS ---
-  float base = NV_SHELF_TOP - NV_HERO_COPY_GAP;
+  float base = NV_SHELF_TOP - NV_HERO_COPY_GAP + descidaCopy;
   float hSin = sinopse[0] ? txt_bloco(TXT_HERO_SIN, sinopse, 255, 255, 255, -1, 0,
                                       NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, 3)
                           : 0.0f;
@@ -563,7 +579,8 @@ static void desenhaFundo(void) {
 
 void home_desenhar(Uint32 agora) {
   desenhaFundo();
-  if (ajustes_hero_ligado()) desenhaHero(agora);
+  float pd = detail_progresso();
+  if (ajustes_hero_ligado()) desenhaHero(agora, pd);
 
   // ABERTURA DO DETALHE: as fileiras DESCEM e apagam; a arte de fundo fica.
   //
@@ -576,7 +593,6 @@ void home_desenhar(Uint32 agora) {
   // O `pd` vem da MESMA mola que o detalhe usa para desenhar (detail_progresso),
   // e nao de um relogio proprio: dois relogios descasariam e a home sairia
   // adiantada ou atrasada em relacao a arte que entra.
-  float pd = detail_progresso();
   float descida = pd * NV_TELA_H * 0.08f;
   if (pd >= 0.996f) return;   // detalhe assentado: nada da home aparece
 

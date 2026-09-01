@@ -34,6 +34,11 @@ const char *home_backdrop(int i);   // arte do titulo i do catalogo
 void home_evento(const SDL_Event *e);
 void home_atualizar(float dt, Uint32 agora);
 void home_desenhar(Uint32 agora);
+
+// Onde a ARTE do hero foi desenhada no ultimo quadro. A tela de detalhe usa
+// isto para nascer com o backdrop no mesmo lugar — o fundo do detalhe E a arte
+// do titulo em foco, e ela nao deve reaparecer, deve continuar.
+void home_hero_rect(float *x, float *y, float *w, float *h);
 void home_encerrar(void);
 int  home_quer_sair(void);
 int  home_pediu_abrir(void);   // OK pressionado: consome o pedido

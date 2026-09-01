@@ -525,6 +525,37 @@ static void *buscarEps(void *u) {
           edit.direcao[n2++] = *dr++;
         edit.direcao[n2] = 0;
       } }
+    // GENEROS, NOTA E PAIS. Vinham so do CATALOGO, e o catalogo do Cinemeta nao
+    // traz nenhum dos tres: a linha de meta ficava com o TIPO ("Programa de TV")
+    // no lugar dos generos, sem selo do IMDb e sem pais. O /meta traz os tres, e
+    // esta funcao ja tem a resposta na mao — deixar de ler era desperdicio de uma
+    // viagem que ja foi paga.
+    { const char *g = js_array(corpo, NULL, "genres");
+      char lista[160]; size_t n3 = 0;
+      lista[0] = 0;
+      while (g && *g == '"' && n3 + 1 < sizeof lista) {
+        const char *p2 = g + 1;
+        if (n3) { // separador do web: espaco, ponto medio, espaco
+          if (n3 + 4 >= sizeof lista) break;
+          lista[n3++] = ' '; lista[n3++] = '\xc2'; lista[n3++] = '\xb7'; lista[n3++] = ' ';
+        }
+        while (*p2 && *p2 != '"' && n3 + 1 < sizeof lista) lista[n3++] = *p2++;
+        lista[n3] = 0;
+        if (*p2 == '"') p2++;
+        while (*p2 == ' ') p2++;
+        g = (*p2 == ',') ? p2 + 1 : NULL;
+        while (g && *g == ' ') g++;
+      }
+      if (lista[0]) snprintf(edit.genero, sizeof edit.genero, "%s", lista); }
+    { double nota = js_num(corpo, NULL, "imdbRating", 0.0);
+      // O campo vem como "8.1" (string ou numero); guardamos por 10 para caber
+      // em int sem perder a casa decimal, como o resto do catalogo ja faz.
+      if (nota > 0.0) {
+        int n10 = (int)(nota * 10.0 + 0.5);
+        if (n10 > 99) n10 /= 10;      // ja veio multiplicado
+        edit.nota = n10;
+      } }
+    js_texto(corpo, NULL, "country", edit.pais, sizeof edit.pais);
     // Temporadas presentes, sem repetir e em ordem.
     { const char *v = js_array(corpo, NULL, "videos");
       edit.nTemporadas = 0;

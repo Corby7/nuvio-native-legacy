@@ -38,6 +38,9 @@ typedef struct {
   // as duas coisas que a linha tecnica do app da Apple mostra alem do ano e da
   // duracao — sem elas a linha fica com metade da informacao.
   int  nota;              // 0 = desconhecida
+  // Pais de producao, para a ultima linha de meta do detalhe (o web mostra
+  // 'United States of America' ali). Vem do /meta, nao do catalogo.
+  char pais[64];
   char provLogo[512];
   char provNome[64];
   // Onde assistir alem da assinatura: aluguel e compra na regiao BR do TMDB.

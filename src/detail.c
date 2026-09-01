@@ -20,6 +20,7 @@
 //   4. Ao rolar, a arte de fundo NAO desfoca: ela vai a 15% de opacidade em
 //      0.8s. O desfoque gaussiano era do app da Apple TV.
 #include "detail.h"
+#include "home.h"
 #include "streams.h"
 #include "descoberta.h"
 #include "gfx.h"
@@ -250,14 +251,15 @@ static int secaoN(int r) {
   return 0;
 }
 
-// Quantos botoes o hero tem AGORA. O secundario ("Reproduzir desde o inicio")
-// so existe quando ha progresso — no web ele e renderizado dentro do mesmo
-// `if` que a linha de retomada.
-static int temSecundario(void) {
-  const CatItem *ci = cat_item(idx);
-  return ci && ci->progresso > 0;
-}
-static int nBotoes(void) { return temSecundario() ? 4 : 3; }
+// O botao primario e UM SO, e ele TROCA DE ROTULO conforme o estado:
+// "Reproduzir" quando nunca foi aberto, "Retomar TxEy" quando ha progresso.
+//
+// Havia um segundo botao ("Reproduzir desde o inicio") que aparecia junto da
+// linha de retomada. Saiu por decisao do dono: "quando ja tiver comecado nao use
+// outro botao para resumir, use o mesmo botao de reproduzir, so troque ele". E o
+// que a referencia mostra tambem — primario + TRES circulares (+, ja assisti,
+// trailer), sem segundo botao de texto.
+static int nBotoes(void) { return 4; }   // primario + 3 circulares
 
 void detail_evento(const SDL_Event *e) {
   if (saindo) return;
@@ -283,18 +285,11 @@ void detail_evento(const SDL_Event *e) {
     dur = SDL_GetTicks() - okDesceEm;
     okDesceEm = 0;
     if (nivel == 0) {
-      // A ordem dos botoes muda com o estado: com progresso entra o secundario
-      // ENTRE o primario e os circulares, como no `renderHeroSection` do web.
-      int sec = temSecundario();
+      // Ordem FIXA agora que o botao de texto extra saiu: primario, adicionar a
+      // lista, marcar como visto, trailer.
       if (botao == 0) {
         if (dur >= NV_HOLD_MS) pedFontes = 1; else pedReproduzir = 1;
-      } else if (sec && botao == 1) {
-        // O roteador (app.c) ainda so sabe "abrir o player deste titulo", e
-        // app.c e arquivo de outro agente nesta sessao. O pedido fica marcado
-        // para quando existir o caminho de "ignorar o ponto salvo", mas o botao
-        // JA reproduz — um botao que nao faz nada e pior que um que faz quase.
-        pedDoInicio = 1; pedReproduzir = 1;
-      } else if (botao == (sec ? 2 : 1)) {
+      } else if (botao == 1) {
         pedMarcar = 1;
       } else {
         pedFontes = 1;
@@ -619,7 +614,8 @@ static void heroWeb(float a, float desloc) {
                             NV_DETW_SIN_LINHAS);
   float ySin = yMeta1 - NV_DETW_GAP_SIN - hSin;              // 748
   float ySup = sup[0] ? ySin - NV_DETW_GAP_SUP - NV_DETW_LD_SUP : ySin;  // 688
-  float temRetom = temSecundario();
+  // A linha de retomada continua ligada ao PROGRESSO, nao ao botao que saiu.
+  float temRetom = (ci && ci->progresso > 0) ? 1.0f : 0.0f;
   float yRetom = ySup - NV_DETW_GAP_SUP - NV_DETW_RETOM_H;
   float yAcoes = (temRetom ? yRetom - NV_DETW_GAP_RETOM
                            : ySup - NV_DETW_GAP_ACOES) - NV_DETW_ACOES_H;
@@ -679,13 +675,9 @@ static void heroWeb(float a, float desloc) {
   GfxRect rp = { bx, yBtn, larguraPrimario(rot), NV_DETW_BTN_H };
   desenhaBotao(rp, rot, 0, nivel == 0 && botao == nb, a);
   bx += rp.w + NV_DETW_BTN_GAP; nb++;
-  if (temSecundario()) {
-    const char *rs = "Reproduzir desde o inicio";
-    GfxRect rs2 = { bx, yBtn, larguraSecundario(rs), NV_DETW_BTN_H };
-    desenhaSecundario(rs2, rs, nivel == 0 && botao == nb, a);
-    bx += rs2.w + NV_DETW_BTN_GAP; nb++;
-  }
-  for (int k = 0; k < 2; k++, nb++) {
+  // TRES circulares, como na referencia: adicionar a lista, marcar como visto e
+  // trailer. Antes eram dois, e entre eles cabia o botao de texto que saiu.
+  for (int k = 0; k < 3; k++, nb++) {
     GfxRect rc = { bx, yCirc, NV_DETW_CIRC, NV_DETW_CIRC };
     desenhaBotao(rc, NULL, k + 1, nivel == 0 && botao == nb, a);
     bx += NV_DETW_CIRC + NV_DETW_BTN_GAP;
@@ -1091,8 +1083,18 @@ void detail_desenhar(Uint32 agora) {
   // Agora a arte ocupa a tela desde o primeiro quadro e so ganha opacidade. Quem
   // se move sao as fileiras da home, que descem (ver home_desenhar, que le o
   // detail_progresso).
+  // O FUNDO NAO TROCA: ele CONTINUA. O hero da home ja mostrava a arte deste
+  // mesmo titulo, entao o backdrop do detalhe nasce no rect exato em que ela
+  // estava e cresce dali ate a tela cheia, sem piscar e sem crossfade — com o
+  // hero em tela cheia os dois rects sao praticamente o mesmo e o olho nao ve
+  // movimento nenhum, so o texto se rearranjando. Antes a arte entrava do zero
+  // ganhando opacidade sobre a arte identica que ja estava la, o que dava um
+  // clarao no meio da transicao.
   GfxRect cheia = { 0, 0, NV_TELA_W, NV_TELA_H };
-  GfxRect alvo = cheia;
+  GfxRect de;
+  home_hero_rect(&de.x, &de.y, &de.w, &de.h);
+  GfxRect alvo = { de.x + (cheia.x - de.x) * s, de.y + (cheia.y - de.y) * s,
+                   de.w + (cheia.w - de.w) * s, de.h + (cheia.h - de.h) * s };
   const char *arte = arteDe(idx);
   // Backdrop em tela cheia: pede o teto de 1920. Com o teto comum de 960 a arte
   // era decodificada com metade da resolucao e ampliada ao dobro na tela.
@@ -1106,8 +1108,12 @@ void detail_desenhar(Uint32 agora) {
   }
   if (tex) {
     gfx_tex_aspect_atual = tex_aspecto(arte);
+    // Opacidade sobe RAPIDO (nao com `s`): a arte por baixo e a mesma, entao o
+    // que a rampa faz e so trocar a vinheta do hero pela do detalhe. Esticada
+    // ao longo de toda a mola ela viraria um esmaecimento visivel do fundo.
+    float aEntrada = anim_clamp(s * 3.0f, 0.0f, 1.0f);
     gfx_rect(alvo, tex, GFX_DETALHE, 0, 0, 0, 0.0f, 0, 0, 0,
-             1.0f - 0.85f * pg);
+             aEntrada * (1.0f - 0.85f * pg));
     gfx_tex_aspect_atual = 0.0f;
   } else {
     gfx_cor(alvo, 0.0f, 0.051f, 0.051f, 0.051f, 1.0f);
@@ -1116,7 +1122,10 @@ void detail_desenhar(Uint32 agora) {
   // O hero ROLA com o documento: ele nao some nem e substituido por um
   // cabecalho fixo. Era isso que fazia a pagina do port parecer outra tela em
   // vez da mesma tela rolada.
-  heroWeb(a2, -scrollY);
+  // O conteudo SOBE para o lugar enquanto aparece, no lugar de so surgir: e a
+  // contraparte do texto da home, que desce e apaga. Junto, le como um bloco
+  // trocando de arranjo, que e o que o dono pediu.
+  heroWeb(a2, -scrollY + (1.0f - a2) * NV_TELA_H * 0.05f);
 
   if (pg <= 0.01f && scrollY < 1.0f) return;
   for (int r = 0; r < N_SECOES; r++) desenhaSecao(r, pg, agora);
