@@ -263,7 +263,18 @@ void app_desenhar(Uint32 agora) {
     // tambem quando `collapseSidebar` esta ligado, que e o estado do perfil do
     // dono. Recolhida ela nao ocupa largura nenhuma: o conteudo passa a comecar
     // em 104, e quem devolve esse x e ajustes_conteudo_x().
-    if (menu_visivel() && !detail_aberto() && !ajustes_rail_recolhida())
+    // A guarda de `collapseSidebar` NAO entra aqui. Ela ja existe DENTRO do
+    // menu_desenhar, e la ela pula so a RAIL FIXA — que e o correto: recolhida,
+    // a barra nao ocupa largura, mas continua abrindo como CAMADA ao ganhar
+    // foco, exatamente como o web faz.
+    //
+    // Com a guarda tambem neste ponto, o menu_desenhar nunca era chamado no
+    // perfil do dono (collapseSidebar ligado): o menu abria, engolia as teclas
+    // e nao desenhava nada. Ficava sem menu e sem caminho para os Ajustes — foi
+    // o defeito relatado como "nao ta mostrando o menu e nao tem os ajustes".
+    // Guarda repetida em dois lugares para a mesma regra: no de dentro ela
+    // significa "nao pinte a faixa", no de fora significava "nao exista".
+    if (menu_visivel() && !detail_aberto())
       menu_desenhar(agora);
   }
   player_desenhar(agora);
