@@ -87,6 +87,7 @@ static void fotosDoElenco(CatItem *d, const char *imdbSerie, int serie) {
       const char *f = js_fim(p);
       char caminhoFoto[128] = "";
       js_texto(p, f, "character", d->elenco[k].papel, sizeof d->elenco[k].papel);
+      d->elenco[k].tmdb = (long)js_num(p, f, "id", 0.0);
       if (js_texto(p, f, "profile_path", caminhoFoto, sizeof caminhoFoto) &&
           caminhoFoto[0] == '/')
         snprintf(d->elenco[k].foto, sizeof d->elenco[k].foto,

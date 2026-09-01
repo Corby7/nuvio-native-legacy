@@ -12,8 +12,19 @@
 #ifndef NV_TRAKT_H
 #define NV_TRAKT_H
 #include "catalogo.h"
+#include <stddef.h>
 
 int  trakt_carregar(const char *dirArte);   // 1 quando ha credencial
+
+// Monta os tres cabecalhos que TODO pedido ao Trakt exige (token, versao da
+// api e a chave do aplicativo) em `cab`, que precisa ter 4 posicoes — a
+// ultima recebe NULL. Devolve 0 quando nao ha credencial carregada.
+//
+// Existe porque este mesmo bloco estava copiado em cada funcao do trakt.c, e o
+// extras.c seria a quarta copia. Os buffers `aut` e `chave` sao de quem chama:
+// os cabecalhos apontam para eles e precisam viver ate o fim do pedido.
+int  trakt_cabecalhos(const char **cab, char *aut, size_t nAut,
+                      char *chave, size_t nChave);
 int  trakt_ativo(void);
 
 // Preenche ate `max` itens do "continue assistindo", ja com arte resolvida.

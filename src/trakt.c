@@ -13,6 +13,15 @@ static int  ligado;
 
 int trakt_ativo(void) { return ligado; }
 
+int trakt_cabecalhos(const char **cab, char *aut, size_t nAut,
+                     char *chave, size_t nChave) {
+  if (!ligado) return 0;
+  snprintf(aut, nAut, "Authorization: Bearer %s", token);
+  snprintf(chave, nChave, "trakt-api-key: %s", cliente);
+  cab[0] = aut; cab[1] = "trakt-api-version: 2"; cab[2] = chave; cab[3] = NULL;
+  return 1;
+}
+
 int trakt_carregar(const char *dirArte) {
   char caminho[600], linha[300], *tab;
   FILE *f;

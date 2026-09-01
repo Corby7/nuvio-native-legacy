@@ -31,7 +31,11 @@ typedef struct {
   // Elenco real: nome, papel e a foto (quando o TMDB tem). Sem isto a secao
   // "Elenco e equipe" fica com nomes inventados, e nomes inventados nao testam
   // o layout — os de verdade tem tamanhos que quebram a coluna.
-  struct { char nome[64]; char papel[64]; char foto[512]; } elenco[6];
+  // `tmdb` e o id da PESSOA no TMDB, nao do titulo: e a chave para abrir a
+  // filmografia dela (/person/<id>?append_to_response=combined_credits), que e
+  // o que o web faz no `openCastDetail`. Sem ele o unico caminho seria procurar
+  // por nome, que erra em homonimo e em nome com acento.
+  struct { char nome[64]; char papel[64]; char foto[512]; long tmdb; } elenco[6];
   int nElenco;
   char direcao[128];
   // Nota da critica em porcentagem e o logo do servico onde o titulo esta. Sao

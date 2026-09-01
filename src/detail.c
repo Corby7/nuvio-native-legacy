@@ -21,6 +21,7 @@
 //      0.8s. O desfoque gaussiano era do app da Apple TV.
 #include "detail.h"
 #include "home.h"
+#include "extras.h"
 #include "streams.h"
 #include "descoberta.h"
 #include "gfx.h"
@@ -96,8 +97,11 @@ static const struct { float grupo, alvo; } SECOES[N_SECOES] = {
 //
 // Aqui existem duas: elenco (sempre) e avaliacoes (quando ha nota). Similares
 // e trailer nao tem fonte neste port; quando tiverem, entram nesta tabela.
-typedef enum { ABA_ELENCO, ABA_AVALIACOES, ABA_NFIXAS } AbaInfoId;
-static const char *ABA_ROTULO[ABA_NFIXAS] = { "Criador e elenco", "Avaliacoes" };
+typedef enum { ABA_ELENCO, ABA_AVALIACOES, ABA_RELACIONADOS, ABA_COMENTARIOS,
+               ABA_NFIXAS } AbaInfoId;
+static const char *ABA_ROTULO[ABA_NFIXAS] = {
+  "Criador e elenco", "Avaliacoes", "Mais como este", "Comentarios"
+};
 
 // Nota do IMDb do titulo aberto, 0 quando nao ha.
 static int notaDe(int i) {
@@ -106,9 +110,13 @@ static int notaDe(int i) {
 }
 static int abaDisponivel(int id) {
   switch (id) {
-    case ABA_ELENCO:     return 1;
-    case ABA_AVALIACOES: return notaDe(idx) > 0;
-    default:             return 0;
+    case ABA_ELENCO:       return 1;
+    // Basta UMA das notas para a aba valer a pena; o cartao que faltar mostra
+    // "-", que e o que o web faz.
+    case ABA_AVALIACOES:   return notaDe(idx) > 0 || extras_nota_trakt() > 0;
+    case ABA_RELACIONADOS: return extras_n_relacionados() > 0;
+    case ABA_COMENTARIOS:  return extras_n_comentarios() > 0;
+    default:               return 0;
   }
 }
 // Traduz a posicao visivel `c` para o id da aba.
@@ -204,6 +212,11 @@ void detail_abrir(const HomeItem *it) {
   aberto = 1; saindo = 0; nivel = 0; botao = 0;
   t = 0.0f; pg = 0.0f; scrollY = 0.0f; abaInfo = 0;
   idx = it->indice;
+  // Nota do Trakt, comentarios e relacionados. Pedido na ABERTURA e nao no
+  // desenho: as abas so aparecem depois que o dado chega, e pedir no desenho
+  // faria a barra de abas surgir com o titulo ja na tela.
+  { const CatItem *ci = cat_item(idx);
+    if (ci && ci->imdb[0]) extras_pedir(ci->imdb, ehSerie()); }
   // A aba marcada tem de ser a da temporada que os episodios trazem. Comecando
   // sempre em 0, uma serie cujo primeiro episodio carregado e da 4 abria com
   // "Temporada 1" aceso — o rotulo desmentia a lista logo abaixo.
@@ -1082,12 +1095,56 @@ static void cartaoNota(float x, float y, const char *fonte, const char *valor,
 }
 
 static void desenhaAvaliacoes(float x, float y, float a) {
-  char imdb[8] = "-";
-  int n = notaDe(idx);
+  char imdb[8] = "-", trakt[8] = "-";
+  int n = notaDe(idx), t = extras_nota_trakt();
   if (n > 0) snprintf(imdb, sizeof imdb, "%.1f", n / 10.0f);
+  if (t > 0) snprintf(trakt, sizeof trakt, "%.1f", t / 10.0f);
   cartaoNota(x, y, "IMDb", imdb, a);
-  // TMDB nao vem no catalogo; o web escreve "-" no cartao quando falta.
-  cartaoNota(x + AVAL_CARD_W + AVAL_CARD_GAP, y, "TMDB", "-", a);
+  // Trakt entra na MESMA fileira, como no renderExternalRatingsRow do web
+  // (metaDetailsScreen.js:3410), que lista trakt, imdb, tmdb e o resto lado a
+  // lado. O TMDB continua "-": a nota dele nao vem no catalogo.
+  cartaoNota(x + (AVAL_CARD_W + AVAL_CARD_GAP), y, "Trakt", trakt, a);
+  cartaoNota(x + (AVAL_CARD_W + AVAL_CARD_GAP) * 2, y, "TMDB", "-", a);
+}
+
+// Aba "Mais como este": /related do Trakt. Uma coluna de titulos com o ano, e
+// nao os posteres do web — o related do Trakt devolve identificador e nome, e
+// buscar poster para doze titulos so para pintar esta aba custaria doze
+// pedidos de rede a cada abertura. O que a aba precisa responder e "o que mais
+// se parece com isto", e o nome responde.
+static void desenhaRelacionados(float x, float y, float a) {
+  int n = extras_n_relacionados(), i;
+  for (i = 0; i < n && i < 8; i++) {
+    float yl = y + i * 52.0f;
+    TxtLinha lt = txt_linha_corta(TXT_DET_META, extras_relacionado_titulo(i),
+                                  235, 238, 245, 255, 900.0f);
+    txt_desenhar_alpha(lt, x, yl, a);
+    { const char *ano = extras_relacionado_ano(i);
+      if (ano[0]) {
+        TxtLinha la = txt_linha(TXT_DET_META2, ano, 150, 154, 163, 255);
+        txt_desenhar_alpha(la, x + lt.w + 18.0f, yl + 2.0f, a * 0.9f);
+      } }
+  }
+}
+
+// Aba "Comentarios": /comments/likes do Trakt, os mais curtidos primeiro. Uma
+// linha com o usuario e as curtidas, e o texto quebrado embaixo.
+static void desenhaComentarios(float x, float y, float a) {
+  int n = extras_n_comentarios(), i;
+  float yl = y;
+  // TRES e nao quatro: com quatro o cabecalho do ultimo cabia na tela e o texto
+  // dele nao, e sobrava um "usuario / N curtidas" solto no rodape.
+  for (i = 0; i < n && i < 3; i++) {
+    char cab[80];
+    snprintf(cab, sizeof cab, "%s   %d curtidas", extras_comentario_usuario(i),
+             extras_comentario_curtidas(i));
+    { TxtLinha lc = txt_linha(TXT_DET_META2, cab, 150, 154, 163, 255);
+      txt_desenhar_alpha(lc, x, yl, a * 0.9f); }
+    yl += 34.0f;
+    yl += txt_bloco(TXT_DET_META, extras_comentario_texto(i), 226, 230, 238,
+                    x, yl, 1100.0f, 34.0f, a, 2);
+    yl += 26.0f;
+  }
 }
 
 static void desenhaSecao(int r, float a, Uint32 agora) {
@@ -1099,10 +1156,17 @@ static void desenhaSecao(int r, float a, Uint32 agora) {
   //
   // Trocar, e nao sobrepor: na primeira captura do aparelho a mensagem saia POR
   // CIMA dos avatares do elenco, e as duas coisas ficavam ilegiveis.
-  if (r == SEC_ELENCO && abaIdDe(abaInfo) == ABA_AVALIACOES) {
-    desenhaAvaliacoes(NV_DETP_X, NV_DETP_EL_Y - scrollY + 40.0f, a);
-    return;
-  }
+  { int aba = abaIdDe(abaInfo);
+    float yAba = NV_DETP_EL_Y - scrollY + 40.0f;
+    if (r == SEC_ELENCO && aba == ABA_AVALIACOES) {
+      desenhaAvaliacoes(NV_DETP_X, yAba, a); return;
+    }
+    if (r == SEC_ELENCO && aba == ABA_RELACIONADOS) {
+      desenhaRelacionados(NV_DETP_X, yAba, a); return;
+    }
+    if (r == SEC_ELENCO && aba == ABA_COMENTARIOS) {
+      desenhaComentarios(NV_DETP_X, yAba, a); return;
+    } }
   if (n <= 0) return;
   float y;
   switch (r) {
