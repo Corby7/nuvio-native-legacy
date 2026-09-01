@@ -300,6 +300,9 @@ void detail_evento(const SDL_Event *e) {
     else if (k == SDLK_LEFT)  { if (botao > 0) botao--; }
     return;
   }
+  // Com uma aba sem conteudo escolhida nao ha fileira de elenco para descer:
+  // sem esta guarda o foco caia em avatares que a secao nem desenha mais.
+  if (k == SDLK_DOWN && foco.fileira == SEC_ABAS_INFO && abaInfo != 0) return;
   if (k == SDLK_RIGHT)      focus_mover(&foco, 1, 0);
   else if (k == SDLK_LEFT)  focus_mover(&foco, -1, 0);
   else if (k == SDLK_DOWN)  focus_mover(&foco, 0, 1);
@@ -935,6 +938,19 @@ static void desenhaElenco(float x, float y, int c, float f, float a) {
 
 static void desenhaSecao(int r, float a, Uint32 agora) {
   int n = secaoN(r);
+  // Aba de informacao que nao seja "Criador e elenco": o web TROCA o conteudo
+  // da secao (avaliacoes por episodio, fileira de similares, trailer). Nenhum
+  // desses dados existe no catalogo nativo, e o web mostra exatamente esta
+  // linha quando o dado falta (`.series-insight-empty`).
+  //
+  // Trocar, e nao sobrepor: na primeira captura do aparelho a mensagem saia POR
+  // CIMA dos avatares do elenco, e as duas coisas ficavam ilegiveis.
+  if (r == SEC_ELENCO && abaInfo != 0) {
+    TxtLinha l = txt_linha(TXT_DET_SIN, "Sem informacao para esta aba.",
+                           128, 128, 128, 255);
+    txt_desenhar_alpha(l, NV_DETP_X, NV_DETP_EL_Y - scrollY + 40.0f, a);
+    return;
+  }
   if (n <= 0) return;
   float y;
   switch (r) {
@@ -976,16 +992,6 @@ static void desenhaSecao(int r, float a, Uint32 agora) {
     }
   }
 
-  // Aba de informacao que nao seja "Criador e elenco": o web troca o conteudo
-  // da secao (avaliacoes por episodio, fileira de similares, trailer). Nenhum
-  // desses dados existe no catalogo nativo — e inventar uma fileira seria pior
-  // que dizer que nao ha. O web mostra exatamente esta linha quando o dado
-  // falta (`.series-insight-empty`).
-  if (r == SEC_ELENCO && abaInfo != 0) {
-    TxtLinha l = txt_linha(TXT_DET_SIN, "Sem informacao para esta aba.",
-                           128, 128, 128, 255);
-    txt_desenhar_alpha(l, NV_DETP_X, y + 40.0f, a);
-  }
 }
 
 void detail_desenhar(Uint32 agora) {
