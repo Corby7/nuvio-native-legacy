@@ -10,6 +10,7 @@
 #include "layout.h"
 #include "ajustes.h"
 #include "catalogo.h"
+#include "extras.h"
 // Declarado a mao em vez de incluir detail.h: aquele header inclui ESTE (por
 // causa do HomeItem), e o ciclo so nao explode por causa das guardas. Uma
 // funcao de uma linha nao vale amarrar os dois arquivos.
@@ -193,6 +194,7 @@ static float passoDe(TipoFileira t) {
 }
 
 int home_iniciar(const char *dirArte) {
+  extras_carregar(dirArte);
   cat_carregar(dirArte);
   carregaDir(dirArte, bd, &nBd, NULL);
   carregaDir(dirArte, pst, &nPst, "poster");

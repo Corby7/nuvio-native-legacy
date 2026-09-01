@@ -8,6 +8,62 @@
 #include <stdlib.h>
 
 static int  notaTrakt, votosTrakt;
+static int  notas[EX_NFONTES];
+static char mdbChave[80];
+static char dirArteEx[512];
+
+// Nome do provedor na api do mdbList E nome do arquivo de marca em art/marcas.
+// A ordem e a do enum, que e a do renderExternalRatingsRow do web.
+static const char *FONTE[EX_NFONTES] = {
+  "trakt", "imdb", "tmdb", "tomatoes", "audience", "metacritic", "letterboxd"
+};
+
+// O mdbList devolve a nota em escalas diferentes por provedor: 0..10 no IMDb,
+// TMDB, Trakt e Letterboxd; 0..100 no Tomatoes, Audience e Metacritic. Aqui
+// tudo vira 0..100, que e a escala que o resto do app ja usa.
+static int centesimos(int fonte, double v) {
+  int n;
+  if (fonte == EX_TOMATOES || fonte == EX_AUDIENCE || fonte == EX_METACRITIC)
+    n = (int)(v + 0.5);
+  else
+    n = (int)(v * 10.0 + 0.5);
+  if (n < 0) n = 0;
+  if (n > 100) n = 100;
+  return n;
+}
+
+void extras_carregar(const char *dirArte) {
+  char caminho[600];
+  FILE *f;
+  snprintf(dirArteEx, sizeof dirArteEx, "%s", dirArte ? dirArte : ".");
+  snprintf(caminho, sizeof caminho, "%s/mdblist.txt", dirArte ? dirArte : ".");
+  f = fopen(caminho, "r");
+  if (!f) { printf("[extras] mdblist ausente\n"); fflush(stdout); return; }
+  if (fgets(mdbChave, sizeof mdbChave, f)) {
+    char *fim = mdbChave + strlen(mdbChave);
+    while (fim > mdbChave && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0;
+  }
+  fclose(f);
+  printf("[extras] mdblist %s\n", mdbChave[0] ? "ok" : "vazio"); fflush(stdout);
+}
+
+int extras_nota(int fonte) {
+  return (fonte >= 0 && fonte < EX_NFONTES) ? notas[fonte] : 0;
+}
+const char *extras_fonte_marca(int fonte) {
+  return (fonte >= 0 && fonte < EX_NFONTES) ? FONTE[fonte] : "";
+}
+
+const char *extras_caminho_marca(int fonte) {
+  // ABSOLUTO. O cache de textura chama IMG_Load com o caminho como veio, e o
+  // diretorio de trabalho do app nao e a pasta da arte — com "marcas/x.png"
+  // relativo o arquivo simplesmente nao era achado e o cartao saia sem logo,
+  // sem erro nenhum. O catalogo ja faz assim (catalogo.c:79).
+  static char cam[600];
+  if (fonte < 0 || fonte >= EX_NFONTES) return "";
+  snprintf(cam, sizeof cam, "%s/marcas/%s.png", dirArteEx, FONTE[fonte]);
+  return cam;
+}
 static struct { char user[40]; char texto[420]; int curtidas; } coment[EX_COMENT_MAX];
 static int  nComent;
 static struct { char titulo[120], ano[8], imdb[16]; } rel[EX_REL_MAX];
@@ -59,8 +115,45 @@ static void *buscar(void *arg) {
     int v = (int)js_num(corpo, NULL, "votes", 0.0);
     free(corpo);
     pthread_mutex_lock(&trava);
-    if (!strcmp(id, idPedido)) { notaTrakt = n; votosTrakt = v; }
+    if (!strcmp(id, idPedido)) {
+      notaTrakt = n; votosTrakt = v;
+      // Sem chave do mdbList esta e a UNICA nota do Trakt que teremos; com
+      // chave, o passo seguinte sobrescreve com a que o mdbList devolver, que
+      // e a mesma fonte que o web mostra.
+      if (!notas[EX_TRAKT]) notas[EX_TRAKT] = n;
+    }
     pthread_mutex_unlock(&trava);
+  }
+
+  // --- notas do mdbList, se o dono tiver chave ---
+  //
+  // Um POST por provedor, como o web faz (fetchProviderRating): a api aceita
+  // "ids" em lote mas so um provedor por chamada. Sao sete chamadas curtas; o
+  // fio ja e proprio, entao nao atrapalha o desenho.
+  if (mdbChave[0]) {
+    const char *cabJ[3];
+    char kj[64];
+    char corpoPost[80];
+    int k;
+    snprintf(kj, sizeof kj, "content-type: application/json");
+    cabJ[0] = kj; cabJ[1] = NULL; cabJ[2] = NULL;
+    snprintf(corpoPost, sizeof corpoPost,
+             "{\"ids\":[\"%s\"],\"provider\":\"imdb\"}", id);
+    for (k = 0; k < EX_NFONTES; k++) {
+      char u[300], *rp;
+      snprintf(u, sizeof u, "https://api.mdblist.com/rating/%s/%s?apikey=%s",
+               serieEmCurso ? "show" : "movie", FONTE[k], mdbChave);
+      rp = rede_postar(u, 12, cabJ, corpoPost);
+      if (!rp) continue;
+      { double v = js_num(rp, NULL, "rating", -1.0);
+        free(rp);
+        if (v >= 0.0) {
+          int c = centesimos(k, v);
+          pthread_mutex_lock(&trava);
+          if (!strcmp(id, idPedido)) notas[k] = c;
+          pthread_mutex_unlock(&trava);
+        } }
+    }
   }
 
   // --- comentarios, os mais curtidos primeiro ---
@@ -165,6 +258,7 @@ void extras_pedir(const char *imdb, int serie) {
   if (!strcmp(idPedido, imdb)) { pthread_mutex_unlock(&trava); return; }
   snprintf(idPedido, sizeof idPedido, "%s", imdb);
   notaTrakt = votosTrakt = nComent = nRel = 0;
+  memset(notas, 0, sizeof notas);
   if (fioVivo) { pthread_mutex_unlock(&trava); return; }
   snprintf(idEmCurso, sizeof idEmCurso, "%s", imdb);
   serieEmCurso = serie;

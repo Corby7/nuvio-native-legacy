@@ -32,6 +32,8 @@ void desc_tmdb(const char *dirArte) {
   printf("[desc] tmdb %s\n", tmdbChave[0] ? "ok" : "ausente");
 }
 
+const char *desc_chave_tmdb(void) { return tmdbChave; }
+
 // strstr que NAO passa de `fim`. O objeto da regiao BR termina antes das
 // outras regioes na resposta do TMDB; procurar rent/buy no corpo inteiro
 // pegaria o provedor de outra regiao quando a BR nao tivesse.

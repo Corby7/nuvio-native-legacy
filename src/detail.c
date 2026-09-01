@@ -22,6 +22,7 @@
 #include "detail.h"
 #include "home.h"
 #include "extras.h"
+#include "pessoa.h"
 #include "streams.h"
 #include "descoberta.h"
 #include "gfx.h"
@@ -50,6 +51,18 @@ static float t = 0.0f;               // 0 = card na home, 1 = tela cheia
 // nivel intermediario "cartao vira tela cheia" so fazia sentido enquanto havia
 // cartao; no web a tela ja nasce cheia.
 static int  nivel = 0;
+// Ficha da pessoa por cima da tela de titulo. Nao e um `nivel` a mais porque
+// nao e um estado da MESMA pagina: e outra tela, que aparece e sai inteira.
+static int  pessoaAberta;
+static int  pessoaFoco;
+#define PES_FOTO_W   280.0f
+#define PES_FOTO_H   420.0f
+#define PES_COL_X    (NV_DETP_X + PES_FOTO_W + 56.0f)
+#define PES_CARD_W   212.0f
+#define PES_CARD_H   318.0f
+#define PES_CARD_GAP  32.0f
+#define PES_POR_LINHA  6
+
 static int  botao = 0;      // botao em foco no hero
 static int  pedReproduzir = 0, pedMarcar = 0, pedFontes = 0;
 static int  pedDoInicio = 0;         // botao "Reproduzir desde o inicio"
@@ -210,7 +223,7 @@ static void txt_peso(TxtLinha l, float x, float y, float a, float grossura) {
 void detail_abrir(const HomeItem *it) {
   item = *it;
   aberto = 1; saindo = 0; nivel = 0; botao = 0;
-  t = 0.0f; pg = 0.0f; scrollY = 0.0f; abaInfo = 0;
+  t = 0.0f; pg = 0.0f; scrollY = 0.0f; abaInfo = 0; pessoaAberta = 0;
   idx = it->indice;
   // Nota do Trakt, comentarios e relacionados. Pedido na ABERTURA e nao no
   // desenho: as abas so aparecem depois que o dado chega, e pedir no desenho
@@ -309,6 +322,36 @@ static int nBotoes(void) { return 4; }   // primario + 3 circulares
 void detail_evento(const SDL_Event *e) {
   if (saindo) return;
 
+  // A FICHA DA PESSOA come os eventos enquanto esta aberta. Ela e outra tela e
+  // nao uma secao desta: deixar a tela de titulo continuar respondendo por
+  // baixo faria a seta mover duas coisas ao mesmo tempo.
+  if (pessoaAberta) {
+    if (e->type != SDL_KEYDOWN) return;
+    { int n = pessoa_n_creditos();
+      switch (e->key.keysym.sym) {
+        case SDLK_LEFT:  if (pessoaFoco > 0) pessoaFoco--; return;
+        case SDLK_RIGHT: if (pessoaFoco + 1 < n) pessoaFoco++; return;
+        case SDLK_UP:
+          if (pessoaFoco >= PES_POR_LINHA) pessoaFoco -= PES_POR_LINHA;
+          return;
+        case SDLK_DOWN:
+          if (pessoaFoco + PES_POR_LINHA < n) pessoaFoco += PES_POR_LINHA;
+          return;
+        case SDLK_AC_BACK: pessoaAberta = 0; return;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+          // Abrir o titulo a partir daqui exigiria resolver o IMDb id contra o
+          // catalogo e reabrir a tela de detalhe com outro indice. O caminho
+          // existe (o id vem em pessoa_credito_imdb), mas trocar de titulo com
+          // a tela de titulo ainda montada por baixo e o tipo de coisa que
+          // quebra em silencio; fica para quando houver como testar a volta.
+          return;
+        default: break;
+      } }
+    if (e->key.keysym.scancode == NV_SCANCODE_BACK) pessoaAberta = 0;
+    return;
+  }
+
   if (e->type == SDL_KEYDOWN && (e->key.keysym.sym == SDLK_RETURN ||
                                  e->key.keysym.sym == SDLK_KP_ENTER)) {
     if (!okDesceEm) okDesceEm = SDL_GetTicks();
@@ -344,6 +387,17 @@ void detail_evento(const SDL_Event *e) {
       // continuava a mesma, o que fazia a aba parecer quebrada.
       temporada = foco.coluna;
       desc_episodios(idx, temporadaEm(temporada));
+    } else if (foco.fileira == SEC_ELENCO && abaIdDe(abaInfo) == ABA_ELENCO) {
+      // OK num rosto abre a FILMOGRAFIA da pessoa. E o `openCastDetail` do web
+      // (metaDetailsScreen.js:6165); aqui o OK no elenco nao fazia nada.
+      const CatItem *ci = cat_item(idx);
+      if (ci && foco.coluna < ci->nElenco && ci->elenco[foco.coluna].tmdb > 0) {
+        pessoa_pedir(ci->elenco[foco.coluna].tmdb,
+                     ci->elenco[foco.coluna].nome,
+                     ci->elenco[foco.coluna].foto);
+        pessoaAberta = 1;
+        pessoaFoco = 0;
+      }
     } else if (foco.fileira == SEC_ABAS_INFO) {
       abaInfo = foco.coluna;
     } else if (foco.fileira == SEC_EPISODIOS) {
@@ -1072,39 +1126,74 @@ static void desenhaElenco(float x, float y, int c, float f, float a) {
 #define AVAL_CARD_W  160.0f
 #define AVAL_CARD_H  120.0f
 #define AVAL_CARD_GAP 16.0f
-static void cartaoNota(float x, float y, const char *fonte, const char *valor,
-                       float a) {
-  GfxRect card = { x, y, AVAL_CARD_W, AVAL_CARD_H };
-  gfx_cor(card, 14.0f, 0.071f, 0.090f, 0.122f, 0.90f * a);
-  // Borda de 1px a 16%: quatro faixas, que e como o resto desta tela desenha
-  // contorno (nao ha helper de borda no gfx).
-  float b = 0.16f * a;
-  gfx_cor((GfxRect){ x, y, AVAL_CARD_W, 1 }, 0, 1, 1, 1, b);
-  gfx_cor((GfxRect){ x, y + AVAL_CARD_H - 1, AVAL_CARD_W, 1 }, 0, 1, 1, 1, b);
-  gfx_cor((GfxRect){ x, y, 1, AVAL_CARD_H }, 0, 1, 1, 1, b);
-  gfx_cor((GfxRect){ x + AVAL_CARD_W - 1, y, 1, AVAL_CARD_H }, 0, 1, 1, 1, b);
-
-  // O SVG das duas marcas nao esta empacotado; o nome em maiusculas ocupa o
-  // mesmo lugar do logo de 56x28 e diz a mesma coisa.
-  TxtLinha lf = txt_linha(TXT_CAPTION2, fonte, 200, 205, 214, 255);
-  TxtLinha lv = txt_linha(TXT_TITULO3, valor, 245, 248, 255, 255);
-  float hBloco = lf.h + 8.0f + lv.h;
-  float yb = y + (AVAL_CARD_H - hBloco) * 0.5f;
-  txt_desenhar_alpha(lf, x + (AVAL_CARD_W - lf.w) * 0.5f, yb, a * 0.9f);
-  txt_desenhar_alpha(lv, x + (AVAL_CARD_W - lv.w) * 0.5f, yb + lf.h + 8.0f, a);
+// Contorno de 1px a 16%, em quatro faixas: nao ha helper de borda no gfx e
+// este mesmo desenho serve o cartao de nota e o de comentario.
+// `raio` em PIXEIS; a conversao para a fracao do menor lado que o gfx espera e
+// feita aqui. Passar 14 direto (o raio do CSS) fazia o SDF saturar e o cartao
+// saia de canto reto — o valor do gfx e fracao, nao pixel.
+static void moldura(GfxRect r, float raio, float a) {
+  float menor = r.w < r.h ? r.w : r.h;
+  raio = menor > 0.0f ? raio / menor : 0.0f;
+  gfx_cor(r, raio, 0.071f, 0.090f, 0.122f, 0.90f * a);
+  { float b = 0.16f * a;
+    gfx_cor((GfxRect){ r.x, r.y, r.w, 1 }, 0, 1, 1, 1, b);
+    gfx_cor((GfxRect){ r.x, r.y + r.h - 1, r.w, 1 }, 0, 1, 1, 1, b);
+    gfx_cor((GfxRect){ r.x, r.y, 1, r.h }, 0, 1, 1, 1, b);
+    gfx_cor((GfxRect){ r.x + r.w - 1, r.y, 1, r.h }, 0, 1, 1, 1, b); }
 }
 
+// Cartao de nota: a MARCA em cima e o valor embaixo, como o .movie-rating-card
+// do web (logo 56x28, valor 34/800). As marcas sao os proprios arquivos do app
+// web convertidos para PNG em art/marcas — desenhar um retangulo colorido com
+// as iniciais, que era o que estava aqui, fica com cara de esboco ao lado de
+// componentes que usam arte de verdade.
+static void cartaoNota(float x, float y, const char *marca, const char *valor,
+                       float a) {
+  GfxRect card = { x, y, AVAL_CARD_W, AVAL_CARD_H };
+  const char *cam = marca;
+  GLuint t;
+  moldura(card, 14.0f, a);
+  t = tex_obter(cam);
+  { TxtLinha lv = txt_linha(TXT_TITULO3, valor, 245, 248, 255, 255);
+    float hLogo = 28.0f, hBloco = hLogo + 12.0f + lv.h;
+    float yb = y + (AVAL_CARD_H - hBloco) * 0.5f;
+    if (t) {
+      float ap = tex_aspecto(cam);
+      float w;
+      if (ap <= 0.0f) ap = 2.0f;
+      w = hLogo * ap;
+      if (w > 96.0f) { w = 96.0f; hLogo = w / ap; }
+      { GfxRect rl = { x + (AVAL_CARD_W - w) * 0.5f, yb, w, hLogo };
+        // GFX_CARD e nao GFX_TEXTO: o modo de texto pinta a forma com a COR
+        // dada e joga fora o RGB da textura — o logo do IMDb sairia como uma
+        // silhueta branca. Aqui a marca tem de manter a cor dela.
+        gfx_tex_aspect_atual = 0.0f;
+        gfx_rect(rl, t, GFX_CARD, 0, 0, 0, 0.0f, 0, 0, 0, a); }
+    }
+    txt_desenhar_alpha(lv, x + (AVAL_CARD_W - lv.w) * 0.5f, yb + 28.0f + 12.0f, a);
+  }
+}
+
+// A FILEIRA de notas, na ordem do web: trakt, imdb, tmdb, tomatoes, audience,
+// metacritic, letterboxd. So entra a fonte que TEM nota — o web faz o mesmo
+// (`.filter(([,,value]) => value != null)`), e uma fileira de "-" nao informa
+// nada. IMDb vem do catalogo quando o mdbList nao respondeu por ele.
 static void desenhaAvaliacoes(float x, float y, float a) {
-  char imdb[8] = "-", trakt[8] = "-";
-  int n = notaDe(idx), t = extras_nota_trakt();
-  if (n > 0) snprintf(imdb, sizeof imdb, "%.1f", n / 10.0f);
-  if (t > 0) snprintf(trakt, sizeof trakt, "%.1f", t / 10.0f);
-  cartaoNota(x, y, "IMDb", imdb, a);
-  // Trakt entra na MESMA fileira, como no renderExternalRatingsRow do web
-  // (metaDetailsScreen.js:3410), que lista trakt, imdb, tmdb e o resto lado a
-  // lado. O TMDB continua "-": a nota dele nao vem no catalogo.
-  cartaoNota(x + (AVAL_CARD_W + AVAL_CARD_GAP), y, "Trakt", trakt, a);
-  cartaoNota(x + (AVAL_CARD_W + AVAL_CARD_GAP) * 2, y, "TMDB", "-", a);
+  int i, col = 0;
+  for (i = 0; i < EX_NFONTES; i++) {
+    int v = extras_nota(i);
+    char txt[8];
+    if (i == EX_IMDB && !v) v = notaDe(idx);
+    if (!v) continue;
+    // Tomatoes, Audience e Metacritic sao porcentagem; o resto e nota de 0 a 10.
+    if (i == EX_TOMATOES || i == EX_AUDIENCE || i == EX_METACRITIC)
+      snprintf(txt, sizeof txt, "%d%%", v);
+    else
+      snprintf(txt, sizeof txt, "%.1f", v / 10.0f);
+    cartaoNota(x + col * (AVAL_CARD_W + AVAL_CARD_GAP), y,
+               extras_caminho_marca(i), txt, a);
+    col++;
+  }
 }
 
 // Aba "Mais como este": /related do Trakt. Uma coluna de titulos com o ano, e
@@ -1129,21 +1218,26 @@ static void desenhaRelacionados(float x, float y, float a) {
 
 // Aba "Comentarios": /comments/likes do Trakt, os mais curtidos primeiro. Uma
 // linha com o usuario e as curtidas, e o texto quebrado embaixo.
+// Comentarios em CARTOES lado a lado, com a mesma moldura dos cartoes de nota,
+// para nao ficarem como texto solto no meio de uma tela feita de componentes.
+#define COM_CARD_W  560.0f
+#define COM_CARD_H  240.0f
+#define COM_CARD_GAP 32.0f
 static void desenhaComentarios(float x, float y, float a) {
   int n = extras_n_comentarios(), i;
-  float yl = y;
-  // TRES e nao quatro: com quatro o cabecalho do ultimo cabia na tela e o texto
-  // dele nao, e sobrava um "usuario / N curtidas" solto no rodape.
   for (i = 0; i < n && i < 3; i++) {
+    float cx = x + i * (COM_CARD_W + COM_CARD_GAP);
+    GfxRect card = { cx, y, COM_CARD_W, COM_CARD_H };
     char cab[80];
+    moldura(card, 14.0f, a);
     snprintf(cab, sizeof cab, "%s   %d curtidas", extras_comentario_usuario(i),
              extras_comentario_curtidas(i));
-    { TxtLinha lc = txt_linha(TXT_DET_META2, cab, 150, 154, 163, 255);
-      txt_desenhar_alpha(lc, x, yl, a * 0.9f); }
-    yl += 34.0f;
-    yl += txt_bloco(TXT_DET_META, extras_comentario_texto(i), 226, 230, 238,
-                    x, yl, 1100.0f, 34.0f, a, 2);
-    yl += 26.0f;
+    { TxtLinha lc = txt_linha_corta(TXT_DET_META2, cab, 150, 154, 163, 255,
+                                    COM_CARD_W - 48.0f);
+      txt_desenhar_alpha(lc, cx + 24.0f, y + 22.0f, a * 0.9f);
+      txt_bloco(TXT_DET_META2, extras_comentario_texto(i), 226, 230, 238,
+                cx + 24.0f, y + 22.0f + lc.h + 16.0f, COM_CARD_W - 48.0f,
+                34.0f, a, 4); }
   }
 }
 
@@ -1208,6 +1302,83 @@ static void desenhaSecao(int r, float a, Uint32 agora) {
     }
   }
 
+}
+
+// FICHA DA PESSOA — a tela que o web chama de castDetailScreen. Ocupa a tela
+// inteira sobre um fundo opaco, com a foto e a bio a esquerda e a filmografia
+// em cartoes de poster a direita. Nao ha layout medido do web para copiar aqui
+// (a tela do web e uma pagina rolavel de largura fluida), entao as medidas
+// seguem as que esta tela ja usa: gutter de 96, poster de 212x318, cartao com
+// o mesmo raio dos outros.
+
+static void desenhaPessoa(float a) {
+  GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
+  gfx_cor(tela, 0.0f, 0.051f, 0.051f, 0.051f, a);
+
+  { GLuint t = pessoa_foto()[0] ? tex_obter(pessoa_foto()) : 0;
+    GfxRect r = { NV_DETP_X, 96.0f, PES_FOTO_W, PES_FOTO_H };
+    if (t) {
+      gfx_tex_aspect_atual = tex_aspecto(pessoa_foto());
+      gfx_rect(r, t, GFX_CARD, 0, 0, 0, NV_RAIO_CARD / PES_FOTO_W, 0, 0, 0, a);
+      gfx_tex_aspect_atual = 0.0f;
+    } else {
+      gfx_cor(r, NV_RAIO_CARD / PES_FOTO_W, 0.13f, 0.13f, 0.13f, a);
+    } }
+
+  { float y = 96.0f + PES_FOTO_H + 32.0f;
+    TxtLinha ln = txt_linha_corta(TXT_TITULO3, pessoa_nome(), 245, 248, 255, 255,
+                                  PES_FOTO_W);
+    txt_desenhar_alpha(ln, NV_DETP_X, y, a);
+    y += ln.h + 10.0f;
+    if (pessoa_area()[0]) {
+      TxtLinha la = txt_linha(TXT_DET_META2, pessoa_area(), 150, 154, 163, 255);
+      txt_desenhar_alpha(la, NV_DETP_X, y, a * 0.9f);
+      y += la.h + 18.0f;
+    }
+    if (pessoa_bio()[0])
+      txt_bloco(TXT_DET_META2, pessoa_bio(), 190, 195, 205, NV_DETP_X, y,
+                PES_FOTO_W, 32.0f, a * 0.9f, 6);
+  }
+
+  { int n = pessoa_n_creditos(), i;
+    float x0 = PES_COL_X;
+    TxtLinha lt = txt_linha(TXT_HEADLINE, "Filmografia", 245, 248, 255, 255);
+    txt_desenhar_alpha(lt, x0, 96.0f, a);
+    for (i = 0; i < n; i++) {
+      int col = i % PES_POR_LINHA, lin = i / PES_POR_LINHA;
+      float x = x0 + col * (PES_CARD_W + PES_CARD_GAP);
+      float y = 96.0f + lt.h + 28.0f + lin * (PES_CARD_H + 92.0f);
+      GfxRect r = { x, y, PES_CARD_W, PES_CARD_H };
+      const char *po = pessoa_credito_poster(i);
+      GLuint t = po[0] ? tex_obter(po) : 0;
+      if (y + PES_CARD_H > NV_TELA_H - 24.0f) break;
+      if (i == pessoaFoco) {
+        GfxRect anel = { r.x - 4, r.y - 4, r.w + 8, r.h + 8 };
+        gfx_cor(anel, NV_RAIO_CARD / PES_CARD_W, 1, 1, 1, a);
+      }
+      if (t) {
+        gfx_tex_aspect_atual = tex_aspecto(po);
+        gfx_rect(r, t, GFX_CARD, i == pessoaFoco ? 1.0f : 0.0f, 0, 0,
+                 NV_RAIO_CARD / PES_CARD_W, 0, 0, 0, a);
+        gfx_tex_aspect_atual = 0.0f;
+      } else {
+        gfx_cor(r, NV_RAIO_CARD / PES_CARD_W, 0.13f, 0.13f, 0.13f, a);
+      }
+      { TxtLinha lc = txt_linha_corta(TXT_DET_META2, pessoa_credito_titulo(i),
+                                      230, 234, 242, 255, PES_CARD_W);
+        txt_desenhar_alpha(lc, x, y + PES_CARD_H + 12.0f, a);
+        { const char *ano = pessoa_credito_ano(i);
+          const char *pap = pessoa_credito_papel(i);
+          char sub[96];
+          snprintf(sub, sizeof sub, "%s%s%s", ano,
+                   (ano[0] && pap[0]) ? "  \xc2\xb7  " : "", pap);
+          if (sub[0]) {
+            TxtLinha ls = txt_linha_corta(TXT_MINI, sub, 140, 144, 153, 255,
+                                          PES_CARD_W);
+            txt_desenhar_alpha(ls, x, y + PES_CARD_H + 12.0f + lc.h + 6.0f,
+                               a * 0.9f);
+          } } }
+    } }
 }
 
 void detail_desenhar(Uint32 agora) {
@@ -1277,8 +1448,14 @@ void detail_desenhar(Uint32 agora) {
   // trocando de arranjo, que e o que o dono pediu.
   heroWeb(a2, -scrollY + (1.0f - a2) * NV_TELA_H * 0.05f);
 
-  if (pg <= 0.01f && scrollY < 1.0f) return;
+
+  if (pg <= 0.01f && scrollY < 1.0f) {
+    if (pessoaAberta) desenhaPessoa(s);
+    return;
+  }
   for (int r = 0; r < N_SECOES; r++) desenhaSecao(r, pg, agora);
+  // POR CIMA de tudo: a ficha e outra tela, nao uma secao desta.
+  if (pessoaAberta) desenhaPessoa(s);
 }
 
 int detail_indice(void) { return idx; }

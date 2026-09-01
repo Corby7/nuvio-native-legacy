@@ -18,6 +18,11 @@ void desc_iniciar(void);
 // foto nem personagem.
 void desc_tmdb(const char *dirArte);
 
+// A chave do TMDB ja carregada. Devolve "" quando art/tmdb.txt nao existe.
+// O modulo `pessoa` precisa dela para a filmografia, e ler o arquivo duas vezes
+// daria duas fontes de verdade para o mesmo segredo.
+const char *desc_chave_tmdb(void);
+
 // 1 enquanto busca; a home pode usar isto para um indicador.
 int  desc_buscando(void);
 

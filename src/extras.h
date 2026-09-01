@@ -21,6 +21,26 @@ void extras_pedir(const char *imdb, int serie);
 int  extras_nota_trakt(void);
 int  extras_votos_trakt(void);
 
+// FONTES DE NOTA, na ordem em que o web as lista (renderExternalRatingsRow,
+// metaDetailsScreen.js:3410). Todas menos IMDb e Trakt vem do mdbList, que
+// precisa da chave do dono em art/mdblist.txt; sem o arquivo elas ficam em 0 e
+// a fileira mostra so as duas que temos por conta propria.
+typedef enum {
+  EX_TRAKT, EX_IMDB, EX_TMDB, EX_TOMATOES, EX_AUDIENCE, EX_METACRITIC,
+  EX_LETTERBOXD, EX_NFONTES
+} ExFonte;
+
+// Le art/mdblist.txt. Sem ele o modulo funciona com Trakt e IMDb apenas.
+void extras_carregar(const char *dirArte);
+
+// Nota da fonte em 0..100; 0 = nao ha. O arquivo de marca correspondente esta
+// em art/marcas/<extras_fonte_marca(i)>.png.
+int  extras_nota(int fonte);
+const char *extras_fonte_marca(int fonte);
+// Caminho ABSOLUTO do arquivo de marca. Ver a nota em extras.c: relativo nao
+// funciona porque o diretorio de trabalho do app nao e a pasta da arte.
+const char *extras_caminho_marca(int fonte);
+
 // Comentarios: os mais curtidos primeiro, que e a ordem de `comments/likes`.
 int  extras_n_comentarios(void);
 const char *extras_comentario_usuario(int i);
