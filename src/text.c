@@ -233,9 +233,34 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
 
 void txt_desenhar(TxtLinha l, float x, float y) { txt_desenhar_alpha(l, x, y, 1.0f); }
 
+// ENCAIXE NO PIXEL DA TELA.
+//
+// A textura do glifo tem exatamente a resolucao em que vai ser desenhada, mas
+// o CANTO caia em coordenada fracionaria o tempo todo: centralizacao
+// (`(r.h - l.h) * 0.5f`), pilhas ancoradas na base, molas de rolagem. Com o
+// canto em 478.4 o GL_LINEAR amostra ENTRE dois texels e cada letra sai
+// espalhada por duas colunas de pixel — o texto inteiro fica meio pixel fora
+// de foco, em toda a tela, o tempo todo.
+//
+// Era isso que restava do "borrao" depois de o 4K se provar impossivel: nao
+// falta resolucao, falta o texto cair em cima do pixel. O web nao tem esse
+// problema porque o navegador ja posiciona glifo na grade do dispositivo.
+//
+// O arredondamento e feito na grade do DRAWABLE e nao na de layout: no Mac
+// retina meio pixel de layout e um pixel de tela inteiro, e arredondar na
+// grade errada jogaria o texto fora do lugar em vez de assenta-lo.
+//
+// So o TEXTO encaixa. Encaixar cartao e arte transformaria as molas em degraus
+// visiveis; o glifo nao sofre disso porque a letra em si nao se deforma, ela
+// so anda de um pixel para o outro.
+static float encaixa(float v) {
+  float e = escalaTxt;
+  return (float)((int)(v * e + (v < 0.0f ? -0.5f : 0.5f))) / e;
+}
+
 void txt_desenhar_alpha(TxtLinha l, float x, float y, float alpha) {
   if (!l.tex) return;
-  GfxRect r = { x, y, (float)l.w, (float)l.h };
+  GfxRect r = { encaixa(x), encaixa(y), (float)l.w, (float)l.h };
   gfx_rect(r, l.tex, GFX_TEXTO, 0, 0, 0, 0.0f, 1, 1, 1, alpha);
 }
 
