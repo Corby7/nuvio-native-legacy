@@ -230,9 +230,27 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
   Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN;
 #endif
+  // SUPERFICIE EM 4K, opcional e MEDIDA, nao presumida.
+  //
+  // A TV e 4K mas o compositor entrega 1920x1080 ao app (conferido: a captura
+  // do proprio app tem 1920x1080 de pixeis). Todo o desenho e vetorial ou vem
+  // de textura maior que o destino, entao uma superficie 3840x2160 renderiza
+  // tudo na resolucao do painel em vez de ser ampliada por ele — o texto e o
+  // que mais ganha, porque passa a ser rasterizado no tamanho final
+  // (ver a `escala` de txt_iniciar).
+  //
+  // Fica atras de /tmp/nuvio-4k.conf porque o custo e de PREENCHIMENTO e esta
+  // GPU (Mali-G71) e o gargalo conhecido do aparelho: quatro vezes os pixeis
+  // por camada de tela cheia. Ligar por padrao sem medir o quadro seria trocar
+  // nitidez por engasgo sem saber. O canvas de layout continua 1920x1080; o que
+  // muda e so a densidade.
+  int telaW = (int)NV_TELA_W, telaH = (int)NV_TELA_H;
+  { FILE *f4 = fopen("/tmp/nuvio-4k.conf", "r");
+    if (f4) { fclose(f4); telaW = 3840; telaH = 2160;
+              printf("[4k] superficie 3840x2160 pedida\n"); fflush(stdout); } }
   SDL_Window *win = SDL_CreateWindow("Nuvio", SDL_WINDOWPOS_CENTERED,
                                      SDL_WINDOWPOS_CENTERED,
-                                     (int)NV_TELA_W, (int)NV_TELA_H, flags);
+                                     telaW, telaH, flags);
   if (!win) { printf("janela: %s\n", SDL_GetError()); return 1; }
   // App de TV nao tem ponteiro: o cursor por cima da interface polui a leitura
   // e some sozinho no aparelho, mas nao no Mac.
@@ -315,7 +333,7 @@ int main(int argc, char **argv) {
   snprintf(dirRec, sizeof dirRec, "%s", dirArte);
   char *barra = strrchr(dirRec, '/');
   if (barra) *barra = 0;
-  txt_iniciar(dirRec);
+  txt_iniciar(dirRec, (float)dw / NV_TELA_W);
   tex_iniciar(96);
   if (!app_iniciar(dirArte)) return 1;
   // A configuracao de addons mora junto da arte. Ausente, o app segue com a

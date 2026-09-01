@@ -16,6 +16,15 @@ typedef struct {
   int ocupado;
 } Entrada;
 
+// Fator entre o pixel do BUFFER e o pixel de layout. As fontes sao abertas em
+// `corpo * escala` e a linha cacheada guarda a medida DIVIDIDA por ele, entao
+// todo o resto do app continua medindo em 1920x1080 enquanto o glifo tem a
+// resolucao real da tela.
+//
+// Sem isto o texto era rasterizado a 1080p e ampliado ao dobro na TV 4K — que
+// e exatamente o borrao que o dono viu comparando com o app web, onde o
+// navegador rasteriza no devicePixelRatio.
+static float escalaTxt = 1.0f;
 static TTF_Font *fontes[TXT_NFONTES];
 static Entrada cache[MAX_LINHAS];
 
@@ -101,7 +110,9 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_PG_GRAV,    PESO_REGULAR },  // .player-parental-severity (22/400)
 };
 
-int txt_iniciar(const char *dirRecursos) {
+int txt_iniciar(const char *dirRecursos, float escala) {
+  if (escala < 0.5f) escala = 1.0f;
+  escalaTxt = escala;
   if (TTF_Init() != 0) { printf("TTF_Init: %s\n", TTF_GetError()); return 0; }
   // A fonte da propria LG e a que a interface da TV usa; DroidSans e a reserva.
   // A Inter vai EMBARCADA no pacote. A TV so tem as fontes da LG e as do app da
@@ -139,7 +150,8 @@ int txt_iniciar(const char *dirRecursos) {
   for (int c = 0; c < 3; c++) {
     int todas = 1;
     for (int i = 0; i < TXT_NFONTES; i++) {
-      fontes[i] = TTF_OpenFont(familias[c][ESTILOS[i].peso], ESTILOS[i].corpo);
+      fontes[i] = TTF_OpenFont(familias[c][ESTILOS[i].peso],
+                               (int)(ESTILOS[i].corpo * escalaTxt + 0.5f));
       if (!fontes[i]) { todas = 0; break; }
       // negrito sintetico so na reserva, que nao tem arquivo Bold proprio
       if (c > 0 && ESTILOS[i].peso == PESO_BOLD) TTF_SetFontStyle(fontes[i], TTF_STYLE_BOLD);
@@ -208,7 +220,10 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
   cache[slot].ocupado = 1;
   cache[slot].hash = h;
   strncpy(cache[slot].chave, chave, sizeof cache[slot].chave - 1);
-  cache[slot].linha.tex = t; cache[slot].linha.w = cv->w; cache[slot].linha.h = cv->h;
+  // Medida em unidades de LAYOUT, nao em pixeis do buffer.
+  cache[slot].linha.tex = t;
+  cache[slot].linha.w = (int)(cv->w / escalaTxt + 0.5f);
+  cache[slot].linha.h = (int)(cv->h / escalaTxt + 0.5f);
   txt_rasterizadas++;
   txt_ms += (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
   cache[slot].uso = ++relogio;

@@ -51,7 +51,10 @@ extern double txt_ms;
 // `dirRecursos` e a pasta que contem fonts/. No aparelho e a pasta do app; no
 // Mac, a pasta do pacote — sem esse parametro a fonte so era procurada ao lado
 // do executavel, e rodar local caia direto no fallback.
-int  txt_iniciar(const char *dirRecursos);
+// `escala` e a razao entre o buffer e o canvas de layout (2 numa TV 4K, 1 em
+// 1080p). As fontes sao abertas nesse tamanho e a linha devolvida continua
+// medindo em unidades de layout — ver text.c.
+int  txt_iniciar(const char *dirRecursos, float escala);
 void txt_encerrar(void);
 
 // Devolve linha cacheada. Cor em 0..255. Nunca devolve NULL; em falha, w/h = 0.
