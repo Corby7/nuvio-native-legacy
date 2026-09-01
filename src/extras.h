@@ -14,7 +14,9 @@
 
 // Pede tudo de um titulo. Nao bloqueia: dispara um fio. Repetir com o mesmo
 // `imdb` nao refaz o pedido. `serie` decide entre /shows e /movies.
-void extras_pedir(const char *imdb, int serie);
+// `tmdbId` e o id do titulo no TMDB (0 quando nao se sabe). Serve so a COLECAO,
+// que o TMDB expoe apenas por id proprio — nao ha caminho por IMDb.
+void extras_pedir(const char *imdb, int serie, long tmdbId);
 
 // Nota do Trakt em 0..100 (0 = ainda nao chegou ou nao existe) e quantos
 // votaram. O web mostra a mesma nota que o mdbList devolve para "trakt".
@@ -64,6 +66,17 @@ int  extras_n_eps(int t);
 int  extras_ep_numero(int t, int i);
 // Nota do episodio em DECIMOS (72 = 7.2); 0 = sem nota.
 int  extras_ep_nota(int t, int i);
+
+// COLECAO (franquia) do filme, para a aba que o web chama pelo nome dela.
+// Vem de /movie/<id> -> belongs_to_collection -> /collection/<id>. As partes
+// trazem so o id do TMDB, entao abrir uma delas passa pelo mesmo caminho do
+// credito de um ator (desc_pedir_titulo_tmdb).
+#define EX_COL_MAX 12
+const char *extras_colecao_nome(void);
+int  extras_n_colecao(void);
+const char *extras_colecao_titulo(int i);
+const char *extras_colecao_ano(int i);
+long extras_colecao_tmdb(int i);
 
 // Titulos relacionados, para a aba "Mais como este".
 int  extras_n_relacionados(void);

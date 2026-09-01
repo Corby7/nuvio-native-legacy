@@ -2,6 +2,7 @@
 #include "trakt.h"
 #include "rede.h"
 #include "js.h"
+#include "descoberta.h"
 #include <pthread.h>
 #include <string.h>
 #include <stdio.h>
@@ -82,6 +83,10 @@ static int  nRel;
 static struct { int numero; int nEps; struct { int ep, nota; } eps[EX_EP_MAX]; }
             temps[EX_TEMP_MAX];
 static int  nTemps;
+static char colNome[80];
+static struct { char titulo[120], ano[8]; long tmdb; } col[EX_COL_MAX];
+static int  nCol;
+static long tmdbEmCurso;
 
 static char idPedido[24], idEmCurso[24];
 static int  serieEmCurso, fioVivo;
@@ -251,6 +256,62 @@ static void *buscar(void *arg) {
     }
   }
 
+  // --- colecao (so filme, e so quando ja sabemos o id do TMDB) ---
+  if (!serieEmCurso && tmdbEmCurso > 0) {
+    const char *chave = desc_chave_tmdb();
+    long idCol = 0;
+    char nome[80] = "";
+    if (chave && chave[0]) {
+      snprintf(url, sizeof url, "%s/movie/%ld?api_key=%s&language=pt-BR",
+               "https://api.themoviedb.org/3", tmdbEmCurso, chave);
+      corpo = rede_baixar(url, 15);
+      if (corpo) {
+        const char *b = strstr(corpo, "\"belongs_to_collection\"");
+        if (b) {
+          const char *o = strchr(b, '{');
+          if (o) { const char *of = js_fim(o);
+                   idCol = (long)js_num(o, of, "id", 0.0);
+                   js_texto(o, of, "name", nome, sizeof nome); }
+        }
+        free(corpo);
+      }
+    }
+    if (idCol > 0) {
+      snprintf(url, sizeof url, "%s/collection/%ld?api_key=%s&language=pt-BR",
+               "https://api.themoviedb.org/3", idCol, chave);
+      corpo = rede_baixar(url, 15);
+      if (corpo) {
+        struct { char t[120], a[8]; long id; } ach[EX_COL_MAX];
+        int nc = 0;
+        const char *p = js_array(corpo, NULL, "parts");
+        while (p && nc < EX_COL_MAX) {
+          const char *f = js_fim(p);
+          char data[16] = "";
+          ach[nc].t[0] = ach[nc].a[0] = 0;
+          js_texto(p, f, "title", ach[nc].t, sizeof ach[nc].t);
+          js_texto(p, f, "release_date", data, sizeof data);
+          if (strlen(data) >= 4) { memcpy(ach[nc].a, data, 4); ach[nc].a[4] = 0; }
+          ach[nc].id = (long)js_num(p, f, "id", 0.0);
+          if (ach[nc].t[0] && ach[nc].id > 0) nc++;
+          p = js_prox(f);
+        }
+        free(corpo);
+        pthread_mutex_lock(&trava);
+        if (!strcmp(id, idPedido)) {
+          int k;
+          snprintf(colNome, sizeof colNome, "%s", nome);
+          for (k = 0; k < nc; k++) {
+            snprintf(col[k].titulo, sizeof col[k].titulo, "%s", ach[k].t);
+            snprintf(col[k].ano, sizeof col[k].ano, "%s", ach[k].a);
+            col[k].tmdb = ach[k].id;
+          }
+          nCol = nc;
+        }
+        pthread_mutex_unlock(&trava);
+      }
+    }
+  }
+
   // --- relacionados ---
   snprintf(url, sizeof url, "https://api.trakt.tv/%s/%s/related?limit=%d",
            tipo, id, EX_REL_MAX);
@@ -293,6 +354,7 @@ static void *buscar(void *arg) {
     for (k = 0; k < EX_NFONTES; k++) if (notas[k]) q++;
     printf("[extras] %s -> notas=%d/%d coment=%d rel=%d temps=%d\n", id, q,
            EX_NFONTES, nComent, nRel, nTemps); }
+  printf("[extras] colecao \"%s\" -> %d\n", colNome, nCol); fflush(stdout);
   fflush(stdout);
   pthread_mutex_lock(&trava);
   fioVivo = 0;
@@ -300,7 +362,7 @@ static void *buscar(void *arg) {
   return NULL;
 }
 
-void extras_pedir(const char *imdb, int serie) {
+void extras_pedir(const char *imdb, int serie, long tmdbId) {
   char id[24];
   const char *dp;
   if (!imdb || imdb[0] != 't' || !trakt_ativo()) return;
@@ -316,11 +378,13 @@ void extras_pedir(const char *imdb, int serie) {
   pthread_mutex_lock(&trava);
   if (!strcmp(idPedido, imdb)) { pthread_mutex_unlock(&trava); return; }
   snprintf(idPedido, sizeof idPedido, "%s", imdb);
-  notaTrakt = votosTrakt = nComent = nRel = nTemps = 0;
+  notaTrakt = votosTrakt = nComent = nRel = nTemps = nCol = 0;
+  colNome[0] = 0;
   memset(notas, 0, sizeof notas);
   if (fioVivo) { pthread_mutex_unlock(&trava); return; }
   snprintf(idEmCurso, sizeof idEmCurso, "%s", imdb);
   serieEmCurso = serie;
+  tmdbEmCurso = tmdbId;
   fioVivo = 1;
   pthread_mutex_unlock(&trava);
   if (pthread_create(&fio, NULL, buscar, NULL) != 0) fioVivo = 0;
@@ -340,6 +404,16 @@ const char *extras_comentario_texto(int i) {
 int extras_comentario_curtidas(int i) {
   return (i >= 0 && i < nComent) ? coment[i].curtidas : 0;
 }
+
+const char *extras_colecao_nome(void) { return colNome; }
+int extras_n_colecao(void) { return nCol; }
+const char *extras_colecao_titulo(int i) {
+  return (i >= 0 && i < nCol) ? col[i].titulo : "";
+}
+const char *extras_colecao_ano(int i) {
+  return (i >= 0 && i < nCol) ? col[i].ano : "";
+}
+long extras_colecao_tmdb(int i) { return (i >= 0 && i < nCol) ? col[i].tmdb : 0; }
 
 int extras_n_temporadas(void) { return nTemps; }
 int extras_temporada_numero(int t) {

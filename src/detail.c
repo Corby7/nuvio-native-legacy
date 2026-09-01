@@ -121,10 +121,10 @@ static const struct { float grupo, alvo; } SECOES[N_SECOES] = {
 //
 // Aqui existem duas: elenco (sempre) e avaliacoes (quando ha nota). Similares
 // e trailer nao tem fonte neste port; quando tiverem, entram nesta tabela.
-typedef enum { ABA_ELENCO, ABA_AVALIACOES, ABA_RELACIONADOS, ABA_COMENTARIOS,
-               ABA_NFIXAS } AbaInfoId;
+typedef enum { ABA_ELENCO, ABA_AVALIACOES, ABA_RELACIONADOS, ABA_COLECAO,
+               ABA_COMENTARIOS, ABA_NFIXAS } AbaInfoId;
 static const char *ABA_ROTULO[ABA_NFIXAS] = {
-  "Criador e elenco", "Avaliacoes", "Mais como este", "Comentarios"
+  "Criador e elenco", "Avaliacoes", "Mais como este", "Colecao", "Comentarios"
 };
 
 // Nota do IMDb do titulo aberto, 0 quando nao ha.
@@ -139,6 +139,7 @@ static int abaDisponivel(int id) {
     // "-", que e o que o web faz.
     case ABA_AVALIACOES:   return notaDe(idx) > 0 || extras_nota_trakt() > 0;
     case ABA_RELACIONADOS: return extras_n_relacionados() > 0;
+    case ABA_COLECAO:      return extras_n_colecao() > 1;
     case ABA_COMENTARIOS:  return extras_n_comentarios() > 0;
     default:               return 0;
   }
@@ -241,7 +242,7 @@ void detail_abrir(const HomeItem *it) {
   // desenho: as abas so aparecem depois que o dado chega, e pedir no desenho
   // faria a barra de abas surgir com o titulo ja na tela.
   { const CatItem *ci = cat_item(idx);
-    if (ci && ci->imdb[0]) extras_pedir(ci->imdb, ehSerie()); }
+    if (ci && ci->imdb[0]) extras_pedir(ci->imdb, ehSerie(), ci->tmdb); }
   // A aba marcada tem de ser a da temporada que os episodios trazem. Comecando
   // sempre em 0, uma serie cujo primeiro episodio carregado e da 4 abria com
   // "Temporada 1" aceso — o rotulo desmentia a lista logo abaixo.
@@ -350,19 +351,28 @@ void detail_evento(const SDL_Event *e) {
     if (e->key.keysym.sym == SDLK_LEFT  && ratTemp > 0)      { ratTemp--; return; }
   }
 
-  if (e->type == SDL_KEYDOWN && foco.fileira == SEC_ELENCO &&
-      abaIdDe(abaInfo) == ABA_RELACIONADOS && !pessoaAberta) {
-    int n = extras_n_relacionados();
-    if (n > 8) n = 8;
+  // "Mais como este" e "Colecao" sao a MESMA lista vertical, so muda a fonte.
+  if (e->type == SDL_KEYDOWN && foco.fileira == SEC_ELENCO && !pessoaAberta &&
+      (abaIdDe(abaInfo) == ABA_RELACIONADOS || abaIdDe(abaInfo) == ABA_COLECAO)) {
+    int col = (abaIdDe(abaInfo) == ABA_COLECAO);
+    int n = col ? extras_n_colecao() : extras_n_relacionados();
+    if (n > (col ? 7 : 8)) n = col ? 7 : 8;
     switch (e->key.keysym.sym) {
       case SDLK_DOWN: if (relFoco + 1 < n) { relFoco++; return; } break;
       case SDLK_UP:   if (relFoco > 0)     { relFoco--; return; } break;
       case SDLK_RETURN:
       case SDLK_KP_ENTER: {
-        const char *id = extras_relacionado_imdb(relFoco);
-        int alvo = cat_indice_por_imdb(id);
-        if (alvo >= 0) pedAbrir = alvo;
-        else if (id[0]) desc_pedir_titulo(id);
+        if (col) {
+          // A parte da colecao traz so o id do TMDB; o caminho e o mesmo do
+          // credito de um ator.
+          long t = extras_colecao_tmdb(relFoco);
+          if (t > 0) desc_pedir_titulo_tmdb(t, "movie");
+        } else {
+          const char *id = extras_relacionado_imdb(relFoco);
+          int alvo = cat_indice_por_imdb(id);
+          if (alvo >= 0) pedAbrir = alvo;
+          else if (id[0]) desc_pedir_titulo(id);
+        }
         return; }
       default: break;
     }
@@ -675,33 +685,50 @@ static void desenhaBotao(GfxRect r, const char *rot, int icone, int focado, floa
     gfx_cor(anel, NV_RAIO_PILL, 1, 1, 1, a);
   }
   // O PROPRIO BOTAO E A BARRA DE PROGRESSO quando o titulo ja foi comecado.
-  // Pedido do dono. Trilho cinza claro, parte assistida branca, recortada na
-  // largura do progresso — as duas claras o bastante para o rotulo preto
-  // continuar legivel por cima das duas.
+  // Pedido do dono, com o acabamento que ele apontou depois: a parte que FALTA
+  // fica igual a pilula de temporada nao escolhida (fundo #222 com a borda de
+  // 1px a 16%), e nao um cinza claro — assim o botao pertence ao mesmo conjunto
+  // visual do resto da tela em vez de parecer um botao desabilitado.
   //
-  // 0.78 e nao 0.62: com o cinza mais fundo o botao lia como DESABILITADO, e
-  // nao como "falta este tanto". O contraste com o branco continua visivel.
-  //
-  // O trilho e CINZA OPACO e nao branco com alfa: o anel de foco e uma pilula
-  // branca desenhada ATRAS do botao, entao qualquer transparencia aqui deixava
-  // o branco do anel atravessar e o progresso sumia justo no botao em foco.
+  // Isso obriga a desenhar o ROTULO DUAS VEZES, cada uma recortada no seu lado:
+  // preto sobre o branco da parte assistida, claro sobre o escuro da parte que
+  // falta. Com uma passada so, metade do rotulo sumia — e um problema que so
+  // aparece porque as duas metades tem luminancia oposta.
+  float corte = 0.0f;
   { int pc = rot ? progressoDe(idx) : 0;
-    if (pc > 0 && pc < 100) {
-      gfx_cor(r, NV_RAIO_PILL, 0.78f, 0.78f, 0.78f, a);
-      gfx_recorte(r.x, r.y, r.w * (float)pc / 100.0f, r.h);
+    if (pc > 0 && pc < 100) corte = r.x + r.w * (float)pc / 100.0f;
+    if (corte > 0.0f) {
+      gfx_cor(r, NV_RAIO_PILL, 0.133f, 0.133f, 0.133f, a);
+      // A borda e um ANEL, nao duas faixas: faixa reta atravessa as pontas
+      // arredondadas e o contorno aparecia sobrando dos dois lados da pilula.
+      gfx_rect(r, 0, GFX_ANEL, 0, 1.0f / r.h, 0, NV_RAIO_PILL, 1, 1, 1, 0.16f * a);
+      gfx_recorte(r.x, r.y, corte - r.x, r.h);
       gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
       gfx_sem_recorte();
     } else {
       gfx_cor(r, NV_RAIO_PILL, 1, 1, 1, a);
     } }
-  TxtLinha l = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);
-  float x = r.x + NV_DETW_BTN_PADX;
-  GfxRect tri = { x + NV_DETW_BTN_ICONE * 0.16f,
-                  r.y + (r.h - NV_DETW_BTN_ICONE) * 0.5f,
-                  NV_DETW_BTN_ICONE * 0.72f, NV_DETW_BTN_ICONE * 0.84f };
-  gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
-  txt_desenhar_alpha(l, x + NV_DETW_BTN_ICONE + NV_DETW_BTN_GAPI,
-                     r.y + (r.h - l.h) * 0.5f, a);
+
+  { float x = r.x + NV_DETW_BTN_PADX;
+    GfxRect tri = { x + NV_DETW_BTN_ICONE * 0.16f,
+                    r.y + (r.h - NV_DETW_BTN_ICONE) * 0.5f,
+                    NV_DETW_BTN_ICONE * 0.72f, NV_DETW_BTN_ICONE * 0.84f };
+    float xr = x + NV_DETW_BTN_ICONE + NV_DETW_BTN_GAPI;
+    TxtLinha lp = txt_linha(TXT_DET_BOTAO, rot, 0, 0, 0, 255);          /* sobre o branco */
+    TxtLinha lc = txt_linha(TXT_DET_BOTAO, rot, 235, 235, 240, 255);    /* sobre o escuro */
+    float yr = r.y + (r.h - lp.h) * 0.5f;
+    if (corte > 0.0f) {
+      gfx_recorte(r.x, r.y, corte - r.x, r.h);
+      gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
+      txt_desenhar_alpha(lp, xr, yr, a);
+      gfx_recorte(corte, r.y, r.x + r.w - corte, r.h);
+      gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0.92f, 0.92f, 0.94f, a);
+      txt_desenhar_alpha(lc, xr, yr, a);
+      gfx_sem_recorte();
+    } else {
+      gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
+      txt_desenhar_alpha(lp, xr, yr, a);
+    } }
 }
 
 // Botao secundario: 345x96, raio 64, fundo #222 e texto branco; focado, fundo
@@ -1384,6 +1411,37 @@ static void desenhaRelacionados(float x, float y, float a) {
   }
 }
 
+// Aba da COLECAO: as partes da franquia, na ordem que o TMDB devolve. Mesma
+// lista vertical de "Mais como este" — o que muda e a fonte e o cabecalho com
+// o nome da colecao.
+static void desenhaColecao(float x, float y, float a) {
+  int n = extras_n_colecao(), i;
+  float y0 = y;
+  if (extras_colecao_nome()[0]) {
+    TxtLinha ln = txt_linha_corta(TXT_DET_META2, extras_colecao_nome(),
+                                  150, 154, 163, 255, 900.0f);
+    txt_desenhar_alpha(ln, x, y0, a * 0.9f);
+    y0 += ln.h + 16.0f;
+  }
+  for (i = 0; i < n && i < 7; i++) {
+    float yl = y0 + i * 52.0f;
+    int aceso = (foco.fileira == SEC_ELENCO) && i == relFoco;
+    int c = aceso ? 255 : 225;
+    if (aceso) {
+      GfxRect faixa = { x - 16.0f, yl - 8.0f, 940.0f, 48.0f };
+      gfx_cor(faixa, 10.0f / 48.0f, 1, 1, 1, 0.12f * a);
+    }
+    { TxtLinha lt = txt_linha_corta(TXT_DET_META, extras_colecao_titulo(i),
+                                    c, c, c, 255, 900.0f);
+      txt_desenhar_alpha(lt, x, yl, a);
+      { const char *ano = extras_colecao_ano(i);
+        if (ano[0]) {
+          TxtLinha la = txt_linha(TXT_DET_META2, ano, 150, 154, 163, 255);
+          txt_desenhar_alpha(la, x + lt.w + 18.0f, yl + 2.0f, a * 0.9f);
+        } } }
+  }
+}
+
 // Aba "Comentarios": /comments/likes do Trakt, os mais curtidos primeiro. Uma
 // linha com o usuario e as curtidas, e o texto quebrado embaixo.
 // Comentarios em CARTOES lado a lado, com a mesma moldura dos cartoes de nota,
@@ -1431,6 +1489,9 @@ static void desenhaSecao(int r, float a, Uint32 agora) {
     }
     if (r == SEC_ELENCO && aba == ABA_RELACIONADOS) {
       desenhaRelacionados(NV_DETP_X, yAba, a); return;
+    }
+    if (r == SEC_ELENCO && aba == ABA_COLECAO) {
+      desenhaColecao(NV_DETP_X, yAba, a); return;
     }
     if (r == SEC_ELENCO && aba == ABA_COMENTARIOS) {
       desenhaComentarios(NV_DETP_X, yAba, a); return;

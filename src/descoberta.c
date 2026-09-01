@@ -77,6 +77,7 @@ static void fotosDoElenco(CatItem *d, const char *imdbSerie, int serie) {
     if (p) idTmdb = (long)js_num(p, js_fim(p), "id", 0); }
   free(corpo);
   if (!idTmdb) return;
+  d->tmdb = idTmdb;
 
   snprintf(url, sizeof url, "%s/%s/%ld/credits?api_key=%s",
            TMDB, serie ? "tv" : "movie", idTmdb, tmdbChave);

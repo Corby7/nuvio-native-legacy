@@ -77,6 +77,10 @@ typedef struct {
   int  naLista, naColecao;
   char imdb[16];
   char tipo[8];
+  // Id do titulo no TMDB, quando a busca por imdb_id ja o resolveu (ver
+  // fotosDoElenco em descoberta.c). Era descartado; e por ele que se chega a
+  // COLECAO do filme, que o TMDB so expoe por id proprio.
+  long tmdb;
 } CatItem;
 
 // Um episodio de serie. Vem de art/episodios.txt, gerado a partir do campo
