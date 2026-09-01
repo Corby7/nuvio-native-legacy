@@ -104,6 +104,14 @@ int  cat_carregar(const char *dirArte);
 int  cat_n(void);
 const CatItem *cat_item(int i);
 
+// Indice do titulo com este IMDb id, ou -1. O id do catalogo pode trazer
+// episodio ("tt123:2:1"); a comparacao para no primeiro ':' dos dois lados.
+//
+// Existe para abrir um titulo a partir de um id que veio de FORA do catalogo —
+// a filmografia de um ator e a aba "Mais como este" devolvem tt..., e sem esta
+// busca nao haveria como saber se aquele titulo e um dos que ja temos meta.
+int cat_indice_por_imdb(const char *imdb);
+
 // Grava onde o dono parou NESTE app. Ate agora o progresso so era LIDO (do app
 // web); sem isto, assistir pelo app nativo nao mudava nada na tela.
 //

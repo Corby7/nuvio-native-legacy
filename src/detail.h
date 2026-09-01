@@ -28,6 +28,14 @@ int  detail_indice(void);
 // Temporada e episodio em foco (1 = ha episodio; 0 = titulo sem episodios).
 int  detail_ep_foco(int *temporada, int *episodio);
 int  detail_pediu_reproduzir(void);   // consome o pedido
+
+// Indice do titulo que a tela pediu para ABRIR no lugar do atual, ou -1.
+// Consome o pedido. Nasce de dois lugares: um credito na filmografia de um ator
+// e um item da aba "Mais como este" — os dois trazem um IMDb id, e quem sabe
+// traduzir isso em indice e o catalogo. Quem TROCA de titulo e o roteador em
+// app.c, nao esta tela: reabrir a si mesma no meio do proprio desenho e o tipo
+// de coisa que quebra em silencio.
+int  detail_pediu_abrir(void);
 int  detail_pediu_marcar(void);       // botao "+"
 int  detail_pediu_fontes(void);       // OK segurado, ou o botao "..."
 // Botao secundario "Reproduzir desde o inicio", que so existe quando ha

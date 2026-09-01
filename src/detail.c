@@ -55,6 +55,10 @@ static int  nivel = 0;
 // nao e um estado da MESMA pagina: e outra tela, que aparece e sai inteira.
 static int  pessoaAberta;
 static int  pessoaFoco;
+static int  pedAbrir = -1;
+// Foco DENTRO da aba "Mais como este", que e uma lista vertical propria e nao
+// uma das fileiras horizontais do focus.c.
+static int  relFoco;
 #define PES_FOTO_W   280.0f
 #define PES_FOTO_H   420.0f
 #define PES_COL_X    (NV_DETP_X + PES_FOTO_W + 56.0f)
@@ -224,6 +228,7 @@ void detail_abrir(const HomeItem *it) {
   item = *it;
   aberto = 1; saindo = 0; nivel = 0; botao = 0;
   t = 0.0f; pg = 0.0f; scrollY = 0.0f; abaInfo = 0; pessoaAberta = 0;
+  relFoco = 0; pedAbrir = -1;
   idx = it->indice;
   // Nota do Trakt, comentarios e relacionados. Pedido na ABERTURA e nao no
   // desenho: as abas so aparecem depois que o dado chega, e pedir no desenho
@@ -326,7 +331,28 @@ void detail_evento(const SDL_Event *e) {
   // nao uma secao desta: deixar a tela de titulo continuar respondendo por
   // baixo faria a seta mover duas coisas ao mesmo tempo.
   if (pessoaAberta) {
-    if (e->type != SDL_KEYDOWN) return;
+    // A aba "Mais como este" e uma LISTA VERTICAL dentro da fileira do elenco.
+  // Enquanto ela estiver aberta, cima/baixo andam nela em vez de trocar de
+  // fileira — e o mesmo que o web faz, onde a lista tem foco proprio.
+  if (e->type == SDL_KEYDOWN && foco.fileira == SEC_ELENCO &&
+      abaIdDe(abaInfo) == ABA_RELACIONADOS && !pessoaAberta) {
+    int n = extras_n_relacionados();
+    if (n > 8) n = 8;
+    switch (e->key.keysym.sym) {
+      case SDLK_DOWN: if (relFoco + 1 < n) { relFoco++; return; } break;
+      case SDLK_UP:   if (relFoco > 0)     { relFoco--; return; } break;
+      case SDLK_RETURN:
+      case SDLK_KP_ENTER: {
+        int alvo = cat_indice_por_imdb(extras_relacionado_imdb(relFoco));
+        if (alvo >= 0) pedAbrir = alvo;
+        return; }
+      default: break;
+    }
+    // CIMA no primeiro item e BAIXO no ultimo caem no comportamento normal e
+    // saem da lista — senao o foco fica preso nela.
+  }
+
+  if (e->type != SDL_KEYDOWN) return;
     { int n = pessoa_n_creditos();
       switch (e->key.keysym.sym) {
         case SDLK_LEFT:  if (pessoaFoco > 0) pessoaFoco--; return;
@@ -339,13 +365,17 @@ void detail_evento(const SDL_Event *e) {
           return;
         case SDLK_AC_BACK: pessoaAberta = 0; return;
         case SDLK_RETURN:
-        case SDLK_KP_ENTER:
-          // Abrir o titulo a partir daqui exigiria resolver o IMDb id contra o
-          // catalogo e reabrir a tela de detalhe com outro indice. O caminho
-          // existe (o id vem em pessoa_credito_imdb), mas trocar de titulo com
-          // a tela de titulo ainda montada por baixo e o tipo de coisa que
-          // quebra em silencio; fica para quando houver como testar a volta.
-          return;
+        case SDLK_KP_ENTER: {
+          // Abre o titulo, quando ele for um dos que o catalogo ja tem meta.
+          // Quem troca de fato e o roteador (app.c) — daqui so sai o pedido.
+          //
+          // Um credito que NAO esta no catalogo nao abre nada, de proposito:
+          // sem meta nao ha episodios, elenco nem fonte, e uma tela de detalhe
+          // vazia e pior que o botao nao responder. Buscar meta sob demanda e
+          // trabalho a parte.
+          int alvo = cat_indice_por_imdb(pessoa_credito_imdb(pessoaFoco));
+          if (alvo >= 0) { pedAbrir = alvo; pessoaAberta = 0; }
+          return; }
         default: break;
       } }
     if (e->key.keysym.scancode == NV_SCANCODE_BACK) pessoaAberta = 0;
@@ -1204,16 +1234,26 @@ static void desenhaAvaliacoes(float x, float y, float a) {
 // se parece com isto", e o nome responde.
 static void desenhaRelacionados(float x, float y, float a) {
   int n = extras_n_relacionados(), i;
+  int naLista = (foco.fileira == SEC_ELENCO);
   for (i = 0; i < n && i < 8; i++) {
     float yl = y + i * 52.0f;
-    TxtLinha lt = txt_linha_corta(TXT_DET_META, extras_relacionado_titulo(i),
-                                  235, 238, 245, 255, 900.0f);
-    txt_desenhar_alpha(lt, x, yl, a);
-    { const char *ano = extras_relacionado_ano(i);
-      if (ano[0]) {
-        TxtLinha la = txt_linha(TXT_DET_META2, ano, 150, 154, 163, 255);
-        txt_desenhar_alpha(la, x + lt.w + 18.0f, yl + 2.0f, a * 0.9f);
-      } }
+    int aceso = naLista && i == relFoco;
+    // O titulo que ESTA no catalogo abre; o que nao esta fica apagado, para o
+    // foco nao prometer uma acao que nao existe.
+    int temMeta = cat_indice_por_imdb(extras_relacionado_imdb(i)) >= 0;
+    int c = aceso ? 255 : (temMeta ? 225 : 150);
+    if (aceso) {
+      GfxRect faixa = { x - 16.0f, yl - 8.0f, 940.0f, 48.0f };
+      gfx_cor(faixa, 10.0f / 48.0f, 1, 1, 1, 0.12f * a);
+    }
+    { TxtLinha lt = txt_linha_corta(TXT_DET_META, extras_relacionado_titulo(i),
+                                    c, c, c, 255, 900.0f);
+      txt_desenhar_alpha(lt, x, yl, a);
+      { const char *ano = extras_relacionado_ano(i);
+        if (ano[0]) {
+          TxtLinha la = txt_linha(TXT_DET_META2, ano, 150, 154, 163, 255);
+          txt_desenhar_alpha(la, x + lt.w + 18.0f, yl + 2.0f, a * 0.9f);
+        } } }
   }
 }
 
@@ -1461,6 +1501,7 @@ void detail_desenhar(Uint32 agora) {
 
 int detail_indice(void) { return idx; }
 int detail_pediu_reproduzir(void) { int v = pedReproduzir; pedReproduzir = 0; return v; }
+int detail_pediu_abrir(void) { int v = pedAbrir; pedAbrir = -1; return v; }
 int detail_pediu_marcar(void)     { int v = pedMarcar;     pedMarcar = 0;     return v; }
 int detail_pediu_fontes(void)     { int v = pedFontes;     pedFontes = 0;     return v; }
 // "Reproduzir desde o inicio" ainda cai no mesmo caminho do primario: o

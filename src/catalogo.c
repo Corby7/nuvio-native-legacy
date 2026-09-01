@@ -266,6 +266,23 @@ const CatItem *cat_item(int i) {
   return &itens[((i % n) + n) % n];
 }
 
+// Compara so ate o primeiro ':' — o catalogo guarda "tt123:2:1" em serie com
+// progresso, e quem procura tem so o id do titulo.
+static int mesmoTitulo(const char *a, const char *b) {
+  while (*a && *b && *a != ':' && *b != ':') { if (*a != *b) return 0; a++; b++; }
+  return (!*a || *a == ':') && (!*b || *b == ':');
+}
+
+int cat_indice_por_imdb(const char *imdb) {
+  int i;
+  if (!imdb || !imdb[0]) return -1;
+  for (i = 0; i < cat_n(); i++) {
+    const CatItem *c = cat_item(i);
+    if (c && c->imdb[0] && mesmoTitulo(c->imdb, imdb)) return i;
+  }
+  return -1;
+}
+
 void cat_salvar_progresso(int indice, double posSeg, double durSeg) {
   char caminho[600], tmp[600], linha[256];
   FILE *e, *s;

@@ -143,7 +143,17 @@ void app_evento(const SDL_Event *e) {
   if (tela == TELA_HOME && home_pediu_menu()) menu_abrir();
 }
 
+// A tela de detalhe pode pedir para abrir OUTRO titulo (um credito da
+// filmografia de um ator, um item de "Mais como este"). Quem troca e aqui, e
+// nao ela: reabrir a si mesma no meio do proprio desenho e o tipo de coisa que
+// quebra em silencio, e o roteador ja e o unico lugar que sabe abrir titulo.
+static void trocaDeTituloSeSolicitada(void) {
+  int alvo = detail_pediu_abrir();
+  if (alvo >= 0) abrirPorIndice(alvo);
+}
+
 void app_atualizar(float dt, Uint32 agora) {
+  trocaDeTituloSeSolicitada();
   // Fora da home, o Back tem para onde voltar: a home. So nela ele fecha o app.
   if (tela != TELA_HOME) {
     int fechar = (tela == TELA_BUSCA      && busca_quer_sair())
