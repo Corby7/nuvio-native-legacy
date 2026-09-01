@@ -34,8 +34,17 @@ void video_parar(void);
 void video_pausar(int pausado);
 void video_buscar(double segundos);
 
-// Retangulo do plano de video, em coordenadas de tela 1920x1080.
+// Retangulo do plano de video, em coordenadas de tela 1920x1080. Fica preso a
+// tela: pedir origem negativa ou tamanho maior que o painel APAGA o plano — um
+// plano de hardware nao recorta o excedente. Para ampliar, use a funcao abaixo.
 void video_janela(int x, int y, int w, int h);
+
+// Zoom de verdade: recorta a FONTE (coordenadas do quadro decodificado, ver
+// video_largura/video_altura) e desenha no destino (coordenadas de tela). Pedir
+// um pedaco menor da fonte para o mesmo destino e o que amplia a imagem, e o
+// que tira da vista a barra preta embutida no quadro.
+void video_janela_fonte(int sx, int sy, int sw, int sh,
+                        int dx, int dy, int dw, int dh);
 
 double video_pos(void);      // segundos decorridos
 double video_duracao(void);  // 0 enquanto desconhecida

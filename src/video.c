@@ -797,13 +797,22 @@ void video_buscar(double segundos) {
 // mesmo resultado do transform do web: a barra preta embutida no quadro sai da
 // area visivel em vez de ser (impossivelmente) recortada por object-fit.
 //
-// Por isso o retangulo NAO e restringido a tela. O flag de tela cheia so pode
-// ser ligado no caso exato 0,0,1920,1080: ligado com um retangulo diferente, o
-// ACB ignora as coordenadas e volta para tela cheia — que era o zoom nao ter
-// efeito nenhum.
+// O retangulo NAO pode passar da tela. MEDIDO: mandar ao ACB um retangulo com
+// origem negativa ou maior que o painel (que era como eu tentava ampliar) NAO
+// recorta nada — o plano simplesmente APAGA, e a tela fica preta em todo modo
+// com escala, com imagem so no ORIGINAL, o unico onde a escala e 1. O
+// acbJanela recebe UM retangulo, o de DESTINO, e nao existe recorte de fonte
+// ali; um plano de hardware nao descarta o excedente como o compositor do
+// navegador faz com transform: scale(). Quem amplia e o video_janela_fonte
+// abaixo, recortando a FONTE.
 void video_janela(int x, int y, int w, int h) {
   long tarefa = 0;
   int cheia = (x == 0 && y == 0 && w == 1920 && h == 1080);
+  if (w < 1 || h < 1) return;
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  if (x + w > 1920) w = 1920 - x;
+  if (y + h > 1080) h = 1080 - y;
   if (w < 1 || h < 1) return;
   if (x == janX && y == janY && w == janW && h == janH) return;  // sem repetir o mesmo rect a cada quadro
   janX = x; janY = y; janW = w; janH = h;
@@ -811,6 +820,59 @@ void video_janela(int x, int y, int w, int h) {
   printf("[video] janela %d,%d %dx%d cheia=%d\n", x, y, w, h, cheia);
   fflush(stdout);
   acbJanela(acb, x, y, w, h, cheia, &tarefa);
+}
+
+// A resposta do uMS ao setDisplayWindow, LOGADA. Sem ler a resposta, um payload
+// com a assinatura errada falha calado e o sintoma que sobra e "tela preta" —
+// exatamente o que custou a descobrir que o caminho do ACB nao recortava.
+static int aoJanela(LSHandle *h, LSMessage *m, void *u) {
+  const char *p = lsPayload(m);
+  (void)h; (void)u;
+  printf("[video] setDisplayWindow -> %s\n", p ? p : "(nulo)");
+  fflush(stdout);
+  return 1;
+}
+
+// ZOOM DE VERDADE: recorta a FONTE e mantem o destino dentro da tela.
+//
+// O uMS aceita os dois retangulos na mesma chamada — `source` em coordenadas do
+// QUADRO DECODIFICADO e `destination` em coordenadas de tela. Ampliar entao nao
+// e inflar o destino (que apaga o plano), e sim pedir um pedaco MENOR da fonte
+// para o mesmo destino: e assim que a barra preta embutida no quadro sai da
+// area visivel. E a mesma imagem que o web produz com transform: scale(), so
+// que calculada do lado certo do escalonador.
+//
+// Mantem o acbJanela para o caso de tela cheia sem recorte, que ja funcionava.
+static int fonX = -1, fonY, fonW, fonH, dstX, dstY, dstW, dstH;
+
+void video_janela_fonte(int sx, int sy, int sw, int sh,
+                        int dx, int dy, int dw, int dh) {
+  char b[420];
+  int cheia;
+  if (sw < 2 || sh < 2 || dw < 1 || dh < 1) return;
+  // Destino preso a tela: o mesmo limite que vale para o acbJanela.
+  if (dx < 0) { dw += dx; dx = 0; }
+  if (dy < 0) { dh += dy; dy = 0; }
+  if (dx + dw > 1920) dw = 1920 - dx;
+  if (dy + dh > 1080) dh = 1080 - dy;
+  if (dw < 1 || dh < 1) return;
+  cheia = (dx == 0 && dy == 0 && dw == 1920 && dh == 1080);
+  if (sx == fonX && sy == fonY && sw == fonW && sh == fonH &&
+      dx == dstX && dy == dstY && dw == dstW && dh == dstH) return;
+  fonX = sx; fonY = sy; fonW = sw; fonH = sh;
+  dstX = dx; dstY = dy; dstW = dw; dstH = dh;
+  janX = dx; janY = dy; janW = dw; janH = dh;   // o reaplicar do bind usa estes
+  if (!ligado || !midia[0]) return;
+  snprintf(b, sizeof b,
+           "{\"mediaId\":\"%s\","
+           "\"source\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d},"
+           "\"destination\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d},"
+           "\"isFullScreen\":%s}",
+           midia, sx, sy, sw, sh, dx, dy, dw, dh, cheia ? "true" : "false");
+  printf("[video] fonte %d,%d %dx%d -> destino %d,%d %dx%d\n",
+         sx, sy, sw, sh, dx, dy, dw, dh);
+  fflush(stdout);
+  chamar("setDisplayWindow", b, aoJanela);
 }
 
 double video_pos(void)      { return posSeg; }

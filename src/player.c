@@ -177,24 +177,29 @@ static void frasePrimeira(char *dst, size_t n, const char *src, size_t maxBytes)
 //   1. o retangulo que o object-fit do modo produziria (contain/cover/fill);
 //   2. multiplicado pela escala do modo (resolveAspectScale), em torno do
 //      CENTRO da tela — que e o `transform-origin: center center` de la.
-// Sair da tela nao e erro: e o recorte. O plano recebe x/y negativos e a TV
-// descarta o que passa da borda, que e o unico jeito de tirar da vista uma
-// barra preta que esta DENTRO do quadro.
+// O retangulo aqui e VIRTUAL: ele pode sair da tela, e sair da tela e o que
+// significa "recortar". Mas ele NAO e o que se manda ao plano — ver
+// aplicarAspecto, que o converte em fonte + destino.
 //
-// MEDIDO NO APARELHO (OLED65C9, webOS 4.10), ciclando os modos com o fluxo
-// tocando e lendo o que saiu para o ACB em /tmp/nuvio.log:
+// ERRO MEDIDO, e vale ficar escrito porque a leitura do web induz a ele: eu
+// mandava este retangulo direto ao ACB, com x/y negativos e tamanho maior que a
+// tela. O ACB aceitou as quatro chamadas sem reclamar e o log ficou bonito —
 //   [video] janela -144,-81  2208x1242 cheia=0   <- Zoom leve   (1.15)
 //   [video] janela -326,-184 2573x1447 cheia=0   <- Zoom cinema (1.34)
 //   [video] janela -528,-297 2976x1674 cheia=0   <- Zoom ultra  (1.55)
-//   [video] janela 0,0       1920x1080 cheia=1   <- de volta ao encaixe
-// Sao exatamente os retangulos que o resolveAspectRender do web produz para um
-// quadro 16:9, ate o pixel. O ACB aceitou os quatro sem reclamar, inclusive os
-// tres com coordenada negativa e tamanho maior que a tela — ou seja, o recorte
-// por retangulo funciona nesta TV, que era a duvida que restava.
+// — batendo ate o pixel com o resolveAspectRender do web. E a TELA FICOU PRETA
+// em todos os tres. Aceitar a chamada nao e exibir: um plano de hardware nao
+// descarta o excedente como o compositor do navegador faz com transform:
+// scale(), entao retangulo fora do painel nao vira recorte, vira retangulo
+// invalido e o plano apaga. So o ORIGINAL mostrava imagem, por ser o unico com
+// escala 1. A licao: `resolveAspectScale` era justamente a parte do web que NAO
+// se traduz, porque a metade que fazia o recorte no web nem esta no arquivo.
 //
 // NAO da para conferir isto por captura de tela: durante a reproducao o
 // /tmp/nuvio-shot.bmp sai PRETO onde esta o video, porque o plano fica atras da
-// superficie GL e o glReadPixels nao o enxerga. A prova e o log, nao a imagem.
+// superficie GL e o glReadPixels nao o enxerga. E foi essa cegueira que deixou
+// o erro passar — o log dizia sucesso, a captura era preta de qualquer jeito, e
+// so quem olhou a TV viu. Conferir zoom exige olhar o aparelho.
 static int    aspecto = PLR_ASP_ORIGINAL;
 static Uint32 toastAte = 0;      // ate quando o aviso de modo fica de pe
 static char   dirPrefs[512];
@@ -301,17 +306,74 @@ static PlrRect aspectoRect(int modo) {
   return r;
 }
 
-// Manda o retangulo ao plano de hardware. Chamado na abertura, na troca de modo
-// e quando o videoInfo chega — antes dele a proporcao do quadro e chute, e o
-// modo calculado com o chute estaria errado justamente nos filmes widescreen,
-// que sao o motivo de tudo isto existir.
+// O retangulo VISIVEL do modo: o retangulo virtual cortado pela tela. E ele que
+// o furo do GL segue e que vira o destino do plano.
+static PlrRect aspectoVisivel(int modo) {
+  PlrRect r = aspectoRect(modo), d;
+  d.x = r.x < 0.0f ? 0.0f : r.x;
+  d.y = r.y < 0.0f ? 0.0f : r.y;
+  d.w = (r.x + r.w > NV_TELA_W ? NV_TELA_W : r.x + r.w) - d.x;
+  d.h = (r.y + r.h > NV_TELA_H ? NV_TELA_H : r.y + r.h) - d.y;
+  if (d.w < 0.0f) d.w = 0.0f;
+  if (d.h < 0.0f) d.h = 0.0f;
+  return d;
+}
+
+// Manda o modo ao plano de hardware. Chamado na abertura, na troca de modo e
+// quando o videoInfo chega — antes dele a proporcao do quadro e chute, e o modo
+// calculado com o chute estaria errado justamente nos filmes widescreen, que
+// sao o motivo de tudo isto existir.
+//
+// AQUI ESTAVA O ERRO que deixava a tela preta em todo modo com zoom. Eu mandava
+// o retangulo VIRTUAL direto ao plano — com x/y negativos e tamanho maior que a
+// tela — na suposicao de que o excedente sairia pela borda, como sai no web. No
+// web quem descarta o excedente e o compositor do navegador; um plano de
+// hardware nao tem esse passo, e retangulo fora do painel nao e recorte, e
+// retangulo invalido: o plano apaga. So o ORIGINAL sobrevivia, por ser o unico
+// com escala 1.
+//
+// A conta certa e a INVERSA: o destino nunca sai da tela, e o zoom vira um
+// pedaco MENOR da FONTE. O retangulo virtual continua sendo o mesmo do web —
+// ele so deixa de ser o que se manda e passa a ser o que se USA PARA CALCULAR
+// que fatia do quadro cai dentro da tela.
 static void aplicarAspecto(void) {
-  PlrRect r;
+  PlrRect r, d;
+  float qw, qh;
+  int sx, sy, sw, sh;
   if (!comVideo) return;
+
   r = aspectoRect(aspecto);
-  video_janela((int)(r.x + (r.x < 0 ? -0.5f : 0.5f)),
-               (int)(r.y + (r.y < 0 ? -0.5f : 0.5f)),
-               (int)(r.w + 0.5f), (int)(r.h + 0.5f));
+  d = aspectoVisivel(aspecto);
+  if (d.w < 1.0f || d.h < 1.0f || r.w < 1.0f || r.h < 1.0f) return;
+
+  qw = (float)video_largura();
+  qh = (float)video_altura();
+  // Sem as dimensoes do quadro nao da para falar em coordenadas de fonte. Cai
+  // no caminho antigo, que serve ao caso sem recorte — e o unico em que ele
+  // funciona. Assim que o videoInfo chegar, aplicarAspecto roda de novo.
+  if (qw < 2.0f || qh < 2.0f) {
+    video_janela((int)(d.x + 0.5f), (int)(d.y + 0.5f),
+                 (int)(d.w + 0.5f), (int)(d.h + 0.5f));
+    return;
+  }
+
+  // Que fatia do quadro cai dentro do destino: o quadro inteiro mapeia no
+  // retangulo virtual `r`, entao a fatia e a regra de tres de `d` dentro de `r`.
+  sx = (int)((d.x - r.x) / r.w * qw + 0.5f);
+  sy = (int)((d.y - r.y) / r.h * qh + 0.5f);
+  sw = (int)(d.w / r.w * qw + 0.5f);
+  sh = (int)(d.h / r.h * qh + 0.5f);
+  // Par: o escalonador trabalha em 4:2:0 e origem ou tamanho impar em croma da
+  // meio pixel de deslocamento de cor na borda do recorte.
+  sx &= ~1; sy &= ~1; sw &= ~1; sh &= ~1;
+  if (sx < 0) sx = 0;
+  if (sy < 0) sy = 0;
+  if (sx + sw > (int)qw) sw = (int)qw - sx;
+  if (sy + sh > (int)qh) sh = (int)qh - sy;
+
+  video_janela_fonte(sx, sy, sw, sh,
+                     (int)(d.x + 0.5f), (int)(d.y + 0.5f),
+                     (int)(d.w + 0.5f), (int)(d.h + 0.5f));
 }
 
 void player_aspecto_definir(int modo) {
@@ -618,12 +680,9 @@ void player_desenhar(Uint32 agora) {
     // na tela. Furar sempre a tela inteira, como antes, deixava faixa preta nos
     // modos que nao ocupam tudo ("Original" num 2.39:1 entregue como 2.39:1):
     // o furo mostrava o nada atras do plano em vez de mostrar o plano.
-    PlrRect r = aspectoRect(aspecto);
+    PlrRect r = aspectoVisivel(aspecto);
     GfxRect furo;
-    furo.x = r.x < 0.0f ? 0.0f : r.x;
-    furo.y = r.y < 0.0f ? 0.0f : r.y;
-    furo.w = (r.x + r.w > NV_TELA_W ? NV_TELA_W : r.x + r.w) - furo.x;
-    furo.h = (r.y + r.h > NV_TELA_H ? NV_TELA_H : r.y + r.h) - furo.y;
+    furo.x = r.x; furo.y = r.y; furo.w = r.w; furo.h = r.h;
     // Fora do furo fica PRETO, e nao a arte-chave: e o que a TV mostra ao lado
     // do plano de video, e pintar outra coisa ali criaria uma borda que nao
     // existe no aparelho.
