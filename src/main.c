@@ -230,27 +230,28 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
   Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN;
 #endif
-  // SUPERFICIE EM 4K, opcional e MEDIDA, nao presumida.
+  // 4K NAO E POSSIVEL NESTE APARELHO — MEDIDO, nao presumido.
   //
-  // A TV e 4K mas o compositor entrega 1920x1080 ao app (conferido: a captura
-  // do proprio app tem 1920x1080 de pixeis). Todo o desenho e vetorial ou vem
-  // de textura maior que o destino, entao uma superficie 3840x2160 renderiza
-  // tudo na resolucao do painel em vez de ser ampliada por ele — o texto e o
-  // que mais ganha, porque passa a ser rasterizado no tamanho final
-  // (ver a `escala` de txt_iniciar).
+  // A TV e 4K, e a ideia (do dono) era renderizar em 3840x2160 e desenhar tudo
+  // em dobro: o texto pararia de ser rasterizado a 1080p e ampliado pelo
+  // painel, que e o borrao que aparece ao lado do app web.
   //
-  // Fica atras de /tmp/nuvio-4k.conf porque o custo e de PREENCHIMENTO e esta
-  // GPU (Mali-G71) e o gargalo conhecido do aparelho: quatro vezes os pixeis
-  // por camada de tela cheia. Ligar por padrao sem medir o quadro seria trocar
-  // nitidez por engasgo sem saber. O canvas de layout continua 1920x1080; o que
-  // muda e so a densidade.
-  int telaW = (int)NV_TELA_W, telaH = (int)NV_TELA_H;
-  { FILE *f4 = fopen("/tmp/nuvio-4k.conf", "r");
-    if (f4) { fclose(f4); telaW = 3840; telaH = 2160;
-              printf("[4k] superficie 3840x2160 pedida\n"); fflush(stdout); } }
+  // Foram tentados os dois caminhos, na TV, com o contador de quadro do proprio
+  // app gravando em /tmp/nuvio-fps.txt:
+  //   1. SDL_CreateWindow com 3840x2160  -> drawable=1920x1080
+  //   2. appinfo.json "resolution": "3840x2160" -> drawable=1920x1080
+  // O compositor do webOS 4.10 fixa a superficie do app nativo em 1080p e
+  // ignora os dois pedidos, em silencio. Nao ha o que otimizar aqui: a saida
+  // seria o painel receber 1080p e ampliar, que e o que ja acontece.
+  //
+  // Base para comparacao futura, medida nesta tela (home, sem rolar):
+  //   drawable=1920x1080 FPS=50.0 pior=21ms janks=0
+  //
+  // txt_iniciar continua recebendo a escala do drawable: no aparelho ela e 1 e
+  // nao muda nada, no Mac (retina) ela e 2 e a previa deixa de mentir.
   SDL_Window *win = SDL_CreateWindow("Nuvio", SDL_WINDOWPOS_CENTERED,
                                      SDL_WINDOWPOS_CENTERED,
-                                     telaW, telaH, flags);
+                                     (int)NV_TELA_W, (int)NV_TELA_H, flags);
   if (!win) { printf("janela: %s\n", SDL_GetError()); return 1; }
   // App de TV nao tem ponteiro: o cursor por cima da interface polui a leitura
   // e some sozinho no aparelho, mas nao no Mac.
@@ -424,6 +425,19 @@ int main(int argc, char **argv) {
              quadros * 1000.0 / (double)(agora - ultRelato), pior, janks,
              piorTxtMs, piorTxtN, itens, pend, bytes / 1048576.0);
       fflush(stdout);
+      // A MESMA linha vai para um arquivo. No aparelho a saida padrao do app
+      // lancado pelo applicationManager nao chega a lugar nenhum que se possa
+      // ler, e rodar o binario a mao nao funciona (sem a identidade do app o
+      // compositor recusa a superficie e ele morre em silencio). Sem isto nao
+      // ha como MEDIR quadro no aparelho — so olhar e achar.
+      { FILE *fp = fopen("/tmp/nuvio-fps.txt", "w");
+        if (fp) {
+          fprintf(fp, "drawable=%dx%d FPS=%.1f pior=%.0fms janks=%d"
+                  " texto=%.1fms/%d texturas=%d %.1fMB\n", dw, dh,
+                  quadros * 1000.0 / (double)(agora - ultRelato), pior, janks,
+                  piorTxtMs, piorTxtN, itens, bytes / 1048576.0);
+          fclose(fp);
+        } }
       quadros = 0; ultRelato = agora; pior = 0; janks = 0; piorTxtMs = 0; piorTxtN = 0;
     }
   }
