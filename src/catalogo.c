@@ -5,6 +5,8 @@
 
 // Alocado conforme chega, nao dimensionado por um numero chutado.
 static CatItem *itens;
+static CatFileira fils[CAT_FIL_MAX];
+static int nFils;
 static int nAlocado;
 
 // Garante espaco para `quero` itens. Devolve 0 se nao deu (e o chamador segue
@@ -316,7 +318,17 @@ const CatEp *cat_episodio(int indiceItem, int i) {
   return &eps[epIni[indiceItem] + i];
 }
 
+int cat_n_fileiras(void) { return nFils; }
+const CatFileira *cat_fileira(int r) {
+  return (r >= 0 && r < nFils) ? &fils[r] : NULL;
+}
+
 void cat_definir(const CatItem *lista, int qtd) {
+  cat_definir_tudo(lista, qtd, NULL, 0);
+}
+
+void cat_definir_tudo(const CatItem *lista, int qtd,
+                      const CatFileira *novasFils, int nNovas) {
   int i;
   if (!lista || qtd < 1) return;
   // TROCA DE BLOCO, sem realloc no lugar.
@@ -338,12 +350,31 @@ void cat_definir(const CatItem *lista, int qtd) {
     static CatItem *lixo;
     if (!novo) return;
     memcpy(novo, lista, sizeof(CatItem) * (size_t)novoN);
+    // As fileiras caem JUNTO com `n`. Elas sao janelas (ini,n) no vetor de
+    // itens; deixar as antigas de pe por um quadro enquanto o vetor troca faz o
+    // desenho ler fora da faixa.
     n = 0;
+    nFils = 0;
     free(lixo);
     lixo = itens;
     itens = novo;
     nAlocado = novoN;
     n = novoN;
+    if (novasFils && nNovas > 0) {
+      int k, q = nNovas > CAT_FIL_MAX ? CAT_FIL_MAX : nNovas;
+      int v = 0;
+      for (k = 0; k < q; k++) {
+        CatFileira f = novasFils[k];
+        // Corta a janela pelo que sobrou de verdade. Um catalogo que respondeu
+        // menos itens do que o esperado deixaria a fileira apontando para o
+        // vizinho.
+        if (f.ini < 0 || f.ini >= n) continue;
+        if (f.ini + f.n > n) f.n = n - f.ini;
+        if (f.n < 1) continue;
+        fils[v++] = f;
+      }
+      nFils = v;
+    }
   }
   // Episodios do catalogo anterior nao valem para o novo: os indices mudaram.
   nEps = 0;

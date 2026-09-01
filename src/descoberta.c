@@ -15,10 +15,12 @@
 // Chave do TMDB, em art/tmdb.txt. SEGREDO do dono (saiu do dist/nuvio.env.js do
 // app web) — nao versionar. Sem ela o elenco continua so com nomes.
 static char tmdbChave[64];
+static char dirArteDesc[512];
 
 void desc_tmdb(const char *dirArte) {
   char caminho[600];
   FILE *f;
+  snprintf(dirArteDesc, sizeof dirArteDesc, "%s", dirArte ? dirArte : ".");
   snprintf(caminho, sizeof caminho, "%s/tmdb.txt", dirArte ? dirArte : ".");
   f = fopen(caminho, "r");
   if (!f) return;
@@ -214,6 +216,141 @@ static int lerCatalogo(const char *base, const char *tipo, const char *id,
   return n;
 }
 
+// --- fileiras da home: catalogos declarados pelos addons ---------------------
+// Isto substitui a lista PREF fixa de quatro catalogos. O app web nao tem
+// fileira fixa: cada fileira e um catalogo declarado no manifesto de um addon,
+// e a ordem/visibilidade/nome saem de `homeCatalogPrefs`. Ver o comentario
+// grande em catalogo.h, que traz o algoritmo de sortAndFilterRowsInternal.
+
+#define DECL_MAX 64
+// Quantos itens cada fileira mostra. A home desenha no maximo MAX_CARDS (12) e
+// buscar mais e trafego que ninguem ve.
+#define MAX_POR_FILEIRA 12
+
+static CatFileira filsMontadas[CAT_FIL_MAX];
+static int nFileirasMontadas;
+
+typedef struct {
+  char chave[192];      // homeCatalogKey:        <addonId>_<tipo>_<catalogoId>
+  char desativar[352];  // homeCatalogDisableKey: <base>_<tipo>_<catalogoId>_<nome>
+  char titulo[96];
+  char tipo[8];
+  char id[96];
+  const char *base;
+} Decl;
+
+// Preferencias do dono, o equivalente local de `homeCatalogPrefs`. Arquivo de
+// texto porque o do app web e um localStorage de outro processo — a mesma razao
+// que ja valia para o progresso: aquele arquivo pertence a quem o mantem aberto,
+// e escrever nele de fora corromperia o estado.
+//
+//   ordem     <chave>
+//   desligada <chave-ou-chave-de-desativar>
+//   titulo    <chave><TAB><titulo>
+#define PREF_MAX 64
+static char prefOrdem[PREF_MAX][192];   static int nPrefOrdem;
+static char prefOff[PREF_MAX][352];     static int nPrefOff;
+static struct { char chave[192], titulo[96]; } prefTit[PREF_MAX];
+static int nPrefTit;
+static void lerPrefs(void) {
+  char caminho[600], linha[600];
+  FILE *f;
+  nPrefOrdem = nPrefOff = nPrefTit = 0;
+  if (!dirArteDesc[0]) return;
+  snprintf(caminho, sizeof caminho, "%s/fileiras.txt", dirArteDesc);
+  f = fopen(caminho, "r");
+  if (!f) return;
+  while (fgets(linha, sizeof linha, f)) {
+    char *fim = linha + strlen(linha);
+    char *arg;
+    while (fim > linha && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0;
+    if (!linha[0] || linha[0] == '#') continue;
+    arg = strchr(linha, ' ');
+    if (!arg) continue;
+    *arg++ = 0;
+    while (*arg == ' ') arg++;
+    if (!strcmp(linha, "ordem") && nPrefOrdem < PREF_MAX) {
+      snprintf(prefOrdem[nPrefOrdem++], 192, "%s", arg);
+    } else if (!strcmp(linha, "desligada") && nPrefOff < PREF_MAX) {
+      snprintf(prefOff[nPrefOff++], 352, "%s", arg);
+    } else if (!strcmp(linha, "titulo") && nPrefTit < PREF_MAX) {
+      char *tab = strchr(arg, '\t');
+      if (!tab) continue;
+      *tab++ = 0;
+      snprintf(prefTit[nPrefTit].chave, 192, "%s", arg);
+      snprintf(prefTit[nPrefTit].titulo, 96, "%s", tab);
+      nPrefTit++;
+    }
+  }
+  fclose(f);
+  printf("[desc] prefs de fileira: %d na ordem, %d desligadas, %d renomeadas\n",
+         nPrefOrdem, nPrefOff, nPrefTit);
+}
+
+// A conferencia e contra DUAS chaves, como no web: quem desliga pela tela de
+// ajustes grava a chave de desativar (que carrega a URL base e o nome), e quem
+// desliga pela ordenacao grava a chave curta.
+static int desligada(const Decl *d) {
+  int i;
+  for (i = 0; i < nPrefOff; i++)
+    if (!strcmp(prefOff[i], d->chave) || !strcmp(prefOff[i], d->desativar)) return 1;
+  return 0;
+}
+
+// formatCatalogRowTitle (js/ui/screens/home/homeUtils.js:62): primeira letra
+// maiuscula e, se o nome ja NAO termina com o rotulo do tipo, " - <tipo>".
+// E por isso que a home mostra "For You - Filme" e nao "for you".
+static void formatarTitulo(const char *nome, const char *tipo, char *dst, size_t tam) {
+  const char *rotulo = strcmp(tipo, "series") ? "Filme" : "S\xc3\xa9rie";
+  const char *cru    = strcmp(tipo, "series") ? "Movie" : "Series";
+  size_t ln = strlen(nome), lr = strlen(rotulo), lc = strlen(cru);
+  int jaTem = 0;
+  if (!nome[0]) { snprintf(dst, tam, "%s", rotulo); return; }
+  if (ln >= lr && !strcasecmp(nome + ln - lr, rotulo)) jaTem = 1;
+  if (ln >= lc && !strcasecmp(nome + ln - lc, cru))    jaTem = 1;
+  if (jaTem) snprintf(dst, tam, "%s", nome);
+  else       snprintf(dst, tam, "%s - %s", nome, rotulo);
+  if (dst[0] >= 'a' && dst[0] <= 'z') dst[0] = (char)(dst[0] - 32);
+}
+
+// Le <base>/manifest.json e acrescenta os catalogos declarados.
+static int lerManifesto(const char *base, Decl *saida, int max) {
+  char url[900], addonId[96] = "", nome[96], tipo[8], id[96];
+  char *corpo;
+  const char *p, *fim;
+  int n = 0;
+  snprintf(url, sizeof url, "%s/manifest.json", base);
+  corpo = rede_baixar(url, 20);
+  if (!corpo) return 0;
+  fim = corpo + strlen(corpo);
+  js_texto(corpo, fim, "id", addonId, sizeof addonId);
+  p = js_array(corpo, fim, "catalogs");
+  while (p && n < max) {
+    const char *f = js_fim(p);
+    tipo[0] = id[0] = nome[0] = 0;
+    js_texto(p, f, "type", tipo, sizeof tipo);
+    js_texto(p, f, "id",   id,   sizeof id);
+    js_texto(p, f, "name", nome, sizeof nome);
+    // Sem tipo ou sem id nao da para montar a URL do catalogo; e um catalogo
+    // que nao responde e pior que uma fileira a menos.
+    if (tipo[0] && id[0]) {
+      Decl *d = &saida[n];
+      memset(d, 0, sizeof *d);
+      d->base = base;
+      snprintf(d->tipo, sizeof d->tipo, "%s", tipo);
+      snprintf(d->id,   sizeof d->id,   "%s", id);
+      snprintf(d->chave, sizeof d->chave, "%s_%s_%s",
+               addonId[0] ? addonId : base, tipo, id);
+      snprintf(d->desativar, sizeof d->desativar, "%s_%s_%s_%s", base, tipo, id, nome);
+      formatarTitulo(nome, tipo, d->titulo, sizeof d->titulo);
+      n++;
+    }
+    p = js_prox(f);
+  }
+  free(corpo);
+  return n;
+}
+
 static void *montar(void *u) {
   // O lote tambem cresce: era dimensionado por CAT_MAX e por isso herdava o
   // mesmo teto arbitrario.
@@ -236,26 +373,79 @@ static void *montar(void *u) {
       if (maior) { lote = maior; cap = novoCap; } \
     } } while (0)
 
-  // Depois o que e do dono (recomendacoes) e so entao o generico: se algum
-  // catalogo falhar, o que se perde e a cauda e nao o comeco.
-  static const char *PREF[][2] = {
-    { "movie",  "recs_movies_for_you" },
-    { "series", "recs_series_for_you" },
-    { "movie",  "trending_movies" },
-    { "series", "trending_series" },
-  };
-  for (i = 0; i < addons_n(); i++) {
-    const char *base = addons_base(i);
-    int k;
-    if (!addons_tem_catalogo(i)) continue;
-    for (k = 0; k < (int)(sizeof PREF / sizeof *PREF); k++) {
-      GARANTE(12);
-      int got = lerCatalogo(base, PREF[k][0], PREF[k][1],
-                            lote + n, cap - n, 10);
-      if (got) printf("[desc] %s/%s: %d\n", PREF[k][0], PREF[k][1], got);
-      n += got;
+  // As fileiras vem dos CATALOGOS declarados nos manifestos dos addons, e nao
+  // de uma lista fixa. A ordem, o que fica de fora e os nomes seguem o
+  // algoritmo do web (sortAndFilterRowsInternal), com as preferencias lidas de
+  // art/fileiras.txt.
+  {
+    Decl decls[DECL_MAX];
+    int nDecl = 0, k;
+    CatFileira fil[CAT_FIL_MAX];
+    int nFil = 0;
+    // A fileira 0 e "Continuar assistindo", que ja foi montada acima. Ela e
+    // SINTETICA: nao esta na ordem do web e nao pode ser desligada por chave —
+    // no app ela existe sempre que ha progresso.
+    if (n > 0) {
+      CatFileira *f0 = &fil[nFil++];
+      memset(f0, 0, sizeof *f0);
+      snprintf(f0->chave,  sizeof f0->chave,  "continue_watching");
+      snprintf(f0->titulo, sizeof f0->titulo, "Continuar assistindo");
+      snprintf(f0->tipo,   sizeof f0->tipo,   "movie");
+      f0->ini = 0; f0->n = n;
+    }
+
+    lerPrefs();
+    for (i = 0; i < addons_n() && nDecl < DECL_MAX; i++) {
+      if (!addons_tem_catalogo(i)) continue;
+      nDecl += lerManifesto(addons_base(i), decls + nDecl, DECL_MAX - nDecl);
+    }
+    printf("[desc] %d catalogos declarados pelos addons\n", nDecl);
+
+    // ensureOrderKeysWithPrefs: a ordem salva primeiro, e as chaves NOVAS
+    // acrescentadas no fim. Catalogo que o addon passou a declarar hoje entra
+    // por ultimo, nao no meio — e o que evita a home se reorganizar sozinha.
+    {
+      int ordem[DECL_MAX];
+      int nOrdem = 0, j;
+      char vistos[DECL_MAX];
+      memset(vistos, 0, sizeof vistos);
+      for (k = 0; k < nPrefOrdem; k++)
+        for (j = 0; j < nDecl; j++)
+          if (!vistos[j] && !strcmp(decls[j].chave, prefOrdem[k])) {
+            ordem[nOrdem++] = j; vistos[j] = 1; break;
+          }
+      for (j = 0; j < nDecl; j++) if (!vistos[j]) ordem[nOrdem++] = j;
+
+      for (k = 0; k < nOrdem && nFil < CAT_FIL_MAX; k++) {
+        Decl *d = &decls[ordem[k]];
+        int got, t;
+        if (desligada(d)) continue;
+        // customTitles ganha do nome do manifesto.
+        for (t = 0; t < nPrefTit; t++)
+          if (!strcmp(prefTit[t].chave, d->chave)) {
+            snprintf(d->titulo, sizeof d->titulo, "%s", prefTit[t].titulo);
+            break;
+          }
+        GARANTE(MAX_POR_FILEIRA + 2);
+        got = lerCatalogo(d->base, d->tipo, d->id, lote + n, cap - n,
+                          MAX_POR_FILEIRA);
+        if (!got) continue;   // fileira vazia nao vira titulo pendurado
+        {
+          CatFileira *f = &fil[nFil++];
+          memset(f, 0, sizeof *f);
+          snprintf(f->chave,  sizeof f->chave,  "%s", d->chave);
+          snprintf(f->titulo, sizeof f->titulo, "%s", d->titulo);
+          snprintf(f->tipo,   sizeof f->tipo,   "%s", d->tipo);
+          f->ini = n; f->n = got;
+        }
+        n += got;
+        printf("[desc] fileira %d: %s (%d)\n", nFil - 1, d->titulo, got);
+      }
+      nFileirasMontadas = nFil;
+      memcpy(filsMontadas, fil, sizeof(CatFileira) * (size_t)nFil);
     }
   }
+
   // Watchlist e colecao entram DEPOIS das recomendacoes, e nao antes.
   // A home usa as PRIMEIRAS posicoes do catalogo nas suas fileiras; com as
   // listas do Trakt na frente (e elas passam de 60 itens cada) as fileiras
@@ -269,7 +459,7 @@ static void *montar(void *u) {
 #undef GARANTE
 
   if (n) {
-    cat_definir(lote, n);
+    cat_definir_tudo(lote, n, filsMontadas, nFileirasMontadas);
     printf("[desc] catalogo montado com %d titulos\n", n);
   } else {
     printf("[desc] nada veio da rede; segue o catalogo do pacote\n");

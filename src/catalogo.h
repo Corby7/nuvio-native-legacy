@@ -106,6 +106,45 @@ void cat_salvar_progresso(int indice, double posSeg, double durSeg);
 // passam a ser URLs — o tex_cache baixa e guarda em disco sozinho.
 void cat_definir(const CatItem *lista, int n);
 
+// --- FILEIRAS DA HOME --------------------------------------------------------
+// O app web nao tem fileira fixa. Cada fileira e UM CATALOGO de UM addon, e a
+// lista sai de `homeCatalogPrefs` (por perfil), aplicada em
+// `sortAndFilterRowsInternal` (js/ui/screens/home/homeScreen.js:9856):
+//
+//   1. junta catalogos e colecoes num mapa indexado por `homeCatalogKey`
+//   2. `ensureOrderKeysWithPrefs` devolve a ordem salva com as chaves NOVAS
+//      acrescentadas no FIM — catalogo que apareceu depois entra por ultimo
+//   3. tira as desativadas, conferindo DUAS chaves: `homeCatalogDisableKey`
+//      (<baseUrl>_<tipo>_<catalogoId>_<nome>) e `homeCatalogKey`
+//   4. aplica `customTitles[homeCatalogKey]` sobre o nome do catalogo
+//   5. colecoes com `pinToTop` vao na frente e nunca sao cortadas
+//   6. corta o total em `getHomeRowLimit()`
+//
+// O teto para NOS e 16: `HOME_MAX_ROWS_LEGACY_TV` em homeConstants.js, o ramo
+// que `isLegacyTvRuntime()` escolhe — e esta TV e exatamente esse caso. O 40 do
+// `HOME_MAX_ROWS_DEFAULT` e do navegador de mesa.
+#define CAT_FIL_MAX 16
+
+typedef struct {
+  char chave[192];   // homeCatalogKey: <addonId>_<tipo>_<catalogoId>
+  char titulo[96];   // ja formatado, com o sufixo de tipo
+  char tipo[8];      // "movie" | "series"
+  // Janela no vetor de itens. As fileiras NAO tem vetor proprio: apontam para
+  // o catalogo unico, que e o que a biblioteca e a busca varrem. Duplicar os
+  // itens por fileira custaria ~3,5 KB por titulo repetido.
+  int  ini, n;
+} CatFileira;
+
+int cat_n_fileiras(void);
+const CatFileira *cat_fileira(int r);   // NULL fora da faixa
+
+// Troca itens E fileiras de uma vez. Tem de ser uma chamada so: com duas, o fio
+// do desenho pega um quadro com as fileiras novas apontando para os itens
+// velhos, e a janela (ini,n) cai fora do vetor.
+void cat_definir_tudo(const CatItem *lista, int qtd,
+                      const CatFileira *fils, int nFils);
+
+
 // Substitui os episodios de UM titulo. Chamado quando o detalhe abre.
 void cat_definir_episodios(int indiceItem, const CatEp *lista, int n);
 

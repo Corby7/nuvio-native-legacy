@@ -16,23 +16,34 @@
 #include <math.h>
 
 #define MAX_ARTE   64
-#define MAX_FIL    6
+// 16, o teto do web para ESTE runtime: HOME_MAX_ROWS_LEGACY_TV em
+// js/ui/screens/home/homeConstants.js, que e o ramo escolhido por
+// isLegacyTvRuntime(). O HOME_MAX_ROWS_DEFAULT de 40 e do navegador de mesa.
+#define MAX_FIL    16
 #define MAX_CARDS  12
 
 typedef struct {
   const char *titulo;
   TipoFileira tipo;
   int n;
+  // Primeiro item DESTA fileira no catalogo. Antes o desenho fazia `r * 8 + c`,
+  // ou seja, cada fileira era uma janela fixa de 8 no vetor plano — o que so
+  // funcionava porque as fileiras eram quatro e cravadas. Com as fileiras
+  // vindo dos catalogos dos addons cada uma tem tamanho proprio.
+  int ini;
 } Fileira;
 
 static char bd[MAX_ARTE][512];    int nBd = 0;    // backdrops 16:9
 static char pst[MAX_ARTE][512];   int nPst = 0;   // posters 2:3
 
+// RESERVA, e so isso: e o que a home mostra enquanto a rede nao respondeu, ou
+// quando nao respondeu nenhuma. As fileiras de verdade vem de cat_fileira(),
+// montadas em descoberta.c a partir dos catalogos que os addons declaram.
 static Fileira fileiras[MAX_FIL] = {
-  { "Continue Assistindo", FILEIRA_CONTINUE, 8 },
-  { "Popular - Movie",     FILEIRA_NORMAL,   8 },
-  { "Popular - Series",    FILEIRA_NORMAL,   8 },
-  { "Em alta",             FILEIRA_NORMAL,   8 },
+  { "Continuar assistindo", FILEIRA_CONTINUE, 8, 0  },
+  { "Popular - Filme",      FILEIRA_NORMAL,   8, 8  },
+  { "Popular - S\xc3\xa9rie", FILEIRA_NORMAL, 8, 16 },
+  { "Em alta",              FILEIRA_NORMAL,   8, 24 },
 };
 static int nFileiras = 4;
 
@@ -44,10 +55,6 @@ static const char *GENEROS_DEMO[] = {
   "Programa de TV  \xc2\xb7  Drama", "Programa de TV  \xc2\xb7  Suspense",
   "Programa de TV  \xc2\xb7  Ficcao cientifica", "Filme  \xc2\xb7  Acao",
   "Programa de TV  \xc2\xb7  Comedia", "Filme  \xc2\xb7  Misterio"
-};
-static const char *META_DEMO[] = {
-  "T2, E10 \xc2\xb7 1 h 24 min", "T1, E1 \xc2\xb7 58 min", "T3, E4 \xc2\xb7 32 min",
-  "T2, E6 \xc2\xb7 51 min", "T4, E2 \xc2\xb7 1 h 5 min", "T1, E4 \xc2\xb7 31 min"
 };
 
 static Foco foco;
@@ -167,7 +174,36 @@ void home_evento(const SDL_Event *e) {
   else if (k == SDLK_UP)    focus_mover(&foco, 0, -1);
 }
 
+// Reconstroi a lista a partir do catalogo. Chamada a cada quadro porque a
+// descoberta roda noutro fio e pode trocar o catalogo a qualquer momento; sai
+// cedo quando nada mudou, entao custa uma comparacao de inteiro.
+static int filsAplicadas = -1;
+static void sincronizarFileiras(void) {
+  int nCat = cat_n_fileiras(), r;
+  if (nCat < 1 || nCat == filsAplicadas) return;
+  for (r = 0; r < nCat && r < MAX_FIL; r++) {
+    const CatFileira *cf = cat_fileira(r);
+    if (!cf) break;
+    fileiras[r].titulo = cf->titulo;
+    // "Continuar assistindo" e a unica landscape: e o
+    // `continueWatchingCardStyle: "card"` do perfil. Todo o resto e poster 2:3.
+    fileiras[r].tipo = (r == 0 && !strcmp(cf->chave, "continue_watching"))
+                     ? FILEIRA_CONTINUE : FILEIRA_NORMAL;
+    fileiras[r].n   = cf->n > MAX_CARDS ? MAX_CARDS : cf->n;
+    fileiras[r].ini = cf->ini;
+  }
+  nFileiras = r;
+  filsAplicadas = nCat;
+  {
+    int cols[MAX_FIL], k;
+    for (k = 0; k < nFileiras; k++) cols[k] = fileiras[k].n;
+    focus_iniciar(&foco, nFileiras, cols);
+  }
+  printf("[home] %d fileiras vindas do catalogo\n", nFileiras);
+}
+
 void home_atualizar(float dt, Uint32 agora) {
+  sincronizarFileiras();
   // O carrossel fica ativo enquanto a home está visível. A troca é lenta e
   // independente do foco, igual à rotação automática do hero legacy.
   if (agora >= heroTrocaEm) {
@@ -374,7 +410,7 @@ void home_desenhar(Uint32 agora) {
             continue;
           }
 
-          const int idxCat = r * 8 + c;
+          const int idxCat = fileiras[r].ini + c;
           const CatItem *cItem = cat_item(idxCat);
           const char *caminho;
           if (tipo == FILEIRA_CONTINUE)
