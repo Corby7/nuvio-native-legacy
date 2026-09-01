@@ -358,11 +358,17 @@ static void desenhaCabecalho(Uint32 agora) {
   if (ajustes_descobrir_na_busca()) {
     GfxRect b = { x, BU_HEAD_Y, NV_BUSCA_BTN, NV_BUSCA_BTN };
     gfx_cor(b, NV_BUSCA_RAIO / NV_BUSCA_BTN, 0.133f, 0.133f, 0.133f, 1.0f);
-    // Lupa/bussola em texto: nao ha atlas de icones neste app, e um glifo tem a
-    // vantagem de escalar com a fonte ja carregada.
-    TxtLinha ic = txt_linha(TXT_TITULO3, "\xe2\x97\x89", 236, 237, 242, 255);
-    txt_desenhar_alpha(ic, b.x + (b.w - ic.w) * 0.5f,
-                       b.y + (b.h - ic.h) * 0.5f, 0.9f);
+    // Bussola do "Descobrir", DESENHADA e nao escrita. O glifo que estava aqui
+    // ("\xe2\x97\x89") nao existe na Inter embarcada e saia como a caixa de
+    // "NO GLYPH" — visivel na captura do aparelho. Nenhuma fonte do pacote tem
+    // simbolos geometricos, entao icone tem de ser geometria.
+    float lado = NV_BUSCA_BTN_ICONE;
+    GfxRect aro = { b.x + (b.w - lado) * 0.5f, b.y + (b.h - lado) * 0.5f, lado, lado };
+    gfx_rect(aro, 0, GFX_ANEL, 0.0f, 0.075f, 0.0f, 0.5f, 0.925f, 0.929f, 0.949f, 0.9f);
+    float ponto = lado * 0.26f;
+    GfxRect miolo = { aro.x + (lado - ponto) * 0.5f, aro.y + (lado - ponto) * 0.5f,
+                      ponto, ponto };
+    gfx_cor(miolo, 0.5f, 0.925f, 0.929f, 0.949f, 0.9f);
     x += NV_BUSCA_BTN + NV_BUSCA_BTN_GAP;
   }
 
@@ -375,12 +381,12 @@ static void desenhaCabecalho(Uint32 agora) {
 
   float tx = campo.x + NV_BUSCA_CAMPO_PADX;
   if (nConsulta) {
-    TxtLinha l = txt_linha(TXT_TITULO3, consulta, 245, 246, 250, 255);
+    TxtLinha l = txt_linha(TXT_HEADLINE, consulta, 245, 246, 250, 255);
     txt_desenhar(l, tx, campo.y + (campo.h - l.h) * 0.5f);
     tx += l.w + 6.0f;
   } else {
     // Mesmo texto do placeholder do web.
-    TxtLinha l = txt_linha(TXT_TITULO3, "Buscar filmes e séries", 255, 255, 255, 255);
+    TxtLinha l = txt_linha(TXT_HEADLINE, "Buscar filmes e séries", 255, 255, 255, 255);
     txt_desenhar_alpha(l, tx, campo.y + (campo.h - l.h) * 0.5f, 0.40f);
   }
   // O cursor piscando e o unico sinal de que o campo esta ativo.
