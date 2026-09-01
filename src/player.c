@@ -719,7 +719,7 @@ void player_desenhar(Uint32 agora) {
     if (furo.w > 0.0f && furo.h > 0.0f) gfx_furo(furo);
   } else {
     const char *arte = (c && c->backdrop[0]) ? c->backdrop : NULL;
-    GLuint tex = arte ? tex_obter(arte) : 0;
+    GLuint tex = arte ? tex_obter_hero(arte) : 0;   // ocupa a tela inteira
     if (tex) {
       gfx_tex_aspect_atual = tex_aspecto(arte);
       gfx_rect(tela, tex, GFX_CARD, 0, 0, 0, 0.0f, 0, 0, 0, entrada);

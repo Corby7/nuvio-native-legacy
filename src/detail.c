@@ -191,6 +191,24 @@ void detail_abrir(const HomeItem *it) {
 
 int detail_aberto(void) { return aberto; }
 
+// Temporada e episodio EM FOCO, para quem for pedir fonte.
+//
+// Sem isto o addons_buscar recebia so o imdb da serie e cravava ":1:1" — e por
+// isso as fontes eram sempre as do episodio 1, qualquer que fosse o escolhido.
+// Devolve 0 quando o foco nao esta na fileira de episodios; nesse caso quem
+// chama cai no primeiro episodio da temporada em exibicao, que e o que a tela
+// mostra em cima.
+int detail_ep_foco(int *temp, int *epis) {
+  const CatEp *ep = NULL;
+  if (!aberto) return 0;
+  if (foco.fileira == SEC_EPISODIOS) ep = cat_episodio(idx, foco.coluna);
+  if (!ep) ep = cat_episodio(idx, 0);
+  if (!ep) return 0;
+  if (temp) *temp = ep->temporada;
+  if (epis) *epis = ep->episodio;
+  return 1;
+}
+
 int detail_assentado(void) {
   return aberto && !saindo && t > 0.985f && nivel == 0;
 }
@@ -598,6 +616,9 @@ static void heroWeb(float a, float desloc) {
 
   // --- logo -----------------------------------------------------------------
   const char *arqLogo = logoDe(idx);
+  // O logo e desenhado com 261 de largura mas a arte de origem costuma vir bem
+  // maior; o teto de 960 ja bastaria, mas quando a mesma arte tambem serve ao
+  // hero o item e promovido — por isso passa pelo mesmo caminho.
   GLuint texLogo = arqLogo ? tex_obter(arqLogo) : 0;
   if (texLogo) {
     float asp = tex_aspecto(arqLogo);
@@ -1052,7 +1073,9 @@ void detail_desenhar(Uint32 agora) {
     anim_mistura(item.rect.w, cheia.w, s), anim_mistura(item.rect.h, cheia.h, s),
   };
   const char *arte = arteDe(idx);
-  GLuint tex = arte ? tex_obter(arte) : 0;
+  // Backdrop em tela cheia: pede o teto de 1920. Com o teto comum de 960 a arte
+  // era decodificada com metade da resolucao e ampliada ao dobro na tela.
+  GLuint tex = arte ? tex_obter_hero(arte) : 0;
   // Ao rolar, o web NAO desfoca a arte: ele a APAGA. Medido em
   // `.series-detail-shell.detail-scrolled` — o backdrop vai a `opacity: 0.15` e
   // a vinheta a 0, ambos em 0.8s cubic-bezier(.4,0,.2,1).

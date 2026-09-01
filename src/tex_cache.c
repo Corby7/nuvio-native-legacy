@@ -20,6 +20,11 @@ typedef struct {
   SDL_Surface *sup;   // preenchida pela thread; consumida no bombear
   GLuint tex;
   int w, h;
+  // Teto de largura PEDIDO para este item. O hero em tela cheia precisa de 1920;
+  // um poster de 212 nao. Um teto unico para todos servia mal aos dois: a 960 o
+  // hero era decodificado com metade da resolucao e esticado para 1920 na tela,
+  // que e o borrao que o dono viu.
+  int limite;
   unsigned long uso;  // contador LRU
 } Item;
 
@@ -94,6 +99,7 @@ static void podar(void) {
 // rebaixando sem parar — o que aparece como 30fps com jank em todo quadro
 // depois de alguns minutos de uso. A 960 a mesma cena cabe com folga.
 #define NV_TEX_LARG_MAX 960
+#define NV_TEX_HERO_LARG_MAX 1920
 
 static char dirCache[512];
 
@@ -164,8 +170,12 @@ static int threadDecode(void *arg) {
     if (!rodando) { SDL_UnlockMutex(mtx); return 0; }
     int idx = fila[filaIni]; filaIni = (filaIni + 1) % MAX_FILA;
     char caminho[512];
+    int limite;
     strncpy(caminho, itens[idx].caminho, sizeof caminho - 1);
     caminho[sizeof caminho - 1] = 0;
+    // Copiado SOB O MUTEX: o item pode ser promovido a hero enquanto este fio
+    // decodifica, e ler o campo depois daria uma leitura sem trava.
+    limite = itens[idx].limite > 0 ? itens[idx].limite : NV_TEX_LARG_MAX;
     SDL_UnlockMutex(mtx);
 
     { char local[600];
@@ -183,8 +193,8 @@ static int threadDecode(void *arg) {
     // DECODIFICADO — meia duzia deles estoura o orcamento e o cache passa a
     // despejar e rebaixar em circulo, o que aparece como queda de fps e quadros
     // de 100 ms. Reduzir aqui vale para qualquer fonte, presente ou futura.
-    if (conv && conv->w > NV_TEX_LARG_MAX) {
-      int lw = NV_TEX_LARG_MAX;
+    if (conv && conv->w > limite) {
+      int lw = limite;
       int lh = conv->h * lw / conv->w;
       SDL_Surface *menor = SDL_CreateRGBSurfaceWithFormat(
           0, lw, lh, 32, SDL_PIXELFORMAT_ABGR8888);
@@ -230,18 +240,33 @@ void tex_encerrar(void) {
   SDL_DestroyCond(cond); SDL_DestroyMutex(mtx);
 }
 
-GLuint tex_obter(const char *caminho) {
+static GLuint tex_obter_limite(const char *caminho, int limite) {
   if (!caminho || !*caminho) return 0;
   GLuint saida = 0;
   SDL_LockMutex(mtx);
   int i = acharIndice(caminho);
   if (i >= 0) {
     itens[i].uso = ++relogio;
+    // PROMOCAO: a mesma arte pode ser pedida como poster (960) e depois como
+    // hero (1920). Se o teto novo e maior e a textura pronta ficou menor que
+    // ele, refaz — senao o hero herda para sempre a versao pequena que o card
+    // pediu primeiro, e o borrao volta sem explicacao aparente.
+    if (limite > itens[i].limite) {
+      itens[i].limite = limite;
+      if (itens[i].estado == PRONTO && itens[i].w < limite) {
+        int prox = (filaFim + 1) % MAX_FILA;
+        if (prox != filaIni) {
+          itens[i].estado = PENDENTE;
+          fila[filaFim] = i; filaFim = prox; SDL_CondSignal(cond);
+        }
+      }
+    }
     saida = itens[i].estado == PRONTO ? itens[i].tex : 0;
   } else {
     int novo = slotLivre();
     if (novo >= 0) {
       strncpy(itens[novo].caminho, caminho, sizeof itens[novo].caminho - 1);
+      itens[novo].limite = limite;
       itens[novo].estado = PENDENTE;
       itens[novo].uso = ++relogio;
       int prox = (filaFim + 1) % MAX_FILA;
@@ -251,6 +276,17 @@ GLuint tex_obter(const char *caminho) {
   }
   SDL_UnlockMutex(mtx);
   return saida;
+}
+
+GLuint tex_obter(const char *caminho) {
+  return tex_obter_limite(caminho, NV_TEX_LARG_MAX);
+}
+
+// Arte que ocupa a tela inteira: hero da home, backdrop do detalhe e a arte do
+// player. 1920 e a largura do painel — pedir mais so gastaria memoria, pedir
+// menos e ampliar depois.
+GLuint tex_obter_hero(const char *caminho) {
+  return tex_obter_limite(caminho, NV_TEX_HERO_LARG_MAX);
 }
 
 float tex_aspecto(const char *caminho) {

@@ -380,8 +380,9 @@ static void desenhaHero(Uint32 agora) {
   const CatItem *cAnt = cat_item(heroAnterior);
   const char *arteB = (cAnt && cAnt->backdrop[0]) ? cAnt->backdrop : bd[heroAnterior];
 
-  GLuint tAnt = tex_obter(arteB);
-  GLuint tAtu = tex_obter(arteA);
+  // Teto de 1920: o hero ocupa a tela e a 960 saia esticado ao dobro.
+  GLuint tAnt = tex_obter_hero(arteB);
+  GLuint tAtu = tex_obter_hero(arteA);
   if (heroFade < 1.0f && tAnt) {
     gfx_tex_aspect_atual = tex_aspecto(arteB);
     gfx_rect(r, tAnt, modoHero, 0, 0, 0, 0.0f, 0, 0, 0, aArte);

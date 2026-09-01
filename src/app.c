@@ -66,12 +66,36 @@ static void abrirPorIndice(int i) {
   if (!c || !c->backdrop[0]) return;
   HomeItem it;
   GfxRect tudo = { 0, 0, NV_TELA_W, NV_TELA_H };
+  // O `it` e da PILHA e esta funcao preenchia todos os campos MENOS o indice —
+  // que ia como lixo. Como a biblioteca e a busca abrem por aqui, qualquer
+  // titulo escolhido nelas levava ao mesmo filme. A home nao sofria porque ela
+  // entrega o HomeItem inteiro, ja com o indice.
+  //
+  // O campo existe exatamente por causa deste defeito, e o comentario dele em
+  // home.h ja avisava: "faltava, e por isso o detalhe abria sempre o item 0".
+  // Zerar a struct antes garante que o proximo campo novo nasca definido em vez
+  // de repetir a historia.
+  memset(&it, 0, sizeof it);
+  it.indice = i;
   it.rect = tudo;
   it.arte = c->backdrop;
   it.titulo = c->titulo;
   it.genero = c->genero;
   it.meta = c->meta;
   abrirTitulo(&it);
+}
+
+// Monta o id que os addons esperam. Para serie e "tt1234567:temporada:episodio";
+// sem os dois numeros a resposta volta VAZIA com HTTP 200, e era por isso que o
+// addons_buscar cravava ":1:1" — o que fazia toda a serie mostrar as fontes do
+// episodio 1, qualquer que fosse o escolhido.
+static void idDoAlvo(const CatItem *ci, char *dst, size_t n) {
+  int t = 0, e = 0;
+  if (!ci) { if (n) dst[0] = 0; return; }
+  if (!strcmp(ci->tipo, "series") && detail_ep_foco(&t, &e) && t > 0 && e > 0)
+    snprintf(dst, n, "%s:%d:%d", ci->imdb, t, e);
+  else
+    snprintf(dst, n, "%s", ci->imdb);
 }
 
 static void trocarTela(Tela nova) {
@@ -161,12 +185,18 @@ void app_atualizar(float dt, Uint32 agora) {
     // Ao abrir um titulo, perguntar as fontes JA — a busca leva segundos e
     // esperar o usuario apertar Reproduzir para so entao comecar faria a
     // primeira reproducao parecer travada.
-    { static int ultimoConsultado = -1;
+    // O gatilho e o ID, nao o indice do titulo. Com o indice, mudar de EPISODIO
+    // nao repetia a busca e a lista continuava a do episodio anterior — meia
+    // correcao seria pior que nenhuma, porque a tela mostraria fontes de um
+    // episodio com o nome de outro.
+    { static char ultimoAlvo[32] = "";
       int i = detail_indice();
       const CatItem *ci = cat_item(i);
-      if (i != ultimoConsultado && ci && ci->imdb[0]) {
-        ultimoConsultado = i;
-        addons_buscar(ci->imdb, ci->tipo);
+      char alvo[32];
+      idDoAlvo(ci, alvo, sizeof alvo);
+      if (ci && ci->imdb[0] && strcmp(alvo, ultimoAlvo)) {
+        snprintf(ultimoAlvo, sizeof ultimoAlvo, "%s", alvo);
+        { addons_buscar(alvo, ci->tipo); }
         // Episodios do titulo aberto, na temporada onde o dono parou. Sai da
         // rede na hora: guardar a lista de episodios de 40 titulos no pacote
         // envelhecia a cada temporada nova.
@@ -184,8 +214,10 @@ void app_atualizar(float dt, Uint32 agora) {
       const CatItem *ci = cat_item(detail_indice());
       player_abrir(detail_indice(), NULL);
       if (stream_idade_ms() > NV_LINK_VALIDO_MS && ci && ci->imdb[0]) {
-        printf("fonte: lista com %ums, renovando\n", (unsigned)stream_idade_ms());
-        addons_buscar(ci->imdb, ci->tipo);
+        char alvo[32]; idDoAlvo(ci, alvo, sizeof alvo);
+        printf("fonte: lista com %ums, renovando (%s)\n",
+               (unsigned)stream_idade_ms(), alvo);
+        addons_buscar(alvo, ci->tipo);
       }
       aguardandoFonte = 1;
     }

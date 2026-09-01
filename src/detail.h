@@ -23,6 +23,8 @@ int  detail_assentado(void);
 // sozinha: reproduzir e marcar na lista. O detalhe nao chama o player nem a
 // biblioteca direto — quem conhece as outras telas e o roteador.
 int  detail_indice(void);
+// Temporada e episodio em foco (1 = ha episodio; 0 = titulo sem episodios).
+int  detail_ep_foco(int *temporada, int *episodio);
 int  detail_pediu_reproduzir(void);   // consome o pedido
 int  detail_pediu_marcar(void);       // botao "+"
 int  detail_pediu_fontes(void);       // OK segurado, ou o botao "..."

@@ -23,6 +23,10 @@ void tex_encerrar(void);
 // Devolve a textura se ja estiver pronta; senao 0 e enfileira o decode.
 // Nunca bloqueia a thread de desenho.
 GLuint tex_obter(const char *caminho);
+// Mesma coisa, com teto de 1920: para a arte que ocupa a tela inteira (hero da
+// home, backdrop do detalhe, arte do player). Com o teto comum de 960 essas
+// tres eram decodificadas com metade da resolucao e ampliadas na tela.
+GLuint tex_obter_hero(const char *caminho);
 
 // Proporcao (w/h) da textura ja carregada; 0 se ainda nao esta pronta.
 // Necessaria para o "cover" do shader — sem ela a arte estica.
