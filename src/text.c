@@ -26,6 +26,7 @@ typedef struct {
 // navegador rasteriza no devicePixelRatio.
 static float escalaTxt = 1.0f;
 static TTF_Font *fontes[TXT_NFONTES];
+
 static Entrada cache[MAX_LINHAS];
 
 // Quantas linhas NOVAS podem ser rasterizadas por quadro.
@@ -110,6 +111,54 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_PG_GRAV,    PESO_REGULAR },  // .player-parental-severity (22/400)
 };
 
+// RESERVA PARA O QUE A INTER NAO TEM.
+//
+// A Inter cobre latim, e so. Um titulo japones da filmografia de um ator (a
+// tela nova de pessoa mostra varios) saia como fileira de quadradinhos — a
+// fonte nao tem o glifo e o SDL_ttf desenha .notdef sem reclamar. A TV traz
+// /usr/share/fonts/DroidSansFallback.ttf, que cobre CJK; abrimos ela SOB
+// DEMANDA, no mesmo corpo do estilo, e so para as linhas que precisam.
+//
+// Nao e fallback por glifo (isso exigiria compor a linha caractere a caractere
+// e perder o kerning): a linha INTEIRA vai para a reserva quando o primeiro
+// caractere fora do ASCII nao existir na fonte principal. Titulo misto
+// "Deadpool & ウルヴァリン" sairia todo na reserva, o que e feio mas legivel —
+// e o caso raro; o comum e a linha ser toda de uma escrita so.
+static TTF_Font *reservas[TXT_NFONTES];
+static char caminhoReserva[512];
+
+// Primeiro codepoint FORA do ASCII, ou 0. Decodifica UTF-8 na mao porque e o
+// unico ponto do app que precisa disso e puxar uma biblioteca por causa de tres
+// linhas nao se paga.
+static Uint32 primeiroNaoAscii(const char *s) {
+  const unsigned char *p = (const unsigned char *)s;
+  for (; *p; p++) {
+    if (*p < 0x80) continue;
+    if ((*p & 0xE0) == 0xC0 && p[1])
+      return (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F));
+    if ((*p & 0xF0) == 0xE0 && p[1] && p[2])
+      return (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F));
+    if ((*p & 0xF8) == 0xF0) return 0x10000;   // fora do BMP: nao tratamos
+    return 0;
+  }
+  return 0;
+}
+
+// Fonte com que a linha `s` deve ser desenhada. Devolve a principal quando ela
+// da conta — que e o caso da esmagadora maioria das linhas.
+static TTF_Font *fonteDe(TxtEstilo estilo, const char *s) {
+  Uint32 cp = primeiroNaoAscii(s);
+  if (!cp || cp >= 0x10000) return fontes[estilo];
+  // Acentos do portugues e do espanhol estao na Inter; so cai na reserva o que
+  // ela realmente nao tem.
+  if (TTF_GlyphIsProvided(fontes[estilo], (Uint16)cp)) return fontes[estilo];
+  if (!caminhoReserva[0]) return fontes[estilo];
+  if (!reservas[estilo])
+    reservas[estilo] = TTF_OpenFont(caminhoReserva,
+                                    (int)(ESTILOS[estilo].corpo * escalaTxt + 0.5f));
+  return reservas[estilo] ? reservas[estilo] : fontes[estilo];
+}
+
 int txt_iniciar(const char *dirRecursos, float escala) {
   if (escala < 0.5f) escala = 1.0f;
   escalaTxt = escala;
@@ -147,6 +196,19 @@ int txt_iniciar(const char *dirRecursos, float escala) {
   };
   const char *nomes[3] = { "Inter (embarcada)", "LG Display", "DroidSans" };
 
+  // Caminho da reserva CJK. Na TV e a DroidSansFallback; no Mac, a fonte do
+  // sistema que cobre CJK — ali isto e so para a previa nao mentir.
+  { const char *cand[] = {
+      "/usr/share/fonts/DroidSansFallback.ttf",
+      "/System/Library/Fonts/Hiragino Sans GB.ttc",
+      "/System/Library/Fonts/PingFang.ttc",
+      NULL };
+    for (int i = 0; cand[i]; i++) {
+      FILE *fr = fopen(cand[i], "rb");
+      if (fr) { fclose(fr); snprintf(caminhoReserva, sizeof caminhoReserva, "%s", cand[i]); break; }
+    }
+    printf("reserva CJK: %s\n", caminhoReserva[0] ? caminhoReserva : "nenhuma"); }
+
   for (int c = 0; c < 3; c++) {
     int todas = 1;
     for (int i = 0; i < TXT_NFONTES; i++) {
@@ -166,7 +228,10 @@ int txt_iniciar(const char *dirRecursos, float escala) {
 void txt_encerrar(void) {
   for (int i = 0; i < MAX_LINHAS; i++)
     if (cache[i].ocupado && cache[i].linha.tex) glDeleteTextures(1, &cache[i].linha.tex);
-  for (int i = 0; i < TXT_NFONTES; i++) if (fontes[i]) TTF_CloseFont(fontes[i]);
+  for (int i = 0; i < TXT_NFONTES; i++) {
+    if (fontes[i]) TTF_CloseFont(fontes[i]);
+    if (reservas[i]) TTF_CloseFont(reservas[i]);
+  }
   TTF_Quit();
 }
 
@@ -224,7 +289,7 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
 
   Uint64 t0 = SDL_GetPerformanceCounter();
   SDL_Color cor = { (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a };
-  SDL_Surface *sf = TTF_RenderUTF8_Blended(fontes[estilo], s, cor);
+  SDL_Surface *sf = TTF_RenderUTF8_Blended(fonteDe(estilo, s), s, cor);
   if (!sf) return vazia;
   SDL_Surface *cv = SDL_ConvertSurfaceFormat(sf, SDL_PIXELFORMAT_ABGR8888, 0);
   SDL_FreeSurface(sf);
