@@ -3,6 +3,9 @@ nuvio-proto.arm
 *.ipk
 deploy/app/nuvio-proto
 deploy/app/art/cache/
+# catalogo-rede.bin e CACHE DE EXECUCAO do catalogo vindo dos addons — o
+# proprio app o descarta quando muda de build ("[cat] cache descartado").
+deploy/app/art/catalogo-rede.bin
 
 # SEGREDOS do dono. NAO versionar: sao chaves de conta, nao configuracao.
 # tmdb.txt e trakt.txt JA ESTAVAM rastreados e sairam do indice com
