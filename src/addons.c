@@ -2,6 +2,7 @@
 #include "streams.h"
 #include "rede.h"
 #include "js.h"
+#include "marco.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -471,6 +472,7 @@ static void *buscar(void *u) {
   Stream *achados = NULL;
   int n = 0, i;
   (void)u;
+  marco("addons: consulta inicio");
 
   nBaldes = 0; proxBalde = 0;
   baldes = calloc((size_t)(nAddon > 0 ? nAddon : 1), sizeof(BaldeFonte));
@@ -500,6 +502,7 @@ static void *buscar(void *u) {
   }
   free(baldes); baldes = NULL; nBaldes = 0;
 
+  marco(n ? "addons: fontes recebidas" : "addons: nenhuma fonte");
   resultado = achados; nResultado = n;
   printf("[addons] total %d\n", n);
   fflush(stdout);

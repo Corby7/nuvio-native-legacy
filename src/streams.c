@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "addons.h"
+#include "marco.h"
 
 #define FOLHA_W       720.0f
 #define FOLHA_LINHA   228.0f
@@ -177,6 +178,7 @@ int stream_primeira_boa(int tentativas) {
   }
   if (nu < 1) { free(usados); return -1; }
 
+  marco("fonte: verificacao inicio");
   verifs = calloc((size_t)nu, sizeof(Verificacao));
   if (!verifs) { free(usados); return -1; }
   { int q;
@@ -193,6 +195,7 @@ int stream_primeira_boa(int tentativas) {
     for (q = 0; q < nu; q++)
       if (verifs[q].ok) { escolhida = verifs[q].idx; break; }
   }
+  marco(escolhida >= 0 ? "fonte: verificacao ok" : "fonte: verificacao sem resultado");
   free(verifs); verifs = NULL; nVerifs = 0; free(usados);
   if (escolhida >= 0) printf("[fonte] %d ok\n", escolhida);
   return escolhida;

@@ -1,10 +1,12 @@
 #include "text.h"
 #include "gfx.h"
 #include "layout.h"
+#include "marco.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 // Quantas linhas de texto ficam guardadas ao mesmo tempo.
 //
@@ -38,6 +40,38 @@ typedef struct {
 // navegador rasteriza no devicePixelRatio.
 static float escalaTxt = 1.0f;
 static TTF_Font *fontes[TXT_NFONTES];
+
+// Os arquivos TTF dos tres pesos, LIDOS UMA VEZ e mantidos vivos enquanto o app
+// vive: as faces do FreeType leem deles sob demanda, entao liberar aqui e
+// leitura de memoria liberada no primeiro glifo novo. Sao ~900 KB no total.
+// `donoPeso` marca quais ponteiros sao proprios: pesos que apontam para o mesmo
+// arquivo compartilham o buffer e so um deles libera.
+static unsigned char *bytesPeso[3];
+static size_t         tamPeso[3];
+static int            donoPeso[3];
+// O RWops de cada estilo. Guardado porque abrimos com freesrc=0 (o buffer e
+// compartilhado, a fonte nao pode fecha-lo) e alguem tem de fechar em
+// txt_encerrar.
+static SDL_RWops     *rwFonte[TXT_NFONTES];
+
+// Le o arquivo inteiro para um buffer novo. NULL se nao abrir.
+static unsigned char *lerTudo(const char *caminho, size_t *tam) {
+  FILE *f = fopen(caminho, "rb");
+  unsigned char *b;
+  long n;
+  *tam = 0;
+  if (!f) return NULL;
+  if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+  n = ftell(f);
+  if (n <= 0) { fclose(f); return NULL; }
+  rewind(f);
+  b = malloc((size_t)n);
+  if (!b) { fclose(f); return NULL; }
+  if (fread(b, 1, (size_t)n, f) != (size_t)n) { free(b); fclose(f); return NULL; }
+  fclose(f);
+  *tam = (size_t)n;
+  return b;
+}
 // As alternativas so sao abertas para os 16 estilos de legenda e sob demanda.
 // Abrir a matriz inteira (todas as familias x todos os estilos do app) gastaria
 // memoria numa TV fraca por uma preferencia que afeta no maximo quatro linhas.
@@ -310,29 +344,87 @@ int txt_iniciar(const char *dirRecursos, float escala) {
              caminhoReserva[e][0] ? caminhoReserva[e] : "nenhuma");
     } }
 
+  marco("fontes: inicio");
   for (int c = 0; c < 3; c++) {
     int todas = 1;
-    for (int i = 0; i < TXT_NFONTES; i++) {
-      fontes[i] = TTF_OpenFont(familias[c][ESTILOS[i].peso],
-                               (int)(ESTILOS[i].corpo * escalaTxt + 0.5f));
-      if (!fontes[i]) { todas = 0; break; }
-      // negrito sintetico so na reserva, que nao tem arquivo Bold proprio
-      if (c > 0 && ESTILOS[i].peso == PESO_BOLD) TTF_SetFontStyle(fontes[i], TTF_STYLE_BOLD);
+    // UM ARQUIVO, UMA LEITURA.
+    //
+    // MEDIDO: 1035 ms na TV contra 12 ms no Mac para o MESMO txt_iniciar. Nao e
+    // o FreeType que custa — e o armazenamento do aparelho. TTF_OpenFont abre e
+    // LE O ARQUIVO INTEIRO a cada chamada, e sao TXT_NFONTES chamadas sobre
+    // apenas TRES arquivos distintos (Regular, Medium, Bold): a mesma dezena de
+    // leituras da mesma dezena de megabytes, num disco que entrega ~1 MB/s de
+    // arquivo pequeno.
+    //
+    // Aqui os tres arquivos sao lidos UMA vez para a memoria e cada estilo abre
+    // sobre esses bytes com TTF_OpenFontRW. Nao ha fio nenhum de proposito: o
+    // gargalo era I/O REPETIDO, e paralelizar leituras redundantes no mesmo
+    // armazenamento lento nao as torna menos redundantes — nao fazer as
+    // leituras torna. Serial e mais previsivel, e nada disso encosta na
+    // thread-safety duvidosa do FreeType.
+    for (int p = 0; p < 3; p++) {
+      int j;
+      // A LG repete Regular em dois pesos e a Droid nos tres: nao ler de novo.
+      for (j = 0; j < p; j++)
+        if (!strcmp(familias[c][p], familias[c][j])) break;
+      if (j < p) { bytesPeso[p] = bytesPeso[j]; tamPeso[p] = tamPeso[j]; donoPeso[p] = 0; continue; }
+      bytesPeso[p] = lerTudo(familias[c][p], &tamPeso[p]);
+      donoPeso[p] = bytesPeso[p] ? 1 : 0;
+      if (!bytesPeso[p]) { todas = 0; break; }
     }
-    if (todas) { printf("fonte: %s\n", nomes[c]); return 1; }
-    for (int i = 0; i < TXT_NFONTES; i++) { if (fontes[i]) TTF_CloseFont(fontes[i]); fontes[i] = NULL; }
+    if (todas)
+      for (int i = 0; i < TXT_NFONTES; i++) {
+        int peso = ESTILOS[i].peso;
+        // Um RWops POR fonte: o FreeType le pelo stream durante toda a vida da
+        // face, entao dois estilos nao podem dividir a mesma posicao de leitura.
+        // Sao bytes em memoria — criar o RWops nao custa I/O.
+        SDL_RWops *rw = SDL_RWFromConstMem(bytesPeso[peso], (int)tamPeso[peso]);
+        // freesrc=0: quem libera o RWops e o TTF_CloseFont em txt_encerrar? Nao
+        // — passamos 0 e guardamos o ponteiro, porque o buffer e compartilhado
+        // entre estilos e nao pode ser liberado pela primeira fonte a fechar.
+        fontes[i] = rw ? TTF_OpenFontRW(rw, 0, (int)(ESTILOS[i].corpo * escalaTxt + 0.5f)) : NULL;
+        rwFonte[i] = rw;
+        if (!fontes[i]) { if (rw) SDL_RWclose(rw); rwFonte[i] = NULL; todas = 0; break; }
+        // negrito sintetico so na reserva, que nao tem arquivo Bold proprio
+        if (c > 0 && ESTILOS[i].peso == PESO_BOLD) TTF_SetFontStyle(fontes[i], TTF_STYLE_BOLD);
+      }
+    if (todas) {
+      printf("fonte: %s (%d estilos, 3 leituras)\n", nomes[c], TXT_NFONTES);
+      marco("fontes: prontas");
+      return 1;
+    }
+    for (int i = 0; i < TXT_NFONTES; i++) {
+      if (fontes[i]) TTF_CloseFont(fontes[i]);
+      fontes[i] = NULL;
+      if (rwFonte[i]) SDL_RWclose(rwFonte[i]);
+      rwFonte[i] = NULL;
+    }
+    for (int p = 0; p < 3; p++) {
+      if (donoPeso[p]) free(bytesPeso[p]);
+      bytesPeso[p] = NULL; tamPeso[p] = 0; donoPeso[p] = 0;
+    }
   }
   printf("txt: nenhuma fonte carregou\n");
+  marco("fontes: nenhuma carregou");
   return 0;
 }
 
 void txt_encerrar(void) {
   for (int i = 0; i < MAX_LINHAS; i++)
     if (cache[i].ocupado && cache[i].linha.tex) glDeleteTextures(1, &cache[i].linha.tex);
+  // ORDEM: a fonte primeiro, o RWops depois, o buffer por ultimo. A face do
+  // FreeType ainda referencia o stream, e o stream, os bytes.
   for (int i = 0; i < TXT_NFONTES; i++) {
     if (fontes[i]) TTF_CloseFont(fontes[i]);
+    fontes[i] = NULL;
+    if (rwFonte[i]) SDL_RWclose(rwFonte[i]);
+    rwFonte[i] = NULL;
     for (int e = 0; e < ESC_N; e++)
       if (reservas[e][i]) TTF_CloseFont(reservas[e][i]);
+  }
+  for (int p = 0; p < 3; p++) {
+    if (donoPeso[p]) free(bytesPeso[p]);
+    bytesPeso[p] = NULL; tamPeso[p] = 0; donoPeso[p] = 0;
   }
   for (int f = 1; f < TXT_FAMILIA_N; f++)
     for (int i = 0; i < TXT_LEG_N; i++)
