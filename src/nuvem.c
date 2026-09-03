@@ -17,11 +17,23 @@
 #ifndef NV_TRAKT_CLIENT_ID
 #define NV_TRAKT_CLIENT_ID ""
 #endif
+#ifndef NV_TRAKT_CLIENT_SECRET
+#define NV_TRAKT_CLIENT_SECRET ""
+#endif
+#ifndef NV_SIMKL_CLIENT_ID
+#define NV_SIMKL_CLIENT_ID ""
+#endif
+#ifndef NV_SIMKL_APP
+#define NV_SIMKL_APP "nuvio"
+#endif
 
 static char url[300]      = NV_SUPABASE_URL;
 static char anon[1200]    = NV_SUPABASE_ANON_KEY;
 static char baseLogin[300] = NV_TV_LOGIN_BASE;
 static char traktCliente[128] = NV_TRAKT_CLIENT_ID;
+static char traktSegredo[128] = NV_TRAKT_CLIENT_SECRET;
+static char simklCliente[200] = NV_SIMKL_CLIENT_ID;
+static char simklApp[80] = NV_SIMKL_APP;
 
 // Freio: instante (em segundos) ate quando ninguem tenta, e quantas falhas
 // seguidas ja aconteceram. O intervalo dobra a cada falha ate o teto — o mesmo
@@ -73,6 +85,9 @@ const char *nuvem_url(void)        { return url; }
 const char *nuvem_anon(void)       { return anon; }
 const char *nuvem_base_login(void) { return baseLogin; }
 const char *nuvem_trakt_cliente(void) { return traktCliente; }
+const char *nuvem_trakt_segredo(void) { return traktSegredo; }
+const char *nuvem_simkl_cliente(void) { return simklCliente; }
+const char *nuvem_simkl_app(void) { return simklApp; }
 
 char *nuvem_post(const char *caminho, const char *corpoJson,
                  const char *bearer, int *status) {

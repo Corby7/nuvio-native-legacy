@@ -18,6 +18,11 @@ typedef struct {
   int  indice;          // profile_index (1..n) — e o que vai em p_profile_id
   char nome[64];
   char corHex[10];      // avatar_color_hex, "#1E88E5"
+  // MEDIDO nesta conta: `avatar_url` vem NULO e o `avatar_id` ("avatar_lalo")
+  // so vira imagem pela tabela `avatars`, que NAO existe neste servidor
+  // (PGRST205). Ou seja: quando nao ha url, nao ha foto para buscar — o
+  // circulo com a inicial e a representacao, nao um remendo.
+  char avatarUrl[300];
   int  primario;        // is_primary
   int  temPin;          // veio de sync_pull_profile_locks
 } ContaPerfil;
@@ -29,6 +34,8 @@ int perfis_puxar(void);
 
 int           perfis_n(void);
 const ContaPerfil *perfis_item(int i);
+// O perfil em vigor, ou NULL quando a lista ainda nao chegou.
+const ContaPerfil *perfis_item_ativo(void);
 const char   *perfis_dono(void);        // uuid de get_sync_owner; "" se nao veio
 
 // ContaPerfil ativo. Persistido em disco: reescolher a cada arranque seria uma

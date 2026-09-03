@@ -17,6 +17,8 @@
 #include "perfis.h"
 #include "perfilsel.h"
 #include "sync.h"
+#include "traktauth.h"
+#include "simklauth.h"
 #include "text.h"
 #include "vertudo.h"
 #include "ctxmenu.h"
@@ -316,6 +318,10 @@ void app_atualizar(float dt, Uint32 agora) {
 
   if (tela == TELA_ESCOLHA_PERFIL) {
     sync_passo((unsigned)agora);
+  // Os vinculos de Trakt e Simkl tambem avancam aqui: os dois fazem poll e
+  // precisam de um passo por quadro, como o login da conta.
+  traktauth_passo((unsigned)agora);
+  simklauth_passo((unsigned)agora);
     perfilsel_atualizar(dt, agora);
     if (perfilsel_concluido()) {
       // O perfil mudou o destino do sync: rodar de novo traz os addons e o
@@ -376,6 +382,15 @@ void app_atualizar(float dt, Uint32 agora) {
     if (fechar) { trocarTela(TELA_HOME); menu_definir_destino(MENU_INICIO); }
   } else if (home_quer_sair()) {
     sair = 1;
+  }
+
+  // Trocar de usuario, pedido pelo rodape da barra lateral. Vem ANTES do
+  // destino: as duas coisas saem do mesmo menu, e quem pediu troca nao quer
+  // mudar de aba.
+  if (menu_pediu_trocar()) {
+    tela = TELA_ESCOLHA_PERFIL;
+    perfilsel_iniciar();
+    return;
   }
 
   if (menu_mudou_destino()) {

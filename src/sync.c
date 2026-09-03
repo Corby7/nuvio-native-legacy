@@ -514,6 +514,31 @@ const char *sync_resumo(void)      { return resumo; }
 unsigned    sync_ultimo_ok(void)   { return ultimoOk; }
 void        sync_sujar_progresso(void) { sujoProgresso = 1; }
 void        sync_sujar_addons(void)    { sujoAddons = 1; }
+void sync_empurrar_credencial(const char *provider, const char *credJson) {
+  Jsw w;
+  char *r;
+  int st = 0;
+  if (!sessao_logada() || !provider || !*provider || !credJson || !*credJson) return;
+  jsw_iniciar(&w);
+  jsw_obj_ini(&w);
+  jsw_ci(&w, "p_profile_id", perfis_ativo());
+  jsw_cs(&w, "p_origin_client_id", dados_cliente_id());
+  jsw_chave(&w, "p_credentials");
+  jsw_arr_ini(&w);
+  jsw_obj_ini(&w);
+  jsw_cs(&w, "provider", provider);
+  jsw_chave(&w, "credential_json");
+  jsw_bruto(&w, credJson);
+  jsw_obj_fim(&w);
+  jsw_arr_fim(&w);
+  jsw_obj_fim(&w);
+  r = sessao_rpc("sync_push_provider_credentials", jsw_texto_final(&w), &st);
+  jsw_livre(&w);
+  if (!ok2xx(r, st)) printf("[sync] push de credencial %s falhou (HTTP %d)\n", provider, st);
+  else printf("[sync] credencial %s guardada na conta\n", provider);
+  free(r);
+}
+
 void sync_reaplicar_ajustes(void) { aplicarAjustes = 1; }
 
 void sync_esquecer_usuario(void) {

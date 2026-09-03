@@ -99,6 +99,15 @@ void sync_esquecer_usuario(void);
 // resto da sessao.
 void sync_reaplicar_ajustes(void);
 
+// Manda uma credencial de servico para a CONTA, para os outros aparelhos da
+// pessoa herdarem o vinculo. `credJson` e o objeto pronto (o servidor guarda o
+// que vier). BLOQUEIA — chamar de um fio, ou aceitar o custo de uma viagem.
+//
+// Existe por causa do Trakt: a conta do dono nao tinha a linha `trakt`, entao
+// vincular na TV nao ajudava o celular. Vincular aqui passa a ESCREVER na
+// conta, que e o que o app web faz.
+void sync_empurrar_credencial(const char *provider, const char *credJson);
+
 void sync_encerrar(void);
 
 #endif

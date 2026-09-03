@@ -19,6 +19,8 @@
 #include "sessao.h"
 #include "perfis.h"
 #include "sync.h"
+#include "traktauth.h"
+#include "simklauth.h"
 #include "app.h"
 #include "video.h"
 #include "addons.h"
@@ -415,6 +417,11 @@ int main(int argc, char **argv) {
   nuvem_configurar(dirArte);
   sessao_iniciar();
   perfis_carregar_ativo();
+  // Vinculos feitos NESTA TV. Vem antes de trakt_carregar (que le o arquivo do
+  // pacote) para o vinculo do usuario ganhar do arquivo de quem montou — e num
+  // pacote distribuivel esse arquivo nem existe.
+  traktauth_carregar();
+  simklauth_carregar();
   if (!app_iniciar(dirArte)) return 1;
   // Progresso e dado DO USUARIO: sai da pasta do pacote, que e a mesma para
   // todo mundo que usar o aparelho, e passa para a pasta da instalacao.

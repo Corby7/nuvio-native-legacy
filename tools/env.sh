@@ -21,6 +21,9 @@ URL=$(valor NUVIO_SUPABASE_URL)
 KEY=$(valor NUVIO_SUPABASE_ANON_KEY)
 TVB=$(valor TV_LOGIN_WEB_BASE_URL)
 TRK=$(valor TRAKT_CLIENT_ID)
+TRS=$(valor TRAKT_CLIENT_SECRET)
+SMK=$(valor SIMKL_CLIENT_ID)
+SMA=$(valor SIMKL_APP_NAME)
 
 if [ -z "$URL" ] || [ -z "$KEY" ]; then
   # Falhar em silencio produziria um .ipk que abre, mostra a tela de login e
@@ -40,10 +43,13 @@ if [ "$1" = "--env-file" ]; then
     printf 'NV_SUPABASE_ANON_KEY=%s\n' "$KEY"
     printf 'NV_TV_LOGIN_BASE=%s\n' "$TVB"
     printf 'NV_TRAKT_CLIENT_ID=%s\n' "$TRK"
+    printf 'NV_TRAKT_CLIENT_SECRET=%s\n' "$TRS"
+    printf 'NV_SIMKL_CLIENT_ID=%s\n' "$SMK"
+    printf 'NV_SIMKL_APP=%s\n' "$SMA"
   } > "$2"
   chmod 600 "$2"
   exit 0
 fi
 
-printf -- '-DNV_SUPABASE_URL=\\"%s\\" -DNV_SUPABASE_ANON_KEY=\\"%s\\" -DNV_TV_LOGIN_BASE=\\"%s\\" -DNV_TRAKT_CLIENT_ID=\\"%s\\"' \
-  "$URL" "$KEY" "$TVB" "$TRK"
+printf -- '-DNV_SUPABASE_URL=\\"%s\\" -DNV_SUPABASE_ANON_KEY=\\"%s\\" -DNV_TV_LOGIN_BASE=\\"%s\\" -DNV_TRAKT_CLIENT_ID=\\"%s\\" -DNV_TRAKT_CLIENT_SECRET=\\"%s\\" -DNV_SIMKL_CLIENT_ID=\\"%s\\" -DNV_SIMKL_APP=\\"%s\\"' \
+  "$URL" "$KEY" "$TVB" "$TRK" "$TRS" "$SMK" "$SMA"

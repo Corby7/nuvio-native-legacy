@@ -58,6 +58,12 @@ int  menu_mudou_destino(void);
 
 const char *menu_rotulo(int destino);
 
+// 1 uma unica vez, no quadro em que o usuario escolheu o rodape ("trocar de
+// usuario"). Consome a flag, como menu_mudou_destino. Nao e um MenuDestino de
+// proposito: trocar de perfil nao e uma aba do app, e uma acao que devolve a
+// pessoa a tela de escolha.
+int  menu_pediu_trocar(void);
+
 void menu_evento(const SDL_Event *e);
 void menu_atualizar(float dt, Uint32 agora);
 // Desenhe por ULTIMO: o menu escurece e cobre tudo que veio antes.

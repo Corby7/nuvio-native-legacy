@@ -31,6 +31,13 @@ const char *nuvem_base_login(void);
 // Client id do APLICATIVO no Trakt (nao e da pessoa). Vem compilado, como no
 // app web; o token do usuario vem do sync.
 const char *nuvem_trakt_cliente(void);
+// Segredo do APLICATIVO no Trakt. So o fluxo de device code precisa dele, na
+// troca do codigo pelo token; nenhuma outra chamada o usa.
+const char *nuvem_trakt_segredo(void);
+// Chave e nome do aplicativo no Simkl. O Simkl nao usa segredo: os dois vao na
+// QUERY de todo pedido, e sem eles a resposta e erro sem explicacao.
+const char *nuvem_simkl_cliente(void);
+const char *nuvem_simkl_app(void);
 
 // POST com Bearer explicito. Devolve o corpo (free pelo chamador) ou NULL
 // quando a requisicao nem saiu. `status` recebe o codigo HTTP — 0 quando nao

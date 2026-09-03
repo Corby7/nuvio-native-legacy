@@ -12,6 +12,8 @@
 //
 // Icones derivados dos SVGs originais do sidebar, com alpha e recortes reais.
 #include "menu.h"
+#include "perfis.h"
+#include "tex_cache.h"
 #include "gfx.h"
 #include "text.h"
 #include "anim.h"
@@ -63,14 +65,25 @@
 // Rotulos e ordem conferidos na referencia.
 static const char *ROTULOS[MENU_N] = { "Início", "Busca", "Biblioteca", "Perfil e Stats", "Ajustes" };
 
+// RODAPE: quem esta usando o app, e a porta para trocar. Ele e um item de
+// FOCO a mais, no indice MENU_N — nao entrou no enum de proposito, porque
+// trocar de perfil nao e uma aba do app e ninguem deve poder "navegar" para
+// ela como destino.
+#define NV_MENU_RODAPE_H   112.0f
+#define NV_MENU_AVATAR      56.0f
+#define NV_MENU_FOCOS      (MENU_N + 1)
+#define MENU_RODAPE         MENU_N
+
+static int   pediuTrocar = 0;
 static int   aberto  = 0;
 static int   destino = MENU_INICIO;
 static int   linha   = MENU_INICIO;   // destaque; so vira destino ao escolher
 static int   mudou   = 0;
 static float desliza = 0.0f;
 static float expande = 0.0f;
-static float animFoco[MENU_N];
+static float animFoco[NV_MENU_FOCOS];
 static void icone(int d, float cx, float cy, float s, float r, float g, float b, float a);
+static void desenhaRodape(float px, float w, float alpha, float foco);
 
 // O legacy deixa a rail de 144px sempre visível. O menu expandido é uma
 // camada adicional; não deslocamos o conteúdo quando ele fecha.
@@ -89,6 +102,7 @@ static void desenhaRailFixa(void) {
     icone(i, NV_MENU_ICONE_CX, y + NV_MENU_LINHA_H * 0.5f,
           NV_MENU_ICONE, lum, lum, lum, 0.95f);
   }
+  desenhaRodape(0.0f, NV_LEGACY_RAIL_W, 0.95f, 0.0f);
 }
 
 int menu_iniciar(void) {
@@ -125,9 +139,18 @@ const char *menu_rotulo(int d) {
 // barra nao "cancela" ao sair pela direita — o item destacado e o que o usuario
 // esta olhando, e desfazer a escolha no caminho de volta seria surpresa.
 static void escolher(void) {
+  if (linha == MENU_RODAPE) {
+    // O rodape nao troca de destino: ele pede a tela de escolha de perfil.
+    pediuTrocar = 1;
+    aberto = 0;
+    linha = destino;
+    return;
+  }
   if (linha != destino) { destino = linha; mudou = 1; }
   aberto = 0;
 }
+
+int menu_pediu_trocar(void) { int p = pediuTrocar; pediuTrocar = 0; return p; }
 
 void menu_evento(const SDL_Event *e) {
   if (!aberto || e->type != SDL_KEYDOWN) return;
@@ -141,7 +164,7 @@ void menu_evento(const SDL_Event *e) {
   if (k == SDLK_RIGHT || k == SDLK_RETURN || k == SDLK_KP_ENTER) { escolher(); return; }
   // Sem rotacao nas pontas: a barra e curta e o usuario ve as quatro linhas de
   // uma vez, entao dar a volta no fim da lista le como falha, nao como atalho.
-  if (k == SDLK_DOWN && linha < MENU_N - 1) linha++;
+  if (k == SDLK_DOWN && linha < NV_MENU_FOCOS - 1) linha++;
   else if (k == SDLK_UP && linha > 0)       linha--;
   // ESQUERDA morre aqui de proposito: a barra ja e a borda da tela.
 }
@@ -157,7 +180,7 @@ void menu_atualizar(float dt, Uint32 agora) {
   float ms   = aberto ? NV_MENU_ABRIR_MS : NV_MENU_FECHAR_MS;
   desliza = anim_rampa(desliza, alvo, dt, ms);
   expande = anim_rampa(expande, alvo, dt, ms * NV_MENU_EXP_LENTO);
-  for (int i = 0; i < MENU_N; i++) {
+  for (int i = 0; i < NV_MENU_FOCOS; i++) {
     float a = (aberto && i == linha) ? 1.0f : 0.0f;
     animFoco[i] = anim_mola(animFoco[i], a, dt,
                             a > animFoco[i] ? NV_MOLA_FOCO : NV_MOLA_DESFOCO);
@@ -169,6 +192,88 @@ static void icone(int d, float cx, float cy, float s, float r, float g, float b,
   static const char *nomes[MENU_N] = {"menu_home", "menu_search", "menu_library", "menu_profile", "menu_settings"};
   if (d < 0 || d >= MENU_N) return;
   gfx_icone((GfxRect){cx-s*.5f, cy-s*.5f, s, s}, nomes[d], r, g, b, a);
+}
+
+
+// Cor do avatar a partir do "#RRGGBB" que a conta guarda. Sem cor legivel, o
+// azul do padrao do web.
+static void corAvatar(const char *hex, float *r, float *g, float *b) {
+  unsigned v = 0;
+  *r = 0.12f; *g = 0.53f; *b = 0.90f;
+  if (!hex || hex[0] != '#' || strlen(hex) < 7) return;
+  if (sscanf(hex + 1, "%6x", &v) != 1) return;
+  *r = ((v >> 16) & 255) / 255.0f;
+  *g = ((v >> 8) & 255) / 255.0f;
+  *b = (v & 255) / 255.0f;
+}
+
+// A INICIAL do nome, respeitando UTF-8: um nome comecado por acento tem dois
+// bytes, e cortar no primeiro desenha lixo.
+static void inicialDe(const char *nome, char *dst, size_t tam) {
+  if (tam < 3) { if (tam) dst[0] = 0; return; }
+  dst[0] = (nome && nome[0]) ? nome[0] : '?';
+  dst[1] = 0;
+  if (nome && (unsigned char)nome[0] >= 0xC0 && nome[1]) { dst[1] = nome[1]; dst[2] = 0; }
+}
+
+// Rodape: quem esta usando, e a porta para trocar. Desenha nas DUAS larguras —
+// recolhida mostra so o avatar (e a unica coisa que cabe em 144px), aberta
+// mostra nome e a acao.
+static void desenhaRodape(float px, float w, float alpha, float foco) {
+  const ContaPerfil *p = perfis_item_ativo();
+  // Acima da area segura, nao colado na base: numa TV os ultimos 60px podem
+  // estar fora do painel (overscan), e o nome do usuario e justamente o que
+  // some primeiro.
+  float y = NV_TELA_H - NV_MARGEM_Y - NV_MENU_RODAPE_H;
+  float cx = px + NV_MENU_ICONE_CX;
+  float cy = y + NV_MENU_RODAPE_H * 0.5f;
+  float cr, cg, cb;
+  char ini[4];
+  GfxRect av;
+
+  if (alpha <= 0.01f) return;
+
+  if (foco > 0.01f) {
+    GfxRect pill = { px + NV_MENU_PILL_PAD, y + 8.0f,
+                     w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_RODAPE_H - 16.0f };
+    GfxRect anel = { pill.x - NV_ANEL_FOCO, pill.y - NV_ANEL_FOCO,
+                     pill.w + NV_ANEL_FOCO * 2, pill.h + NV_ANEL_FOCO * 2 };
+    float raio = (pill.h * NV_MENU_RAIO_PILL + NV_ANEL_FOCO) / anel.h;
+    gfx_cor(anel, raio, 1, 1, 1, foco * alpha);
+    gfx_cor(pill, NV_MENU_RAIO_PILL, NV_COR_FOCO_R, NV_COR_FOCO_G,
+            NV_COR_FOCO_B, foco * alpha);
+  }
+
+  av.x = cx - NV_MENU_AVATAR * 0.5f;
+  av.y = cy - NV_MENU_AVATAR * 0.5f;
+  av.w = av.h = NV_MENU_AVATAR;
+
+  // FOTO quando a conta tem uma; senao o circulo com a inicial, que e o mesmo
+  // que o app web mostra quando `avatar_url` e nulo — e nesta conta ele e.
+  { GLuint tex = (p && p->avatarUrl[0]) ? tex_obter(p->avatarUrl) : 0;
+    if (tex) {
+      gfx_tex_aspect_atual = 1.0f;
+      gfx_rect(av, tex, GFX_CARD, 0, 0, 0, 0.5f, 0, 0, 0, alpha);
+    } else {
+      corAvatar(p ? p->corHex : NULL, &cr, &cg, &cb);
+      gfx_cor(av, 0.5f, cr, cg, cb, alpha);
+      inicialDe(p ? p->nome : NULL, ini, sizeof ini);
+      { TxtLinha l = txt_linha(TXT_HEADLINE, ini, 255, 255, 255, 255);
+        txt_desenhar_alpha(l, av.x + (av.w - l.w) * 0.5f,
+                           av.y + (av.h - l.h) * 0.5f, alpha); } } }
+
+  // Nome e acao so aparecem com a barra aberta: em 144px nao cabe texto, e
+  // espremer o nome ali seria pior que nao mostrar.
+  { float aTexto = expande * expande * alpha;
+    if (aTexto > 0.01f) {
+      int c = (int)(anim_mistura(0.72f, 1.0f, foco) * 255.0f + 0.5f);
+      TxtLinha nome = txt_linha_corta(TXT_BODY, p ? p->nome : "Sua conta",
+                                      c, c, c, 255,
+                                      NV_MENU_W_ABERTO - NV_MENU_ROTULO_X - 28.0f);
+      TxtLinha acao = txt_linha(TXT_CAPTION, "Trocar de usuário", 150, 152, 160, 255);
+      txt_desenhar_alpha(nome, px + NV_MENU_ROTULO_X, cy - nome.h - 2.0f, aTexto);
+      txt_desenhar_alpha(acao, px + NV_MENU_ROTULO_X, cy + 4.0f, aTexto);
+    } }
 }
 
 void menu_desenhar(Uint32 agora) {
@@ -251,6 +356,8 @@ void menu_desenhar(Uint32 agora) {
       txt_desenhar_alpha(l, px + NV_MENU_ROTULO_X, cy - l.h * 0.5f, aRot);
     }
   }
+
+  desenhaRodape(px, w, entrada, animFoco[MENU_RODAPE]);
 
   gfx_sem_recorte();
 }

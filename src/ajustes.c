@@ -20,6 +20,8 @@
 #include "sessao.h"
 #include "sync.h"
 #include "perfis.h"
+#include "traktauth.h"
+#include "simklauth.h"
 #include "js.h"
 #include <stdio.h>
 #include <string.h>
@@ -70,7 +72,7 @@ typedef enum {
   // Interface
   AJ_IDIOMA, AJ_ANIM,
   // Conta
-  AJ_PERFIL_ATIVO, AJ_SYNC, AJ_SAIR,
+  AJ_PERFIL_ATIVO, AJ_SYNC, AJ_TRAKT, AJ_SIMKL, AJ_SAIR,
   // Sobre
   AJ_VERSAO_I, AJ_ESPACO,
   AJ_N
@@ -169,6 +171,8 @@ static const Opcao OPCOES[AJ_N] = {
 
   LER("Perfil"),
   LER("Sincronização"),
+  ACAO("Trakt"),
+  ACAO("Simkl"),
   ACAO("Sair da conta"),
   LER("Versão"),
   LER("Memória usada por imagens"),
@@ -201,7 +205,7 @@ static const char *CHAVE[] = {
   "posterCardWidthDp", "posterCardCornerRadiusDp",
   "idioma", "animacoes",
   // Conta: sao linhas locais, nao vem nem vao para o perfil na nuvem.
-  "-perfil", "-sync", "-sair",
+  "-perfil", "-sync", "-trakt", "-simkl", "-sair",
   "-versao", "-espaco",
 };
 
@@ -227,7 +231,7 @@ static const struct { const char *titulo; int ini, n; } SECOES[] = {
   { "Efeito de Profundidade",         AJ_PROF,                9 },
   { "Tamanho dos itens",              AJ_LARGURA_DP,          2 },
   { "Interface",                      AJ_IDIOMA,              2 },
-  { "Conta",                          AJ_PERFIL_ATIVO,        3 },
+  { "Conta",                          AJ_PERFIL_ATIVO,        5 },
   { "Sobre",                          AJ_VERSAO_I,            2 },
 };
 #define AJ_N_SECOES (int)(sizeof SECOES / sizeof *SECOES)
@@ -584,6 +588,24 @@ static const char *textoLeitura(int op) {
       default:           return sessao_logada() ? "aguardando" : "sem conta";
     }
   }
+  if (op == AJ_TRAKT) {
+    switch (traktauth_estado()) {
+      case TRA_LIGADO:     return "conectado";
+      case TRA_PEDINDO:    return "preparando…";
+      case TRA_AGUARDANDO: return "aguardando";
+      case TRA_ERRO:       return "falhou";
+      default:             return "conectar";
+    }
+  }
+  if (op == AJ_SIMKL) {
+    switch (simklauth_estado()) {
+      case SMK_LIGADO:     return "conectado";
+      case SMK_PEDINDO:    return "preparando…";
+      case SMK_AGUARDANDO: return "aguardando";
+      case SMK_ERRO:       return "falhou";
+      default:             return "conectar";
+    }
+  }
   if (op == AJ_SAIR) return "OK";
   if (op == AJ_HERO_CATALOGOS) {
     // "Todos" com a lista vazia e o que o web escreve (common_all), e e o estado
@@ -679,6 +701,25 @@ static float yDaOpcao(int op) {
 void ajustes_evento(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+
+  // Vinculo em andamento e uma pergunta: enquanto ele esta em pe, nada mais na
+  // tela responde ao controle.
+  { TraEstado ta = traktauth_estado();
+    SmkEstado sa = simklauth_estado();
+    int traAtivo = (ta == TRA_PEDINDO || ta == TRA_AGUARDANDO || ta == TRA_ERRO);
+    int smkAtivo = (sa == SMK_PEDINDO || sa == SMK_AGUARDANDO || sa == SMK_ERRO);
+    if (traAtivo || smkAtivo) {
+      if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE) {
+        if (traAtivo) traktauth_cancelar(); else simklauth_cancelar();
+      } else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+        // OK so refaz o pedido quando deu erro; com o codigo na tela ele nao
+        // faz nada de proposito, para nao trocar o codigo que a pessoa acabou
+        // de digitar no celular.
+        if (traAtivo && ta == TRA_ERRO) traktauth_comecar();
+        else if (smkAtivo && sa == SMK_ERRO) simklauth_comecar();
+      }
+      return;
+    } }
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
       k == SDLK_DELETE) { sair = 1; return; }
 
@@ -686,11 +727,15 @@ void ajustes_evento(const SDL_Event *e) {
   else if (k == SDLK_UP)   { if (focoOp > 0)        focoOp--; }
   else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
     if (OPCOES[focoOp].tipo != OP_ACAO) return;
+    if (focoOp == AJ_TRAKT) { traktauth_comecar(); return; }
+    if (focoOp == AJ_SIMKL) { simklauth_comecar(); return; }
     if (focoOp == AJ_SAIR) {
       // Sair apaga a sessao do disco. Sem confirmacao de proposito: o custo de
       // sair sem querer e um login por QR, e uma caixa de confirmacao nesta
       // lista exigiria um modal que a tela nao tem.
       sessao_sair();
+      traktauth_esquecer();
+      simklauth_esquecer();
       // A sessao sozinha nao basta: addons, Trakt, perfil e progresso ficariam
       // para a proxima pessoa. Ver o cabecalho de sync_esquecer_usuario.
       sync_esquecer_usuario();
@@ -816,6 +861,67 @@ static void desenhaLinha(int op, float y, float f) {
   txt_desenhar_alpha(val, valorDir - val.w, vy, aTexto);
 }
 
+// Sobreposicao do vinculo (Trakt ou Simkl). O codigo destes dois e CURTO — 8
+// caracteres no Trakt — e o endereco e fixo, entao da para ler da TV e digitar
+// no celular. Nao precisa de QR, ao contrario dos 32 digitos hexadecimais do
+// login da conta.
+static void desenhaVinculo(const char *servico, const char *codigo,
+                           const char *endereco, const char *falha, int esperando) {
+  GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect cartao = { (NV_TELA_W - 1000.0f) * 0.5f, 250.0f, 1000.0f, 560.0f };
+  TxtLinha l;
+  char t[80];
+  float y = 300.0f;
+  // Veu QUASE opaco mais um cartao solido atras do bloco. Com 0.80 de veu e sem
+  // cartao, as linhas de Ajustes atravessavam o texto — "aguardando" caia em
+  // cima de "Trakt" e "conectar" em cima de "e informe o codigo". Um codigo que
+  // a pessoa precisa transcrever nao pode competir com texto de fundo.
+  gfx_cor(tela, 0.0f, 0.0f, 0.0f, 0.0f, 0.92f);
+  gfx_cor(cartao, 0.045f, NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
+
+  snprintf(t, sizeof t, "Conectar %s", servico);
+  l = txt_linha(TXT_TITULO2, t, 255, 255, 255, 255);
+  txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+  y += 92.0f;
+
+  if (falha && falha[0]) {
+    l = txt_linha(TXT_HEADLINE, falha, 236, 108, 108, 255);
+    txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+    y += 70.0f;
+    l = txt_linha(TXT_CAPTION, "OK para tentar de novo · Voltar para fechar",
+                  150, 152, 160, 255);
+    txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+    return;
+  }
+  if (!codigo || !codigo[0]) {
+    l = txt_linha(TXT_HEADLINE, "Preparando o código…", 210, 212, 220, 255);
+    txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+    return;
+  }
+
+  l = txt_linha(TXT_BODY, "No celular, abra:", 176, 178, 186, 255);
+  txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+  y += 52.0f;
+  l = txt_linha(TXT_TITULO3, endereco && endereco[0] ? endereco : "-", 255, 255, 255, 255);
+  txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+  y += 92.0f;
+  l = txt_linha(TXT_BODY, "e informe o código:", 176, 178, 186, 255);
+  txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+  y += 66.0f;
+
+  // Espacamento entre letras: um codigo curto sem tracking le como palavra, e
+  // a pessoa transcreve errado.
+  { float larg = txt_tracking(TXT_TITULO1, codigo, 255, 255, 255, -1.0f, 0.0f, 1.0f, 16.0f);
+    txt_tracking(TXT_TITULO1, codigo, 255, 255, 255,
+                 (NV_TELA_W - larg) * 0.5f, y, 1.0f, 16.0f); }
+  y += 130.0f;
+
+  if (esperando) {
+    l = txt_linha(TXT_CAPTION, "Aguardando a autorização…", 150, 152, 160, 255);
+    txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, y);
+  }
+}
+
 void ajustes_desenhar(Uint32 agora) {
   (void)agora;
   // Fundo opaco proprio: a tela cobre tudo e nao pode depender de quem desenhou
@@ -887,4 +993,15 @@ void ajustes_desenhar(Uint32 agora) {
   }
   TxtLinha rodape = txt_linha(TXT_CAPTION, "PgUp / PgDn  Trocar seção", 156, 159, 168, 255);
   txt_desenhar(rodape, AJ_LISTA_X, AJ_BASE + 20);
+
+  // Por cima de tudo: enquanto um vinculo esta em andamento, ele e a pergunta
+  // da tela.
+  { TraEstado ta = traktauth_estado();
+    SmkEstado sa = simklauth_estado();
+    if (ta == TRA_PEDINDO || ta == TRA_AGUARDANDO || ta == TRA_ERRO)
+      desenhaVinculo("o Trakt", traktauth_codigo(), traktauth_url(),
+                     traktauth_erro(), ta == TRA_AGUARDANDO);
+    else if (sa == SMK_PEDINDO || sa == SMK_AGUARDANDO || sa == SMK_ERRO)
+      desenhaVinculo("o Simkl", simklauth_codigo(), simklauth_url(),
+                     simklauth_erro(), sa == SMK_AGUARDANDO); }
 }

@@ -67,6 +67,7 @@ int perfis_puxar(void) {
       tmp[novos].indice = (int)idx;
       if (!js_texto(p, f, "name", tmp[novos].nome, sizeof tmp[novos].nome))
         snprintf(tmp[novos].nome, sizeof tmp[novos].nome, "ContaPerfil %d", (int)idx);
+      js_texto(p, f, "avatar_url", tmp[novos].avatarUrl, sizeof tmp[novos].avatarUrl);
       if (!js_texto(p, f, "avatar_color_hex", tmp[novos].corHex, sizeof tmp[novos].corHex))
         snprintf(tmp[novos].corHex, sizeof tmp[novos].corHex, "#1E88E5");
       { char b[16];
@@ -106,6 +107,12 @@ int perfis_puxar(void) {
 
 int           perfis_n(void)         { return n; }
 const ContaPerfil *perfis_item(int i)     { return (i >= 0 && i < n) ? &lista[i] : NULL; }
+
+const ContaPerfil *perfis_item_ativo(void) {
+  int i;
+  for (i = 0; i < n; i++) if (lista[i].indice == ativo) return &lista[i];
+  return NULL;
+}
 const char   *perfis_dono(void)      { return dono; }
 int           perfis_ativo(void)     { return ativo > 0 ? ativo : 1; }
 
