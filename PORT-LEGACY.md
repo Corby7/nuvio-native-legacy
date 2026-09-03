@@ -28,6 +28,21 @@ substituir oficialmente o protótipo.
 bash tools/mac.sh
 ```
 
+## Conta, e o que o pacote pode levar
+
+Este build deixou de ser um app de UM dono. Addons, ajustes do perfil, chave do
+TMDB e progresso vem da CONTA de quem loga (ver PLANO-CONTA-SYNC.md); o login e
+por QR, e a sessao sobrevive ao reinicio.
+
+A consequencia para o empacotamento e direta: **`art/*.txt` com credencial nao
+pode ir no `.ipk`**. `tools/arm.sh --ipk` ja empacota de uma copia limpa e
+CONFERE o pacote pronto; `tools/testa-ipk.sh` prova isso sem docker.
+
+Uma pendencia conhecida: a conta NAO guarda credencial de Trakt
+(`sync_pull_provider_credentials` devolve tmdb, mdblist, debrid:* e outros, mas
+nenhum `trakt`). Como `art/trakt.txt` nao vai mais no pacote, quem instalar fica
+sem Trakt ate logar no app web uma vez.
+
 O script compila todos os módulos SDL2/GLES2 para validação no Mac. O arquivo
 `deploy/app/nuvio-proto` que veio da cópia é apenas um artefato de referência e
 não deve ser distribuído: o pacote webOS precisa substituir esse executável

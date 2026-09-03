@@ -1,4 +1,0 @@
-OpenSubtitles v3	https://opensubtitles-v3.strem.io	0	0	1
-Xperience	https://xperience-app.com/manifest/34cab677-8ef3-4bb6-9a0a-cc519db05156/eyJhbGciOiJIUzI1NiJ9.eyJwaWQiOiIzNGNhYjY3Ny04ZWYzLTRiYjYtOWEwYS1jYzUxOWRiMDUxNTYiLCJraWQiOiI3ZjUwMWFjOC0wODdjLTRlNDQtYTdhNy03MzI0ZjI0NTY1MjEiLCJzY29wZSI6Im1hbmlmZXN0Iiwic3ViIjoiMzY3MzMxOWQtZGZjMC00ZGM1LWE3NmMtMjE3ODU4MzRjNDZlIiwiaWF0IjoxNzg3NDQyMjc5fQ.qERXngijWOAYYbzEN_uTKjbiRQIz_crz_a2BAYnU6b0	0	1	0
-AIOStreams | ElfHosted	https://aiostreams.elfhosted.com/stremio/a78d454c-ef42-4933-8310-d7507b0d97e5/eyJpIjoidHgvQ1hkYmZlMjBTamNmeUZSTXAvZz09IiwiZSI6ImszSjlWWnlGY0ZMVXM5VEpiY0FuNkJwR0xCcXFpMEhvbENZMnV0Y2JHeGc9IiwidCI6ImEifQ	1	1	0
-Akashi TV	https://akstv.akashitv.com.br/f99b379f6df6c660	1	1	0

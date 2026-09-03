@@ -12,3 +12,14 @@ deploy/app/art/cache/
 deploy/app/art/tmdb.txt
 deploy/app/art/trakt.txt
 deploy/app/art/mdblist.txt
+# addons.txt ficou de fora da limpeza anterior e AINDA ESTAVA RASTREADO. A URL
+# de cada addon carrega a chave do debrid no proprio caminho (ver addons.h),
+# entao ele e tao secreto quanto os de cima. Sai do indice com
+# `git rm --cached`; o arquivo continua no disco e o app segue usando enquanto
+# nao houver conta.
+deploy/app/art/addons.txt
+# ajustes.txt e a preferencia de LAYOUT de quem montou. Nao e credencial, mas
+# chegaria como se fosse a de quem instalou — e agora ela vem da conta.
+deploy/app/art/ajustes.txt
+deploy/app/art/collections.json
+deploy/app/art/collections/

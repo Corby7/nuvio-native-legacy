@@ -1,7 +1,98 @@
 # Ferramentas de desenvolvimento — app nativo
 
-Três coisas que não existiam e sem as quais era impossível trabalhar sozinho
-nesta TV. Todas nasceram de um obstáculo concreto, não de gosto.
+Coisas que não existiam e sem as quais era impossível trabalhar sozinho nesta
+TV. Todas nasceram de um obstáculo concreto, não de gosto.
+
+---
+
+## 0. Compilar e rodar
+
+```bash
+bash tools/mac.sh          # compila e roda no Mac, JÁ LOGADO
+bash tools/arm.sh          # compila para ARM, instala na TV e lança
+bash tools/arm.sh --build  # só compila
+bash tools/arm.sh --ipk    # gera também o .ipk, sem credencial nenhuma dentro
+bash tools/testa-ipk.sh    # prova que o .ipk não leva credencial (sem docker)
+bash tests/conta.sh        # testes de conta: logout, ajustes e QR
+```
+
+### A configuração do servidor entra por `-D`, não por arquivo
+
+`tools/env.sh` lê o **mesmo `local.properties` do app web** e imprime os `-D`
+que a compilação precisa: `NV_SUPABASE_URL`, `NV_SUPABASE_ANON_KEY`,
+`NV_TV_LOGIN_BASE` e `NV_TRAKT_CLIENT_ID`. Nenhum desses valores entra em
+arquivo de código versionado — eles viajam da propriedade direto para a linha
+de comando do compilador.
+
+**Sem eles o app compila, instala e abre**, e o único sintoma é a tela de login
+dizendo "Este pacote foi montado sem servidor". Foi o que aconteceu no primeiro
+deploy: os `-D` só tinham sido postos no `mac.sh`, e o `arm.sh` compila dentro
+do container com uma linha própria. Hoje as variáveis entram no container por
+`docker run --env-file` (passá-las na linha de `sh -c` exigiria aspas dentro de
+aspas, que é onde isso quebra de novo) e o `arm.sh` **aborta** se `api.nuvio.tv`
+não estiver no binário gerado.
+
+### Ficar logado no Mac, sem escanear QR toda vez
+
+A sessão é gravada em `$NUVIO_DADOS`, e `tools/mac.sh` já aponta essa variável
+para `~/.nuvio`. Logue **uma vez** (escaneando o QR que aparece na tela) e a
+partir daí todo `bash tools/mac.sh` abre com a conta já dentro — o refresh
+token se renova sozinho quando vence.
+
+CONFERIDO: primeiro arranque `[sessao] logado como …`; reiniciando sem escanear
+nada, `[sessao] sessao restaurada …` seguido de `[addons] N vindos da conta`.
+
+Para rodar como um usuário NOVO (testar a primeira execução de quem instala),
+aponte a variável para uma pasta vazia:
+
+```bash
+NUVIO_DADOS=/tmp/nuvio-novo bash tools/mac.sh
+```
+
+"Sair da conta", em Ajustes, apaga `~/.nuvio` inteiro — sessão, ajustes e
+progresso. Depois disso é preciso escanear de novo.
+
+### O `.ipk` não pode levar `art/*.txt`
+
+`art/` guarda credencial de PESSOA: o token do Trakt, as URLs de addon com a
+chave do debrid embutida, as chaves do TMDB e do mdblist (esta com modo 0600) e
+o `ajustes.txt` com o layout de quem montou. Enquanto o app dependia desses
+arquivos isso não tinha jeito; com a conta, ele não depende mais, e o
+empacotamento passa a sair de uma **cópia limpa**.
+
+`tools/arm.sh --ipk` remove esses arquivos do palco e **confere o pacote
+pronto**, abortando e apagando o `.ipk` se algum voltar.
+
+> ARMADILHA MEDIDA: o `.ipk` é um pacote Debian (`ar` com `debian-binary` +
+> `control.tar.gz` + `data.tar.gz`). `tar tzf pacote.ipk` lista **sem erro
+> nenhum** apenas esses três nomes — nunca os arquivos do app. Uma conferência
+> escrita assim passa sempre, inclusive com o segredo dentro. É preciso
+> desempacotar o `ar` e listar o `data.tar.gz`.
+
+`tools/testa-ipk.sh` prova isso sem docker e foi conferido nos dois sentidos:
+com a exclusão o pacote sai limpo; deixando `trakt.txt` entrar de propósito, o
+teste acusa e devolve 1.
+
+### Lançar não reinicia
+
+`luna://com.webos.applicationManager/launch` **não reinicia** um app que já está
+rodando: apenas o traz para frente. Dois deploys seguidos foram lidos no log de
+um processo antigo, e quase concluíram que a correção não tinha funcionado. O
+título carrega os 8 primeiros dígitos do md5 do binário justamente para o
+launcher responder qual build está ali. Para trocar de verdade:
+
+```bash
+PID=$(sshpass -p alpine ssh root@192.168.1.32 \
+      "ps aux | grep -a 'native.legacy/nuvio-proto' | grep -v grep | awk '{print \$2}' | head -1")
+sshpass -p alpine ssh root@192.168.1.32 "kill $PID"
+# e só então lançar
+```
+
+E não relance em laço: **cada arranque consome cota do backend**, e quando ela
+estoura o login falha, a TV cai em sessão anônima e sincroniza a conta errada —
+o que parece bug do app.
+
+---
 
 ## 1. Log em arquivo
 
