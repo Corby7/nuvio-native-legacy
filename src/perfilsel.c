@@ -1,5 +1,6 @@
 #include "perfilsel.h"
 #include "perfis.h"
+#include "sync.h"
 #include "gfx.h"
 #include "text.h"
 #include "anim.h"
@@ -126,7 +127,17 @@ void perfilsel_atualizar(float dt, Uint32 agora) {
     }
     resultadoPin = 0;
   }
-  // Conta de um perfil so (ou nenhum) nao e uma escolha: seguir direto.
+  // NAO concluir enquanto o ciclo que BUSCA os perfis ainda esta rodando.
+  //
+  // O defeito que isto conserta: app.c troca para esta tela logo depois de
+  // chamar sync_iniciar(), que e assincrono. No primeiro quadro perfis_n() e 0
+  // porque a resposta nao chegou — e "0 perfis" e indistinguivel de "conta de
+  // uma pessoa so". A tela se dispensava sozinha ANTES de existir, e uma conta
+  // de duas pessoas caia no perfil 1 em silencio: o app sincronizava e
+  // ESCREVIA progresso no perfil errado, sem nunca perguntar.
+  if (sync_estado() == SYNC_RODANDO) return;
+
+  // Terminado o ciclo, "nenhum ou um" e resposta de verdade: seguir direto.
   if (perfis_n() <= 1) concluido = 1;
 }
 
@@ -187,6 +198,15 @@ void perfilsel_desenhar(Uint32 agora) {
   { TxtLinha t = txt_linha(TXT_TITULO1, "Quem está assistindo?", 255, 255, 255, 255);
     txt_desenhar(t, (NV_TELA_W - t.w) * 0.5f, 200.0f); }
 
+  // Enquanto a lista nao chega, dizer isso. Uma tela com titulo e nada abaixo
+  // le como travamento.
+  if (n == 0) {
+    TxtLinha e = txt_linha(TXT_BODY, "Carregando os perfis da sua conta…",
+                           160, 162, 170, 255);
+    txt_desenhar(e, (NV_TELA_W - e.w) * 0.5f, 430.0f);
+    return;
+  }
+
   larguraTotal = n * PS_AVATAR + (n - 1) * PS_GAP;
   x = (NV_TELA_W - larguraTotal) * 0.5f;
   for (i = 0; i < n; i++) {
@@ -213,8 +233,12 @@ void perfilsel_desenhar(Uint32 agora) {
     txt_desenhar(nome, x + (PS_AVATAR - nome.w) * 0.5f, 420.0f + PS_AVATAR + 28.0f);
 
     if (p->temPin) {
-      TxtLinha cad = txt_linha(TXT_CAPTION, "🔒", 200, 200, 205, 255);
-      txt_desenhar(cad, x + (PS_AVATAR - cad.w) * 0.5f, 420.0f + PS_AVATAR + 74.0f);
+      // A PALAVRA, nao um cadeado. O emoji U+1F512 nao existe na fonte
+      // embarcada e sai como retangulo vazio — a mesma armadilha que gfx.h ja
+      // registra sobre o U+25B6 ("depender do glifo da fonte e loteria"), e na
+      // qual eu cai de novo. Texto que a fonte tem sempre desenha.
+      TxtLinha cad = txt_linha(TXT_CAPTION, "PIN", 150, 152, 160, 255);
+      txt_desenhar(cad, x + (PS_AVATAR - cad.w) * 0.5f, 420.0f + PS_AVATAR + 70.0f);
     }
     x += PS_AVATAR + PS_GAP;
   }

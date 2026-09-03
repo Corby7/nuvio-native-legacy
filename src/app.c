@@ -331,6 +331,17 @@ void app_atualizar(float dt, Uint32 agora) {
   // Um ciclo por vez, e so quando a conta existe. O passo e barato: sem fio
   // terminado ele nao faz nada.
   sync_passo((unsigned)agora);
+
+  // Conta com mais de um perfil e nenhum escolhido NESTA instalacao: perguntar.
+  // Isto vale tambem para quem abriu o app com sessao ja gravada — o caminho
+  // comum depois do primeiro dia. Sem isto o app assumia o perfil 1 para
+  // sempre, e `perfis_precisa_escolher()` era codigo morto.
+  if (tela == TELA_HOME && !player_aberto() && !detail_aberto() &&
+      perfis_precisa_escolher()) {
+    tela = TELA_ESCOLHA_PERFIL;
+    perfilsel_iniciar();
+    return;
+  }
   // E o ciclo automatico — nunca com o player aberto: rajada de HTTP no meio
   // do video disputa CPU e rede com o decodificador.
   if (!player_aberto()) sync_periodico((unsigned)agora);

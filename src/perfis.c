@@ -85,10 +85,17 @@ int perfis_puxar(void) {
     for (p = js_raiz_array(r); p; p = js_prox(js_fim(p))) {
       const char *f = js_fim(p);
       int idx = (int)js_num(p, f, "profile_id", 0);
-      int i;
+      char b[16];
+      int i, travado;
       if (!idx) idx = (int)js_num(p, f, "profile_index", 0);
+      // MEDIDO: esta RPC devolve UMA LINHA POR PERFIL, com `pin_enabled` false
+      // quando nao ha PIN — nao e uma lista so dos travados. Marcar todo perfil
+      // que aparece aqui trancava TODOS eles, e como nenhum tem PIN nenhuma
+      // digitacao seria aceita: ninguem entraria na propria conta.
+      travado = js_bruto(p, f, "pin_enabled", b, sizeof b)
+                ? (strcmp(b, "true") == 0) : 0;
       for (i = 0; i < n; i++)
-        if (lista[i].indice == idx) lista[i].temPin = 1;
+        if (lista[i].indice == idx) lista[i].temPin = travado;
     }
   }
   free(r);
