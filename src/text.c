@@ -6,7 +6,19 @@
 #include <string.h>
 #include <stdio.h>
 
-#define MAX_LINHAS 256
+// Quantas linhas de texto ficam guardadas ao mesmo tempo.
+//
+// 256 chegou ao limite quando a pagina de titulo passou a ter a secao de
+// comentarios: cada cartao sao ~7 linhas (nome, cinco de texto e o rodape) e
+// eles convivem com episodios, elenco, abas, sinopse e as duas linhas de meta.
+// Passando do teto, o LRU despeja linhas que a PROPRIA TELA ainda vai desenhar
+// no mesmo quadro; elas voltam pela fila de TXT_POR_QUADRO, duas por vez, e
+// sao despejadas de novo. E esse laco que aparece como o texto "piscando".
+//
+// 512 nao muda o custo de busca (a sondagem parte do hash e para no primeiro
+// buraco) nem o de rasterizacao. Custa memoria de textura para linhas que nao
+// estao na tela — o preco de nao rerasterizar as que estao.
+#define MAX_LINHAS 512
 
 typedef struct {
   char chave[288];
@@ -26,6 +38,16 @@ typedef struct {
 // navegador rasteriza no devicePixelRatio.
 static float escalaTxt = 1.0f;
 static TTF_Font *fontes[TXT_NFONTES];
+// As alternativas so sao abertas para os 16 estilos de legenda e sob demanda.
+// Abrir a matriz inteira (todas as familias x todos os estilos do app) gastaria
+// memoria numa TV fraca por uma preferencia que afeta no maximo quatro linhas.
+#define TXT_LEG_N (TXT_LEG_200 - TXT_LEG_50 + 1)
+static TTF_Font *fontesLegAlt[TXT_FAMILIA_N][TXT_LEG_N];
+static unsigned char fonteLegTentada[TXT_FAMILIA_N][TXT_LEG_N];
+static int avisoFallback[TXT_FAMILIA_N];
+const char *const TXT_FAMILIAS_PT[TXT_FAMILIA_N] = {
+  "Inter", "LG Display", "Droid Sans"
+};
 
 static Entrada cache[MAX_LINHAS];
 
@@ -43,6 +65,11 @@ static int rastNesteQuadro;
 void txt_novo_quadro(void) { rastNesteQuadro = 0; }
 static unsigned long relogio = 1;
 int    txt_rasterizadas = 0;
+// Quantas linhas foram DESPEJADAS para dar lugar a outras. Zero e o estado
+// saudavel. Se voltar a subir com a tela parada, a tabela encheu de novo e o
+// texto vai piscar — e melhor ler isso num contador do que descobrir pela
+// reclamacao de quem esta olhando a tela.
+int    txt_despejos = 0;
 double txt_ms = 0.0;
 
 // Peso por estilo. Cada peso e um ARQUIVO de verdade da Inter Display
@@ -109,6 +136,18 @@ static const struct { int corpo, peso; } ESTILOS[TXT_NFONTES] = {
   { NV_FT_PG_FIM,     PESO_REGULAR },  // .player-ends-at (20/400)
   { NV_FT_PG_ROTULO,  PESO_MEDIUM  },  // .player-parental-label (22/600)
   { NV_FT_PG_GRAV,    PESO_REGULAR },  // .player-parental-severity (22/400)
+  { 36, PESO_REGULAR },             // cabecalhos dos paineis do player oficial
+  { 24, PESO_BOLD },                // episodio/fonte dentro da lista
+  { 28, PESO_MEDIUM },              // titulo no card Continuar assistindo
+  { 23, PESO_REGULAR },             // temporada e nome do episodio
+  { 20, PESO_MEDIUM },              // tempo restante no badge do card
+  { 110, PESO_BOLD },               // posição real no ranking
+  { 20, PESO_REGULAR }, { 24, PESO_REGULAR }, { 28, PESO_REGULAR },
+  { 32, PESO_REGULAR }, { 36, PESO_REGULAR }, { 40, PESO_REGULAR },
+  { 44, PESO_REGULAR }, { 48, PESO_REGULAR }, { 52, PESO_REGULAR },
+  { 56, PESO_REGULAR }, { 60, PESO_REGULAR }, { 64, PESO_REGULAR },
+  { 68, PESO_REGULAR }, { 72, PESO_REGULAR }, { 76, PESO_REGULAR },
+  { 80, PESO_REGULAR },
 };
 
 // RESERVA PARA O QUE A INTER NAO TEM.
@@ -178,6 +217,33 @@ static TTF_Font *fonteDe(TxtEstilo estilo, const char *s) {
   return reservas[e][estilo] ? reservas[e][estilo] : fontes[estilo];
 }
 
+static TTF_Font *fonteLegendaDe(TxtEstilo estilo, const char *s,
+                                TxtFamilia familia) {
+  int i;
+  const char *caminho;
+  if (familia <= TXT_FAMILIA_INTER || familia >= TXT_FAMILIA_N ||
+      estilo < TXT_LEG_50 || estilo > TXT_LEG_200)
+    return fonteDe(estilo, s);
+  i = estilo - TXT_LEG_50;
+  if (fontesLegAlt[familia][i]) return fontesLegAlt[familia][i];
+  if (fonteLegTentada[familia][i]) return fonteDe(estilo, s);
+  fonteLegTentada[familia][i] = 1;
+  caminho = familia == TXT_FAMILIA_LG
+          ? "/usr/share/fonts/LG_Display-Regular.ttf"
+          : "/usr/share/fonts/DroidSans.ttf";
+  fontesLegAlt[familia][i] = TTF_OpenFont(
+      caminho, (int)(ESTILOS[estilo].corpo * escalaTxt + 0.5f));
+  if (!fontesLegAlt[familia][i]) {
+    if (!avisoFallback[familia]) {
+      printf("fonte de legenda %s indisponivel; usando Inter\n",
+             TXT_FAMILIAS_PT[familia]);
+      avisoFallback[familia] = 1;
+    }
+    return fonteDe(estilo, s);
+  }
+  return fontesLegAlt[familia][i];
+}
+
 int txt_iniciar(const char *dirRecursos, float escala) {
   if (escala < 0.5f) escala = 1.0f;
   escalaTxt = escala;
@@ -217,7 +283,10 @@ int txt_iniciar(const char *dirRecursos, float escala) {
 
   // Caminho da reserva CJK. Na TV e a DroidSansFallback; no Mac, a fonte do
   // sistema que cobre CJK — ali isto e so para a previa nao mentir.
-  { const char *cand[ESC_N][4] = {
+  // Largura 5, nao 4: a linha do arabe tem quatro candidatos mais o NULL, e o
+  // laco abaixo para no NULL. Com [4] o terminador era descartado em silencio e
+  // a busca do arabe seguia lendo a linha do cirilico.
+  { const char *cand[ESC_N][5] = {
       /* ESC_CJK          */ { "/usr/share/fonts/LG_Display_JP.ttf",
                                "/usr/share/fonts/DroidSansFallback.ttf",
                                "/System/Library/Fonts/Hiragino Sans GB.ttc", NULL },
@@ -265,15 +334,23 @@ void txt_encerrar(void) {
     for (int e = 0; e < ESC_N; e++)
       if (reservas[e][i]) TTF_CloseFont(reservas[e][i]);
   }
+  for (int f = 1; f < TXT_FAMILIA_N; f++)
+    for (int i = 0; i < TXT_LEG_N; i++)
+      if (fontesLegAlt[f][i]) TTF_CloseFont(fontesLegAlt[f][i]);
   TTF_Quit();
 }
 
-TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) {
+static TxtLinha linhaFamilia(TxtEstilo estilo, const char *s, int r, int g,
+                             int b, int a, TxtFamilia familia) {
   TxtLinha vazia = {0, 0, 0};
   if (!s || !*s || estilo < 0 || estilo >= TXT_NFONTES || !fontes[estilo]) return vazia;
 
+  if (familia < TXT_FAMILIA_INTER || familia >= TXT_FAMILIA_N)
+    familia = TXT_FAMILIA_INTER;
+
   char chave[288];
-  snprintf(chave, sizeof chave, "%d|%02x%02x%02x|%.240s", (int)estilo, r & 255, g & 255, b & 255, s);
+  snprintf(chave, sizeof chave, "%d:%d|%02x%02x%02x|%.236s", (int)familia,
+           (int)estilo, r & 255, g & 255, b & 255, s);
 
   // Hash da chave para evitar o strcmp em quase todas as entradas: a busca
   // roda para CADA linha de CADA quadro, e comparar 288 bytes centenas de
@@ -314,6 +391,7 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
       if (cache[i].uso < menor) { menor = cache[i].uso; slot = i; }
   }
   if (slot < 0) return vazia;
+  if (cache[slot].ocupado) txt_despejos++;
   if (cache[slot].ocupado && cache[slot].linha.tex) {
     // avisa o gfx: o nome pode ser reutilizado pelo glGenTextures logo abaixo
     gfx_tex_esquecer(cache[slot].linha.tex);
@@ -322,7 +400,8 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
 
   Uint64 t0 = SDL_GetPerformanceCounter();
   SDL_Color cor = { (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a };
-  SDL_Surface *sf = TTF_RenderUTF8_Blended(fonteDe(estilo, s), s, cor);
+  SDL_Surface *sf = TTF_RenderUTF8_Blended(
+      fonteLegendaDe(estilo, s, familia), s, cor);
   if (!sf) return vazia;
   SDL_Surface *cv = SDL_ConvertSurfaceFormat(sf, SDL_PIXELFORMAT_ABGR8888, 0);
   SDL_FreeSurface(sf);
@@ -348,6 +427,15 @@ TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) 
   cache[slot].uso = ++relogio;
   SDL_FreeSurface(cv);
   return cache[slot].linha;
+}
+
+TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a) {
+  return linhaFamilia(estilo, s, r, g, b, a, TXT_FAMILIA_INTER);
+}
+
+TxtLinha txt_linha_familia(TxtEstilo estilo, const char *s, int r, int g,
+                           int b, int a, TxtFamilia familia) {
+  return linhaFamilia(estilo, s, r, g, b, a, familia);
 }
 
 void txt_desenhar(TxtLinha l, float x, float y) { txt_desenhar_alpha(l, x, y, 1.0f); }
@@ -411,7 +499,14 @@ float txt_tracking(TxtEstilo estilo, const char *s, int r, int g, int b,
 // arquivo solto nao linka nada.
 TxtLinha txt_linha_corta(TxtEstilo estilo, const char *s, int r, int g, int b,
                          int a, float maxW) {
-  TxtLinha l = txt_linha(estilo, s, r, g, b, a);
+  return txt_linha_corta_familia(estilo, s, r, g, b, a, maxW,
+                                 TXT_FAMILIA_INTER);
+}
+
+TxtLinha txt_linha_corta_familia(TxtEstilo estilo, const char *s, int r, int g,
+                                 int b, int a, float maxW,
+                                 TxtFamilia familia) {
+  TxtLinha l = txt_linha_familia(estilo, s, r, g, b, a, familia);
   if (!s || !*s || (float)l.w <= maxW) return l;
   char buf[512];
   size_t n = strlen(s);
@@ -430,10 +525,10 @@ TxtLinha txt_linha_corta(TxtEstilo estilo, const char *s, int r, int g, int b,
     if (!n) break;
     char t[520];
     snprintf(t, sizeof t, "%s\xe2\x80\xa6", buf);
-    l = txt_linha(estilo, t, r, g, b, a);
+    l = txt_linha_familia(estilo, t, r, g, b, a, familia);
     if ((float)l.w <= maxW) return l;
   }
-  return txt_linha(estilo, "\xe2\x80\xa6", r, g, b, a);
+  return txt_linha_familia(estilo, "\xe2\x80\xa6", r, g, b, a, familia);
 }
 
 float txt_bloco(TxtEstilo estilo, const char *s, int r, int g, int b,

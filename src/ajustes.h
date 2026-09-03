@@ -100,4 +100,19 @@ int   ajustes_largura_poster_dp(void);
 int   ajustes_raio_poster_dp(void);
 float ajustes_raio_poster_px(void);   // raio em px (dp x 2)
 
+// --- AJUSTES QUE VEM DA CONTA ------------------------------------------------
+// Aplica o blob de `sync_pull_profile_settings_blob` (o objeto `settings_json`,
+// como texto JSON cru) sobre os valores locais. Devolve quantas opcoes mudaram.
+//
+// POR QUE ISTO EXISTE: as ~40 chaves deste arquivo (`heroSectionEnabled`,
+// `continueWatchingCardStyle`, `cardDepthEnabled`, `posterCardWidthDp`...) sao
+// as MESMAS do app web, e os padroes daqui foram transcritos a mao do perfil de
+// quem montou o pacote. Sem aplicar o blob, quem instalar recebe o layout de
+// outra pessoa e nao o proprio — o mesmo defeito que o art/addons.txt tinha.
+//
+// Chave ausente no blob NAO mexe na opcao, e valor de texto que este app nao
+// reconhece tambem nao: trocar por um padrao seria inventar uma escolha que o
+// usuario nunca fez.
+int ajustes_aplicar_blob(const char *json);
+
 #endif

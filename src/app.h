@@ -9,8 +9,19 @@
 #define NV_APP_H
 #include <SDL2/SDL.h>
 
+// TELA_LOGIN e TELA_ESCOLHA_PERFIL sao a excecao a ordem de prioridade: quando
+// uma delas esta ativa NADA mais desenha nem recebe tecla. Sem conta nao ha
+// catalogo do usuario, nao ha addons e nao ha progresso — deixar a home
+// aparecer por tras seria mostrar o conteudo de exemplo do pacote como se
+// fosse dele.
+//
+// TELA_ESCOLHA_PERFIL e a escolha de perfil DA CONTA; TELA_PERFIL, que ja
+// existia, e a tela de estatisticas do Trakt. Nomes proximos, coisas
+// diferentes.
 typedef enum {
-  TELA_HOME, TELA_BUSCA, TELA_BIBLIOTECA, TELA_AJUSTES, TELA_PLAYER
+  TELA_LOGIN, TELA_ESCOLHA_PERFIL,
+  TELA_HOME, TELA_BUSCA, TELA_BIBLIOTECA, TELA_PERFIL, TELA_AJUSTES,
+  TELA_PLAYER, TELA_SOCIAL
 } Tela;
 
 int  app_iniciar(const char *dirArte);

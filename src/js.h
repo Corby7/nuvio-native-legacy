@@ -31,4 +31,16 @@ const char *js_array(const char *ini, const char *fim, const char *chave);
 // Proximo elemento do array a partir do fim do anterior; NULL no fim.
 const char *js_prox(const char *fimAnterior);
 
+// Primeiro elemento de um array que e a RAIZ do documento. Toda RPC do
+// Supabase responde `[{...},{...}]` sem chave em volta, e js_array — que
+// procura por nome — nao tem o que procurar ali. Avance com js_prox.
+const char *js_raiz_array(const char *corpo);
+
+// Copia o valor de `chave` como TEXTO JSON CRU, com as chaves e colchetes.
+// Existe para o `credential_json` das credenciais: o app repassa aquele objeto
+// ao servidor sem interpretar, e reconstrui-lo campo a campo perderia tudo que
+// esta versao do app nao conhece. 1 se achou e coube.
+int js_bruto(const char *ini, const char *fim, const char *chave,
+             char *dst, size_t tam);
+
 #endif

@@ -1,9 +1,112 @@
 #include "video.h"
+#include <SDL2/SDL.h>
+#include "marco.h"
+#include "mkv.h"
+#include "js.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
+#include <ctype.h>
+#include <stdint.h>
+
+// Nomes que o uMS aceita em charColor, e os rotulos que a folha mostra.
+//
+// FORA do #if do aparelho: a folha de faixas desenha os rotulos tambem no Mac,
+// onde o resto do modulo e stub. Deixa-los no lado da TV quebrava a ligacao da
+// build de desenvolvimento — que e onde a interface e conferida.
+const char *const VIDEO_LEG_CORES[VIDEO_LEG_NCORES] = {
+  "white", "yellow", "green", "blue", "red", "black"
+};
+const char *const VIDEO_LEG_CORES_PT[VIDEO_LEG_NCORES] = {
+  "Branco", "Amarelo", "Verde", "Azul", "Vermelho", "Preto"
+};
+
+static int extensaoLegenda(const char *ini, const char *fim) {
+  static const char *const ext[] = { ".srt", ".vtt", ".smi", ".ass", ".ssa", ".sub" };
+  size_t i;
+  for (i = 0; i < sizeof ext / sizeof *ext; i++) {
+    size_t n = strlen(ext[i]);
+    const char *p;
+    if ((size_t)(fim - ini) < n) continue;
+    p = fim - n;
+    { size_t k; for (k = 0; k < n; k++)
+        if (tolower((unsigned char)p[k]) != ext[i][k]) break;
+      if (k == n) return 1; }
+  }
+  return 0;
+}
+
+void video_normalizar_url_legenda(const char *url, char *dst, unsigned tam) {
+  const char *q;
+  size_t antes, sufixo, cabe;
+  if (!dst || !tam) return;
+  dst[0] = 0;
+  if (!url) return;
+  q = strchr(url, '?');
+  if (!q) q = url + strlen(url);
+  if (extensaoLegenda(url, q)) { snprintf(dst, tam, "%s", url); return; }
+  antes = (size_t)(q - url); sufixo = strlen(q);
+  cabe = antes + 4 + sufixo;
+  if (cabe + 1 > tam) { snprintf(dst, tam, "%s", url); return; }
+  memcpy(dst, url, antes);
+  memcpy(dst + antes, ".srt", 4);
+  memcpy(dst + antes + 4, q, sufixo + 1);
+}
+
+// Declarada aqui porque o loadCompleted a chama muito antes de ela ser
+// definida. O clang do Mac aceita a implicita; o gcc do ARM recusa — e o ARM
+// que esta certo.
+static void aplicarEstilo(void);
+
+// Declarada aqui porque o loadCompleted a chama muito antes de ela ser
+// definida. O clang do Mac aceita a implicita e o gcc do ARM recusa — e o ARM
+// que esta certo.
+static void aplicarEstilo(void);
+
+
+// Definidos adiante (junto de urlAtual, que e o que o fio consome); declarados
+// aqui porque o parse do sourceInfo, bem acima, e quem dispara o fio.
+static char  urlAtual[1024];   // URL da reproducao corrente
+// Recuperacao de pipeline destruido: pedida pelo fio de resposta do luna e
+// executada no fio principal (video_bombear), porque recarregar de dentro do
+// tratador de evento reentra no mesmo caminho que acabou de falhar.
+static int    recuperando;
+static double retomarEm;
+// Posicao a aplicar assim que o load terminar. Seek antes do loadCompleted e
+// mandado para um pipeline que ainda nao existe e some sem erro.
+static double posAoCarregar;
+// FAIXAS a restaurar depois de uma queda de pipeline. Sem isto o video voltava
+// com OUTRO audio — o pipeline novo comeca sempre na faixa 0, e o dono, que
+// tinha escolhido a dele, via a escolha ser desfeita sozinha. `-1` = nao ha o
+// que restaurar.
+static int   audioAoCarregar = -1, legAoCarregar = -1;
+static char  legUrlAoCarregar[1024];
+// URL da legenda EXTERNA em uso. O legAtual nao a representa: quem escolhe uma
+// legenda do OpenSubtitles nao mexe em faixa nenhuma do arquivo, so aponta o
+// setSubtitleSource. Sem guardar a URL, a recuperacao trazia de volta a legenda
+// embutida de antes, ou nenhuma.
+static char  legUrlAtual[1024];
+// Avanco pendente: alvo e quando manda-lo. Ver SEEK_REPOUSO_MS.
+static int    pausaPedida;   // 1 enquanto a pausa foi pedida por nos
+// Sonda de MKV pedida, esperando o buffer. Ver a nota no sourceInfo.
+static int    mkvPendente;
+// 1 quando a fonte foi anunciada como MP4. Ver video_definir_mp4.
+static int    fonteMp4;
+static double seekAlvo;
+static Uint32 seekEm;
+// Declarada aqui porque video_bombear a chama antes da definicao. O clang do
+// Mac aceita a implicita; o gcc do ARM recusa — e o ARM que esta certo. Terceira
+// vez neste arquivo.
+static void seekAgora(double segundos);
+static void *lerMkv(void *arg);
+static pthread_t fioMkv;
+static int       fioMkvVivo;
+// Identidade monotonica do pipeline. Callbacks do LS2 podem sobreviver ao
+// unload; sem uma geracao, a resposta antiga pode ocupar o estado da proxima
+// abertura e fazer o load correto ser ignorado.
+static unsigned  sessao;
 
 #ifdef __APPLE__
 // No Mac nao existe barramento nem plano de video. Os cotos deixam o resto do
@@ -40,6 +143,8 @@ int  video_legenda_atual(void) { return -1; }
 void video_escolher_audio(int i) { (void)i; }
 void video_escolher_legenda(int i) { (void)i; }
 void video_legenda_externa(const char *u) { (void)u; }
+void video_legenda_estilo(const VideoLegendaEstilo *e) { (void)e; }
+void video_definir_mp4(int m) { (void)m; }
 int  video_tem_atmos(void) { return 0; }
 int  video_tem_dolby_vision(void) { return 0; }
 const char *video_hdr(void) { return "none"; }
@@ -137,20 +242,52 @@ static int dvPedido;
 // fica com o codigo, que e melhor que "Desconhecido" — o codigo ao menos
 // identifica.
 static const char *idiomaLegivel(const char *c) {
+  // Tabela com ACENTO — e nome de idioma na tela, nao identificador. E com os
+  // codigos de tres letras (ISO 639-2) alem dos de duas, porque MKV de release
+  // etiqueta quase sempre com os de tres.
   static const struct { const char *cod, *nome; } T[] = {
-    { "pt", "Portugues" }, { "pob", "Portugues (BR)" }, { "por", "Portugues" },
-    { "en", "Ingles" },    { "eng", "Ingles" },
-    { "es", "Espanhol" },  { "spa", "Espanhol" },
-    { "fr", "Frances" },   { "fre", "Frances" }, { "fra", "Frances" },
-    { "de", "Alemao" },    { "ger", "Alemao" },
-    { "it", "Italiano" },  { "ita", "Italiano" },
-    { "ja", "Japones" },   { "jpn", "Japones" },
+    { "pt", "Português" },  { "pob", "Português (BR)" }, { "por", "Português" },
+    { "pt-br", "Português (BR)" }, { "ptb", "Português (BR)" },
+    { "en", "Inglês" },     { "eng", "Inglês" },
+    { "es", "Espanhol" },   { "spa", "Espanhol" }, { "esp", "Espanhol" },
+    { "fr", "Francês" },    { "fre", "Francês" },  { "fra", "Francês" },
+    { "de", "Alemão" },     { "ger", "Alemão" },   { "deu", "Alemão" },
+    { "it", "Italiano" },   { "ita", "Italiano" },
+    { "ja", "Japonês" },    { "jpn", "Japonês" },
+    { "ko", "Coreano" },    { "kor", "Coreano" },
+    { "zh", "Chinês" },     { "chi", "Chinês" },   { "zho", "Chinês" },
+    { "ru", "Russo" },      { "rus", "Russo" },
+    { "ar", "Árabe" },      { "ara", "Árabe" },
+    { "hi", "Hindi" },      { "hin", "Hindi" },
+    { "nl", "Holandês" },   { "dut", "Holandês" }, { "nld", "Holandês" },
+    { "sv", "Sueco" },      { "swe", "Sueco" },
+    { "no", "Norueguês" },  { "nor", "Norueguês" },
+    { "da", "Dinamarquês" },{ "dan", "Dinamarquês" },
+    { "fi", "Finlandês" },  { "fin", "Finlandês" },
+    { "pl", "Polonês" },    { "pol", "Polonês" },
+    { "tr", "Turco" },      { "tur", "Turco" },
+    { "he", "Hebraico" },   { "heb", "Hebraico" },
+    { "th", "Tailandês" },  { "tha", "Tailandês" },
+    { "cs", "Tcheco" },     { "cze", "Tcheco" },
+    { "el", "Grego" },      { "gre", "Grego" },
+    { "hu", "Húngaro" },    { "hun", "Húngaro" },
+    { "ro", "Romeno" },     { "rum", "Romeno" },
+    { "uk", "Ucraniano" },  { "ukr", "Ucraniano" },
+    { "vi", "Vietnamita" }, { "vie", "Vietnamita" },
+    { "id", "Indonésio" },  { "ind", "Indonésio" },
   };
   size_t i;
   if (!c || !*c) return "";
   for (i = 0; i < sizeof T / sizeof *T; i++)
     if (!strcasecmp(c, T[i].cod)) return T[i].nome;
-  return c;
+  // Sem nome na tabela, devolve o CODIGO EM MAIUSCULAS — e o que o app web faz
+  // quando nao sabe nomear ("ENG", "POR"). Mostrar o codigo diz alguma coisa;
+  // cair em "Legenda 3" nao diz nada.
+  { static char cx[16]; size_t k;
+    for (k = 0; c[k] && k + 1 < sizeof cx; k++)
+      cx[k] = (c[k] >= 'a' && c[k] <= 'z') ? (char)(c[k] - 32) : c[k];
+    cx[k] = 0;
+    return cx; }
 }
 static char      midia[64];
 static double    posSeg, durSeg;
@@ -212,6 +349,9 @@ static double numeroDe(const char *p, const char *chave) {
 
 static pthread_t fioBind;
 static volatile int bindVivo = 0;   // existe um bind em andamento?
+// Se o load novo termina durante o bind lento da sessao anterior, guarda o
+// trabalho. video_bombear inicia o bind assim que o fio anterior liberar.
+static volatile int bindPendente;
 
 // Latencia do pipeline: pedido de load -> loadCompleted -> primeiro quadro.
 // Sao os numeros que dizem se o comeco e o buffer estao saudaveis; sem eles
@@ -362,7 +502,9 @@ fora:
 
 static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m);
-  (void)h; (void)u;
+  unsigned minhaSessao = (unsigned)(uintptr_t)u;
+  (void)h;
+  if (minhaSessao != sessao) return 1;
   if (!p) return 1;
   printf("[video] ev %s\n", p); fflush(stdout);
   if (strstr(p, "sourceInfo")) {
@@ -414,6 +556,17 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
         o = fo ? strchr(fo, '{') : NULL;
       }
     }
+    // DIAGNOSTICO: despeja o sourceInfo CRU uma vez por titulo. A TV nao
+    // devolve idioma de legenda nos arquivos do dono (todas saem como
+    // "Legenda N"), e sem ver o JSON de verdade qualquer conserto e chute —
+    // pode ser outro nome de campo, pode ser que o pipeline nao etiquete mesmo.
+    // Ler com: sshpass ... scp root@TV:/tmp/nuvio-faixas.json .
+    { static int despejou;
+      if (!despejou) {
+        FILE *fd = fopen("/tmp/nuvio-faixas.json", "w");
+        if (fd) { fputs(p, fd); fclose(fd); despejou = 1; }
+      } }
+
     q = strstr(p, "\"subtitleTrackInfo\"");
     if (q) {
       const char *fimVet = strchr(q, ']');
@@ -442,6 +595,32 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
     }
     printf("[video] faixas: audio=%d legenda=%d atmos=%d\n", nAudio, nLeg, vidAtmos);
     fflush(stdout);
+
+    // O PIPELINE NAO DA IDIOMA DE LEGENDA. Medido nesta TV, num arquivo com 43
+    // legendas: o audioTrackInfo vem com "en"/"es"/"fr"/"it" e TODA entrada do
+    // subtitleTrackInfo vem com "language":"(null)". Nao ha outro campo ali —
+    // a informacao nao sai do pipeline, e a lista virava "Legenda 1..43", que
+    // nao ajuda ninguem a escolher.
+    //
+    // O jeito de saber e ler o proprio arquivo, que e o que o navegador faz de
+    // graca no app web. Dispara um fio que baixa os primeiros 2 MB por Range e
+    // le o elemento Tracks do Matroska; quando volta, casa por trackNum e
+    // reescreve os rotulos. Nao bloqueia a reproducao: se falhar, ou se o
+    // arquivo nao for MKV, fica o que ja estava.
+    { int faltando = 0, i;
+      for (i = 0; i < nLeg; i++) if (!faixaLeg[i].idioma[0]) faltando = 1;
+      // SO ANOTA. Quem dispara e o video_bombear, quando o buffer estiver
+      // saudavel — a sonda concorre com a propria reproducao (mesma conexao,
+      // mesmo servidor) e o sourceInfo chega justamente no pior instante, com o
+      // pipeline ainda enchendo o buffer. MEDIDO na TV: buffer em falta 1,6 s
+      // depois da leitura, caindo a 2,8 s e levando 9 s para se recuperar.
+      //
+      // O idioma da legenda nao tem pressa: so importa quando o dono abre a
+      // folha de faixas.
+      // MP4 nunca tem Tracks de Matroska: sondar e trafego garantidamente
+      // perdido, e ele sai da MESMA conexao do video.
+      if (faltando && !fonteMp4) mkvPendente = 1;
+      else if (faltando) marco("mkv: fonte e MP4, sonda dispensada"); }
   }
 
   if (strstr(p, "videoInfo")) {
@@ -466,7 +645,15 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
           // 5 e 8 e cai para HDR10 em Matroska; esta linha e o que permite
           // confirmar ou desmentir isso NESTA TV, com medida em vez de fama.
           printf("[video] HDR do pipeline: %s (fonte afirmava DV=%d)\n",
-                 vidHdr, dvPedido); } } }
+                 vidHdr, dvPedido);
+          // Vai tambem para os MARCOS, que sao legiveis no aparelho: o stdout
+          // do app lancado pelo applicationManager nao chega a lugar nenhum, e
+          // era por isso que esta medida — a unica que responde se a TV honrou
+          // ou rebaixou o Dolby Vision — so existia em teoria.
+          { char m[64];
+            snprintf(m, sizeof m, "hdr do pipeline: %s (fonte DV=%d)",
+                     vidHdr, dvPedido);
+            marco(m); } } } }
     // O Nuvio web que toca corretamente repassa estes valores sem alterar.
     // Para DolbyVision ele omite os dois blocos; montarVideoData faz o mesmo.
     { double x;
@@ -486,6 +673,30 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
     }
   }
   if (strstr(p, "loadCompleted")) {
+    marco("video loadCompleted");
+    // ORDEM: faixas primeiro, posicao depois. Trocar de faixa reinicia o
+    // decode no pipeline; fazer isso DEPOIS do seek jogaria a posicao fora.
+    if (audioAoCarregar >= 0) {
+      int a2 = audioAoCarregar; audioAoCarregar = -1;
+      if (a2 > 0) video_escolher_audio(a2);
+    }
+    if (legUrlAoCarregar[0]) {
+      char u[1024];
+      snprintf(u, sizeof u, "%s", legUrlAoCarregar);
+      legUrlAoCarregar[0] = 0; legAoCarregar = -1;
+      video_legenda_externa(u);
+    } else if (legAoCarregar >= 0) {
+      int l2 = legAoCarregar; legAoCarregar = -1;
+      video_escolher_legenda(l2);
+    }
+    if (posAoCarregar > 1.0) {
+      double alvo = posAoCarregar;
+      posAoCarregar = 0.0;
+      video_buscar(alvo);
+      marco("retomado apos queda do pipeline");
+    }
+    // O pipeline e novo: o estilo da legenda nao sobrevive ao load anterior.
+    aplicarEstilo();
     pronto = 1;
     if (cronPediu && !cronLoad) {
       cronLoad = 1;
@@ -499,15 +710,30 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
     // Sem o stopMute o video fica mudo: tela preta com audio normal.
     // E POR SESSAO, nao uma vez por processo: sem isto a segunda reproducao
     // herda um ACB apontando para o mediaId morto da anterior.
-    if (acb && midia[0] && !bindVivo) {
-      bindVivo = 1;
-      if (pthread_create(&fioBind, NULL, prenderPlano, NULL) == 0) pthread_detach(fioBind);
-      else bindVivo = 0;
-    }
+    if (acb && midia[0]) bindPendente = 1;
   }
   if (strstr(p, "bufferRange")) {
     double e = numeroDe(p, "\"endTime\":");
     if (e >= 0) bufferSeg = e;
+  }
+  // PAUSA POR FALTA DE DADOS. O dono relatou "fica pausando" e os marcos nao
+  // registravam NADA — porque encher e esvaziar o buffer nao gera evento neste
+  // lado, e uma pausa dessas nao passa por `paused` nem por erro. Sem isto a
+  // unica coisa que sobra e adivinhar.
+  //
+  // Carimba quanto do buffer havia no instante: e o numero que separa "a fonte
+  // nao entrega" de "o decoder engasgou".
+  if (strstr(p, "bufferingStart")) {
+    char m[64];
+    snprintf(m, sizeof m, "buffering INICIO (buffer %+.1fs a frente)",
+             bufferSeg - posSeg);
+    marco(m);
+  }
+  if (strstr(p, "bufferingEnd")) {
+    char m[64];
+    snprintf(m, sizeof m, "buffering FIM (buffer %+.1fs a frente)",
+             bufferSeg - posSeg);
+    marco(m);
   }
   if (strstr(p, "playing")) {
     tocando = 1;
@@ -518,8 +744,48 @@ static int aoEvento(LSHandle *h, LSMessage *m, void *u) {
       printf("[video] janela reaplicada com o fluxo ja tocando\n"); fflush(stdout);
     }
   }
-  if (strstr(p, "paused"))   tocando = 0;
-  if (strstr(p, "endOfStream")) tocando = 0;
+  if (strstr(p, "paused")) {
+    // So carimba quando NAO fomos nos que pausamos: pausa do dono e esperada,
+    // pausa vinda do pipeline e o defeito.
+    if (tocando && !pausaPedida) marco("pausado PELO PIPELINE");
+    tocando = 0;
+  }
+  if (strstr(p, "endOfStream")) { tocando = 0; marco("endOfStream"); }
+
+  // ERRO DO PIPELINE. Nao havia tratamento nenhum: quando o uMS recusava um
+  // seek ou perdia a fonte, o app simplesmente parava e ninguem sabia por que —
+  // "eu passei e ele nao continuou mais" e exatamente o formato desse silencio.
+  // Nao ha o que consertar sem saber a causa, e a causa vem no proprio evento.
+  // ERRO DE VERDADE, e nao "errorCode: 0".
+  //
+  // A primeira versao carimbava tudo que tivesse `errorCode`, e o uMS manda
+  // esse campo em resposta NORMAL — os marcos encheram de
+  // `pipeline erro: errorText":"No Error"`, que e ruido escondendo o sinal.
+  if (strstr(p, "errorText") && !strstr(p, "\"No Error\"")) {
+    const char *q = strstr(p, "errorText");
+    char m[96];
+    snprintf(m, sizeof m, "pipeline erro: %.60s", q);
+    { char *n2; for (n2 = m; *n2; n2++) if (*n2 == '\n' || *n2 == '\r') *n2 = ' '; }
+    marco(m);
+    // PIPELINE DESTRUIDO. Medido duas vezes na TV do dono: ~71 s depois de um
+    // avanco, o uMS responde "com.webos.pipeline.<id> is not running" e o video
+    // simplesmente para — o app nao fazia NADA, e era isso que ele descrevia
+    // como "passei e nao continuou mais".
+    //
+    // Recarrega a mesma fonte e volta para onde estava. Nao e conserto da
+    // CAUSA (o pipeline morre por algo entre o seek e a fonte do debrid, que
+    // este lado nao enxerga), e sim de nao deixar o dono na tela parada.
+    if (strstr(p, "is not running") && urlAtual[0] && !recuperando) {
+      recuperando = 1;
+      retomarEm = posSeg;
+      // GUARDA AS ESCOLHAS. A posicao sozinha nao basta: o pipeline novo nasce
+      // com a faixa 0 e a legenda desligada.
+      audioAoCarregar = audioAtual;
+      legAoCarregar   = legAtual;
+      snprintf(legUrlAoCarregar, sizeof legUrlAoCarregar, "%s", legUrlAtual);
+      marco("pipeline morreu: recarregando");
+    }
+  }
   { double v = numeroDe(p, "\"currentTime\":");
     if (v >= 0) {
       posSeg = v / 1000.0;
@@ -548,6 +814,17 @@ static void chamar(const char *metodo, const char *carga, Filtro cb) {
     printf("[video] %s falhou\n", metodo);
 }
 
+// Variante para callbacks que precisam saber a qual sessao pertencem. O
+// contexto e um inteiro convertido em ponteiro; nao ha alocacao para vazar nem
+// memoria cujo tempo de vida possa acabar antes da resposta assincrona.
+static void chamarCtx(const char *metodo, const char *carga, Filtro cb,
+                      void *ctx) {
+  char uri[128]; unsigned long tok = 0;
+  snprintf(uri, sizeof uri, "luna://com.webos.media/%s", metodo);
+  if (!lsCall(bus, uri, carga, cb, ctx, &tok, ERRO))
+    printf("[video] %s falhou\n", metodo);
+}
+
 // Chamada a OUTRO servico. O recorte de fonte NAO mora no com.webos.media: ele
 // respondeu `Unknown method "setDisplayWindow" for category "/"`, e a lista do
 // `ls-monitor -i com.webos.media` confirma que nao existe ali. Quem tem os
@@ -569,8 +846,22 @@ static void chamarEm(const char *servico, const char *metodo,
 static int aoCarregar(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m), *q;
   char b[256];
-  (void)h; (void)u;
+  unsigned minhaSessao = (unsigned)(uintptr_t)u;
+  (void)h;
   printf("[video] load: %s\n", p ? p : "(nulo)"); fflush(stdout);
+  if (minhaSessao != sessao) {
+    printf("[video] load antigo ignorado (sessao %u, atual %u)\n",
+           minhaSessao, sessao);
+    // Um load cancelado ainda pode criar um pipeline no uMS. Liberar esse
+    // recurso evita deixar o decoder ocupado quando o usuario reabre o filme.
+    char antigo[96] = "";
+    if (p) js_texto(p, NULL, "mediaId", antigo, sizeof antigo);
+    if (antigo[0] && strcmp(antigo, midia)) {
+      snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", antigo);
+      chamar("unload", b, soLog);
+    }
+    return 1;
+  }
   if (!p || midia[0]) return 1;
   q = strstr(p, "\"mediaId\":\"");
   if (!q) return 1;
@@ -582,7 +873,7 @@ static int aoCarregar(LSHandle *h, LSMessage *m, void *u) {
   snprintf(b, sizeof b, "{\"connectionId\":\"%s\"}", midia);
   chamar("notifyForeground", b, soLog);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", midia);
-  chamar("subscribe", b, aoEvento);
+  chamarCtx("subscribe", b, aoEvento, (void *)(uintptr_t)minhaSessao);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"type\":\"video\",\"index\":0}", midia);
   chamar("selectTrack", b, soLog);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", midia);
@@ -677,7 +968,67 @@ int video_iniciar(void) {
 // sem imagem por causa de uma afirmacao nossa.
 #define NV_DV_PRAZO_MS 7000
 
-static char  urlAtual[1024];
+
+// --- idioma das legendas lido do proprio arquivo -----------------------------
+// Ver a nota no ponto de disparo, logo abaixo do parse do sourceInfo.
+static void *lerMkv(void *arg) {
+  MkvFaixa fx[MKV_MAX_FAIXAS];
+  char url[1024];
+  int n, i, j, casou = 0;
+  (void)arg;
+
+  snprintf(url, sizeof url, "%s", urlAtual);
+
+  n = mkv_faixas(url, fx, MKV_MAX_FAIXAS);
+  if (n < 1) {
+    // Sem isto o unico sinal era uma linha de stdout, que na TV nao chega a
+    // lugar nenhum — e a lista ficava em "Legenda 1, Legenda 2" sem ninguem
+    // saber se o arquivo nao e MKV, se o Range falhou ou se o cabecalho passa
+    // dos 2 MB que baixamos.
+    marco("mkv: nenhuma faixa lida (nao e MKV, ou Range falhou)");
+    fioMkvVivo = 0; return NULL;
+  }
+
+  // SEM MUTEX, e de proposito: este arquivo nao tem um. faixaLeg ja e escrito
+  // pelo fio de resposta do luna e lido pelo desenho sem trava nenhuma, e
+  // introduzir uma trava so aqui daria falsa seguranca — protegeria a escrita
+  // e nao a leitura. O dano possivel e um rotulo lido pela metade em UM quadro;
+  // por isso cada campo e preenchido de uma vez, com um snprintf so, e o
+  // rotulo (que e o que aparece) e escrito por ULTIMO, depois do idioma.
+  // O trackNum do sourceInfo da LG e o TrackNumber do Matroska: casar por ele,
+  // e nao por ordem. As duas listas nao vem na mesma ordem (o sourceInfo desta
+  // TV comecou em 42, 40, 41, 32...), e casar por posicao trocaria os idiomas
+  // de lugar — pior que nao ter idioma nenhum.
+  for (i = 0; i < nLeg; i++) {
+    if (faixaLeg[i].idioma[0]) continue;
+    for (j = 0; j < n; j++) {
+      if (fx[j].numero != faixaLeg[i].numero) continue;
+      if (fx[j].idioma[0] && strcmp(fx[j].idioma, "und")) {
+        snprintf(faixaLeg[i].idioma, sizeof faixaLeg[i].idioma, "%s", fx[j].idioma);
+        casou++;
+      }
+      // O NOME da faixa ("Forced", "SDH", "Full") e o que separa duas legendas
+      // do MESMO idioma. Sem ele o dono ve "Portugues" tres vezes e escolhe no
+      // escuro — e essa e justamente a lista que ele reclamou.
+      if (fx[j].nome[0])
+        snprintf(faixaLeg[i].rotulo, sizeof faixaLeg[i].rotulo, "%s%s%s",
+                 faixaLeg[i].idioma[0] ? idiomaLegivel(faixaLeg[i].idioma) : "",
+                 faixaLeg[i].idioma[0] ? "  \xc2\xb7  " : "", fx[j].nome);
+      else if (faixaLeg[i].idioma[0])
+        snprintf(faixaLeg[i].rotulo, sizeof faixaLeg[i].rotulo, "%s",
+                 idiomaLegivel(faixaLeg[i].idioma));
+      break;
+    }
+  }
+  { char m[64];
+    snprintf(m, sizeof m, "mkv: %d faixas lidas, %d legendas com idioma", n, casou);
+    marco(m); }
+  printf("[mkv] %d legendas ganharam idioma\n", casou);
+  fflush(stdout);
+  fioMkvVivo = 0;
+  return NULL;
+}
+
 static long  msDoLoad = 0;
 
 static long agoraMs(void) {
@@ -697,6 +1048,45 @@ int video_tocar(const char *url) {
 // Chamado uma vez por quadro. So existe para o prazo acima: sem ele o recuo
 // dependeria de o usuario perceber que nao ha imagem e sair da tela.
 void video_bombear(void) {
+  // O ACB demora cerca de 1,5 s para ligar uma sessao. Se o usuario sair e
+  // reabrir nesse intervalo, o loadCompleted novo encontra bindVivo=1. Antes
+  // ele simplesmente desistia para sempre; agora o pedido fica pendente.
+  if (bindPendente && !bindVivo && acb && midia[0]) {
+    bindPendente = 0;
+    bindVivo = 1;
+    if (pthread_create(&fioBind, NULL, prenderPlano, NULL) == 0)
+      pthread_detach(fioBind);
+    else {
+      bindVivo = 0;
+      bindPendente = 1;
+    }
+  }
+  // SONDA DE MKV so com folga de buffer. 20 s a frente e o sinal de que a
+  // fonte esta entregando mais rapido do que o decoder consome, e portanto de
+  // que ha banda sobrando para os 320 KB do cabecalho.
+  if (mkvPendente && !fioMkvVivo && urlAtual[0] && bufferSeg - posSeg >= 20.0) {
+    mkvPendente = 0;
+    fioMkvVivo = 1;
+    if (pthread_create(&fioMkv, NULL, lerMkv, NULL) != 0) fioMkvVivo = 0;
+    else pthread_detach(fioMkv);
+  }
+  // Avanco pendente que ja repousou.
+  if (seekEm && SDL_GetTicks() >= seekEm) {
+    Uint32 q = seekEm; seekEm = 0; (void)q;
+    seekAgora(seekAlvo);
+  }
+  // RECUPERACAO DO PIPELINE, no fio principal. Ver a nota em `recuperando`.
+  if (recuperando) {
+    double alvo = retomarEm;
+    recuperando = 0;
+    marco("recarregando a fonte");
+    if (tocarInterno(urlAtual, 1) && alvo > 1.0) {
+      // O seek so vale depois do load; guardar o alvo e deixar o
+      // loadCompleted aplica-lo evita mandar posicao para um pipeline que
+      // ainda nao existe.
+      posAoCarregar = alvo;
+    }
+  }
   // O recuo por prazo foi REMOVIDO por nao funcionar: o gatilho era "o pipeline
   // nao reportou videoInfo", e o uMS reporta videoInfo, sourceInfo e
   // loadCompleted normalmente mesmo nos arquivos que ficam sem imagem. Medido:
@@ -712,8 +1102,10 @@ void video_bombear(void) {
 
 static int tocarInterno(const char *url, int comDV) {
   char carga[2048];
+  unsigned minhaSessao;
   if (!ligado && !video_iniciar()) return 0;
   video_parar();
+  minhaSessao = ++sessao;
   viuVideo = 0;
   // O retangulo aplicado e da SESSAO: sem zerar, uma sessao nova que calcule o
   // mesmo rect cairia no "ja e esse" e nunca chegaria a mandar nada ao plano.
@@ -722,6 +1114,7 @@ static int tocarInterno(const char *url, int comDV) {
   fonX = -1; dstX = dstY = dstW = dstH = -1;
   posSeg = durSeg = bufferSeg = 0; tocando = pronto = 0; midia[0] = 0;
   nAudio = nLeg = 0; audioAtual = 0; legAtual = -1; vidAtmos = 0;
+  legUrlAtual[0] = 0; mkvPendente = 0;
   snprintf(vidHdr, sizeof vidHdr, "none");
   seiX0 = seiX1 = seiX2 = seiY0 = seiY1 = seiY2 = 0;
   seiBrancoX = seiBrancoY = seiMinLum = seiMaxLum = seiMaxCLL = seiMaxFALL = 0;
@@ -808,15 +1201,25 @@ static int tocarInterno(const char *url, int comDV) {
       "\"uri\":\"%s\",\"type\":\"media\"}", dolby, url);
   printf("[video] URL: %s\n", url); fflush(stdout);
   msDoLoad = agoraMs();
-  chamar("load", carga, aoCarregar);
+  chamarCtx("load", carga, aoCarregar, (void *)(uintptr_t)minhaSessao);
   return 1;
 }
 
 void video_parar(void) {
   char b[128];
-  if (!ligado || !midia[0]) return;
-  snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", midia);
-  chamar("unload", b, soLog);
+  // Invalida tambem a sessao que ainda esta esperando o retorno de load. Esse
+  // era o caso abrir -> sair -> abrir que travava: nao havia mediaId para
+  // descarregar, mas o callback antigo continuava vivo e contaminava o novo.
+  sessao++;
+  bindPendente = 0;
+  recuperando = 0; retomarEm = posAoCarregar = 0.0;
+  audioAoCarregar = legAoCarregar = -1;
+  legUrlAoCarregar[0] = 0;
+  pausaPedida = 0; seekEm = 0; mkvPendente = 0;
+  if (ligado && midia[0]) {
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", midia);
+    chamar("unload", b, soLog);
+  }
   midia[0] = 0; tocando = pronto = 0;
 }
 
@@ -826,16 +1229,37 @@ void video_pausar(int pausado) {
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", midia);
   chamar(pausado ? "pause" : "play", b, soLog);
   tocando = !pausado;
+  pausaPedida = pausado;
 }
 
+// AVANCO COM REPOUSO.
+//
+// Medido na TV: segurar a seta produzia QUATRO seeks em 0,8 s (16 s, 26 s, 36 s,
+// 46 s) — quatro pedidos de faixa seguidos a mesma fonte, e ~71 s depois o
+// pipeline morria. Nao esta provado que um causa o outro, mas mandar quatro
+// posicoes quando o dono quis UMA e desperdicio de qualquer forma: as tres
+// primeiras sao descartadas assim que a quarta chega.
+//
+// A posicao MOSTRADA muda na hora (senao a barra nao responde ao toque); o que
+// espera o repouso e o comando ao pipeline.
+#define SEEK_REPOUSO_MS 350
+
 void video_buscar(double segundos) {
-  char b[192];
   if (!ligado || !midia[0]) return;
   if (segundos < 0) segundos = 0;
+  posSeg = segundos;
+  seekAlvo = segundos;
+  seekEm = SDL_GetTicks() + SEEK_REPOUSO_MS;
+}
+
+// Manda de fato. Chamado pelo video_bombear quando o repouso vence.
+static void seekAgora(double segundos) {
+  char b[192];
+  if (!ligado || !midia[0]) return;
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}",
            midia, (int)(segundos * 1000.0));
   chamar("seek", b, soLog);
-  posSeg = segundos;
+  { char m[48]; snprintf(m, sizeof m, "seek para %ds", (int)segundos); marco(m); }
 }
 
 // O retangulo do plano de hardware. E por AQUI que os modos de zoom acontecem:
@@ -1022,19 +1446,88 @@ void video_escolher_legenda(int i) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"type\":\"text\",\"index\":%d}",
              midia, f->numero);
     chamar("selectTrack", b, soLog);
-    legAtual = i; }
+    legAtual = i;
+    legUrlAtual[0] = 0;   // voltou para uma faixa do arquivo
+    aplicarEstilo(); }
 }
 
+// O estilo escolhido, guardado porque o PIPELINE NASCE A CADA LOAD e nao herda
+// nada do video anterior. Reaplicado em loadCompleted e sempre que a legenda e
+// (re)selecionada.
+static VideoLegendaEstilo estilo = { 120, 0, 0, 3, 1, 0, 0, 0 };
+static int temEstilo;
+
+static void aplicarEstilo(void) {
+  char b[256];
+  if (!ligado || !midia[0] || !temEstilo) return;
+  /* Embutida ainda pertence ao uMS: reduz o percentual aos cinco degraus. */
+  { int p=estilo.tamanho, t=p<=70?0:p<=100?1:p<=130?2:p<=165?3:4;
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"fontSize\":%d}", midia, t);
+    chamar("setSubtitleFontSize", b, soLog); }
+  { int c = estilo.cor;
+    if (c < 0 || c >= VIDEO_LEG_NCORES) c = 0;
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charColor\":\"%s\"}",
+             midia, VIDEO_LEG_CORES[c]);
+    chamar("setSubtitleCharacterColor", b, soLog); }
+  // Opacidade DA LETRA, separada da do fundo. O handler existe no firmware da
+  // C9 (`setSubtitleCharacterOpacity`) e recebe 0..255. Tres niveis evitam uma
+  // folha interminavel no controle remoto e mantem o texto legivel sobre video.
+  { int op = estilo.opacidade == 3 ? 64 : estilo.opacidade == 2 ? 128
+           : estilo.opacidade == 1 ? 191 : 255;
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charOpacity\":%d}", midia, op);
+    chamar("setSubtitleCharacterOpacity", b, soLog); }
+  // O fundo e a dupla cor+opacidade: sem declarar a cor, mudar so a opacidade
+  // nao tem o que revelar.
+  { int f = estilo.fundo; if (f < 0) f = 0; if (f > 4) f = 4;
+    int op = f == 4 ? 255 : f * 64;
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"bgColor\":\"black\"}", midia);
+    chamar("setSubtitleBackgroundColor", b, soLog);
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"bgOpacity\":%d}", midia, op);
+    chamar("setSubtitleBackgroundOpacity", b, soLog); }
+  // A folha oferece 0..7; o uMS quer -3..4.
+  { int p = estilo.posicao; if (p < 0) p = 0; if (p > 7) p = 7;
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", midia, p - 3);
+    chamar("setSubtitlePosition", b, soLog); }
+  // VERIFICADO NA TELA: "uniform" desenha contorno em volta das letras.
+  // "none" e o sem-borda. O retorno do uMS nao serve de prova aqui — ele
+  // respondeu returnValue:true ate para valores inventados.
+  { const char *ed = estilo.borda == 2 ? "dropShadow"
+                   : (estilo.borda == 1 ? "uniform" : "none");
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charEdgeType\":\"%s\"}",
+             midia, ed);
+    chamar("setSubtitleCharacterEdge", b, soLog); }
+  if (estilo.atrasoMs) {
+    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"sync\":%d}", midia, estilo.atrasoMs);
+    chamar("setSubtitleSync", b, soLog);
+  }
+}
+
+void video_legenda_estilo(const VideoLegendaEstilo *e) {
+  if (!e) return;
+  estilo = *e;
+  temEstilo = 1;
+  aplicarEstilo();
+}
+
+void video_definir_mp4(int ehMp4) { fonteMp4 = ehMp4; }
+
 void video_legenda_externa(const char *url) {
-  char b[1200];
+  char b[1400], reconhecivel[1024];
   if (!ligado || !midia[0] || !url || !*url) return;
   // O uMS baixa e sincroniza sozinho — o app so aponta. E o que permite usar
-  // legenda do OpenSubtitles em arquivo que nao traz nenhuma embutida.
-  snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"uri\":\"%s\"}", midia, url);
+  // legenda do OpenSubtitles em arquivo que nao traz nenhuma embutida. Nesta
+  // LG, URI /file/123 produziu errorCode 210 "Unknown Subtitle"; o MESMO
+  // arquivo servido como /file/123.srt e reconhecido pelo formato.
+  video_normalizar_url_legenda(url, reconhecivel, sizeof reconhecivel);
+  snprintf(b, sizeof b,
+           "{\"mediaId\":\"%s\",\"uri\":\"%s\",\"preferredEncodings\":[\"UTF-8\"]}",
+           midia, reconhecivel);
   chamar("setSubtitleSource", b, soLog);
+  snprintf(legUrlAtual, sizeof legUrlAtual, "%s", reconhecivel);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"enable\":true}", midia);
   chamar("setSubtitleEnable", b, soLog);
-  printf("[video] legenda externa: %.80s\n", url);
+  aplicarEstilo();
+  printf("[video] legenda externa: %.80s\n", reconhecivel);
   fflush(stdout);
 }
 

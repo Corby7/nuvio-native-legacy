@@ -99,3 +99,39 @@ const char *js_prox(const char *fimAnterior) {
   }
   return NULL;
 }
+
+const char *js_raiz_array(const char *corpo) {
+  const char *p;
+  if (!corpo) return NULL;
+  p = pula(corpo);
+  if (*p != '[') return NULL;
+  p = pula(p + 1);
+  return (*p == '{' || *p == '"') ? p : NULL;
+}
+
+int js_bruto(const char *ini, const char *fim, const char *chave,
+             char *dst, size_t tam) {
+  const char *p = achaChave(ini, fim, chave);
+  const char *f;
+  size_t n;
+  if (!p) return 0;
+  p = pula(p);
+  if (*p == '{' || *p == '[') {
+    f = js_fim(p);
+  } else if (*p == '"') {
+    // String: o valor pode ser o proprio JSON serializado (o app web aceita as
+    // duas formas). Devolve com as aspas; quem consome decide.
+    const char *q = p + 1;
+    while (*q && *q != '"') { if (*q == '\\' && q[1]) q++; q++; }
+    f = *q ? q + 1 : q;
+  } else {
+    const char *q = p;
+    while (*q && *q != ',' && *q != '}' && *q != ']') q++;
+    f = q;
+  }
+  n = (size_t)(f - p);
+  if (n + 1 > tam) return 0;
+  memcpy(dst, p, n);
+  dst[n] = 0;
+  return 1;
+}

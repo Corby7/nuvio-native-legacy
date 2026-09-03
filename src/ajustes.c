@@ -1,8 +1,8 @@
 // Ajustes: lista vertical em secoes, rotulo a esquerda e valor a direita.
 //
 // A regra que organiza a tela inteira: existem TRES naturezas de linha e elas
-// TEM que parecer diferentes. Linha de escolha ganha pilula clara com texto
-// escuro e as setas ao redor do valor; linha NUMERICA acrescenta uma barra de
+// TEM que parecer diferentes. Linha de escolha ganha foco e setas ao redor do
+// valor; linha NUMERICA acrescenta uma barra de
 // preenchimento sob o valor, porque "28%" sem barra nao diz onde fica no
 // intervalo; linha so de leitura ganha um realce apagado, sem setas. Com o mesmo
 // desenho nas tres, o usuario aperta esquerda e direita em cima da versao do app
@@ -17,6 +17,10 @@
 #include "tex_cache.h"
 #include "anim.h"
 #include "layout.h"
+#include "sessao.h"
+#include "sync.h"
+#include "perfis.h"
+#include "js.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -35,7 +39,7 @@
 #define AJ_LISTA_W     1120.0f
 #define AJ_PAD           34.0f    // borda da linha ao texto
 #define AJ_TOPO        (NV_MARGEM_Y + 118.0f)   // abaixo do titulo da tela
-#define AJ_BASE        (NV_TELA_H - NV_MARGEM_Y)
+#define AJ_BASE        (NV_TELA_H - NV_MARGEM_Y - 48.0f)
 // Raio da linha em fracao do menor lado (o SDF do shader e normalizado):
 // 12px sobre 88 de altura.
 #define AJ_RAIO           0.14f
@@ -65,6 +69,8 @@ typedef enum {
   AJ_LARGURA_DP, AJ_RAIO_DP,
   // Interface
   AJ_IDIOMA, AJ_ANIM,
+  // Conta
+  AJ_PERFIL_ATIVO, AJ_SYNC, AJ_SAIR,
   // Sobre
   AJ_VERSAO_I, AJ_ESPACO,
   AJ_N
@@ -88,7 +94,10 @@ static const char *V_DESCOBRIR[] = { "Mostrar na Busca", "Na barra lateral", "De
 static const char *V_NOTAS[]     = { "Mostrar", "Ocultar" };
 
 // Natureza da linha.
-typedef enum { OP_ESCOLHA, OP_NUMERO, OP_LEITURA } OpcaoTipo;
+// OP_ACAO responde ao OK, nao a esquerda/direita. Ela NAO e leitura: uma linha
+// que faz alguma coisa tem de ter o mesmo destaque de quem muda valor, senao o
+// usuario aperta OK esperando que nada aconteca.
+typedef enum { OP_ESCOLHA, OP_NUMERO, OP_LEITURA, OP_ACAO } OpcaoTipo;
 
 typedef struct {
   const char  *rotulo;
@@ -102,6 +111,7 @@ typedef struct {
 #define ESC(rot, vals, qtd) { rot, OP_ESCOLHA, vals, qtd, 0, 0, 0, NULL }
 #define NUM(rot, lo, hi, st, suf) { rot, OP_NUMERO, NULL, 0, lo, hi, st, suf }
 #define LER(rot)            { rot, OP_LEITURA, NULL, 0, 0, 0, 0, NULL }
+#define ACAO(rot)           { rot, OP_ACAO,    NULL, 0, 0, 0, 0, NULL }
 
 static const Opcao OPCOES[AJ_N] = {
   ESC("Qualidade máxima",           V_QUALIDADE, 4),
@@ -157,8 +167,11 @@ static const Opcao OPCOES[AJ_N] = {
   ESC("Idioma",                     V_IDIOMA, 2),
   ESC("Animações",                  V_ANIM, 2),
 
+  LER("Perfil"),
+  LER("Sincronização"),
+  ACAO("Sair da conta"),
   LER("Versão"),
-  LER("Espaço usado por imagens"),
+  LER("Memória usada por imagens"),
 };
 
 // Nome de cada opcao no arquivo. O formato era POSICIONAL — uma linha por
@@ -166,7 +179,7 @@ static const Opcao OPCOES[AJ_N] = {
 // arquivo de quem ja tinha o app aplicar os valores errados, em silencio. Com
 // chave por linha, opcao nova nasce no padrao e as antigas continuam onde
 // estavam. Os nomes seguem os do app web onde existe correspondente.
-static const char *CHAVE[AJ_N] = {
+static const char *CHAVE[] = {
   "qualidade", "dolbyVision", "dolbyAtmos",
   "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
   "collapseSidebar", "modernSidebar", "modernSidebarBlur",
@@ -186,8 +199,20 @@ static const char *CHAVE[AJ_N] = {
   "cardDepthContinueWatchingEnabled", "cardDepthEpisodeCardsEnabled",
   "cardDepthCastEnabled", "cardDepthTrailersEnabled",
   "posterCardWidthDp", "posterCardCornerRadiusDp",
-  "idioma", "animacoes", "-versao", "-espaco",
+  "idioma", "animacoes",
+  // Conta: sao linhas locais, nao vem nem vao para o perfil na nuvem.
+  "-perfil", "-sync", "-sair",
+  "-versao", "-espaco",
 };
+
+// O compilador CONFERE que ha uma chave por opcao. Sem isto, acrescentar uma
+// opcao no enum e esquecer a chave deixa as ultimas entradas em NULL e
+// DESALINHA todas as chaves depois do ponto de insercao — e o defeito nao
+// aparece na hora: so quando o ajustes.txt passa a existir, o strcmp(NULL,...)
+// derruba o app no arranque seguinte. Foi exatamente o que aconteceu, e o
+// unico sintoma na TV foi o app abrir e fechar.
+typedef char conferi_uma_chave_por_opcao[
+  (sizeof CHAVE / sizeof *CHAVE == AJ_N) ? 1 : -1];
 
 // Onde cada secao comeca e quantas opcoes ela tem. Secao e um agrupamento
 // visual, nao um nivel de navegacao: cima/baixo atravessa os cabecalhos sem
@@ -202,6 +227,7 @@ static const struct { const char *titulo; int ini, n; } SECOES[] = {
   { "Efeito de Profundidade",         AJ_PROF,                9 },
   { "Tamanho dos itens",              AJ_LARGURA_DP,          2 },
   { "Interface",                      AJ_IDIOMA,              2 },
+  { "Conta",                          AJ_PERFIL_ATIVO,        3 },
   { "Sobre",                          AJ_VERSAO_I,            2 },
 };
 #define AJ_N_SECOES (int)(sizeof SECOES / sizeof *SECOES)
@@ -223,7 +249,10 @@ static int valor[AJ_N] = {
   0,                /* mostrar destaque: ligado */
   0,                /* catalogos do destaque: leitura */
   0,                /* local do descobrir: na busca */
-  0,                /* rotulos nos posteres: ligado */
+  // DESLIGADO por padrao: o cartaz ja traz o titulo impresso na arte, e repetir
+  // o nome logo abaixo e a mesma informacao duas vezes ocupando altura de
+  // fileira. Continua sendo ajuste — quem quiser o rotulo liga em Ajustes.
+  1,                /* rotulos nos posteres: desligado */
   0,                /* nome do addon: ligado */
   0,                /* tipo de conteudo: ligado */
   1,                /* ocultar nao lancados: desligado */
@@ -343,6 +372,54 @@ const char *ajustes_qualidade(void)   { return V_QUALIDADE[valor[AJ_QUALIDADE]];
 // no padrao — o que faz a tela inteira parecer decorativa.
 static char dirAjustes[512];
 
+
+// Valores LITERAIS que o app web grava nas opcoes que nao sao booleanas. A
+// ordem casa, uma a uma, com a do vetor de rotulos correspondente — e essa
+// correspondencia e o contrato: mexer num vetor sem mexer no outro troca o
+// ajuste da pessoa em silencio. Todos conferidos no codigo do app web.
+static const char *W_DESCOBRIR[] = { "in_search", "in_sidebar", "off", NULL };
+static const char *W_NOTAS[]     = { "SHOW_ALL", "HIDE_ALL", NULL };
+static const char *W_CW[]        = { "card", "wide", "poster", NULL };
+static const char *W_CW_ORDEM[]  = { "default", "streaming_style", "split_upcoming", NULL };
+
+// `heroSectionEnabled` -> `hero_section_enabled`. Uma sequencia de maiusculas
+// conta como uma palavra so (`homeImdbRatingsVisibility` ->
+// `home_imdb_ratings_visibility`, e nao `home_i_m_d_b_...`).
+static void camelParaSnake(const char *src, char *dst, size_t tam) {
+  size_t w = 0;
+  int i;
+  for (i = 0; src[i] && w + 2 < tam; i++) {
+    int alto = src[i] >= 'A' && src[i] <= 'Z';
+    if (alto && w > 0) {
+      int anteriorBaixo = src[i - 1] >= 'a' && src[i - 1] <= 'z';
+      int anteriorDigito = src[i - 1] >= '0' && src[i - 1] <= '9';
+      int proximoBaixo = src[i + 1] >= 'a' && src[i + 1] <= 'z';
+      if (anteriorBaixo || anteriorDigito || proximoBaixo) dst[w++] = '_';
+    }
+    dst[w++] = alto ? (char)(src[i] - 'A' + 'a') : src[i];
+  }
+  dst[w] = 0;
+}
+
+static int igualSemCaixa(const char *a, const char *b) {
+  for (; *a && *b; a++, b++) {
+    char x = (*a >= 'A' && *a <= 'Z') ? (char)(*a - 'A' + 'a') : *a;
+    char y = (*b >= 'A' && *b <= 'Z') ? (char)(*b - 'A' + 'a') : *b;
+    if (x != y) return 1;
+  }
+  return *a || *b;   // 0 quando iguais, como strcmp
+}
+
+static const char *const *literaisDe(int op) {
+  switch (op) {
+    case AJ_DESCOBRIR:  return W_DESCOBRIR;
+    case AJ_NOTAS_HOME: return W_NOTAS;
+    case AJ_CW_ESTILO:  return W_CW;
+    case AJ_CW_ORDEM:   return W_CW_ORDEM;
+    default:            return NULL;
+  }
+}
+
 static int limita(int op, int v) {
   const Opcao *o = &OPCOES[op];
   if (o->tipo == OP_ESCOLHA) return (v >= 0 && v < o->n) ? v : valor[op];
@@ -362,7 +439,8 @@ void ajustes_dir(const char *dir) {
     char chave[64]; int v, i;
     if (sscanf(linha, "%63s %d", chave, &v) != 2) continue;
     for (i = 0; i < AJ_N; i++) {
-      if (strcmp(CHAVE[i], chave) || OPCOES[i].tipo == OP_LEITURA) continue;
+      if (!CHAVE[i] || strcmp(CHAVE[i], chave)) continue;
+      if (OPCOES[i].tipo == OP_LEITURA || OPCOES[i].tipo == OP_ACAO) continue;
       // Valor fora da faixa (arquivo de outra versao, ou editado a mao) cai no
       // padrao em vez de indexar fora do vetor.
       valor[i] = limita(i, v);
@@ -381,10 +459,101 @@ static void gravar(void) {
   snprintf(tmp, sizeof tmp, "%s/ajustes.tmp", dirAjustes);
   f = fopen(tmp, "w");
   if (!f) return;
-  for (i = 0; i < AJ_N; i++)
-    if (OPCOES[i].tipo != OP_LEITURA) fprintf(f, "%s %d\n", CHAVE[i], valor[i]);
+  for (i = 0; i < AJ_N; i++) {
+    // "-" marca linha local (versao, espaco, conta): nao tem valor para
+    // guardar. Acao tambem nao. E chave ausente NUNCA vai para o arquivo — foi
+    // um "(null) 0" gravado assim que derrubou o app na leitura seguinte.
+    if (!CHAVE[i] || CHAVE[i][0] == '-') continue;
+    if (OPCOES[i].tipo == OP_LEITURA || OPCOES[i].tipo == OP_ACAO) continue;
+    fprintf(f, "%s %d\n", CHAVE[i], valor[i]);
+  }
   fclose(f);
   rename(tmp, caminho);
+}
+
+
+int ajustes_aplicar_blob(const char *json) {
+  const char *fim;
+  int i, mudou = 0, reconhecidas = 0;
+  if (!json || !*json) return 0;
+  fim = json + strlen(json);
+
+  for (i = 0; i < AJ_N; i++) {
+    char snake[80], embrulho[400], bruto[160];
+    int novo;
+    // Linha de leitura/acao nao tem valor; chave com "-" e marcador local
+    // (heroCatalogKeys, versao, espaco) e nao vem do blob.
+    if (OPCOES[i].tipo == OP_LEITURA || OPCOES[i].tipo == OP_ACAO) continue;
+    if (!CHAVE[i] || CHAVE[i][0] == '-') continue;
+    // MEDIDO na TV, com uma conta de verdade: o blob NAO e um mapa plano de
+    // camelCase. Ele e
+    //   {"version":1,"features":{"layout_settings":{
+    //      "hero_section_enabled":{"type":"boolean","value":true}, ...}}}
+    // — chave em snake_case, aninhada por "feature", e o valor EMBRULHADO num
+    // objeto com tipo. Procurando por `heroSectionEnabled` o app achava zero
+    // chaves em 12 KB de ajustes e nao aplicava nada, sem erro nenhum.
+    //
+    // A busca por nome ignora o aninhamento de proposito: js_bruto varre o
+    // texto inteiro, e os nomes destas chaves sao unicos no documento.
+    camelParaSnake(CHAVE[i], snake, sizeof snake);
+    if (!js_bruto(json, fim, snake, embrulho, sizeof embrulho) &&
+        !js_bruto(json, fim, CHAVE[i], embrulho, sizeof embrulho)) continue;
+    if (embrulho[0] == '{') {
+      // Desembrulha {"type":...,"value":X}. O `type` vem antes do `value` no
+      // codificador do web, entao a primeira chave "value" e a certa.
+      if (!js_bruto(embrulho, embrulho + strlen(embrulho), "value",
+                    bruto, sizeof bruto)) continue;
+    } else {
+      snprintf(bruto, sizeof bruto, "%s", embrulho);
+    }
+
+    if (!strcmp(bruto, "true") || !strcmp(bruto, "false")) {
+      // O primeiro rotulo de V_LIGA e "Ligado" e o de V_RAIL e "Recolhida" —
+      // nos dois, o indice 0 e o `true` do web. Coincidencia util, mas
+      // coincidencia: se um vetor novo comecar pelo estado desligado, ele
+      // precisa de literais proprios em literaisDe().
+      novo = !strcmp(bruto, "true") ? 0 : 1;
+    } else if (bruto[0] == '"') {
+      const char *const *lit = literaisDe(i);
+      char texto[128];
+      size_t n = strlen(bruto);
+      if (n < 2) continue;
+      if (n - 2 >= sizeof texto) continue;
+      memcpy(texto, bruto + 1, n - 2);
+      texto[n - 2] = 0;
+      novo = -1;
+      // Comparacao SEM CAIXA. MEDIDO na TV: o servidor guarda estes enums em
+      // MAIUSCULA ("IN_SEARCH", "CARD", "DEFAULT") enquanto o codigo JS do app
+      // web os escreve em minuscula. Ler so o codigo do web levava a rejeitar
+      // o valor de verdade — e a rejeicao era CORRETA (melhor manter que
+      // inventar), mas o efeito era o ajuste nunca chegar.
+      if (lit) { int k; for (k = 0; lit[k]; k++) if (!igualSemCaixa(lit[k], texto)) { novo = k; break; } }
+      if (novo < 0) {
+        // Valor que este app nao conhece (versao nova do web, opcao nova).
+        // Manter o que esta e a resposta certa: escolher um padrao aqui
+        // inventaria uma preferencia que a pessoa nunca marcou.
+        printf("[ajustes] %s=\"%s\" nao reconhecido; mantido\n", CHAVE[i], texto);
+        continue;
+      }
+    } else if ((bruto[0] >= '0' && bruto[0] <= '9') || bruto[0] == '-' || bruto[0] == '.') {
+      novo = (int)(atof(bruto) + 0.5);
+    } else {
+      continue;   // null, objeto, array: nao ha o que aplicar
+    }
+
+    reconhecidas++;
+    novo = limita(i, novo);
+    if (novo != valor[i]) { valor[i] = novo; mudou++; }
+  }
+
+  if (mudou) gravar();   // o que veio da conta tem de sobreviver ao arranque
+  // Registra SEMPRE, inclusive zero. "Nenhuma linha no log" tem duas leituras
+  // opostas — o blob nao foi aplicado, ou foi aplicado e ja estava tudo igual —
+  // e sem o numero nao da para saber qual. Foi exatamente a duvida que sobrou
+  // na primeira verificacao na TV.
+  printf("[ajustes] blob da conta: %d chave(s) reconhecida(s), %d mudou(aram)\n",
+         reconhecidas, mudou);
+  return mudou;
 }
 
 int ajustes_iniciar(void) { focoOp = 0; scrollY = 0.0f; sair = 0; return 1; }
@@ -397,6 +566,25 @@ int ajustes_quer_sair(void) { return sair; }
 static const char *textoLeitura(int op) {
   static char buf[64];
   if (op == AJ_VERSAO_I) return AJ_VERSAO;
+  if (op == AJ_PERFIL_ATIVO) {
+    static char bufp[80];
+    int i;
+    for (i = 0; i < perfis_n(); i++)
+      if (perfis_item(i)->indice == perfis_ativo()) return perfis_item(i)->nome;
+    // Sem lista de perfis, dizer "Perfil 1" e mais honesto que deixar vazio: e
+    // literalmente o que o app esta usando em p_profile_id.
+    snprintf(bufp, sizeof bufp, "Perfil %d", perfis_ativo());
+    return bufp;
+  }
+  if (op == AJ_SYNC) {
+    switch (sync_estado()) {
+      case SYNC_RODANDO: return "sincronizando…";
+      case SYNC_FALHOU:  return "falhou";
+      case SYNC_PRONTO:  return sync_resumo();
+      default:           return sessao_logada() ? "aguardando" : "sem conta";
+    }
+  }
+  if (op == AJ_SAIR) return "OK";
   if (op == AJ_HERO_CATALOGOS) {
     // "Todos" com a lista vazia e o que o web escreve (common_all), e e o estado
     // do perfil do dono. Um "0" ali leria como "nenhum", o oposto do que e.
@@ -433,8 +621,45 @@ static int inativa(int op) {
   }
 }
 
+// Acao NAO e leitura (tem o destaque de linha ativa), mas tambem NAO e mutavel
+// (esquerda/direita nao fazem nada nela). As duas respostas sao diferentes de
+// proposito, e e por isso que sao duas funcoes.
 static int soLeitura(int op) { return OPCOES[op].tipo == OP_LEITURA; }
-static int mutavel(int op)   { return !soLeitura(op) && !inativa(op); }
+static int mutavel(int op)   { return OPCOES[op].tipo != OP_LEITURA &&
+                                      OPCOES[op].tipo != OP_ACAO && !inativa(op); }
+
+static int secaoAtual(void) {
+  for (int s = 0; s < AJ_N_SECOES; s++)
+    if (focoOp < SECOES[s].ini + SECOES[s].n) return s;
+  return AJ_N_SECOES - 1;
+}
+
+static const char *ajudaOpcao(int op) {
+  if (inativa(op)) {
+    if (op == AJ_RAIL) return "Desative a barra lateral moderna para escolher entre recolhida e fixa.";
+    if (op == AJ_RAIL_BLUR) return "Ative a barra lateral moderna para usar o desfoque.";
+    if (op == AJ_HERO_CATALOGOS) return "Ative Mostrar destaque para exibir os catálogos no topo da Home.";
+    if (op >= AJ_CW_ESTILO && op <= AJ_CW_ORDEM)
+      return op == AJ_CW_BLUR_PROX && ajustes_cw_ligado()
+        ? "Ative Miniatura do episódio para desfocar a imagem do próximo episódio."
+        : "Ative Continuar assistindo para ajustar os cards de retomada.";
+    if (op == AJ_EXPANDIR_ATRASO) return "Ative Expandir pôster ao focar para ajustar o tempo de espera.";
+    return "Ative Efeito de profundidade para personalizar este detalhe.";
+  }
+  switch (op) {
+    case AJ_QUALIDADE: return "Define a preferência de resolução. A disponibilidade depende das fontes do addon.";
+    case AJ_DV: case AJ_ATMOS: return "Preferência para fontes compatíveis. O formato disponível também depende do arquivo e da TV.";
+    case AJ_HERO_CATALOGOS: return "Quantidade de catálogos incluídos no destaque. Esta linha é apenas informativa.";
+    case AJ_CW_FURTHEST: return "Escolhe o próximo episódio a partir do mais avançado marcado como assistido.";
+    case AJ_CW_BLUR_PROX: case AJ_DET_BLUR_NAO_VISTOS: return "Oculta detalhes da miniatura para evitar spoilers de episódios ainda não assistidos.";
+    case AJ_ANIM: return "Use Reduzidas para movimentos mais discretos ao navegar pela interface.";
+    case AJ_ESPACO: return "Uso atual de memória pelo cache de imagens, não espaço ocupado no armazenamento da TV.";
+    case AJ_VERSAO_I: return "Versão do aplicativo. Esta informação não pode ser alterada.";
+    case AJ_LARGURA_DP: return "Ajusta a largura dos pôsteres nas fileiras que usam o tamanho personalizável.";
+    case AJ_RAIO_DP: return "Controla o arredondamento dos cantos dos pôsteres.";
+    default: return "Use as setas laterais para escolher. A preferência é aplicada ao alterar o valor.";
+  }
+}
 
 // Deslocamento vertical do topo da lista ate a linha `op`, contando os
 // cabecalhos das secoes que vieram antes.
@@ -459,6 +684,23 @@ void ajustes_evento(const SDL_Event *e) {
 
   if (k == SDLK_DOWN)      { if (focoOp < AJ_N - 1) focoOp++; }
   else if (k == SDLK_UP)   { if (focoOp > 0)        focoOp--; }
+  else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+    if (OPCOES[focoOp].tipo != OP_ACAO) return;
+    if (focoOp == AJ_SAIR) {
+      // Sair apaga a sessao do disco. Sem confirmacao de proposito: o custo de
+      // sair sem querer e um login por QR, e uma caixa de confirmacao nesta
+      // lista exigiria um modal que a tela nao tem.
+      sessao_sair();
+      // A sessao sozinha nao basta: addons, Trakt, perfil e progresso ficariam
+      // para a proxima pessoa. Ver o cabecalho de sync_esquecer_usuario.
+      sync_esquecer_usuario();
+      sair = 1;   // volta para a home, que cai no login no proximo quadro
+    }
+  }
+  else if (k == SDLK_PAGEUP || k == SDLK_PAGEDOWN) {
+    int s = secaoAtual() + (k == SDLK_PAGEDOWN ? 1 : -1);
+    if (s >= 0 && s < AJ_N_SECOES) focoOp = SECOES[s].ini;
+  }
   else if (k == SDLK_LEFT || k == SDLK_RIGHT) {
     // Item so de leitura ou desligado pela dependencia nao muda com nada.
     if (!mutavel(focoOp)) return;
@@ -482,7 +724,7 @@ void ajustes_atualizar(float dt, Uint32 agora) {
   (void)agora;
   for (int i = 0; i < AJ_N; i++) {
     float alvo = (i == focoOp) ? 1.0f : 0.0f;
-    animFoco[i] = anim_mola(animFoco[i], alvo, dt,
+    animFoco[i] = ajustes_animacoes_reduzidas() ? alvo : anim_mola(animFoco[i], alvo, dt,
                             alvo > animFoco[i] ? NV_MOLA_FOCO : NV_MOLA_DESFOCO);
   }
   // Rola o minimo para a linha focada caber, e leva junto o cabecalho da secao
@@ -496,7 +738,7 @@ void ajustes_atualizar(float dt, Uint32 agora) {
   if (base - alvo > AJ_BASE - AJ_TOPO) alvo = base - (AJ_BASE - AJ_TOPO);
   if (topo - alvo < 0.0f)              alvo = topo;
   if (alvo < 0.0f) alvo = 0.0f;
-  scrollY = anim_mola(scrollY, alvo, dt, NV_MOLA_SCROLL);
+  scrollY = ajustes_animacoes_reduzidas() ? alvo : anim_mola(scrollY, alvo, dt, NV_MOLA_SCROLL);
 }
 
 // Texto do valor de uma linha. Buffer estatico porque so uma linha e desenhada
@@ -504,7 +746,7 @@ void ajustes_atualizar(float dt, Uint32 agora) {
 static const char *textoValor(int op) {
   static char buf[48];
   const Opcao *o = &OPCOES[op];
-  if (o->tipo == OP_LEITURA) return textoLeitura(op);
+  if (o->tipo == OP_LEITURA || o->tipo == OP_ACAO) return textoLeitura(op);
   if (o->tipo == OP_NUMERO) {
     snprintf(buf, sizeof buf, "%d%s", valor[op], o->sufixo ? o->sufixo : "");
     return buf;
@@ -522,30 +764,27 @@ static void desenhaLinha(int op, float y, float f) {
   int desligada = inativa(op);
   int podeMudar = mutavel(op);
   GfxRect linha = { AJ_LISTA_X, y, AJ_LISTA_W, AJ_LINHA_H };
-  // Aqui esta a diferenca visual entre mudavel e nao mudavel: a pilula clara com
-  // texto escuro e a marca de "isto responde ao controle". A linha de leitura e
-  // a inativa recebem so um realce apagado e mantem o texto claro — elas mostram
-  // que o foco esta ali sem prometer interacao.
-  if (!podeMudar) {
-    gfx_cor(linha, AJ_RAIO, 1, 1, 1, (0.03f + 0.09f * f) * a);
-  } else {
-    float lum = 0.62f + 0.34f * f;
-    gfx_cor(linha, AJ_RAIO, lum, lum, lum, (0.06f + 0.86f * f) * a);
-  }
+  // Mesmo vocabulário do menu: superfície escura, texto claro e foco explícito.
+  gfx_cor(linha, AJ_RAIO, NV_COR_FOCO_R, NV_COR_FOCO_G, NV_COR_FOCO_B,
+          (0.34f + 0.66f * f) * a);
+  if (op == focoOp)
+    gfx_rect(linha, 0, GFX_ANEL, 0, NV_ANEL_FOCO / AJ_LINHA_H, 0,
+             AJ_RAIO, 0.96f, 0.96f, 0.97f, a);
 
   // Uma linha inativa fica visivelmente mais apagada QUE a de leitura: leitura e
   // informacao, inativa e "isto existe mas depende de outra coisa".
-  float aTexto = a * (desligada ? 0.42f : 1.0f);
-  int escuro = (podeMudar && f > 0.55f);
-  int cr = escuro ? 24 : (podeMudar ? 240 : 176);
-  TxtLinha rot = txt_linha(TXT_BODY, OPCOES[op].rotulo, cr, cr, cr, 255);
+  float aTexto = a * (desligada ? 0.65f : 1.0f);
+  int cr = podeMudar ? 240 : 192;
+  TxtLinha rot = txt_linha_corta(TXT_CALLOUT, OPCOES[op].rotulo,
+                                cr, cr, cr, 255, AJ_LISTA_W - 420.0f);
   txt_desenhar_alpha(rot, AJ_LISTA_X + AJ_PAD,
                      y + (AJ_LINHA_H - rot.h) * 0.5f, aTexto);
 
   const char *v = textoValor(op);
-  int cv = escuro ? 70 : (podeMudar ? 178 : 132);
-  TxtLinha val = txt_linha(TXT_BODY, v, cv, cv, cv, 255);
+  int cv = podeMudar ? 220 : 176;
+  TxtLinha val = txt_linha_corta(TXT_CALLOUT, v, cv, cv, cv, 255, 310.0f);
   float xDir = AJ_LISTA_X + AJ_LISTA_W - AJ_PAD;
+  float valorDir = xDir - 36.0f;
   float vy = y + (AJ_LINHA_H - val.h) * 0.5f;
 
   // Barra de preenchimento da linha numerica. Sem ela, "28%" nao diz nada sobre
@@ -554,16 +793,15 @@ static void desenhaLinha(int op, float y, float f) {
     const Opcao *o = &OPCOES[op];
     float t = (o->max > o->min)
             ? (float)(valor[op] - o->min) / (float)(o->max - o->min) : 0.0f;
-    float bw = 220.0f, bh = 6.0f;
-    float bx = xDir - val.w - 24.0f - bw;
-    float by = y + (AJ_LINHA_H - bh) * 0.5f;
+    float bw = 220.0f, bh = 4.0f;
+    float bx = valorDir - bw;
+    float by = y + AJ_LINHA_H - 17.0f;
+    vy -= 8.0f;
     GfxRect trilho = { bx, by, bw, bh };
     GfxRect cheio  = { bx, by, bw * anim_clamp(t, 0.0f, 1.0f), bh };
-    gfx_cor(trilho, 0.5f, escuro ? 0.10f : 1.0f, escuro ? 0.10f : 1.0f,
-            escuro ? 0.10f : 1.0f, 0.22f * aTexto);
+    gfx_cor(trilho, 0.5f, 0.94f, 0.94f, 0.96f, 0.22f * aTexto);
     if (cheio.w > 0.5f)
-      gfx_cor(cheio, 0.5f, escuro ? 0.10f : 1.0f, escuro ? 0.10f : 1.0f,
-              escuro ? 0.10f : 1.0f, 0.92f * aTexto);
+      gfx_cor(cheio, 0.5f, 0.94f, 0.94f, 0.96f, 0.92f * aTexto);
   }
 
   // As setas so aparecem na linha em foco que MUDA. Elas sao a instrucao: sem
@@ -572,12 +810,10 @@ static void desenhaLinha(int op, float y, float f) {
     TxtLinha dir = txt_linha(TXT_CAPTION2, "\xe2\x96\xb6", cv, cv, cv, 255);
     TxtLinha esq = txt_linha(TXT_CAPTION2, "\xe2\x97\x80", cv, cv, cv, 255);
     txt_desenhar_alpha(dir, xDir - dir.w, y + (AJ_LINHA_H - dir.h) * 0.5f, aTexto * f);
-    txt_desenhar_alpha(val, xDir - dir.w - 16.0f - val.w, vy, aTexto);
-    txt_desenhar_alpha(esq, xDir - dir.w - 16.0f - val.w - 16.0f - esq.w,
+    txt_desenhar_alpha(esq, valorDir - val.w - 16.0f - esq.w,
                        y + (AJ_LINHA_H - esq.h) * 0.5f, aTexto * f);
-  } else {
-    txt_desenhar_alpha(val, xDir - val.w, vy, aTexto);
   }
+  txt_desenhar_alpha(val, valorDir - val.w, vy, aTexto);
 }
 
 void ajustes_desenhar(Uint32 agora) {
@@ -585,11 +821,42 @@ void ajustes_desenhar(Uint32 agora) {
   // Fundo opaco proprio: a tela cobre tudo e nao pode depender de quem desenhou
   // antes dela — sem isto a home aparece entre as linhas da lista.
   GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
-  gfx_cor(tela, 0.0f, NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
+  // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
+  // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
+  // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill
+  // rate (gfx.c registra que DUAS camadas de tela cheia derrubavam a
+  // Mali-G71 para ~40fps). Nao repor sem antes mudar a cor do clear.
+  (void)tela;
 
   TxtLinha tit = txt_linha(TXT_TITULO1, "Ajustes", 255, 255, 255, 255);
   txt_desenhar(tit, AJ_LISTA_X, NV_MARGEM_Y);
 
+  int sec = secaoAtual();
+  char pos[80];
+  snprintf(pos, sizeof pos, "%s  ·  %d de %d", SECOES[sec].titulo,
+           focoOp - SECOES[sec].ini + 1, SECOES[sec].n);
+  TxtLinha contexto = txt_linha(TXT_CAPTION, pos, 178, 180, 186, 255);
+  txt_desenhar(contexto, AJ_LISTA_X, NV_MARGEM_Y + tit.h + 10.0f);
+
+  float hx = AJ_LISTA_X + AJ_LISTA_W + 52.0f;
+  float hw = NV_TELA_W - NV_MARGEM_X - hx;
+  if (hw > 240.0f) {
+    TxtLinha tipo = txt_linha(TXT_CAPTION, inativa(focoOp) ? "Opção indisponível"
+                        : soLeitura(focoOp) ? "Informação" : "Personalizar", 168, 171, 180, 255);
+    txt_desenhar(tipo, hx, AJ_TOPO + AJ_SEC_CABEC);
+    float hy = AJ_TOPO + AJ_SEC_CABEC + tipo.h + 22.0f;
+    hy += txt_bloco(TXT_HEADLINE, OPCOES[focoOp].rotulo, 237, 238, 242,
+                   hx, hy, hw, 40, 1, 3);
+    hy += 22.0f;
+    hy += txt_bloco(TXT_CAPTION, ajudaOpcao(focoOp), 183, 186, 194,
+                   hx, hy, hw, 32, 1, 7);
+    hy += 42.0f;
+    txt_bloco(TXT_CAPTION, "↑ ↓  Navegar\n← →  Alterar valor\nVoltar  Sair dos ajustes",
+              155, 159, 169, hx, hy, hw, 34, 1, 4);
+  }
+
+  gfx_recorte(AJ_LISTA_X - NV_ANEL_FOCO, AJ_TOPO,
+               AJ_LISTA_W + NV_ANEL_FOCO * 2, AJ_BASE - AJ_TOPO);
   float y = AJ_TOPO - scrollY;
   for (int s = 0; s < AJ_N_SECOES; s++) {
     if (s) y += AJ_SEC_GAP;
@@ -606,4 +873,18 @@ void ajustes_desenhar(Uint32 agora) {
       y += AJ_LINHA_H + AJ_LINHA_GAP;
     }
   }
+  gfx_sem_recorte();
+
+  float total = yDaOpcao(AJ_N - 1) + AJ_LINHA_H;
+  float janela = AJ_BASE - AJ_TOPO;
+  if (total > janela) {
+    float altura = janela * janela / total;
+    float sy = AJ_TOPO + (janela - altura) * anim_clamp(scrollY / (total - janela), 0, 1);
+    gfx_cor((GfxRect){ AJ_LISTA_X + AJ_LISTA_W + 18, AJ_TOPO, 3, janela },
+            0.5f, 0.60f, 0.62f, 0.66f, 0.14f);
+    gfx_cor((GfxRect){ AJ_LISTA_X + AJ_LISTA_W + 18, sy, 3, altura },
+            0.5f, 0.80f, 0.82f, 0.86f, 0.8f);
+  }
+  TxtLinha rodape = txt_linha(TXT_CAPTION, "PgUp / PgDn  Trocar seção", 156, 159, 168, 255);
+  txt_desenhar(rodape, AJ_LISTA_X, AJ_BASE + 20);
 }

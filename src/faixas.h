@@ -16,6 +16,10 @@
 void faixas_reiniciar(void);
 
 void faixas_abrir(void);
+// Abre com o foco JA na coluna pedida: 0 = audio, 1 = legenda. O player tem um
+// icone para cada, e abrir sempre no audio fazia os dois parecerem o mesmo
+// botao.
+void faixas_abrir_em(int col);
 int  faixas_aberta(void);
 void faixas_evento(const SDL_Event *e);
 void faixas_atualizar(float dt, Uint32 agora);

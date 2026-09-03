@@ -7,7 +7,7 @@
 #ifndef NV_FOCUS_H
 #define NV_FOCUS_H
 
-#define FOCUS_MAX_FILEIRAS 16
+#define FOCUS_MAX_FILEIRAS 32
 
 typedef struct {
   int fileira;

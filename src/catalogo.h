@@ -65,6 +65,7 @@ typedef struct {
   // e e isso que separa os dois casos no desenho.
   int  temporada, episodio;
   int  restanteMin;
+  char nomeEpisodio[120]; // titulo do episodio em andamento, nunca nome do arquivo
   // Temporadas que a serie tem, na ordem. Sai do campo `videos` do Cinemeta,
   // buscado quando o titulo abre. 0 = ainda nao se sabe (ou e filme), e as
   // abas caem no padrao de 3 que existia fixo.
@@ -77,6 +78,8 @@ typedef struct {
   int  naLista, naColecao;
   char imdb[16];
   char tipo[8];
+  // Autoria do feed social, separada dos metadados do filme.
+  char socialNome[96], socialSlug[128], socialAvatar[768], socialAcao[64];
   // Id do titulo no TMDB, quando a busca por imdb_id ja o resolveu (ver
   // fotosDoElenco em descoberta.c). Era descartado; e por ele que se chega a
   // COLECAO do filme, que o TMDB so expoe por id proprio.
@@ -105,6 +108,35 @@ typedef struct {
 // Le <dir>/catalogo.txt. Devolve quantos itens carregou (0 = nenhum, e quem
 // chama deve seguir com o que tiver).
 int  cat_carregar(const char *dirArte);
+
+// --- CACHE EM DISCO DO CATALOGO MONTADO PELA REDE ----------------------------
+//
+// Medido na TV: 14,5 s entre abrir o app e o catalogo da rede estar completo, e
+// TODA abertura refazia os ~30 pedidos. O catalogo do PACOTE (catalogo.txt)
+// cobria esse vao com 40 titulos estaticos que nao sao os do dono.
+//
+// Aqui o que a descoberta montou e gravado como esta na memoria e relido na
+// proxima abertura, antes de qualquer rede. A rede continua rodando por cima e
+// substitui quando chega — o cache nao e a verdade, e o que mostrar enquanto a
+// verdade nao chega.
+//
+// Formato BINARIO e nao texto: CatItem e POD (so vetores de char e inteiros,
+// nenhum ponteiro), entao gravar em bloco e correto e dispensa um serializador
+// que teria de ser mantido em sincronia com a struct a cada campo novo. O
+// cabecalho guarda `sizeof(CatItem)` e uma versao: se a struct mudar, o arquivo
+// e RECUSADO em vez de lido torto. Ler lixo aqui seria pior que nao ter cache.
+int  cat_gravar_cache(const char *dirArte);
+// Devolve 1 se carregou. Chamar DEPOIS de cat_carregar: ele substitui o
+// catalogo do pacote quando o cache existe e e valido.
+int  cat_ler_cache(const char *dirArte);
+// 1 enquanto o que esta na tela veio do CACHE, e nao da rede desta sessao.
+//
+// A descoberta publica cada fileira assim que ela chega, o que e certo numa
+// tela vazia e ERRADO sobre o cache: a home iria de 16 fileiras para 1 e
+// voltaria a crescer na frente do dono. Com o cache no ar, ela espera o
+// catalogo completo. Sem cache, publica em partes como antes.
+int  cat_do_cache(void);
+void cat_cache_substituido(void);
 int  cat_n(void);
 const CatItem *cat_item(int i);
 
@@ -114,12 +146,25 @@ const CatItem *cat_item(int i);
 // Existe para abrir um titulo a partir de um id que veio de FORA do catalogo —
 // a filmografia de um ator e a aba "Mais como este" devolvem tt..., e sem esta
 // busca nao haveria como saber se aquele titulo e um dos que ja temos meta.
+// Onde progresso.txt e gravado. Passou a ser necessario com o login: o
+// progresso e dado DO USUARIO e nao pode morar na pasta do pacote, que e a
+// mesma para todo mundo que usar o aparelho. Chamar depois de cat_carregar.
+void cat_dir_gravacao(const char *dir);
+
 int cat_indice_por_imdb(const char *imdb);
 
 // Acrescenta um titulo ao FIM e devolve o indice, ou -1. Para o titulo que veio
 // de fora do catalogo (filmografia de ator, "Mais como este"). Ver a nota sobre
 // a troca de bloco em catalogo.c.
 int cat_acrescentar(const CatItem *item);
+
+// Acrescenta `qtd` itens numa UNICA troca de bloco e escreve os indices em
+// `saidaIdx` (pode ser NULL). Devolve quantos entraram.
+//
+// Use este, e nao cat_acrescentar em laco, sempre que houver mais de um: aquele
+// copia o catalogo inteiro por chamada, e a busca chegava a mover dezenas de MB
+// no fio de desenho a cada tecla.
+int cat_acrescentar_lote(const CatItem *v, int qtd, int *saidaIdx);
 
 // Atualiza o espelho local de "esta na watchlist". A verdade e o Trakt, mas
 // esperar o proximo ciclo de descoberta para o botao mudar de cara faria o
@@ -135,6 +180,7 @@ void cat_definir_na_lista(int i, int naLista);
 // enquanto o que este app grava ganha do que veio de la, que e o certo, porque
 // e mais recente.
 void cat_salvar_progresso(int indice, double posSeg, double durSeg);
+void cat_salvar_progresso_ep(int indice, double posSeg, double durSeg, int temporada, int episodio);
 
 // Episodios do titulo `indiceItem`. Filme devolve 0 — e o que a tela usa para
 // decidir se mostra a secao de episodios.
@@ -165,6 +211,16 @@ typedef struct {
   char chave[192];   // homeCatalogKey: <addonId>_<tipo>_<catalogoId>
   char titulo[96];   // ja formatado, com o sufixo de tipo
   char tipo[8];      // "movie" | "series"
+  // DE ONDE A FILEIRA VEIO. A chave acima identifica o catalogo mas nao serve
+  // para CHAMAR de novo: ela carrega o id do ADDON, nao o endereco dele.
+  // Sem estes dois nao ha como pedir a continuacao da lista, que e o que a tela
+  // "Ver tudo" faz — ela chama o mesmo catalogo com `skip`.
+  // 600 e nao 300: o Xperience embute um JWT no CAMINHO e a base dele tem 367
+  // caracteres. Com 300 ela era truncada em silencio, a URL montada aqui virava
+  // outra coisa e o catalogo respondia sem `metas` — a tela "Ver tudo" abria
+  // vazia sem nenhum erro. addons.c ja usa 600 pelo mesmo motivo.
+  char base[600];
+  char catId[96];
   // Janela no vetor de itens. As fileiras NAO tem vetor proprio: apontam para
   // o catalogo unico, que e o que a biblioteca e a busca varrem. Duplicar os
   // itens por fileira custaria ~3,5 KB por titulo repetido.

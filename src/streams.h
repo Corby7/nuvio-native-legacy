@@ -8,31 +8,39 @@
 // preferido — um app que abre a lista de fontes toda vez que o melhor formato
 // falta transfere ao usuario um trabalho que e da maquina.
 //
-// LIMITE DE HOJE, escrito para nao enganar: nao ha addon ligado nem pipeline de
-// video no app nativo. As fontes abaixo sao um CONJUNTO DE EXEMPLO, marcado
-// como tal em streams.c, que existe para exercitar a ordenacao e a folha. Quem
-// ligar os addons de verdade so precisa preencher `stream_definir_lista`.
+// Lista real dos addons. Resposta vazia permanece vazia, sem fontes de exemplo.
 #ifndef NV_STREAMS_H
 #define NV_STREAMS_H
 #include <SDL2/SDL.h>
+#include <stdint.h>
 
-#define STREAM_MAX 12
+// A lista cresce conforme a resposta dos addons; a UI virtualiza as linhas.
 
 typedef struct {
-  char rotulo[96];      // "Nuvio · 4K HDR"
-  char provedor[40];
+  char rotulo[192];     // Nome curto da fonte
+  char provedor[96];
   // 1024 e nao 512. MEDIDO: os links de reproducao do AIOStreams tem 525 a 547
   // caracteres (dois segmentos assinados), e com 512 TODOS eram cortados em
   // silencio. O servidor entao respondia com um MP4 de aviso de 120s que TOCA
   // NORMALMENTE — o app parecia funcionar e mostrava o cartao de erro. Nao ha
   // erro para detectar nesse caminho, so o tamanho do campo.
-  char url[1024];
+  char url[4096];
   int  altura;          // 2160, 1080, 720...
   int  dolbyVision;
   int  dolbyAtmos;
+  uint64_t badges;     // classificados uma vez, nunca regex no desenho
   int  mp4;             // 1 = MP4 progressivo; 0 = HLS ou outro
   long tamanhoMB;       // 0 quando desconhecido
+  char descricao[2048];
+  char arquivo[512];
 } Stream;
+
+// Parser sem rede: o chamador libera *saida. Retorna -1 se a alocacao falhar.
+int stream_extrair(const char *json, const char *provedor, Stream **saida);
+void stream_definir_atual(int indice);
+int stream_atual(void);
+void stream_folha_contexto(const char *texto);
+int stream_folha_recarregar(void);
 
 // Substitui a lista do titulo corrente. Chamar quando os addons responderem.
 void stream_definir_lista(const Stream *lista, int n);

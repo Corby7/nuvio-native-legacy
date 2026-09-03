@@ -10,10 +10,7 @@
 // entrada. E esse atraso que produz a leitura "entrou e entao se abriu"; com uma
 // mola so, a barra aparece ja no tamanho final e o efeito some.
 //
-// Nao ha arquivo de icone no projeto, entao os quatro icones sao desenhados com
-// gfx_cor. Ver o comentario de cada um: o telhado da casa e uma escada de barras
-// porque nao existe rotacao no gfx, e o cabo da lupa e um degrau de tres
-// quadradinhos pelo mesmo motivo.
+// Icones derivados dos SVGs originais do sidebar, com alpha e recortes reais.
 #include "menu.h"
 #include "gfx.h"
 #include "text.h"
@@ -25,23 +22,46 @@
 // bastante para o rotulo mais comprido ("Biblioteca") nao encostar na borda.
 #define NV_MENU_W_ICONE   NV_LEGACY_RAIL_W
 #define NV_MENU_W_ABERTO  392.0f
-#define NV_MENU_LINHA_H   104.0f
-#define NV_MENU_ICONE      44.0f
+#define NV_MENU_LINHA_H    96.0f
+#define NV_MENU_ICONE      38.0f
 // O centro do icone e o mesmo nas duas larguras: no aparelho o icone NAO anda
 // quando a barra abre, so o rotulo entra ao lado dele. Se o icone deslizasse
 // junto, a abertura viraria um empurrao lateral em vez de uma revelacao.
 #define NV_MENU_ICONE_CX  (NV_MENU_W_ICONE * 0.5f)
-#define NV_MENU_ROTULO_X  108.0f
-#define NV_MENU_PILL_PAD   12.0f
-#define NV_MENU_RAIO_PILL  0.30f
+#define NV_MENU_ROTULO_X  112.0f
+#define NV_MENU_PILL_PAD   20.0f
+#define NV_MENU_RAIO_PILL  0.20f
 // Quanto o conteudo a direita escurece com a barra aberta. Sem isso o menu
 // disputa atencao com a arte do hero, que e clara e ocupa a tela toda.
 #define NV_MENU_VEU        0.58f
-// Mola da largura, deliberadamente mais frouxa que NV_MOLA_TELA: e a diferenca
-// entre as duas que cria o atraso descrito no topo.
-#define NV_MENU_MOLA_EXP   6.5f
+// TEMPO DE ABRIR E DE FECHAR, com relogio proprio.
+//
+// A referencia nao tem barra lateral nenhuma na home — LEFT e UP a partir do
+// primeiro card sobem para os botoes do hero e param ali; nao ha rail para
+// medir. O unico overlay comparavel que consegui abrir la foi a folha de
+// contexto da tecla MENU, e ela da o tempo e a FORMA do veu:
+//
+//   fechar (medida limpa, 10 quadros seguidos, sem perda):
+//     16ms 0,00 | 33 0,09 | 50 0,19 | 66 0,29 | 83 0,38 | 100 0,49
+//     117 0,60 | 133 0,73 | 151 0,84 | 166 0,98
+//   ou seja RAMPA RETA, ~0,10 a cada 17 ms, terminando em ~150 ms de percurso.
+//   abrir: mesma rampa reta, ~0,0044/ms, o que da ~230 ms de percurso.
+//
+// Dois achados que a mola nao reproduzia: o veu e LINEAR (mola nenhuma e), e
+// FECHAR e bem mais rapido que ABRIR. NV_MOLA_TELA (9,0) dava 333 ms simetricos
+// e com a partida mais veloz do percurso, que e o oposto de uma rampa.
+#define NV_MENU_ABRIR_MS  230.0f
+#define NV_MENU_FECHAR_MS 150.0f
+// A largura continua ATRASADA em relacao a entrada — e o efeito "entrou e
+// entao se abriu" descrito no topo do arquivo. Nao ha medida da referencia para
+// ele (la nao existe esta barra); o que mudou foi so o tempo total, agora
+// amarrado ao mesmo relogio em vez de uma mola de rigidez solta.
+#define NV_MENU_EXP_LENTO  1.6f
 
-static const char *ROTULOS[MENU_N] = { "Buscar", "Inicio", "Biblioteca", "Ajustes" };
+// "Inicio" sem acento era erro de portugues NA TELA. E "Busca", nao "Buscar":
+// os outros tres sao substantivos (Biblioteca, Ajustes) e o verbo destoava.
+// Rotulos e ordem conferidos na referencia.
+static const char *ROTULOS[MENU_N] = { "Início", "Busca", "Biblioteca", "Perfil e Stats", "Ajustes" };
 
 static int   aberto  = 0;
 static int   destino = MENU_INICIO;
@@ -134,8 +154,9 @@ void menu_atualizar(float dt, Uint32 agora) {
     return;
   }
   float alvo = aberto ? 1.0f : 0.0f;
-  desliza = anim_mola(desliza, alvo, dt, NV_MOLA_TELA);
-  expande = anim_mola(expande, alvo, dt, NV_MENU_MOLA_EXP);
+  float ms   = aberto ? NV_MENU_ABRIR_MS : NV_MENU_FECHAR_MS;
+  desliza = anim_rampa(desliza, alvo, dt, ms);
+  expande = anim_rampa(expande, alvo, dt, ms * NV_MENU_EXP_LENTO);
   for (int i = 0; i < MENU_N; i++) {
     float a = (aberto && i == linha) ? 1.0f : 0.0f;
     animFoco[i] = anim_mola(animFoco[i], a, dt,
@@ -143,78 +164,11 @@ void menu_atualizar(float dt, Uint32 agora) {
   }
 }
 
-// --- Icones ------------------------------------------------------------------
-// Todos recebem o CENTRO e o lado `s`, e todas as medidas sao fracoes de `s`:
-// assim o icone acompanha qualquer mudanca de NV_MENU_ICONE sem retoque.
-
-// Lupa: disco cheio mais um cabo. O disco e cheio, e nao um anel, porque anel
-// exigiria furar o meio com a cor do painel — e durante o deslize o painel
-// ainda esta translucido, entao o furo apareceria com a cor errada.
-// O cabo e uma escada de tres quadradinhos sobrepostos: gfx nao tem rotacao, e
-// uma barra diagonal de verdade nao existe. Sobrepostos e com canto arredondado
-// eles se fundem numa diagonal continua.
-static void iconeBuscar(float cx, float cy, float s, float r, float g, float b, float a) {
-  GfxRect disco = { cx - 0.34f * s, cy - 0.40f * s, 0.62f * s, 0.62f * s };
-  gfx_cor(disco, 0.5f, r, g, b, a);
-  for (int i = 0; i < 3; i++) {
-    float t = i * 0.085f * s;
-    GfxRect p = { cx + 0.14f * s + t, cy + 0.14f * s + t, 0.17f * s, 0.17f * s };
-    gfx_cor(p, 0.5f, r, g, b, a);
-  }
-}
-
-// Casa: corpo quadrado e telhado em escada. Nove degraus de largura crescente,
-// com as pontas arredondadas para que a serrilha (menos de 2px por degrau em
-// 1080p) se dissolva no anti-aliasing do SDF em vez de virar dente visivel.
-static void iconeInicio(float cx, float cy, float s, float r, float g, float b, float a) {
-  const int N = 9;
-  float topo = cy - 0.44f * s, alt = 0.44f * s / N;
-  for (int i = 0; i < N; i++) {
-    float w = anim_mistura(0.16f * s, 0.80f * s, (i + 1) / (float)N);
-    // +0.6 na altura: sem a sobreposicao aparece uma linha de fundo entre os
-    // degraus quando o painel esta translucido.
-    GfxRect d = { cx - w * 0.5f, topo + i * alt, w, alt + 0.6f };
-    gfx_cor(d, 0.35f, r, g, b, a);
-  }
-  GfxRect corpo = { cx - 0.30f * s, cy - 0.02f * s, 0.60f * s, 0.44f * s };
-  gfx_cor(corpo, 0.12f, r, g, b, a);
-}
-
-// Biblioteca: duas barras empilhadas, a de cima mais estreita — a leitura de
-// "pilha" vem da diferenca de largura, nao do numero de barras. Com as duas
-// iguais o icone vira um sinal de igual.
-static void iconeBiblioteca(float cx, float cy, float s, float r, float g, float b, float a) {
-  GfxRect topo  = { cx - 0.22f * s, cy - 0.34f * s, 0.44f * s, 0.20f * s };
-  GfxRect base  = { cx - 0.36f * s, cy - 0.06f * s, 0.72f * s, 0.44f * s };
-  gfx_cor(topo, 0.30f, r, g, b, a * 0.80f);
-  gfx_cor(base, 0.22f, r, g, b, a);
-}
-
-// Ajustes: engrenagem aproximada por um disco com oito dentes. Os dentes sao
-// quadrados sem rotacao — nos 45 graus eles entram no disco por um canto, e no
-// tamanho do icone isso le como dente, nao como defeito. Um anel central nao
-// entra pelo mesmo motivo da lupa: nao da para furar o painel.
-static void iconeAjustes(float cx, float cy, float s, float r, float g, float b, float a) {
-  static const float DIR[8][2] = {
-    { 1, 0 }, { 0.7071f, 0.7071f }, { 0, 1 }, { -0.7071f, 0.7071f },
-    { -1, 0 }, { -0.7071f, -0.7071f }, { 0, -1 }, { 0.7071f, -0.7071f }
-  };
-  float rd = 0.34f * s, d = 0.19f * s;
-  for (int i = 0; i < 8; i++) {
-    GfxRect t = { cx + DIR[i][0] * rd - d * 0.5f, cy + DIR[i][1] * rd - d * 0.5f, d, d };
-    gfx_cor(t, 0.30f, r, g, b, a);
-  }
-  GfxRect disco = { cx - 0.30f * s, cy - 0.30f * s, 0.60f * s, 0.60f * s };
-  gfx_cor(disco, 0.5f, r, g, b, a);
-}
-
+// Mesmos vetores do sidebar oficial, rasterizados no build e tintados pelo shader.
 static void icone(int d, float cx, float cy, float s, float r, float g, float b, float a) {
-  switch (d) {
-    case MENU_BUSCAR:     iconeBuscar(cx, cy, s, r, g, b, a); break;
-    case MENU_INICIO:     iconeInicio(cx, cy, s, r, g, b, a); break;
-    case MENU_BIBLIOTECA: iconeBiblioteca(cx, cy, s, r, g, b, a); break;
-    default:              iconeAjustes(cx, cy, s, r, g, b, a); break;
-  }
+  static const char *nomes[MENU_N] = {"menu_home", "menu_search", "menu_library", "menu_profile", "menu_settings"};
+  if (d < 0 || d >= MENU_N) return;
+  gfx_icone((GfxRect){cx-s*.5f, cy-s*.5f, s, s}, nomes[d], r, g, b, a);
 }
 
 void menu_desenhar(Uint32 agora) {
@@ -226,13 +180,16 @@ void menu_desenhar(Uint32 agora) {
   // camada quando ganha foco. O port ja movia o conteudo para 104 nesse caso
   // (ajustes_conteudo_x), mas continuava pintando os 144px da rail por baixo
   // dele: uma faixa escura sob o primeiro card, sem nada em cima.
-  if (!aberto && !ajustes_rail_recolhida()) desenhaRailFixa();
+  if (!aberto && desliza < .002f && !ajustes_rail_recolhida()) desenhaRailFixa();
   if (!aberto && desliza < 0.002f) return;
 
-  float w = anim_mistura(NV_MENU_W_ICONE, NV_MENU_W_ABERTO, expande);
-  // A barra desliza a partir da propria largura: em desliza=0 ela esta inteira
-  // fora da tela, qualquer que seja o estagio da expansao.
-  float px = -w * (1.0f - desliza);
+  float w = anim_mistura(NV_MENU_W_ICONE, NV_MENU_W_ABERTO, anim_suave(expande));
+  // O VEU usa a rampa CRUA: a medida da referencia e uma reta (ver
+  // NV_MENU_ABRIR_MS). A POSICAO do painel usa a mesma rampa suavizada — um
+  // bloco desse tamanho parando de vez no fim do percurso le como corte, e a
+  // referencia comeca devagar em tudo que desliza (ver anim_mola2 em anim.h).
+  float entrada = anim_suave(desliza);
+  float px = -w * (1.0f - entrada);
 
   GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
   gfx_cor(tela, 0.0f, 0, 0, 0, NV_MENU_VEU * desliza);
@@ -241,7 +198,7 @@ void menu_desenhar(Uint32 agora) {
   // fundo da home ele precisa de uma aresta propria, senao a barra parece um
   // pedaco da tela que escureceu sozinho.
   GfxRect painel = { px, 0, w, NV_TELA_H };
-  gfx_cor(painel, 0.0f, 0.075f, 0.078f, 0.086f, 0.97f * desliza);
+  gfx_cor(painel, 0.0f, 0.075f, 0.078f, 0.086f, 0.97f * entrada);
 
   // Tudo daqui para baixo fica preso ao painel. Sem o recorte, o rotulo — que e
   // desenhado no x fixo do texto — vaza para o conteudo enquanto a barra ainda
@@ -253,18 +210,32 @@ void menu_desenhar(Uint32 agora) {
     float f = animFoco[i];
     float cy = y + NV_MENU_LINHA_H * 0.5f;
 
+    if (i == destino && f < .99f) {
+      GfxRect atual = {px + NV_MENU_PILL_PAD, y + 9, w - NV_MENU_PILL_PAD*2, NV_MENU_LINHA_H - 18};
+      gfx_cor(atual, NV_MENU_RAIO_PILL, .16f, .17f, .19f, .6f * (1-f) * desliza);
+    }
     if (f > 0.01f) {
       GfxRect pill = { px + NV_MENU_PILL_PAD, y + 7.0f,
                        w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_LINHA_H - 14.0f };
-      gfx_cor(pill, NV_MENU_RAIO_PILL, 0.93f, 0.93f, 0.95f, 0.96f * f * desliza);
+      // PILULA ESCURA com anel branco, nao pilula clara com texto escuro.
+      // MEDIDO na referencia: item focado tem fundo #303030 e texto #FFFFFF —
+      // o token --focus-bg, que o CSS do web tambem declara. O nosso invertia
+      // (fundo #E4E4E9, texto escuro), e #E4E4E9 nao era cor de sistema
+      // nenhuma: nem branco, nem o #F5F5F5 de --secondary-color.
+      { GfxRect anel = { pill.x - NV_ANEL_FOCO, pill.y - NV_ANEL_FOCO,
+                         pill.w + NV_ANEL_FOCO * 2, pill.h + NV_ANEL_FOCO * 2 };
+        float raio = (pill.h * NV_MENU_RAIO_PILL + NV_ANEL_FOCO) / anel.h;
+        gfx_cor(anel, raio, 1, 1, 1, f * desliza); }
+      gfx_cor(pill, NV_MENU_RAIO_PILL, NV_COR_FOCO_R, NV_COR_FOCO_G,
+              NV_COR_FOCO_B, f * desliza);
     }
 
-    // Tres estados, e os tres precisam existir: em foco (tinta escura sobre a
-    // pilula clara), destino em vigor (branco, para o usuario achar onde esta
+    // Tres estados, e os tres precisam existir: em foco (texto BRANCO sobre a
+    // pilula escura), destino em vigor (branco, para o usuario achar onde esta
     // sem mover o foco) e o resto (cinza). Com so dois estados, abrir o menu
     // apaga a indicacao de onde voce estava.
     int atual = (i == destino);
-    float lum = anim_mistura(atual ? 1.0f : 0.62f, 0.13f, f);
+    float lum = anim_mistura(atual ? 1.0f : 0.62f, 1.0f, f);
     float alpha = desliza * anim_mistura(atual ? 1.0f : 0.85f, 1.0f, f);
 
     icone(i, px + NV_MENU_ICONE_CX, cy, NV_MENU_ICONE, lum, lum, lum, alpha);
@@ -272,10 +243,11 @@ void menu_desenhar(Uint32 agora) {
     // O rotulo entra com a largura, nao antes dela: `expande` ao quadrado
     // segura a palavra ate a barra ter espaco de verdade, senao ela nasce
     // espremida contra o icone.
-    float aRot = expande * expande * desliza;
+    float aRot = expande * expande * entrada;
     if (aRot > 0.01f) {
       int c = (int)(lum * 255.0f + 0.5f);
-      TxtLinha l = txt_linha(TXT_HEADLINE, ROTULOS[i], c, c, c, 255);
+      TxtLinha l = txt_linha_corta(TXT_BODY, ROTULOS[i], c, c, c, 255,
+                                   NV_MENU_W_ABERTO - NV_MENU_ROTULO_X - 28);
       txt_desenhar_alpha(l, px + NV_MENU_ROTULO_X, cy - l.h * 0.5f, aRot);
     }
   }

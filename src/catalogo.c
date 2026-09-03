@@ -1,4 +1,5 @@
 #include "catalogo.h"
+#include "descoberta.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -8,6 +9,9 @@ static CatItem *itens;
 static CatFileira fils[CAT_FIL_MAX];
 static int nFils;
 static int nAlocado;
+// 1 enquanto o catalogo na tela veio do cache em disco, e nao da rede desta
+// sessao. Ver a nota em catalogo.h.
+static int veioDoCache;
 
 // Garante espaco para `quero` itens. Devolve 0 se nao deu (e o chamador segue
 // com o que ja tinha, que e melhor que perder tudo).
@@ -86,6 +90,28 @@ int cat_carregar(const char *dirArte) {
     else it->logo[0] = 0;
     p = campo(p, it->titulo, sizeof it->titulo);
     p = campo(p, it->genero, sizeof it->genero);
+    // O catalogo do pacote guarda o genero JA COMPOSTO e em ingles
+    // ("Filme  ·  Science Fiction  ·  Action"). Traduz cada pedaco entre os
+    // separadores; o primeiro ("Filme"/"Programa de TV") ja vem em portugues e
+    // atravessa a tabela sem mudanca. Feito aqui, na leitura, porque `genero` e
+    // lido por varias telas e traduzir no desenho deixaria cada uma resolver
+    // por conta propria.
+    { char saida[sizeof it->genero]; size_t o = 0;
+      const char *q = it->genero;
+      const char *SEP = "  \xc2\xb7  ";
+      while (*q && o + 1 < sizeof saida) {
+        const char *sp = strstr(q, SEP);
+        char parte[64]; size_t n = sp ? (size_t)(sp - q) : strlen(q);
+        const char *pt;
+        if (n >= sizeof parte) n = sizeof parte - 1;
+        memcpy(parte, q, n); parte[n] = 0;
+        pt = desc_genero_pt(parte);
+        o += (size_t)snprintf(saida + o, sizeof saida - o, "%s%s",
+                              o ? SEP : "", pt);
+        if (!sp) break;
+        q = sp + strlen(SEP);
+      }
+      if (o) snprintf(it->genero, sizeof it->genero, "%s", saida); }
     p = campo(p, it->meta, sizeof it->meta);
     p = campo(p, it->classificacao, sizeof it->classificacao);
     campo(p, it->sinopse, sizeof it->sinopse);
@@ -196,7 +222,8 @@ int cat_carregar(const char *dirArte) {
     if (fp) {
       while (fgets(linha, sizeof linha, fp)) {
         char id[24]; double pos, dur; int i;
-        if (sscanf(linha, "%23s %lf %lf", id, &pos, &dur) != 3 || dur <= 1.0) continue;
+        int temporada = 0, episodio = 0;
+        if (sscanf(linha, "%23s %lf %lf %d %d", id, &pos, &dur, &temporada, &episodio) < 3 || dur <= 1.0) continue;
         for (i = 0; i < n; i++) {
           // O id do catalogo pode trazer episodio ("tt123:4:9"); comparar so o
           // prefixo do titulo, que e o que identifica a obra.
@@ -204,6 +231,11 @@ int cat_carregar(const char *dirArte) {
               (itens[i].imdb[strlen(id)] == 0 || itens[i].imdb[strlen(id)] == ':')) {
             itens[i].progresso = (int)(100.0 * pos / dur);
             itens[i].restanteMin = (int)((dur - pos) / 60.0 + 0.5);
+            if(temporada>0 && episodio>0) {
+              if(itens[i].temporada!=temporada || itens[i].episodio!=episodio)
+                itens[i].nomeEpisodio[0]=0;
+              itens[i].temporada=temporada; itens[i].episodio=episodio;
+            }
             aplicados++;
             break;
           }
@@ -259,6 +291,101 @@ int cat_carregar(const char *dirArte) {
   return n;
 }
 
+// --- CACHE EM DISCO ----------------------------------------------------------
+//
+// Ver a nota em catalogo.h. O cabecalho carrega a versao E o sizeof(CatItem):
+// e o sizeof que protege de verdade, porque acrescentar um campo na struct
+// muda o layout sem que ninguem se lembre de subir a versao a mao.
+#define CACHE_MAGIA  0x4E56434Bu   /* "NVCK" */
+#define CACHE_VERSAO 1
+
+typedef struct {
+  unsigned magia, versao, tamItem, tamFileira;
+  int nItens, nFileiras;
+} CacheCab;
+
+static void caminhoCache(const char *dirArte, char *dst, size_t tam) {
+  snprintf(dst, tam, "%s/catalogo-rede.bin", dirArte ? dirArte : ".");
+}
+
+// Chamado pela descoberta quando o catalogo COMPLETO da rede substitui o do
+// cache. A partir daqui a tela ja e a desta sessao.
+void cat_cache_substituido(void) { veioDoCache = 0; }
+
+int cat_gravar_cache(const char *dirArte) {
+  char caminho[600], tmp[620];
+  CacheCab c;
+  FILE *f;
+  if (n < 1) return 0;
+  caminhoCache(dirArte, caminho, sizeof caminho);
+  // Grava num temporario e renomeia: quem le na proxima abertura nunca pega
+  // arquivo pela metade se o app for fechado no meio da escrita.
+  snprintf(tmp, sizeof tmp, "%s.tmp", caminho);
+  f = fopen(tmp, "wb");
+  if (!f) return 0;
+  c.magia = CACHE_MAGIA; c.versao = CACHE_VERSAO;
+  c.tamItem = (unsigned)sizeof(CatItem);
+  c.tamFileira = (unsigned)sizeof(CatFileira);
+  c.nItens = n; c.nFileiras = nFils;
+  if (fwrite(&c, sizeof c, 1, f) != 1 ||
+      fwrite(itens, sizeof(CatItem), (size_t)n, f) != (size_t)n ||
+      (nFils > 0 &&
+       fwrite(fils, sizeof(CatFileira), (size_t)nFils, f) != (size_t)nFils)) {
+    fclose(f); remove(tmp); return 0;
+  }
+  fclose(f);
+  if (rename(tmp, caminho) != 0) { remove(tmp); return 0; }
+  printf("[cat] cache gravado: %d titulos, %d fileiras\n", n, nFils);
+  fflush(stdout);
+  return 1;
+}
+
+int cat_ler_cache(const char *dirArte) {
+  char caminho[600];
+  CacheCab c;
+  FILE *f;
+  CatItem *novo;
+  CatFileira lidas[CAT_FIL_MAX];
+  int nLidas = 0;
+  caminhoCache(dirArte, caminho, sizeof caminho);
+  f = fopen(caminho, "rb");
+  if (!f) return 0;
+  if (fread(&c, sizeof c, 1, f) != 1) { fclose(f); return 0; }
+  // RECUSA em vez de ler torto. Struct diferente = arquivo de outra build.
+  if (c.magia != CACHE_MAGIA || c.versao != CACHE_VERSAO ||
+      c.tamItem != sizeof(CatItem) || c.tamFileira != sizeof(CatFileira) ||
+      c.nItens < 1 || c.nItens > CAT_MAX ||
+      c.nFileiras < 0 || c.nFileiras > CAT_FIL_MAX) {
+    fclose(f);
+    printf("[cat] cache descartado (formato de outra build)\n");
+    remove(caminho);
+    return 0;
+  }
+  novo = malloc(sizeof(CatItem) * (size_t)c.nItens);
+  if (!novo) { fclose(f); return 0; }
+  if (fread(novo, sizeof(CatItem), (size_t)c.nItens, f) != (size_t)c.nItens) {
+    free(novo); fclose(f); remove(caminho); return 0;
+  }
+  if (c.nFileiras > 0) {
+    if (fread(lidas, sizeof(CatFileira), (size_t)c.nFileiras, f)
+        != (size_t)c.nFileiras) {
+      free(novo); fclose(f); remove(caminho); return 0;
+    }
+    nLidas = c.nFileiras;
+  }
+  fclose(f);
+  // Reaproveita o caminho de troca de bloco, que ja e o seguro para o fio de
+  // desenho — e o que corta as janelas de fileira pelo tamanho real.
+  cat_definir_tudo(novo, c.nItens, lidas, nLidas);
+  veioDoCache = 1;
+  free(novo);
+  printf("[cat] cache lido: %d titulos, %d fileiras\n", c.nItens, nLidas);
+  fflush(stdout);
+  return 1;
+}
+
+int cat_do_cache(void) { return veioDoCache; }
+
 int cat_n(void) { return n; }
 
 const CatItem *cat_item(int i) {
@@ -273,6 +400,10 @@ static int mesmoTitulo(const char *a, const char *b) {
   return (!*a || *a == ':') && (!*b || *b == ':');
 }
 
+void cat_dir_gravacao(const char *dir) {
+  if (dir && *dir) snprintf(dirGravacao, sizeof dirGravacao, "%s", dir);
+}
+
 int cat_indice_por_imdb(const char *imdb) {
   int i;
   if (!imdb || !imdb[0]) return -1;
@@ -284,6 +415,10 @@ int cat_indice_por_imdb(const char *imdb) {
 }
 
 void cat_salvar_progresso(int indice, double posSeg, double durSeg) {
+  cat_salvar_progresso_ep(indice,posSeg,durSeg,0,0);
+}
+
+void cat_salvar_progresso_ep(int indice, double posSeg, double durSeg, int temporada, int episodio) {
   char caminho[600], tmp[600], linha[256];
   FILE *e, *s;
   const CatItem *it;
@@ -310,7 +445,7 @@ void cat_salvar_progresso(int indice, double posSeg, double durSeg) {
     }
     fclose(e);
   }
-  fprintf(s, "%s\t%.0f\t%.0f\n", it->imdb, posSeg, durSeg);
+  fprintf(s, "%s\t%.0f\t%.0f\t%d\t%d\n", it->imdb, posSeg, durSeg,temporada,episodio);
   fclose(s);
   // Gravar em temporario e renomear: um corte de energia no meio da escrita
   // deixaria o arquivo pela metade e o app subiria sem progresso nenhum.
@@ -318,6 +453,19 @@ void cat_salvar_progresso(int indice, double posSeg, double durSeg) {
 
   itens[indice].progresso = (int)(100.0 * posSeg / durSeg);
   itens[indice].restanteMin = (int)((durSeg - posSeg) / 60.0 + 0.5);
+  if(temporada>0 && episodio>0) {
+    if (itens[indice].temporada != temporada || itens[indice].episodio != episodio)
+      itens[indice].nomeEpisodio[0] = 0;
+    itens[indice].temporada=temporada;
+    itens[indice].episodio=episodio;
+    for (int e = 0; e < cat_n_episodios(indice); e++) {
+      const CatEp *ep = cat_episodio(indice, e);
+      if (ep && ep->temporada == temporada && ep->episodio == episodio) {
+        snprintf(itens[indice].nomeEpisodio, sizeof itens[indice].nomeEpisodio, "%s", ep->nome);
+        break;
+      }
+    }
+  }
 }
 
 int cat_n_episodios(int indiceItem) {
@@ -355,6 +503,37 @@ const CatFileira *cat_fileira(int r) {
 void cat_definir_na_lista(int i, int naLista) {
   if (n <= 0 || i < 0 || i >= n) return;
   itens[i].naLista = naLista ? 1 : 0;
+}
+
+// Acrescenta N de UMA VEZ. cat_acrescentar copia o catalogo inteiro a cada
+// chamada, e a busca a chamava POR RESULTADO: com 300 titulos no acervo sao
+// ~2,3 MB por copia, vezes 40 resultados, no fio de DESENHO, a cada tecla. Era
+// o travamento que aparecia como "a busca engasga quando digito".
+//
+// Uma troca de bloco so, seguindo a mesma ordem de cat_definir: zera `n` antes
+// de trocar o ponteiro (o desenho ve catalogo vazio por um quadro em vez de ler
+// memoria liberada) e nao libera o bloco velho aqui — um leitor pode estar
+// dentro dele; ele morre na proxima troca.
+int cat_acrescentar_lote(const CatItem *v, int qtd, int *saidaIdx) {
+  static CatItem *lixoLote;
+  CatItem *novo;
+  int novoN, k;
+  if (!v || qtd < 1 || n < 1) return 0;
+  if (n + qtd > CAT_MAX) qtd = CAT_MAX - n;
+  if (qtd < 1) return 0;
+  novoN = n + qtd;
+  novo = malloc(sizeof(CatItem) * (size_t)novoN);
+  if (!novo) return 0;
+  memcpy(novo, itens, sizeof(CatItem) * (size_t)n);
+  memcpy(&novo[n], v, sizeof(CatItem) * (size_t)qtd);
+  if (saidaIdx) for (k = 0; k < qtd; k++) saidaIdx[k] = n + k;
+  free(lixoLote);
+  lixoLote = itens;
+  itens = novo;
+  nAlocado = novoN;
+  n = novoN;
+  garantirFaixas(nAlocado);
+  return qtd;
 }
 
 int cat_acrescentar(const CatItem *item) {
@@ -444,13 +623,19 @@ void cat_definir_tudo(const CatItem *lista, int qtd,
     if (fp) {
       while (fgets(linha, sizeof linha, fp)) {
         char id[24]; double pos, dur;
-        if (sscanf(linha, "%23s %lf %lf", id, &pos, &dur) != 3 || dur <= 1.0) continue;
+        int temporada = 0, episodio = 0;
+        if (sscanf(linha, "%23s %lf %lf %d %d", id, &pos, &dur, &temporada, &episodio) < 3 || dur <= 1.0) continue;
         for (i = 0; i < n; i++) {
           size_t L = strlen(id);
           if (!strncmp(itens[i].imdb, id, L) &&
               (itens[i].imdb[L] == 0 || itens[i].imdb[L] == ':')) {
             itens[i].progresso = (int)(100.0 * pos / dur);
             itens[i].restanteMin = (int)((dur - pos) / 60.0 + 0.5);
+            if(temporada>0 && episodio>0) {
+              if(itens[i].temporada!=temporada || itens[i].episodio!=episodio)
+                itens[i].nomeEpisodio[0]=0;
+              itens[i].temporada=temporada; itens[i].episodio=episodio;
+            }
             break;
           }
         }
@@ -464,10 +649,16 @@ void cat_definir_episodios(int indiceItem, const CatEp *lista, int qtd) {
   int m = cat_n();
   if (!lista || qtd < 1 || m < 1) return;
   indiceItem = ((indiceItem % m) + m) % m;
-  if (qtd > 30) qtd = 30;
+  if (qtd > CAT_EP_MAX) qtd = CAT_EP_MAX;
   // Anexa no fim do vetor comum. Trocar de temporada varias vezes acumula, mas
   // o teto de CAT_EP_MAX segura e o custo de compactar nao se paga.
-  if (nEps + qtd > CAT_EP_MAX) nEps = 0;
+  if (nEps + qtd > CAT_EP_MAX) {
+    nEps = 0;
+    // Invalidar os indices antes de reutilizar o armazenamento: senao outra
+    // serie passa a exibir os episodios da obra que acabou de ser carregada.
+    memset(epQtd,0,(size_t)nAlocado*sizeof *epQtd);
+    memset(epIni,0,(size_t)nAlocado*sizeof *epIni);
+  }
   memcpy(&eps[nEps], lista, sizeof(CatEp) * (size_t)qtd);
   epIni[indiceItem] = nEps;
   epQtd[indiceItem] = qtd;

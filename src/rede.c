@@ -1,4 +1,5 @@
 #include "rede.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,6 +24,8 @@
 #define INFO_URL_FINAL    1048577
 #define OPT_POSTFIELDS      10015
 #define OPT_POST               47
+// CURLINFO_RESPONSE_CODE = CURLINFO_LONG (0x200000) + 2.
+#define INFO_RESPONSE_CODE   2097154
 
 static void *(*curl_init)(void);
 static int   (*curl_setopt)(void *, int, ...);
@@ -38,11 +41,22 @@ typedef struct { char *p; size_t n; } Balde;
 
 static char *rede_baixar_interno(const char *url, int segundos, long *tam,
                                  const char *const *cab);
+static char *rede_baixar_interno2(const char *url, int segundos, long *tam,
+                                  const char *const *cab, int *status);
+
+// Teto opcional de bytes para a proxima transferencia; 0 = sem teto. Existe
+// porque servidor que IGNORA o cabecalho Range responde 200 com o arquivo
+// inteiro, e nesse caso o cabecalho pedido nao limita nada.
+long rede_teto = 0;
 
 static size_t receber(void *dados, size_t tam, size_t qtd, void *u) {
   Balde *b = (Balde *)u;
   size_t bytes = tam * qtd;
-  char *novo = realloc(b->p, b->n + bytes + 1);
+  char *novo;
+  if (rede_teto > 0 && b->n >= (size_t)rede_teto) return 0;   // corta a conexao
+  if (rede_teto > 0 && b->n + bytes > (size_t)rede_teto)
+    bytes = (size_t)rede_teto - b->n;
+  novo = realloc(b->p, b->n + bytes + 1);
   if (!novo) return 0;              // devolver 0 aborta a transferencia
   b->p = novo;
   memcpy(b->p + b->n, dados, bytes);
@@ -51,15 +65,38 @@ static size_t receber(void *dados, size_t tam, size_t qtd, void *u) {
   return bytes;
 }
 
+// CARREGAMENTO DA LIBCURL, UMA VEZ SO E COM TRAVA.
+//
+// `curl_global_init` NAO e seguro entre fios — e a propria libcurl documenta
+// isso. Isto aqui era uma bandeira simples, e enquanto so a descoberta e dois
+// fios de decode chamavam, a corrida quase nunca acontecia. Ao acrescentar
+// QUATRO fios de rede para as artes, todos partindo no arranque, ela passou a
+// acontecer: dois fios entram com `pronto == 0`, os dois fazem dlopen e os dois
+// chamam curl_global_init ao mesmo tempo. O estado global fica corrompido e
+// TODO download passa a falhar — catalogos, addons e artes de uma vez, que foi
+// exatamente o que o dono viu depois do ultimo deploy.
+//
+// A trava e estatica e sem inicializacao dinamica de proposito: ela precisa
+// existir ANTES do primeiro fio, e um PTHREAD_MUTEX_INITIALIZER garante isso
+// sem depender de ninguem chamar nada primeiro.
+static pthread_mutex_t abrirTrava = PTHREAD_MUTEX_INITIALIZER;
+
 static int abrir(void) {
   void *h;
+  int r;
+  // Leitura rapida sem trava para o caso comum (ja carregado). Escrita de int
+  // e atomica nas arquiteturas em que este app roda; o que precisa de trava e a
+  // SEQUENCIA dlopen+global_init, nao a bandeira.
   if (pronto) return pronto > 0;
+  pthread_mutex_lock(&abrirTrava);
+  if (pronto) { r = pronto > 0; pthread_mutex_unlock(&abrirTrava); return r; }
   pronto = -1;
   h = dlopen("libcurl.so.5", RTLD_NOW);
   if (!h) h = dlopen("libcurl.so.4", RTLD_NOW);
   if (!h) h = dlopen("libcurl.4.dylib", RTLD_NOW);   // Mac
   if (!h) h = dlopen("libcurl.dylib", RTLD_NOW);
-  if (!h) { printf("[rede] sem libcurl: %s\n", dlerror()); return 0; }
+  if (!h) { printf("[rede] sem libcurl: %s\n", dlerror());
+            pthread_mutex_unlock(&abrirTrava); return 0; }
   *(void **)(&curl_init)    = dlsym(h, "curl_easy_init");
   *(void **)(&curl_setopt)  = dlsym(h, "curl_easy_setopt");
   *(void **)(&curl_perform) = dlsym(h, "curl_easy_perform");
@@ -70,12 +107,16 @@ static int abrir(void) {
   *(void **)(&curl_getinfo) = dlsym(h, "curl_easy_getinfo");
   if (!curl_init || !curl_setopt || !curl_perform) {
     printf("[rede] libcurl sem os simbolos esperados\n");
+    pthread_mutex_unlock(&abrirTrava);
     return 0;
   }
   if (curl_global) curl_global(3 /* CURL_GLOBAL_DEFAULT */);
   pronto = 1;
+  pthread_mutex_unlock(&abrirTrava);
   return 1;
 }
+
+void rede_preparar(void) { abrir(); }
 
 char *rede_baixar_bin(const char *url, int segundos, long *tam) {
   return rede_baixar_interno(url, segundos, tam, NULL);
@@ -85,15 +126,47 @@ char *rede_baixar(const char *url, int segundos) {
   return rede_baixar_interno(url, segundos, NULL, NULL);
 }
 
+char *rede_baixar_trecho(const char *url, int segundos, long ini, long fim,
+                         long *tam) {
+  char faixa[80];
+  const char *cab[2];
+  // Range e um cabecalho comum, entao o caminho com cabecalhos ja existente
+  // serve. Nao ha modo "binario com cabecalhos" separado porque
+  // rede_baixar_interno ja devolve o tamanho quando `tam` e passado — quem
+  // pediu texto e que ignora esse campo.
+  snprintf(faixa, sizeof faixa, "Range: bytes=%ld-%ld", ini, fim);
+  cab[0] = faixa; cab[1] = NULL;
+  // TETO DE VERDADE, e nao so o cabecalho. MEDIDO: um servidor que ignora o
+  // Range responde 200 com o arquivo INTEIRO — no teste vieram 31 MB para um
+  // pedido de 2 MB. Sem o teto, ler o cabecalho de um filme de 20 GB baixaria
+  // o filme. O corte e no recebedor, entao a conexao morre no limite em vez de
+  // esperar o fim.
+  rede_teto = fim - ini + 1;
+  { char *r = rede_baixar_interno(url, segundos, tam, cab);
+    rede_teto = 0;
+    return r; }
+}
+
 char *rede_baixar_com(const char *url, int segundos, const char *const *cab) {
   return rede_baixar_interno(url, segundos, NULL, cab);
 }
 
+char *rede_baixar_st(const char *url, int segundos, const char *const *cab,
+                     int *status) {
+  return rede_baixar_interno2(url, segundos, NULL, cab, status);
+}
+
 static char *rede_baixar_interno(const char *url, int segundos, long *tam,
                                  const char *const *cab) {
+  return rede_baixar_interno2(url, segundos, tam, cab, NULL);
+}
+
+static char *rede_baixar_interno2(const char *url, int segundos, long *tam,
+                                  const char *const *cab, int *status) {
   Balde b = { NULL, 0 };
   void *c, *lista = NULL;
   int r;
+  if (status) *status = 0;
   if (!url || !*url || !abrir()) return NULL;
   c = curl_init();
   if (!c) return NULL;
@@ -119,8 +192,39 @@ static char *rede_baixar_interno(const char *url, int segundos, long *tam,
     if (lista) curl_setopt(c, OPT_HTTPHEADER, lista);
   }
   r = curl_perform(c);
+  // STATUS HTTP, e nao so o codigo de erro da libcurl. MEDIDO: numa navegacao
+  // da home o log tinha 93 "decode falhou" e ZERO "[rede] falha" — ou seja, o
+  // curl_easy_perform devolvia 0 (sucesso de TRANSPORTE) para respostas que nao
+  // eram a imagem. Um 404, um 403 ou um 429 e uma transferencia bem-sucedida
+  // para a libcurl; quem tem de olhar o status e quem chama.
+  //
+  // Sem isto o erro chegava sem nome ao tex_cache, que so via "corpo curto" e
+  // devolvia 0 em silencio — e o unico sintoma era card sem arte. A assinatura
+  // de imagem que ja existe la pega o 404 com pagina de erro GRANDE; esta
+  // conferencia pega o resto, e diz QUAL foi o codigo.
+  //
+  // A EXCECAO e quem pediu `status`: para o Supabase, um 4xx nao e falha, e a
+  // resposta. O corpo do 404 diz QUAL funcao ou tabela nao existe (PGRST202 /
+  // PGRST205), e e essa string que distingue "servidor antigo" de "parametro
+  // errado". Jogar o corpo fora aqui apagaria a unica pista.
+  { long http = 0;
+    if (curl_getinfo) curl_getinfo(c, INFO_RESPONSE_CODE, &http);
+    if (status) *status = (int)http;
+    if (!r && http >= 400 && !status) {
+      curl_cleanup(c);
+      if (lista && slist_free) slist_free(lista);
+      free(b.p);
+      printf("[rede] HTTP %ld em %.60s\n", http, url);
+      fflush(stdout);
+      return NULL;
+    } }
   curl_cleanup(c);
   if (lista && slist_free) slist_free(lista);
+  // 23 = CURLE_WRITE_ERROR. Quando ha teto, ele e o resultado ESPERADO: o
+  // recebedor devolve menos bytes de proposito para cortar a conexao assim que
+  // enche. Nesse caso o que ja veio e exatamente o que se queria — tratar como
+  // falha jogaria fora o cabecalho inteiro que acabamos de baixar.
+  if (r == 23 && rede_teto > 0 && b.n > 0) r = 0;
   if (r != 0) { free(b.p); printf("[rede] falha %d em %.60s\n", r, url); return NULL; }
   if (tam) *tam = (long)b.n;
   return b.p;
@@ -156,9 +260,15 @@ int rede_url_final(const char *url, int segundos, char *dst, unsigned tam) {
 
 char *rede_postar(const char *url, int segundos, const char *const *cab,
                   const char *corpo) {
+  return rede_postar_st(url, segundos, cab, corpo, NULL);
+}
+
+char *rede_postar_st(const char *url, int segundos, const char *const *cab,
+                     const char *corpo, int *status) {
   Balde b = { NULL, 0 };
   void *c, *lista = NULL;
   int r;
+  if (status) *status = 0;
   if (!url || !*url || !abrir()) return NULL;
   c = curl_init();
   if (!c) return NULL;
@@ -179,8 +289,17 @@ char *rede_postar(const char *url, int segundos, const char *const *cab,
     if (lista) curl_setopt(c, OPT_HTTPHEADER, lista);
   }
   r = curl_perform(c);
+  // O codigo sai ANTES do cleanup: depois dele a alca nao existe mais.
+  if (status && !r && curl_getinfo) {
+    long codigo = 0;
+    curl_getinfo(c, INFO_RESPONSE_CODE, &codigo);
+    *status = (int)codigo;
+  }
   curl_cleanup(c);
   if (lista && slist_free) slist_free(lista);
+  // Falha de TRANSPORTE (r != 0) continua sendo NULL — ai nao houve resposta
+  // nenhuma. O corpo de um 4xx, ao contrario, e devolvido: e nele que o
+  // PostgREST explica o que faltou.
   if (r != 0) { free(b.p); return NULL; }
   return b.p ? b.p : strdup("");
 }

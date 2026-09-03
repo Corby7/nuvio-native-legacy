@@ -8,10 +8,17 @@
 #include <sys/stat.h>
 #include "gfx.h"
 #include "text.h"
+#include "marco.h"
+#include "rede.h"
 #include "tex_cache.h"
 #include "home.h"
 #include "text.h"
 #include "detail.h"
+#include "dados.h"
+#include "nuvem.h"
+#include "sessao.h"
+#include "perfis.h"
+#include "sync.h"
 #include "app.h"
 #include "video.h"
 #include "addons.h"
@@ -53,6 +60,49 @@ static void consome(const char *caminho) {
   FILE *f = fopen(caminho, "w");
   if (f) fclose(f);
 }
+
+// O pedido e NOVO? Guarda contra o arquivo que nao da para consumir.
+//
+// `consome` esvazia abrindo com "w" em vez de apagar, justamente por causa do
+// sticky bit do /tmp. Mas isso tambem falha quando o arquivo pertence a OUTRO
+// usuario: um pedido criado por ssh como root fica 644, e o app (uid 5152) nao
+// pode nem apagar nem truncar. O pedido entao vale para sempre.
+//
+// MEDIDO na TV do dono, e fui eu que causei: um /tmp/nuvio-shot-req esquecido
+// como root fez o app capturar a tela inteira (glReadPixels de 1920x1080 mais
+// 8 MB gravados) EM TODO QUADRO por horas — `aux` foi de 0,0 para 100,7 ms e o
+// app caiu de 60 para 9 fps. O sintoma que chegou foi "a interface ta lerda".
+//
+// Comparar a data de modificacao resolve sem depender de escrita: um pedido que
+// nao mudou desde o ultimo atendimento nao e um pedido novo.
+// A data so e consultada quando o consumo FALHA, e nao sempre: ela tem
+// resolucao de um segundo, e duas rajadas de tecla no mesmo segundo seriam
+// tratadas como a mesma. No caminho normal (arquivo do proprio app) o consumo
+// funciona e nada disto entra em jogo.
+static int pedidoNovo(const char *caminho, time_t *bloqueado) {
+  struct stat st;
+  if (stat(caminho, &st) != 0 || st.st_size <= 0) return 0;
+  // Pedido que ja foi atendido e nao pode ser esvaziado: ignora enquanto nao
+  // mudar. Sem isto ele vale para sempre e o trabalho e refeito por quadro.
+  if (*bloqueado && st.st_mtime == *bloqueado) return 0;
+  *bloqueado = 0;
+  return 1;
+}
+
+// Esvazia e confere. Devolve 0 quando NAO conseguiu — dono diferente, sticky
+// bit — e nesse caso marca o pedido para ser ignorado ate a data mudar.
+static int consomeOuBloqueia(const char *caminho, time_t *bloqueado) {
+  struct stat st;
+  consome(caminho);
+  if (stat(caminho, &st) == 0 && st.st_size > 0) {
+    *bloqueado = st.st_mtime;
+    printf("[main] %s nao pode ser consumido (dono diferente); ignorando\n",
+           caminho);
+    fflush(stdout);
+    return 0;
+  }
+  return 1;
+}
 // stat() e nao fopen+fseek: esta sondagem roda para TRES arquivos em TODO
 // quadro, e cada fopen paga alocacao de FILE e dois syscalls a mais so para
 // descobrir o tamanho. O stat responde a mesma pergunta com um syscall.
@@ -73,7 +123,8 @@ static void teclasInjetadas(void (*entregar)(const SDL_Event *)) {
     entregar(&up);
     soltarEm = 0;
   }
-  if (tamanhoDe("/tmp/nuvio-key") <= 0) return;
+  static time_t bloqueadoKey;
+  if (!pedidoNovo("/tmp/nuvio-key", &bloqueadoKey)) return;
   FILE *f = fopen("/tmp/nuvio-key", "r");
   if (!f) return;
   char linha[32];
@@ -100,7 +151,7 @@ static void teclasInjetadas(void (*entregar)(const SDL_Event *)) {
     else { e.type = SDL_KEYUP; entregar(&e); }
   }
   fclose(f);
-  consome("/tmp/nuvio-key");
+  consomeOuBloqueia("/tmp/nuvio-key", &bloqueadoKey);
 }
 
 // Tamanho do buffer de onde a captura le. Definido no arranque, junto com o
@@ -111,9 +162,10 @@ static int capW = (int)NV_TELA_W, capH = (int)NV_TELA_H;
 // o app toca. E o unico jeito de testar reproducao sem alguem no sofa — e o
 // video nao pode ser conferido por captura, porque vive em outro plano.
 static void videoSeSolicitado(void) {
+  static time_t bloqueado;
   char url[1024];
   FILE *f;
-  if (tamanhoDe("/tmp/nuvio-video") <= 0) return;
+  if (!pedidoNovo("/tmp/nuvio-video", &bloqueado)) return;
   f = fopen("/tmp/nuvio-video", "r");
   if (!f) return;
   if (fgets(url, sizeof url, f)) {
@@ -125,13 +177,13 @@ static void videoSeSolicitado(void) {
     else { video_tocar(url); video_janela(0, 0, 1920, 1080); }
   }
   fclose(f);
-  consome("/tmp/nuvio-video");
+  consomeOuBloqueia("/tmp/nuvio-video", &bloqueado);
 }
 
 static void capturaSeSolicitado(void) {
-  // Mesma armadilha do sticky bit: pedido vale enquanto tiver conteudo.
-  if (tamanhoDe("/tmp/nuvio-shot-req") <= 0) return;
-  consome("/tmp/nuvio-shot-req");
+  static time_t bloqueado;
+  if (!pedidoNovo("/tmp/nuvio-shot-req", &bloqueado)) return;
+  consomeOuBloqueia("/tmp/nuvio-shot-req", &bloqueado);
 
   // Le o DRAWABLE inteiro, nao 1920x1080 fixo: em tela retina o buffer e maior
   // que a janela, e ler o tamanho da janela captura so um quarto da imagem.
@@ -329,6 +381,12 @@ int main(int argc, char **argv) {
   gfx_tamanho_alvo(dw, dh);
   capW = dw; capH = dh;
 
+  // O relogio dos marcos comeca AQUI e nao no topo do main: o que vem antes e
+  // parse de argumento e SDL_Init, que nao dependem de nada nosso.
+  marco_iniciar();
+  // ANTES de tex_iniciar e de app_iniciar, que sao quem cria os fios de rede.
+  rede_preparar();
+  marco("gfx_iniciar");
   if (!gfx_iniciar()) return 1;
   // fonts/ fica ao lado de art/: derruba o ultimo componente do caminho da arte
   char dirRec[512];
@@ -336,17 +394,43 @@ int main(int argc, char **argv) {
   char *barra = strrchr(dirRec, '/');
   if (barra) *barra = 0;
   txt_iniciar(dirRec, (float)dw / NV_TELA_W);
-  tex_iniciar(96);
+  // A MESMA escala vai para o cache de texturas: e ela que decide o teto de
+  // decodificacao de cada arte a partir da largura com que o card a desenha.
+  // Sem isto todo card decodificava com o teto unico de 640 e o cache batia no
+  // orcamento com ~40 texturas.
+  tex_escala((float)dw / NV_TELA_W);
+  marco("fontes+tex prontos");
+  // 192 slots, nao 96. O teto de slots so faz sentido junto com o tamanho de
+  // cada textura: com o teto unico de 640 cada uma custava 2,4 MB e 96 slots ja
+  // estouravam o orcamento de 96 MB (medido: `texturas=40 pend=32 92.3MB` com a
+  // home rolando — o cache despejava o que ainda estava na tela). Com o teto
+  // por uso a mesma arte custa ~500 KB na TV, e 192 slots cabem com folga.
+  //
+  // Isso tambem dobra o teto de itens EM VOO, que e nMax/3 em slotLivre: a
+  // fileira que entra na tela pede tudo de uma vez em vez de pedir aos poucos.
+  tex_iniciar(192);
+  // A conta vem ANTES da UI: app_iniciar decide entre abrir na home e abrir no
+  // login, e para decidir ele precisa saber se ha sessao gravada.
+  dados_iniciar(dirArte);
+  nuvem_configurar(dirArte);
+  sessao_iniciar();
+  perfis_carregar_ativo();
   if (!app_iniciar(dirArte)) return 1;
+  // Progresso e dado DO USUARIO: sai da pasta do pacote, que e a mesma para
+  // todo mundo que usar o aparelho, e passa para a pasta da instalacao.
+  if (dados_dir()[0]) cat_dir_gravacao(dados_dir());
   // A configuracao de addons mora junto da arte. Ausente, o app segue com a
   // lista de exemplo — nunca fica sem nada para mostrar.
   addons_carregar(dirArte);
-  ajustes_dir(dirArte);
+  // Ajustes tambem sao do USUARIO, nao do pacote.
+  ajustes_dir(dados_dir()[0] ? dados_dir() : dirArte);
   { // As imagens vindas de URL ficam ao lado da arte do pacote. Uma vez
     // baixadas valem para sempre: arte de filme nao muda.
     char c[600];
     snprintf(c, sizeof c, "%s/cache", dirArte);
     tex_cache_dir(c); }
+  // Os icones da interface saem de art/icones (SVG do app web rasterizados).
+  gfx_icones_dir(dirArte);
   // Catalogo da rede. O do pacote ja esta carregado e continua na tela ate a
   // resposta chegar — abrir vazio enquanto busca seria pior que mostrar o de
   // ontem por dois segundos.
@@ -362,13 +446,33 @@ int main(int argc, char **argv) {
   // verdade. Esticado 4x, nenhuma borda de texel aparece.
   gfx_borrao_iniciar(480, 270);
 
-  Uint32 ultQuadro = SDL_GetTicks(), ultRelato = ultQuadro;
+  Uint32 ultRelato = SDL_GetTicks();
   double txtMsQuadro = 0, piorTxtMs = 0;
   int    txtNQuadro = 0, piorTxtN = 0;
   int quadros = 0, janks = 0; double pior = 0;
 
+  // TELEMETRIA POR FASE. O quadro pior custava 22ms num alvo de 20ms e nao
+  // havia como saber ONDE. Os relogios sao de CPU (SDL_GetPerformanceCounter)
+  // e NAO ha glFinish em lugar nenhum: glFinish esconde o jank, porque
+  // distribui o custo de GPU igualmente por todos os quadros em vez de deixar
+  // o atraso aparecer onde ele nasce. Aqui, `des` e o custo de SUBMETER o
+  // desenho (CPU) e `swap` absorve a espera do vsync MAIS o que a GPU ainda
+  // devia — um quadro pesado de GPU aparece como swap grande, um quadro pesado
+  // de CPU aparece na fase que o causou.
+  double perFreq = (double)SDL_GetPerformanceFrequency();
+  Uint64 ultQuadro = SDL_GetPerformanceCounter();
+  double fEv=0, fBomb=0, fUpd=0, fDes=0, fSwap=0, fAux=0, fClr=0;
+  double pEv=0, pBomb=0, pUpd=0, pDes=0, pSwap=0, pAux=0, pClr=0;
+  // Dentro de `des`: quanto e travessia de GL e quanto e busca no cache.
+  double fFill=0, pFill=0; int fNCheio=0, pNCheio=0;
+  double fGfxMs=0, fTexMs=0, fOutMs=0; int fNRect=0, fNProg=0, fNBind=0, fNBusca=0, fNOut=0;
+  double pGfxMs=0, pTexMs=0, pOutMs=0; int pNRect=0, pNProg=0, pNBind=0, pNBusca=0, pNOut=0;
+#define NV_T0() (SDL_GetPerformanceCounter())
+#define NV_DT(a) ((SDL_GetPerformanceCounter() - (a)) * 1000.0 / perFreq)
+
   while (!app_quer_sair()) {
     SDL_Event e;
+    Uint64 tEv = NV_T0();
     // Enquanto o detalhe existe ele fica com o teclado inteiro: a home
     // continua desenhada por baixo, mas nao deve reagir ao D-pad.
     while (SDL_PollEvent(&e)) {
@@ -387,13 +491,36 @@ int main(int argc, char **argv) {
       app_evento(&e);
     }
     teclasInjetadas(app_evento);
+    fEv = NV_DT(tEv);
 
     Uint32 agora = SDL_GetTicks();
-    float dt = (agora - ultQuadro) / 1000.0f; ultQuadro = agora;
-    if (dt <= 0.0f) dt = 1.0f / 60.0f;
-    double dtms = dt * 1000.0;
+    // dt VEM DO RELOGIO DE ALTA RESOLUCAO, nao de SDL_GetTicks.
+    //
+    // SDL_GetTicks conta em MILISSEGUNDOS INTEIROS. No Mac o app roda sem vsync
+    // a ~1300 fps, entao quase todo quadro dura menos de 1 ms e a subtracao dava
+    // ZERO — e o piso `if (dt <= 0) dt = 1/60` entregava 16,7 ms SINTETICOS para
+    // um quadro de 0,8 ms de relogio real. Toda animacao avancava ~20x mais
+    // rapido que o relogio: medido, um fade de 330 ms terminava em 92 ms.
+    //
+    // Na TV o vsync escondia o defeito (dt real, sempre >= 20 ms), mas o efeito
+    // pratico era pior que um bug de Mac: QUALQUER calibracao de animacao feita
+    // na previa perseguia um numero que a TV nunca ia reproduzir, e a medida de
+    // pior quadro no Mac tambem saia distorcida.
+    //
+    // O clamp continua, mas so como TETO: voltar de suspensao entrega um dt de
+    // varios segundos e uma animacao daria um salto. Piso nao existe mais —
+    // quadro curto tem de ser um dt curto.
+    Uint64 cQuadro = SDL_GetPerformanceCounter();
+    double dtms = (double)(cQuadro - ultQuadro) * 1000.0 / perFreq;
+    ultQuadro = cQuadro;
+    if (dtms > 100.0) dtms = 100.0;
+    if (dtms < 0.0) dtms = 0.0;
+    float dt = (float)(dtms / 1000.0);
     if (quadros > 20) {
-      if (dtms > pior) { pior = dtms; piorTxtMs = txtMsQuadro; piorTxtN = txtNQuadro; }
+      if (dtms > pior) { pior = dtms; piorTxtMs = txtMsQuadro; piorTxtN = txtNQuadro;
+                         pEv=fEv; pBomb=fBomb; pUpd=fUpd; pDes=fDes; pSwap=fSwap; pAux=fAux; pClr=fClr;
+                         pGfxMs=fGfxMs; pTexMs=fTexMs; pNRect=fNRect; pNProg=fNProg;
+                         pNBind=fNBind; pNBusca=fNBusca; pOutMs=fOutMs; pNOut=fNOut; pFill=fFill; pNCheio=fNCheio; }
       if (dtms > 33.0) janks++;
     }
     // zera os contadores do quadro que comeca agora; o que foi medido acima
@@ -401,30 +528,66 @@ int main(int argc, char **argv) {
     txtMsQuadro = txt_ms; txtNQuadro = txt_rasterizadas;
     txt_ms = 0.0; txt_rasterizadas = 0;
 
-    // Sobe no maximo 2 texturas por quadro: o upload e barato, mas dois ja
-    // bastam para preencher a tela rapido sem estourar o orcamento do quadro.
-    // 1 por quadro, nao 2. Cada envio e um glTexImage2D de ~2 MB; dois no mesmo
-    // quadro somavam mais de 20 ms e apareciam como tranco ao entrar numa
-    // fileira nova. Um por quadro enche a tela em meio segundo, que ninguem ve.
-    tex_bombear(1);
+    // TRES por quadro. O limite de 1 vinha de quando TODA arte era decodificada
+    // com o teto unico de 640: cada glTexImage2D custava ~2 MB e dois no mesmo
+    // quadro passavam de 20 ms, aparecendo como tranco ao entrar numa fileira.
+    //
+    // Esse argumento caiu junto com o teto unico: agora cada arte e decodificada
+    // pela largura com que e desenhada (tex_obter_larg), e na TV um poster sai a
+    // ~500 KB em vez de 2,4 MB. Tres envios pequenos somam menos que o UNICO
+    // envio grande de antes, e a fileira que entra na tela deixa de aparecer aos
+    // pedacos.
+    Uint64 t0 = NV_T0();
+    tex_bombear(3);
+    fBomb = NV_DT(t0);
+    t0 = NV_T0();
     app_atualizar(dt, agora);
+    fUpd = NV_DT(t0);
 
+    // RECORTE DESLIGADO ANTES DO CLEAR. glClear respeita o scissor test: se
+    // qualquer tela terminar o quadro com um recorte ativo, o clear seguinte
+    // limpa SO aquele retangulo e o resto da tela guarda o quadro anterior.
+    // Hoje todos os chamadores equilibram recorte/sem_recorte, mas isso e uma
+    // invariante que ninguem verifica — e o sintoma seria justamente uma faixa
+    // com conteudo velho, dificil de atribuir a causa. Uma chamada por quadro.
+    t0 = NV_T0();
+    gfx_novo_quadro();
+    tex_novo_quadro();
+    gfx_sem_recorte();
     glClearColor(NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    fClr = NV_DT(t0);
+    t0 = NV_T0();
     txt_novo_quadro();
     app_desenhar(agora);
+    fDes = NV_DT(t0);
+    fGfxMs = gfx_ms_rect; fTexMs = tex_ms_busca;
+    fNRect = gfx_n_rect; fNProg = gfx_n_prog; fNBind = gfx_n_bind; fNBusca = tex_n_busca;
+    fOutMs = gfx_ms_outros; fNOut = gfx_n_outros;
+    fFill = gfx_fill; fNCheio = gfx_n_cheio;
+    t0 = NV_T0();
     videoSeSolicitado();
     capturaSeSolicitado();
+    fAux = NV_DT(t0);
+    t0 = NV_T0();
     SDL_GL_SwapWindow(win);
+    fSwap = NV_DT(t0);
+    // PRIMEIRO PIXEL. E o numero que responde "quanto tempo ate a TV mostrar
+    // alguma coisa", que nenhuma metrica de quadro dava.
+    //
+    // Bandeira PROPRIA e nao `if (!quadros)`: `quadros` zera a cada relatorio
+    // de 3 s, entao aquilo carimbaria "primeiro quadro" tres vezes por minuto.
+    { static int jaCarimbou;
+      if (!jaCarimbou) { jaCarimbou = 1; marco("primeiro quadro na tela"); } }
     quadros++;
 
     if (agora - ultRelato >= 3000) {
       int itens, pend; long bytes;
       tex_estatisticas(&itens, &pend, &bytes);
-      printf("FPS=%.1f pior=%.0fms janks=%d | pior-quadro: texto %.1fms em %d linhas"
-             " | texturas=%d pend=%d %.1fMB\n",
+      printf("FPS=%.1f pior=%.1fms janks=%d | pior-quadro: texto %.1fms em %d linhas"
+             " | texturas=%d pend=%d %.1fMB | despejos=%d\n",
              quadros * 1000.0 / (double)(agora - ultRelato), pior, janks,
-             piorTxtMs, piorTxtN, itens, pend, bytes / 1048576.0);
+             piorTxtMs, piorTxtN, itens, pend, bytes / 1048576.0, txt_despejos);
       fflush(stdout);
       // A MESMA linha vai para um arquivo. No aparelho a saida padrao do app
       // lancado pelo applicationManager nao chega a lugar nenhum que se possa
@@ -433,13 +596,23 @@ int main(int argc, char **argv) {
       // ha como MEDIR quadro no aparelho — so olhar e achar.
       { FILE *fp = fopen("/tmp/nuvio-fps.txt", "w");
         if (fp) {
-          fprintf(fp, "drawable=%dx%d FPS=%.1f pior=%.0fms janks=%d"
-                  " texto=%.1fms/%d texturas=%d %.1fMB\n", dw, dh,
+          fprintf(fp, "drawable=%dx%d FPS=%.1f pior=%.1fms janks=%d"
+                  " texto=%.1fms/%d texturas=%d %.1fMB"
+                  " | pior: ev=%.1f bomb=%.1f upd=%.1f clr=%.1f des=%.1f aux=%.1f swap=%.1f"
+                  " | des: gfx=%.1f/%d(p%d,b%d) tex=%.2f/%d out=%.1f/%d fill=%.2fx(cheias=%d)"
+                  " | despejos=%d\n",
+                  dw, dh,
                   quadros * 1000.0 / (double)(agora - ultRelato), pior, janks,
-                  piorTxtMs, piorTxtN, itens, bytes / 1048576.0);
+                  piorTxtMs, piorTxtN, itens, bytes / 1048576.0,
+                  pEv, pBomb, pUpd, pClr, pDes, pAux, pSwap,
+                  pGfxMs, pNRect, pNProg, pNBind, pTexMs, pNBusca, pOutMs, pNOut, pFill, pNCheio,
+                  txt_despejos);
           fclose(fp);
         } }
       quadros = 0; ultRelato = agora; pior = 0; janks = 0; piorTxtMs = 0; piorTxtN = 0;
+      txt_despejos = 0;
+      pEv=pBomb=pUpd=pDes=pSwap=pAux=pClr=0;
+      pGfxMs=pTexMs=pOutMs=0; pNRect=pNProg=pNBind=pNBusca=pNOut=0; pFill=0; pNCheio=0;
     }
   }
 

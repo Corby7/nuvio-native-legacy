@@ -2,13 +2,19 @@
 #define NV_HOME_H
 #include <SDL2/SDL.h>
 #include "gfx.h"
+#include "catalogo.h"
 
 // Tipos de fileira presentes na home moderna do Nuvio 1.0.1 legacy.
 typedef enum {
   FILEIRA_CONTINUE,   // card 16:9 com barra de progresso
   FILEIRA_NORMAL,      // poster retrato 2:3
-  FILEIRA_DESTAQUE,    // reservado para colecoes landscape/continue
-  FILEIRA_TOP10        // ranking usa poster retrato no legacy
+  FILEIRA_DESTAQUE,    // seleção editorial: arte landscape maior
+  FILEIRA_TOP10,       // ranking usa poster retrato no legacy
+  FILEIRA_COLECAO,     // premiações / coleções: landscape intermediário
+  FILEIRA_SERVICO,     // catálogo por serviço: landscape compacto
+  FILEIRA_SOCIAL,      // atividade dos amigos: editorial largo com autoria
+  FILEIRA_RETORNO,     // sessão recém-interrompida: faixa compacta de retomar
+  FILEIRA_CATALOGOS    // atalhos para catálogos existentes, não títulos
 } TipoFileira;
 
 // O item sob o foco, com o retangulo que ele ocupa na tela NESTE quadro. A
@@ -40,8 +46,13 @@ void home_desenhar(Uint32 agora);
 // do titulo em foco, e ela nao deve reaparecer, deve continuar.
 void home_hero_rect(float *x, float *y, float *w, float *h);
 void home_encerrar(void);
+// Registra o titulo interrompido para a faixa contextual "Retomar agora".
+// A faixa so existe enquanto o progresso fizer sentido (nem inicio nem fim).
+void home_registrar_retorno(int indice, double posSeg, double durSeg);
 int  home_quer_sair(void);
 int  home_pediu_abrir(void);   // OK pressionado: consome o pedido
 int  home_pediu_menu(void);    // ESQUERDA na primeira coluna: chama o menu
+int home_pediu_social(void);
+int home_pediu_pessoa_social(CatItem *saida);
 
 #endif

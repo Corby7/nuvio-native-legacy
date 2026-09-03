@@ -35,6 +35,7 @@
 #include "layout.h"
 #include "ajustes.h"
 #include "catalogo.h"
+#include "descoberta.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -45,10 +46,8 @@
 //   .search-input-field  1396x110 em (420,22)  bg #222, raio 22, 34/500,
 //                        padding lateral 32, placeholder "Buscar filmes e séries"
 //
-// O botao de VOZ nao existe aqui: nao ha captura de audio neste app, e botao que
-// aparece e nao faz nada foi exatamente a reclamacao que originou esta rodada.
-// O botao de DESCOBRIR aparece conforme `discoverLocation` — e `in_search` que o
-// poe nesta tela (searchDiscoverEnabled).
+// Voz e Descobrir nao aparecem como botoes: nao ha captura de audio ou acao
+// de descoberta nesta tela nativa. O campo ocupa toda a largura disponivel.
 #define BU_HEAD_Y     NV_BUSCA_HEAD_Y
 #define BU_HEAD_H     NV_BUSCA_HEAD_H
 #define BU_DIR       (NV_TELA_W - NV_CONTENT_PAD)   // 1816
@@ -61,7 +60,6 @@
 #define BU_KB_PASSO   (BU_TECLA_W + BU_TECLA_GAP)
 #define BU_KB_W       (BU_KB_COLS * BU_TECLA_W + (BU_KB_COLS - 1) * BU_TECLA_GAP)
 #define BU_KB_Y       NV_BUSCA_VAZIO_Y   // 148: a faixa do estado vazio do web
-#define BU_TECLA_LARGA (3 * BU_TECLA_W + 2 * BU_TECLA_GAP)
 // Crescimento da tecla em foco. Menor que o do poster de proposito: a tecla e
 // pequena e vizinha imediata das outras, e com 14% ela invade o gap de 12px.
 #define BU_TECLA_ESCALA 0.10f
@@ -82,6 +80,7 @@ static Foco  focoRes;
 static int   painel = 0;            // 0 = teclado, 1 = resultados
 static char  consulta[BU_MAX_CONSULTA];
 static int   nConsulta = 0;
+static char consultaFiltrada[BU_MAX_CONSULTA];
 // Resultados agrupados por CATALOGO, como no web: uma fileira por catalogo que
 // teve pelo menos um titulo casando. Guardamos indices do catalogo global.
 static struct {
@@ -100,7 +99,7 @@ static float scrollX[BU_MAX_FILEIRAS];
 static HomeItem itemFoco;
 static int   temItemFoco = 0;
 
-static const int KB_COLUNAS[BU_KB_FILEIRAS] = { 6, 6, 6, 6, 6, 6, 2 };
+static const int KB_COLUNAS[BU_KB_FILEIRAS] = { 6, 6, 6, 6, 6, 6, 3 };
 // Minusculas como no aparelho: o campo mostra o que foi digitado, e uma consulta
 // em caixa alta le como grito. A comparacao ignora caixa de qualquer forma.
 static const char *TECLAS =
@@ -152,11 +151,84 @@ static void normalizar(const char *s, char *destino, size_t tam) {
 // <addon>" mostra.
 static void refiltrar(void) {
   char alvo[BU_MAX_CONSULTA * 2];
+  int anterior = -1, mesmaConsulta = !strcmp(consultaFiltrada, consulta);
+  if (mesmaConsulta && painel == 1 && focoRes.fileira < nFil &&
+      focoRes.coluna < fil[focoRes.fileira].n)
+    anterior = fil[focoRes.fileira].itens[focoRes.coluna];
+  snprintf(consultaFiltrada, sizeof consultaFiltrada, "%s", consulta);
   normalizar(consulta, alvo, sizeof alvo);
   nFil = 0;
   // Menos de 2 caracteres = estado vazio, como o web ("Digite ao menos 2
   // caracteres"). Buscar com uma letra devolve o acervo inteiro e nao ajuda.
   if ((int)strlen(alvo) < 2) { painel = 0; return; }
+
+  // BUSCA NA REDE. A tela so filtrava o que ja estava em memoria — as ~12
+  // primeiras linhas de cada catalogo da home — entao qualquer titulo fora
+  // disso simplesmente nao existia para a busca. Dispara e volta na hora; o
+  // resultado aparece sozinho quando chegar, porque refiltrar roda a cada
+  // tecla e desc_busca_n so responde para o termo corrente.
+  desc_buscar(alvo);
+
+  // UMA FILEIRA POR CATALOGO CONSULTADO, com a origem embaixo — igual ao web,
+  // que monta uma `.search-results-row` por catalogo em vez de uma lista unica.
+  //
+  // Antes so o Cinemeta era consultado e tudo caia numa fileira "Resultados da
+  // busca". Com dez alvos numa lista so o dono nao tinha como saber de onde
+  // veio nada, e os resultados do addon lento pareciam nunca chegar (chegavam;
+  // ficavam no fim de uma fileira de 12 que ja estava cheia de Cinemeta).
+  //
+  // Os itens entram no catalogo global via cat_acrescentar_lote porque a tela
+  // abre titulo por INDICE de catalogo — um resultado que vivesse so aqui nao
+  // seria abrivel.
+  { int alvoIdx, nAlvos = desc_busca_n_alvos();
+    for (alvoIdx = 0; alvoIdx < nAlvos && nFil < BU_MAX_FILEIRAS; alvoIdx++) {
+      int nRem = desc_busca_alvo_n(alvoIdx, alvo), i;
+      // DOIS PASSOS, e a separacao e o conserto: primeiro junta os que ainda
+      // NAO estao no catalogo, depois acrescenta TODOS numa troca de bloco so.
+      //
+      // Antes era cat_acrescentar por resultado, e cada chamada copia o
+      // catalogo inteiro: com 300 titulos, ~2,3 MB por copia, ate 40 vezes, no
+      // fio de DESENHO, a cada tecla digitada. A busca engasgava por isso.
+      CatItem novos[BU_MAX_POR_FIL];
+      int idxNovos[BU_MAX_POR_FIL];
+      int achou = 0, nNovos = 0;
+      int posNovo[BU_MAX_POR_FIL];   // onde cada novo entra em fil[].itens
+      if (nRem <= 0) continue;
+      for (i = 0; i < nRem && achou < BU_MAX_POR_FIL; i++) {
+        CatItem it;
+        int idx;
+        if (!desc_busca_alvo_item(alvoIdx, i, &it)) continue;
+        // Ja esta no catalogo? Reaproveita o indice em vez de duplicar o card.
+        idx = it.imdb[0] ? cat_indice_por_imdb(it.imdb) : -1;
+        if (idx >= 0) {
+          fil[nFil].itens[achou++] = idx;
+        } else if (nNovos < BU_MAX_POR_FIL) {
+          novos[nNovos] = it;
+          posNovo[nNovos] = achou++;   // reserva o lugar; o indice vem depois
+          nNovos++;
+        }
+      }
+      if (nNovos > 0) {
+        int entraram = cat_acrescentar_lote(novos, nNovos, idxNovos);
+        for (i = 0; i < nNovos; i++)
+          fil[nFil].itens[posNovo[i]] = (i < entraram) ? idxNovos[i] : -1;
+        // O que nao coube (catalogo no teto) vira -1 e e COMPACTADO para fora.
+        // So diminuir a contagem deixaria buracos no MEIO da fileira, e o card
+        // do buraco apontaria para o item errado — pior que faltar um card.
+        if (entraram < nNovos) {
+          int r = 0, w = 0;
+          for (r = 0; r < achou; r++)
+            if (fil[nFil].itens[r] >= 0) fil[nFil].itens[w++] = fil[nFil].itens[r];
+          achou = w;
+        }
+      }
+      if (achou > 0) {
+        fil[nFil].titulo = desc_busca_alvo_titulo(alvoIdx);
+        fil[nFil].origem = desc_busca_alvo_addon(alvoIdx);
+        fil[nFil].n = achou;
+        nFil++;
+      }
+    } }
 
   int nCat = cat_n_fileiras();
   for (int r = 0; r < nCat && nFil < BU_MAX_FILEIRAS; r++) {
@@ -186,9 +258,22 @@ static void refiltrar(void) {
   int cols[BU_MAX_FILEIRAS];
   for (int i = 0; i < nFil; i++) cols[i] = fil[i].n;
   focus_iniciar(&focoRes, nFil > 0 ? nFil : 1, nFil > 0 ? cols : (int[]){ 1 });
+  if (anterior >= 0) {
+    int encontrado = 0;
+    for (int r = 0; r < nFil && !encontrado; r++)
+      for (int c = 0; c < fil[r].n; c++)
+        if (fil[r].itens[c] == anterior) {
+          focoRes.fileira = r; focoRes.coluna = c;
+          focoRes.colunaLembrada[r] = c;
+          encontrado = 1; break;
+        }
+  }
   if (nFil == 0) painel = 0;
   memset(animRes, 0, sizeof animRes);
-  memset(scrollX, 0, sizeof scrollX);
+  if (!mesmaConsulta) {
+    memset(scrollX, 0, sizeof scrollX);
+    scrollY = scrollAlvo = 0.0f;
+  }
 }
 
 // --- Teclas ------------------------------------------------------------------
@@ -199,8 +284,10 @@ static void aplicarTecla(void) {
   } else if (focoKb.coluna == 0) {
     // espaco no comeco nao entra: nao muda o filtro e so acumula lixo no campo
     if (nConsulta > 0 && nConsulta + 1 < BU_MAX_CONSULTA) consulta[nConsulta++] = ' ';
-  } else {
+  } else if (focoKb.coluna == 1) {
     if (nConsulta > 0) nConsulta--;
+  } else {
+    nConsulta = 0;
   }
   consulta[nConsulta] = 0;
   refiltrar();
@@ -214,8 +301,8 @@ static GfxRect retanguloTecla(int fileira, int coluna) {
     r.x = BU_KB_X + coluna * BU_KB_PASSO;
     r.w = BU_TECLA_W;
   } else {
-    r.x = BU_KB_X + coluna * (BU_TECLA_LARGA + BU_TECLA_GAP);
-    r.w = BU_TECLA_LARGA;
+    r.w = (BU_KB_W - 2 * BU_TECLA_GAP) / 3;
+    r.x = BU_KB_X + coluna * (r.w + BU_TECLA_GAP);
   }
   return r;
 }
@@ -225,6 +312,7 @@ int busca_iniciar(void) {
   focus_iniciar(&focoKb, BU_KB_FILEIRAS, KB_COLUNAS);
   painel = 0; sair = 0; pedido = -1;
   nConsulta = 0; consulta[0] = 0;
+  consultaFiltrada[0] = 0;
   scrollY = scrollAlvo = 0.0f;
   temItemFoco = 0;
   memset(animTecla, 0, sizeof animTecla);
@@ -255,6 +343,10 @@ void busca_evento(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
 
+  if (k == SDLK_BACKSPACE && painel == 0) {
+    if (nConsulta > 0) { consulta[--nConsulta] = 0; refiltrar(); }
+    return;
+  }
   if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE) {
     // Nos resultados, o Back volta ao teclado: e o movimento inverso do que
     // levou ate la. So do teclado ele fecha a tela.
@@ -263,6 +355,14 @@ void busca_evento(const SDL_Event *e) {
   }
 
   if (painel == 0) {
+    if (!(e->key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) &&
+        ((k >= SDLK_a && k <= SDLK_z) || (k >= SDLK_0 && k <= SDLK_9) || k == SDLK_SPACE)) {
+      if (nConsulta + 1 < BU_MAX_CONSULTA && (k != SDLK_SPACE || nConsulta)) {
+        consulta[nConsulta++] = (char)k; consulta[nConsulta] = 0; refiltrar();
+      }
+      return;
+    }
+    if (k == SDLK_TAB && nFil > 0) { painel = 1; return; }
     switch (k) {
       case SDLK_LEFT:  focus_mover(&focoKb, -1, 0); break;
       case SDLK_RIGHT:
@@ -282,6 +382,7 @@ void busca_evento(const SDL_Event *e) {
   }
 
   switch (k) {
+    case SDLK_TAB: painel = 0; break;
     case SDLK_LEFT:
       // Voltar da primeira coluna dos resultados devolve o foco ao teclado.
       if (focoRes.coluna == 0) painel = 0;
@@ -309,6 +410,20 @@ void busca_evento(const SDL_Event *e) {
 
 void busca_atualizar(float dt, Uint32 agora) {
   (void)agora;
+  // O RESULTADO DA REDE CHEGA DEPOIS DA TECLA. refiltrar() so roda quando o
+  // dono digita, entao sem isto a resposta do Cinemeta chegava, ficava guardada
+  // e NUNCA aparecia — a tela seguia mostrando o filtro local do momento em que
+  // a ultima letra foi apertada. Aqui a contagem do termo corrente e vigiada
+  // por quadro, e uma mudanca remonta a lista uma vez so.
+  { char alvo[BU_MAX_CONSULTA * 2];
+    static int ultimoRemoto = -1;
+    normalizar(consulta, alvo, sizeof alvo);
+    if ((int)strlen(alvo) >= 2) {
+      int n = desc_busca_n(alvo);
+      if (n != ultimoRemoto) { ultimoRemoto = n; refiltrar(); }
+    } else {
+      ultimoRemoto = -1;
+    } }
   for (int f = 0; f < BU_KB_FILEIRAS; f++)
     for (int c = 0; c < KB_COLUNAS[f]; c++) {
       float alvo = (painel == 0 && focus_indice(&focoKb, f, c)) ? 1.0f : 0.0f;
@@ -349,39 +464,32 @@ void busca_atualizar(float dt, Uint32 agora) {
 }
 
 // --- Desenho -----------------------------------------------------------------
-// Cabecalho: botao de Descobrir (quando a preferencia o poe aqui) e o campo, com
-// a geometria medida no web.
+// Campo de consulta: nenhum botao decorativo que nao possa receber foco.
 static void desenhaCabecalho(Uint32 agora) {
   float x = NV_CONTENT_PAD;
   float raio = NV_BUSCA_RAIO / (NV_BUSCA_HEAD_H * 0.5f) * 0.5f;  // 22 sobre 110
 
-  if (ajustes_descobrir_na_busca()) {
-    GfxRect b = { x, BU_HEAD_Y, NV_BUSCA_BTN, NV_BUSCA_BTN };
-    gfx_cor(b, NV_BUSCA_RAIO / NV_BUSCA_BTN, 0.133f, 0.133f, 0.133f, 1.0f);
-    // Bussola do "Descobrir", DESENHADA e nao escrita. O glifo que estava aqui
-    // ("\xe2\x97\x89") nao existe na Inter embarcada e saia como a caixa de
-    // "NO GLYPH" — visivel na captura do aparelho. Nenhuma fonte do pacote tem
-    // simbolos geometricos, entao icone tem de ser geometria.
-    float lado = NV_BUSCA_BTN_ICONE;
-    GfxRect aro = { b.x + (b.w - lado) * 0.5f, b.y + (b.h - lado) * 0.5f, lado, lado };
-    gfx_rect(aro, 0, GFX_ANEL, 0.0f, 0.075f, 0.0f, 0.5f, 0.925f, 0.929f, 0.949f, 0.9f);
-    float ponto = lado * 0.26f;
-    GfxRect miolo = { aro.x + (lado - ponto) * 0.5f, aro.y + (lado - ponto) * 0.5f,
-                      ponto, ponto };
-    gfx_cor(miolo, 0.5f, 0.925f, 0.929f, 0.949f, 0.9f);
-    x += NV_BUSCA_BTN + NV_BUSCA_BTN_GAP;
-  }
-
   GfxRect campo = { x, BU_HEAD_Y, BU_DIR - x, NV_BUSCA_HEAD_H };
   gfx_cor(campo, raio, 0.133f, 0.133f, 0.133f, 1.0f);
-  // Foco do campo: borda #f5f5f5 com halo rgba(245,245,245,.22) de 2px. Aqui o
-  // campo esta sempre "ativo" — quem digita e o teclado ao lado.
-  GfxRect halo = { campo.x - 2.0f, campo.y - 2.0f, campo.w + 4.0f, campo.h + 4.0f };
-  gfx_cor(halo, raio, 0.961f, 0.961f, 0.961f, 0.22f);
+  // Contorno do campo — ANEL, nao retangulo cheio.
+  //
+  // Aqui havia um gfx_cor sobre `campo + 2px`, e gfx_cor PREENCHE: o branco a
+  // 22% lavava o campo inteiro. A conta bate com o que se media na tela:
+  // 0,133 x 0,78 + 0,961 x 0,22 = 0,315, ou seja #505050 no lugar do #222222
+  // que a linha de cima acabou de pintar. O campo lia como controle
+  // DESABILITADO, e o texto de exemplo quase sumia dentro dele.
+  //
+  // GFX_ANEL desenha so o contorno (o miolo fica intacto), que era a intencao
+  // escrita no comentario antigo.
+  { GfxRect halo = { campo.x - 2.0f, campo.y - 2.0f,
+                     campo.w + 4.0f, campo.h + 4.0f };
+    gfx_rect(halo, 0, GFX_ANEL, 0, 2.0f / halo.h, 0, raio,
+             0.961f, 0.961f, 0.961f, painel == 0 ? 0.55f : 0.16f); }
 
   float tx = campo.x + NV_BUSCA_CAMPO_PADX;
   if (nConsulta) {
-    TxtLinha l = txt_linha(TXT_HEADLINE, consulta, 245, 246, 250, 255);
+    TxtLinha l = txt_linha_corta(TXT_HEADLINE, consulta, 245, 246, 250, 255,
+                                campo.w - 2 * NV_BUSCA_CAMPO_PADX - 12);
     txt_desenhar(l, tx, campo.y + (campo.h - l.h) * 0.5f);
     tx += l.w + 6.0f;
   } else {
@@ -390,7 +498,7 @@ static void desenhaCabecalho(Uint32 agora) {
     txt_desenhar_alpha(l, tx, campo.y + (campo.h - l.h) * 0.5f, 0.40f);
   }
   // O cursor piscando e o unico sinal de que o campo esta ativo.
-  if ((agora / 500) % 2 == 0) {
+  if (painel == 0 && (agora / 500) % 2 == 0) {
     GfxRect cur = { tx, campo.y + 24.0f, 3.0f, campo.h - 48.0f };
     gfx_cor(cur, 0.0f, 1.0f, 1.0f, 1.0f, 0.85f);
   }
@@ -414,28 +522,38 @@ static void desenhaTeclado(void) {
       if (f < BU_KB_FILEIRAS - 1) {
         rotulo[0] = TECLAS[f * BU_KB_COLS + c]; rotulo[1] = 0;
         s = rotulo;
-      } else s = (c == 0) ? "espa\xc3\xa7o" : "apagar";
+      } else s = (c == 0) ? "espa\xc3\xa7o" : (c == 1 ? "apagar" : "limpar");
       int tom = (int)anim_mistura(236.0f, 26.0f, k);
       TxtEstilo est = (f < BU_KB_FILEIRAS - 1) ? TXT_TITULO3 : TXT_HEADLINE;
       TxtLinha l = txt_linha(est, s, tom, tom, tom, 255);
       txt_desenhar(l, t.x + (t.w - l.w) * 0.5f, t.y + (t.h - l.h) * 0.5f);
     }
   }
+  float y = BU_KB_Y + BU_KB_FILEIRAS * BU_KB_PASSO + 24;
+  TxtLinha hint = txt_linha_corta(TXT_CAPTION2,
+      nFil ? "Direita: resultados   •   Voltar: menu" : "OK: digitar   •   Voltar: menu",
+      179, 183, 190, 255, BU_KB_W);
+  txt_desenhar(hint, BU_KB_X, y);
 }
 
 // Estado vazio do web: titulo 56/600 e apoio 24/400 rgb(179,179,179). Aqui ele
 // fica a DIREITA, no lugar das fileiras, porque a faixa central esta com o
 // teclado.
 static void desenhaVazio(void) {
-  const char *t1 = nConsulta ? "Nenhum resultado" : "Comece a pesquisar";
-  const char *t2 = nConsulta ? "Tente outro termo"
-                             : "Digite ao menos 2 caracteres";
+  const char *t1 = nConsulta >= 2 ? "Nenhum título recebido" : "O que vamos assistir?";
+  const char *t2 = nConsulta >= 2 ? "Os resultados dos addons aparecem aqui."
+                             : "Digite ao menos 2 letras de um filme ou série.";
   TxtLinha l1 = txt_linha(TXT_TITULO2, t1, 255, 255, 255, 255);
   TxtLinha l2 = txt_linha(TXT_BODY, t2, 179, 179, 179, 255);
   float cx = BU_RES_X + (BU_DIR - BU_RES_X) * 0.5f;
   float y = BU_RES_Y + 180.0f;
   txt_desenhar_alpha(l1, cx - l1.w * 0.5f, y, 0.96f);
   txt_desenhar_alpha(l2, cx - l2.w * 0.5f, y + l1.h + 18.0f, 0.85f);
+  if (nConsulta >= 2) {
+    TxtLinha ajuda = txt_linha(TXT_CAPTION2,
+        "Se não aparecerem, confira a conexão ou tente outro nome.", 179, 183, 190, 255);
+    txt_desenhar(ajuda, cx - ajuda.w * 0.5f, y + l1.h + l2.h + 42);
+  }
 }
 
 static void desenhaResultados(Uint32 agora) {
@@ -457,7 +575,8 @@ static void desenhaResultados(Uint32 agora) {
     if (fil[r].origem) {
       char org[96];
       snprintf(org, sizeof org, "de %s", fil[r].origem);
-      TxtLinha ts = txt_linha(TXT_CAPTION2, org, 179, 179, 179, 255);
+      TxtLinha ts = txt_linha_corta(TXT_CAPTION2, org, 179, 179, 179, 255,
+                                   BU_DIR - BU_RES_X);
       txt_desenhar_alpha(ts, BU_RES_X, ry + NV_BUSCA_ROW_SUB, 0.95f);
     }
 
@@ -484,7 +603,7 @@ static void desenhaResultados(Uint32 agora) {
 
         const char *arte = ci->poster[0] ? ci->poster
                          : (ci->backdrop[0] ? ci->backdrop : NULL);
-        GLuint tex = arte ? tex_obter(arte) : 0;
+        GLuint tex = arte ? tex_obter_larg(arte, poster.w) : 0;
         if (tex) {
           // Sem o aspecto a arte 2:3 estica; e o poster e justamente onde isso
           // salta aos olhos, porque todos ficam lado a lado.
@@ -492,7 +611,10 @@ static void desenhaResultados(Uint32 agora) {
           gfx_rect(poster, tex, GFX_CARD, f, 0.0f, 0.0f, raio, 0, 0, 0, 1);
           gfx_tex_aspect_atual = 0.0f;
         } else {
-          gfx_cor(poster, raio, 0.133f, 0.133f, 0.133f, 1.0f);
+          // Esqueleto VISIVEL, o mesmo da home: #2C2C2C. Ver a nota la — placeholder
+            // do tom do fundo le como card quebrado, nao como carregando.
+            gfx_cor(poster, raio, NV_COR_ESQUELETO_R, NV_COR_ESQUELETO_G,
+                  NV_COR_ESQUELETO_B, 1.0f);
         }
 
         // Nome 28/500 branco a 8 do poster; ano 20/400 rgb(179) a 4 do nome.
@@ -524,7 +646,12 @@ void busca_desenhar(Uint32 agora) {
   // Fundo #0d0d0d, medido no .search-screen-shell do web — mais escuro que o
   // cinza da home, e o web usa o mesmo tom nas duas.
   GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
-  gfx_cor(tela, 0.0f, NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
+  // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
+  // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
+  // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill
+  // rate (gfx.c registra que DUAS camadas de tela cheia derrubavam a
+  // Mali-G71 para ~40fps). Nao repor sem antes mudar a cor do clear.
+  (void)tela;
   desenhaCabecalho(agora);
   desenhaTeclado();
   desenhaResultados(agora);

@@ -1,4 +1,6 @@
 #include "streams.h"
+#include "badges.h"
+#include <pthread.h>
 #include "rede.h"
 #include "gfx.h"
 #include "text.h"
@@ -6,46 +8,36 @@
 #include "layout.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include "addons.h"
 
-#define FOLHA_H       720.0f
-#define FOLHA_LINHA    88.0f
-#define FOLHA_PAD      56.0f
+#define FOLHA_W       720.0f
+#define FOLHA_LINHA   228.0f
+#define FOLHA_TOPO    272.0f
 
-static Stream lista[STREAM_MAX];
+static Stream *lista;
 static int n = 0;
+static int atual = -1, recarregar;
+static char contexto[320];
+void stream_definir_atual(int i) { atual = i >= 0 && i < n ? i : -1; }
+int stream_atual(void) { return atual; }
+void stream_folha_contexto(const char *s) { snprintf(contexto, sizeof contexto, "%s", s ? s : ""); }
+int stream_folha_recarregar(void) { int r = recarregar; recarregar = 0; return r; }
 
 static int aberta = 0, foco = 0, escolha = -1;
 static float anim = 0.0f, rolagem = 0.0f;
+// Linha do realce, em unidades de ITEM (2.4 = entre o terceiro e o quarto). O
+// realce escorrega entre as linhas em vez de saltar: com o salto seco a folha
+// parecia trocar de conteudo a cada tecla, e num D-pad e a continuidade do
+// realce que diz "ainda e a mesma lista, voce so andou".
+
 
 static const char *containerDa(const Stream *s) {
   if (s->mp4 || strstr(s->url, ".mp4") || strstr(s->rotulo, ".mp4")) return "MP4";
-  if (strstr(s->url, ".mkv") || strstr(s->rotulo, ".mkv")) return "MKV";
+  if (strstr(s->url, ".mkv") || strstr(s->arquivo, ".mkv") || strstr(s->descricao, ".mkv")) return "MKV";
   if (strstr(s->url, ".m3u8") || strstr(s->rotulo, "HLS")) return "HLS";
   return "ARQUIVO";
 }
-
-// CONJUNTO DE EXEMPLO. Nao ha addon ligado ainda: isto existe para a ordenacao,
-// a folha E AGORA A REPRODUCAO poderem ser exercitadas de ponta a ponta. A
-// ordem aqui e proposital — o preferido NAO e o primeiro, senao a regra de
-// escolha nunca seria testada.
-//
-// As URLs apontam para o servidor de teste da maquina de desenvolvimento. Sao
-// o MESMO arquivo de proposito: o que se testa aqui e a cadeia (botao -> regra
-// -> pipeline -> plano de video), nao a diferenca entre as fontes. Quem ligar
-// os addons troca isto por stream_definir_lista com as fontes de verdade e
-// apaga este bloco inteiro.
-//
-// ATENCAO ao trocar por arquivos proprios: fonte SEM FAIXA DE AUDIO nao toca
-// nesta TV. O relogio do pipeline e regido pelo audio e o currentTime congela
-// em ~266ms, sem erro nenhum, com load e play retornando sucesso.
-#define NV_TESTE_URL "http://192.168.1.181:8899/longo.mp4"
-static const Stream EXEMPLO[] = {
-  { "Fonte A  ·  1080p",           "Fonte A", NV_TESTE_URL, 1080, 0, 0, 1, 2400 },
-  { "Fonte B  ·  4K HDR10",        "Fonte B", NV_TESTE_URL, 2160, 0, 1, 1, 8100 },
-  { "Fonte C  ·  4K Dolby Vision", "Fonte C", NV_TESTE_URL, 2160, 1, 1, 1, 9600 },
-  { "Fonte D  ·  4K Dolby Vision", "Fonte D", NV_TESTE_URL, 2160, 1, 1, 0, 9200 },
-  { "Fonte E  ·  720p",            "Fonte E", NV_TESTE_URL,  720, 0, 0, 1,  900 },
-};
 
 static Uint32 recebidaEm;
 
@@ -55,21 +47,19 @@ Uint32 stream_idade_ms(void) {
 
 void stream_definir_lista(const Stream *l, int qtd) {
   recebidaEm = SDL_GetTicks();
-  n = qtd > STREAM_MAX ? STREAM_MAX : (qtd < 0 ? 0 : qtd);
-  if (l && n) memcpy(lista, l, sizeof(Stream) * (size_t)n);
+  Stream *nova = l && qtd > 0 ? malloc(sizeof(Stream) * (size_t)qtd) : NULL;
+  if (l && qtd > 0 && !nova) return;
+  if (nova) memcpy(nova, l, sizeof(Stream) * (size_t)qtd);
+  free(lista); lista = nova; n = nova ? qtd : 0; atual = -1;
   foco = 0;
 }
 
 int stream_n(void) {
-  // Sem lista definida, cai no exemplo — assim a tela nunca aparece vazia
-  // enquanto os addons nao estao ligados.
-  if (!n) stream_definir_lista(EXEMPLO, (int)(sizeof EXEMPLO / sizeof *EXEMPLO));
   return n;
 }
 
 const Stream *stream_item(int i) {
-  if (!stream_n()) return NULL;
-  return &lista[((i % n) + n) % n];
+  return i >= 0 && i < n ? &lista[i] : NULL;
 }
 
 // Pontuacao da regra do dono, do mais forte para o mais fraco:
@@ -81,10 +71,27 @@ const Stream *stream_item(int i) {
 // de ifs onde a ordem das comparacoes vira a regra escondida.
 static long pontos(const Stream *s) {
   long p = 0;
+  // DOLBY VISION SO VALE PONTO EM MP4 — e isto e medida, nao teoria.
+  //
+  // Marcado no aparelho do dono (LG C9, webOS 4.10) tocando um MKV que o addon
+  // anunciava como DV:
+  //   hdr do pipeline: HDR10 (fonte DV=1)
+  // A TV REBAIXOU para HDR10. E o comportamento ja relatado para Matroska —
+  // webOS aciona DV nativo em MP4 e cai para HDR10 em MKV — agora confirmado
+  // aqui em vez de citado.
+  //
+  // O que isso significa na pratica: num perfil 5 a camada base NAO e
+  // compativel com HDR10 (e IPT-PQ), entao decodifica-la como HDR10 produz
+  // exatamente as cores lavadas que o dono relatou. Preferir a versao DV em
+  // MKV era escolher, de proposito, o arquivo que fica PIOR nesta TV.
+  //
+  // Nao ha como consertar a decodificacao pelo caminho da URI: o Kodi so
+  // resolve descartando a camada de realce e reescrevendo o RPU, o que exige
+  // demuxar e alimentar o pipeline por buffer — outro projeto, ja registrado em
+  // video.c. O que ESTA ao alcance e parar de premiar a fonte que nao serve.
   if (s->mp4 && s->altura >= 2160 && s->dolbyVision) p += 100000;
-  if (s->altura >= 2160 && s->dolbyVision)           p +=  50000;
   if (s->altura >= 2160)                             p +=  20000;
-  if (s->dolbyVision)                                p +=  10000;
+  if (s->mp4 && s->dolbyVision)                      p +=  10000;
   if (s->dolbyAtmos)                                 p +=   2000;
   p += s->altura;
   return p;
@@ -100,16 +107,64 @@ static int enderecoDeAviso(const char *u) {
          strstr(u, "slate.mp4") || strstr(u, "slate.m3u8") ? 1 : 0;
 }
 
+// VERIFICACAO DAS CANDIDATAS EM PARALELO.
+//
+// Eram ate 8 rede_url_final EM SERIE, 20 s cada — a segunda metade dos 16,5 s
+// medidos entre abrir o titulo e ter fonte. E desperdicio duplo: a maioria das
+// tentativas RESOLVE, entao esperar a 1a terminar para so entao comecar a 2a so
+// tem valor quando a 1a falha.
+//
+// A REGRA DE ESCOLHA NAO MUDA: continua sendo "a de maior pontuacao que
+// resolve". Os fios verificam as N melhores de uma vez e o resultado e lido NA
+// ORDEM DE PONTUACAO, entao a fonte escolhida e exatamente a mesma que a versao
+// em serie escolheria — so que sem esperar as anteriores falharem uma a uma.
+#define VER_FIOS 4
+
+typedef struct { int idx; int ok; } Verificacao;
+static Verificacao *verifs;
+static int nVerifs, proxVerif;
+static pthread_mutex_t verTrava = PTHREAD_MUTEX_INITIALIZER;
+
+static void *fioVerificar(void *u) {
+  (void)u;
+  for (;;) {
+    int meu, i;
+    char fim[900];
+    pthread_mutex_lock(&verTrava);
+    if (proxVerif >= nVerifs) { pthread_mutex_unlock(&verTrava); return NULL; }
+    meu = proxVerif++;
+    pthread_mutex_unlock(&verTrava);
+    i = verifs[meu].idx;
+    if (!lista[i].url[0]) continue;
+    // 10 s e nao 20: em paralelo o timeout deixa de ser somado, mas continua
+    // sendo o tempo que o dono espera pela mais lenta.
+    if (!rede_url_final(lista[i].url, 10, fim, sizeof fim)) {
+      printf("[fonte] %d nao resolveu\n", i);
+      continue;
+    }
+    if (enderecoDeAviso(fim)) {
+      printf("[fonte] %d e aviso (%.60s)\n", i, fim);
+      continue;
+    }
+    verifs[meu].ok = 1;
+  }
+}
+
 int stream_primeira_boa(int tentativas) {
-  int usados[STREAM_MAX], nu = 0, k;
+  int *usados, nu = 0;
   int total = stream_n();
+  int escolhida = -1;
   if (total < 1) return -1;
   if (tentativas < 1) tentativas = 1;
-  for (k = 0; k < tentativas && nu < total; k++) {
-    int melhor = -1;
+  if (tentativas > total) tentativas = total;
+  usados = calloc((size_t)tentativas, sizeof *usados);
+  if (!usados) return -1;
+
+  // Seleciona as `tentativas` melhores, EM ORDEM DE PONTUACAO — a mesma ordem
+  // que o laco em serie percorria.
+  while (nu < tentativas) {
+    int melhor = -1, i, j;
     long maiorP = 0;
-    int i, j;
-    // Melhor ainda nao tentado, pela mesma regra do automatico.
     for (i = 0; i < total; i++) {
       int visto = 0;
       for (j = 0; j < nu; j++) if (usados[j] == i) { visto = 1; break; }
@@ -119,20 +174,28 @@ int stream_primeira_boa(int tentativas) {
     }
     if (melhor < 0) break;
     usados[nu++] = melhor;
-    { char fim[900];
-      if (!lista[melhor].url[0]) continue;
-      if (!rede_url_final(lista[melhor].url, 20, fim, sizeof fim)) {
-        printf("[fonte] %d nao resolveu\n", melhor);
-        continue;
-      }
-      if (enderecoDeAviso(fim)) {
-        printf("[fonte] %d e aviso (%.60s), tentando a proxima\n", melhor, fim);
-        continue;
-      }
-      printf("[fonte] %d ok -> %.60s\n", melhor, fim);
-      return melhor; }
   }
-  return -1;
+  if (nu < 1) { free(usados); return -1; }
+
+  verifs = calloc((size_t)nu, sizeof(Verificacao));
+  if (!verifs) { free(usados); return -1; }
+  { int q;
+    for (q = 0; q < nu; q++) verifs[q].idx = usados[q];
+    nVerifs = nu; proxVerif = 0;
+    { pthread_t fios[VER_FIOS];
+      int criados = 0;
+      for (q = 0; q < VER_FIOS && q < nu; q++)
+        if (pthread_create(&fios[criados], NULL, fioVerificar, NULL) == 0) criados++;
+      if (!criados) fioVerificar(NULL);   // sem fios: em serie, mesmo resultado
+      for (q = 0; q < criados; q++) pthread_join(fios[q], NULL);
+    }
+    // Primeira que passou, na ordem de pontuacao.
+    for (q = 0; q < nu; q++)
+      if (verifs[q].ok) { escolhida = verifs[q].idx; break; }
+  }
+  free(verifs); verifs = NULL; nVerifs = 0; free(usados);
+  if (escolhida >= 0) printf("[fonte] %d ok\n", escolhida);
+  return escolhida;
 }
 
 int stream_automatico(void) {
@@ -148,130 +211,137 @@ int stream_automatico(void) {
   return melhor;
 }
 
+
+static int grupo, filtro;
+static char provedores[13][96];
+static int nProvedores;
+
+static void atualizarProvedores(void) {
+  nProvedores = 1;
+  snprintf(provedores[0],sizeof provedores[0],"Todos");
+  for (int i=0;i<n;i++) {
+    int j;
+    for(j=1;j<nProvedores;j++) if(!strcmp(provedores[j],lista[i].provedor)) break;
+    if(j==nProvedores && nProvedores<13)
+      snprintf(provedores[nProvedores++],96,"%s",lista[i].provedor);
+  }
+  if(filtro>=nProvedores) filtro=0;
+}
+static int filtrado(int linha) {
+  for(int i=0,j=0;i<n;i++)
+    if(!filtro || !strcmp(lista[i].provedor,provedores[filtro]))
+      if(j++==linha) return i;
+  return -1;
+}
+static int nFiltrados(void) {
+  int k=0;
+  for(int i=0;i<n;i++) if(!filtro || !strcmp(lista[i].provedor,provedores[filtro])) k++;
+  return k;
+}
 void stream_folha_abrir(void) {
-  stream_n();
-  aberta = 1;
-  escolha = -1;
-  int a = stream_automatico();
-  // Abre com o foco no que o automatico tocaria: quem abriu a lista quer
-  // COMPARAR com essa escolha, nao procurar onde ela esta.
-  foco = a >= 0 ? a : 0;
-  rolagem = 0.0f;
+  aberta=1; escolha=-1; foco=0; grupo=1; filtro=0; recarregar=0;
+  atualizarProvedores();
+  if(atual>=0) foco=atual;
+  rolagem=0;
 }
-
 int stream_folha_aberta(void) { return aberta; }
-
 void stream_folha_evento(const SDL_Event *e) {
-  if (!aberta || e->type != SDL_KEYDOWN) return;
-  SDL_Keycode k = e->key.keysym.sym;
-  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
-      k == SDLK_DELETE) { aberta = 0; return; }
-  if (k == SDLK_DOWN && foco < n - 1) foco++;
-  else if (k == SDLK_UP && foco > 0)  foco--;
-  else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { escolha = foco; aberta = 0; }
+  if(!aberta || e->type!=SDL_KEYDOWN) return;
+  SDL_Keycode k=e->key.keysym.sym;
+  if(k==SDLK_ESCAPE || k==SDLK_AC_BACK || k==SDLK_BACKSPACE || k==SDLK_DELETE) {aberta=0;return;}
+  if(k==SDLK_r) {recarregar=1;return;}
+  int nf=nFiltrados();
+  if(k==SDLK_UP) {if(grupo==1 && foco>0) foco--; else if(grupo>-1) grupo--;}
+  if(k==SDLK_DOWN) {if(grupo<1) grupo++; else if(foco<nf-1) foco++;}
+  if(grupo==0 && (k==SDLK_LEFT || k==SDLK_RIGHT)) {
+    filtro+=k==SDLK_RIGHT?1:-1;
+    if(filtro<0) filtro=0;
+    if(filtro>=nProvedores) filtro=nProvedores-1;
+    foco=0;rolagem=0;
+  }
+  if(grupo==-1 && (k==SDLK_LEFT || k==SDLK_RIGHT)) foco=k==SDLK_LEFT?0:1;
+  if(k==SDLK_RETURN || k==SDLK_KP_ENTER) {
+    if(grupo==-1) {if(foco==0) recarregar=1;else aberta=0;}
+    else if(grupo==0) {grupo=1;foco=0;}
+    else {escolha=filtrado(foco);if(escolha>=0) aberta=0;}
+  }
 }
-
 void stream_folha_atualizar(float dt, Uint32 agora) {
   (void)agora;
-  anim = anim_mola(anim, aberta ? 1.0f : 0.0f, dt, NV_MOLA_TELA);
-  // Mantem o foco no miolo da janela e revela os itens seguintes. Antes a
-  // lista desenhava sempre a partir do zero: o foco andava para itens que
-  // existiam, mas estavam literalmente fora da folha.
-  { const float area = FOLHA_H - 142.0f;
-    const float max = n * FOLHA_LINHA > area ? n * FOLHA_LINHA - area : 0.0f;
-    float alvo = foco * FOLHA_LINHA - (area - FOLHA_LINHA) * 0.5f;
-    if (alvo < 0) alvo = 0;
-    if (alvo > max) alvo = max;
-    rolagem = anim_mola(rolagem, alvo, dt, NV_MOLA_SCROLL); }
+  anim=anim_mola(anim,aberta?1:0,dt,NV_MOLA_TELA);
+  atualizarProvedores();
+  int nf=nFiltrados();
+  if(grupo==1 && foco>=nf) foco=nf>0?nf-1:0;
+  float area=NV_TELA_H-FOLHA_TOPO-32;
+  float max=nf*FOLHA_LINHA-area;
+  float alvo=foco*FOLHA_LINHA-(area-FOLHA_LINHA)*.5f;
+  if(alvo>max) alvo=max;
+  if(alvo<0) alvo=0;
+  rolagem=anim_mola(rolagem,alvo,dt,NV_MOLA_SCROLL);
 }
-
 int stream_folha_escolheu(int *out) {
-  if (escolha < 0) return 0;
-  if (out) *out = escolha;
-  escolha = -1;
-  return 1;
+  if(escolha<0) return 0;
+  if(out) *out=escolha;
+  escolha=-1;return 1;
 }
-
 void stream_folha_desenhar(Uint32 agora) {
   (void)agora;
-  if (!aberta && anim < 0.004f) return;
-
-  GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
-  gfx_cor(tela, 0.0f, 0, 0, 0, 0.62f * anim);
-
-  // A folha sobe da base. Sobe, e nao aparece: a lista de fontes e uma gaveta
-  // do que ja esta em cena, nao uma tela nova.
-  float h = FOLHA_H;
-  float y = NV_TELA_H - h * anim;
-  GfxRect folha = { 0, y, NV_TELA_W, h };
-  gfx_cor(folha, 0.0f, 0.086f, 0.090f, 0.098f, 0.985f * anim);
-
-  TxtLinha tit = txt_linha(TXT_HEADLINE, "Fontes", 255, 255, 255, 255);
-  txt_desenhar_alpha(tit, NV_MARGEM_X, y + 34.0f, anim);
-
-  { char pos[48]; snprintf(pos, sizeof pos, "%d de %d", foco + 1, n);
-    TxtLinha lp = txt_linha(TXT_CAPTION2, pos, 178, 180, 190, 255);
-    txt_desenhar_alpha(lp, NV_TELA_W - NV_MARGEM_X - lp.w,
-                       y + 42.0f, anim * 0.9f); }
-
-  int aut = stream_automatico();
-  float topo = y + 34.0f + tit.h + 22.0f;
-  float areaH = FOLHA_H - (topo - y) - 22.0f;
-  gfx_recorte(0, topo, NV_TELA_W, areaH);
-  for (int i = 0; i < n; i++) {
-    float ly = topo + i * FOLHA_LINHA - rolagem;
-    if (ly + FOLHA_LINHA < topo || ly > topo + areaH) continue;
-    int sel = (i == foco);
-    GfxRect linha = { NV_MARGEM_X - 24.0f, ly, NV_TELA_W - (NV_MARGEM_X - 24.0f) * 2,
-                      FOLHA_LINHA - 12.0f };
-    if (sel) gfx_cor(linha, 0.14f, 0.93f, 0.93f, 0.95f, 0.95f * anim);
-
-    int cor = sel ? 24 : 236;
-    txt_bloco(TXT_BODY, lista[i].rotulo, cor, cor, cor,
-              NV_MARGEM_X, ly + 9.0f, 1160.0f, NV_LD_BODY, anim, 1);
-
-    // Formato vem PRIMEIRO e em caixa alta: o objetivo desta folha e permitir
-    // achar um MP4 DV sem depender do nome enorme da release.
-    char meta[160]; size_t u;
-    snprintf(meta, sizeof meta, "%s", containerDa(&lista[i]));
-#define META(fmt, ...) do { u = strlen(meta); snprintf(meta + u, sizeof meta - u, "  ·  " fmt, __VA_ARGS__); } while (0)
-    if (lista[i].altura >= 2160) META("%s", "4K");
-    else if (lista[i].altura > 0) META("%dp", lista[i].altura);
-    if (lista[i].dolbyVision) META("%s", "DOLBY VISION");
-    if (lista[i].dolbyAtmos) META("%s", "ATMOS");
-    if (lista[i].tamanhoMB > 0) META("%.1f GB", lista[i].tamanhoMB / 1024.0);
-#undef META
-    { int c2 = sel ? 72 : 164;
-      TxtLinha lm = txt_linha(TXT_CAPTION2, meta, c2, c2, c2 + 8, 255);
-      txt_desenhar_alpha(lm, NV_MARGEM_X, ly + 49.0f, anim * 0.95f); }
-
-    if (lista[i].provedor[0]) {
-      int c3 = sel ? 80 : 152;
-      TxtLinha lp = txt_linha(TXT_CAPTION2, lista[i].provedor, c3, c3, c3 + 6, 255);
-      txt_desenhar_alpha(lp, NV_TELA_W - NV_MARGEM_X - lp.w,
-                         ly + 13.0f, anim * 0.88f);
-    }
-
-    // Marca qual o automatico tocaria. Sem essa marca a lista nao explica por
-    // que o app escolheu o que escolheu, e a escolha vira mistério.
-    if (i == aut) {
-      TxtLinha la = txt_linha(TXT_MINI, "AUTOMATICO", sel ? 70 : 150,
-                              sel ? 70 : 150, sel ? 76 : 158, 255);
-      txt_desenhar_alpha(la, NV_TELA_W - NV_MARGEM_X - la.w,
-                         ly + 49.0f, anim * 0.9f);
-    }
+  if(anim<.005f) return;
+  float x=NV_TELA_W-FOLHA_W+(1-anim)*FOLHA_W;
+  gfx_cor((GfxRect){0,0,NV_TELA_W,NV_TELA_H},0,.02f,.02f,.025f,.35f*anim);
+  gfx_cor((GfxRect){x,0,FOLHA_W,NV_TELA_H},.025f,.095f,.095f,.10f,anim);
+  txt_desenhar_alpha(txt_linha(TXT_PAINEL_TITULO,"Fontes",240,241,243,255),x+40,44,anim);
+  for(int i=0;i<2;i++) {
+    float bx=x+FOLHA_W-284+i*128;
+    int sel=grupo==-1 && foco==i;
+    gfx_cor((GfxRect){bx,44,120,50},.3f,sel?.94f:.14f,sel?.94f:.14f,sel?.95f:.15f,anim);
+    int c=sel?24:224;
+    TxtLinha l=txt_linha(TXT_PG_FIM,i?"Fechar":"Recarregar",c,c,c,255);
+    txt_desenhar_alpha(l,bx+(120-l.w)*.5f,58,anim);
+  }
+  txt_desenhar_alpha(txt_linha_corta(TXT_PG_FIM,contexto,184,187,193,255,FOLHA_W-80),x+40,126,anim);
+  gfx_recorte(x+40,180,FOLHA_W-80,62);
+  int ini=filtro>1?filtro-1:0;
+  float tx=x+40;
+  for(int i=ini;i<nProvedores && i<ini+3;i++) {
+    float w=i?232:108;int sel=i==filtro,c=sel?24:202;
+    gfx_cor((GfxRect){tx,182,w,50},.5f,sel?.94f:.14f,sel?.94f:.14f,sel?.95f:.15f,anim);
+    TxtLinha l=txt_linha_corta(TXT_PG_FIM,provedores[i],c,c,c,255,w-24);
+    txt_desenhar_alpha(l,tx+(w-l.w)*.5f,196,anim);
+    if(sel && grupo==0) gfx_cor((GfxRect){tx+16,237,w-32,2},0,.94f,.94f,.95f,anim);
+    tx+=w+12;
   }
   gfx_sem_recorte();
-
-  // Affordance de scroll: deixa claro que ha conteudo acima/abaixo antes de o
-  // usuario tentar adivinhar. A posicao numerica no cabecalho e o complemento.
-  if (rolagem > 4.0f) {
-    TxtLinha a = txt_linha(TXT_CAPTION2, "▲  mais fontes", 170, 172, 182, 255);
-    txt_desenhar_alpha(a, (NV_TELA_W - a.w) * 0.5f, topo - 2.0f, anim * 0.8f);
+  gfx_recorte(x+36,FOLHA_TOPO,FOLHA_W-72,NV_TELA_H-FOLHA_TOPO-32);
+  int nf=nFiltrados();
+  for(int row=0;row<nf;row++) {
+    float y=FOLHA_TOPO+row*FOLHA_LINHA-rolagem;
+    if(y+FOLHA_LINHA<FOLHA_TOPO || y>NV_TELA_H-32) continue;
+    int i=filtrado(row),sel=grupo==1 && foco==row;
+    const Stream *s=&lista[i];
+    GfxRect r={x+40,y,FOLHA_W-80,FOLHA_LINHA-14};
+    if(sel) gfx_cor(r,.10f,.94f,.94f,.95f,anim);
+    r.x+=2;r.y+=2;r.w-=4;r.h-=4;
+    gfx_cor(r,.09f,.135f,.135f,.14f,anim);
+    float lx=x+62,w=FOLHA_W-124;
+    char nome[sizeof s->rotulo],descricao[sizeof s->descricao];
+    snprintf(nome,sizeof nome,"%s",s->rotulo);snprintf(descricao,sizeof descricao,"%s",s->descricao);
+    // SDL_ttf nao interpreta quebras de linha; nao renderizar glifos .notdef.
+    for(char *p=nome;*p;p++)if((unsigned char)*p<32)*p=' ';
+    for(char *p=descricao;*p;p++)if((unsigned char)*p<32)*p=' ';
+    txt_desenhar_alpha(txt_linha_corta(TXT_PAINEL_ITEM,nome,240,241,243,255,w),lx,y+16,anim);
+    txt_desenhar_alpha(txt_linha_corta(TXT_PG_FIM,i==atual?"Reproduzindo agora":s->provedor,175,178,185,255,w),lx,y+46,anim);
+    txt_bloco(TXT_PG_FIM,descricao,194,197,202,lx,y+76,w,25,anim,2);
+    char meta[192],qual[24]="";
+    if(s->altura) snprintf(qual,sizeof qual," · %dp",s->altura);
+    snprintf(meta,sizeof meta,"%s%s%s%s",containerDa(s),qual,s->dolbyVision?" · Dolby Vision":"",s->dolbyAtmos?" · Atmos":"");
+    if(s->tamanhoMB) {size_t p=strlen(meta);snprintf(meta+p,sizeof meta-p," · %.1f GB",s->tamanhoMB/1024.0);}
+    txt_desenhar_alpha(txt_linha_corta(TXT_MINI,meta,224,226,232,255,w),lx,y+140,anim);
+    badges_desenhar(s->badges,lx,y+171,w,26,anim);
   }
-  if (rolagem + areaH < n * FOLHA_LINHA - 4.0f) {
-    TxtLinha a = txt_linha(TXT_CAPTION2, "▼  mais fontes", 170, 172, 182, 255);
-    txt_desenhar_alpha(a, (NV_TELA_W - a.w) * 0.5f,
-                       y + FOLHA_H - a.h - 5.0f, anim * 0.8f);
+  if(!nf) {
+    const char *s=addons_estado()==ADD_BUSCANDO?"Buscando fontes nos addons…":"Nenhuma fonte direta disponível. Use Recarregar para tentar novamente.";
+    txt_bloco(TXT_PG_FIM,s,196,199,204,x+56,FOLHA_TOPO+40,FOLHA_W-112,28,anim,3);
   }
+  gfx_sem_recorte();
 }

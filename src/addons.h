@@ -14,9 +14,29 @@
 
 typedef enum { ADD_PARADO = 0, ADD_BUSCANDO, ADD_PRONTO, ADD_VAZIO } AddEstado;
 
-// Le art/addons.txt (nome<TAB>url por linha). Sem o arquivo, o app segue com a
-// lista de exemplo de streams.c — nunca fica sem nada para mostrar.
+// Le art/addons.txt (nome<TAB>url por linha). Sem ele a lista fica vazia.
 int  addons_carregar(const char *dirArte);
+
+// Lista vinda da CONTA, substituindo o arquivo. E isto que torna o pacote
+// distribuivel: enquanto a lista sair de art/addons.txt, o .ipk carrega as
+// chaves de debrid de quem o montou embutidas nas URLs.
+//
+// Uma lista VAZIA e ignorada de proposito. O servidor pode responder vazio por
+// perfil errado, 401 mal tratado ou queda — e nenhum desses e "o usuario
+// removeu todos os addons". Trocar por vazio deixaria a pessoa sem fonte
+// nenhuma e sem entender por que.
+typedef struct { char nome[64]; char url[600]; int ativo; } AddonRemoto;
+int  addons_definir_lista(const AddonRemoto *lista, int n);
+
+// Lista atual, para o sync poder empurrar de volta o que este aparelho tem.
+int  addons_exportar(AddonRemoto *saida, int max);
+
+// Esquece a lista da conta. Chamado ao SAIR: sem isto, a proxima pessoa a usar
+// esta TV navega com os addons da anterior — e como as chaves de debrid vao
+// embutidas nas URLs, ela tambem consome a assinatura da anterior — ate o
+// primeiro sync terminar. Ficar sem fonte por alguns segundos e o
+// comportamento correto de "ninguem logado".
+void addons_esquecer(void);
 int  addons_n(void);
 const char *addons_base(int i);   // URL base, sem /manifest.json
 int  addons_tem_catalogo(int i);  // 1 quando o addon fornece catalogo

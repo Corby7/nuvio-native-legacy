@@ -16,7 +16,13 @@ int focus_mover(Foco *f, int dx, int dy) {
     if (novo >= 0 && novo < f->nColunas[f->fileira]) f->coluna = novo;
   }
   if (dy) {
+    // PULA fileira vazia. Num filme as fileiras de temporada e de episodio tem
+    // zero colunas, e pousar nelas era foco em coisa que a tela nem desenha: o
+    // D-pad parecia travado e a rolagem ainda mirava o grupo vazio. Uma fileira
+    // sem item nunca deve receber foco, entao a busca segue no mesmo sentido
+    // ate achar uma que tenha — ou desistir na borda, devolvendo 0.
     int nova = f->fileira + dy;
+    while (nova >= 0 && nova < f->nFileiras && f->nColunas[nova] <= 0) nova += dy;
     if (nova >= 0 && nova < f->nFileiras) {
       // guarda onde estava nesta fileira antes de sair
       f->colunaLembrada[f->fileira] = f->coluna;

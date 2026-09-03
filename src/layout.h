@@ -26,7 +26,28 @@
 // perfil do dono). MEDIDO: .home-modern-hero-media 1920x1062 em (0,0), imagem
 // em `object-fit: cover` com `object-position: 100% 0`. O bloco de texto
 // continua com 640 de largura, mas em x = NV_CONTENT_PAD e comecando em y=40.
-#define NV_HERO_CHEIO_H        1062.0f
+// 1080 e nao 1062. Os 1062 vieram da medida do `.home-modern-hero-media` no
+// app WEB, e ali sobravam 18px porque a janela do navegador tinha barra. Nesta
+// TV a tela e 1080 cravados, e os 18px que a arte nao cobria apareciam como uma
+// FAIXA no rodape — foi o "buraco/margem no final do background" que o dono viu.
+//
+// MEDIDO na captura do aparelho: y=1060 dava (13,13,13), y=1064 saltava para
+// (37,38,41) e ficava assim ate o fim da tela, em qualquer coluna.
+//
+// INVESTIGADO ate o fim, e a conclusao importa para quem mexer nisto depois: os
+// ultimos 18px NAO SAO NOSSOS. Provas, nesta ordem:
+//   - com o heroi em 1062 havia faixa; subindo para 1080 a faixa CONTINUOU
+//     igual, no mesmo y — ou seja, nao era o tamanho do heroi;
+//   - trocar a cor do glClear por magenta nao pintou aquela regiao;
+//   - desenhar um retangulo opaco ali tambem nao pintou;
+//   - SDL_GL_GetDrawableSize responde 1920x1080 (esta no /tmp/nuvio-fps.txt).
+// Ou seja: o SDL relata 1080 e a superficie GL de verdade tem 1062. A faixa e o
+// fundo do compositor do webOS aparecendo, e nenhum desenho do app a alcanca.
+//
+// Fica em 1080 assim mesmo: e o valor CORRETO para a tela, o excedente e
+// descartado sem custo, e se um firmware devolver a superficie inteira a arte
+// passa a cobrir sozinha.
+#define NV_HERO_CHEIO_H        1080.0f
 #define NV_HERO_CHEIO_COPY_Y     40.0f
 // Com o hero em TELA CHEIA o bloco de texto sobe: o web poe o logo em y=65 e a
 // linha de meta em 257, contra 135 e 327 do hero de faixa. MEDIDO na sessao
@@ -63,6 +84,7 @@
 // Scancode do BACK no SDL da LG (SDL_SCANCODE_WEBOS_BACK). Nao esta no
 // SDL_scancode.h padrao, por isso vem como numero.
 #define NV_SCANCODE_BACK 482
+#define NV_SCANCODE_BLUE 489 // SDL_webOS.h: SDL_WEBOS_SCANCODE_BLUE
 // Quanto tempo o OK precisa ficar pressionado para valer como pressao longa.
 // 500ms e o limiar classico: mais curto dispara sem querer, mais longo parece
 // que o botao nao respondeu.
@@ -111,6 +133,31 @@
 // a arte encosta no TOPO dela — nao cresce a partir da base, que era o que o
 // port fazia. 160 era medida de uma arte concreta, nao da caixa.
 #define NV_LOGO_HERO_H   200.0f
+
+// Quando um logo e a VARIANTE ESCURA do TMDB e precisa ser tingido de branco.
+//
+// DUAS condicoes, e a segunda importa tanto quanto a primeira. Os numeros saem
+// de medir os 40 logos de art/logo (media dos pixels opacos, croma =
+// max(RGB)-min(RGB)):
+//
+//   arquivo  lum  croma   decisao
+//   08, 19     0      0   TINGE  — preto puro, a variante errada
+//   07        17     19   TINGE  — quase preto
+//   27        74     21   TINGE  — cinza escuro, ilegivel sobre o backdrop
+//   01        63    124   passa  — VERMELHO ESCURO: cor de marca, deliberada
+//   24        76    255   passa  — vermelho puro
+//   38        84     43   passa
+//   20       129      0   passa  — acromatico, mas claro
+//
+// So a luminancia nao serve: reprovaria o 01 junto com os pretos, e tingir de
+// branco um logo vermelho-escuro troca um defeito por outro. So o croma
+// tambem nao: reprovaria o 20, que e cinza CLARO e le bem. E a conjuncao que
+// isola exatamente a variante errada — escura E sem cor propria.
+//
+// O limiar de luminancia e 80 e nao 70 por causa do 27, que mede 74: com 70 ele
+// escapava por quatro pontos e continuava sumindo na tela.
+#define NV_LOGO_LUM_MIN     80
+#define NV_LOGO_CROMA_MAX   45
 #define NV_LOGO_HERO_MAX_W 440.0f
 // Posicoes ABSOLUTAS do bloco de texto do hero, medidas no app web com a home
 // no topo. Antes isto era ancorado na BASE (base = 1080 - NV_HERO_BASE) e
@@ -128,6 +175,17 @@
 // (components.css:19171), que devolve 640 para meta, secundaria E sinopse — com
 // 560 a linha de meta de um episodio quebrava em duas ou tres linhas.
 #define NV_HERO_SIN_W    640.0f
+
+// HERO EDITORIAL DE COLECOES. A arte de uma colecao ja e uma composicao 16:9
+// pronta (gradiente, luz e area de respiro); o texto nao deve competir com uma
+// segunda capa grande no lado direito. As posicoes seguem a referencia da tela
+// de Awards: grupo no alto, logo real da lista no centro-esquerdo e a acao
+// encostando antes do cabecalho da fileira.
+#define NV_COLLECTION_HERO_GROUP_Y      182.0f
+#define NV_COLLECTION_HERO_LOGO_Y       258.0f
+#define NV_COLLECTION_HERO_LOGO_MAX_W   520.0f
+#define NV_COLLECTION_HERO_LOGO_MAX_H   150.0f
+#define NV_COLLECTION_HERO_CAPTION_Y    448.0f
 // line-height do CSS: sinopse 22*1.35, meta 21*1.25, secundaria 18*1.35.
 #define NV_LD_HERO_SIN   30
 #define NV_LD_HERO_META  26
@@ -153,10 +211,19 @@
 // altura 318 (o 212 x 1.5 "certinho" que o web nao usa) e gap 24.
 #define NV_CARD_W        212.0f
 #define NV_CARD_H        322.0f
-// 520 - 248 = 272 de passo; menos os 212 do card, o gap e 60. Era 24 — menos da
-// metade —, e e a diferenca que mais salta ao olhar as duas telas lado a lado:
-// as fileiras do nativo pareciam apertadas.
-#define NV_CARD_GAP      60.0f
+// 24, e o 60 que estava aqui era ERRO DE MEDIDA. A conta "520 - 248 = 272 de
+// passo, menos 212 do card = 60" mediu um estado com o card EXPANDIDO pelo
+// foco; o passo em repouso e outro.
+//
+// MEDIDO no app de referencia (com.nuvio.tv na TCL, 1920x1080, deteccao de
+// goteira coluna a coluna): card 210, goteira 24,0 px em todas as ocorrencias
+// consecutivas, passo 234. O CSS do web concorda: `--home-track-gap: 24px` em
+// `.home-layout-modern`. Duas fontes independentes contra uma conta feita em
+// cima do estado errado.
+//
+// Efeito: de ~6,6 para ~7,8 posteres por tela, e a fileira deixa de parecer
+// rala — que era o defeito oposto ao que o comentario antigo dizia consertar.
+#define NV_CARD_GAP      24.0f
 // Passo entre fileiras MEDIDO: titulo da fileira 0 em y=518, da fileira 1 em
 // y=934 -> 416. Desses, 46 sao do cabecalho ate os cards (518 -> 564) e 322 do
 // card, sobrando 48 de respiro entre uma fileira e a proxima.
@@ -216,13 +283,49 @@
 // shader recorta (cover) em vez de esticar; sem isso a imagem deforma, que foi
 // exatamente o defeito que apareceu na primeira tentativa.
 #define NV_DESTAQUE_W    419.0f
+#define NV_CW_PAD          18.0f
+#define NV_CW_BAR_H         4.0f
+#define NV_CW_BAR_BOTTOM   10.0f
+#define NV_CW_BADGE_PAD_X  14.0f
+#define NV_CW_BADGE_PAD_Y   8.0f
+#define NV_CW_BADGE_RADIUS  7.0f
 #define NV_DESTAQUE_H    236.0f   // continue watching: 419 x 236
                                   // (16:9 -> 3:2 -> 4:3 -> +20%: cada passo foi
                                   //  comparado lado a lado na TV)
 
 // Hero-carrossel: tempo em cada arte e duracao do crossfade.
 #define NV_HERO_INTERVALO_MS  7000
-#define NV_HERO_FADE_MS       900.0f
+// APAGAR a arte velha, NAO dissolver uma na outra.
+//
+// MEDIDO na referencia (screenrecord do aparelho, quadros com carimbo de tempo,
+// tres trocas de heroi na home, tecla DIREITA em "Continuar assistindo"):
+//   - a arte fica intacta ate ~90 ms depois da tecla (latencia de entrada);
+//   - a partir dai ela APAGA, e chega a alfa 0 aos ~450 ms depois da tecla,
+//     ou seja ~330 ms de esvanecimento;
+//   - a tela fica REALMENTE VAZIA (so o fundo) por um tempo que depende do
+//     carregamento: medi 120 ms com a arte em cache e 780 ms sem;
+//   - a arte nova entra de CORTE SECO, em UM UNICO QUADRO. Numa das trocas a
+//     luminancia da regiao da arte saltou de 20,5 para 93,1 entre dois quadros
+//     consecutivos (+72,5), e nos 1,8 s seguintes o gravador nao emitiu nem um
+//     quadro — nada se moveu. Nao ha esvanecimento de entrada.
+// Nao ha crossfade em momento nenhum: a arte velha e a nova nunca aparecem
+// juntas. Eram 900 ms de mistura, quase o triplo do tempo e a forma errada.
+#define NV_HERO_FADE_MS       330.0f
+// REPOUSO ANTES DE TROCAR O HEROI. O fundo so acompanha o foco depois que ele
+// PARA por este tempo.
+//
+// Sem isso, atravessar uma fileira de 12 cards trocava o heroi 12 vezes: a arte
+// piscava a cada passo (o dono: "no outro aplicativo, se eu passar rapido pelos
+// posteres, ele mantem a arte que estava ate eu parar no filme") e, pior, cada
+// troca PEDIA UMA TEXTURA DE 1920 — ~8 MB cada. Doze delas em dois segundos
+// estouram o orcamento do cache e despejam justamente os posteres que estao na
+// tela, que e a outra queixa ("continua nao aparecendo todos os posteres"). As
+// duas coisas eram o mesmo defeito.
+//
+// 220 ms: acima do intervalo de repeticao do D-pad segurado (~130 ms nesta TV),
+// entao atravessar a fileira nao dispara nenhuma troca; e curto o bastante para
+// que parar no card e ver o fundo responder pareca imediato.
+#define NV_HERO_REPOUSO_MS    220
 #define NV_HERO_DOT           9.0f
 #define NV_HERO_DOT_GAP      14.0f
 
@@ -256,7 +359,12 @@
 // para fora do lugar que o web reserva para ela.
 // .home-row-title do web: 26px, peso 600. O nativo usava HEADLINE (38), e era
 // isso que fazia o titulo da fileira invadir o card logo abaixo dele.
-#define NV_FT_ROW_TITULO 26
+// 33 e nao 26. MEDIDO comparando a MESMA string ("Top 100 Today - Filme")
+// presente nas duas capturas: largura da tinta 258 px no nosso contra 329 na
+// referencia, altura 25,2 contra 32,0 — razao 1,27 nos dois eixos. 26 x 1,27 =
+// 33. O 26 vinha do `.home-row-title` do web; o web e a TCL divergem aqui e a
+// TCL manda, por ser o aparelho.
+#define NV_FT_ROW_TITULO 33
 // .home-modern-hero-secondary: 18/600 na sessao logada.
 #define NV_FT_HERO_SEC   18   // --modern-hero-secondary-size (212*0.085)
 #define NV_FT_HERO_META  21   // --modern-hero-meta-size (212*0.1), peso 500
@@ -286,17 +394,51 @@
 #define NV_LD_CAPTION    29
 #define NV_LD_CAPTION2   30
 
+// ANEL DE FOCO, em pixels, para o app INTEIRO. MEDIDO na referencia: 4 px
+// solidos de branco puro, sem rampa, por fora da caixa do elemento. Vale para
+// card de home, card de episodio, botao de detalhe e tecla de teclado — um
+// numero so. NV_DETW_ANEL ja era 4 e so era aplicado no detalhe.
+#define NV_ANEL_FOCO      4.0f
+
+// FOCO EM SUPERFICIE (pilula, item de menu, chip): fundo ESCURO com texto
+// branco — nao o contrario.
+//
+// Usavamos #E4E4E9 (claro) com texto escuro, que alem de invertido em relacao a
+// referencia nao e cor de sistema nenhuma: nem #FFFFFF, nem o #F5F5F5 de
+// --secondary-color. Era um off-white azulado inventado. A referencia tem UM
+// token: --focus-bg #303030, confirmado no CSS do web e MEDIDO exato na TCL.
+//
+// Excecao legitima: o botao primario do detalhe ("Reproduzir") e branco com
+// texto preto nos DOIS apps. Esse continua como esta.
+#define NV_COR_FOCO_R     0.188f
+#define NV_COR_FOCO_G     0.188f
+#define NV_COR_FOCO_B     0.188f
+
 // Raios, em fracao do menor lado (o shader usa SDF normalizado)
 #define NV_RAIO_CARD     0.055f
 #define NV_RAIO_PILL     0.5f
 #define NV_RAIO_BADGE    0.18f
 
-// Cores (0..1). Fundo cinza-escuro, nunca preto puro — OBSERVADO nas fotos.
-// Cinza neutro, levemente frio — o tom que a home do aparelho usa atras das
-// fileiras. O quase-preto que estava aqui fazia os cards flutuarem no vazio.
-#define NV_COR_FUNDO_R   0.145f
-#define NV_COR_FUNDO_G   0.149f
-#define NV_COR_FUNDO_B   0.161f
+// Fundo: #0D0D0D. Aqui estava #252629, com a justificativa de que "o
+// quase-preto fazia os cards flutuarem no vazio" — mas a referencia E
+// quase-preta: MEDIDO #0D0D0D na home da TCL e #020202 na home rolada, e
+// `--bg-color: #0D0D0D` no CSS do web. As duas fontes concordam.
+//
+// Nao e cosmetico. Com #252629 o placeholder de card sem arte (#242429) ficava
+// a uma distancia de (1,2,0) do fundo — contraste 1,0:1, ou seja, INVISIVEL. Os
+// posteres "que nao apareciam" apareciam: como retangulos da cor exata do
+// fundo. Ver NV_COR_ESQUELETO logo abaixo.
+#define NV_COR_FUNDO_R   0.051f
+#define NV_COR_FUNDO_G   0.051f
+#define NV_COR_FUNDO_B   0.051f
+
+// Superficie de CARD SEM ARTE (#2C2C2C). MEDIDO na referencia, que a desenha
+// solida na caixa exata do card enquanto a imagem nao chega — luminancia ~22x
+// a do fundo, impossivel nao ver. E o que faz "carregando" ler como carregando
+// em vez de como quebrado.
+#define NV_COR_ESQUELETO_R 0.173f
+#define NV_COR_ESQUELETO_G 0.173f
+#define NV_COR_ESQUELETO_B 0.173f
 
 // Foco: escala 1.05-1.10x na HIG. Usamos 1.09 no card.
 // Escala do foco DERIVADA das tabelas oficiais de Top Shelf, que publicam
@@ -321,9 +463,25 @@
 // ("focusing animations should be prominent, unfocusing subtler"). Com a mesma
 // rigidez nos dois sentidos a navegacao fica com um peso uniforme que nao
 // existe no aparelho.
-#define NV_MOLA_FOCO     13.0f    // entrando no foco
-#define NV_MOLA_DESFOCO   8.5f    // saindo dele
+// ANEL DE FOCO — MEDIDO na referencia: ele nao esvanece, ele SALTA.
+//
+// Rastreei a aresta branca do card focado quadro a quadro. No primeiro quadro
+// desenhado depois da tecla (16-49 ms) o anel ja esta no card novo com o branco
+// cheio, e a folha do app web declara 120 ms `ease` para foco/borda. Os 13,0 /
+// 8,5 que estavam aqui davam 230 ms e 350 ms para 95% — o dobro e o triplo.
+// 25,0 fecha 95% em 120 ms, que e a medida. A assimetria foco/desfoco que havia
+// aqui vinha do HIG do tvOS, nao desta interface: na referencia os dois lados
+// levam o mesmo tempo, e com tempos diferentes existe um instante com DOIS
+// aneis na tela, que a referencia nunca mostra.
+#define NV_MOLA_FOCO     25.0f    // entrando no foco  (95% em 120ms)
+#define NV_MOLA_DESFOCO  25.0f    // saindo dele       (mesmo tempo: ver acima)
 #define NV_MOLA_SCROLL    8.0f
+// Frequencia (rad/s) da mola de 2a ordem que rola as fileiras da home. Vale o
+// k da CAUDA medida no deslize da referencia (~12,5 /s); 11,5 e o valor que
+// faz a curva inteira bater, porque nessa mola a cauda e so metade do ajuste:
+// p(t)=1-(1+wt)e^-wt cruza a metade em 1,678/w = 146 ms com w=11,5, e o medido
+// foi ~145 ms. Ver anim_mola2() em anim.h para o porque da troca de mola.
+#define NV_MOLA2_SCROLL  11.5f
 #define NV_MOLA_TELA      9.0f
 // Abertura da PAGINA de secoes do detalhe. MEDIDO na folha do app web:
 // `.series-detail-shell.detail-scrolled .series-detail-backdrop` vai a

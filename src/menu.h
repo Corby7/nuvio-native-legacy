@@ -3,8 +3,8 @@
 // Ele nao e uma tela: e uma camada que aparece POR CIMA do conteudo e toma o
 // D-pad enquanto esta visivel. Por isso a API foge do padrao de tela em dois
 // pontos, de proposito:
-//   - nao tem menu_encerrar: o modulo nao possui textura, fonte nem alocacao;
-//     tudo que ele desenha e cor solida e texto cacheado pelo text.c.
+//   - nao tem menu_encerrar: texto e icones usam os caches de text.c e gfx.c;
+//     o modulo nao possui alocacoes independentes.
 //   - nao tem menu_quer_sair: fechar o menu nunca fecha o app. O Back aqui so
 //     devolve o foco ao conteudo, e quem decide sair continua sendo a home.
 //
@@ -17,10 +17,14 @@
 
 // Os destinos do app, na ordem em que aparecem na barra. MENU_N fecha o enum
 // para quem quiser dimensionar vetor por destino sem repetir o numero 4.
+// ORDEM DA REFERENCIA: Inicio primeiro, depois Busca. Estava Busca antes de
+// Inicio, que poe a acao secundaria acima do destino padrao — e no D-pad
+// significa que voltar para a home custa um passo a mais que ir buscar.
 typedef enum {
-  MENU_BUSCAR,
   MENU_INICIO,
+  MENU_BUSCAR,
   MENU_BIBLIOTECA,
+  MENU_PERFIL,
   MENU_AJUSTES,
   MENU_N
 } MenuDestino;

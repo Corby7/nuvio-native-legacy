@@ -12,6 +12,7 @@
 #ifndef NV_TRAKT_H
 #define NV_TRAKT_H
 #include "catalogo.h"
+#include "perfil.h"
 #include <stddef.h>
 
 int  trakt_carregar(const char *dirArte);   // 1 quando ha credencial
@@ -27,9 +28,31 @@ int  trakt_cabecalhos(const char **cab, char *aut, size_t nAut,
                       char *chave, size_t nChave);
 int  trakt_ativo(void);
 
+// Credencial vinda da CONTA, no lugar do arquivo. O token sai de
+// sync_pull_provider_credentials (provider "trakt"); o clientId e do
+// APLICATIVO, nao da pessoa, e vem compilado (-DNV_TRAKT_CLIENT_ID, gerado de
+// local.properties). Enquanto isto nao existia, o vinculo Trakt do app nativo
+// era o do dono do pacote — para todo mundo que instalasse.
+int  trakt_definir(const char *token, const char *clientId);
+
+// Esquece a credencial. Chamado ao SAIR: um token de Trakt que sobrevive ao
+// logout continua ESCREVENDO (trakt_marcar) na conta de quem saiu, com o que a
+// proxima pessoa assistir.
+void trakt_esquecer(void);
+
 // Preenche ate `max` itens do "continue assistindo", ja com arte resolvida.
 // BLOQUEIA — chamar do fio de descoberta. Devolve quantos preencheu.
 int  trakt_continuar(CatItem *saida, int max);
+
+// Atividade recente dos AMIGOS do dono. Usa o feed social oficial do Trakt
+// (/users/me/friends/activities), mantendo no CatItem o titulo/arte normais e
+// os dados sociais nos campos de apresentacao: `pais` = nome do amigo,
+// `provNome` = acao e `direcao` = contexto do episodio. BLOQUEIA.
+int  trakt_social(CatItem *saida, int max);
+
+// Snapshot mensal usado pela tela Perfil e Stats. Faz as chamadas no fio de
+// trabalho do app e nunca deve ser executado no laco de desenho.
+int  trakt_perfil(PerfilDados *saida);
 
 // Informa onde o dono parou. `imdb` pode trazer episodio ("tt123:4:9").
 // Ate agora o app so LIA o Trakt; sem isto, assistir aqui nao mexia no
@@ -45,5 +68,13 @@ int  trakt_lista(const char *qual, CatItem *saida, int max);
 // o que faltava era escrever de volta: o botao "+" so mexia num vetor local e a
 // lista nos outros aparelhos nunca sabia.
 void trakt_watchlist(const char *imdb, int adicionar);
+
+// Marca (ou desmarca) o titulo como ASSISTIDO em /sync/history.
+//
+// NAO confundir com trakt_marcar, que e /scrobble/pause ("parei aqui") e serve
+// ao player. O botao do olho quer dizer "ja vi este", e usava trakt_marcar com
+// duracao 1.0 — valor que a propria guarda daquela funcao rejeita, entao nada
+// chegava ao Trakt.
+void trakt_assistido(const char *imdb, int marcar);
 
 #endif

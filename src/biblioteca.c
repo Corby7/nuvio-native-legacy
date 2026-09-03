@@ -31,6 +31,7 @@
 //   2. A rolagem move o MINIMO para a linha focada caber. Alinhar a linha focada
 //      ao topo empurra o cabecalho para fora da tela na primeira descida.
 #include "biblioteca.h"
+#include "trakt.h"
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
@@ -57,14 +58,14 @@
 
 // "Salvos" e a lista do proprio aparelho; "Nuvem" e o que veio do Trakt.
 enum { MODO_SALVOS, MODO_NUVEM, BIB_N_MODOS };
-static const char *ROT_MODO[BIB_N_MODOS] = { "Salvos", "Nuvem" };
+static const char *ROT_MODO[BIB_N_MODOS] = { "Salvos", "Coleção" };
 
 // Seletor "Tipo": os mesmos valores do web.
 enum { TIPO_TODOS, TIPO_FILME, TIPO_SERIE, BIB_N_TIPOS };
 static const char *ROT_TIPO[BIB_N_TIPOS] = { "Todos", "Filmes", "Séries" };
 // Seletor "Ordenar".
 enum { ORD_ADICIONADOS, ORD_TITULO, ORD_ANO, BIB_N_ORD };
-static const char *ROT_ORD[BIB_N_ORD] = { "Adicionados \xe2\x86\x93", "Título", "Ano \xe2\x86\x93" };
+static const char *ROT_ORD[BIB_N_ORD] = { "Ordem da lista", "Título: A a Z", "Ano: mais recentes" };
 
 static int modo = MODO_SALVOS;
 static int tipo = TIPO_TODOS;
@@ -73,6 +74,7 @@ static int pickSel = 0;          // qual dos dois seletores esta em foco
 
 static int filtro[CAT_MAX];      // indices do catalogo visiveis
 static int nFiltro = 0;
+static int totalModo = 0;
 static Foco foco;
 static float animModo[BIB_N_MODOS];
 static float animPick[2];
@@ -80,10 +82,10 @@ static float animFoco[BIB_MAX_LINHAS][NV_BIB_COLUNAS];
 static float scrollY = 0.0f;
 static int sair = 0, pedido = -1;
 
-// Estado de conta. No aparelho vem do login; aqui a lista de verdade e a do
-// Trakt, que marca ci->naLista/naColecao. `naLista` local guarda o que o botao
-// "+" do detalhe marcou nesta sessao.
-static char naLista[CAT_MAX];
+// Estado de conta. A lista de verdade e a do Trakt, que marca
+// ci->naLista/naColecao NO ITEM — nao ha mais tabela por indice aqui: o
+// catalogo e reconstruido da rede e um indice guardado aponta para outro titulo
+// na volta seguinte. `comprado` sobrevive porque nao ha fonte para ele ainda.
 static char comprado[CAT_MAX];
 
 static float alturaLinha(void) {
@@ -106,14 +108,28 @@ static void reconstruir(void) {
   int n = cat_n();
   if (n > CAT_MAX) n = CAT_MAX;
   nFiltro = 0;
+  totalModo = 0;
   for (int i = 0; i < n; i++) {
     const CatItem *ci = cat_item(i);
     if (!ci) continue;
-    // "Salvos" = o que este aparelho marcou; "Nuvem" = o que veio do Trakt
-    // (watchlist ou colecao).
-    int entra = (modo == MODO_SALVOS) ? (naLista[i] || ci->naLista)
-                                      : (ci->naLista || ci->naColecao || comprado[i]);
+    // "Salvos" = QUERO VER (watchlist do Trakt). "Nuvem" = TENHO (colecao).
+    //
+    // Os dois modos mostravam quase a MESMA lista: ambos incluiam ci->naLista,
+    // entao trocar de pilula praticamente nao mudava nada e as duas nao tinham
+    // razao de existir. A divisao agora e a do proprio Trakt, que separa
+    // watchlist (o que se pretende ver) de collection (o que se possui) — sao
+    // perguntas diferentes e cada pilula responde uma.
+    //
+    // E le do ITEM, nao mais do vetor naLista[] indexado por posicao. Aquele
+    // vetor era um erro conhecido e documentado: o catalogo e RECONSTRUIDO da
+    // rede a cada descoberta, entao a posicao 3 de hoje e outro titulo amanha —
+    // a marca "salvo" migrava sozinha para um filme que ninguem salvou. A marca
+    // tem de viver no item, e vive (CatItem.naLista / .naColecao, preenchidos
+    // com a lista de verdade do Trakt).
+    int entra = (modo == MODO_SALVOS) ? ci->naLista
+                                      : (ci->naColecao || comprado[i]);
     if (!entra) continue;
+    totalModo++;
     if (tipo == TIPO_FILME && ehSerie(ci)) continue;
     if (tipo == TIPO_SERIE && !ehSerie(ci)) continue;
     // `hideUnreleasedContent`: sem ano em `meta` o titulo ainda nao estreou do
@@ -155,16 +171,15 @@ static void reconstruir(void) {
 
 static int iniciado;
 int biblioteca_iniciar(void) {
-  // Zerado UMA vez por processo, e nao a cada entrada: o botao "+" do detalhe
-  // usa esta tabela, e apagar a escolha do usuario a cada visita a faria sumir
-  // sem ele entender por que.
+  // Zerado UMA vez por processo, e nao a cada entrada.
   if (!iniciado) {
-    memset(naLista, 0, sizeof naLista);
     memset(comprado, 0, sizeof comprado);
     iniciado = 1;
   }
   modo = MODO_SALVOS; tipo = TIPO_TODOS; ordem = ORD_ADICIONADOS;
   pickSel = 0;
+  memset(animModo, 0, sizeof animModo);
+  memset(animPick, 0, sizeof animPick);
   sair = 0; pedido = -1;
   reconstruir();
   // O foco nasce na barra de modos: quem entra ainda esta escolhendo o recorte.
@@ -175,11 +190,19 @@ int biblioteca_iniciar(void) {
 
 void biblioteca_encerrar(void) { }
 
-int biblioteca_na_lista(int i) { return (i >= 0 && i < CAT_MAX) ? naLista[i] : 0; }
+int biblioteca_na_lista(int i) {
+  // A verdade e a marca DO ITEM, que a descoberta preenche com a watchlist do
+  // Trakt. O vetor por indice que respondia aqui apontava para outro titulo
+  // assim que o catalogo era reconstruido.
+  const CatItem *c = cat_item(i);
+  return c ? c->naLista : 0;
+}
 int biblioteca_comprado(int i) { return (i >= 0 && i < CAT_MAX) ? comprado[i] : 0; }
 void biblioteca_alternar_lista(int i) {
-  if (i < 0 || i >= CAT_MAX) return;
-  naLista[i] = !naLista[i];
+  // So remonta a lista. Quem vira a marca e cat_definir_na_lista, no mesmo
+  // ponto que fala com o Trakt (app.c) — ter DOIS donos do mesmo estado era o
+  // que deixava a biblioteca discordando do botao "+" do detalhe.
+  (void)i;
   reconstruir();
 }
 
@@ -208,7 +231,9 @@ void biblioteca_evento(const SDL_Event *e) {
     if (k == SDLK_LEFT && modo > 0) {
       modo--; reconstruir(); foco.fileira = BIB_FIL_MODO; foco.coluna = modo; return;
     }
-    if (k == SDLK_DOWN) { foco.fileira = BIB_FIL_PICK; foco.coluna = pickSel; }
+    if (k == SDLK_DOWN || k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+      foco.fileira = BIB_FIL_PICK; foco.coluna = pickSel;
+    }
     return;
   }
 
@@ -255,7 +280,9 @@ void biblioteca_atualizar(float dt, Uint32 agora) {
     animPick[p] = anim_mola(animPick[p], alvo, dt,
                             alvo > animPick[p] ? NV_MOLA_FOCO : NV_MOLA_DESFOCO);
   }
-  for (int r = 0; r < BIB_MAX_LINHAS; r++)
+  int linhas = nLinhas();
+  if (linhas > BIB_MAX_LINHAS) linhas = BIB_MAX_LINHAS;
+  for (int r = 0; r < linhas; r++)
     for (int c = 0; c < NV_BIB_COLUNAS; c++) {
       float alvo = focus_indice(&foco, BIB_FIL_GRADE + r, c) ? 1.0f : 0.0f;
       animFoco[r][c] = anim_mola(animFoco[r][c], alvo, dt,
@@ -290,9 +317,11 @@ static void desenhaModo(int a, float f) {
     gfx_cor(b, raio, 0.961f, 0.961f, 0.961f, f);
   }
   float lum = sel ? 0.188f : 0.133f;        // #303030 contra #222
-  lum = anim_mistura(lum, 0.92f, f);
   gfx_cor(r, raio, lum, lum, lum, 1.0f);
-  int cor = (f > 0.55f) ? 24 : 255;
+  if (sel && f < 0.98f)
+    gfx_rect(r, 0, GFX_ANEL, 0, 1.0f / r.h, 0, raio,
+             0.70f, 0.70f, 0.72f, 1.0f - f);
+  int cor = 245;
   TxtLinha l = txt_linha(TXT_CAPTION2, ROT_MODO[a], cor, cor, cor, 255);
   txt_desenhar_alpha(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f,
                      sel ? 1.0f : 0.82f);
@@ -314,14 +343,14 @@ static void desenhaPicker(int p, float f) {
   const char *rot = (p == 0) ? "Tipo" : "Ordenar";
   const char *val = (p == 0) ? ROT_TIPO[tipo] : ROT_ORD[ordem];
   // 19/500 rgb(128,128,128) em cima, 30/500 branco embaixo com 4 de folga.
-  TxtLinha tr = txt_linha(TXT_MINI, rot, 128, 128, 128, 255);
+  TxtLinha tr = txt_linha(TXT_MINI, rot, 179, 179, 179, 255);
   TxtLinha tv = txt_linha(TXT_CALLOUT, val, 255, 255, 255, 255);
   float tx = r.x + NV_BIB_PICK_PADX;
   float ty = r.y + NV_BIB_PICK_PADY;
   txt_desenhar_alpha(tr, tx, ty, 0.95f);
   txt_desenhar_alpha(tv, tx, ty + tr.h + 4.0f, 1.0f);
 
-  TxtLinha seta = txt_linha(TXT_CAPTION2, "\xe2\x96\xbc", 236, 237, 242, 255);
+  TxtLinha seta = txt_linha(TXT_CAPTION2, "OK: alterar", 196, 197, 202, 255);
   txt_desenhar_alpha(seta, r.x + r.w - NV_BIB_PICK_PADX - seta.w,
                      r.y + (r.h - seta.h) * 0.5f, 0.85f);
 }
@@ -329,33 +358,66 @@ static void desenhaPicker(int p, float f) {
 // Estado vazio: 46/500 branco e 28/400 rgb(179,179,179), centrado na largura
 // util. Uma grade em branco parece tela quebrada.
 static void desenhaVazio(void) {
-  const char *l1 = "Nada por aqui ainda";
-  const char *l2 = (modo == MODO_NUVEM)
-      ? "O que você salvar na sua conta aparece aqui."
-      : "Comece a salvar seus favoritos para vê-los aqui";
+  const char *l1 = totalModo ? "Nenhum título neste filtro"
+      : modo == MODO_NUVEM ? "Sua coleção aparece aqui" : "Sua próxima sessão começa aqui";
+  const char *l2 = totalModo
+      ? "Em Tipo, escolha Todos. Confira também os filtros em Ajustes."
+      : modo == MODO_NUVEM
+        ? "Os filmes e séries da sua coleção no Trakt ficam reunidos nesta aba."
+        : "Abra um filme ou série e escolha Adicionar à lista para guardar.";
   TxtLinha t1 = txt_linha(TXT_TITULO2, l1, 255, 255, 255, 255);
   TxtLinha t2 = txt_linha(TXT_CALLOUT, l2, 179, 179, 179, 255);
   float cx = NV_BIB_X + NV_BIB_W * 0.5f;
-  float y = NV_BIB_VAZIO_Y + 38.0f + 300.0f;
+  float y = NV_BIB_VAZIO_Y + 190.0f;
+  gfx_icone((GfxRect){cx - 32.0f, y - 100.0f, 64.0f, 64.0f},
+             "menu_library", 0.70f, 0.70f, 0.72f, 1.0f);
   txt_desenhar_alpha(t1, cx - t1.w * 0.5f, y, 0.96f);
   txt_desenhar_alpha(t2, cx - t2.w * 0.5f, y + t1.h + 18.0f, 0.85f);
+  TxtLinha dica = txt_linha(TXT_CAPTION2,
+      "↑ Voltar aos filtros   ·   Voltar: menu", 179, 179, 179, 255);
+  txt_desenhar(dica, cx - dica.w * 0.5f, y + t1.h + t2.h + 58.0f);
 }
 
 void biblioteca_desenhar(Uint32 agora) {
+  (void)agora;
   // Fundo opaco proprio: a biblioteca cobre a tela inteira e nao pode contar com
   // quem desenhou antes dela.
   GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
-  gfx_cor(tela, 0.0f, NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
+  // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
+  // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
+  // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill
+  // rate (gfx.c registra que DUAS camadas de tela cheia derrubavam a
+  // Mali-G71 para ~40fps). Nao repor sem antes mudar a cor do clear.
+  (void)tela;
 
   TxtLinha tit = txt_linha(TXT_TITULO2, "Biblioteca", 255, 255, 255, 255);
   txt_desenhar(tit, NV_BIB_X, NV_BIB_Y);
   // Selo de origem, alinhado a direita da area util. Espacado de proposito: no
   // web ele tem letter-spacing 4 e le como etiqueta, nao como palavra.
-  float wSelo = txt_tracking(TXT_CALLOUT, "NUVIO", 128, 128, 128, -1.0f, 0.0f, 0.0f, 4.0f);
-  txt_tracking(TXT_CALLOUT, "NUVIO", 128, 128, 128,
-               NV_BIB_DIR - wSelo, NV_BIB_Y + 10.0f, 0.9f, 4.0f);
+  //
+  // O SELO DIZ A ORIGEM DE VERDADE. Estava cravado em "NUVIO", que e o nome do
+  // app e nao a fonte dos dados — a lista vem do TRAKT, e o log confirma
+  // ("[trakt] credencial carregada", "[trakt] watchlist: 118"). Selo de origem
+  // que nao reflete a origem e da mesma familia da classificacao "14" e do
+  // elenco de demonstracao: informacao inventada com cara de dado.
+  //
+  // Sem credencial do Trakt a biblioteca e local, e o selo diz isso.
+  { const char *fonte = trakt_ativo() ? "TRAKT" : "LOCAL";
+    float wSelo = txt_tracking(TXT_CALLOUT, fonte, 128, 128, 128,
+                               -1.0f, 0.0f, 0.0f, 4.0f);
+    txt_tracking(TXT_CALLOUT, fonte, 128, 128, 128,
+                 NV_BIB_DIR - wSelo, NV_BIB_Y + 10.0f, 0.9f, 4.0f); }
 
   for (int a = 0; a < BIB_N_MODOS; a++) desenhaModo(a, animModo[a]);
+  {
+    char resumo[160];
+    snprintf(resumo, sizeof resumo, "%d %s   ·   %s", nFiltro,
+             nFiltro == 1 ? "título" : "títulos",
+             modo == MODO_SALVOS ? "Sua lista para assistir" : "Sua coleção no Trakt");
+    TxtLinha info = txt_linha(TXT_CAPTION2, resumo, 179, 179, 179, 255);
+    txt_desenhar(info, NV_BIB_DIR - info.w,
+                 NV_BIB_MODO_Y + (NV_BIB_MODO_H - info.h) * 0.5f);
+  }
   for (int p = 0; p < 2; p++)           desenhaPicker(p, animPick[p]);
 
   if (nFiltro == 0) { desenhaVazio(); return; }
@@ -401,22 +463,18 @@ void biblioteca_desenhar(Uint32 agora) {
         } else {
           // Placeholder na cor dos cards: o poster ainda esta decodificando em
           // outra thread e a grade nao pode piscar buraco.
-          gfx_cor(card, raio, 0.133f, 0.133f, 0.133f, a);
+          // Esqueleto VISIVEL, o mesmo da home: #2C2C2C. Ver a nota la — placeholder
+            // do tom do fundo le como card quebrado, nao como carregando.
+            gfx_cor(card, raio, NV_COR_ESQUELETO_R, NV_COR_ESQUELETO_G,
+                  NV_COR_ESQUELETO_B, a);
         }
         // A borda de foco do web e de 4px POR DENTRO do poster (o card ja
         // reserva `border: 4px solid transparent`), e nao um halo por fora —
         // "Android TV uses the inside focus border, not an outer halo", diz o
         // proprio comentario da folha.
         if (f > 0.01f) {
-          float b = NV_BIB_POSTER_BORDA;
-          GfxRect topoB = { card.x, card.y, card.w, b };
-          GfxRect baseB = { card.x, card.y + card.h - b, card.w, b };
-          GfxRect esqB  = { card.x, card.y, b, card.h };
-          GfxRect dirB  = { card.x + card.w - b, card.y, b, card.h };
-          gfx_cor(topoB, 0.0f, 0.961f, 0.961f, 0.961f, f * a);
-          gfx_cor(baseB, 0.0f, 0.961f, 0.961f, 0.961f, f * a);
-          gfx_cor(esqB,  0.0f, 0.961f, 0.961f, 0.961f, f * a);
-          gfx_cor(dirB,  0.0f, 0.961f, 0.961f, 0.961f, f * a);
+          gfx_rect(card, 0, GFX_ANEL, 0, NV_BIB_POSTER_BORDA / card.w,
+                   0, raio, 0.961f, 0.961f, 0.961f, f * a);
         }
 
         // Titulo 32/500, uma linha, cortado com reticencias — o web usa

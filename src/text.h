@@ -36,16 +36,40 @@ typedef enum {
   //   .player-parental-label 22 / 600
   //   .player-parental-severity e .player-parental-separator 22 / 400
   TXT_PG_RELOGIO, TXT_PG_FIM, TXT_PG_ROTULO, TXT_PG_GRAV,
+  TXT_PAINEL_TITULO, TXT_PAINEL_ITEM,
+  TXT_CW_TITULO, TXT_CW_META, TXT_CW_BADGE,
+  TXT_RANK,
+  // Legenda externa: 50%..200%, em passos de 10. O firmware da C9 oferece
+  // apenas cinco degraus; estas fontes pertencem ao overlay do proprio app.
+  TXT_LEG_50, TXT_LEG_60, TXT_LEG_70, TXT_LEG_80,
+  TXT_LEG_90, TXT_LEG_100, TXT_LEG_110, TXT_LEG_120,
+  TXT_LEG_130, TXT_LEG_140, TXT_LEG_150, TXT_LEG_160,
+  TXT_LEG_170, TXT_LEG_180, TXT_LEG_190, TXT_LEG_200,
   TXT_NFONTES
 } TxtEstilo;
 
 typedef struct { GLuint tex; int w, h; } TxtLinha;
+
+// Familia alternativa usada SOMENTE pelo renderer de legenda externa. A
+// interface continua em Inter; misturar a familia da legenda com menus faria
+// a preferencia de reproducao redesenhar o app inteiro.
+typedef enum {
+  TXT_FAMILIA_INTER = 0,
+  TXT_FAMILIA_LG,
+  TXT_FAMILIA_DROID,
+  TXT_FAMILIA_N
+} TxtFamilia;
+
+extern const char *const TXT_FAMILIAS_PT[TXT_FAMILIA_N];
 
 // Instrumentacao: quantas linhas foram RASTERIZADAS (nao vieram do cache) no
 // quadro e quanto tempo isso custou. Rasterizar texto e a operacao mais cara
 // que acontece dentro de um quadro, e sem contador nao da para saber se um
 // jank veio dai ou do upload de textura.
 extern int    txt_rasterizadas;
+// Despejos do cache de linhas. Diferente de zero com a tela parada = a tabela
+// nao cabe no que a tela desenha, e o texto pisca.
+extern int    txt_despejos;
 extern double txt_ms;
 
 // `dirRecursos` e a pasta que contem fonts/. No aparelho e a pasta do app; no
@@ -64,12 +88,20 @@ void txt_novo_quadro(void);
 
 TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a);
 
+// Igual a txt_linha, mas escolhe uma das familias seguras para a legenda. Se a
+// fonte do sistema nao existir (por exemplo na previa do Mac), cai na Inter
+// embarcada e registra o fallback uma vez no log.
+TxtLinha txt_linha_familia(TxtEstilo estilo, const char *s, int r, int g,
+                           int b, int a, TxtFamilia familia);
+
 // Linha que NUNCA passa de `maxW`: corta por palavra (ou por caractere, se uma
 // palavra so ja estourar) e fecha com "…". Conteudo que vem de fora (nome de
 // addon, genero do TMDB) nao tem comprimento garantido, e sem corte ele invade
 // a coluna vizinha — foi o que apareceu no Top 10 e na folha de faixas.
 TxtLinha txt_linha_corta(TxtEstilo estilo, const char *s, int r, int g, int b,
                          int a, float maxW);
+TxtLinha txt_linha_corta_familia(TxtEstilo estilo, const char *s, int r, int g,
+                                 int b, int a, float maxW, TxtFamilia familia);
 
 // Desenha no canto superior esquerdo (x,y).
 void txt_desenhar(TxtLinha l, float x, float y);

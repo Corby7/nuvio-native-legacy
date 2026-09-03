@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "tex_cache.h"
 #include <SDL2/SDL.h>
 #include "layout.h"
 #include <stdio.h>
@@ -15,6 +16,7 @@ static int progAtual = -1;
 // Proporcao da textura corrente, para o "cover". Fica global porque o desenho e
 // imediato: quem chama define antes de cada rect com textura.
 float gfx_tex_aspect_atual = 0.0f;
+float gfx_opacidade_grupo = 1.0f;
 // Tamanho real do alvo da tela (em retina, maior que 1920x1080). Guardado aqui
 // porque toda volta de FBO precisa restaurar o viewport com ele.
 static int telaW = (int)NV_TELA_W, telaH = (int)NV_TELA_H;
@@ -244,7 +246,14 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "                - clamp((x-0.5148)/0.0936,0.0,1.0)*0.16\n"
   "                - clamp((x-0.6084)/0.0936,0.0,1.0)*0.11\n"
   "                - clamp((x-0.7020)/0.0780,0.0,1.0)*0.07;\n"
-  "  c = mix(c, bg, clamp(a,0.0,1.0));\n"
+  // uFoco = FORCA da vinheta: 1 no topo, 0 com a pagina rolada. No web a
+  // vinheta e uma CAMADA IRMA do backdrop e tem opacidade propria — ao rolar,
+  // `.detail-scrolled` leva a arte a 0.15 E a vinheta a 0 (components.css:17348).
+  // Aqui os dois estao fundidos num modo so, por fill rate (ver gfx.h:21-25),
+  // entao a opacidade da vinheta precisa entrar como uniforme. Sem isto ela
+  // ficava em forca TOTAL sobre uma arte ja a 15%, e os 78% da esquerda — que e
+  // exatamente onde o texto se apoia — viravam preto solido.
+  "  c = mix(c, bg, clamp(a,0.0,1.0) * uFoco);\n"
   "  gl_FragColor = vec4(c, uCor.a);\n"
   "}\n",
 
@@ -366,6 +375,81 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "  if (m <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
   "}\n",
+
+  // GFX_MARCA — a forma vem do ALPHA, a cor de uCor. Ver a nota em gfx.h.
+  "void main(){\n"
+  "  float m = texture2D(uTex, vUv).a;\n"
+  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "}\n",
+
+  // GFX_VEU_BAIXO — vertical puro, transparente em cima. Ver a nota em gfx.h.
+  "void main(){\n"
+  "  float t = clamp(vUv.y, 0.0, 1.0);\n"
+  "  float g = t * t * (3.0 - 2.0 * t);\n"
+  "  g = g * g;\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uCor.a);\n"
+  "}\n",
+  // GFX_SOCIAL: broad off-centre light, quiet left side for copy.
+  "void main(){\n"
+  "  vec2 p = vUv;\n"
+  "  float glow = 1.0-smoothstep(0.0,0.95,length((p-vec2(0.88,0.18))*vec2(1.0,1.25)));\n"
+  "  float ribbon = 1.0-smoothstep(0.04,0.40,abs(p.y-0.12-p.x*0.44));\n"
+  "  vec3 c = mix(vec3(0.105,0.065,0.095),vec3(0.40,0.14,0.18),glow);\n"
+  "  c += vec3(0.065,0.028,0.020)*ribbon*glow;\n"
+  "  c = mix(c,vec3(0.047,0.045,0.055),smoothstep(0.44,1.0,p.y));\n"
+  "  gl_FragColor = vec4(c,uCor.a);\n"
+  "}\n",
+
+  // GFX_AVATAR: mascara radial exata. O GFX_CARD usa o SDF de retangulo
+  // arredondado e over-scan de parallax; num circulo pequeno isso deixava a
+  // aresta irregular e deslocava a fotografia dentro do disco.
+  "void main(){\n"
+  "  vec2 p=(vUv-0.5)*vec2(uAspect,1.0);\n"
+  "  float d=length(p);\n"
+  "  float m=smoothstep(0.500,0.486,d);\n"
+  "  if(m<=0.001) discard;\n"
+  "  vec3 c=texture2D(uTex,clamp(cover(vUv),0.0,1.0)).rgb;\n"
+  "  gl_FragColor=vec4(c,m*uCor.a);\n"
+  "}\n",
+
+  // GFX_RETRATO: preserva o enquadramento vertical do profile still e o
+  // ancora a direita. Fora da fotografia o shader fica transparente, deixando
+  // o hero de base aparecer sem a emenda de um segundo painel.
+  "void main(){\n"
+  // A origem e um still vertical com fundo branco. Tonalizamos os highlights
+  // antes do alpha: o branco do arquivo vira uma luz cinza do mesmo ambiente,
+  // em vez de um retangulo branco colado atras do elenco.
+  "  float cropH=0.82;\n"
+  "  float dispW=clamp((uTexAsp/uAspect)/cropH,0.30,0.72);\n"
+  "  float x0=1.0-dispW;\n"
+  "  vec2 uv=vec2((vUv.x-x0)/dispW,0.01+vUv.y*cropH);\n"
+  "  float inside=step(x0,vUv.x)*step(vUv.x,1.0);\n"
+  "  vec3 raw=texture2D(uTex,clamp(uv,0.0,1.0)).rgb;\n"
+  "  float l=dot(raw,vec3(0.2126,0.7152,0.0722));\n"
+  "  float tone=pow(clamp(l,0.0,1.0),0.78);\n"
+  "  vec3 c=vec3(0.035,0.038,0.045)+vec3(0.245,0.250,0.265)*tone;\n"
+  "  c=mix(c,vec3(0.075,0.078,0.088),smoothstep(0.78,1.0,l)*0.40);\n"
+  "  float left=smoothstep(x0,x0+dispW*0.16,vUv.x);\n"
+  "  float bottom=1.0-smoothstep(0.70,0.99,vUv.y);\n"
+  "  float top=smoothstep(0.0,0.10,vUv.y)*0.16+0.84;\n"
+  "  float right=1.0-smoothstep(0.91,1.0,vUv.x)*0.22;\n"
+  // Pixels muito claros recebem menos alpha, o que conserva a leitura do
+  // rosto e deixa o fundo do still respirar junto com o degrade do hero.
+  "  float paper=1.0-smoothstep(0.56,0.96,l);\n"
+  "  float density=0.32+0.56*paper;\n"
+  "  float mask=inside*left*bottom*top*right*density;\n"
+  "  if(mask<=0.001) discard;\n"
+  "  gl_FragColor=vec4(c,uCor.a*mask);\n"
+  "}\n",
+
+  // GFX_DISCO: preenchimento circular com antialias. Ao ficar atras do avatar
+  // produz um aro perfeito sem esconder pixels da imagem nem criar rebarbas.
+  "void main(){\n"
+  "  vec2 p=(vUv-0.5)*vec2(uAspect,1.0);\n"
+  "  float m=smoothstep(0.500,0.486,length(p));\n"
+  "  if(m<=0.001) discard;\n"
+  "  gl_FragColor=vec4(uCor.rgb,uCor.a*m);\n"
+  "}\n",
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
@@ -374,7 +458,13 @@ static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
   {0,1}, {0,1},
   {1,0},   /* GFX_ANEL */
   {0,0},   /* GFX_OLHO    — SDF proprio, nao o do retangulo */
-  {0,0}    /* GFX_FONTES  — idem */
+  {0,0},   /* GFX_FONTES  — idem */
+  {0,0},   /* GFX_MARCA   — so o alpha da textura: sem SDF, sem cover */
+  {0,0},   /* GFX_VEU_BAIXO — degrade vertical puro */
+  {0,0},   /* GFX_SOCIAL */
+  {0,1},   /* GFX_AVATAR */
+  {0,0},   /* GFX_RETRATO */
+  {0,0}    /* GFX_DISCO */
 };
 
 static GLuint compila(GLenum tipo, const char *src) {
@@ -452,12 +542,47 @@ static GLuint texAtual = 0;
 // tex = 0 significa "esqueca tudo": e o que os uploads usam.
 void gfx_tex_esquecer(GLuint tex) { if (tex == 0 || texAtual == tex) texAtual = 0; }
 
+int    gfx_n_rect = 0, gfx_n_prog = 0, gfx_n_bind = 0, gfx_n_outros = 0;
+double gfx_ms_rect = 0.0, gfx_ms_outros = 0.0;
+// PREENCHIMENTO SUBMETIDO no quadro, em telas cheias (1920x1080 = 1,0).
+// Nesta Mali o custo e de fragmento, nao de chamada: a nota no topo deste
+// arquivo diz que DUAS camadas de tela cheia derrubavam o quadro para ~40fps.
+// Sem contar a area, "quantas camadas cheias tem esta tela" e chute — com o
+// contador e uma medida por quadro.
+double gfx_fill = 0.0;
+int    gfx_n_cheio = 0;   // desenhos que cobrem >= 50% da tela
+static double gfxFreqMs = 0.0;
+void gfx_novo_quadro(void) {
+  gfx_n_rect = gfx_n_prog = gfx_n_bind = gfx_n_outros = 0;
+  gfx_ms_rect = gfx_ms_outros = 0.0;
+  gfx_fill = 0.0; gfx_n_cheio = 0;
+}
+// Relogio dos pontos de GL que NAO sao gfx_rect: recorte, FBO do snapshot e as
+// tres passadas do desfoque. Numa GPU de ladrilhos trocar de alvo de render no
+// meio do quadro forca descarga do ladrilho — e o suspeito natural para o custo
+// de CPU que sobra dentro de app_desenhar depois de descontar gfx_rect e texto.
+#define GFX_OUTRO_INI() \
+  if (gfxFreqMs == 0.0) gfxFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency(); \
+  Uint64 tO_ = SDL_GetPerformanceCounter()
+#define GFX_OUTRO_FIM() do { \
+  gfx_ms_outros += (double)(SDL_GetPerformanceCounter() - tO_) * gfxFreqMs; \
+  gfx_n_outros++; } while (0)
+
 void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,
               float parx, float pary, float raio,
               float cr, float cg, float cb, float ca) {
   if ((int)modo < 0 || (int)modo >= GFX_NMODOS) return;
+  if (gfxFreqMs == 0.0) gfxFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency();
+  (void)gfxFreqMs;
+#ifdef NV_PERF_FINO
+  Uint64 t0 = SDL_GetPerformanceCounter();
+#endif
+  gfx_n_rect++;
+  { float area = (r.w * r.h) / (NV_TELA_W * NV_TELA_H);
+    gfx_fill += area;
+    if (area >= 0.5f) gfx_n_cheio++; }
   const Programa *P = &progs[modo];
-  if (progAtual != (int)modo) { glUseProgram(P->prog); progAtual = (int)modo; }
+  if (progAtual != (int)modo) { glUseProgram(P->prog); progAtual = (int)modo; gfx_n_prog++; }
   // Uniform que o shader do modo nao declara volta como -1 do link; passar -1
   // ao glUniform e no-op valido mas ainda paga a travessia da chamada GL. Num
   // quadro tipico da home sao centenas de gfx_rect, a maioria em modos que nao
@@ -468,13 +593,17 @@ void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,
   if (P->raio >= 0)   glUniform1f(P->raio, raio);
   if (P->asp >= 0)    glUniform1f(P->asp, r.h > 0 ? r.w / r.h : 1.0f);
   if (P->texAsp >= 0) glUniform1f(P->texAsp, gfx_tex_aspect_atual);
-  if (P->cor >= 0)    glUniform4f(P->cor, cr, cg, cb, ca);
+  if (P->cor >= 0)    glUniform4f(P->cor, cr, cg, cb, ca * gfx_opacidade_grupo);
   if (tex && tex != texAtual) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
     texAtual = tex;
+    gfx_n_bind++;
   }
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+#ifdef NV_PERF_FINO
+  gfx_ms_rect += (double)(SDL_GetPerformanceCounter() - t0) * gfxFreqMs;
+#endif
 }
 
 void gfx_cor(GfxRect r, float raio, float cr, float cg, float cb, float ca) {
@@ -523,16 +652,20 @@ int gfx_snap_iniciar(int w, int h) {
 
 void gfx_snap_comecar(void) {
   if (!snapFbo) return;
+  GFX_OUTRO_INI();
   glBindFramebuffer(GL_FRAMEBUFFER, snapFbo);
   // uTela continua em coordenadas de tela cheia: o viewport menor faz a
   // reducao sozinho, e nenhum codigo de layout precisa saber que existe FBO.
   glViewport(0, 0, snapW, snapH);
+  GFX_OUTRO_FIM();
 }
 
 void gfx_snap_terminar(void) {
   if (!snapFbo) return;
+  GFX_OUTRO_INI();
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glViewport(0, 0, telaW, telaH);
+  GFX_OUTRO_FIM();
 }
 
 void gfx_snap_desenhar(void) {
@@ -548,8 +681,33 @@ void gfx_snap_encerrar(void) {
   snapFbo = snapTex = 0;
 }
 
+// --- icones ------------------------------------------------------------------
+static char dirIcones[512];
+
+void gfx_icones_dir(const char *dirArte) {
+  snprintf(dirIcones, sizeof dirIcones, "%s/icones", dirArte ? dirArte : ".");
+}
+
+void gfx_icone(GfxRect r, const char *nome, float cr, float cg, float cb, float ca) {
+  char cam[600];
+  GLuint t;
+  if (!nome || !nome[0] || !dirIcones[0]) return;
+  // Caminho ABSOLUTO: o diretorio de trabalho do app nao e a pasta da arte, e
+  // com caminho relativo o IMG_Load falha em silencio e o icone some sem erro.
+  // Mesma armadilha ja documentada em extras_caminho_marca.
+  snprintf(cam, sizeof cam, "%s/%s.png", dirIcones, nome);
+  // Pede pela largura de desenho: um icone de 38px nao precisa dos 128 do
+  // arquivo, e o teto por uso e o que mantem o cache fora do vermelho.
+  t = tex_obter_larg(cam, r.w);
+  if (!t) return;
+  gfx_tex_aspect_atual = 0.0f;   // o arquivo ja e quadrado
+  gfx_rect(r, t, GFX_MARCA, 0, 0, 0, 0.0f, cr, cg, cb, ca);
+}
+
 void gfx_recorte(float x, float y, float w, float h) {
-  if (w <= 0.0f || h <= 0.0f) { glEnable(GL_SCISSOR_TEST); glScissor(0, 0, 0, 0); return; }
+  GFX_OUTRO_INI();
+  if (w <= 0.0f || h <= 0.0f) { glEnable(GL_SCISSOR_TEST); glScissor(0, 0, 0, 0);
+                                GFX_OUTRO_FIM(); return; }
   // Duas conversoes acontecem aqui, e em nenhum outro lugar do app:
   //
   // 1. glScissor conta do canto INFERIOR esquerdo; o resto trabalha com y
@@ -562,6 +720,7 @@ void gfx_recorte(float x, float y, float w, float h) {
   int yy = (int)((NV_TELA_H - (y + h)) * ey);
   glEnable(GL_SCISSOR_TEST);
   glScissor((int)(x * ex), yy, (int)(w * ex), (int)(h * ey));
+  GFX_OUTRO_FIM();
 }
 void gfx_sem_recorte(void) { glDisable(GL_SCISSOR_TEST); }
 
@@ -600,6 +759,7 @@ void gfx_borrao_gerar(int via, unsigned int tex, float texAspecto) {
   int a0 = via ? 2 : 0, a1 = via ? 3 : 1;
   if (!borFbo[a0] || !tex) return;
   GfxRect cheio = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GFX_OUTRO_INI();
   glDisable(GL_BLEND);
   glViewport(0, 0, borW, borH);
 
@@ -619,6 +779,7 @@ void gfx_borrao_gerar(int via, unsigned int tex, float texAspecto) {
   glEnable(GL_BLEND);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glViewport(0, 0, telaW, telaH);
+  GFX_OUTRO_FIM();
 }
 
 void gfx_borrao_desenhar(int via, GfxRect r, float alpha) {
