@@ -13,6 +13,11 @@
 // simkl.c como ha o trakt.c. Vincular aqui serve para a CREDENCIAL CHEGAR NA
 // CONTA, e dali para o app web e o celular. Quando o nativo ganhar leitura de
 // Simkl, o token ja vai estar no lugar.
+// LIMITE CONHECIDO, e diferente do Trakt: aqui o pedido pendente NAO sobrevive
+// a um reinicio do app — o PIN vive so na memoria. No Trakt isso foi corrigido
+// porque mordeu de verdade (o dono autorizou e o app tinha reiniciado no meio);
+// aqui fica anotado em vez de implementado sem uso, ja que nada neste app
+// consome Simkl ainda. Se virar problema, e o mesmo remendo do traktauth.c.
 #ifndef NV_SIMKLAUTH_H
 #define NV_SIMKLAUTH_H
 

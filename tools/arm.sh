@@ -56,25 +56,24 @@ docker run --rm --platform linux/arm64 --env-file "$ENVF" \
 
 # CONFERE que a configuracao entrou MESMO no binario. Sem isto o unico sintoma
 # e a tela de login dizendo que o pacote saiu sem servidor, ja na TV.
-# A conferencia checa CADA chave, nao so uma. Ela ja existia olhando so o
-# endereco do servidor, e por isso passou batido no dia em que as chaves do
-# Trakt e do Simkl foram acrescentadas ao --env-file mas NAO a linha do gcc: o
-# binario subiu para a TV e o unico sintoma foi a tela dizendo "pacote sem as
-# chaves do Trakt". Uma guarda que cobre so um caso da a sensacao de estar
-# coberto.
-for par in "NV_SUPABASE_URL:$NV_SUPABASE_URL" \
-           "NV_SUPABASE_ANON_KEY:$NV_SUPABASE_ANON_KEY" \
-           "NV_TV_LOGIN_BASE:$NV_TV_LOGIN_BASE" \
-           "NV_TRAKT_CLIENT_ID:$NV_TRAKT_CLIENT_ID" \
-           "NV_TRAKT_CLIENT_SECRET:$NV_TRAKT_CLIENT_SECRET" \
-           "NV_SIMKL_CLIENT_ID:$NV_SIMKL_CLIENT_ID"; do
-  NOME=${par%%:*}; VALOR=${par#*:}
-  [ -z "$VALOR" ] && { echo "    aviso: $NOME vazio em local.properties"; continue; }
+# A conferencia checa CADA chave, lendo os VALORES DO ENV-FILE.
+#
+# Ela ja leu do ambiente do SHELL, e isso a tornava inutil sem parecer: as
+# variaveis so existem DENTRO do container (o --env-file as injeta la), entao
+# no host todas davam vazias, cada uma caia no "aviso: vazio" e a checagem era
+# PULADA. Uma guarda que se auto-desliga e pior que guarda nenhuma, porque
+# tranquiliza.
+while IFS='=' read -r NOME VALOR; do
+  [ -z "$NOME" ] && continue
+  if [ -z "$VALOR" ]; then
+    echo "    aviso: $NOME vazio em local.properties"
+    continue
+  fi
   if ! strings nuvio-proto.arm 2>/dev/null | grep -qF "$VALOR"; then
     echo "    ABORTADO: $NOME nao entrou no binario ARM"
     exit 1
   fi
-done
+done < "$ENVF"
 
 cp nuvio-proto.arm deploy/app/nuvio-proto
 rm -f ./*.ipk

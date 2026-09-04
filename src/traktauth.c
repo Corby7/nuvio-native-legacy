@@ -10,8 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 
-#define TRA_ARQ "trakt.txt"
+#define TRA_ARQ  "trakt.txt"
+#define TRA_FLUXO "trakt-fluxo.txt"
 #define TRA_BASE "https://api.trakt.tv"
 // Quando o Trakt nao manda `interval`, 5s e o que a documentacao dele sugere.
 #define TRA_POLL_PADRAO 5000u
@@ -24,6 +26,9 @@ static char erro[200];
 static char token[300], refresh[300];
 static unsigned pollMs = TRA_POLL_PADRAO;
 static unsigned proximoPoll, comecouMs, limiteMs;
+// Prazo em RELOGIO DE PAREDE, nao em ticks: o pedido tem de sobreviver a um
+// reinicio do app, e SDL_GetTicks zera junto com o processo.
+static long expiraEm;
 
 static pthread_t fio;
 static int fioVivo, fioPronto;
@@ -42,6 +47,24 @@ static char *postar(const char *caminho, const char *corpo, int *status) {
 }
 
 // ---------------------------------------------------------------- disco
+
+// O PEDIDO PENDENTE vai para o disco. Sem isto o codigo do dispositivo vivia so
+// na memoria: bastava o app reiniciar — ou o proprio deploy — para a
+// autorizacao feita no celular nao ter mais ninguem perguntando por ela. Foi
+// exatamente o que aconteceu: o dono autorizou e o app "nao atualizou", porque
+// a instancia que tinha pedido o codigo ja nao existia. O app web guarda o
+// mesmo estado (TraktAuthStore.saveDeviceFlow).
+static void gravarFluxo(void) {
+  char buf[600];
+  snprintf(buf, sizeof buf, "%s\t%s\t%s\t%ld\n", deviceCode, userCode, url, expiraEm);
+  dados_gravar(TRA_FLUXO, buf);
+}
+
+static void esquecerFluxo(void) {
+  deviceCode[0] = userCode[0] = 0;
+  expiraEm = 0;
+  dados_apagar(TRA_FLUXO);
+}
 
 static void gravar(void) {
   char buf[400];
@@ -66,13 +89,43 @@ int traktauth_carregar(void) {
     estado = TRA_LIGADO;
   }
   free(b);
-  return token[0] != 0;
+  if (token[0]) return 1;
+
+  // Sem token, mas pode haver um pedido em andamento de antes do reinicio.
+  { char *f = dados_ler(TRA_FLUXO);
+    if (f) {
+      char *c[4] = { f, NULL, NULL, NULL };
+      int i;
+      for (i = 1; i < 4 && c[i - 1]; i++) {
+        c[i] = strchr(c[i - 1], '\t');
+        if (c[i]) *c[i]++ = 0;
+      }
+      { char *fim = f + strlen(f);
+        while (fim > f && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0; }
+      if (c[3]) {
+        long agora = (long)time(NULL);
+        long ate = atol(c[3]);
+        if (ate > agora + 5) {
+          snprintf(deviceCode, sizeof deviceCode, "%s", c[0]);
+          snprintf(userCode, sizeof userCode, "%s", c[1]);
+          snprintf(url, sizeof url, "%s", c[2]);
+          expiraEm = ate;
+          estado = TRA_AGUARDANDO;
+          printf("[trakt] retomando o pedido pendente (%lds restantes)\n", ate - agora);
+        } else {
+          dados_apagar(TRA_FLUXO);
+        }
+      }
+      free(f);
+    } }
+  return 0;
 }
 
 void traktauth_esquecer(void) {
-  token[0] = refresh[0] = deviceCode[0] = userCode[0] = url[0] = erro[0] = 0;
+  token[0] = refresh[0] = url[0] = erro[0] = 0;
   estado = TRA_PARADO;
   dados_apagar(TRA_ARQ);
+  esquecerFluxo();
 }
 
 // ---------------------------------------------------------------- fluxo
@@ -117,6 +170,8 @@ static void *fioPedir(void *u) {
     estado = TRA_ERRO;
   } else {
     if (!url[0]) snprintf(url, sizeof url, "https://trakt.tv/activate");
+    expiraEm = (long)time(NULL) + (long)(limiteMs / 1000u);
+    gravarFluxo();
     estado = TRA_AGUARDANDO;
   }
   free(r);
@@ -148,6 +203,7 @@ static void *fioPoll(void *u) {
       if (!js_texto(r, r + strlen(r), "refresh_token", refresh, sizeof refresh))
         refresh[0] = 0;
       tokenNovo = 1;
+      esquecerFluxo();
       estado = TRA_LIGADO;
     } else {
       snprintf(erro, sizeof erro, "o Trakt respondeu sem token");
@@ -161,12 +217,15 @@ static void *fioPoll(void *u) {
     if (pollMs > 60000u) pollMs = 60000u;
   } else if (st == 409) {
     snprintf(erro, sizeof erro, "este codigo ja foi usado");
+    esquecerFluxo();
     estado = TRA_ERRO;
   } else if (st == 410) {
     snprintf(erro, sizeof erro, "o codigo expirou");
+    esquecerFluxo();
     estado = TRA_ERRO;
   } else if (st == 418) {
     snprintf(erro, sizeof erro, "autorizacao negada no Trakt");
+    esquecerFluxo();
     estado = TRA_ERRO;
   } else if (st) {
     snprintf(erro, sizeof erro, "falha ao trocar o codigo (HTTP %d)", st);
@@ -221,8 +280,9 @@ void traktauth_passo(unsigned agoraMs) {
 
   if (estado != TRA_AGUARDANDO) return;
   if (!comecouMs) comecouMs = agoraMs;
-  if (limiteMs && agoraMs - comecouMs > limiteMs) {
+  if (expiraEm && (long)time(NULL) >= expiraEm) {
     snprintf(erro, sizeof erro, "o codigo expirou");
+    esquecerFluxo();
     estado = TRA_ERRO;
     return;
   }
