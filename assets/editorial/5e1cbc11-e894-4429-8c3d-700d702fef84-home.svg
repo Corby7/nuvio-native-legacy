@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Letterboxd Top 250 — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#9eaba5" stroke="#9eaba5" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><circle cx="225" cy="205" r="113" fill="#946439" /><circle cx="225" cy="205" r="98" fill="none" /><circle cx="378" cy="205" r="113" fill="#44745b" /><circle cx="378" cy="205" r="98" fill="none" /><circle cx="531" cy="205" r="113" fill="#426b83" /><circle cx="531" cy="205" r="98" fill="none" /><path d="M110 78L110 332" fill="none" /><path d="M217 78L217 332" fill="none" /><path d="M324 78L324 332" fill="none" /><path d="M431 78L431 332" fill="none" /><path d="M538 78L538 332" fill="none" /><path d="M645 78L645 332" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

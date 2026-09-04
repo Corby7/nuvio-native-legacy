@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Steven Spielberg — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#9fbac1" stroke="#9fbac1" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><circle cx="435" cy="180" r="140" fill="#637781" /><circle cx="435" cy="180" r="119" fill="#7c9096" /><path d="M15 375Q175 280 280 345T750 310V430H15Z" fill="#171e22" /><circle cx="394" cy="223" r="27" fill="none" /><circle cx="476" cy="223" r="27" fill="none" /><path d="M394 223L428 180 449 223 394 223 466 189 476 223M428 180L445 178M439 178L429 149 408 143" fill="none" /><circle cx="426" cy="132" r="10" fill="currentColor" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

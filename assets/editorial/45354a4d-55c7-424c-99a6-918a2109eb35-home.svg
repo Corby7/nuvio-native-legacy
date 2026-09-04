@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Coen Brothers — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#a7b5b3" stroke="#a7b5b3" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><path d="M50 420L328 93 430 93 720 420Z" fill="#303638" /><path d="M375 110L375 157" fill="none" /><path d="M375 190L375 259" fill="none" /><path d="M375 305L375 405" fill="none" /><path d="M15 320L145 210 241 268 326 120M430 121L566 285 683 178 748 289" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

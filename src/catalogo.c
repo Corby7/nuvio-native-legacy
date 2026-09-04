@@ -42,6 +42,77 @@ static CatEp eps[CAT_EP_MAX];
 // agora cresce, entao estes tambem.
 static int  *epIni, *epQtd, nEps;
 
+// O progresso de reproducao e uma posicao, nao uma prova de que o titulo foi
+// marcado como assistido. O historico do Trakt fica separado, por identidade
+// estavel, para que uma troca do catalogo nao transforme indice em identidade
+// e para que um progresso alto nao masque um historico real conhecido.
+typedef struct {
+  char imdb[32];
+  char tipo[8];
+  int conhecido;
+  int visto;
+} CatHistorico;
+
+static CatHistorico historico[CAT_MAX];
+static int nHistorico;
+
+static void id_base(const char *origem, char *destino, size_t tam) {
+  size_t n = 0;
+  if (!destino || tam == 0) return;
+  if (origem) {
+    while (origem[n] && origem[n] != ':' && n + 1 < tam) n++;
+    memcpy(destino, origem, n);
+  }
+  destino[n] = 0;
+}
+
+static const char *tipo_base(const char *tipo) {
+  if (tipo && (!strcmp(tipo, "series") || !strcmp(tipo, "show"))) return "series";
+  return "movie";
+}
+
+static int historico_pos(const char *imdb, const char *tipo, int criar) {
+  char id[32];
+  int i;
+  id_base(imdb, id, sizeof id);
+  if (!id[0]) return -1;
+  for (i = 0; i < nHistorico; i++)
+    if (!strcmp(historico[i].imdb, id) &&
+        !strcmp(historico[i].tipo, tipo_base(tipo))) return i;
+  if (!criar || nHistorico >= CAT_MAX) return -1;
+  snprintf(historico[nHistorico].imdb, sizeof historico[nHistorico].imdb, "%s", id);
+  snprintf(historico[nHistorico].tipo, sizeof historico[nHistorico].tipo, "%s", tipo_base(tipo));
+  return nHistorico++;
+}
+
+// Leitura interna da modal: -1 = historico ainda nao consultado, 0 = nao
+// visto confirmado, 1 = visto confirmado.
+int cat_historico_estado_item(int indice) {
+  const CatItem *it = cat_item(indice);
+  int p;
+  if (!it || !it->imdb[0]) return -1;
+  p = historico_pos(it->imdb, it->tipo, 0);
+  return p >= 0 && historico[p].conhecido ? historico[p].visto : -1;
+}
+
+// Atualiza o retrato de historico somente depois de uma resposta 2xx do
+// Trakt. A chave e o IMDb sem sufixo de episodio, nunca o indice do vetor.
+void cat_historico_definir_id(const char *imdb, const char *tipo, int visto) {
+  int p = historico_pos(imdb, tipo, 1);
+  if (p < 0) return;
+  historico[p].conhecido = 1;
+  historico[p].visto = visto ? 1 : 0;
+}
+
+// Compatibilidade para chamadores antigos que so conhecem o IMDb. A serie e
+// inferida do proprio catalogo quando possivel; o sufixo de episodio e o
+// fallback para itens que ainda nao entraram no vetor.
+const char *cat_tipo_por_imdb(const char *imdb) {
+  int i = cat_indice_por_imdb(imdb);
+  if (i >= 0 && cat_item(i)) return cat_item(i)->tipo;
+  return (imdb && strchr(imdb, ':')) ? "series" : "movie";
+}
+
 static void garantirFaixas(int quantos) {
   int *a, *b;
   if (quantos < 1) return;
@@ -389,7 +460,7 @@ int cat_do_cache(void) { return veioDoCache; }
 int cat_n(void) { return n; }
 
 const CatItem *cat_item(int i) {
-  if (n <= 0) return NULL;
+  if (!itens || n <= 0) return NULL;
   return &itens[((i % n) + n) % n];
 }
 
@@ -501,8 +572,17 @@ const CatFileira *cat_fileira(int r) {
 //   - `n` NAO e zerado: subir a contagem depois que o bloco novo ja esta
 //     publicado e seguro, e zerar faria a home piscar a cada titulo aberto.
 void cat_definir_na_lista(int i, int naLista) {
-  if (n <= 0 || i < 0 || i >= n) return;
+  if (!itens || n <= 0 || i < 0 || i >= n) return;
   itens[i].naLista = naLista ? 1 : 0;
+}
+
+// Atualiza um espelho de item somente quando o indice ainda pertence ao bloco
+// atualmente publicado. A modal pode receber a resposta do worker depois que
+// a descoberta trocou o catalogo; nesse caso ignorar e seguro, escrever por um
+// indice antigo poderia alterar outro titulo.
+void cat_atualizar_item(int i, const CatItem *item) {
+  if (!item || !itens || n <= 0 || i < 0 || i >= n) return;
+  itens[i] = *item;
 }
 
 // Acrescenta N de UMA VEZ. cat_acrescentar copia o catalogo inteiro a cada
@@ -663,13 +743,6 @@ void cat_definir_episodios(int indiceItem, const CatEp *lista, int qtd) {
   epIni[indiceItem] = nEps;
   epQtd[indiceItem] = qtd;
   nEps += qtd;
-}
-
-void cat_atualizar_item(int indice, const CatItem *novo) {
-  int m = cat_n();
-  if (!novo || m < 1) return;
-  indice = ((indice % m) + m) % m;
-  itens[indice] = *novo;
 }
 
 // Generos de um item, como uma lista de trechos separados por " · ". O primeiro

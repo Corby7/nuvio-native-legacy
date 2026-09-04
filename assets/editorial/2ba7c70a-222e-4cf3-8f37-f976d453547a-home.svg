@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Oscars: Best Picture Winners — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#c0a270" stroke="#c0a270" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><circle cx="390" cy="91" r="25" fill="#a88b58" /><path d="M370 123L354 230 375 237 373 326H409L405 237 426 230 410 123Z" fill="#a88b58" /><rect x="339" y="327" width="104" height="23" fill="#726044" /><rect x="318" y="350" width="146" height="28" fill="#484032" /><circle cx="390" cy="190" r="164" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

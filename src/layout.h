@@ -310,7 +310,7 @@
 //     quadro — nada se moveu. Nao ha esvanecimento de entrada.
 // Nao ha crossfade em momento nenhum: a arte velha e a nova nunca aparecem
 // juntas. Eram 900 ms de mistura, quase o triplo do tempo e a forma errada.
-#define NV_HERO_FADE_MS       330.0f
+#define NV_HERO_FADE_MS       220.0f
 // REPOUSO ANTES DE TROCAR O HEROI. O fundo so acompanha o foco depois que ele
 // PARA por este tempo.
 //
@@ -399,6 +399,12 @@
 // card de home, card de episodio, botao de detalhe e tecla de teclado — um
 // numero so. NV_DETW_ANEL ja era 4 e so era aplicado no detalhe.
 #define NV_ANEL_FOCO      4.0f
+
+// Area util explicita da home: a rail pode variar, mas o texto e o foco nunca
+// encostam na safe area direita.
+#define NV_HOME_SAFE_RIGHT    NV_LEGACY_CONTENT_RIGHT
+#define NV_HOME_TEXT_GUTTER   24.0f
+#define NV_HOLD_FEEDBACK_MS   110.0f
 
 // FOCO EM SUPERFICIE (pilula, item de menu, chip): fundo ESCURO com texto
 // branco — nao o contrario.

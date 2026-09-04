@@ -42,6 +42,7 @@
 #include "episodios.h"
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdlib.h>
 
 // Link de debrid expira em minutos; um minuto e folga suficiente para o usuario
 // apertar Reproduzir logo depois de abrir o titulo sem pagar uma busca a mais.
@@ -54,22 +55,46 @@ static _Atomic int fonteEscolhida = -2;   // release/acquire entre verificacao e
 static PerfilDados perfilPendente;
 static int perfilSucesso;
 static _Atomic int perfilCarga; // 0=ocioso, 1=rede, 2=snapshot pronto
+static _Atomic unsigned perfilGeracao = 1;
+static pthread_mutex_t perfilTrava = PTHREAD_MUTEX_INITIALIZER;
+typedef struct { unsigned geracao; int perfil; char conta[96]; } PerfilPedido;
 static void *carregarPerfil(void *u) {
-  (void)u;
-  PerfilDados novo;
-  perfilSucesso = trakt_perfil(&novo);
-  if (perfilSucesso) perfilPendente = novo;
-  else memset(&perfilPendente, 0, sizeof perfilPendente);
-  atomic_store_explicit(&perfilCarga, 2, memory_order_release);
+  PerfilPedido *pedido=u;
+  PerfilDados novo={0};
+  int sucesso=trakt_perfil(&novo);
+  pthread_mutex_lock(&perfilTrava);
+  // A troca de conta/perfil invalida a resposta. O worker termina, mas nunca
+  // publica uma identidade antiga nem deixa um snapshot obsoleto na fila.
+  if(pedido->geracao==atomic_load_explicit(&perfilGeracao,memory_order_acquire) &&
+     atomic_load_explicit(&perfilCarga,memory_order_relaxed)==1 && sessao_logada() &&
+     perfis_ativo()==pedido->perfil && !strcmp(sessao_usuario(),pedido->conta)){
+    perfilSucesso=sucesso;
+    perfilPendente=novo;
+    atomic_store_explicit(&perfilCarga,2,memory_order_release);
+  }
+  pthread_mutex_unlock(&perfilTrava);
+  free(pedido);
   return NULL;
+}
+static void invalidarPerfil(void) {
+  atomic_fetch_add_explicit(&perfilGeracao,1,memory_order_acq_rel);
+  atomic_store_explicit(&perfilCarga,0,memory_order_release);
+  pthread_mutex_lock(&perfilTrava);memset(&perfilPendente,0,sizeof perfilPendente);perfilSucesso=0;pthread_mutex_unlock(&perfilTrava);
+  perfil_definir_dados(NULL);
 }
 static void pedirPerfil(void) {
   pthread_t t;
   int esperado = 0;
+  PerfilPedido *pedido;
   perfil_definir_carregando(1);
   if (!atomic_compare_exchange_strong(&perfilCarga, &esperado, 1)) return;
-  if (pthread_create(&t, NULL, carregarPerfil, NULL) == 0) pthread_detach(t);
-  else { perfilCarga = 0; perfil_definir_erro("Nao foi possivel iniciar a consulta. Tente novamente."); }
+  pedido=calloc(1,sizeof *pedido);
+  if(!pedido){atomic_store(&perfilCarga,0);perfil_definir_erro("Nao foi possivel iniciar a consulta. Tente novamente.");return;}
+  pedido->geracao=atomic_load_explicit(&perfilGeracao,memory_order_acquire);
+  pedido->perfil=perfis_ativo();
+  snprintf(pedido->conta,sizeof pedido->conta,"%s",sessao_usuario());
+  if (pthread_create(&t, NULL, carregarPerfil, pedido) == 0) pthread_detach(t);
+  else { free(pedido); atomic_store(&perfilCarga,0); perfil_definir_erro("Nao foi possivel iniciar a consulta. Tente novamente."); }
 }
 
 // A verificacao faz uma requisicao por fonte candidata e bloqueia; num fio
@@ -311,6 +336,7 @@ void app_atualizar(float dt, Uint32 agora) {
   // unica saida honesta. Continuar na home mostraria o catalogo de exemplo do
   // pacote como se fosse o da pessoa.
   if (!sessao_logada()) {
+    invalidarPerfil();
     tela = TELA_LOGIN;
     login_iniciar();
     return;
@@ -323,10 +349,18 @@ void app_atualizar(float dt, Uint32 agora) {
   traktauth_passo((unsigned)agora);
   simklauth_passo((unsigned)agora);
     perfilsel_atualizar(dt, agora);
+    if (perfilsel_pediu_repetir()) { sync_iniciar(); return; }
+    if (perfilsel_quer_sair()) {
+      // Sem uma escolha confirmada, voltar nao pode escolher o perfil 1 por
+      // acidente. A tela continua visivel e aguarda uma escolha explicita.
+      if (!perfis_precisa_escolher()) { tela = TELA_HOME; menu_definir_destino(MENU_INICIO); }
+      return;
+    }
     if (perfilsel_concluido()) {
       // O perfil mudou o destino do sync: rodar de novo traz os addons e o
       // progresso DESTE perfil, e nao os do perfil 1 que o primeiro ciclo
       // pegou por falta de escolha.
+      invalidarPerfil();
       sync_reaplicar_ajustes();
       sync_iniciar();
       tela = TELA_HOME;
@@ -357,8 +391,13 @@ void app_atualizar(float dt, Uint32 agora) {
   trocaDeTituloSeSolicitada();
   marcarAssistidoSeSolicitado();
   if (atomic_load_explicit(&perfilCarga, memory_order_acquire) == 2) {
-    if (perfilSucesso) perfil_definir_dados(&perfilPendente);
-    else perfil_definir_erro("Nao foi possivel consultar o Trakt. Confira a conexao da conta.");
+    PerfilDados snapshot; int sucesso;
+    pthread_mutex_lock(&perfilTrava); snapshot=perfilPendente; sucesso=perfilSucesso; pthread_mutex_unlock(&perfilTrava);
+    if (sucesso) perfil_definir_dados(&snapshot);
+    else if (!trakt_ativo()) perfil_definir_estado(PERFIL_ESTADO_DESCONECTADO,
+                                                    "Trakt desconectado. Vincule a conta para ver seu perfil.");
+    else perfil_definir_estado(PERFIL_ESTADO_INDISPONIVEL,
+                               "Perfil indisponível. O último resumo continua seguro, se houver.");
     atomic_store_explicit(&perfilCarga, 0, memory_order_release);
   }
   if ((tela == TELA_PERFIL || perfil_lateral()) && perfil_pediu_atualizar()) pedirPerfil();
@@ -388,6 +427,7 @@ void app_atualizar(float dt, Uint32 agora) {
   // destino: as duas coisas saem do mesmo menu, e quem pediu troca nao quer
   // mudar de aba.
   if (menu_pediu_trocar()) {
+    invalidarPerfil();
     tela = TELA_ESCOLHA_PERFIL;
     perfilsel_iniciar();
     return;
@@ -417,6 +457,12 @@ void app_atualizar(float dt, Uint32 agora) {
       if (perfil_item_selecionado(&p) && p.id[0]) {
         idx = cat_indice_por_imdb(p.id);
         if (idx >= 0) abrirPorIndice(idx); else desc_pedir_titulo(p.id);
+      }
+    } else if (tela == TELA_SOCIAL) {
+      SocialItemSelecionado s;
+      if (social_item_selecionado(&s) && s.imdb[0]) {
+        idx=cat_indice_por_imdb(s.imdb);
+        if(idx>=0)abrirPorIndice(idx); else desc_pedir_titulo(s.imdb);
       }
     }
   }

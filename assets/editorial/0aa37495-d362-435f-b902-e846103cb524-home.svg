@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Oscars: Best Picture Nominees — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#9e9179" stroke="#9e9179" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><g transform="rotate(-20 380 340)" ><rect x="210" y="90" width="340" height="250" fill="#242521" /></g><g transform="rotate(-10 380 340)" ><rect x="210" y="90" width="340" height="250" fill="#242521" /></g><g transform="rotate(0 380 340)" ><rect x="210" y="90" width="340" height="250" fill="#242521" /></g><g transform="rotate(10 380 340)" ><rect x="210" y="90" width="340" height="250" fill="#242521" /></g><g transform="rotate(20 380 340)" ><rect x="210" y="90" width="340" height="250" fill="#242521" /></g><path d="M380 132L395.55279777565886 173.5934103288389L439.91656052659465 175.53192935437832L405.16495542116974 203.1765896711611L417.03047089442583 245.96807064562168L380 221.46L342.9695291055742 245.96807064562168L354.83504457883026 203.1765896711611L320.0834394734053 175.53192935437832L364.44720222434114 173.5934103288389Z" fill="currentColor" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

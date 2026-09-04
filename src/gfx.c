@@ -416,28 +416,31 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   // ancora a direita. Fora da fotografia o shader fica transparente, deixando
   // o hero de base aparecer sem a emenda de um segundo painel.
   "void main(){\n"
-  // A origem e um still vertical com fundo branco. Tonalizamos os highlights
-  // antes do alpha: o branco do arquivo vira uma luz cinza do mesmo ambiente,
-  // em vez de um retangulo branco colado atras do elenco.
-  "  float cropH=0.82;\n"
-  "  float dispW=clamp((uTexAsp/uAspect)/cropH,0.30,0.72);\n"
+  // O pipeline pode entregar JPEG/RGB ou PNG com alpha real. Nao tentamos
+  // adivinhar o fundo por luminancia: cabelo e roupa escuros tambem sao pixels
+  // validos e um chroma-key heuristico os apagaria. Sem matte, o fallback e a
+  // foto inteira com uma dissolucao de borda segura; com alpha, a silhueta
+  // fornecida pela origem permanece intacta.
+  // Zoom editorial: a referencia nao mostra o retrato inteiro; mostra a
+  // cabeca ocupando o hero e saindo pela borda direita. O recorte vertical
+  // amplia o rosto sem esticar a textura.
+  "  float cropY=0.05;\n"
+  "  float cropH=0.78;\n"
+  "  float dispW=clamp((uTexAsp/uAspect)/cropH,0.46,0.90);\n"
   "  float x0=1.0-dispW;\n"
-  "  vec2 uv=vec2((vUv.x-x0)/dispW,0.01+vUv.y*cropH);\n"
+  "  float localX=clamp((vUv.x-x0)/dispW,0.0,1.0);\n"
+  "  vec2 uv=vec2(localX,cropY+vUv.y*cropH);\n"
   "  float inside=step(x0,vUv.x)*step(vUv.x,1.0);\n"
-  "  vec3 raw=texture2D(uTex,clamp(uv,0.0,1.0)).rgb;\n"
-  "  float l=dot(raw,vec3(0.2126,0.7152,0.0722));\n"
-  "  float tone=pow(clamp(l,0.0,1.0),0.78);\n"
-  "  vec3 c=vec3(0.035,0.038,0.045)+vec3(0.245,0.250,0.265)*tone;\n"
-  "  c=mix(c,vec3(0.075,0.078,0.088),smoothstep(0.78,1.0,l)*0.40);\n"
-  "  float left=smoothstep(x0,x0+dispW*0.16,vUv.x);\n"
-  "  float bottom=1.0-smoothstep(0.70,0.99,vUv.y);\n"
-  "  float top=smoothstep(0.0,0.10,vUv.y)*0.16+0.84;\n"
-  "  float right=1.0-smoothstep(0.91,1.0,vUv.x)*0.22;\n"
-  // Pixels muito claros recebem menos alpha, o que conserva a leitura do
-  // rosto e deixa o fundo do still respirar junto com o degrade do hero.
-  "  float paper=1.0-smoothstep(0.56,0.96,l);\n"
-  "  float density=0.32+0.56*paper;\n"
-  "  float mask=inside*left*bottom*top*right*density;\n"
+  "  vec4 pix=texture2D(uTex,clamp(uv,0.0,1.0));\n"
+  "  vec3 c=pix.rgb;\n"
+  // Dissolve amplo nas quatro bordas: o retrato se mistura com o banner em
+  // vez de denunciar um retangulo cinza. O centro continua inteiro para o
+  // rosto manter detalhe e contraste.
+  "  float left=smoothstep(0.0,0.28,localX);\n"
+  "  float right=1.0-smoothstep(0.82,1.0,localX);\n"
+  "  float top=smoothstep(0.0,0.12,vUv.y);\n"
+  "  float bottom=1.0-smoothstep(0.68,0.99,vUv.y);\n"
+  "  float mask=inside*left*right*top*bottom*pix.a;\n"
   "  if(mask<=0.001) discard;\n"
   "  gl_FragColor=vec4(c,uCor.a*mask);\n"
   "}\n",

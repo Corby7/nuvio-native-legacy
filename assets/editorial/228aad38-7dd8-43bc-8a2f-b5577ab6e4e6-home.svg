@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Denis Villeneuve — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#bd9670" stroke="#bd9670" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><circle cx="485" cy="133" r="96" fill="#b79168" /><path d="M0 370Q190 130 410 240T780 285V450H0Z" fill="#39362e" /><path d="M0 392Q190 175 410 265T780 313V450H0Z" fill="#272723" /><path d="M0 414Q190 220 410 290T780 341V450H0Z" fill="#39362e" /><path d="M0 436Q190 265 410 315T780 369V450H0Z" fill="#272723" /><path d="M0 458Q190 310 410 340T780 397V450H0Z" fill="#39362e" /><path d="M543 275L543 316" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

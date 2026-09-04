@@ -129,6 +129,11 @@ static float scrollY = 0.0f;
 static float velX[MAX_FIL];
 static float velY = 0.0f;
 static int sair = 0, pedidoAbrir = 0, pedidoMenu = 0;
+static Uint32 okDesde = 0;
+static int okPressionando = 0;
+static int okLongDisparado = 0;
+static int okConsumirSoltura = 0;
+static float okHold = 0.0f;
 
 // --- hero-carrossel ---
 static int heroAtual = 0, heroAnterior = 0;
@@ -218,6 +223,125 @@ static float larguraDe(TipoFileira t) {
 }
 // Quantos titulos o hero percorre. Vem do catalogo quando existe.
 static int nAcervoHero(void) { int n = cat_n(); if (n) return n; return nBd ? nBd : 1; }
+
+// Arte de um titulo nunca pode ser preenchida por uma posição equivalente de
+// outro vetor. O catalogo chega em lotes, e a ordem dos backdrops do pacote não
+// tem relação estável com a ordem dos itens da rede. Retornar somente arte que
+// pertence ao próprio item deixa o estado sem arte explícito, em vez de trocar
+// identidade silenciosamente.
+static const char *arteDoItem(const CatItem *item, int *ehPoster) {
+  if (ehPoster) *ehPoster = 0;
+  if (!item) return NULL;
+  if (item->backdrop[0]) return item->backdrop;
+  if (item->poster[0]) {
+    if (ehPoster) *ehPoster = 1;
+    return item->poster;
+  }
+  return NULL;
+}
+
+// Um poster é uma boa reserva editorial, mas não deve ser cover-stretched num
+// hero 16:9, pois isso corta justamente o rosto e o título. Ele fica contido no
+// lado direito, com a mesma vinheta do hero, e o restante da composição segue
+// disponível para a cópia do título.
+static int desenhaArteHero(GfxRect r, GfxModo modo, const CatItem *item,
+                           const char *path, float alpha) {
+  int ehPoster = 0;
+  const char *arte = item ? arteDoItem(item, &ehPoster) : path;
+  GLuint tex;
+  if (!arte || !arte[0]) return 0;
+  tex = tex_obter_hero(arte);
+  if (!tex) return 0;
+  gfx_tex_aspect_atual = tex_aspecto(arte);
+  if (!ehPoster) {
+    gfx_rect(r, tex, modo, 0, 0, 0, 0, 0, 0, 0, alpha);
+  } else {
+    float ap = gfx_tex_aspect_atual > 0.05f ? gfx_tex_aspect_atual : (2.0f / 3.0f);
+    float h = r.h, w = h * ap, limite = r.w * 0.42f;
+    if (w > limite) { w = limite; h = w / ap; }
+    GfxRect poster = { r.x + r.w - w, r.y + (r.h - h) * 0.5f, w, h };
+    gfx_rect(poster, tex, GFX_HERO, 0, 0, 0, 0, 0, 0, 0, alpha);
+  }
+  gfx_tex_aspect_atual = 0.0f;
+  return 1;
+}
+
+static void desenhaPlaceholderHero(GfxRect r, const CatItem *item, float alpha) {
+  GfxRect bloco = { r.x + r.w * 0.58f, r.y + 32.0f,
+                    r.w * 0.34f, r.h - 64.0f };
+  gfx_cor(bloco, 0.035f, 0.075f, 0.082f, 0.098f, alpha * 0.92f);
+  { TxtLinha t = txt_linha(TXT_HERO_META, "Arte indisponível",
+                            185, 191, 204, 255);
+    txt_desenhar_alpha(t, bloco.x + 28.0f,
+                       bloco.y + bloco.h * 0.5f - t.h * 0.5f,
+                       alpha); }
+  if (item && item->titulo[0]) {
+    TxtLinha t = txt_linha_corta(TXT_CAPTION, item->titulo,
+                                 211, 216, 226, 255, bloco.w - 56.0f);
+    txt_desenhar_alpha(t, bloco.x + 28.0f,
+                       bloco.y + bloco.h * 0.5f + 20.0f, alpha * 0.76f);
+  }
+}
+
+static void desenhaArteAusente(GfxRect r, float raio, const CatItem *item,
+                               float alpha) {
+  gfx_cor(r, raio, NV_COR_ESQUELETO_R, NV_COR_ESQUELETO_G,
+          NV_COR_ESQUELETO_B, alpha);
+  TxtLinha estado = txt_linha_corta(TXT_CAPTION, "Arte indisponível",
+                                    184, 188, 198, 255, r.w - 32.0f);
+  float centro = r.y + r.h * 0.5f;
+  txt_desenhar_alpha(estado, r.x + (r.w - estado.w) * 0.5f,
+                     centro - estado.h * 0.5f - (item && item->titulo[0] ? 8.0f : 0.0f),
+                     alpha * 0.9f);
+  if (item && item->titulo[0]) {
+    TxtLinha nome = txt_linha_corta(TXT_MINI, item->titulo,
+                                    160, 165, 178, 255, r.w - 32.0f);
+    txt_desenhar_alpha(nome, r.x + (r.w - nome.w) * 0.5f,
+                       centro + 12.0f, alpha * 0.78f);
+  }
+}
+
+// Escolha de formato para cards. O helper arteDoItem acima informa se precisou
+// usar poster como fallback; aqui a ordem visual do card continua explicita.
+static const char *arte_por_formato(const CatItem *item, int deitado) {
+  if (!item) return NULL;
+  if (deitado) return item->backdrop[0] ? item->backdrop
+                                      : (item->poster[0] ? item->poster : NULL);
+  return item->poster[0] ? item->poster
+                         : (item->backdrop[0] ? item->backdrop : NULL);
+}
+
+// `cat_item()` faz wrap para telas que percorrem listas circulares. A home nao
+// pode usar esse contrato para resolver arte: indice stale vira ausencia, nunca
+// outro titulo.
+static const CatItem *cat_item_exato(int i) {
+  int n = cat_n();
+  if (i < 0 || i >= n) return NULL;
+  return cat_item(i);
+}
+
+// A pasta art/ e acervo de reserva apenas no modo sem catalogo. Quando a rede
+// publicou itens, nenhum arquivo generico pode ocupar o lugar de outro titulo.
+static const char *arte_por_identidade(int indice, int deitado) {
+  const CatItem *item = cat_item_exato(indice);
+  const char *arte = arte_por_formato(item, deitado);
+  if (arte) return arte;
+  if (cat_n() == 0 && indice >= 0) {
+    if (!deitado && indice < nPst) return pst[indice];
+    if (indice < nBd) return bd[indice];
+  }
+  return NULL;
+}
+
+static int foco_pode_pressao_longa(void) {
+  if (foco.fileira < 0 || foco.fileira >= nFileiras) return 0;
+  const Fileira *s = &fileiras[foco.fileira];
+  if (s->tipo == FILEIRA_CATALOGOS || s->tipo == FILEIRA_SOCIAL ||
+      s->tipo == FILEIRA_TOP10) return 0;
+  if (s->verTudo && foco.coluna == s->n) return 0;
+  return foco.coluna >= 0 && foco.coluna < s->n;
+}
+
 
 static float alturaDe(TipoFileira t) {
   switch (t) {
@@ -345,17 +469,32 @@ void home_evento(const SDL_Event *e) {
   // — e ele era descartado logo abaixo, junto com todo evento que nao fosse
   // KEYDOWN. A tela de titulo ja usa esta mesma medida (NV_HOLD_MS) para
   // separar "Reproduzir" de "escolher fonte".
-  { static Uint32 okDesde;
-    SDL_Keycode kk = e->key.keysym.sym;
+  { SDL_Keycode kk = e->key.keysym.sym;
     int ehOk = (kk == SDLK_RETURN || kk == SDLK_KP_ENTER || kk == SDLK_SPACE);
     if (e->type == SDL_KEYDOWN && ehOk) {
-      if (!okDesde) okDesde = SDL_GetTicks();   // repeticao nao reinicia
+      if (!okPressionando) {
+        okPressionando = 1;
+        okLongDisparado = 0;
+        okConsumirSoltura = 0;
+        okDesde = SDL_GetTicks();
+      }
+      return;
     } else if (e->type == SDL_KEYUP && ehOk) {
+      if (okConsumirSoltura) {
+        okConsumirSoltura = 0;
+        okDesde = 0;
+        okPressionando = 0;
+        okHold = 0.0f;
+        return;
+      }
       Uint32 dur = okDesde ? SDL_GetTicks() - okDesde : 0;
       int noVerTudo = (foco.fileira >= 0 && foco.fileira < nFileiras &&
                        fileiras[foco.fileira].verTudo &&
                        foco.coluna == fileiras[foco.fileira].n);
       okDesde = 0;
+      okPressionando = 0;
+      okLongDisparado = 0;
+      okHold = 0.0f;
       if (foco.fileira < 0 || foco.fileira >= nFileiras) return;
       if(fileiras[foco.fileira].tipo==FILEIRA_TOP10 && fileiras[foco.fileira].stackN) {
         Fileira *s=&fileiras[foco.fileira];
@@ -369,7 +508,7 @@ void home_evento(const SDL_Event *e) {
         pedidoSocial=1;return;
       }
       if(fileiras[foco.fileira].tipo==FILEIRA_SOCIAL) {
-        const CatItem *ci=cat_item(fileiras[foco.fileira].ini+foco.coluna);
+        const CatItem *ci=cat_item_exato(fileiras[foco.fileira].ini+foco.coluna);
         if(ci){pessoaSocial=*ci;pedidoPessoaSocial=1;}return;
       }
       if (fileiras[foco.fileira].tipo == FILEIRA_CATALOGOS) {
@@ -516,7 +655,10 @@ static void sincronizarFileiras(void) {
       "Trending Movies","Trending Series","Themes","Picked for You · Movies",
       "Picked for You · Series","Top 100 · Movies","Top 100 · Series",
       "Awards","Directors","Genres"};
-    for(size_t s=0;s<sizeof ids/sizeof ids[0];s++) {
+    // A curadoria conhecida ganha prioridade, mas nao e uma lista de corte.
+    // O web mantem chaves novas no fim e a home nativa precisa fazer o mesmo:
+    // catalogos e grupos que nao estavam nesta tabela continuam acessiveis.
+    for(size_t s=0;s<sizeof ids/sizeof ids[0] && destino<MAX_FIL;s++) {
       if(ids[s][0]=='@') {
         Fileira v={0};v.n=col_grupo(ids[s]+1,v.folders,MAX_CARDS);
         if(!v.n)continue;
@@ -532,6 +674,35 @@ static void sincronizarFileiras(void) {
         else if(s==9||s==10)fileiras[destino].tipo=FILEIRA_TOP10;
         else if(s!=0)fileiras[destino].tipo=FILEIRA_NORMAL;
         destino++;break;
+      }
+    }
+    // Tudo que nao casou com a curadoria acima permanece na ordem declarada
+    // pelo addon/preferencia. A comparacao por chave evita duplicar uma linha
+    // especial que ja foi promovida.
+    for(int k=0;k<total && destino<MAX_FIL;k++) {
+      int visto=0;
+      for(int j=0;j<destino;j++) if(!strcmp(fileiras[j].chave,orig[k].chave)){visto=1;break;}
+      if(!visto) fileiras[destino++]=orig[k];
+    }
+    // Grupos adicionais tambem sao configuracao do usuario. Nao dependem de
+    // nomes que conheciamos quando a tabela foi escrita, e cada grupo aparece
+    // uma vez com todos os seus folders.
+    for(int i=0;i<col_n() && destino<MAX_FIL;i++) {
+      const ColFolder *folder=col_folder(i);
+      int grupoVisto=0;
+      if(!folder||!folder->group[0])continue;
+      for(int j=0;j<destino;j++) {
+        char chave[192];snprintf(chave,sizeof chave,"collection_%s",folder->group);
+        if(!strcmp(fileiras[j].chave,chave)){grupoVisto=1;break;}
+      }
+      if(grupoVisto)continue;
+      { Fileira v={0};
+        v.n=col_grupo(folder->group,v.folders,MAX_CARDS);
+        if(!v.n)continue;
+        v.tipo=FILEIRA_CATALOGOS;
+        snprintf(v.chave,sizeof v.chave,"collection_%s",folder->group);
+        snprintf(v.titulo,sizeof v.titulo,"%s",folder->group);
+        fileiras[destino++]=v;
       }
     }
   }
@@ -615,6 +786,29 @@ static void sincronizarFileiras(void) {
 void home_atualizar(float dt, Uint32 agora) {
   sincronizarFileiras();
 
+  const int motionReduzido = ajustes_animacoes_reduzidas();
+  if (okPressionando && foco_pode_pressao_longa())
+    okHold = anim_clamp((agora - okDesde) / NV_HOLD_FEEDBACK_MS, 0.0f, 1.0f);
+  else if (!okPressionando)
+    okHold = 0.0f;
+  if (okPressionando && okHold >= 1.0f && !okLongDisparado) {
+    okLongDisparado = 1;
+    okConsumirSoltura = 1;
+    okPressionando = 0;
+    okDesde = 0;
+    // O menu contextual continua sendo o dono das acoes e da UI. A home so
+    // dispara uma vez no limiar e consome o KEYUP seguinte.
+    ctx_abrir(fileiras[foco.fileira].ini + foco.coluna);
+  }
+
+  // O catalogo pode encolher entre duas respostas. Normalizar os indices do
+  // carrossel evita que um estado stale caia no wrap de cat_item().
+  { int total = nAcervoHero();
+    if (heroAtual < 0 || heroAtual >= total) heroAtual = 0;
+    if (heroAnterior < 0 || heroAnterior >= total) heroAnterior = heroAtual;
+    if (heroPendente < 0 || heroPendente >= total) heroPendente = heroAtual;
+  }
+
   // O HERO SEGUE O FOCO. Pedido do dono, e e uma DIVERGENCIA DELIBERADA do app
   // web: medi duas vezes com o foco andando de verdade (o card mudou de "54
   // minutos restantes" para "1h 12m restantes") e a arte do
@@ -654,11 +848,13 @@ void home_atualizar(float dt, Uint32 agora) {
       // da arte nova estiver pronta — ver heroDesejado.
       heroDesejado = heroPendente;
     } else if (alvo < 0 && agora >= heroTrocaEm) {
-      // Sem card em foco (acervo vazio, por exemplo) o carrossel volta a girar.
-      heroAnterior = heroAtual;
-      heroAtual = (heroAtual + 1) % nAcervoHero();
-      heroPendente = heroAtual;   // senao o repouso dispararia uma troca extra
-      heroSai = 1.0f; heroEntra = 0.0f;
+      // Sem card em foco, agenda o proximo item e deixa o desenho efetivar a
+      // troca somente quando a textura ou o placeholder ja estiver pronto.
+      int total = nAcervoHero();
+      int proximo = total > 0 ? (heroAtual + 1) % total : 0;
+      heroPendente = proximo;
+      heroPendenteEm = agora - NV_HERO_REPOUSO_MS;
+      heroDesejado = proximo;
       heroTrocaEm = agora + NV_HERO_INTERVALO_MS;
     }
   }
@@ -674,7 +870,8 @@ void home_atualizar(float dt, Uint32 agora) {
       // Fileira DEITADA (e a de continuar assistindo) ja mostra a arte larga:
       // nao ha para o que expandir.
       if (pronto && podeExpandir(foco.fileira))
-        expAbre = anim_mola(expAbre, 1.0f, dt, NV_MOLA_TELA); }
+        expAbre = motionReduzido ? 1.0f
+                   : anim_mola(expAbre, 1.0f, dt, NV_MOLA_TELA); }
   } else {
     expAbre = 0.0f; expFileira = expColuna = -1;
   }
@@ -682,6 +879,9 @@ void home_atualizar(float dt, Uint32 agora) {
   if (heroSai > 0.0f) {
     heroSai -= dt * (1000.0f / NV_HERO_FADE_MS);
     if (heroSai < 0.0f) heroSai = 0.0f;
+    heroEntra = motionReduzido ? 1.0f : 1.0f - heroSai;
+  } else {
+    heroEntra = 1.0f;
   }
 
   // O passeio automatico do foco era so para ver o protótipo se mexendo sem
@@ -693,7 +893,9 @@ void home_atualizar(float dt, Uint32 agora) {
     if (nAnim > MAX_CARDS) nAnim = MAX_CARDS;
     for (int c = 0; c < nAnim; c++) {
       float alvo = focus_indice(&foco, r, c) ? 1.0f : 0.0f;
-      animFoco[r][c] = anim_mola(animFoco[r][c], alvo, dt,
+      animFoco[r][c] = motionReduzido
+                     ? alvo
+                     : anim_mola(animFoco[r][c], alvo, dt,
                                  alvo > animFoco[r][c] ? NV_MOLA_FOCO : NV_MOLA_DESFOCO);
     }
     if (r == foco.fileira) {
@@ -705,7 +907,7 @@ void home_atualizar(float dt, Uint32 agora) {
       float passo = lw + gapDe(fileiras[r].tipo);
       float esq = (float)foco.coluna * passo;
       float dir = esq + lw;
-      float util = NV_TELA_W - ajustes_conteudo_x() - NV_LEGACY_CONTENT_RIGHT;
+      float util = NV_TELA_W - ajustes_conteudo_x() - NV_HOME_SAFE_RIGHT;
       float alvo = scrollX[r];
       // a folga cobre o crescimento do foco: o card cresce para os dois lados,
       // e sem reservar essa metade ele encosta na borda ao ficar em foco
@@ -713,7 +915,8 @@ void home_atualizar(float dt, Uint32 agora) {
       if (dir + folga - alvo > util)  alvo = dir + folga - util;
       if (esq - alvo < 0.0f)  alvo = esq;
       if (alvo < 0) alvo = 0;
-      scrollX[r] = anim_mola2(&velX[r], scrollX[r], alvo, dt, NV_MOLA2_SCROLL);
+      scrollX[r] = anim_mola2_reduzida(&velX[r], scrollX[r], alvo, dt,
+                                       NV_MOLA2_SCROLL, motionReduzido);
     }
   }
 
@@ -737,7 +940,8 @@ void home_atualizar(float dt, Uint32 agora) {
     for (int i = 0; i < r && i < nFileiras; i++)
       alvoY += NV_LEGACY_ROW_HEAD_H + alturaTotalDe(fileiras[i].tipo) + fileiraGap();
   }
-  scrollY = anim_mola2(&velY, scrollY, alvoY, dt, NV_MOLA2_SCROLL);
+  scrollY = anim_mola2_reduzida(&velY, scrollY, alvoY, dt,
+                                NV_MOLA2_SCROLL, motionReduzido);
 }
 
 // ---------- Hero do layout moderno legacy ----------------------------------
@@ -760,6 +964,7 @@ void home_hero_rect(float *x, float *y, float *w, float *h) {
 // nao como troca de tela.
 static void desenhaHero(Uint32 agora, float saida) {
   (void)agora;
+  const int motionReduzido = ajustes_animacoes_reduzidas();
   float aArte = 1.0f;
   // MEDIDO no app web: .home-modern-hero-media fica em x=555, y=0, 1421x670.
   // A conta que estava aqui (0.28*W - 56 = 481,6 de largura 1438) vinha de
@@ -776,26 +981,50 @@ static void desenhaHero(Uint32 agora, float saida) {
   if(foco.fileira>=0 && foco.fileira<nFileiras && fileiras[foco.fileira].tipo==FILEIRA_SOCIAL) {
     float x=ajustes_conteudo_x(),a=1-saida;
     gfx_rect((GfxRect){0,0,NV_TELA_W,NV_TELA_H},0,GFX_SOCIAL,0,0,0,0,1,1,1,1);
-    const char *marca=extras_caminho_marca_nome("trakt_wordmark");
-    GLuint logo=tex_obter(marca);
-    float marcaAsp=logo?tex_aspecto(marca):2.66f;
-    if(marcaAsp<=0)marcaAsp=2.66f;
-    if(logo)gfx_rect((GfxRect){x,144,44*marcaAsp,44},logo,GFX_MARCA,0,0,0,0,.96f,.94f,.95f,a);
-    txt_desenhar_alpha(txt_linha(TXT_HERO_META,"SUA COMUNIDADE",210,191,199,255),x+44*marcaAsp+24,154,a);
-    txt_desenhar_alpha(txt_linha(TXT_TITULO1,"Boas histórias conectam.",244,243,247,255),x,226,a);
-    txt_bloco(TXT_HERO_SIN,"Descubra o que seus amigos estão vendo.\nUma nova recomendação pode começar aqui.",187,190,202,x,330,740,36,a,2);
     const Fileira *s=&fileiras[foco.fileira];
-    const CatItem *p=s->ini>=0?cat_item(s->ini+foco.coluna):NULL;
+    const CatItem *p=(s->ini>=0&&foco.coluna<s->n)
+                    ?cat_item_exato(s->ini+foco.coluna):NULL;
     if(p) {
-      float ax=NV_TELA_W-420,ay=146,d=232;
-      GLuint foto=p->socialAvatar[0]?tex_obter_larg(p->socialAvatar,320):0;
-      // O avatar faz parte do hero, sem medalhao ou aro decorativo. O halo
-      // anterior lia como uma moldura grossa e ainda amplificava qualquer
-      // irregularidade do recorte circular da imagem.
-      if(foto){gfx_tex_aspect_atual=tex_aspecto(p->socialAvatar);
-        gfx_rect((GfxRect){ax,ay,d,d},foto,GFX_AVATAR,0,0,0,0,1,1,1,a);gfx_tex_aspect_atual=0;}
-      TxtLinha nome=txt_linha_corta(TXT_CALLOUT,p->socialNome,237,236,244,255,340);
-      txt_desenhar_alpha(nome,ax+(d-nome.w)*.5f,ay+d+24,a);
+      const char *arte=arte_por_formato(p, 1);
+      GLuint ta=arte?tex_obter_hero(arte):0;
+      // A atividade continua com um ambiente discreto, mas quando o Trakt
+      // trouxe arte real ela vira o assunto do hero. A pessoa fica apenas na
+      // ficha social, onde o avatar tem contexto e não compete com o titulo.
+      if(ta){gfx_tex_aspect_atual=tex_aspecto(arte);
+        gfx_rect(r,ta,modoHero,0,0,0,0,0,0,0,aArte);gfx_tex_aspect_atual=0;}
+      else if (!arte) desenhaArteAusente(r, 0.0f, p, aArte);
+
+      const char *nome=p->socialNome[0]&&strcmp(p->socialNome,"Amigo")?p->socialNome:NULL;
+      char autoria[240];
+      if(nome&&p->socialAcao[0])snprintf(autoria,sizeof autoria,"%s  ·  %s",nome,p->socialAcao);
+      else if(nome)snprintf(autoria,sizeof autoria,"%s",nome);
+      else snprintf(autoria,sizeof autoria,"%s",p->socialAcao);
+      txt_desenhar_alpha(txt_linha_corta(TXT_HERO_META,autoria,210,210,221,255,680),x,146,a);
+
+      GLuint tl=p->logo[0]?tex_obter_larg(p->logo,520):0;
+      if(tl&&tex_aspecto(p->logo)>0){
+        float ap=tex_aspecto(p->logo),w=520,h=w/ap;
+        if(h>104){h=104;w=h*ap;}
+        gfx_rect((GfxRect){x,208,w,h},tl,tex_marca_escura(p->logo)?GFX_MARCA:GFX_TEXTO,
+                 0,0,0,0,1,1,1,a);
+      } else if(p->titulo[0]) {
+        txt_desenhar_alpha(txt_linha_corta(TXT_TITULO1,p->titulo,244,243,247,255,680),x,208,a);
+      }
+      if(p->direcao[0])
+        txt_desenhar_alpha(txt_linha_corta(TXT_CALLOUT,p->direcao,230,231,238,255,680),x,326,a);
+      if(p->meta[0])
+        txt_desenhar_alpha(txt_linha_corta(TXT_HERO_META,p->meta,190,194,205,255,680),x,364,a);
+      if(p->sinopse[0])
+        txt_bloco(TXT_HERO_SIN,p->sinopse,229,231,237,x,402,700,31,a,2);
+    } else {
+      const char *marca=extras_caminho_marca_nome("trakt_wordmark");
+      GLuint logo=tex_obter(marca);
+      float marcaAsp=logo?tex_aspecto(marca):2.66f;
+      if(marcaAsp<=0)marcaAsp=2.66f;
+      if(logo)gfx_rect((GfxRect){x,144,44*marcaAsp,44},logo,GFX_MARCA,0,0,0,0,.96f,.94f,.95f,a);
+      txt_desenhar_alpha(txt_linha(TXT_HERO_META,"SUA COMUNIDADE",210,191,199,255),x+44*marcaAsp+24,154,a);
+      txt_desenhar_alpha(txt_linha(TXT_TITULO1,"Boas histórias conectam.",244,243,247,255),x,226,a);
+      txt_bloco(TXT_HERO_SIN,"Descubra o que seus amigos estão vendo.\nUma nova recomendação pode começar aqui.",187,190,202,x,330,740,36,a,2);
     }
     heroArteRect=r;
     return;
@@ -804,36 +1033,76 @@ static void desenhaHero(Uint32 agora, float saida) {
   if(foco.fileira>=0&&foco.fileira<nFileiras&&fileiras[foco.fileira].tipo==FILEIRA_CATALOGOS) {
     const ColFolder *folder=col_folder(fileiras[foco.fileira].folders[foco.coluna]);
     if(folder) {
-      int ehDiretor=!strcasecmp(folder->group,"Directors");
-      // A capa de Directors contem nome e retrato assados no mesmo JPEG. Ao
-      // amplia-la, o nome virava um borrão gigante. O fundo neutro entra
-      // primeiro; a fotografia limpa do TMDB e composta separadamente abaixo.
-      const char *art=folder->hero[0]?folder->hero:folder->cover;
-      GLuint t=tex_obter_hero(art);
-      if(!t){art=folder->cover;t=tex_obter_hero(art);}
-      if(t){gfx_tex_aspect_atual=tex_aspecto(art);gfx_rect(r,t,modoHero,0,0,0,0,0,0,0,aArte);gfx_tex_aspect_atual=0;}
-      if(ehDiretor) {
-        diretor_pedir(folder->title);
-        const char *foto=diretor_foto(folder->title);
-        GLuint tp=foto[0]?tex_obter_hero(foto):0;
-        if(tp) {
-          // Uma janela de composicao constante impede que a altura expandida
-          // do hero transforme o retrato vertical num close extremo.
-          GfxRect rp=cheio?(GfxRect){720,18,1200,700}
-                            :(GfxRect){740,8,1180,650};
-          gfx_tex_aspect_atual=tex_aspecto(foto);
-          gfx_rect(rp,tp,GFX_RETRATO,0,0,0,0,0,0,0,.94f*aArte);
-          gfx_tex_aspect_atual=0;
-        }
+      if(folder->editorial) {
+        /* Art is authored for this rectangle, not cropped as a movie backdrop.
+           The neutral canvas continues below it; no art behind the shelves. */
+        float x=ajustes_conteudo_x(),a=1-saida;
+        GLuint art=tex_obter_hero(folder->hero);
+        GfxRect header={0,0,1920,500};
+        if(art)gfx_rect(header,art,GFX_TEXTO,0,0,0,0,1,1,1,a);
+        heroArteRect=header;
+        int director=!strcasecmp(folder->group,"Directors");
+        txt_desenhar_alpha(txt_linha(TXT_HERO_META,director?"DIRETORES":"COLEÇÕES",190,193,200,255),x,122,a);
+        txt_bloco(TXT_TITULO1,folder->title,244,243,247,x,183,860,72,a,2);
+        char caption[160];
+        snprintf(caption,sizeof caption,"%s  ·  %d %s",director?"Filmografia":"Seleção de cinema e séries",folder->nSources,folder->nSources==1?"lista":"listas");
+        txt_desenhar_alpha(txt_linha_corta(TXT_HERO_META,caption,190,193,200,255,860),x,358,a);
+        txt_desenhar_alpha(txt_linha(TXT_HERO_META,"OK para explorar",224,225,230,255),x,406,a);
+        return;
       }
+      int ehDiretor=!strcasecmp(folder->group,"Directors");
+      // A colecao ja traz o banner certo: e um fundo neutro, sem lettering,
+      // feito para receber o conteudo por cima. O retrato do diretor entra como
+      // uma segunda camada dissolvida no lado direito — nunca como um card e
+      // nunca como o backdrop de um filme conhecido.
+      const char *art=folder->hero[0]?folder->hero:folder->cover;
+      GLuint t=0;
+      if (ehDiretor) diretor_pedir(folder->title);
+      if (!t && art[0]) t=tex_obter_hero(art);
+      if(t){gfx_tex_aspect_atual=tex_aspecto(art);gfx_rect(r,t,modoHero,0,0,0,0,0,0,0,aArte);gfx_tex_aspect_atual=0;}
       heroArteRect=r;
       float x=ajustes_conteudo_x(),a=1-saida;
       TxtLinha group=txt_linha(TXT_HERO_META,folder->group,201,206,218,255);
       txt_desenhar_alpha(group,x,NV_COLLECTION_HERO_GROUP_Y,a);
+      if (ehDiretor) {
+        const char *foto=diretor_foto(folder->title);
+        GLuint retrato=foto[0]
+          ?tex_obter_larg(foto,cheio?1280.0f:1100.0f):0;
+        if (retrato) {
+          // O shader conserva a proporcao vertical e dissolve as quatro bordas.
+          // A largura e intencionalmente generosa para a cabeca ter a mesma
+          // presenca visual do exemplo aprovado, sem parecer uma foto espremida.
+          GfxRect pr=cheio ? (GfxRect){840.0f,-20.0f,1080.0f,1120.0f}
+                           : (GfxRect){980.0f,-15.0f,940.0f,700.0f};
+          gfx_tex_aspect_atual=tex_aspecto(foto);
+          gfx_rect(pr,retrato,GFX_RETRATO,0,0,0,0,0,0,0,aArte);
+          gfx_tex_aspect_atual=0.0f;
+        }
+        TxtLinha name=txt_linha_corta(TXT_TITULO1,folder->title,244,243,247,255,780);
+        txt_desenhar_alpha(name,x,NV_COLLECTION_HERO_LOGO_Y,a);
+        const char *meta=diretor_meta(folder->title);
+        if (meta[0])
+          txt_desenhar_alpha(txt_linha_corta(TXT_HERO_META,meta,201,206,218,255,780),
+                             x,NV_COLLECTION_HERO_LOGO_Y+92.0f,a);
+        const char *con=diretor_conhecido(folder->title);
+        if (con[0]) {
+          char linha[300];
+          snprintf(linha,sizeof linha,"Conhecido por  %s",con);
+          txt_desenhar_alpha(txt_linha_corta(TXT_HERO_META,linha,220,224,233,255,780),
+                             x,NV_COLLECTION_HERO_LOGO_Y+136.0f,a);
+        }
+        char caption[96];
+        snprintf(caption, sizeof caption, "%d %s · OK para explorar",
+                 folder->nSources, folder->nSources == 1 ? "lista" : "listas");
+        txt_desenhar_alpha(txt_linha_corta(TXT_HERO_SIN, caption,
+                                           205, 210, 221, 255, 780),
+                           x, NV_COLLECTION_HERO_CAPTION_Y, a);
+        return;
+      }
       // As logos de colecao sao arte, nao texto rasterizado. O limite de
       // decode fica acima do tamanho desenhado para preservar nitidez quando
       // a proporcao da logo pede a altura maxima.
-      GLuint logo=folder->logo[0]
+      GLuint logo=(!ehDiretor && folder->logo[0])
         ?tex_obter_larg(folder->logo,NV_COLLECTION_HERO_LOGO_MAX_W+40.0f):0;
       float ap=logo?tex_aspecto(folder->logo):0;
       float fimTitulo=NV_COLLECTION_HERO_LOGO_Y+NV_COLLECTION_HERO_LOGO_MAX_H;
@@ -883,21 +1152,24 @@ static void desenhaHero(Uint32 agora, float saida) {
   // cache nao devolve textura, heroAtual nao muda e a tela segue com a arte que
   // ja estava — que e exatamente o que o dono pediu ao andar depressa.
   if (heroDesejado >= 0 && heroDesejado != heroAtual) {
-    const CatItem *cd = cat_item(heroDesejado);
-    const char *arteD = (cd && cd->backdrop[0]) ? cd->backdrop : bd[heroDesejado];
-    if (tex_obter_hero(arteD)) {
+    const char *arteD = arte_por_identidade(heroDesejado, 1);
+    // Ausencia de arte tambem e um estado pronto: o placeholder pertence ao
+    // item e pode entrar sem apagar o hero anterior primeiro.
+    int artePronta = !arteD || tex_obter_hero(arteD);
+    if (artePronta) {
       heroAnterior = heroAtual;
       heroAtual = heroDesejado;
       heroDesejado = -1;
-      heroSai = 1.0f; heroEntra = 0.0f;
+      heroSai = (motionReduzido || !arteD) ? 0.0f : 1.0f;
+      heroEntra = (motionReduzido || !arteD) ? 1.0f : 0.0f;
       heroTrocaEm = SDL_GetTicks() + NV_HERO_INTERVALO_MS;
     }
   }
 
-  const CatItem *ci = cat_item(heroAtual);
-  const char *arteA = (ci && ci->backdrop[0]) ? ci->backdrop : bd[heroAtual];
-  const CatItem *cAnt = cat_item(heroAnterior);
-  const char *arteB = (cAnt && cAnt->backdrop[0]) ? cAnt->backdrop : bd[heroAnterior];
+  const CatItem *ci = cat_item_exato(heroAtual);
+  const char *arteA = arte_por_identidade(heroAtual, 1);
+  const CatItem *cAnt = cat_item_exato(heroAnterior);
+  const char *arteB = arte_por_identidade(heroAnterior, 1);
 
   // Teto de 1920: o hero ocupa a tela e a 960 saia esticado ao dobro.
   // O ANTERIOR so e pedido ENQUANTO a mistura acontece. Estava sendo pedido em
@@ -905,22 +1177,24 @@ static void desenhaHero(Uint32 agora, float saida) {
   // cache ja o tinha despejado, o pedido o trazia de volta — uma textura de
   // 1920 (~8 MB) re-decodificada para NAO ser desenhada, empurrando os posteres
   // visiveis para fora do orcamento.
-  GLuint tAnt = (heroSai > 0.0f) ? tex_obter_hero(arteB) : 0;
+  GLuint tAnt = (heroSai > 0.0f && arteB) ? tex_obter_hero(arteB) : 0;
   // Pedir a nova JA, durante o esvanecimento: e este pedido que enfileira o
   // decode, e e por isso que o vazio dura o tempo do carregamento e nao mais.
-  GLuint tAtu = tex_obter_hero(arteA);
-  // O CORTE SECO. So depois de a velha ter apagado por completo — a referencia
-  // nunca mostra as duas juntas, nem por um quadro.
-  if (heroEntra < 1.0f && heroSai <= 0.0f && tAtu) heroEntra = 1.0f;
+  GLuint tAtu = arteA ? tex_obter_hero(arteA) : 0;
   if (tAnt) {
     // Esvanecimento com aceleracao e desaceleracao: o medido fica ~25% do
     // percurso quase parado no comeco, entao rampa reta le como corte na saida.
-    gfx_tex_aspect_atual = tex_aspecto(arteB);
-    gfx_rect(r, tAnt, modoHero, 0, 0, 0, 0.0f, 0, 0, 0, anim_suave(heroSai) * aArte);
+    (void)desenhaArteHero(r, modoHero, cAnt, arteB,
+                          anim_suave(heroSai) * aArte);
+  } else if (heroSai > 0.0f) {
+    desenhaPlaceholderHero(r, cAnt, anim_suave(heroSai) * aArte);
   }
   if (tAtu && heroEntra > 0.0f) {
-    gfx_tex_aspect_atual = tex_aspecto(arteA);
-    gfx_rect(r, tAtu, modoHero, 0, 0, 0, 0.0f, 0, 0, 0, aArte);
+    (void)desenhaArteHero(r, modoHero, ci, arteA,
+                          anim_suave(heroEntra) * aArte);
+  } else if (!tAtu) {
+    desenhaPlaceholderHero(r, ci,
+                           aArte * (heroEntra > 0.0f ? 1.0f : heroEntra));
   }
   gfx_tex_aspect_atual = 0.0f;
   heroArteRect = r;
@@ -1111,7 +1385,8 @@ static void desenhaAtalhos(int r, float y) {
     const ColFolder *folder=col_folder(fileiras[r].folders[c]);if(!folder)continue;
     const char *arte = folder->cover;
     GLuint tex = arte && arte[0] ? tex_obter_larg(arte, w) : 0;
-    if(foco.fileira==r&&foco.coluna==c&&folder->frames>0) {
+    if(foco.fileira==r&&foco.coluna==c&&folder->frames>0 &&
+       !ajustes_animacoes_reduzidas()) {
       int id=fileiras[r].folders[c];Uint32 now=SDL_GetTicks();
       if(ultimo!=id){ultimo=id;desde=now;}
       if(now-desde>350) {
@@ -1130,12 +1405,11 @@ static void desenhaAtalhos(int r, float y) {
       gfx_rect(card, tex, GFX_CARD, 0, 0, 0, raio, 0, 0, 0, 1);
       gfx_tex_aspect_atual = 0;
     }
-    if(!folder->hideTitle || !tex) {
-    gfx_rect(card, 0, GFX_VEU, 0, 0, 0, raio, 0, 0, 0, .65f);
-    TxtLinha nome = txt_linha_corta(TXT_CW_TITULO, folder->title,
-                                    245, 246, 249, 255, w - 48);
-    txt_desenhar(nome, x + 28, y + h - 28 - nome.h);
-    }
+    // A propria capa e a identidade do catalogo. O nome/logo vinha sendo
+    // desenhado novamente por cima dela e criava exatamente a duplicacao que
+    // o usuario apontou em Netflix, Prime Video, Disney+ e nas listas IMDb.
+    // Titulo de fileira continua no cabecalho; dentro do card fica somente a
+    // arte, sem veu, badge ou logo auxiliar.
   }
 }
 
@@ -1221,7 +1495,7 @@ void home_desenhar(Uint32 agora) {
           snprintf(pos, sizeof pos, "%d / %d", foco.coluna + 1, fileiras[r].n);
         else snprintf(pos, sizeof pos, "Ver tudo");
         TxtLinha lp = txt_linha(TXT_HERO_META, pos, 186, 191, 202, 255);
-        txt_desenhar(lp, NV_TELA_W - NV_LEGACY_CONTENT_RIGHT - lp.w, y + (tl.h - lp.h)*.5f);
+        txt_desenhar(lp, NV_TELA_W - NV_HOME_SAFE_RIGHT - lp.w, y + (tl.h - lp.h)*.5f);
       }
       if (tipo == FILEIRA_CATALOGOS) {
         desenhaAtalhos(r, cardY);
@@ -1300,11 +1574,12 @@ void home_desenhar(Uint32 agora) {
             // Sem placa de fundo: os cartazes empilhados ja formam o card.
             int count=fileiras[r].stackN<6?fileiras[r].stackN:6;
             for(int k=0;k<count;k++) {
-              const CatItem *it=cat_item(idxCat+k);if(!it)continue;
+              const CatItem *it=cat_item_exato(idxCat+k);if(!it)continue;
               GfxRect pr={px+20+k*78,py+18,178,h-72};
-              GLuint tx=tex_obter_larg(it->poster,178);
-              if(tx){gfx_tex_aspect_atual=tex_aspecto(it->poster);gfx_rect(pr,tx,GFX_CARD,0,0,0,.055f,1,1,1,1);gfx_tex_aspect_atual=0;}
-              else gfx_cor(pr,.055f,.15f,.14f,.19f,1);
+              const char *pa=arte_por_formato(it,0);
+              GLuint tx=pa?tex_obter_larg(pa,178):0;
+              if(tx){gfx_tex_aspect_atual=tex_aspecto(pa);gfx_rect(pr,tx,GFX_CARD,0,0,0,.055f,1,1,1,1);gfx_tex_aspect_atual=0;}
+              else desenhaArteAusente(pr,.055f,it,1);
             }
             txt_desenhar(txt_linha(TXT_CAPTION,"TOP 100   ·   Explorar primeiros 10",242,235,248,255),px+24,py+h-42);
             if(foco.fileira==r)temItemFoco=0;
@@ -1321,12 +1596,31 @@ void home_desenhar(Uint32 agora) {
             if(foco.fileira==r)temItemFoco=0;
             continue;
           }
-          const CatItem *cItem = cat_item(idxCat);
+          const CatItem *cItem = cat_item_exato(idxCat);
           if(tipo==FILEIRA_SOCIAL && cItem) {
             if(foco.fileira==r)temItemFoco=0;
-            float d=120.0f, ax=px+12.0f, ay=py+24.0f;
+            // A atividade social precisa de contexto, nao de um segundo hero.
+            // Sem painel e sem contorno: o palco neutro da home faz o trabalho
+            // de fundo. A imagem tem um papel editorial menor, thumbnail da
+            // obra, enquanto autoria e acao respiram diretamente na tela.
+            const float conteudoTopo=py+24.0f;
+            const float conteudoBase=py+h-24.0f;
+            const float arteW=134.0f;
+            const float arteX=px+w-24.0f-arteW;
+            const char *thumbPath=cItem->poster[0]?cItem->poster:
+                                  (cItem->backdrop[0]?cItem->backdrop:NULL);
+            if(thumbPath){GLuint thumb=tex_obter_larg(thumbPath,arteW);
+              if(thumb){GfxRect tr={arteX,conteudoTopo,arteW,conteudoBase-conteudoTopo};
+                gfx_tex_aspect_atual=tex_aspecto(thumbPath);
+                gfx_rect(tr,thumb,GFX_CARD,0,0,0,.055f,0,0,0,1);gfx_tex_aspect_atual=0;
+              }
+            }
+            // Avatar maior e centralizado na mesma faixa vertical da arte.
+            // O eixo comum deixa a composicao com cara de ficha editorial,
+            // em vez de avatar solto no topo e thumbnail separado embaixo.
+            float d=120.0f, ax=px+24.0f, ay=py+(h-d)*.5f;
             GfxRect avatar={ax,ay,d,d};
-            GLuint foto=cItem->socialAvatar[0]?tex_obter_larg(cItem->socialAvatar,180):0;
+            GLuint foto=cItem->socialAvatar[0]?tex_obter_larg(cItem->socialAvatar,220):0;
             // O foco e um disco atras da imagem, nunca um stroke por cima.
             // Assim as duas circunferencias compartilham o mesmo centro e o
             // aro permanece uniforme inclusive no limite superior da fileira.
@@ -1339,19 +1633,21 @@ void home_desenhar(Uint32 agora) {
             else {char inicial[8]="?";const char *nome=cItem->socialNome[0]?cItem->socialNome:cItem->pais;
               if(nome[0]){size_t z=1;while(z<4 && (nome[z]&0xc0)==0x80)z++;memcpy(inicial,nome,z);inicial[z]=0;}
               TxtLinha l=txt_linha(TXT_TITULO2,inicial,235,236,240,255);txt_desenhar(l,ax+(d-l.w)*.5f,ay+(d-l.h)*.5f);}
-            float tx=px+160,tw=w-180;
+            float tx=ax+d+24.0f,tw=thumbPath?arteX-tx-24.0f:w-192.0f;
             TxtLinha nome=txt_linha_corta(TXT_CW_TITULO,cItem->socialNome[0]?cItem->socialNome:cItem->pais,245,245,247,255,tw);
-            txt_desenhar(nome,tx,py+20);
+            txt_desenhar(nome,tx,conteudoTopo);
             TxtLinha acao=txt_linha_corta(TXT_MINI,cItem->socialAcao[0]?cItem->socialAcao:cItem->provNome,181,185,196,255,tw);
-            txt_desenhar(acao,tx,py+60);
+            txt_desenhar(acao,tx,conteudoTopo+38.0f);
             TxtLinha titulo=txt_linha_corta(TXT_CW_META,cItem->titulo,228,231,239,255,tw);
-            txt_desenhar(titulo,tx,py+104);
+            txt_desenhar(titulo,tx,conteudoTopo+92.0f);
             TxtLinha ep=txt_linha_corta(TXT_MINI,cItem->temporada?cItem->direcao:"Filme",181,185,196,255,tw);
-            txt_desenhar(ep,tx,py+138);
-            if(f>.1f){TxtLinha ver=txt_linha(TXT_MINI,"Ver perfil",235,237,244,255);txt_desenhar_alpha(ver,tx,py+184,f);}
+            txt_desenhar(ep,tx,conteudoTopo+130.0f);
+            TxtLinha fonte=txt_linha_corta(TXT_MINI,cItem->provNome[0]?cItem->provNome:"Trakt",155,161,174,255,tw);
+            txt_desenhar(fonte,tx,conteudoBase-14.0f);
+            if(f>.1f){TxtLinha ver=txt_linha(TXT_MINI,"Ver perfil",235,237,244,255);txt_desenhar_alpha(ver,tx,conteudoBase-40.0f,f);}
             continue;
           }
-          const char *caminho;
+          const char *caminho = NULL;
           // Card DEITADO pede arte deitada. No web o poster do card landscape sai
           // de `landscapePoster` -> `background` -> `backdrop` -> `poster`
           // (homeScreen.js:3155), nao do poster 2:3 — usar o retrato aqui faria o
@@ -1359,19 +1655,9 @@ void home_desenhar(Uint32 agora) {
           // Aberto, o card mostra a arte DEITADA: e para isso que ele abre.
           // A troca acontece na metade do caminho, quando a moldura ja tem
           // largura de 16:9 e o retrato comecaria a ser recortado feio.
-          if (abre > 0.5f)
-            caminho = (cItem && cItem->backdrop[0]) ? cItem->backdrop
-                    : (cItem && cItem->poster[0]) ? cItem->poster
-                    : (nBd ? bd[idxCat % nBd] : NULL);
-          else if (tipo == FILEIRA_CONTINUE || tipo == FILEIRA_RETORNO || deitado)
-            caminho = (cItem && cItem->backdrop[0]) ? cItem->backdrop
-                    : (cItem && cItem->poster[0]) ? cItem->poster
-                    : (nBd ? bd[idxCat % nBd] : NULL);
-          else
-            caminho = (cItem && cItem->poster[0]) ? cItem->poster
-                    : (cItem && cItem->backdrop[0]) ? cItem->backdrop
-                    : (nPst ? pst[idxCat % nPst] : NULL);
-          if (!caminho) continue;
+          caminho = arte_por_identidade(idxCat, abre > 0.5f ||
+                                        tipo == FILEIRA_CONTINUE ||
+                                        tipo == FILEIRA_RETORNO || deitado);
 
           if (focus_indice(&foco, r, c)) {
             GfxRect aqui = { px, py, w, h };
@@ -1386,7 +1672,7 @@ void home_desenhar(Uint32 agora) {
           // Pede pela largura REAL do card: e esta fileira que multiplica.
           // Com o teto unico de 640 cada poster custava 2,4 MB e o cache
           // estourava com ~40 texturas, despejando o que ainda estava na tela.
-          GLuint t = tex_obter_larg(caminho, w);
+          GLuint t = caminho ? tex_obter_larg(caminho, w) : 0;
           // ANEL DE FOCO: 4 px de #FFFFFF, POR FORA da arte.
           //
           // Era 2 px de #f5f5f5, tirado do `box-shadow` do app WEB. MEDIDO no
@@ -1441,8 +1727,7 @@ void home_desenhar(Uint32 agora) {
             //
             // A referencia usa #2C2C2C sobre #0D0D0D: luminancia ~22x a do
             // fundo, impossivel nao ver.
-            gfx_cor(card, raio, NV_COR_ESQUELETO_R, NV_COR_ESQUELETO_G,
-                    NV_COR_ESQUELETO_B, 1.0f);
+            desenhaArteAusente(card, raio, cItem, 1.0f);
           }
           // SELO DE ASSISTIDO: disco branco com um "v" escuro, no canto
           // superior direito do poster. A referencia o tem e nos nao tinhamos
@@ -1632,6 +1917,24 @@ void home_desenhar(Uint32 agora) {
                 txt_desenhar(tb, bx + 8, yMeta + 2); }
             }
           }
+
+          // Feedback progressivo do gesto, sem duplicar o menu contextual. A
+          // barra aparece somente enquanto o mesmo item esta sob pressao;
+          // atingido o limiar, ctxmenu ja foi aberto e a soltura e consumida.
+          if (okPressionando && okHold > 0.0f &&
+              foco_pode_pressao_longa() && focus_indice(&foco, r, c)) {
+            float bx = px + NV_HOME_TEXT_GUTTER;
+            float bw = w - NV_HOME_TEXT_GUTTER * 2.0f;
+            GfxRect trilho = { bx, py + h - 12.0f, bw, 4.0f };
+            gfx_cor(trilho, 0.5f, 0.18f, 0.19f, 0.22f, 0.92f);
+            gfx_cor((GfxRect){ bx, trilho.y, bw * okHold, trilho.h },
+                    0.5f, 0.92f, 0.93f, 0.96f, 1.0f);
+            TxtLinha dica = txt_linha(TXT_MINI,
+                                      okHold >= 1.0f ? "Solte para abrir opções"
+                                                     : "Segure para opções",
+                                      225, 228, 235, 255);
+            txt_desenhar_alpha(dica, bx, py + h - 38.0f, 0.92f);
+          }
         }
       }
     }
@@ -1650,7 +1953,7 @@ void home_registrar_retorno(int indice, double posSeg, double durSeg) {
   }
   if (novo != retomarIndice) { retomarIndice = novo; retomarRev++; }
   else if (novo >= 0) retomarRev++; // atualiza barra/tempo da mesma sessao
-  const CatItem *c = novo >= 0 ? cat_item(novo) : NULL;
+  const CatItem *c = novo >= 0 ? cat_item_exato(novo) : NULL;
   snprintf(retomarId, sizeof retomarId, "%s", c ? c->imdb : "");
 }
 int home_quer_sair(void) { return sair; }
@@ -1665,11 +1968,10 @@ int home_n_artes(void) { return nBd; }
 // Quando ha catalogo, a arte vem dele (na ordem certa, casada com o titulo);
 // sem catalogo, cai na varredura da pasta.
 const char *home_backdrop(int i) {
-  const CatItem *c = cat_item(i);
-  if (c && c->backdrop[0]) return c->backdrop;
-  return home_arte(i);
+  const CatItem *c = cat_item_exato(i);
+  return c && c->backdrop[0] ? c->backdrop : NULL;
 }
-const char *home_arte(int i) { return (nBd && i >= 0) ? bd[i % nBd] : NULL; }
+const char *home_arte(int i) { return (nBd && i >= 0 && i < nBd) ? bd[i] : NULL; }
 
 // Consome o pedido de abrir: quem le, zera. Assim o OK vale uma vez so, mesmo
 // que o quadro demore.

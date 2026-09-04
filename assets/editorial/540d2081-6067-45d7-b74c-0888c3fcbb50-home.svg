@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Guillermo del Toro — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#9ca98a" stroke="#9ca98a" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><path d="M377 218Q170 12 120 160Q153 248 343 245Q185 289 236 355Q347 381 377 238M389 218Q596 12 646 160Q613 248 423 245Q581 289 530 355Q419 381 389 238" fill="#3c493d" /><path d="M383 170Q365 232 383 294Q403 230 383 170Z" fill="#a0aa88" /><circle cx="248" cy="184" r="45" fill="none" /><circle cx="270" cy="191" r="33" fill="none" /><circle cx="292" cy="198" r="21" fill="none" /><circle cx="518" cy="184" r="45" fill="none" /><circle cx="496" cy="191" r="33" fill="none" /><circle cx="474" cy="198" r="21" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

@@ -60,6 +60,25 @@ typedef struct {
   char aviso[160];
 } PerfilDados;
 
+typedef enum {
+  PERFIL_ESTADO_CARREGANDO = 0,
+  PERFIL_ESTADO_ATUALIZANDO,
+  PERFIL_ESTADO_PRONTO,
+  PERFIL_ESTADO_STALE,
+  PERFIL_ESTADO_ERRO,
+  PERFIL_ESTADO_SEM_ATIVIDADE,
+  PERFIL_ESTADO_PRIVADO,
+  PERFIL_ESTADO_DESCONECTADO,
+  PERFIL_ESTADO_INDISPONIVEL
+} PerfilEstado;
+
+// Identificador opaco de uma obra selecionada. O roteador resolve o item no
+// catalogo atual antes de abrir o detalhe, sem inventar metadados.
+typedef struct {
+  char id[64];
+  char titulo[128];
+} PerfilItemSelecionado;
+
 int  perfil_iniciar(void);
 void perfil_encerrar(void);
 
@@ -78,6 +97,8 @@ void perfil_definir_dados(const PerfilDados *dados);
 // Preserva o ultimo snapshot ao falhar uma atualizacao. Sem snapshot, OK
 // pede nova tentativa. O chamador faz a rede e consome a flag abaixo.
 void perfil_definir_erro(const char *mensagem);
+void perfil_definir_estado(PerfilEstado estado, const char *mensagem);
+PerfilEstado perfil_estado(void);
 int  perfil_pediu_atualizar(void);
 
 void perfil_evento(const SDL_Event *e);

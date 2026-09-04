@@ -16,5 +16,7 @@ void perfilsel_evento(const SDL_Event *e);
 void perfilsel_atualizar(float dt, Uint32 agora);
 void perfilsel_desenhar(Uint32 agora);
 int  perfilsel_concluido(void);
+int  perfilsel_quer_sair(void);
+int  perfilsel_pediu_repetir(void);
 
 #endif

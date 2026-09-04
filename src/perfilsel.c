@@ -5,27 +5,35 @@
 #include "text.h"
 #include "anim.h"
 #include "layout.h"
+#include "ajustes.h"
+#include "sessao.h"
 #include <stdio.h>
 #include <string.h>
 #include <pthread.h>
+#include <stdatomic.h>
 
-#define PS_AVATAR      196.0f
-#define PS_GAP          64.0f
+#define PS_COLS           4
+#define PS_AVATAR      156.0f
+#define PS_GAP           48.0f
+#define PS_ROW_GAP       72.0f
 #define PS_PIN_MAX       8
 #define PS_TECLA         96.0f
 #define PS_TECLA_GAP     18.0f
 
 static int foco;
-static int concluido;
+static int concluido, sair, repetir;
 static float animFoco[CONTA_PERFIL_MAX];
 
 // Estado do PIN: -1 = nenhum perfil pedindo PIN.
 static int pinDe = -1;
 static char pin[PS_PIN_MAX + 1];
 static int pinFoco;              // 0..9 digitos, 10 = apagar, 11 = confirmar
-static int pinErrado;
+static int pinErrado, pinRede;
 static pthread_t fioPin;
-static int verificando, resultadoPin;   // resultadoPin: 0 nada, 1 ok, -1 errou
+static int verificando;
+static _Atomic int resultadoPin; // 0 pendente, 1 ok, -1 PIN incorreto, -2 rede
+static _Atomic unsigned pinGeracao;
+typedef struct { unsigned geracao; int slot, indice; char valor[PS_PIN_MAX + 1]; } PinTarefa;
 
 static int corDe(const char *hex, float *r, float *g, float *b) {
   unsigned v = 0;
@@ -40,11 +48,15 @@ static int corDe(const char *hex, float *r, float *g, float *b) {
 void perfilsel_iniciar(void) {
   int i;
   foco = 0;
-  concluido = 0;
+  concluido = sair = repetir = 0;
   pinDe = -1;
   pin[0] = 0;
   pinFoco = 0;
   pinErrado = 0;
+  pinRede = 0;
+  verificando = 0;
+  atomic_fetch_add(&pinGeracao, 1);
+  atomic_store(&resultadoPin, 0);
   for (i = 0; i < CONTA_PERFIL_MAX; i++) animFoco[i] = 0.0f;
   // Se o perfil ativo ja e conhecido, comeca o foco nele: reabrir a tela e
   // encontrar o cursor no primeiro perfil sugere que a escolha se perdeu.
@@ -53,24 +65,36 @@ void perfilsel_iniciar(void) {
 }
 
 static void *fioVerificar(void *u) {
-  const ContaPerfil *p = perfis_item(pinDe);
-  (void)u;
-  resultadoPin = (p && perfis_verificar_pin(p->indice, pin)) ? 1 : -1;
+  PinTarefa *t = u;
+  char corpo[128]; int status = 0, resultado = -2;
+  snprintf(corpo, sizeof corpo, "{\"p_profile_id\":%d,\"p_pin\":\"%s\"}", t->indice, t->valor);
+  { char *r = sessao_rpc("verify_profile_pin", corpo, &status);
+    if (r && status >= 200 && status < 300) resultado = strstr(r, "true") ? 1 : -1;
+    free(r); }
+  if (t->geracao == atomic_load(&pinGeracao) && pinDe == t->slot && verificando)
+    atomic_store(&resultadoPin, resultado);
+  free(t);
   return NULL;
 }
 
 static void escolher(int i) {
   const ContaPerfil *p = perfis_item(i);
   if (!p) return;
-  if (p->temPin) { pinDe = i; pin[0] = 0; pinFoco = 0; pinErrado = 0; return; }
+  if (p->temPin) { pinDe = i; pin[0] = 0; pinFoco = 0; pinErrado = pinRede = 0; return; }
   perfis_definir_ativo(p->indice);
   concluido = 1;
 }
 
 static void eventoPin(SDL_Keycode k) {
-  if (verificando) return;
+  if (verificando) {
+    if (k == SDLK_AC_BACK || k == SDLK_ESCAPE) {
+      atomic_fetch_add(&pinGeracao, 1); atomic_store(&resultadoPin, 0);
+      verificando = 0; pinRede = 0; pinErrado = 0;
+    }
+    return;
+  }
   if (k == SDLK_AC_BACK || k == SDLK_ESCAPE) {
-    if (pin[0]) pin[strlen(pin) - 1] = 0;
+    if (pin[0]) { pin[strlen(pin) - 1] = 0; pinErrado = pinRede = 0; }
     else pinDe = -1;
     return;
   }
@@ -83,12 +107,18 @@ static void eventoPin(SDL_Keycode k) {
   if (pinFoco == 10) { if (pin[0]) pin[strlen(pin) - 1] = 0; return; }
   if (pinFoco == 11) {
     if (!pin[0]) return;
+    PinTarefa *t = malloc(sizeof *t);
+    const ContaPerfil *p = perfis_item(pinDe);
+    if (!t || !p) { free(t); pinRede = 1; return; }
+    t->geracao = atomic_load(&pinGeracao); t->slot = pinDe; t->indice = p->indice;
+    snprintf(t->valor, sizeof t->valor, "%s", pin);
     verificando = 1;
-    resultadoPin = 0;
+    pinErrado = pinRede = 0;
+    atomic_store(&resultadoPin, 0);
     // Verificar BLOQUEIA (uma viagem ao servidor). Num fio, para a tela nao
     // congelar por um segundo a cada tentativa.
-    if (pthread_create(&fioPin, NULL, fioVerificar, NULL) == 0) pthread_detach(fioPin);
-    else { verificando = 0; pinErrado = 1; }
+    if (pthread_create(&fioPin, NULL, fioVerificar, t) == 0) pthread_detach(fioPin);
+    else { free(t); verificando = 0; pinRede = 1; }
     return;
   }
   { size_t n = strlen(pin);
@@ -101,31 +131,42 @@ void perfilsel_evento(const SDL_Event *e) {
   k = e->key.keysym.sym;
   if (pinDe >= 0) { eventoPin(k); return; }
 
-  if (k == SDLK_RIGHT) { if (foco < perfis_n() - 1) foco++; }
-  else if (k == SDLK_LEFT) { if (foco > 0) foco--; }
+  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE) { sair = 1; return; }
+  if (sync_estado() == SYNC_FALHOU && (k == SDLK_RETURN || k == SDLK_KP_ENTER)) { repetir = 1; return; }
+  if (k == SDLK_RIGHT) { if (foco < perfis_n() - 1 && foco%PS_COLS < PS_COLS-1) foco++; }
+  else if (k == SDLK_LEFT) { if (foco > 0 && foco%PS_COLS > 0) foco--; }
+  else if (k == SDLK_UP) { if (foco >= PS_COLS) foco -= PS_COLS; }
+  else if (k == SDLK_DOWN) { if (foco + PS_COLS < perfis_n()) foco += PS_COLS; }
   else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) escolher(foco);
 }
 
 void perfilsel_atualizar(float dt, Uint32 agora) {
   int i;
   (void)agora;
+  int reduzida=ajustes_animacoes_reduzidas();
   for (i = 0; i < CONTA_PERFIL_MAX; i++) {
     float alvo = (i == foco && pinDe < 0) ? 1.0f : 0.0f;
     animFoco[i] = anim_mola(animFoco[i], alvo, dt,
                             alvo > animFoco[i] ? NV_MOLA_FOCO : NV_MOLA_DESFOCO);
+    if(reduzida)animFoco[i]=alvo;
   }
-  if (verificando && resultadoPin) {
+  { int resultado = atomic_load(&resultadoPin);
+  if (verificando && resultado) {
+    atomic_store(&resultadoPin, 0);
     verificando = 0;
-    if (resultadoPin == 1) {
+    if (resultado == 1) {
       const ContaPerfil *p = perfis_item(pinDe);
       if (p) perfis_definir_ativo(p->indice);
       pinDe = -1;
       concluido = 1;
+    } else if (resultado == -2) {
+      pinRede = 1;
+      pin[0] = 0;
     } else {
       pinErrado = 1;
       pin[0] = 0;
     }
-    resultadoPin = 0;
+  }
   }
   // NAO concluir enquanto o ciclo que BUSCA os perfis ainda esta rodando.
   //
@@ -138,8 +179,14 @@ void perfilsel_atualizar(float dt, Uint32 agora) {
   if (sync_estado() == SYNC_RODANDO) return;
 
   // Terminado o ciclo, "nenhum ou um" e resposta de verdade: seguir direto.
-  if (perfis_n() <= 1) concluido = 1;
+  // Um erro de rede nunca equivale a "uma conta sem perfis". So concluir
+  // automaticamente quando o ciclo terminou com sucesso; assim a proxima
+  // pessoa nao cai silenciosamente no perfil implicito 1.
+  if (sync_estado() == SYNC_PRONTO && perfis_n() <= 1) concluido = 1;
 }
+
+int perfilsel_quer_sair(void) { int v=sair; sair=0; return v; }
+int perfilsel_pediu_repetir(void) { int v=repetir; repetir=0; return v; }
 
 static void desenhaPin(void) {
   static const char *ROT[12] = { "0","1","2","3","4","5","6","7","8","9","←","OK" };
@@ -166,7 +213,10 @@ static void desenhaPin(void) {
   { TxtLinha l = txt_linha(TXT_TITULO1, n ? mascara : "—", 255, 255, 255, 255);
     txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, 420.0f); }
 
-  if (pinErrado) {
+  if (pinRede) {
+    TxtLinha l = txt_linha(TXT_BODY, "Sem conexão. Tente novamente.", 236, 150, 150, 255);
+    txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, 480.0f);
+  } else if (pinErrado) {
     TxtLinha l = txt_linha(TXT_BODY, "PIN incorreto", 236, 108, 108, 255);
     txt_desenhar(l, (NV_TELA_W - l.w) * 0.5f, 480.0f);
   }
@@ -189,7 +239,7 @@ static void desenhaPin(void) {
 
 void perfilsel_desenhar(Uint32 agora) {
   int i, n = perfis_n();
-  float larguraTotal, x;
+  float larguraTotal, x, y;
   (void)agora;
 
   { GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
@@ -201,20 +251,26 @@ void perfilsel_desenhar(Uint32 agora) {
   // Enquanto a lista nao chega, dizer isso. Uma tela com titulo e nada abaixo
   // le como travamento.
   if (n == 0) {
-    TxtLinha e = txt_linha(TXT_BODY, "Carregando os perfis da sua conta…",
+    const char *msg=sync_estado()==SYNC_FALHOU?
+      "Não foi possível carregar os perfis. OK: tentar novamente":
+      "Carregando os perfis da sua conta…";
+    TxtLinha e = txt_linha(TXT_BODY, msg,
                            160, 162, 170, 255);
     txt_desenhar(e, (NV_TELA_W - e.w) * 0.5f, 430.0f);
     return;
   }
 
-  larguraTotal = n * PS_AVATAR + (n - 1) * PS_GAP;
+  larguraTotal = PS_COLS * PS_AVATAR + (PS_COLS - 1) * PS_GAP;
   x = (NV_TELA_W - larguraTotal) * 0.5f;
   for (i = 0; i < n; i++) {
     const ContaPerfil *p = perfis_item(i);
     float f = animFoco[i];
+    int col=i%PS_COLS,row=i/PS_COLS;
+    float px=x+col*(PS_AVATAR+PS_GAP);
+    y=350.0f+row*(PS_AVATAR+PS_ROW_GAP);
     float cr = 0.12f, cg = 0.53f, cb = 0.90f;
     float cresce = PS_AVATAR * NV_FOCO_ESCALA_P * f;
-    GfxRect a = { x - cresce * 0.5f, 420.0f - cresce * 0.5f - NV_FOCO_LIFT * f,
+    GfxRect a = { px - cresce * 0.5f, y - cresce * 0.5f - NV_FOCO_LIFT * f,
                   PS_AVATAR + cresce, PS_AVATAR + cresce };
     TxtLinha nome;
     corDe(p->corHex, &cr, &cg, &cb);
@@ -228,9 +284,15 @@ void perfilsel_desenhar(Uint32 agora) {
       l = txt_linha(TXT_TITULO1, ini, 255, 255, 255, 255);
       txt_desenhar(l, a.x + (a.w - l.w) * 0.5f, a.y + (a.h - l.h) * 0.5f); }
 
+    if (f > .02f)
+      gfx_rect((GfxRect){a.x-NV_ANEL_FOCO,a.y-NV_ANEL_FOCO,
+                         a.w+NV_ANEL_FOCO*2,a.h+NV_ANEL_FOCO*2},
+               0,GFX_ANEL,0,NV_ANEL_FOCO/(a.w+NV_ANEL_FOCO*2),0,.5f,
+               .96f,.96f,.98f,f);
+
     { int c = 140 + (int)(115 * f);
       nome = txt_linha_corta(TXT_BODY, p->nome, c, c, c, 255, PS_AVATAR + PS_GAP); }
-    txt_desenhar(nome, x + (PS_AVATAR - nome.w) * 0.5f, 420.0f + PS_AVATAR + 28.0f);
+    txt_desenhar(nome, px + (PS_AVATAR - nome.w) * 0.5f, y + PS_AVATAR + 20.0f);
 
     if (p->temPin) {
       // A PALAVRA, nao um cadeado. O emoji U+1F512 nao existe na fonte
@@ -238,10 +300,14 @@ void perfilsel_desenhar(Uint32 agora) {
       // registra sobre o U+25B6 ("depender do glifo da fonte e loteria"), e na
       // qual eu cai de novo. Texto que a fonte tem sempre desenha.
       TxtLinha cad = txt_linha(TXT_CAPTION, "PIN", 150, 152, 160, 255);
-      txt_desenhar(cad, x + (PS_AVATAR - cad.w) * 0.5f, 420.0f + PS_AVATAR + 70.0f);
+      txt_desenhar(cad, px + (PS_AVATAR - cad.w) * 0.5f, y + PS_AVATAR + 54.0f);
     }
-    x += PS_AVATAR + PS_GAP;
   }
+
+  { TxtLinha d = txt_linha(TXT_CAPTION,
+                           "Setas: mover  ·  OK: escolher",
+                           182,184,194,255);
+    txt_desenhar(d,(NV_TELA_W-d.w)*.5f,870.0f); }
 
   if (pinDe >= 0) desenhaPin();
 }

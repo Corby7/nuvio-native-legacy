@@ -61,7 +61,9 @@ int main(void) {
     "ai_movies_for_you","ai_series_for_you","snoak_top100_movies","snoak_top100_series"};
   for(int i=1;i<8;i++)snprintf(fils[i].catId,sizeof fils[i].catId,"%s",ids[i]);
   cat_definir_tudo(itensTeste,48,fils,16);filsAplicadas=-1;sincronizarFileiras();
-  assert(nFileiras==11);
+  // A curadoria ordena os atalhos conhecidos, mas nao apaga fileiras novas
+  // declaradas pelo addon. O fixture tem oito chaves fora da tabela editorial.
+  assert(nFileiras>=11);
   assert(fileiras[1].tipo==FILEIRA_SOCIAL);
   assert(!strcmp(fileiras[2].titulo,"Recent Release"));
   assert(!strcmp(fileiras[3].titulo,"Streaming"));
@@ -73,6 +75,12 @@ int main(void) {
   assert(fileiras[9].tipo==FILEIRA_TOP10);
   assert(fileiras[10].tipo==FILEIRA_TOP10);
   assert(fileiras[9].stackN==3 && fileiras[9].n==1);
+  for (int i=8; i<16; i++) {
+    int encontrado=0;
+    for (int r=0; r<nFileiras; r++)
+      if (!strcmp(fileiras[r].chave, fils[i].chave)) encontrado=1;
+    assert(encontrado);
+  }
   fileiras[9].n=3;fileiras[9].stackN=0;fileiras[9].verTudo=1;
   for(int i=0;i<nFileiras;i++)assert(strcmp(fileiras[i].titulo,"Seus catálogos"));
   snprintf(fils[15].chave,sizeof fils[15].chave,"social_activity");
@@ -84,6 +92,36 @@ int main(void) {
   }
   assert(sociais==1); // dados reais substituem vazio, nunca duplicam a fileira
   assert(fileiras[9].stackN==0 && fileiras[9].n==3 && fileiras[9].verTudo);
+
+  // Arte de outro titulo nunca e fallback silencioso, mesmo quando o indice
+  // esta alem do acervo local. Sem catalogo, os vetores locais continuam
+  // disponiveis apenas na mesma posicao.
+  snprintf(itensTeste[0].poster,sizeof itensTeste[0].poster,"own-poster.jpg");
+  snprintf(itensTeste[0].backdrop,sizeof itensTeste[0].backdrop,"own-backdrop.jpg");
+  snprintf(itensTeste[1].poster,sizeof itensTeste[1].poster,"other-poster.jpg");
+  nBd=2; nPst=1;
+  snprintf(bd[0],sizeof bd[0],"fallback-0.jpg");
+  snprintf(bd[1],sizeof bd[1],"fallback-1.jpg");
+  snprintf(pst[0],sizeof pst[0],"fallback-poster-0.jpg");
+  cat_definir_tudo(itensTeste,48,NULL,0);
+  assert(!strcmp(arte_por_identidade(0,0),"own-poster.jpg"));
+  assert(!strcmp(arte_por_identidade(0,1),"own-backdrop.jpg"));
+  assert(!strcmp(arte_por_identidade(1,0),"other-poster.jpg"));
+  assert(arte_por_identidade(999,0)==NULL);
+
+  // A integracao de segunda ordem retargeta sem overshoot, e reduced motion
+  // pode saltar ao destino sem deixar velocidade residual.
+  { float x=0, v=0;
+    for (int i=0; i<60; i++) {
+      x=anim_mola2(&v,x,1.0f,0.016f,NV_MOLA2_SCROLL);
+      assert(x>=0.0f && x<=1.0f);
+    }
+    x=anim_mola2(&v,x,0.0f,0.016f,NV_MOLA2_SCROLL);
+    assert(x>=0.0f && x<=1.0f);
+    x=anim_mola2_reduzida(&v,x,0.35f,0.016f,NV_MOLA2_SCROLL,1);
+    assert(x==0.35f && v==0.0f);
+  }
+  assert(NV_HERO_FADE_MS>=180.0f && NV_HERO_FADE_MS<=250.0f);
   free(itensTeste);
   puts("home layout: PASS (fallback, imported collections, requested order, ranks, focus)");
   return 0;

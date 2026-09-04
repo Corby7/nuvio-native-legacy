@@ -13,6 +13,9 @@
 
 #define MAX_ITENS_ABS 512
 #define MAX_FILA 128
+#define NV_TEX_STALE_FRAMES 8
+#define NV_TEX_STALE_MS 200
+#define NV_TEX_UPLOAD_BUDGET_MS 4.0
 
 // FALHOU e um estado de verdade, nao a ausencia de um. Sem ele, um caminho que
 // nao decodifica volta a VAZIO, o desenho pede de novo no quadro seguinte e o
@@ -43,6 +46,8 @@ typedef struct {
   // Quando tentar de novo (ticks) e quantas vezes ja falhou. Ver o enum Estado.
   Uint32 tentarEm;
   int    falhas;
+  unsigned long ultimoQuadro;
+  Uint32 ultimoPedido;
   // Croma medio: max(R,G,B) - min(R,G,B) dos mesmos pixels opacos. Separa logo
   // PRETO (acromatico, variante errada do TMDB) de logo de MARCA escuro mas
   // colorido (vermelho, vinho), que deve passar intacto.
@@ -68,6 +73,21 @@ static int rodando = 0;
 // corruption" dentro do SDL: era falta de memoria, nao bug de ponteiro.
 static long bytesUsados = 0;
 static long orcamento = 0;
+static unsigned long quadroAtual = 1;
+
+// O driver tambem aloca a piramide de mipmaps. Contar apenas o nivel base
+// deixava o cache ultrapassar o teto real em cerca de 33% nas artes de card.
+static long bytesTextura(int w, int h) {
+  long total = (long)w * h * 4;
+  int mw = w, mh = h;
+  if (w >= 1024) return total;
+  while (mw > 1 || mh > 1) {
+    mw = (mw + 1) / 2;
+    mh = (mh + 1) / 2;
+    total += (long)mw * mh * 4;
+  }
+  return total;
+}
 
 // DUAS FILAS, e a separacao e o conserto.
 //
@@ -125,7 +145,35 @@ static unsigned long hashCaminho(const char *s) {
 int    tex_n_busca = 0;
 double tex_ms_busca = 0.0;
 static double texFreqMs = 0.0;
-void tex_novo_quadro(void) { tex_n_busca = 0; tex_ms_busca = 0.0; (void)texFreqMs; }
+static int pedidoObsoleto(const Item *it) {
+  Uint32 agora;
+  if (!it->ultimoPedido || !it->ultimoQuadro) return 0;
+  agora = SDL_GetTicks();
+  return quadroAtual > it->ultimoQuadro + NV_TEX_STALE_FRAMES &&
+         agora - it->ultimoPedido >= NV_TEX_STALE_MS;
+}
+
+void tex_novo_quadro(void) {
+  tex_n_busca = 0;
+  tex_ms_busca = 0.0;
+  (void)texFreqMs;
+  if (!mtx) return;
+  SDL_LockMutex(mtx);
+  quadroAtual++;
+  // Um decode concluido mas nunca mais desenhado nao deve ocupar memoria nem
+  // bloquear a arte que entrou na tela. Pedidos PENDENTES sao cancelados pelo
+  // consumidor da fila, para que o indice do slot nao seja reutilizado antes
+  // de a fila o retirar.
+  for (int i = 0; i < nMax; i++) {
+    if (itens[i].estado == DECODIFICADO && pedidoObsoleto(&itens[i])) {
+      SDL_FreeSurface(itens[i].sup);
+      itens[i].sup = NULL;
+      itens[i].estado = VAZIO;
+      itens[i].caminho[0] = 0;
+    }
+  }
+  SDL_UnlockMutex(mtx);
+}
 
 // Envolve TRAVA + busca com relogio de CPU. So os chamadores da THREAD DE
 // DESENHO passam por aqui; a thread de decode usa acharIndice cru, senao os
@@ -208,7 +256,7 @@ static int slotLivre(void) {
   }
   if (melhor >= 0) {
     if (itens[melhor].tex) { gfx_tex_esquecer(itens[melhor].tex); glDeleteTextures(1, &itens[melhor].tex); }
-    bytesUsados -= (long)itens[melhor].w * itens[melhor].h * 4;
+    bytesUsados -= bytesTextura(itens[melhor].w, itens[melhor].h);
     if (bytesUsados < 0) bytesUsados = 0;
     memset(&itens[melhor], 0, sizeof(Item));
     itens[melhor].lum = -1;   // 0 seria "preto"; o desconhecido e -1
@@ -226,7 +274,7 @@ static void podar(void) {
     }
     if (melhor < 0) break;          // so restou o que esta em voo
     if (itens[melhor].tex) { gfx_tex_esquecer(itens[melhor].tex); glDeleteTextures(1, &itens[melhor].tex); }
-    bytesUsados -= (long)itens[melhor].w * itens[melhor].h * 4;
+    bytesUsados -= bytesTextura(itens[melhor].w, itens[melhor].h);
     if (bytesUsados < 0) bytesUsados = 0;
     memset(&itens[melhor], 0, sizeof(Item));
     itens[melhor].lum = -1;   // 0 seria "preto"; o desconhecido e -1
@@ -404,15 +452,42 @@ static int threadRede(void *arg) {
     while (rodando && filaIni == filaFim) SDL_CondWait(cond, mtx);
     if (!rodando) { SDL_UnlockMutex(mtx); return 0; }
     idx = fila[filaIni]; filaIni = (filaIni + 1) % MAX_FILA;
+    if (itens[idx].estado != PENDENTE || pedidoObsoleto(&itens[idx])) {
+      if (itens[idx].estado == PENDENTE) {
+        itens[idx].estado = VAZIO;
+        itens[idx].caminho[0] = 0;
+      }
+      SDL_UnlockMutex(mtx);
+      continue;
+    }
     strncpy(caminho, itens[idx].caminho, sizeof caminho - 1);
     caminho[sizeof caminho - 1] = 0;
     SDL_UnlockMutex(mtx);
 
     // Caminho local devolve na hora; so URL sai para a rede.
+    SDL_LockMutex(mtx);
+    if (itens[idx].estado != PENDENTE || pedidoObsoleto(&itens[idx])) {
+      if (itens[idx].estado == PENDENTE) {
+        itens[idx].estado = VAZIO;
+        itens[idx].caminho[0] = 0;
+      }
+      SDL_UnlockMutex(mtx);
+      continue;
+    }
+    SDL_UnlockMutex(mtx);
+
     if (!garantirLocal(caminho, local, sizeof local)) {
       // Falhou o download. Marca como falha AQUI para o recuo valer — antes o
       // decode e que marcava, e ate la o item ficava PENDENTE ocupando slot.
       SDL_LockMutex(mtx);
+      if (itens[idx].estado != PENDENTE || pedidoObsoleto(&itens[idx])) {
+        if (itens[idx].estado == PENDENTE) {
+          itens[idx].estado = VAZIO;
+          itens[idx].caminho[0] = 0;
+        }
+        SDL_UnlockMutex(mtx);
+        continue;
+      }
       itens[idx].estado = FALHOU;
       itens[idx].falhas++;
       itens[idx].tentarEm = SDL_GetTicks() +
@@ -421,6 +496,14 @@ static int threadRede(void *arg) {
       continue;
     }
     SDL_LockMutex(mtx);
+    if (itens[idx].estado != PENDENTE || pedidoObsoleto(&itens[idx])) {
+      if (itens[idx].estado == PENDENTE) {
+        itens[idx].estado = VAZIO;
+        itens[idx].caminho[0] = 0;
+      }
+      SDL_UnlockMutex(mtx);
+      continue;
+    }
     paraDecode(idx);
     SDL_UnlockMutex(mtx);
   }
@@ -442,6 +525,14 @@ static int threadDecode(void *arg) {
     if (!rodando) { SDL_UnlockMutex(mtx); return 0; }
     int idx = filaDec[decIni]; decIni = (decIni + 1) % MAX_FILA;
     SDL_CondSignal(condLivre);   // abriu lugar: solta um fio de rede que espera
+    if (itens[idx].estado != PENDENTE || pedidoObsoleto(&itens[idx])) {
+      if (itens[idx].estado == PENDENTE) {
+        itens[idx].estado = VAZIO;
+        itens[idx].caminho[0] = 0;
+      }
+      SDL_UnlockMutex(mtx);
+      continue;
+    }
     char caminho[512];
     int limite;
     strncpy(caminho, itens[idx].caminho, sizeof caminho - 1);
@@ -512,7 +603,13 @@ static int threadDecode(void *arg) {
     // metahub passou despercebido.
     int falhou = 0;
     SDL_LockMutex(mtx);
-    if (itens[idx].estado == PENDENTE) {
+    if (itens[idx].estado == PENDENTE && pedidoObsoleto(&itens[idx])) {
+      // A imagem terminou depois de o card sair da tela. Nao a publique e nao
+      // a transforme em falha: outro card pode reutilizar o slot frio.
+      itens[idx].estado = VAZIO;
+      itens[idx].caminho[0] = 0;
+      if (conv) { SDL_FreeSurface(conv); conv = NULL; }
+    } else if (itens[idx].estado == PENDENTE) {
       itens[idx].lum = lumMedia;
       itens[idx].croma = cromaMedia;
       itens[idx].sup = conv;
@@ -615,6 +712,8 @@ static GLuint tex_obter_limite(const char *caminho, int limite) {
   unsigned long h = hashCaminho(caminho);
   int i; BUSCA_MEDIDA(i, caminho, h);
   if (i >= 0 && itens[i].estado == FALHOU) {
+    itens[i].ultimoQuadro = quadroAtual;
+    itens[i].ultimoPedido = SDL_GetTicks();
     // Ja falhou: so volta para a fila quando o recuo vencer, e nunca depois da
     // terceira tentativa. Sem isto o pedido voltava a cada quadro.
     if (itens[i].falhas < 3 && SDL_GetTicks() >= itens[i].tentarEm) {
@@ -629,6 +728,8 @@ static GLuint tex_obter_limite(const char *caminho, int limite) {
     return 0;
   }
   if (i >= 0) {
+    itens[i].ultimoQuadro = quadroAtual;
+    itens[i].ultimoPedido = SDL_GetTicks();
     itens[i].uso = ++relogio;
     // PROMOCAO: a mesma arte pode ser pedida como poster (960) e depois como
     // hero (1920). Se o teto novo e maior e a textura pronta ficou menor que
@@ -658,6 +759,8 @@ static GLuint tex_obter_limite(const char *caminho, int limite) {
       itens[novo].limite = limite;
       itens[novo].estado = PENDENTE;
       itens[novo].uso = ++relogio;
+      itens[novo].ultimoQuadro = quadroAtual;
+      itens[novo].ultimoPedido = SDL_GetTicks();
       int prox = (filaFim + 1) % MAX_FILA;
       if (prox != filaIni) { fila[filaFim] = novo; filaFim = prox; SDL_CondSignal(cond); }
       else { itens[novo].estado = VAZIO; itens[novo].caminho[0] = 0; } // fila cheia
@@ -719,7 +822,13 @@ int tex_marca_escura(const char *caminho) {
 
 int tex_bombear(int max_por_quadro) {
   int subiu = 0;
+  Uint64 inicio = SDL_GetPerformanceCounter();
+  double freq = (double)SDL_GetPerformanceFrequency();
   for (int passo = 0; passo < max_por_quadro; passo++) {
+    if (subiu > 0 &&
+        (double)(SDL_GetPerformanceCounter() - inicio) * 1000.0 / freq >=
+            NV_TEX_UPLOAD_BUDGET_MS)
+      break;
     SDL_Surface *sup = NULL; int alvo = -1;
     SDL_LockMutex(mtx);
     for (int i = 0; i < nMax; i++) {
@@ -773,12 +882,12 @@ int tex_bombear(int max_por_quadro) {
     if (itens[alvo].tex) {
       gfx_tex_esquecer(itens[alvo].tex);
       glDeleteTextures(1, &itens[alvo].tex);
-      bytesUsados -= (long)itens[alvo].w * itens[alvo].h * 4;
+    bytesUsados -= bytesTextura(itens[alvo].w, itens[alvo].h);
       if (bytesUsados < 0) bytesUsados = 0;
     }
     itens[alvo].tex = t; itens[alvo].w = sup->w; itens[alvo].h = sup->h;
     itens[alvo].estado = PRONTO;
-    bytesUsados += (long)sup->w * sup->h * 4;
+    bytesUsados += bytesTextura(sup->w, sup->h);
     podar();
     SDL_UnlockMutex(mtx);
     SDL_FreeSurface(sup);
@@ -791,7 +900,7 @@ void tex_estatisticas(int *nItens, int *nPend, long *bytes) {
   int a=0, p=0; long b=0;
   SDL_LockMutex(mtx);
   for (int i = 0; i < nMax; i++) {
-    if (itens[i].estado == PRONTO) { a++; b += (long)itens[i].w * itens[i].h * 4; }
+    if (itens[i].estado == PRONTO) { a++; b += bytesTextura(itens[i].w, itens[i].h); }
     else if (itens[i].estado != VAZIO) p++;
   }
   SDL_UnlockMutex(mtx);

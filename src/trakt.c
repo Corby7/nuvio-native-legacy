@@ -12,6 +12,43 @@
 static char token[128], cliente[80];
 static int  ligado;
 
+// Estado da ultima escrita iniciada pelo menu. O corpo de um POST nao e prova
+// de sucesso: o Trakt tambem devolve corpo em 4xx. O consumidor usa este
+// estado para so espelhar a intencao local depois de um HTTP 2xx.
+enum { TK_OP_NENHUMA, TK_OP_PENDENTE, TK_OP_CONFIRMADA, TK_OP_FALHA };
+enum { TK_OP_LISTA = 1, TK_OP_HISTORICO = 2 };
+static volatile int listaEstado, historicoEstado;
+
+// Mantem o contrato antigo (so IMDb) sem perder o tipo quando o item ja esta
+// no catalogo. O sufixo de episodio continua sendo um fallback para chamadas
+// antigas feitas antes de o catalogo estar montado.
+extern const char *cat_tipo_por_imdb(const char *imdb);
+extern void cat_historico_definir_id(const char *imdb, const char *tipo, int visto);
+
+static const char *tipo_item(const char *tipo, const char *imdb) {
+  if (tipo && (!strcmp(tipo, "series") || !strcmp(tipo, "show"))) return "series";
+  if (tipo && !strcmp(tipo, "movie")) return "movie";
+  return cat_tipo_por_imdb(imdb);
+}
+static pthread_mutex_t travaLista = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t travaHistorico = PTHREAD_MUTEX_INITIALIZER;
+
+static void estadoEscrever(volatile int *estado, int valor) {
+  __atomic_store_n(estado, valor, __ATOMIC_RELEASE);
+}
+
+static int estadoLer(const volatile int *estado) {
+  return __atomic_load_n(estado, __ATOMIC_ACQUIRE);
+}
+
+// API pequena e interna ao port: a declaracao fica no consumidor porque o
+// contrato publico historico de trakt_watchlist/trakt_assistido continua void.
+int trakt_operacao_estado(int tipo) {
+  if (tipo == TK_OP_LISTA) return estadoLer(&listaEstado);
+  if (tipo == TK_OP_HISTORICO) return estadoLer(&historicoEstado);
+  return TK_OP_NENHUMA;
+}
+
 int trakt_ativo(void) { return ligado; }
 
 void trakt_esquecer(void) {
@@ -137,6 +174,44 @@ static void *fioEnfeitar(void *u) {
   }
 }
 
+// A barra de retomada vem de /sync/playback e nao informa se o titulo foi
+// marcado como assistido. Consultamos o historico real uma vez no mesmo ciclo
+// de descoberta para que a modal nao trate progresso alto como prova de visto.
+// Para series, registros com `episode` sao deliberadamente ignorados: ter
+// visto um episodio nao significa ter marcado a serie inteira como assistida.
+static void carregarHistoricoReal(const char *const *cab) {
+  char *corpo = rede_baixar_com("https://api.trakt.tv/sync/history?limit=100&extended=full", 25, cab);
+  const char *p;
+  if (!corpo) return;
+  p = strchr(corpo, '[');
+  p = p ? p + 1 : NULL;
+  while (p && *p) {
+    const char *f, *obj;
+    char id[24] = "";
+    const char *tipo = NULL;
+    while (*p && (unsigned char)*p <= ' ') p++;
+    if (*p != '{') break;
+    f = js_fim(p);
+    if (strstr(p, "\"episode\"") && strstr(p, "\"episode\"") < f) {
+      p = js_prox(f);
+      continue;
+    }
+    obj = strstr(p, "\"movie\"");
+    if (obj && obj < f) tipo = "movie";
+    else {
+      obj = strstr(p, "\"show\"");
+      if (obj && obj < f) tipo = "series";
+    }
+    if (obj && tipo) {
+      const char *fo = js_fim(strchr(obj, '{'));
+      js_texto(obj, fo, "imdb", id, sizeof id);
+      if (id[0]) cat_historico_definir_id(id, tipo, 1);
+    }
+    p = js_prox(f);
+  }
+  free(corpo);
+}
+
 int trakt_continuar(CatItem *saida, int max) {
   const char *cab[4];
   char aut[200], chave[140];
@@ -196,6 +271,7 @@ int trakt_continuar(CatItem *saida, int max) {
     p = js_prox(f);
   }
   free(corpo);
+  carregarHistoricoReal(cab);
 
   // ENFEITAR os n itens em TK_FIOS fios, e so entao compactar: `enfeitar` falha
   // para item que o Cinemeta nao conhece, e antes o `if (enfeitar(...)) n++`
@@ -631,32 +707,44 @@ void trakt_marcar(const char *imdb, double posSeg, double durSeg) {
 // ci->naLista ja e preenchido por trakt_lista na descoberta; o que faltava era
 // manter esse campo em dia depois de uma escrita nossa.
 static char alvoLista[24];
+static char alvoListaTipo[8];
 static int  alvoAdicionar, fioListaVivo;
 static pthread_t fioLista;
 
 static void *enviarLista(void *u) {
   const char *cab[4];
-  char aut[200], chave[140], url[120], corpo[200], id[24], tipo[8];
+  char aut[200], chave[140], url[120], corpo[200], id[24], tipoItemBuf[8];
   char *resp;
+  int status = 0, confirmado;
+  int adicionar;
   (void)u;
+  pthread_mutex_lock(&travaLista);
   snprintf(id, sizeof id, "%s", alvoLista);
-  snprintf(tipo, sizeof tipo, "%s", alvoAdicionar ? "" : "/remove");
+  snprintf(tipoItemBuf, sizeof tipoItemBuf, "%s", alvoListaTipo);
+  adicionar = alvoAdicionar;
+  pthread_mutex_unlock(&travaLista);
   if (!trakt_cabecalhos(cab, aut, sizeof aut, chave, sizeof chave)) {
-    fioListaVivo = 0; return NULL;
+    estadoEscrever(&listaEstado, TK_OP_FALHA);
+    pthread_mutex_lock(&travaLista); fioListaVivo = 0; pthread_mutex_unlock(&travaLista);
+    return NULL;
   }
-  // O Trakt aceita o titulo por ids.imdb tanto em movies quanto em shows; mandar
-  // nos DOIS vetores e o que evita ter de saber o tipo aqui — o que nao existe
-  // e simplesmente ignorado.
-  snprintf(corpo, sizeof corpo,
-           "{\"movies\":[{\"ids\":{\"imdb\":\"%s\"}}],"
-           "\"shows\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id, id);
-  snprintf(url, sizeof url, "https://api.trakt.tv/sync/watchlist%s", tipo);
-  resp = rede_postar(url, 20, cab, corpo);
-  printf("[trakt] watchlist %s %s -> %s\n", alvoAdicionar ? "add" : "del", id,
-         resp ? "ok" : "falhou");
+  // O tipo faz parte da intencao: mandar filme e serie juntos deixa a API
+  // resolver o IMDb no escopo errado e torna a confirmacao ambigua.
+  if (!strcmp(tipoItemBuf, "series"))
+    snprintf(corpo, sizeof corpo, "{\"shows\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id);
+  else
+    snprintf(corpo, sizeof corpo, "{\"movies\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id);
+  snprintf(url, sizeof url, "https://api.trakt.tv/sync/watchlist%s",
+           adicionar ? "" : "/remove");
+  resp = rede_postar_st(url, 20, cab, corpo, &status);
+  confirmado = status >= 200 && status < 300;
+  estadoEscrever(&listaEstado, confirmado ? TK_OP_CONFIRMADA : TK_OP_FALHA);
+  printf("[trakt] watchlist %s %s (%s) -> %s (HTTP %d)\n",
+         adicionar ? "add" : "del", id, tipoItemBuf,
+         confirmado ? "confirmado" : "falhou", status);
   fflush(stdout);
   free(resp);
-  fioListaVivo = 0;
+  pthread_mutex_lock(&travaLista); fioListaVivo = 0; pthread_mutex_unlock(&travaLista);
   return NULL;
 }
 
@@ -673,55 +761,109 @@ static void *enviarLista(void *u) {
 static pthread_t fioHist;
 static int       fioHistVivo, histAdicionar;
 static char      alvoHist[24];
+static char      alvoHistTipo[8];
 
 static void *enviarHistorico(void *u) {
   const char *cab[4];
-  char aut[200], chave[140], url[120], corpo[200], id[24];
+  char aut[200], chave[140], url[120], corpo[200], id[24], tipoItemBuf[8];
   char *resp;
+  int status = 0, confirmado;
+  int marcar;
   (void)u;
+  pthread_mutex_lock(&travaHistorico);
   snprintf(id, sizeof id, "%s", alvoHist);
+  snprintf(tipoItemBuf, sizeof tipoItemBuf, "%s", alvoHistTipo);
+  marcar = histAdicionar;
+  pthread_mutex_unlock(&travaHistorico);
   if (!trakt_cabecalhos(cab, aut, sizeof aut, chave, sizeof chave)) {
-    fioHistVivo = 0; return NULL;
+    estadoEscrever(&historicoEstado, TK_OP_FALHA);
+    pthread_mutex_lock(&travaHistorico); fioHistVivo = 0; pthread_mutex_unlock(&travaHistorico);
+    return NULL;
   }
-  // Mesma tatica da watchlist: manda nos DOIS vetores e deixa o Trakt ignorar o
-  // que nao existe, em vez de precisar saber o tipo aqui.
-  snprintf(corpo, sizeof corpo,
-           "{\"movies\":[{\"ids\":{\"imdb\":\"%s\"}}],"
-           "\"shows\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id, id);
+  // O escopo do comando e explicito. Para serie, o alvo e o show, nao um
+  // episodio derivado de progresso e nem um segundo vetor de tipo oposto.
+  if (!strcmp(tipoItemBuf, "series"))
+    snprintf(corpo, sizeof corpo, "{\"shows\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id);
+  else
+    snprintf(corpo, sizeof corpo, "{\"movies\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id);
   snprintf(url, sizeof url, "https://api.trakt.tv/sync/history%s",
-           histAdicionar ? "" : "/remove");
-  resp = rede_postar(url, 20, cab, corpo);
-  printf("[trakt] historico %s %s -> %s\n", histAdicionar ? "add" : "del", id,
-         resp ? "ok" : "falhou");
+           marcar ? "" : "/remove");
+  resp = rede_postar_st(url, 20, cab, corpo, &status);
+  confirmado = status >= 200 && status < 300;
+  estadoEscrever(&historicoEstado, confirmado ? TK_OP_CONFIRMADA : TK_OP_FALHA);
+  if (confirmado) cat_historico_definir_id(id, tipoItemBuf, marcar);
+  printf("[trakt] historico %s %s (%s) -> %s (HTTP %d)\n",
+         marcar ? "add" : "del", id, tipoItemBuf,
+         confirmado ? "confirmado" : "falhou", status);
   fflush(stdout);
   free(resp);
-  fioHistVivo = 0;
+  pthread_mutex_lock(&travaHistorico); fioHistVivo = 0; pthread_mutex_unlock(&travaHistorico);
   return NULL;
 }
 
-void trakt_assistido(const char *imdb, int marcar) {
+int trakt_assistido_tipo(const char *imdb, const char *tipo, int marcar) {
   const char *dp;
-  if (!ligado || !imdb || imdb[0] != 't' || fioHistVivo) return;
+  if (!ligado || !imdb || imdb[0] != 't') {
+    estadoEscrever(&historicoEstado, TK_OP_FALHA);
+    return 0;
+  }
+  pthread_mutex_lock(&travaHistorico);
+  if (fioHistVivo) {
+    pthread_mutex_unlock(&travaHistorico);
+    return 0;
+  }
   // "tt123:2:5" (episodio) vira "tt123": o historico e do TITULO.
   dp = strchr(imdb, ':');
   { size_t k = dp ? (size_t)(dp - imdb) : strlen(imdb);
     if (k >= sizeof alvoHist) k = sizeof alvoHist - 1;
     memcpy(alvoHist, imdb, k); alvoHist[k] = 0; }
+  snprintf(alvoHistTipo, sizeof alvoHistTipo, "%s", tipo_item(tipo, imdb));
   histAdicionar = marcar;
+  estadoEscrever(&historicoEstado, TK_OP_PENDENTE);
   fioHistVivo = 1;
-  if (pthread_create(&fioHist, NULL, enviarHistorico, NULL) != 0) fioHistVivo = 0;
+  pthread_mutex_unlock(&travaHistorico);
+  if (pthread_create(&fioHist, NULL, enviarHistorico, NULL) != 0) {
+    pthread_mutex_lock(&travaHistorico); fioHistVivo = 0; pthread_mutex_unlock(&travaHistorico);
+    estadoEscrever(&historicoEstado, TK_OP_FALHA);
+    return 0;
+  }
   else pthread_detach(fioHist);
+  return 1;
 }
 
-void trakt_watchlist(const char *imdb, int adicionar) {
+int trakt_watchlist_tipo(const char *imdb, const char *tipo, int adicionar) {
   const char *dp;
-  if (!ligado || !imdb || imdb[0] != 't' || fioListaVivo) return;
+  if (!ligado || !imdb || imdb[0] != 't') {
+    estadoEscrever(&listaEstado, TK_OP_FALHA);
+    return 0;
+  }
+  pthread_mutex_lock(&travaLista);
+  if (fioListaVivo) {
+    pthread_mutex_unlock(&travaLista);
+    return 0;
+  }
   dp = strchr(imdb, ':');
   { size_t k = dp ? (size_t)(dp - imdb) : strlen(imdb);
     if (k >= sizeof alvoLista) k = sizeof alvoLista - 1;
     memcpy(alvoLista, imdb, k); alvoLista[k] = 0; }
+  snprintf(alvoListaTipo, sizeof alvoListaTipo, "%s", tipo_item(tipo, imdb));
   alvoAdicionar = adicionar;
+  estadoEscrever(&listaEstado, TK_OP_PENDENTE);
   fioListaVivo = 1;
-  if (pthread_create(&fioLista, NULL, enviarLista, NULL) != 0) fioListaVivo = 0;
+  pthread_mutex_unlock(&travaLista);
+  if (pthread_create(&fioLista, NULL, enviarLista, NULL) != 0) {
+    pthread_mutex_lock(&travaLista); fioListaVivo = 0; pthread_mutex_unlock(&travaLista);
+    estadoEscrever(&listaEstado, TK_OP_FALHA);
+    return 0;
+  }
   else pthread_detach(fioLista);
+  return 1;
+}
+
+void trakt_assistido(const char *imdb, int marcar) {
+  (void)trakt_assistido_tipo(imdb, cat_tipo_por_imdb(imdb), marcar);
+}
+
+void trakt_watchlist(const char *imdb, int adicionar) {
+  (void)trakt_watchlist_tipo(imdb, cat_tipo_por_imdb(imdb), adicionar);
 }

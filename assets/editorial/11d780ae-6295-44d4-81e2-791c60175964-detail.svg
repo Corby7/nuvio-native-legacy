@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="640" viewBox="0 0 1920 320">
+<title>Alfred Hitchcock — detail</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="320" fill="#0d0d0d" />
+<g color="#b8aba0" stroke="#b8aba0" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1210 0) scale(0.72)"><g transform="translate(375 207) scale(1.65)" ><path d="M-90 10Q-50 -75 0 -3Q40 -50 95 -25Q45 -6 12 22L-2 40 -12 19Q-55 -7 -90 10Z" fill="currentColor" /></g><g transform="translate(160 104) scale(0.48)" ><path d="M-90 10Q-50 -75 0 -3Q40 -50 95 -25Q45 -6 12 22L-2 40 -12 19Q-55 -7 -90 10Z" fill="currentColor" /></g><g transform="translate(621 127) scale(0.6)" ><path d="M-90 10Q-50 -75 0 -3Q40 -50 95 -25Q45 -6 12 22L-2 40 -12 19Q-55 -7 -90 10Z" fill="currentColor" /></g><path d="M90 315L675 315" fill="none" /><path d="M90 327L630 327" fill="none" /><path d="M90 339L585 339" fill="none" /><path d="M90 351L540 351" fill="none" /><path d="M90 363L495 363" fill="none" /><path d="M90 375L450 375" fill="none" /><path d="M90 387L405 387" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="320" fill="url(#fade)" stroke="none"/>
+</svg>

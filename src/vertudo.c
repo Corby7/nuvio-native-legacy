@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 // MEDIDAS do web (catalogSeeAllScreen, .seeall-card): cartaz de 248 de largura
 // e raio 12. A 1920 cabem 5 colunas com o gutter da tela dos dois lados.
@@ -65,7 +66,7 @@ static const char *rotuloGrupo(void) {
 }
 static const char *legendaGrupo(void) {
   if (timeline) return "Filmografia em ordem cronológica";
-  if (grupo("Awards")) return ranked ? "Ranking na ordem original" : "Seleção reconhecida pela crítica e pela indústria";
+  if (grupo("Awards")) return ranked ? "Ranking na ordem original" : "Lista de prêmios configurada pelo usuário";
   if (grupo("Genres")) return "Títulos do gênero no seu catálogo";
   if (grupo("Themes")) return "Uma curadoria por tema e atmosfera";
   if (grupo("Streaming")) return "Catálogo organizado por serviço";
@@ -191,7 +192,7 @@ static void painel(float a) {
   // O contexto lateral usa o cartaz, nunca repete a cena da timeline.
   // Mantém a geometria 2:3 mesmo sem arte para não deslocar os metadados.
   { GfxRect r = { VT_PAN_X, y, VT_PAN_ART_W, VT_PAN_ART_H };
-    const char *arte = it.poster;
+    const char *arte = it.poster[0] ? it.poster : it.backdrop;
     float raio = 12.0f / VT_PAN_ART_W;
     GLuint t = arte[0] ? tex_obter_larg(arte, VT_PAN_ART_W) : 0;
     gfx_cor(r, raio, 1, 1, 1, 0.05f * a);
@@ -259,32 +260,51 @@ static void painel(float a) {
   }
 }
 
-// Uma única arte full-width, dissolvendo na mesma cor do corpo. Antes a
-// imagem começava em x=830 sobre outro tom sólido: duas emendas visíveis.
-// Usa o shader existente, sem blur ou novas texturas por frame na LG.
+static const char *retratoLocal(const ColFolder *folder) {
+  static char caminho[700];
+  if (!folder || !folder->frameDir[0]) return "";
+  snprintf(caminho, sizeof caminho, "%s/portrait.png", folder->frameDir);
+  if (access(caminho, R_OK) == 0) return caminho;
+  snprintf(caminho, sizeof caminho, "%s/portrait.jpg", folder->frameDir);
+  return access(caminho, R_OK) == 0 ? caminho : "";
+}
+
+// Uma única arte full-width, dissolvendo na mesma cor do corpo. Directors usa
+// o retrato vertical local quando o pacote ja o tem; o hero horizontal dessa
+// colecao e um placeholder neutro e so acrescenta uma camada sem informacao.
+// Usa os shaders e o cache existentes, sem blur ou novas texturas por frame.
 static void themeBackground(float a) {
   if(collection) {
-    const char *art=collection->hero[0]?collection->hero:collection->cover;
-    GLuint tex=art[0]?tex_obter_hero(art):0;
-    if(tex) {
-      gfx_tex_aspect_atual=tex_aspecto(art);
-      gfx_rect((GfxRect){0,0,NV_TELA_W,620},tex,GFX_HERO_CHEIO,
-               0,0,0,0,0,0,0,a*.38f);
-      gfx_tex_aspect_atual=0;
+    if(collection->editorial) {
+      GLuint art=tex_obter_hero(collection->detailHero);
+      /* The content starts at 332; the separate detail illustration ends at 320. */
+      if(art)gfx_rect((GfxRect){0,0,1920,320},art,GFX_TEXTO,0,0,0,0,1,1,1,a);
+      return;
     }
     if(grupo("Directors")) {
-      diretor_pedir(collection->title);
-      const char *foto=diretor_foto(collection->title);
-      GLuint tp=foto[0]?tex_obter_hero(foto):0;
+      const char *foto=retratoLocal(collection);
+      if(!foto[0]) {
+        diretor_pedir(collection->title);
+        foto=diretor_foto(collection->title);
+      }
+      GLuint tp=foto[0]?tex_obter_larg(foto,260.0f):0;
       if(tp) {
-        // Na filmografia o painel do item selecionado ocupa a direita mais
-        // abaixo. O retrato do diretor fica limitado ao palco superior, sem
-        // atravessar pôster e sinopse como uma segunda camada.
-        GfxRect rp=timeline?(GfxRect){1030,0,890,430}
-                           :(GfxRect){720,0,1200,620};
+        // O painel do item selecionado começa em VT_PAN_Y. O retrato ocupa
+        // apenas o cabeçalho e termina antes dele, sem atravessar pôster ou
+        // sinopse como uma segunda camada.
+        GfxRect rp={1660,18,260,300};
         gfx_tex_aspect_atual=tex_aspecto(foto);
         gfx_rect(rp,tp,GFX_RETRATO,
-                 0,0,0,0,0,0,0,a*(timeline?.78f:.82f));
+                 0,0,0,0,0,0,0,a*.88f);
+        gfx_tex_aspect_atual=0;
+      }
+    } else {
+      const char *art=collection->hero[0]?collection->hero:collection->cover;
+      GLuint tex=art[0]?tex_obter_hero(art):0;
+      if(tex) {
+        gfx_tex_aspect_atual=tex_aspecto(art);
+        gfx_rect((GfxRect){0,0,NV_TELA_W,620},tex,GFX_HERO_CHEIO,
+                 0,0,0,0,0,0,0,a*.38f);
         gfx_tex_aspect_atual=0;
       }
     }
@@ -295,7 +315,12 @@ static void themeHeader(float a,float x0) {
   float r,g,b;corColecao(&r,&g,&b);
   TxtLinha eyebrow=txt_linha(TXT_HERO_META,rotuloGrupo(),197,202,211,255);
   txt_desenhar_alpha(eyebrow,x0,40,a);
-  GLuint logo=collection&&collection->logo[0]?tex_obter_larg(collection->logo,560):0;
+  int ehDiretor=collection&&!strcasecmp(collection->group,"Directors");
+  // O wordmark de uma coleção de diretores pode conter cabeça ou lettering
+  // composto. No cabeçalho da filmografia, o nome textual e o retrato limpo
+  // deixam a identidade legível sem duplicar a mesma informação visual.
+  GLuint logo=!ehDiretor&&collection&&!collection->editorial&&collection->logo[0]
+             ?tex_obter_larg(collection->logo,560):0;
   float aspect=logo?tex_aspecto(collection->logo):0;
   if(logo&&aspect>0) {
     // Wordmark oficial, grande o bastante para leitura a distancia. O PNG
@@ -345,8 +370,11 @@ static void timelineCard(int i,float cy,float a,float x0) {
   float x=x0+158;GfxRect card={x,cy,1000,VT_CARD_H};
   if(sel)gfx_cor((GfxRect){x-4,cy-4,1008,VT_CARD_H+8},.045f,.94f,.95f,.97f,a);
   gfx_cor(card,.04f,.09f,.095f,.105f,a);
-  const char *art=it.backdrop[0]?it.backdrop:it.poster;GLuint tex=tex_obter_larg(art,390);
+  const char *art=it.backdrop[0]?it.backdrop:it.poster;GLuint tex=art[0]?tex_obter_larg(art,390):0;
   if(tex){gfx_tex_aspect_atual=tex_aspecto(art);gfx_rect((GfxRect){x+12,cy+12,376,212},tex,GFX_CARD,0,0,0,.04f,0,0,0,a);gfx_tex_aspect_atual=0;}
+  else { gfx_cor((GfxRect){x+12,cy+12,376,212},.04f,.16f,.16f,.18f,a);
+         txt_desenhar_alpha(txt_linha(TXT_MINI,"Sem arte",184,188,198,255),
+                            x+158,y+104,a*.9f); }
   TxtLinha name=txt_linha_corta(TXT_CW_TITULO,it.titulo,242,243,247,255,550);txt_desenhar_alpha(name,x+418,cy+22,a);
   TxtLinha genre=txt_linha_corta(TXT_HERO_META,it.genero,187,194,207,255,550);txt_desenhar_alpha(genre,x+418,cy+64,a);
   txt_bloco(TXT_DET_META2,it.sinopse,209,214,225,x+418,cy+106,545,30,a,3);

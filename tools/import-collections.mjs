@@ -20,7 +20,12 @@ for (const base of bases) {
 const groups=[];
 async function localImage(url,dir,id,kind) {
   if(!url) return '';
-  const logo=kind==='logo', ext=logo?'png':'jpg';
+  // Portraits and logos may carry a real matte. Keep them lossless so the
+  // native renderer can use the source alpha instead of trying to infer a
+  // background from luminance (which can erase hair or dark clothing).
+  const logo=kind==='logo';
+  const preserveAlpha=logo||kind==='portrait';
+  const ext=preserveAlpha?'png':'jpg';
   const rel=`collections/${id}/${kind}.${ext}`, out=path.join(art,rel);
   if(fs.existsSync(out)&&fs.statSync(out).size>256) return rel;
   fs.mkdirSync(dir,{recursive:true});
@@ -32,7 +37,8 @@ async function localImage(url,dir,id,kind) {
     const size=kind==='hero'?'1920:1080':kind==='portrait'?'460:690':'720:405';
     const vf=logo?'scale=800:300:force_original_aspect_ratio=decrease':`scale=${size}:force_original_aspect_ratio=increase,crop=${size}`;
     const args=['-v','error','-i',input,'-frames:v','1','-vf',vf];
-    if(!logo) args.push('-q:v','4','-pix_fmt','yuvj420p');
+    if(preserveAlpha) args.push('-c:v','png');
+    else args.push('-q:v','4','-pix_fmt','yuvj420p');
     args.push('-y',out);
     const result=spawnSync('ffmpeg',args,{timeout:30000});
     if(result.status!==0) throw Error('convert');
@@ -51,14 +57,16 @@ for (const c of collections) {
       const declared=a?.catalogs.find(x=>x.id===s.catalogId&&x.type===s.type);
       sources.push({title:s.title||s.catalogName||declared?.name||s.catalogId,base,type:s.type,catId:s.catalogId,genre:s.genre&&s.genre!=='None'?s.genre:''});
     }
-    if(!sources.length) continue;
     const id=f.id.replace(/[^a-zA-Z0-9_-]/g,'_');
     const dir=path.join(art,'collections',id);
     const cover=await localImage(f.coverImageUrl,dir,id,'cover');
     const hero=await localImage(f.heroBackdropUrl||c.backdropImageUrl,dir,id,'hero');
     const logo=await localImage(f.titleLogoUrl,dir,id,'logo');
-    if(c.title==='Directors'&&f.titleLogoUrl) {
-      const portraitUrl=f.titleLogoUrl.replace('.logo.webp','.webp');
+    // Use only an explicitly supplied portrait field. Deriving a second URL
+    // from titleLogoUrl guessed an endpoint and could turn a missing asset
+    // into the wrong image. Existing local portraits remain a valid fallback.
+    const portraitUrl=f.portraitImageUrl||f.portraitUrl||f.profileImageUrl||f.personImageUrl;
+    if(c.title==='Directors'&&portraitUrl) {
       await localImage(portraitUrl,dir,id,'portrait');
     }
     let frames=0;

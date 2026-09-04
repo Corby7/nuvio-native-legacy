@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 static ColFolder folders[COL_MAX];
 static int count;
 static void localiza(char *value,size_t cap,const char *dir) {
@@ -39,6 +40,13 @@ int col_carregar(const char *dir) {
       v->hideTitle=js_num(p,pe,"hideTitle",0);v->frames=js_num(p,pe,"frames",0);
       if(v->frames<0||v->frames>90)v->frames=0;
       snprintf(v->frameDir,sizeof v->frameDir,"%s/collections/%s",dir,v->id);
+      /* Local paired artwork survives catalog imports. Activate only a complete pair. */
+      char editorial[512];
+      snprintf(editorial,sizeof editorial,"%s/editorial/%s-home.png",dir,v->id);
+      snprintf(v->detailHero,sizeof v->detailHero,"%s/editorial/%s-detail.png",dir,v->id);
+      if(!access(editorial,R_OK)&&!access(v->detailHero,R_OK)) {
+        snprintf(v->hero,sizeof v->hero,"%s",editorial);v->editorial=1;
+      } else v->detailHero[0]=0;
       for(const char *s=js_array(p,pe,"sources");s&&v->nSources<COL_SOURCE_MAX;s=js_prox(js_fim(s))) {
         const char *se=js_fim(s);ColSource *a=&v->sources[v->nSources];
         js_texto(s,se,"title",a->title,sizeof a->title);js_texto(s,se,"base",a->base,sizeof a->base);

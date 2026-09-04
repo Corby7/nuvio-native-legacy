@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Best Movies of 2024 — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#bda17e" stroke="#bda17e" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><g transform="rotate(-21 370 355)" ><rect x="230" y="75" width="270" height="290" fill="#232521" /></g><g transform="rotate(-7 370 355)" ><rect x="230" y="75" width="270" height="290" fill="#232521" /></g><g transform="rotate(7 370 355)" ><rect x="230" y="75" width="270" height="290" fill="#232521" /></g><g transform="rotate(21 370 355)" ><rect x="230" y="75" width="270" height="290" fill="#232521" /></g><circle cx="373" cy="191" r="72" fill="#8a7051" /><path d="M343 147L411 191 343 235Z" fill="#242622" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

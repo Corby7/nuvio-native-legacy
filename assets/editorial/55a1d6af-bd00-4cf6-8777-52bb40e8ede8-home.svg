@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>David Fincher — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#9caa8d" stroke="#9caa8d" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><path d="M80 40H650V370H130V100" fill="none" /><path d="M104 65H625V347H154V125" fill="none" /><path d="M128 90H600V324H178V150" fill="none" /><path d="M152 115H575V301H202V175" fill="none" /><path d="M176 140H550V278H226V200" fill="none" /><path d="M200 165H525V255H250V225" fill="none" /><path d="M224 190H500V232H274V250" fill="none" /><circle cx="415" cy="209" r="37" fill="#62705d" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

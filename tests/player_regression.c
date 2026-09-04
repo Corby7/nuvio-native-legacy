@@ -17,12 +17,16 @@
 #include "legenda.h"
 #include "intro.h"
 #include "perfil.h"
+#include "social.h"
 #include <SDL2/SDL_image.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+extern int cat_historico_estado_item(int indice);
+extern void cat_historico_definir_id(const char *imdb, const char *tipo, int visto);
 
 static void tecla(SDL_Keycode k) {
   SDL_Event e={0};e.type=SDL_KEYDOWN;e.key.keysym.sym=k;episodios_evento(&e);
@@ -36,6 +40,15 @@ static void teclaMenu(SDL_Keycode k) {
 static void testar(void) {
   perfil_iniciar();perfil_abrir_lateral();
   assert(perfil_lateral() && perfil_aberto());
+  { PerfilDados pd={0};
+    snprintf(pd.nome,sizeof pd.nome,"Perfil de teste");
+    snprintf(pd.usuario,sizeof pd.usuario,"teste");
+    pd.periodo[0]='J'; pd.periodo[1]=0;
+    perfil_definir_dados(&pd);
+    perfil_definir_carregando(1);
+    perfil_definir_erro("rede indisponível");
+    perfil_definir_dados(NULL);
+  }
   SDL_Event pe={0};pe.type=SDL_KEYDOWN;pe.key.keysym.sym=SDLK_DOWN;
   perfil_evento(&pe);pe.key.keysym.sym=SDLK_RETURN;perfil_evento(&pe);
   assert(perfil_pediu_atualizar());
@@ -110,6 +123,11 @@ static void testar(void) {
   snprintf(arquivo,sizeof arquivo,"%s/catalogo.txt",pasta);
   FILE *fp=fopen(arquivo,"w");assert(fp);fclose(fp);
   cat_carregar(pasta);strcpy(c.imdb,"tt0000001");cat_definir(&c,1);
+  c.progresso=95;assert(cat_historico_estado_item(0)<0);
+  cat_historico_definir_id("tt0000001","series",1);
+  assert(cat_historico_estado_item(0)==1);
+  cat_historico_definir_id("tt0000001:2:4","series",0);
+  assert(cat_historico_estado_item(0)==0);
   cat_salvar_progresso_ep(0,500,1000,2,4);
   c.temporada=1;c.episodio=1;strcpy(c.nomeEpisodio,"Nome antigo");
   cat_definir(&c,1);

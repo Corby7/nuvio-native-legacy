@@ -43,10 +43,32 @@ static inline float anim_mistura(float a, float b, float t) { return a + (b - a)
 // frequencia em rad/s e vale o k da cauda medida.
 static inline float anim_mola2(float *v, float atual, float alvo, float dt, float w) {
   // Um quadro perdido (aba escondida, decode longo) nao pode virar um passo
-  // gigante: com dt grande o Euler semi-implicito estoura.
+  // gigante. A forma fechada evita o overshoot do Euler semi-implicito e
+  // continua retargetavel quando o D-pad muda o alvo durante o movimento.
+  if (dt <= 0.0f || w <= 0.0f) return atual;
   if (dt > 0.05f) dt = 0.05f;
-  *v += (-2.0f * w * (*v) - w * w * (atual - alvo)) * dt;
-  return atual + (*v) * dt;
+  if ((alvo - atual) * (*v) < 0.0f) *v = 0.0f;
+  float x = atual - alvo;
+  float e = expf(-w * dt);
+  float c = (*v + w * x) * dt;
+  float novo = alvo + (x + c) * e;
+  float nv = (*v - w * c) * e;
+  if ((alvo > atual && novo > alvo) || (alvo < atual && novo < alvo)) {
+    novo = alvo;
+    nv = 0.0f;
+  }
+  *v = nv;
+  return novo;
+}
+
+// Reduced motion e uma politica, nao um detalhe de cada tela.
+static inline float anim_reduzida(float atual, float alvo, int reduzida) {
+  return reduzida ? alvo : atual;
+}
+static inline float anim_mola2_reduzida(float *v, float atual, float alvo,
+                                        float dt, float w, int reduzida) {
+  if (reduzida) { *v = 0.0f; return alvo; }
+  return anim_mola2(v, atual, alvo, dt, w);
 }
 
 // Aceleracao e desaceleracao simetricas, para animacao com relogio proprio.

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>1001 Movies — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#b1a18d" stroke="#b1a18d" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><path d="M90 95Q235 56 380 132Q525 56 670 95V351Q525 312 380 388Q235 312 90 351Z" fill="#39352e" /><path d="M380 132L380 388" fill="none" /><path d="M113 130Q241 97 355 160M405 160Q530 97 649 130" fill="none" /><path d="M113 160Q241 127 355 190M405 190Q530 127 649 160" fill="none" /><path d="M113 190Q241 157 355 220M405 220Q530 157 649 190" fill="none" /><path d="M113 220Q241 187 355 250M405 250Q530 187 649 220" fill="none" /><path d="M113 250Q241 217 355 280M405 280Q530 217 649 250" fill="none" /><path d="M113 280Q241 247 355 310M405 310Q530 247 649 280" fill="none" /><path d="M113 310Q241 277 355 340M405 340Q530 277 649 310" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

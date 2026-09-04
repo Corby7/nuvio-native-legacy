@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>IMDb Top 250 Shows — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#ac965f" stroke="#ac965f" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><rect x="100" y="60" width="310" height="220" fill="#292a23" /><rect x="196" y="96" width="310" height="220" fill="#292a23" /><rect x="292" y="132" width="310" height="220" fill="#292a23" /><rect x="388" y="168" width="310" height="220" fill="#292a23" /><path d="M425 211L425 278" fill="none" /><path d="M451 211L451 278" fill="none" /><path d="M477 211L477 278" fill="none" /><path d="M381 108L390.134182820625 132.42787590741332L416.18909110292066 133.56637120812695L395.77941826322666 149.8021240925867L402.7480543348215 174.93362879187305L381 160.54L359.2519456651785 174.93362879187305L366.22058173677334 149.8021240925867L345.81090889707934 133.56637120812695L371.865817179375 132.42787590741332Z" fill="currentColor" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>

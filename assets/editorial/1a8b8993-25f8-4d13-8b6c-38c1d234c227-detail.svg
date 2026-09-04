@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="640" viewBox="0 0 1920 320">
+<title>Criterion Collection — detail</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="320" fill="#0d0d0d" />
+<g color="#b2b7b6" stroke="#b2b7b6" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1210 0) scale(0.72)"><path d="M170 375V220a195 195 0 0 1 390 0V375Z" fill="#202326" /><path d="M198 375V207a167 167 0 0 1 334 0V375Z" fill="#202326" /><path d="M226 375V194a139 139 0 0 1 278 0V375Z" fill="#202326" /><path d="M254 375V181a111 111 0 0 1 222 0V375Z" fill="#202326" /><path d="M282 375V168a83 83 0 0 1 166 0V375Z" fill="#202326" /><circle cx="365" cy="210" r="45" fill="none" /></g>
+<rect x="0" y="0" width="1920" height="320" fill="url(#fade)" stroke="none"/>
+</svg>

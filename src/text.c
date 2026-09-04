@@ -27,6 +27,7 @@ typedef struct {
   unsigned long hash;   // FNV-1a da chave, para pular o strcmp
   TxtLinha linha;
   unsigned long uso;
+  unsigned long quadroUso;
   int ocupado;
 } Entrada;
 
@@ -95,8 +96,9 @@ static Entrada cache[MAX_LINHAS];
 // que NENHUMA parte sozinha coma mais que um terco do quadro.
 #define TXT_POR_QUADRO 2
 static int rastNesteQuadro;
+static unsigned long quadroTxt = 1;
 
-void txt_novo_quadro(void) { rastNesteQuadro = 0; }
+void txt_novo_quadro(void) { rastNesteQuadro = 0; quadroTxt++; }
 static unsigned long relogio = 1;
 int    txt_rasterizadas = 0;
 // Quantas linhas foram DESPEJADAS para dar lugar a outras. Zero e o estado
@@ -384,7 +386,10 @@ int txt_iniciar(const char *dirRecursos, float escala) {
         // entre estilos e nao pode ser liberado pela primeira fonte a fechar.
         fontes[i] = rw ? TTF_OpenFontRW(rw, 0, (int)(ESTILOS[i].corpo * escalaTxt + 0.5f)) : NULL;
         rwFonte[i] = rw;
-        if (!fontes[i]) { if (rw) SDL_RWclose(rw); rwFonte[i] = NULL; todas = 0; break; }
+        // A LG usa SDL 2.0.4: SDL_RWclose so existe nas versoes novas do SDL.
+        // SDL_FreeRW e a ABI disponivel no webOS 4 e libera corretamente o
+        // stream criado por SDL_RWFromConstMem.
+        if (!fontes[i]) { if (rw) SDL_FreeRW(rw); rwFonte[i] = NULL; todas = 0; break; }
         // negrito sintetico so na reserva, que nao tem arquivo Bold proprio
         if (c > 0 && ESTILOS[i].peso == PESO_BOLD) TTF_SetFontStyle(fontes[i], TTF_STYLE_BOLD);
       }
@@ -396,7 +401,7 @@ int txt_iniciar(const char *dirRecursos, float escala) {
     for (int i = 0; i < TXT_NFONTES; i++) {
       if (fontes[i]) TTF_CloseFont(fontes[i]);
       fontes[i] = NULL;
-      if (rwFonte[i]) SDL_RWclose(rwFonte[i]);
+      if (rwFonte[i]) SDL_FreeRW(rwFonte[i]);
       rwFonte[i] = NULL;
     }
     for (int p = 0; p < 3; p++) {
@@ -417,7 +422,7 @@ void txt_encerrar(void) {
   for (int i = 0; i < TXT_NFONTES; i++) {
     if (fontes[i]) TTF_CloseFont(fontes[i]);
     fontes[i] = NULL;
-    if (rwFonte[i]) SDL_RWclose(rwFonte[i]);
+    if (rwFonte[i]) SDL_FreeRW(rwFonte[i]);
     rwFonte[i] = NULL;
     for (int e = 0; e < ESC_N; e++)
       if (reservas[e][i]) TTF_CloseFont(reservas[e][i]);
@@ -466,7 +471,9 @@ static TxtLinha linhaFamilia(TxtEstilo estilo, const char *s, int r, int g,
     int i = (int)((h + (unsigned long)k) % MAX_LINHAS);
     if (!cache[i].ocupado) { livre = i; break; }
     if (cache[i].hash == h && strcmp(cache[i].chave, chave) == 0) {
-      cache[i].uso = ++relogio; return cache[i].linha;
+      cache[i].uso = ++relogio;
+      cache[i].quadroUso = quadroTxt;
+      return cache[i].linha;
     }
   }
 
@@ -480,7 +487,11 @@ static TxtLinha linhaFamilia(TxtEstilo estilo, const char *s, int r, int g,
     // acontece no maximo TXT_POR_QUADRO vezes por quadro, nao por linha.
     unsigned long menor = ~0UL;
     for (int i = 0; i < MAX_LINHAS; i++)
-      if (cache[i].uso < menor) { menor = cache[i].uso; slot = i; }
+      if (cache[i].ocupado && cache[i].quadroUso != quadroTxt &&
+          cache[i].uso < menor) {
+        menor = cache[i].uso;
+        slot = i;
+      }
   }
   if (slot < 0) return vazia;
   if (cache[slot].ocupado) txt_despejos++;
@@ -517,6 +528,7 @@ static TxtLinha linhaFamilia(TxtEstilo estilo, const char *s, int r, int g,
   txt_rasterizadas++;
   txt_ms += (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
   cache[slot].uso = ++relogio;
+  cache[slot].quadroUso = quadroTxt;
   SDL_FreeSurface(cv);
   return cache[slot].linha;
 }

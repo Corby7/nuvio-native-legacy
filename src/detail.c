@@ -28,6 +28,7 @@
 #include "pessoa.h"
 #include "streams.h"
 #include "descoberta.h"
+#include "diretor.h"
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
@@ -373,9 +374,40 @@ static const char *logoDe(int i) {
 }
 static const char *arteDe(int i) {
   const CatItem *c = cat_item(i);
+  // Um detalhe nunca pode herdar a arte de outra posicao do catalogo. Quando
+  // o backdrop do proprio titulo falta, o renderer mostra o estado neutro e
+  // preserva o layout, aguardando eventual enriquecimento do mesmo item.
   if (c && c->backdrop[0]) return c->backdrop;
-  int n = home_n_artes();
-  return n ? home_arte(((i % n) + n) % n) : NULL;
+  // Poster do próprio título é a reserva segura. O desenho trata-o como arte
+  // contida, não como cover 16:9, para preservar rosto, lettering e proporção.
+  if (c && c->poster[0]) return c->poster;
+  return NULL;
+}
+
+static int arteDetalheEhPoster(int i) {
+  const CatItem *c = cat_item(i);
+  return c && !c->backdrop[0] && c->poster[0];
+}
+
+static void desenhaArteDetalhe(GfxRect alvo, GLuint tex, const char *arte,
+                               int poster, float alpha, float pg) {
+  if (!tex) {
+    gfx_cor(alvo, 0.0f, 0.051f, 0.051f, 0.051f, alpha);
+    return;
+  }
+  gfx_tex_aspect_atual = tex_aspecto(arte);
+  if (!poster) {
+    gfx_rect(alvo, tex, GFX_DETALHE, 1.0f - pg, 0, 0, 0.0f, 0, 0, 0,
+             alpha);
+  } else {
+    float ap = gfx_tex_aspect_atual > 0.05f ? gfx_tex_aspect_atual : (2.0f / 3.0f);
+    float h = alvo.h * 0.90f, w = h * ap, maxW = alvo.w * 0.42f;
+    if (w > maxW) { w = maxW; h = w / ap; }
+    GfxRect r = { alvo.x + alvo.w - w - 72.0f,
+                  alvo.y + (alvo.h - h) * 0.5f, w, h };
+    gfx_rect(r, tex, GFX_HERO, 0, 0, 0, 0, 0, 0, 0, alpha);
+  }
+  gfx_tex_aspect_atual = 0.0f;
 }
 static int ehSerie(void) {
   const CatItem *ci = cat_item(idx);
@@ -2901,6 +2933,33 @@ static void desenhaPessoa(float a) {
     } }
 }
 
+// O retrato do diretor pertence ao detalhe, não ao hero da home. A foto do
+// TMDB entra sobre o backdrop com o mesmo tratamento editorial do renderer e
+// recua quando o documento rola; a arte horizontal continua sendo a base.
+static void desenhaDiretorDetalhe(const CatItem *ci, float a, float pg) {
+  const char *foto;
+  GLuint tex;
+  GfxRect r;
+  if (!ci || ehSerie() || !ci->direcao[0] || a <= 0.005f) return;
+  diretor_pedir(ci->direcao);
+  foto = diretor_foto(ci->direcao);
+  if (!foto[0]) return;
+  // O retrato ocupa menos que um hero full-bleed, mas e exibido grande na TV.
+  // Pedir pelo tamanho da coluna evita ampliar um w500 borrado sem reservar
+  // os ~2K de uma capa horizontal.
+  tex = tex_obter_larg(foto, 960.0f);
+  if (!tex) return;
+  // Caixa vertical real: a proporcao da foto fica sob responsabilidade do
+  // shader GFX_RETRATO, que ancora a imagem na direita e dissolve as bordas.
+  // A caixa mais alta deixa o rosto respirar e evita a aparencia de retrato
+  // comprimido dentro de um banner largo.
+  r = (GfxRect){ 1080.0f, 0.0f, 840.0f, 930.0f };
+  gfx_tex_aspect_atual = tex_aspecto(foto);
+  gfx_rect(r, tex, GFX_RETRATO, 0, 0, 0, 0, 0, 0, 0,
+           a * (1.0f - 0.82f * pg));
+  gfx_tex_aspect_atual = 0.0f;
+}
+
 void detail_desenhar(Uint32 agora) {
   if (!aberto) return;
   float s = suave(t), a2 = fase2();
@@ -2934,6 +2993,7 @@ void detail_desenhar(Uint32 agora) {
   GfxRect alvo; float aEntrada;
   backdropRect(&alvo, &aEntrada);
   const char *arte = arteDe(idx);
+  int artePoster = arteDetalheEhPoster(idx);
   // Backdrop em tela cheia: pede o teto de 1920. Com o teto comum de 960 a arte
   // era decodificada com metade da resolucao e ampliada ao dobro na tela.
   GLuint tex = arte ? tex_obter_hero(arte) : 0;
@@ -2954,20 +3014,13 @@ void detail_desenhar(Uint32 agora) {
     GfxRect tela = { 0, 0, NV_TELA_W, NV_TELA_H };
     gfx_cor(tela, 0.0f, 0.051f, 0.051f, 0.051f, pg);
   }
-  if (tex) {
-    gfx_tex_aspect_atual = tex_aspecto(arte);
-    // 4o parametro = forca da VINHETA, nao "foco". Vai a 0 junto com a rolagem,
-    // que e o par que faltava: o web apaga a arte para 15% E some com a vinheta
-    // ao mesmo tempo. Fazendo so a primeira metade — que era o caso aqui — a
-    // arte fraca continuava recebendo a tinta preta dos 78% da esquerda e a
-    // pagina rolada ficava quase preta em vez de mostrar a arte por inteiro,
-    // fraca e uniforme.
-    gfx_rect(alvo, tex, GFX_DETALHE, 1.0f - pg, 0, 0, 0.0f, 0, 0, 0,
-             aEntrada * (1.0f - 0.85f * pg));
-    gfx_tex_aspect_atual = 0.0f;
-  } else {
-    gfx_cor(alvo, 0.0f, 0.051f, 0.051f, 0.051f, 1.0f);
-  }
+  // 4o parametro = forca da VINHETA, nao "foco". Vai a 0 junto com a rolagem,
+  // que e o par que faltava: o web apaga a arte para 15% E some com a vinheta
+  // ao mesmo tempo. Poster reserva usa composição contida, sem crop de capa.
+  desenhaArteDetalhe(alvo, tex, arte, artePoster,
+                     tex ? aEntrada * (1.0f - 0.85f * pg) : 1.0f, pg);
+
+  desenhaDiretorDetalhe(cat_item(idx), aEntrada, pg);
 
   // O hero ROLA com o documento: ele nao some nem e substituido por um
   // cabecalho fixo. Era isso que fazia a pagina do port parecer outra tela em

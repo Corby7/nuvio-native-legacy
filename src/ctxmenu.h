@@ -13,6 +13,10 @@
 #include <SDL2/SDL.h>
 
 // `indice` e a posicao no catalogo global.
+// A integracao da pressao longa fica em home.c: ele mede NV_HOLD_MS no KEYUP e
+// chama ctx_abrir somente quando o limiar foi atingido. Este modulo nao mede a
+// tecla nem abre no KEYDOWN; assim o toque curto continua abrindo o detalhe e
+// o modal recebe apenas o foco D-pad depois de estar visivel.
 void ctx_abrir(int indice);
 int  ctx_aberto(void);
 void ctx_evento(const SDL_Event *e);

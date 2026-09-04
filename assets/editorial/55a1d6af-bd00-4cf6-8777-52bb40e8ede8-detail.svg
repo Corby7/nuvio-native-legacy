@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="640" viewBox="0 0 1920 320">
+<title>David Fincher — detail</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="320" fill="#0d0d0d" />
+<g color="#9caa8d" stroke="#9caa8d" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1210 0) scale(0.72)"><rect x="110" y="30" width="485" height="350" fill="none" /><rect x="132" y="50" width="441" height="310" fill="none" /><rect x="154" y="70" width="397" height="270" fill="none" /><rect x="176" y="90" width="353" height="230" fill="none" /><rect x="198" y="110" width="309" height="190" fill="none" /><rect x="220" y="130" width="265" height="150" fill="none" /><rect x="242" y="150" width="221" height="110" fill="none" /><rect x="264" y="170" width="177" height="70" fill="none" /><path d="M352 44V165H470V295H262V372" fill="none" stroke-width="6"/></g>
+<rect x="0" y="0" width="1920" height="320" fill="url(#fade)" stroke="none"/>
+</svg>

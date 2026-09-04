@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="1000" viewBox="0 0 1920 500">
+<title>Stanley Kubrick — home</title>
+<defs><linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d0d0d" stop-opacity="0"/><stop offset=".65" stop-color="#0d0d0d" stop-opacity="0"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient></defs>
+<rect x="0" y="0" width="1920" height="500" fill="#0d0d0d" />
+<g color="#b0a09a" stroke="#b0a09a" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round" opacity=".9" transform="translate(1080 12) scale(1.02)"><path d="M0 425L340 185 430 185 760 425" fill="none" /><path d="M65 425L340 185 430 185 695 425" fill="none" /><path d="M130 425L340 185 430 185 630 425" fill="none" /><path d="M195 425L340 185 430 185 565 425" fill="none" /><path d="M260 425L340 185 430 185 500 425" fill="none" /><path d="M325 425L340 185 430 185 435 425" fill="none" /><path d="M390 425L340 185 430 185 370 425" fill="none" /><path d="M455 425L340 185 430 185 305 425" fill="none" /><rect x="322" y="38" width="105" height="280" fill="#171819" stroke-width="3"/><path d="M322 38L350 22" fill="none" /><path d="M350 22L454 22" fill="none" /><path d="M427 38L454 22V300L427 318Z" fill="#363134" /></g>
+<rect x="0" y="0" width="1920" height="500" fill="url(#fade)" stroke="none"/>
+</svg>
