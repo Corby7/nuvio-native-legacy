@@ -23,6 +23,7 @@
 #include "simklauth.h"
 #include "app.h"
 #include "video.h"
+#include "plane.h"
 #include "addons.h"
 #include "settings.h"
 #include "discover.h"
@@ -242,6 +243,13 @@ int main(int argc, char **argv) {
   freopen("/tmp/nuvio.log", "a", stderr);
 #endif
   setvbuf(stdout, NULL, _IOLBF, 0);
+  // QUAL BUILD ESTA RODANDO. O md5 do arquivo prova o que esta no DISCO; esta
+  // linha prova o que foi LANCADO, que e outra pergunta — e a que ja custou
+  // 2h30 lendo o log de um processo antigo achando que o deploy tinha entrado.
+  // Guardado por #ifdef porque o mac.sh nao define nada disso.
+#ifdef NV_BUILD
+  printf("[main] build %s\n", NV_BUILD);
+#endif
   if (!getenv("XDG_RUNTIME_DIR")) setenv("XDG_RUNTIME_DIR", "/tmp/xdg", 1);
 
   // O SAM lanca o app passando o JSON de launch como argv[1], entao so tratamos
@@ -342,6 +350,12 @@ int main(int argc, char **argv) {
       // Sem commit de proposito: o commit vem do proximo SwapWindow.
       if (marshal && sup) { marshal(sup, 4, NULL); printf("non-opaque surface\n"); }
       else printf("no wayland: video will not appear\n");
+      // Exporta a superficie como objeto de video AGORA, e nao no primeiro
+      // play: o windowId chega por evento, e o load do com.webos.media nao
+      // pode sair sem ele. Descobrir isso dentro do play significaria bloquear
+      // o fio de desenho esperando o compositor, ou mandar um load que falha
+      // em silencio. Aqui ainda somos um fio so, e um roundtrip nao custa nada.
+      plane_start(fields[0], sup);
     }
   }
 #endif
@@ -573,6 +587,7 @@ int main(int argc, char **argv) {
     fOutMs = gfx_ms_others; fNOut = gfx_n_others;
     fFill = gfx_fill; fNFull = gfx_n_full;
     t0 = NV_T0();
+    plane_pump();
     videoIfRequested();
     captureIfRequested();
     fAux = NV_DT(t0);

@@ -1,12 +1,20 @@
 #!/bin/bash
-# Builds for ARM and installs on the TV by DIRECT COPY. Full cycle (~30s).
+# Builds for ARM, installs on the TV through Developer Mode and verifies it.
 #
-#   bash tools/arm.sh            # build, copy, check and launch
-#   bash tools/arm.sh --build    # build only
-#   bash tools/arm.sh --ipk      # also produce the .ipk (for distribution)
+#   bash tools/arm.sh            # build, package, install, launch and verify
+#   bash tools/arm.sh --build    # build only, no package and no TV
+#   bash tools/arm.sh --ipk      # same as the default, but keeps the .ipk
 #
-# It does NOT use appInstallService, and the reason is written at the send step:
-# that service answers success and does not swap the binary.
+#   NUVIO_TV_DEVICE=lgc3         # ares device name (see ares-setup-device --list)
+#   NUVIO_NO_INSTALL=1           # build and package, stop before the TV
+#
+# ONE-TIME SETUP: the Developer Mode ssh key has a passphrase, so load it into
+# the agent once per session or the verification step cannot read the TV:
+#
+#   ssh-add ~/.ssh/lgc3_webos
+#
+# It DOES go through the installer now, and that is a downgrade forced by the
+# target, not a preference — see the long note at the install step.
 #
 # The image comes from tools/Dockerfile:
 #   docker build --platform linux/arm64 -t nuvio-webos-sdk tools/
@@ -21,16 +29,24 @@
 set -e
 cd "$(dirname "$0")/.."
 
-TV_IP="${NUVIO_TV_IP:-192.168.1.32}"
-TV_PASS="${NUVIO_TV_PASS:-alpine}"
+# The TV is addressed by the DEVICE NAME registered with ares-setup-device, not
+# by an IP: the Developer Mode ssh needs a key and a passphrase, and both live in
+# ~/.webos/tv/novacom-devices.json under that name. `ares-setup-device --list`
+# shows what is configured; this one is prisoner@192.168.1.100:9922.
+#
+# The address moved once already (the old default, 192.168.1.32, is a lease the
+# TV no longer holds) and cost a deploy each time it was hardcoded. A name that
+# resolves through the ares config cannot go stale that way.
+TV_DEV="${NUVIO_TV_DEVICE:-lgc3}"
 APP_ID="space.nuvio.native.legacy"
-# The sibling web checkout supplies ares-package, and has been called both
-# NuvioWeb-0.3.38-beta and NuvioWeb. Try each rather than hard-coding one.
-ARES=""
+# The sibling web checkout supplies the whole ares toolchain, and has been called
+# both NuvioWeb-0.3.38-beta and NuvioWeb. Try each rather than hard-coding one.
+ARESDIR=""
 for c in ../NuvioWeb-0.3.38-beta ../NuvioWeb; do
-  [ -x "$c/node_modules/.bin/ares-package" ] && ARES="$c/node_modules/.bin/ares-package"
+  [ -x "$c/node_modules/.bin/ares-package" ] && ARESDIR="$c/node_modules/.bin"
 done
-[ -n "$ARES" ] || { echo "ares-package not found in ../NuvioWeb*/node_modules/.bin" >&2; exit 1; }
+[ -n "$ARESDIR" ] || { echo "ares tools not found in ../NuvioWeb*/node_modules/.bin" >&2; exit 1; }
+ARES="$ARESDIR/ares-package"
 
 echo "==> building for ARM"
 # The server configuration enters through an ENVIRONMENT VARIABLE and the -D
@@ -47,6 +63,20 @@ cleanup() { [ -n "$TRASH" ] && rm -rf $TRASH; }
 trap cleanup EXIT
 ENVF=$(mktemp); TRASH="$TRASH $ENVF"
 tools/env.sh --env-file "$ENVF"
+
+# BUILD ID COMPILED INTO THE BINARY, printed by main.c at startup.
+#
+# The md5 further down proves what is ON DISK. It does NOT prove what is
+# RUNNING, and this deploy now goes through appInstallService — the very service
+# this file already records as answering success without replacing the binary
+# (three deploys lost that way, the app running an old build for 2h30 while the
+# log said success). Only the process saying its own build id closes that.
+#
+# It goes in the env-file, so the "did every -D land" check below covers it for
+# free.
+NV_BUILD=$(date +%Y%m%d-%H%M%S)
+echo "NV_BUILD=$NV_BUILD" >> "$ENVF"
+echo "==> build $NV_BUILD"
 docker run --rm --platform linux/arm64 --env-file "$ENVF" \
   -v "$PWD":/work nuvio-webos-sdk sh -c '
   SR=$NUVIO_SYSROOT
@@ -58,6 +88,7 @@ docker run --rm --platform linux/arm64 --env-file "$ENVF" \
     -DNV_TRAKT_CLIENT_SECRET="\"$NV_TRAKT_CLIENT_SECRET\"" \
     -DNV_SIMKL_CLIENT_ID="\"$NV_SIMKL_CLIENT_ID\"" \
     -DNV_SIMKL_APP="\"$NV_SIMKL_APP\"" \
+    -DNV_BUILD="\"$NV_BUILD\"" \
     -I$SR/usr/include -I$SR/usr/include/SDL2 \
     -lSDL2 -lSDL2_image -lSDL2_ttf -lGLESv2 -lEGL -ldl -lpthread -lm'
 
@@ -86,6 +117,23 @@ done < "$ENVF"
 cp nuvio-proto.arm deploy/app/nuvio-proto
 rm -f ./*.ipk
 
+# BUILD STAMP IN THE TITLE, applied BEFORE packaging because the .ipk carries
+# appinfo.json — stamping afterwards would ship the previous build's number.
+#
+# "is it still the old build" cannot be answered by looking at the screen: the
+# binary's md5 proves what is on DISK, not what was LAUNCHED, and the TV has two
+# Nuvio apps (this one and the web "Nuvio TV") — opening the wrong tile gives
+# exactly the same symptom. With the first 8 digits of the md5 in the title, the
+# launcher answers for itself which build is there.
+echo "==> stamping the title with the build"
+STAMP=$(md5 -q nuvio-proto.arm 2>/dev/null || md5sum nuvio-proto.arm | cut -d' ' -f1)
+STAMP=${STAMP:0:8}
+# The source keeps the (BUILD) placeholder; only the packaged copy is stamped.
+# Rewriting deploy/app/appinfo.json in place would make the placeholder survive
+# exactly one build and then be gone from the tree.
+sed "s/(BUILD)/($STAMP)/" deploy/app/appinfo.json > /tmp/appinfo.stamped.json
+echo "    $STAMP"
+
 # The .ipk only matters for DISTRIBUTION (installing on another TV, publishing).
 # The development cycle does not go through it — see the note below.
 #
@@ -110,17 +158,38 @@ PERSONAL_FILES="trakt.txt addons.txt tmdb.txt mdblist.txt
                 ajustes.txt progresso.txt nuvem.txt sessao.txt perfil.txt
                 cliente.txt"
 
-if [ "$1" = "--ipk" ]; then
+# --build stops here: it is the "does it compile" path and wants nothing to do
+# with packaging or with the TV.
+[ "$1" = "--build" ] && exit 0
+
+# THE PACKAGE IS NO LONGER OPTIONAL. Under Developer Mode there is no direct
+# copy into the app directory, so the .ipk IS the deploy — `--ipk` now only
+# means "leave it in the tree afterwards".
+if true; then
   echo "==> packaging (without credentials)"
   STAGE=$(mktemp -d); TRASH="$TRASH $STAGE"
   cp -R deploy/app "$STAGE/app"
+  # The stamped title goes into the STAGED copy, never into the tree: rewriting
+  # deploy/app/appinfo.json in place would consume the (BUILD) placeholder on the
+  # first build and it would never come back.
+  cp /tmp/appinfo.stamped.json "$STAGE/app/appinfo.json"
   # cache/ is a RUNTIME cache, not package art: megabytes of downloaded images
   # that the app fetches again on its own.
   rm -rf "$STAGE/app/art/cache"
   for f in $PERSONAL_FILES; do rm -f "$STAGE/app/art/$f"; done
 
-  "$ARES" "$STAGE/app" -o .
-  IPK=$(ls -t ./*.ipk | head -1)
+  # THE EXIT CODE OF ares-package IS NOT EVIDENCE. Version 3.2.4 writes the
+  # package correctly and THEN throws in its own cleanup:
+  #   ares-package ERR! uncaughtException TypeError: rimraf is not a function
+  # It exits non-zero having done the job. Under `set -e` that aborts a deploy
+  # that actually succeeded, so the check below asks the FILE, not the tool —
+  # the same rule the rest of this script already follows.
+  "$ARES" "$STAGE/app" -o . || echo "    (ares-package exited non-zero; checking the file instead)"
+  IPK=$(ls -t ./*.ipk 2>/dev/null | head -1)
+  if [ -z "$IPK" ] || [ ! -s "$IPK" ]; then
+    echo "    ABORTED: ares-package produced no .ipk"
+    exit 1
+  fi
 
   # CHECKS the FINISHED package, not the folder it came from. The exclusion list
   # above is an intent; the test below is the fact.
@@ -148,114 +217,104 @@ if [ "$1" = "--ipk" ]; then
   echo "    $IPK ($(du -h "$IPK" | cut -f1)) — without art/{$(echo $PERSONAL_FILES | tr ' ' ',')}"
 fi
 
-[ "$1" = "--build" ] && exit 0
+[ "$NUVIO_NO_INSTALL" = "1" ] && { echo "==> NUVIO_NO_INSTALL=1: stopping before the TV"; exit 0; }
 
-# THE TV IS ROOTED: direct copy, without going through the installer.
+# THE DIRECT COPY IS GONE, and not by preference.
 #
-# appInstallService answers `"returnValue": true` and `statusValue: 264`
-# (installed) and DOES NOT REPLACE THE BINARY — it writes art/ and leaves
-# nuvio-proto and appinfo.json untouched. I lost three deploys believing they
-# had landed: the app on the TV ran an old version for 2h30 while the log said
-# success.
+# The old path scp'd the binary straight into the app directory as root over
+# port 22, and it was right to: appInstallService answers `"returnValue": true`
+# and `statusValue: 264` (installed) and DOES NOT REPLACE THE BINARY. Three
+# deploys were lost to that — the app ran an old version for 2h30 while the log
+# said success.
 #
-# With root there is no reason for the middleman. scp + mv + chmod does the same
-# in two seconds, and the md5 at the end PROVES it went up — that is the real
-# lesson: a deploy without verification is hope, not delivery.
+# That TV (a rooted C9) is gone. This one is an OLED55C32LA on webOS 23, running
+# Developer Mode only: port 22 is closed, ssh is prisoner@...:9922, and the app
+# directory is NOT writable by prisoner (measured — `test -w` says no). So the
+# installer is the only way in, which means the verification below is not a
+# nicety, it is the thing that stands between a deploy and a hope.
+echo "==> installing on $TV_DEV"
+"$ARESDIR/ares-install" -d "$TV_DEV" "$IPK"
+
+# LAUNCH ONCE. Never in a loop: every start consumes backend quota, and when it
+# runs out the login fails, the TV falls back to an anonymous session and syncs
+# the wrong account — which looks like a bug in the app.
 #
-# ares-install is no use here either: it expects Developer Mode's
-# prisoner@<ip>:9922, and this TV does not run Developer Mode — it is root on 22
-# with the password alpine.
+# Launching does NOT restart an app that is already running, it only brings it
+# to the front. Close first so what starts is actually this build.
+echo "==> launching"
+"$ARESDIR/ares-launch" -d "$TV_DEV" --close "$APP_ID" >/dev/null 2>&1 || true
+"$ARESDIR/ares-launch" -d "$TV_DEV" "$APP_ID"
+
+# ---------------------------------------------------------------- verifying
+#
+# Two different questions, and the old script only ever answered the first:
+#   1. is the right binary ON DISK?   -> md5
+#   2. is that binary what is RUNNING? -> the build id it prints at startup
+# Question 2 is the one appInstallService can lie about.
+#
+# The ssh details come from the SAME ares config the install used, so the check
+# can never end up pointing at a different TV than the deploy did.
+eval "$(python3 - "$TV_DEV" <<'PY'
+import json, os, sys
+name = sys.argv[1]
+p = os.path.expanduser("~/.webos/tv/novacom-devices.json")
+try:
+    devices = json.load(open(p))
+except Exception:
+    sys.exit(0)
+for e in devices:
+    if e.get("name") == name:
+        key = e.get("privateKey", {}).get("openSsh", "")
+        print("TV_HOST=%s" % e.get("host", ""))
+        print("TV_PORT=%s" % e.get("port", "9922"))
+        print("TV_USER=%s" % e.get("username", "prisoner"))
+        print("TV_KEY=%s" % (os.path.expanduser("~/.ssh/" + key) if key else ""))
+        break
+PY
+)"
+
 APPDIR=/media/developer/apps/usr/palm/applications/$APP_ID
-SSH="sshpass -p $TV_PASS ssh -o StrictHostKeyChecking=no"
-SCP="sshpass -p $TV_PASS scp -o StrictHostKeyChecking=no -q"
-
-# THE DIRECTORY MAY NOT EXIST: the owner may have uninstalled the app from the
-# TV, and then every scp below fails with "No such file or directory" — which is
-# exactly what happened. Creating it first makes the deploy able to REINSTALL,
-# not just update.
-$SSH "root@$TV_IP" "mkdir -p $APPDIR"
-
-echo "==> sending the binary to $TV_IP"
-$SCP nuvio-proto.arm "root@$TV_IP:$APPDIR/nuvio-proto.new"
-# Rename instead of overwrite: if the app is running, the executable is mapped
-# and a direct write fails with ETXTBSY. The rename swaps the inode.
-$SSH "root@$TV_IP" "cd $APPDIR && mv -f nuvio-proto.new nuvio-proto && chmod 755 nuvio-proto"
-
-# THE ART changes rarely, but when it does (a new icon, a new source) it has to
-# go along. BUILD STAMP IN THE TITLE.
-#
-# "is it still the old build" cannot be answered by looking at the screen: the
-# binary's md5 proves what is on DISK, not what was LAUNCHED, and the TV has two
-# Nuvio apps (this one and the web "Nuvio TV") — opening the wrong tile gives
-# exactly the same symptom. With the first 8 digits of the md5 in the title, the
-# launcher answers for itself which build is there.
-echo "==> stamping the title with the build"
-STAMP=$(md5 -q nuvio-proto.arm 2>/dev/null || md5sum nuvio-proto.arm | cut -d' ' -f1)
-STAMP=${STAMP:0:8}
-sed "s/(BUILD)/($STAMP)/" deploy/app/appinfo.json > /tmp/appinfo.stamped.json
-cp /tmp/appinfo.stamped.json deploy/app/appinfo.json.stamped
-
-$SCP /tmp/appinfo.stamped.json "root@$TV_IP:$APPDIR/appinfo.json"
-
-echo "==> syncing art"
-# --exclude art/cache: it is a RUNTIME cache, not package art. With it the tar
-# went past 49 MB (27 MB of posters downloaded on the Mac alone) and extraction
-# in the TV's busybox died halfway — and whatever came AFTER "cache/" in
-# alphabetical order, "brands/" included, vanished silently. That is how the
-# Trakt wordmark "went up" three times without ever arriving.
-#
-# Without the cache the tar drops to a few MB. The TV rebuilds its own, and no
-# longer inherits the Mac's uid — the same trap the chown below remedies.
-#
-# 2>&1 and not 2>/dev/null: a hidden tar error is exactly what made the deploy
-# lie. The lesson was already written here for the binary (the md5 at the end)
-# and the art had been left out of it.
-# The xattr noise filter stays on the MAC: the TV's sh is busybox ash and has no
-# PIPESTATUS — trying to use it there gave "bad substitution" and broke the
-# deploy.
-#
-# And the status comes from a local `set -o pipefail` around the pipe, not from
-# PIPESTATUS indices, which turn ambiguous the moment you add a `|| true`.
-if ! ( set -o pipefail
-       tar czf - -C deploy/app --exclude 'art/cache' \
-           --exclude 'appinfo.json.stamped' \
-           art fonts icon.png \
-         | $SSH "root@$TV_IP" "tar xzf - -C $APPDIR" ) 2>&1 \
-     | grep -v 'unknown extended header keyword'; then
-  :
+if [ -z "$TV_HOST" ] || [ ! -f "$TV_KEY" ]; then
+  echo "    NOT VERIFIED: no ssh details for '$TV_DEV' in ~/.webos/tv/novacom-devices.json"
+  exit 1
 fi
-if ! $SSH "root@$TV_IP" "test -f $APPDIR/art/brands/trakt.png"; then
-  echo "    FAILED: the art did not reach the TV"; exit 1
-fi
-rm -f deploy/app/appinfo.json.stamped
-# The `core` from an old crash sits in the app's directory and weighs 118 MB on
-# a 4.2 G partition. It is no use once the report has been generated.
-$SSH "root@$TV_IP" "rm -f $APPDIR/core; rm -f /tmp/nuvio-shot-req /tmp/nuvio-shot.bmp" || true
-
-# OWNER OF THE CACHE FOLDER. The tar is made on the Mac and extracted as ROOT on
-# the TV, so art/cache inherits the Mac's uid (13888160) at mode 755. The app
-# runs as uid 5152 and CANNOT WRITE there: every downloaded image was discarded
-# silently, and the two decode threads kept re-fetching what could never be
-# stored.
-#
-# MEASURED: 91 "decode failed" in the log with ZERO network errors. After the
-# chown, 15 — and textures went from 87 to 99. Without this line the defect
-# comes back on every deploy, and the symptom is "a poster that does not
-# appear", which has already cost half a session.
-$SSH "root@$TV_IP" "mkdir -p $APPDIR/art/cache && chown -R 5152:5000 $APPDIR/art && chmod -R u+rwX $APPDIR/art"
+# BatchMode: the Developer Mode key has a passphrase, and without this ssh would
+# PROMPT — a prompt inside a deploy script is a hang, which is the worst way for
+# this to fail. Load it once with `ssh-add "$TV_KEY"` and it stays in the agent.
+# HostKeyAlgorithms: the TV runs OpenSSH 6.1 and offers only ssh-rsa, which
+# modern clients refuse by default ("no matching host key type found").
+SSH="ssh -p ${TV_PORT:-9922} -i $TV_KEY -o StrictHostKeyChecking=no \
+     -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa \
+     -o BatchMode=yes -o ConnectTimeout=10 ${TV_USER:-prisoner}@$TV_HOST"
 
 echo "==> verifying"
 LOCAL=$(md5 -q nuvio-proto.arm 2>/dev/null || md5sum nuvio-proto.arm | cut -d' ' -f1)
-REMOTO=$($SSH "root@$TV_IP" "md5sum $APPDIR/nuvio-proto | cut -d' ' -f1" 2>/dev/null | tr -d '\r')
-if [ "$LOCAL" != "$REMOTO" ]; then
-  echo "    FAILED: local $LOCAL != TV $REMOTO"
+REMOTE=$($SSH "md5sum $APPDIR/nuvio-proto 2>/dev/null | cut -d' ' -f1" 2>/dev/null | tr -d '\r')
+if [ -z "$REMOTE" ]; then
+  echo "    NOT VERIFIED: could not read the TV over ssh."
+  echo "    If it asked for a passphrase, run:  ssh-add $TV_KEY"
   exit 1
 fi
-echo "    ok ($LOCAL)"
+if [ "$LOCAL" != "$REMOTE" ]; then
+  echo "    FAILED: on disk $REMOTE, built $LOCAL — the installer did not swap the binary"
+  exit 1
+fi
+echo "    on disk ok ($LOCAL)"
 
-echo "==> launching"
-( sleep 2
-  printf 'luna-send -n 1 -f luna://com.webos.applicationManager/launch '"'"'{"id":"%s"}'"'"'\n' "$APP_ID"
-  sleep 3
-  printf 'exit\n'
-) | nc -w20 "$TV_IP" 23 | tr -d '\0' | grep returnValue
+# The app has to boot far enough to write its first log line.
+RUNNING=""
+for _ in 1 2 3 4 5 6 7 8; do
+  sleep 2
+  RUNNING=$($SSH "sed -n 's/^\[main\] build //p' /tmp/nuvio.log 2>/dev/null | head -1" 2>/dev/null | tr -d '\r')
+  [ -n "$RUNNING" ] && break
+done
+if [ -z "$RUNNING" ]; then
+  echo "    NOT VERIFIED: the app never wrote a build line to /tmp/nuvio.log"
+  exit 1
+fi
+if [ "$RUNNING" != "$NV_BUILD" ]; then
+  echo "    FAILED: running build $RUNNING, expected $NV_BUILD"
+  echo "    (installed but not swapped, or an older instance is still up)"
+  exit 1
+fi
+echo "    running ok ($RUNNING)"

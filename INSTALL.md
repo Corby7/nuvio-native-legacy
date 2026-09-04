@@ -1,6 +1,6 @@
 # Installing on another TV
 
-Download `space.nuvio.native.legacy_1.0.1_arm.ipk` (**175 MB**) from the
+Download `space.nuvio.native.legacy_1.0.1_arm.ipk` from the
 [releases page](https://github.com/iqui27/nuvio-native-legacy/releases/latest),
 or build it yourself:
 
@@ -13,14 +13,17 @@ The package contains **no credentials**. `tools/test-ipk.sh` proves it, and
 
 ---
 
-## Do you need root? No. But read the LS2 caveat.
+## Do you need root? No — and the development TV no longer has it either.
 
 | | Developer Mode | Homebrew Channel | Root |
 |---|---|---|---|
 | Root required | no | no, to install the channel | yes |
 | Lifetime | **50 h session**, renewable | permanent | permanent |
 | LG developer account | required | only to install the channel | no |
-| Install with | `ares-install` | from the TV itself | `bash tools/arm.sh` |
+| Install with | `ares-install` | from the TV itself | — |
+
+Developer Mode is now the path the project itself uses, so it is the one that
+gets exercised on every deploy rather than the one nobody tried.
 
 ### Developer Mode
 
@@ -30,9 +33,10 @@ ares-install space.nuvio.native.legacy_1.0.1_arm.ipk -d <name>
 ares-launch space.nuvio.native.legacy -d <name>
 ```
 
-`tools/arm.sh` is **not** the tool for this: it uses root over port 22 with a
-password, while `ares-install` expects `prisoner@<ip>:9922`, the Developer Mode
-ssh.
+`tools/arm.sh` now does exactly this, plus the build and the verification —
+`ares-install -d <device>` against `prisoner@<ip>:9922`. It used to be the
+opposite: it copied the binary in as root over port 22, which is no longer
+possible and is no longer what the script does.
 
 ### Homebrew Channel
 
@@ -47,30 +51,50 @@ environment.
 
 The risk is not the installation. It is the **bus permission**.
 
-This app talks directly to `luna://com.webos.media` and uses `libAcbAPI` to
-drive the video plane. `src/video.c` records that the direct call to
-`com.webos.service.tv.display` is **refused by the hub** even on the rooted TV
-("Not permitted to send to com.webos.service.tv.display"), because of the role
-the app registers under — which is why it goes through libAcbAPI instead, the
-path the TV's own browser uses.
+This app talks directly to `luna://com.webos.media`. It registers on the bus as
+`com.webos.media.client.nuvio`, because the app's LS2 role only allows names
+matching `com.webos.media.client.*`.
 
-And the package **ships no LS2 role file**: only `appinfo.json`, with
-`requiredPermissions: ["all"]`. So it depends on what the install directory
-grants. On a rooted TV that is permissive. **On a TV without root, this has not
-been measured.**
+That role does **not** reach `com.webos.service.tv.display` — `src/video.c`
+records the hub refusing it with "Not permitted to send to
+com.webos.service.tv.display". Up to webOS 4 the way around that was
+`libAcbAPI`, which could reach it. **That library does not exist from webOS 5
+onwards**, and on the C3 `find /` turns up nothing.
 
-**Likely symptom if it is not granted:** the UI opens normally and video is a
-black screen, with or without audio — exactly the failure mode `video.c`
-describes when ACB cannot bring up the plane.
+The video plane therefore no longer goes through any display service. The app
+exports its own Wayland surface (`wl_webos_foreign.export_element`), the
+compositor answers with a window id, and that id is handed to `com.webos.media`
+in the `load` payload. Nothing has to be permitted, because nothing extra is
+addressed.
 
-What argues in favour, as evidence rather than a promise: this TV runs
-`com.limelight.webos` (Moonlight, a **native** app with a media pipeline) and
-`org.webosbrew.hbchannel` from the same directory. A native video app
-distributed that way works on the device.
+The package **ships no LS2 role file**: only `appinfo.json`, with
+`requiredPermissions: ["all"]`, so bus access depends on what the install
+directory grants. That was the open question for a long time, and on this TV it
+is now **settled: it is granted.**
 
-**How to settle it:** run it on a TV without root. That cannot be answered from
-here — this TV has no Developer Mode app installed and port 9922 is closed
-(checked).
+Measured on an OLED55C32LA (webOS 23), installed with `ares-install` through
+Developer Mode, no root anywhere:
+
+```
+[plane] foreign 'wl_webos_foreign' v1 -> 0x254e900
+[plane] window id '_Window_Id_13' (type 0)
+[video] ready (window id '_Window_Id_13')
+[video] load: {"returnValue":true,"mediaId":"_0iQtqrBVnMnWDK"}
+[video] ev {"resourceInfo": ... "VDEC" ... "ADEC" ...}
+[video] load->loadCompleted 382ms
+[plane] source 0,0 1920x1080 -> destination 0,0 1920x1080
+```
+
+`LSRegister` succeeds, `com.webos.media` answers, hardware decoders are
+allocated and `currentTime` advances. A Developer Mode install is enough.
+
+**If it is ever refused elsewhere**, the symptom is specific: the UI opens
+normally and the last video line is `[video] LSRegister recusado`, with nothing
+after it. That is distinct from the plane failing, which instead logs
+`[plane] NO window id ...` or refuses the load with
+`[video] no window id from the compositor`.
+
+**How to check on your own TV:** install and read `/tmp/nuvio.log`.
 
 ---
 
@@ -92,9 +116,10 @@ here — this TV has no Developer Mode app installed and port 9922 is closed
 
 ## What still bothers me
 
-- **175 MB**, nearly all prebaked artwork — and it is the packager's: whoever
-  installs it sees someone else's catalogue before signing in. Not a credential,
-  but it does not belong there.
+- **~24 MB** as the tree builds today, nearly all prebaked artwork — and it is
+  the packager's: whoever installs it sees someone else's catalogue before
+  signing in. Not a credential, but it does not belong there. (Older notes say
+  175 MB, from a larger `art/`.)
 - **50 h** sessions in Developer Mode. LG's limit, not the app's.
 - The package uses the id `space.nuvio.native.legacy` so it can coexist with the
   web app (`space.nuvio.webos`) on the same TV. See PORT-LEGACY.md.

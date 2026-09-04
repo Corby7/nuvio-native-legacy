@@ -1,4 +1,11 @@
-# Cross-compilation toolchain for the native app (webOS 4 / ARMv7).
+# Cross-compilation toolchain for the native app (ARMv7, arm-webos-linux-gnueabi).
+#
+# THE ARMv7 TARGET IS STILL CORRECT ON webOS 23, and it is worth writing down
+# because it looks wrong. The C3's kernel reports `aarch64` — but the USERLAND is
+# 32-bit: /usr/lib/libSDL2, libluna-service2 and libwayland-client are all
+# ELFCLASS32 / EM_ARM, and the binary this SDK produces (ELF32, EM_ARM) runs on
+# the device at 60 fps. Do not "fix" this to an aarch64 toolchain on the strength
+# of `uname -m`; check the libraries the binary actually has to link against.
 #
 # This recipe exists because the image was assembled by hand on 30/08 and then
 # lost: with no versioned Dockerfile there was no way to rebuild the environment,

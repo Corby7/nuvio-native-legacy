@@ -1,4 +1,4 @@
-// Real video playback on this TV (webOS 4.10), over LS2 directly.
+// Real video playback on this TV (OLED55C32LA, webOS 23), over LS2 directly.
 //
 // The module draws NOTHING. The video lives on a separate HARDWARE PLANE, behind
 // the app's GL surface; what the app does is open a transparent hole through
@@ -7,14 +7,31 @@
 // That is the model, not a defect — verifying playback is done through the
 // state, or through the access log of whoever serves the file.
 //
-// Why LS2 directly and not StarfishMediaAPIs, all measured on the device:
-// the StarfishMediaAPIs constructor calls exit(0) when the process does not match
-// the "exeName" of its LS2 role (it is not a crash: atexit fires and the journal
-// stays silent), and even with the right role it never gets as far as talking to
-// com.webos.media here — it answers error 202 "Media Not Found", which is a
-// string internal to the library itself. The sequence below, by contrast, came
-// out of an ls-monitor capture of the TV's browser playing the same file: it is
-// what demonstrably works.
+// Why LS2 directly and not StarfishMediaAPIs, measured on the C9 this port was
+// born on: the StarfishMediaAPIs constructor calls exit(0) when the process does
+// not match the "exeName" of its LS2 role (it is not a crash: atexit fires and
+// the journal stays silent), and even with the right role it never got as far as
+// talking to com.webos.media — it answered error 202 "Media Not Found", a string
+// internal to the library itself. The sequence below came out of an ls-monitor
+// capture of the TV's browser playing the same file. On the C3 the question is
+// moot: libStarfishMediaAPIs is not on the device at all.
+//
+// WHAT CHANGED WITH THE C3 (webOS 23), and it is the whole reason this file was
+// touched: until webOS 4 the video PLANE was driven with libAcbAPI. That was
+// never about the plane — the app registers on LS2 as
+// `com.webos.media.client.nuvio`, and that role is not permitted to send to
+// com.webos.service.tv.display, so libAcbAPI was used as a proxy that could.
+// libAcbAPI.so.1 DOES NOT EXIST on this TV (`find /` returns nothing), and
+// requiring it used to take the LS2 half down with it even though the LS2 half
+// works perfectly.
+//
+// The plane now comes from the compositor instead: the app exports its own
+// surface (plane.c, wl_webos_foreign), gets a window id back, and that id
+// travels in the com.webos.media `load` payload. No display service is
+// addressed, so the permission problem simply does not arise. NDL_DirectMedia
+// was considered and rejected — NDL_DirectMediaLoad takes codec parameters and
+// elementary-stream buffers, not a URL, so using it would mean writing a
+// demuxer.
 #ifndef NV_VIDEO_H
 #define NV_VIDEO_H
 
@@ -101,7 +118,8 @@ void video_normalize_url_subtitle(const char *url, char *dst, unsigned size);
 
 // --- SUBTITLE STYLE ----------------------------------------------------------
 //
-// PROVEN ON THE DEVICE (LG C9, webOS 4.10, 2026-09-02) with a film playing: the
+// PROVEN ON THE DEVICE (LG C9, webOS 4.10, 2026-09-02 — the superseded target;
+// NOT re-measured on the C3) with a film playing: the
 // five methods below really do change the subtitle on screen. The test was
 // visual and not by return value, because the uMS answers `returnValue:true` to
 // ANYTHING — it even accepted values I invented for `charEdgeType`. In this API

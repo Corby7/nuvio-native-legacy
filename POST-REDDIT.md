@@ -11,9 +11,17 @@ Written for you to review and post. I do not publish anything.
    rule about download links and self-promotion. Read the sidebar rules first —
    a post removed by rule does not come back.
 
-Also: **nothing here has been tested on a TV without root.** The text already
-says so. Do not remove that line — it is what stops someone installing it,
+Also: **video playback is not confirmed on the current target.** The root
+question is settled — the development TV is now a C3 on webOS 23 running
+Developer Mode only, so "needs root" is no longer true. What replaced it is a
+narrower and still-open question: whether the app's LS2 role is granted under a
+Developer Mode install, and whether the new exported-surface video plane
+produces a picture. Until someone has watched something play on a C3, the post
+must say so. Do not remove that line — it is what stops someone installing it,
 getting a black screen for video, and you becoming the person who promised.
+
+**This draft is stale in its numbers.** It still describes a 2019 C9 throughout.
+Rewrite it against the C3 before posting.
 
 ## Where the links go, and why not in the body
 
@@ -93,11 +101,13 @@ video, so the number is here rather than left for you to count.
 
 **Honest limits**
 
-- Only tested on a rooted C9. It *should* install through Developer Mode or the
-  Homebrew Channel with no root, but the app needs LS2 access to
-  `com.webos.media`, and I have not verified that a non-rooted install grants
-  it. If it doesn't, expect the UI to run and video to be a black screen. If
-  anyone tries it on a non-rooted TV I would genuinely like to know.
+- The interface is measured at 60 fps / 0 janks on a C3 (webOS 23) and, before
+  it, on a 2019 C9. Installing through Developer Mode is the path I use myself,
+  so no root is needed.
+- **Video playback is not confirmed on webOS 23.** The app needs LS2 access to
+  `com.webos.media`, and I have not verified that a Developer Mode install
+  grants it. If it doesn't, expect the UI to run and video to be a black screen.
+  If anyone tries it I would genuinely like to know.
 - The package is 172 MB, most of it prebaked artwork I still need to strip.
 - Developer Mode sessions expire every 50 hours. LG's limit, not mine.
 

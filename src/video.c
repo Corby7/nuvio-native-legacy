@@ -1,4 +1,5 @@
 #include "video.h"
+#include "plane.h"
 #include <SDL2/SDL.h>
 #include "mark.h"
 #include "mkv.h"
@@ -170,43 +171,30 @@ static void *(*loopNew)(void *, int);
 static void  (*loopRun)(void *);
 static void  (*loopStop)(void *);
 
-// libAcbAPI e SEMPRE por dlopen. Linkar cria um DT_NEEDED e, se a lib faltar
-// (ela sumiu no webOS 5), o processo morre antes do main e antes do log —
-// nao sobra nem uma linha para diagnosticar.
-static long (*acbCreate)(void);
-static int  (*acbStart)(long, int, const char *, void *);
-static int  (*acbSink)(long, int);
-static int  (*acbMedia)(long, const char *);
-static int  (*acbState)(long, int, int, long *);
-static int  (*acbWindow)(long, long, long, long, long, int, long *);
-// Janela CUSTOMIZADA: recorte de fonte + retangulo de destino. E o caminho com
-// permissao. Chamar luna://com.webos.service.tv.display/setCustomDisplayWindow
-// direto e RECUSADO pelo hub — "Not permitted to send to
-// com.webos.service.tv.display" —, porque o app se registra como
-// com.webos.media.client.nuvio e esse papel nao alcanca o servico de display.
-// A libAcbAPI alcanca: ela expoe AcbAPI_setCustomDisplayWindow e fala com o
-// tv.display por dentro, que e como o proprio navegador da TV faz.
-static int  (*acbWindowCustom)(long, long, long, long, long,
-                               long, long, long, long, int, long *);
-static void (*acbDestroy)(long);
-// O navegador da TV chama isto e nos nao chamavamos: sem o connect o plano de
-// video existe, decodifica e toca o audio, mas nao e ligado a saida — tela
-// preta com som, exatamente o sintoma observado.
-static int  (*acbConnect)(long, int, long *);
-// Recebe JSON como string (confirmado: a lib chama strlen no argumento antes de
-// montar um std::string). Sem esta chamada o servico do ACB nunca repassa nada
-// para com.webos.service.tv.display e o plano de video nao liga — o sintoma e
-// audio normal com tela preta.
-static int  (*acbVideoDate)(long, const char *, long *);
-static int  (*acbAudioDate)(long, const char *, long *);
-
+// O PLANO DE VIDEO NAO MORA MAIS AQUI. Ate o webOS 4 ele era conduzido pela
+// libAcbAPI, e o motivo nunca foi o plano: o app se registra no LS2 como
+// com.webos.media.client.nuvio, e esse papel NAO alcanca o
+// com.webos.service.tv.display ("Not permitted to send to ..."). A libAcbAPI
+// alcancava, e servia de procurador.
+//
+// Nesta TV (OLED55C32LA, webOS 23) a libAcbAPI.so.1 NAO EXISTE — `find /` nao
+// devolve nada — e o dlopen dela derrubava junto a metade LS2, que funciona
+// perfeitamente. O substituto nao e outro procurador: a superficie do app se
+// EXPORTA pelo compositor (plane.c), que devolve um windowId, e esse id vai no
+// load do com.webos.media. O servico de display nunca e endereçado, entao o
+// problema de permissao deixa de existir.
+//
+// O que sobrou neste arquivo e so o pipeline: LS2 -> com.webos.media.
 static LSHandle *bus;
 static void     *loop;
 static pthread_t thread;
-static long      acb;
-// Retangulo pedido pela UI. Guardado porque o ACB so aceita a janela depois do
-// loadCompleted, que chega muito depois de quem pediu.
+// Retangulo pedido pela UI. Guardado porque a janela so pode ser aplicada
+// depois que ha midia presa, que chega muito depois de quem pediu.
 static int       windowX, windowY, windowW = 1920, windowH = 1080;
+// Pedido de reaplicar o retangulo vindo de um callback do LS2. O Wayland
+// pertence ao fio de desenho e os callbacks do LS2 rodam no fio do GMainLoop,
+// entao o que atravessa os dois e ESTA marca, lida pelo video_pump.
+static volatile int windowDirty;
 // Ultimo par fonte/destino aplicado pelo setDisplayWindow do uMS, para nao
 // repetir a mesma chamada a cada quadro. fonX = -1 quer dizer "nada aplicado".
 static int       fontX = -1, fontY, fontW, fontH, dstX = -1, dstY, dstW, dstH;
@@ -293,42 +281,6 @@ static char      media[64];
 static double    posSeg, durationSeg;
 static int       playing, ready, on;
 
-// PLAYER_TYPE_MSE. O ACB usa isto para saber que a fonte e um pipeline de
-// midia e nao um sintonizador.
-// Os enums do ACB nao tem header publico e chutar sai caro: com playerType 10 e
-// sink 1 o aparelho registrou "playerType":"mse","vsmSinkType":"sub" — ou seja,
-// o video foi para o plano SECUNDARIO (PIP) e a tela ficou preta. Os numeros
-// ficam ajustaveis por /tmp/nuvio-acb justamente para conferir contra o que o
-// ls-monitor mostra que o ACB resolveu, em vez de adivinhar de novo.
-static int kindPlayer = 0, kindSink = 0, stLoaded = 1, stPlaying = 2;
-// hdrType do setMediaVideoData. O padrao e "none"; para testar Dolby Vision,
-// escreva na SEGUNDA linha de /tmp/nuvio-acb: "dolby_vision" ou "hdr10".
-// Afirmar DV sem o pipeline pedir e mentira — por isso NAO existe deteccao
-// automatica: o sourceInfo do uMS nao distingue HEVC main-10 HDR10 de DV.
-static char hdrKind[24] = "none";
-
-static void readSettingsAcb(void) {
-  FILE *f = fopen("/tmp/nuvio-acb", "r");
-  if (!f) return;
-  if (fscanf(f, "%d %d %d %d", &kindPlayer, &kindSink, &stLoaded, &stPlaying) > 0)
-    printf("[video] acb settings: player=%d sink=%d loaded=%d playing=%d\n",
-           kindPlayer, kindSink, stLoaded, stPlaying);
-  { // resto da primeira linha descartado; a SEGUNDA linha, se existir, e o hdrType.
-    char line[64];
-    if (fgets(line, sizeof line, f) && fgets(line, sizeof line, f)) {
-      char t[24] = "";
-      if (sscanf(line, "%23s", t) == 1 && t[0]) {
-        snprintf(hdrKind, sizeof hdrKind, "%s", t);
-        if (strstr(hdrKind, "dolby")) vidDV = 1;
-        printf("[video] acb settings: hdrType=%s\n", hdrKind);
-      }
-    }
-  }
-  fclose(f);
-}
-
-#define NV_ACB_FOREGROUND 1
-
 // Procura a chave e exige que o que vem depois seja NUMERO.
 //
 // O evento e {"currentTime":{"currentTime":8580,...}}: a primeira ocorrencia da
@@ -347,12 +299,6 @@ static double numberOf(const char *p, const char *key) {
   return -1.0;
 }
 
-static pthread_t threadBind;
-static volatile int bindAlive = 0;   // existe um bind em andamento?
-// Se o load novo termina durante o bind lento da sessao anterior, guarda o
-// trabalho. video_bombear inicia o bind assim que o fio anterior liberar.
-static volatile int bindPending;
-
 // Latencia do pipeline: pedido de load -> loadCompleted -> primeiro quadro.
 // Sao os numeros que dizem se o comeco e o buffer estao saudaveis; sem eles
 // "ta lento" e impressao.
@@ -366,139 +312,6 @@ static long msSinceRequest(void) {
 // Ate onde o buffer do pipeline ja cobre (segundos), do evento bufferRange.
 static double bufferSeg;
 
-static void wait_(int ms) { struct timespec t; t.tv_sec = ms / 1000;
-  t.tv_nsec = (long)(ms % 1000) * 1000000L; nanosleep(&t, NULL); }
-
-// O JSON de video do ACB, montado por partes porque os valores de HDR mudam
-// com o que se esta afirmando. VUI segue H.273/HEVC: 9=BT.2020, 16=PQ
-// (SMPTE 2084) — e o par que HDR10 e DV pedem; SDR fica em 2 (unspecified),
-// que e o que sempre foi mandado e toca.
-static void buildVideoDate(char *vd, size_t n, const char *ctx,
-                            const char *hKind, int first, int trans, int matrix) {
-  const char *scan = strstr(vidScan, "inter") ? "VIDEO_INTERLACED"
-                   : "VIDEO_PROGRESSIVE";
-  char color[768] = "";
-  if (!strcmp(hKind, "HDR10")) {
-    snprintf(color, sizeof color,
-      "\"mediaSei\":{\"displayPrimariesX0\":%ld,\"displayPrimariesX1\":%ld,"
-      "\"displayPrimariesX2\":%ld,\"displayPrimariesY0\":%ld,"
-      "\"displayPrimariesY1\":%ld,\"displayPrimariesY2\":%ld,"
-      "\"maxContentLightLevel\":%ld,\"maxDisplayMasteringLuminance\":%ld,"
-      "\"maxPicAverageLightLevel\":%ld,\"minDisplayMasteringLuminance\":%ld,"
-      "\"whitePointX\":%ld,\"whitePointY\":%ld},"
-      "\"mediaVui\":{\"colorPrimaries\":%d,\"matrixCoeffs\":%d,"
-      "\"transferCharacteristics\":%d,\"videoFullRangeFlag\":false},",
-      seiX0, seiX1, seiX2, seiY0, seiY1, seiY2, seiMaxCLL, seiMaxLuma,
-      seiMaxFALL, seiMinLuma, seiWhiteX, seiWhiteY,
-      first, matrix, trans);
-  } else if (!strcmp(hKind, "none")) {
-    snprintf(color, sizeof color,
-      "\"mediaSei\":{\"displayPrimariesX0\":0,\"displayPrimariesX1\":0,"
-      "\"displayPrimariesX2\":0,\"displayPrimariesY0\":0,"
-      "\"displayPrimariesY1\":0,\"displayPrimariesY2\":0,"
-      "\"maxContentLightLevel\":0,\"maxDisplayMasteringLuminance\":0,"
-      "\"maxPicAverageLightLevel\":0,\"minDisplayMasteringLuminance\":0,"
-      "\"whitePointX\":0,\"whitePointY\":0},"
-      "\"mediaVui\":{\"colorPrimaries\":2,\"matrixCoeffs\":2,"
-      "\"transferCharacteristics\":2,\"videoFullRangeFlag\":false},");
-  }
-  snprintf(vd, n,
-    //  - "context" com o mediaId TEM de vir no proprio JSON: o servico do
-    //    ACB repassa o payload como veio, nao insere o campo. Sem ele o
-    //    tv.display responde ERROR_06 "Invalid argument" com
-    //    "context": "" — e o erro nao diz qual argumento e.
-    "{\"content\":\"movie\",\"context\":\"%s\",\"video\":{"
-    "\"adaptive\":false,\"bitRate\":%ld,"
-    "\"data3D\":{\"currentPattern\":\"2d\",\"originalPattern\":\"2d\","
-            "\"typeLR\":\"LR\"},"
-    "\"frameRate\":%d.0,\"hdrType\":\"%s\","
-    "\"height\":%d,\"width\":%d,"
-    "%s"
-    "\"hfr\":false,"
-    "\"path\":\"network\","
-    "\"pixelAspectRatio\":{\"height\":1,\"width\":1},"
-    "\"rotation\":\"0\",\"scanType\":\"%s\",\"specificRendering\":\"none\""
-    "}}", ctx, vidBits, vidRate, hKind, vidH, vidW, color, scan);
-}
-
-static void *prenderPlane(void *u) {
-  (void)u;
-  // O bind e POR SESSAO: cada loadCompleted tem de religar o plano. Foi o bug
-  // da "segunda reproducao preta com som" — o ACB continuava apontando para o
-  // mediaId da sessao anterior, que o unload matou. A guarda de midia cobre a
-  // troca de titulo no MEIO do bind (unload+load em menos de ~1,5s de pausas):
-  // continuar descreveria ao tv.display um mediaId que ja morreu.
-  char my[64];
-  snprintf(my, sizeof my, "%s", media);
-  long task = 0;
-  acbMedia(acb, my);            wait_(200);
-  if (strcmp(media, my)) goto fora;
-  acbState(acb, NV_ACB_FOREGROUND, stLoaded, &task); wait_(200);
-  if (strcmp(media, my)) goto fora;
-  printf("[video] connect=%d\n", acbConnect(acb, kindSink, &task)); wait_(200);
-  if (strcmp(media, my)) goto fora;
-  {
-    // Strings e formato copiados de controles positivos na MESMA TV:
-    // Apple TV e Nuvio web usam "DolbyVision" sem SEI/VUI; HDR10 usa o SEI/VUI
-    // real do videoInfo. A grafia/capitalizacao e semanticamente relevante.
-    // Enquanto isso nao existia, "none" ia sempre: o C9 exibia o video
-    // mapeado em SDR e o modo HDR/DV da TV nunca ligava — exatamente o
-    // sintoma do teste 4K.
-    char hKind[24];
-    int first = 2, trans = 2, matrix = 2;
-    if (strcmp(hdrKind, "none")) { snprintf(hKind, sizeof hKind, "%s", hdrKind);
-                                  first = vuiFirst; trans = vuiTrans; matrix = vuiMatrix; }
-    else if (!strcasecmp(vidHdr, "DolbyVision") || vidDV) {
-                                  snprintf(hKind, sizeof hKind, "DolbyVision"); }
-    else if (!strcasecmp(vidHdr, "HDR10")) {
-                                  snprintf(hKind, sizeof hKind, "HDR10");
-                                  first = vuiFirst; trans = vuiTrans; matrix = vuiMatrix; }
-    else                           snprintf(hKind, sizeof hKind, "none");
-    char vd[2048];
-    buildVideoDate(vd, sizeof vd, my, hKind, first, trans, matrix);
-    { char ad[160];
-      snprintf(ad, sizeof ad,
-               "{\"context\":\"%s\",\"audio\":{\"immersive\":\"none\"}}", my);
-      int rvd = acbVideoDate(acb, vd, &task);
-      printf("[video] videoData=%d (hdrType=%s)\n", rvd, hKind);
-      if (!strcmp(hKind, "DolbyVision") && !strcasecmp(vidHdr, "HDR10")) {
-        // O ACB aceita DolbyVision e a TV acende o badge mesmo quando o
-        // demuxer do MKV so entregou a camada HDR10 — nesse caso o plano fica
-        // sem imagem. O retorno sincrono nao detecta isso. Depois de negociar
-        // DV, voltar para o formato REAL do decoder recupera imagem + HDR10.
-        wait_(700);
-        buildVideoDate(vd, sizeof vd, my, "HDR10", vuiFirst, vuiTrans, vuiMatrix);
-        printf("[video] MKV DV delivered as HDR10; real fallback: %d\n",
-               acbVideoDate(acb, vd, &task));
-      } else if (!strcmp(hKind, "DolbyVision") && !strcasecmp(vidHdr, "none")) {
-        // Profile DV que o demuxer desta TV nao reconheceu nem como camada
-        // HDR10. O badge liga, mas nao ha quadro DV; voltar a SDR garante
-        // imagem. MP4 reconhecido vem como DolbyVision e nao entra aqui.
-        wait_(700);
-        buildVideoDate(vd, sizeof vd, my, "none", 2, 2, 2);
-        printf("[video] DV not recognised by the decoder; SDR fallback: %d\n",
-               acbVideoDate(acb, vd, &task));
-      } else if (rvd != 1 && strcmp(hKind, "none")) {
-        buildVideoDate(vd, sizeof vd, my, "none", 2, 2, 2);
-        printf("[video] videoData refused hdrType=%s, retrying without HDR: %d\n",
-               hKind, acbVideoDate(acb, vd, &task));
-      }
-      printf("[video] audioData=%d\n", acbAudioDate(acb, ad, &task));
-      fflush(stdout);
-    }
-    wait_(300);
-    if (strcmp(media, my)) goto fora;
-  }
-  acbWindow(acb, windowX, windowY, windowW, windowH,
-          (windowX == 0 && windowY == 0 && windowW == 1920 && windowH == 1080), &task);
-  acbState(acb, NV_ACB_FOREGROUND, stPlaying, &task);
-  printf("[video] plane pinned at %d,%d %dx%d\n", windowX, windowY, windowW, windowH);
-  fflush(stdout);
-fora:
-  if (strcmp(media, my)) printf("[video] bind aborted: the media changed midway\n");
-  bindAlive = 0;
-  return NULL;
-}
 
 static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m);
@@ -626,8 +439,16 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   if (strstr(p, "videoInfo")) {
     sawVideo = 1;   // fecha o prazo do recuo de DV
     double v;
+    int wasW = vidW, wasH = vidH;
     v = numberOf(p, "\"width\":");      if (v > 0) vidW = (int)v;
     v = numberOf(p, "\"height\":");     if (v > 0) vidH = (int)v;
+    // O TAMANHO REAL DO QUADRO chegou. Ate aqui vidW/vidH valiam 1920x1080 por
+    // falta de coisa melhor, e a regiao de FONTE mandada ao compositor usava
+    // esse palpite: num arquivo 3840x1606 isso nao e "sem recorte", e um
+    // recorte do canto superior esquerdo, ampliado — uma imagem errada que
+    // parece defeito de zoom e nao falta de medida. Remarcar faz o video_pump
+    // reenviar o par com o tamanho certo, no fio de desenho.
+    if (vidW != wasW || vidH != wasH) windowDirty = 1;
     v = numberOf(p, "\"frameRate\":");  if (v > 0) vidRate = (int)v;
     v = numberOf(p, "\"bitRate\":");    if (v > 0) vidBits = (long)v;
     { const char *q = strstr(p, "\"scanType\":\"");
@@ -702,15 +523,15 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
       cronLoad = 1;
       printf("[video] load->loadCompleted %lums\n", msSinceRequest());
     }
-    // O bind do ACB vai para um fio proprio COM PAUSAS entre os passos.
-    // Motivo medido: cada chamada do AcbAPI e assincrona (o servico responde
-    // pelo barramento) e disparando tudo em sequencia o setMediaVideoData
-    // chegava antes do register terminar — o servico respondia
-    // "piplineID key Error!!", parava a sequencia e nunca mandava o stopMute.
-    // Sem o stopMute o video fica mudo: tela preta com audio normal.
-    // E POR SESSAO, nao uma vez por processo: sem isto a segunda reproducao
-    // herda um ACB apontando para o mediaId morto da anterior.
-    if (acb && media[0]) bindPending = 1;
+    // NAO HA MAIS BIND POR SESSAO. O plano ja esta preso a superficie exportada
+    // desde o arranque, e o pipeline foi mandado para ele pelo windowId que
+    // viajou no proprio load. O fio de bind com pausas entre os passos, que
+    // existia porque cada chamada do AcbAPI era assincrona, sumiu junto com o
+    // ACB — e com ele o bug da "segunda reproducao preta com som", que era o
+    // ACB apontando para o mediaId morto da sessao anterior.
+    //
+    // O retangulo, esse sim, e reaplicado: ver windowDirty abaixo.
+    windowDirty = 1;
   }
   if (strstr(p, "bufferRange")) {
     double e = numberOf(p, "\"endTime\":");
@@ -737,12 +558,12 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   }
   if (strstr(p, "playing")) {
     playing = 1;
-    if (acb && media[0]) {
-      long task = 0;
-      acbWindow(acb, windowX, windowY, windowW, windowH,
-                (windowX == 0 && windowY == 0 && windowW == 1920 && windowH == 1080), &task);
-      printf("[video] window reapplied with the stream already playing\n"); fflush(stdout);
-    }
+    // NAO aplicar o retangulo AQUI. Este callback roda no fio do GMainLoop do
+    // LS2, e o Wayland pertence ao fio de desenho: mandar um request do fio
+    // errado corrompe a fila do compositor, e o sintoma nao e um erro — e o
+    // cliente desconectado, ou seja, o app inteiro morre sem log.
+    // Marca, e o video_pump aplica no fio certo.
+    windowDirty = 1;
   }
   if (strstr(p, "paused")) {
     // So carimba quando NAO fomos nos que pausamos: pausa do dono e esperada,
@@ -825,23 +646,15 @@ static void callCtx(const char *method, const char *load, Filter cb,
     printf("[video] %s failed\n", method);
 }
 
-// Chamada a OUTRO servico. O recorte de fonte NAO mora no com.webos.media: ele
-// respondeu `Unknown method "setDisplayWindow" for category "/"`, e a lista do
-// `ls-monitor -i com.webos.media` confirma que nao existe ali. Quem tem os
-// metodos de janela e o com.webos.service.tv.display:
+// NAO EXISTE MAIS CHAMADA A OUTRO SERVICO. Havia aqui um `callIn` generico,
+// escrito para alcancar o com.webos.service.tv.display: o recorte de fonte nao
+// mora no com.webos.media (ele responde `Unknown method "setDisplayWindow" for
+// category "/"`, e o `ls-monitor -i com.webos.media` confirma). Aquele caminho
+// nunca chegou a ser usado, porque o hub recusa este app no tv.display, e foi
+// por isso que a libAcbAPI virou procuradora.
 //
-//   "setDisplayWindow":       {"provides":["tv.management","private","tv.settings","all","public"]}
-//   "setCustomDisplayWindow": idem
-//
-// setCustomDisplayWindow e o que aceita a fonte junto do destino, que e o
-// recorte de que o zoom precisa.
-static void callIn(const char *service, const char *method,
-                     const char *load, Filter cb) {
-  char uri[160]; unsigned long token = 0;
-  snprintf(uri, sizeof uri, "luna://%s/%s", service, method);
-  if (!lsCall(bus, uri, load, cb, NULL, &token, ERROR))
-    printf("[video] %s/%s failed\n", service, method);
-}
+// O recorte agora e uma propriedade da superficie exportada e quem o aplica e o
+// compositor (plane.c), entao nao ha segundo servico a chamar.
 
 static int onLoad(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m), *q;
@@ -883,30 +696,22 @@ static int onLoad(LSHandle *h, LSMessage *m, void *u) {
 
 static void *runLoop(void *u) { (void)u; loopRun(loop); return NULL; }
 
-// O ACB EXIGE um callback de verdade. Passar NULL nao e ignorado: no primeiro
-// evento ele salta para o endereco 0 e o app morre com SIGSEGV em pc=0x0, longe
-// do ponto onde o NULL foi escrito.
-static void acbNotified(long h, long task, long event,
-                         long stApp, long stPlays, int response) {
-  (void)h; (void)task;
-  printf("[video] acb event=%ld app=%ld play=%ld resp=%d\n",
-         event, stApp, stPlays, response);
-  fflush(stdout);
-}
-
 #define SIM(h, v, n) do { \
     *(void **)(&v) = dlsym(h, n); \
     if (!v) { printf("[video] missing %s\n", n); return 0; } \
   } while (0)
 
 int video_start(void) {
-  void *L, *G, *A;
+  void *L, *G;
   if (on) return 1;
   L = dlopen("libluna-service2.so.3", RTLD_NOW);
   if (!L) L = dlopen("libluna-service2.so", RTLD_NOW);
   G = dlopen("libglib-2.0.so.0", RTLD_NOW);
-  A = dlopen("libAcbAPI.so.1", RTLD_NOW);
-  if (!L || !G || !A) { printf("[video] libs: %s\n", dlerror()); return 0; }
+  // A libAcbAPI SAIU DAQUI. Ela era exigida junto com estas duas, e nesta TV
+  // nao existe: o dlopen falhava e levava consigo a metade LS2, que funciona.
+  // O plano de video agora vem do compositor (plane.c), e quem nao tem plano
+  // ainda tem pipeline — a falha passa a ser "sem imagem", nao "sem video".
+  if (!L || !G) { printf("[video] libs: %s\n", dlerror()); return 0; }
 
   SIM(L, lsRegister, "LSRegister");
   SIM(L, lsAttach,   "LSGmainAttach");
@@ -915,20 +720,6 @@ int video_start(void) {
   SIM(G, loopNew,   "g_main_loop_new");
   SIM(G, loopRun,  "g_main_loop_run");
   SIM(G, loopStop,  "g_main_loop_quit");
-  SIM(A, acbCreate,    "AcbAPI_create");
-  SIM(A, acbStart,  "AcbAPI_initialize");
-  SIM(A, acbSink,     "AcbAPI_setSinkType");
-  SIM(A, acbMedia,    "AcbAPI_setMediaId");
-  SIM(A, acbState,   "AcbAPI_setState");
-  SIM(A, acbWindow,   "AcbAPI_setDisplayWindow");
-  // NAO usa SIM: se a lib desta TV nao tiver o simbolo, o app segue sem zoom
-  // em vez de nao iniciar. O recorte e util, mas nao vale o app inteiro.
-  *(void **)(&acbWindowCustom) = dlsym(A, "AcbAPI_setCustomDisplayWindow");
-  if (!acbWindowCustom) printf("[video] no AcbAPI_setCustomDisplayWindow; zoom is unavailable\n");
-  SIM(A, acbDestroy, "AcbAPI_destroy");
-  SIM(A, acbConnect, "AcbAPI_connectDass");
-  SIM(A, acbVideoDate, "AcbAPI_setMediaVideoData");
-  SIM(A, acbAudioDate, "AcbAPI_setMediaAudioData");
 
   // O nome PRECISA casar com o padrao do papel LS2 do app
   // (allowedNames: "com.webos.media.client.*"). Qualquer outro nome e recusado
@@ -943,12 +734,11 @@ int video_start(void) {
   // variaveis simples, lidas pelo desenho sem trava.
   pthread_create(&thread, NULL, runLoop, NULL);
 
-  readSettingsAcb();
-  acb = acbCreate();
-    acbStart(acb, kindPlayer, "space.nuvio.native.legacy", (void *)acbNotified);
-  acbSink(acb, kindSink);
   on = 1;
-  printf("[video] ready (acb=%ld)\n", acb); fflush(stdout);
+  // O windowId vem do plane.c, que exportou a superficie no arranque. Se ele
+  // estiver vazio aqui, o load ainda assim SAI — e falha em silencio, que e o
+  // que esta linha existe para tornar visivel no log.
+  printf("[video] ready (window id '%s')\n", plane_window_id()); fflush(stdout);
   return 1;
 }
 
@@ -1038,6 +828,7 @@ static long nowMs(void) {
 }
 
 static int playInternal(const char *url, int comDV);
+static void pushWindow(void);
 
 int video_play(const char *url) {
   dvInset = 0;
@@ -1048,18 +839,13 @@ int video_play(const char *url) {
 // Chamado uma vez por quadro. So existe para o prazo acima: sem ele o recuo
 // dependeria de o usuario perceber que nao ha imagem e sair da tela.
 void video_pump(void) {
-  // O ACB demora cerca de 1,5 s para ligar uma sessao. Se o usuario sair e
-  // reabrir nesse intervalo, o loadCompleted novo encontra bindVivo=1. Antes
-  // ele simplesmente desistia para sempre; agora o pedido fica pendente.
-  if (bindPending && !bindAlive && acb && media[0]) {
-    bindPending = 0;
-    bindAlive = 1;
-    if (pthread_create(&threadBind, NULL, prenderPlane, NULL) == 0)
-      pthread_detach(threadBind);
-    else {
-      bindAlive = 0;
-      bindPending = 1;
-    }
+  // Reaplica o retangulo pedido de dentro de um callback do LS2. Aqui estamos
+  // no fio de desenho, que e o dono da conexao Wayland — o unico lugar de onde
+  // um request pode sair. plane_forget zera a memoria de "ja e esse retangulo",
+  // porque o pedido veio justamente de quem suspeita que o plano o perdeu.
+  if (windowDirty) {
+    windowDirty = 0;
+    if (media[0]) { plane_forget(); pushWindow(); }
   }
   // SONDA DE MKV so com folga de buffer. 20 s a frente e o sinal de que a
   // fonte esta entregando mais rapido do que o decoder consome, e portanto de
@@ -1119,13 +905,11 @@ static int playInternal(const char *url, int comDV) {
   seiX0 = seiX1 = seiX2 = seiY0 = seiY1 = seiY2 = 0;
   seiWhiteX = seiWhiteY = seiMinLuma = seiMaxLuma = seiMaxCLL = seiMaxFALL = 0;
   vuiFirst = vuiTrans = vuiMatrix = 2;
-  // A afirmacao de DV da fonte escolhida sobrevive ao reset: e ela que o bind
-  // descreve ao tv.display. Sem ela, toda sessao nasceria "none".
+  // A afirmacao de DV da fonte escolhida sobrevive ao reset: e ela que decide o
+  // DolbyHdrInfo do load abaixo. Sem ela, toda sessao nasceria "none".
   vidDV = dvRequest;
   cronRequested = 1; cronLoad = 0; cronFrame = 0;
   clock_gettime(CLOCK_MONOTONIC, &t0Request);
-  // windowId "window_id_dummy" NAO e enfeite: com string vazia o load responde
-  // returnValue:true, aloca mediaId e nunca busca o arquivo. Falha muda.
   // DolbyHdrInfo: e assim que o Kodi anuncia Dolby Vision a este mesmo pipeline
   // (xbmc/cores/VideoPlayer/MediaPipelineWebOS.cpp):
   //   contents["DolbyHdrInfo"]["encryptionType"] = "clear"
@@ -1192,14 +976,25 @@ static int playInternal(const char *url, int comDV) {
       dvInLoad = 1;
     }
   }
+  // O windowId REAL, o que o compositor devolveu para a superficie exportada.
+  // E ele que manda o pipeline desenhar no plano deste app. Se estiver vazio, o
+  // load responde returnValue:true, aloca um mediaId e nunca busca o arquivo —
+  // exatamente a falha muda que o "window_id_dummy" contornava no webOS 4.
+  // Por isso a recusa e AQUI, com nome, e nao la adiante sem imagem.
+  if (!plane_ready()) {
+    printf("[video] no window id from the compositor; refusing to load "
+           "(it would report success and fetch nothing)\n");
+    fflush(stdout);
+    return 0;
+  }
   snprintf(load, sizeof load,
       "{\"payload\":{\"option\":{\"useSeekableRanges\":true,"
       "\"appId\":\"space.nuvio.native.legacy\","
       "%s"
       "\"bufferControl\":{\"userBufferCtrl\":false},"
-      "\"windowId\":\"window_id_dummy\"}},"
-      "\"uri\":\"%s\",\"type\":\"media\"}", dolby, url);
-  printf("[video] URL: %s\n", url); fflush(stdout);
+      "\"windowId\":\"%s\"}},"
+      "\"uri\":\"%s\",\"type\":\"media\"}", dolby, plane_window_id(), url);
+  printf("[video] URL: %s (window '%s')\n", url, plane_window_id()); fflush(stdout);
   msOfLoad = nowMs();
   callCtx("load", load, onLoad, (void *)(uintptr_t)mySession);
   return 1;
@@ -1211,7 +1006,7 @@ void video_stop(void) {
   // era o caso abrir -> sair -> abrir que travava: nao havia mediaId para
   // descarregar, mas o callback antigo continuava vivo e contaminava o novo.
   session++;
-  bindPending = 0;
+  windowDirty = 0;
   recovering = 0; resumeIn = posOnLoad = 0.0;
   audioOnLoad = subOnLoad = -1;
   subUrlOnLoad[0] = 0;
@@ -1269,17 +1064,31 @@ static void seekNow(double seconds) {
 // mesmo resultado do transform do web: a barra preta embutida no quadro sai da
 // area visivel em vez de ser (impossivelmente) recortada por object-fit.
 //
-// O retangulo NAO pode passar da tela. MEDIDO: mandar ao ACB um retangulo com
-// origem negativa ou maior que o painel (que era como eu tentava ampliar) NAO
-// recorta nada — o plano simplesmente APAGA, e a tela fica preta em todo modo
-// com escala, com imagem so no ORIGINAL, o unico onde a escala e 1. O
-// acbJanela recebe UM retangulo, o de DESTINO, e nao existe recorte de fonte
-// ali; um plano de hardware nao descarta o excedente como o compositor do
-// navegador faz com transform: scale(). Quem amplia e o video_janela_fonte
-// abaixo, recortando a FONTE.
+// O retangulo NAO pode passar da tela. MEDIDO no webOS 4 e mantido aqui porque
+// a razao nao era do ACB: mandar ao plano um retangulo com origem negativa ou
+// maior que o painel (que era como eu tentava ampliar) NAO recorta nada — o
+// plano simplesmente APAGA, e a tela fica preta em todo modo com escala, com
+// imagem so no ORIGINAL, o unico onde a escala e 1. Um plano de hardware nao
+// descarta o excedente como o compositor do navegador faz com
+// transform: scale(). Quem amplia e o video_window_source abaixo, recortando a
+// FONTE.
+//
+// Manda ao compositor o par fonte/destino corrente. A fonte so e conhecida
+// depois do videoInfo; ate la vidW/vidH valem 1920x1080, que e o palpite certo
+// para quase tudo. E preciso mandar SEMPRE os dois retangulos: nenhum dos dois
+// argumentos do set_exported_window aceita nulo, e mandar nulo nao devolve erro
+// — o compositor desconecta o cliente, ou seja, o app morre inteiro.
+static void pushWindow(void) {
+  int sx = fontX, sy = fontY, sw = fontW, sh = fontH;
+  if (fontX < 0) {
+    sx = 0; sy = 0;
+    sw = vidW > 1 ? vidW : 1920;
+    sh = vidH > 1 ? vidH : 1080;
+  }
+  plane_window(sx, sy, sw, sh, windowX, windowY, windowW, windowH);
+}
+
 void video_window(int x, int y, int w, int h) {
-  long task = 0;
-  int full = (x == 0 && y == 0 && w == 1920 && h == 1080);
   if (w < 1 || h < 1) return;
   if (x < 0) { w += x; x = 0; }
   if (y < 0) { h += y; y = 0; }
@@ -1288,94 +1097,41 @@ void video_window(int x, int y, int w, int h) {
   if (w < 1 || h < 1) return;
   if (x == windowX && y == windowY && w == windowW && h == windowH) return;  // sem repetir o mesmo rect a cada quadro
   windowX = x; windowY = y; windowW = w; windowH = h;
-  if (!on || !acb || !media[0]) return;   // sem midia presa, aplicar seria no vazio
-  printf("[video] window %d,%d %dx%d full=%d\n", x, y, w, h, full);
-  fflush(stdout);
-  acbWindow(acb, x, y, w, h, full, &task);
-}
-
-// A resposta do uMS ao setDisplayWindow, LOGADA — e AGIDA.
-//
-// A assinatura source/destination ainda nao foi confirmada nesta TV (o
-// ls-monitor ficou para depois, a TV estava ocupada). Se ela estiver errada, o
-// pedido e recusado e o plano fica com o retangulo de antes — ou seja, o
-// sintoma seria de novo "tela preta no zoom", que e exatamente o erro que esta
-// rodada corrigiu. Entao a recusa nao pode passar calada: ao primeiro
-// returnValue:false o modulo DESISTE do caminho do uMS e volta ao acbJanela em
-// tela cheia. Perde-se o zoom, que e um recurso; nao se perde a imagem, que e o
-// filme. Errar para o lado de continuar mostrando video e a unica escolha
-// defensavel enquanto isto nao foi medido.
-static int withoutUms;   // 1 depois que o uMS recusou o setDisplayWindow
-
-static int onWindow(LSHandle *h, LSMessage *m, void *u) {
-  const char *p = lsPayload(m);
-  (void)h; (void)u;
-  printf("[video] setDisplayWindow -> %s\n", p ? p : "(null)");
-  fflush(stdout);
-  if (p && strstr(p, "\"returnValue\":false")) {
-    long task = 0;
-    withoutUms = 1;
-    printf("[video] uMS refused the source crop; falling back to full screen via ACB\n");
-    fflush(stdout);
-    windowX = windowY = 0; windowW = 1920; windowH = 1080;
-    if (acb) acbWindow(acb, 0, 0, 1920, 1080, 1, &task);
-  }
-  return 1;
+  fontX = -1;   // pediram um destino sem recorte: a fonte volta a ser inteira
+  if (!on || !media[0]) return;   // sem midia presa, aplicar seria no vazio
+  pushWindow();
 }
 
 // ZOOM DE VERDADE: recorta a FONTE e mantem o destino dentro da tela.
 //
-// O uMS aceita os dois retangulos na mesma chamada — `source` em coordenadas do
-// QUADRO DECODIFICADO e `destination` em coordenadas de tela. Ampliar entao nao
-// e inflar o destino (que apaga o plano), e sim pedir um pedaco MENOR da fonte
-// para o mesmo destino: e assim que a barra preta embutida no quadro sai da
-// area visivel. E a mesma imagem que o web produz com transform: scale(), so
-// que calculada do lado certo do escalonador.
+// O compositor aceita os dois retangulos na mesma chamada — `source_region` em
+// coordenadas do QUADRO DECODIFICADO e `destination_region` em coordenadas de
+// tela. Ampliar entao nao e inflar o destino (que apaga o plano), e sim pedir
+// um pedaco MENOR da fonte para o mesmo destino: e assim que a barra preta
+// embutida no quadro sai da area visivel. E a mesma imagem que o web produz com
+// transform: scale(), so que calculada do lado certo do escalonador.
 //
-// Mantem o acbJanela para o caso de tela cheia sem recorte, que ja funcionava.
+// O caminho do webOS 4 precisava do AcbAPI_setCustomDisplayWindow porque o papel
+// LS2 deste app nao alcanca o com.webos.service.tv.display. Aqui nao ha servico
+// nenhum no meio: o recorte e uma propriedade da superficie exportada, e quem a
+// aplica e o compositor. Nao existe mais recusa a tratar, e por isso o antigo
+// `withoutUms` — a desistencia permanente apos um returnValue:false — sumiu.
 void video_window_source(int sx, int sy, int sw, int sh,
                         int dx, int dy, int dw, int dh) {
-  char b[420];
-  int full;
   if (sw < 2 || sh < 2 || dw < 1 || dh < 1) return;
-  // O uMS ja recusou uma vez nesta sessao: nao insistir. Cada tentativa nova
-  // seria outra chance de deixar o plano num estado sem imagem.
-  if (withoutUms) { video_window(dx, dy, dw, dh); return; }
-  // Destino preso a tela: o mesmo limite que vale para o acbJanela.
+  // Destino preso a tela: o mesmo limite de sempre.
   if (dx < 0) { dw += dx; dx = 0; }
   if (dy < 0) { dh += dy; dy = 0; }
   if (dx + dw > 1920) dw = 1920 - dx;
   if (dy + dh > 1080) dh = 1080 - dy;
   if (dw < 1 || dh < 1) return;
-  full = (dx == 0 && dy == 0 && dw == 1920 && dh == 1080);
   if (sx == fontX && sy == fontY && sw == fontW && sh == fontH &&
       dx == dstX && dy == dstY && dw == dstW && dh == dstH) return;
   fontX = sx; fontY = sy; fontW = sw; fontH = sh;
   dstX = dx; dstY = dy; dstW = dw; dstH = dh;
-  windowX = dx; windowY = dy; windowW = dw; windowH = dh;   // o reaplicar do bind usa estes
+  windowX = dx; windowY = dy; windowW = dw; windowH = dh;   // o reaplicar usa estes
   if (!on || !media[0]) return;
-  // Formato do com.webos.service.tv.display: `sourceInput` e o recorte no
-  // quadro decodificado, `displayOutput` o retangulo na tela, `sink` MAIN
-  // porque o video vai para o plano principal (o secundario e o PIP).
-  snprintf(b, sizeof b,
-           "{\"sink\":\"MAIN\",\"fullScreen\":%s,"
-           "\"sourceInput\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d},"
-           "\"displayOutput\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}}",
-           full ? "true" : "false", sx, sy, sw, sh, dx, dy, dw, dh);
-  printf("[video] source %d,%d %dx%d -> destination %d,%d %dx%d\n",
-         sx, sy, sw, sh, dx, dy, dw, dh);
-  fflush(stdout);
-  // O caminho e o ACB, nao o luna direto: o hub recusa o app no tv.display.
-  if (acbWindowCustom && acb) {
-    long task = 0;
-    int r = acbWindowCustom(acb, sx, sy, sw, sh, dx, dy, dw, dh, full, &task);
-    printf("[video] acb custom window -> %d\n", r); fflush(stdout);
-    if (r) return;
-    printf("[video] acb refused the crop; falling back to full screen\n"); fflush(stdout);
-  }
-  withoutUms = 1;
-  video_window(dx, dy, dw, dh);
-  (void)b; (void)onWindow;
+  pushWindow();
 }
 
 double video_pos(void)      { return posSeg; }
@@ -1534,7 +1290,6 @@ void video_subtitle_external(const char *url) {
 void video_shutdown(void) {
   if (!on) return;
   video_stop();
-  if (acb) { acbDestroy(acb); acb = 0; }
   if (loop) loopStop(loop);
   on = 0;
 }

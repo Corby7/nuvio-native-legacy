@@ -8,12 +8,44 @@ this TV. Every one of them came out of a concrete obstacle, not a preference.
 ## 0. Build and run
 
 ```bash
+ssh-add ~/.ssh/lgc3_webos  # ONCE per session — see below
 bash tools/mac.sh          # build and run on the Mac, ALREADY SIGNED IN
-bash tools/arm.sh          # build for ARM, install on the TV and launch
-bash tools/arm.sh --build  # build only
-bash tools/arm.sh --ipk    # also produce the .ipk, with no credential inside
+bash tools/arm.sh          # build, install via Developer Mode, launch, verify
+bash tools/arm.sh --build  # build only, no package and no TV
+bash tools/arm.sh --ipk    # same as the default, but keeps the .ipk
 bash tools/test-ipk.sh     # prove the .ipk carries no credential (no docker)
 bash tests/account.sh      # account tests: sign-out, settings and QR
+```
+
+### The TV is reached by ares device name, not by IP
+
+The target is an **OLED55C32LA (C3), webOS 23**, registered with
+`ares-setup-device` as `lgc3` → `prisoner@192.168.1.100:9922`. `arm.sh` reads
+the host, port, user and key out of `~/.webos/tv/novacom-devices.json` under
+that name, so the deploy and the verification can never end up pointing at
+different machines. Override with `NUVIO_TV_DEVICE`.
+
+The old default, `192.168.1.32` as root with the password `alpine`, is dead
+twice over: the TV does not hold that lease any more, and this one has no root
+at all — port 22 is closed and only Developer Mode ssh on 9922 answers.
+
+**The devmode key has a passphrase**, so load it into the agent once per session:
+
+```bash
+ssh-add ~/.ssh/lgc3_webos      # passphrase is in the ares device config
+```
+
+`arm.sh` uses `BatchMode=yes` deliberately: without it, a missing key turns into
+an interactive passphrase prompt in the middle of a deploy, and a prompt there
+is a hang. With it, you get a clear failure telling you to run the line above.
+
+Two more flags are needed for any manual ssh to this TV — it runs OpenSSH 6.1
+and offers only `ssh-rsa`, which current clients refuse by default with
+"no matching host key type found":
+
+```bash
+ssh -p 9922 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa \
+    prisoner@192.168.1.100
 ```
 
 ### Server configuration arrives by `-D`, not by file
@@ -79,15 +111,28 @@ the test catches it and returns 1.
 `luna://com.webos.applicationManager/launch` **does not restart** an app that is
 already running: it only brings it to the front. Two consecutive deploys were
 read from the log of an old process, and nearly led to the conclusion that the
-fix had not worked. The title carries the first 8 digits of the binary's md5
-precisely so the launcher can say which build is there. To really swap it:
+fix had not worked. `arm.sh` closes the app before launching for that reason:
 
 ```bash
-PID=$(sshpass -p alpine ssh root@192.168.1.32 \
-      "ps aux | grep -a 'native.legacy/nuvio-proto' | grep -v grep | awk '{print \$2}' | head -1")
-sshpass -p alpine ssh root@192.168.1.32 "kill $PID"
-# and only then launch
+ares-launch -d lgc3 --close space.nuvio.native.legacy
+ares-launch -d lgc3 space.nuvio.native.legacy
 ```
+
+The title still carries the first 8 digits of the binary's md5 so the launcher
+tile says which build is there. But the title only proves what is **on disk**,
+and so does an md5 — neither proves what is **running**. That is why the binary
+now carries a `-DNV_BUILD` stamp and prints it as its first log line:
+
+```bash
+ssh ... prisoner@192.168.1.100 "grep -m1 '^\[main\] build' /tmp/nuvio.log"
+```
+
+`arm.sh` checks that automatically and fails the deploy if it does not match the
+build it just made. This matters more than it used to: the install now goes
+through `appInstallService`, the same service that answers `"returnValue": true`
+and `statusValue: 264` while leaving the old binary in place — three deploys
+were lost to it, one of them running a stale build for 2h30 while the log said
+success.
 
 And do not relaunch in a loop: **every start consumes backend quota**, and when
 it runs out the login fails, the TV falls back to an anonymous session and syncs
@@ -101,10 +146,20 @@ When SAM launches the app, `/proc/<pid>/fd/1` and `fd/2` point at `/dev/null`.
 **Every `printf` was discarded** — FPS, shader errors, everything. That is why
 `main.c` calls `freopen("/tmp/nuvio.log", ...)` right at the start.
 
+The old recipe here piped commands into the debug telnet console on port 23.
+That was a rooted-TV feature and it is gone; read the log over the Developer
+Mode ssh instead:
+
 ```bash
-(sleep 3; printf 'grep -a FPS /tmp/nuvio.log | tail -5\n'; sleep 3; printf 'exit\n') \
-  | nc -w25 192.168.1.32 23 | tr -d '\0'
+SSH="ssh -p 9922 -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa \
+     prisoner@192.168.1.100"
+$SSH "grep -a FPS /tmp/nuvio.log | tail -5"
+$SSH "grep -aE '^\[(video|plane|main)\]' /tmp/nuvio.log"   # the playback story
 ```
+
+The second line is the one to read when video does not appear. `[plane]` covers
+the exported surface and the window id, `[video]` the LS2 pipeline, and the
+order in which they stop tells you which half failed.
 
 ## 2. Screen capture
 
