@@ -14,6 +14,31 @@ Além disso: **nada aqui foi testado em TV sem root.** O texto já diz isso. Nã
 tire essa frase — é ela que evita que alguém instale, o vídeo dê tela preta, e
 você vire o cara que prometeu.
 
+## Onde os links entram, e por que não no corpo
+
+Um post anterior no r/Nuvio caiu por **"Reddit's filters"** — antispam do SITE,
+não moderador (a mensagem é diferente de "removed by moderators"). Causa
+provável: idade/karma da conta, ou links demais no corpo.
+
+Por isso: **corpo sem link nenhum.** Estes vão no PRIMEIRO COMENTÁRIO:
+
+- Código: https://github.com/iqui27/nuvio-native-legacy
+- Download (.ipk, 175 MB): https://github.com/iqui27/nuvio-native-legacy/releases/tag/v1.0.1
+
+Se cair mesmo assim, **modmail** pedindo aprovação — o post fica na fila de
+filtrados, não some.
+
+## O vídeo
+
+`~/Desktop/nuvio-demo-1080p60.mp4` — 2 min, 1920x1080, **7194 quadros em
+119,98 s = 59,96 fps medidos**. Sobe como vídeo nativo do Reddit; eles
+re-codificam, então não conte com os 60fps sobreviverem ao player deles — é por
+isso que o número está escrito no corpo do post.
+
+E ele mostra **só a interface**: o build do Mac não tem pipeline de vídeo, e na
+TV nenhuma captura por software fotografa o vídeo (plano de hardware). Se
+alguém pedir prova de reprodução, só com captura HDMI.
+
 ---
 
 ## Título (escolha um)
@@ -32,6 +57,10 @@ build to a native C app on SDL2 + GLES2. It runs on a 2019 LG C9 (webOS 4.10).
 **Where it landed:** 60.0 fps, 0 janks on the home screen, worst frame 18-19 ms.
 Video plays through the TV's own pipeline (LS2 → `com.webos.media` + libAcbAPI),
 not through a browser.
+
+The clip is a screen recording of the same code running on macOS, so it shows
+the UI only — 7194 frames in 119.98 s, 59.96 fps measured. Reddit re-encodes
+video, so the number is here rather than left for you to count.
 
 **What it does now**
 
