@@ -12,10 +12,10 @@
 #ifndef NV_ADDONS_H
 #define NV_ADDONS_H
 
-typedef enum { ADD_PARADO = 0, ADD_BUSCANDO, ADD_PRONTO, ADD_VAZIO } AddEstado;
+typedef enum { ADD_STOPPED = 0, ADD_SEARCHING, ADD_READY, ADD_EMPTY } AddState;
 
 // Le art/addons.txt (nome<TAB>url por linha). Sem ele a lista fica vazia.
-int  addons_carregar(const char *dirArte);
+int  addons_load(const char *dirArt);
 
 // Lista vinda da CONTA, substituindo o arquivo. E isto que torna o pacote
 // distribuivel: enquanto a lista sair de art/addons.txt, o .ipk carrega as
@@ -25,44 +25,44 @@ int  addons_carregar(const char *dirArte);
 // perfil errado, 401 mal tratado ou queda — e nenhum desses e "o usuario
 // removeu todos os addons". Trocar por vazio deixaria a pessoa sem fonte
 // nenhuma e sem entender por que.
-typedef struct { char nome[64]; char url[600]; int ativo; } AddonRemoto;
-int  addons_definir_lista(const AddonRemoto *lista, int n);
+typedef struct { char name[64]; char url[600]; int active; } AddonRemote;
+int  addons_set_list(const AddonRemote *list, int n);
 
 // Lista atual, para o sync poder empurrar de volta o que este aparelho tem.
-int  addons_exportar(AddonRemoto *saida, int max);
+int  addons_export(AddonRemote *output, int max);
 
 // Esquece a lista da conta. Chamado ao SAIR: sem isto, a proxima pessoa a usar
 // esta TV navega com os addons da anterior — e como as chaves de debrid vao
 // embutidas nas URLs, ela tambem consome a assinatura da anterior — ate o
 // primeiro sync terminar. Ficar sem fonte por alguns segundos e o
 // comportamento correto de "ninguem logado".
-void addons_esquecer(void);
+void addons_forget(void);
 int  addons_n(void);
 const char *addons_base(int i);   // URL base, sem /manifest.json
-int  addons_tem_catalogo(int i);  // 1 quando o addon fornece catalogo
+int  addons_tem_catalog(int i);  // 1 quando o addon fornece catalogo
 
 // Dispara a busca das fontes de `imdb` ("tt1234567", ou "tt1234567:1:2" para
 // episodio). Volta na hora; o resultado chega por stream_definir_lista.
-void addons_buscar(const char *imdb, const char *tipo);
+void addons_fetch(const char *imdb, const char *kind);
 
 // --- legendas externas (OpenSubtitles) ---------------------------------------
 // Addon de legenda responde em /subtitles/<tipo>/<id>.json com
 // {"subtitles":[{lang,url,subtitleFileName,...}]}. Sao dezenas por titulo, a
 // maioria em idiomas que nao interessam — por isso a lista e FILTRADA por
 // idioma antes de chegar na tela: 70 linhas para rolar seria pior que nenhuma.
-#define LEG_MAX 12
+#define SUB_MAX 12
 
 typedef struct {
-  char rotulo[64];   // "Portugues (BR)  ·  Silo.S01E05.WEB"
-  char idioma[8];
+  char label[64];   // "Portugues (BR)  ·  Silo.S01E05.WEB"
+  char language[8];
   char url[600];
-} Legenda;
+} Subtitle;
 
-void addons_buscar_legendas(const char *imdb, const char *tipo);
-int  addons_n_legendas(void);
-const Legenda *addons_legenda(int i);
+void addons_fetch_subtitles(const char *imdb, const char *kind);
+int  addons_n_subtitles(void);
+const Subtitle *addons_subtitle(int i);
 
-AddEstado addons_estado(void);
-void addons_encerrar(void);
+AddState addons_state(void);
+void addons_shutdown(void);
 
 #endif

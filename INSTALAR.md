@@ -7,7 +7,7 @@ bash tools/arm.sh --ipk
 ```
 
 `space.nuvio.native.legacy_1.0.1_arm.ipk`, **172 MB**, sem credencial nenhuma
-dentro — `tools/testa-ipk.sh` prova isso, e o proprio `arm.sh` aborta e apaga o
+dentro — `tools/test-ipk.sh` prova isso, e o proprio `arm.sh` aborta e apaga o
 pacote se alguma voltar.
 
 ---

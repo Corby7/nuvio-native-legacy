@@ -1,9 +1,9 @@
 #ifndef NV_INTRO_H
 #define NV_INTRO_H
-typedef struct { double inicio,fim; int tipo; } IntroTrecho;
-enum { INTRO_ABERTURA=1, INTRO_RESUMO=2, INTRO_CREDITOS=3 };
-void intro_pedir(const char *imdb,int temporada,int episodio);
-void intro_desligar(void);
-int  intro_ativo(double posSeg,double *fim,int *tipo);
-int  intro_extrair(const char *json,IntroTrecho *saida,int max);
+typedef struct { double start,end; int kind; } IntroChunk;
+enum { INTRO_OPENING=1, INTRO_SUMMARY=2, INTRO_CREDITS=3 };
+void intro_request(const char *imdb,int season,int episode);
+void intro_off(void);
+int  intro_active(double posSeg,double *end,int *kind);
+int  intro_parse(const char *json,IntroChunk *output,int max);
 #endif

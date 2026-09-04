@@ -22,32 +22,32 @@
 #define NV_TRAKTAUTH_H
 
 typedef enum {
-  TRA_PARADO = 0,
-  TRA_PEDINDO,     // buscando o codigo
-  TRA_AGUARDANDO,  // codigo na tela, esperando a pessoa autorizar
-  TRA_LIGADO,      // token obtido
-  TRA_ERRO
-} TraEstado;
+  TRA_STOPPED = 0,
+  TRA_REQUESTING,     // buscando o codigo
+  TRA_WAITING,  // codigo na tela, esperando a pessoa autorizar
+  TRA_ON,      // token obtido
+  TRA_ERROR
+} TraState;
 
 // Comeca o fluxo num fio proprio. Idempotente enquanto um estiver em andamento.
-void traktauth_comecar(void);
+void traktauth_begin(void);
 
 // Um passo. Chamar uma vez por quadro; nao bloqueia. E aqui que o poll e
 // reagendado — o intervalo vem do proprio Trakt, e sobe quando ele manda 429.
-void traktauth_passo(unsigned agoraMs);
+void traktauth_step(unsigned nowMs);
 
-TraEstado   traktauth_estado(void);
-const char *traktauth_codigo(void);    // user_code, para exibir
+TraState   traktauth_state(void);
+const char *traktauth_code(void);    // user_code, para exibir
 const char *traktauth_url(void);       // verification_url
-const char *traktauth_erro(void);
+const char *traktauth_error(void);
 
-void traktauth_cancelar(void);
+void traktauth_cancel(void);
 
 // Carrega o token guardado nesta instalacao e o aplica em trakt.c. Chamar no
 // arranque, depois de dados_iniciar. 1 quando havia token.
-int  traktauth_carregar(void);
+int  traktauth_load(void);
 
 // Esquece o vinculo (chamado ao sair da conta).
-void traktauth_esquecer(void);
+void traktauth_forget(void);
 
 #endif

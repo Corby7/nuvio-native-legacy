@@ -1,7 +1,7 @@
 #include "traktauth.h"
-#include "nuvem.h"
-#include "dados.h"
-#include "rede.h"
+#include "cloud.h"
+#include "data.h"
+#include "net.h"
 #include "trakt.h"
 #include "sync.h"
 #include "js.h"
@@ -12,38 +12,38 @@
 #include <pthread.h>
 #include <time.h>
 
-#define TRA_ARQ  "trakt.txt"
-#define TRA_FLUXO "trakt-fluxo.txt"
+#define TRA_FILE  "trakt.txt"
+#define TRA_STREAM "trakt-flow.txt"
 #define TRA_BASE "https://api.trakt.tv"
 // Quando o Trakt nao manda `interval`, 5s e o que a documentacao dele sugere.
-#define TRA_POLL_PADRAO 5000u
+#define TRA_POLL_DFLT 5000u
 
-static TraEstado estado = TRA_PARADO;
+static TraState state = TRA_STOPPED;
 static char deviceCode[128];
 static char userCode[32];
 static char url[160];
-static char erro[200];
+static char error[200];
 static char token[300], refresh[300];
-static unsigned pollMs = TRA_POLL_PADRAO;
-static unsigned proximoPoll, comecouMs, limiteMs;
+static unsigned pollMs = TRA_POLL_DFLT;
+static unsigned nextPoll, beganMs, limitMs;
 // Prazo em RELOGIO DE PAREDE, nao em ticks: o pedido tem de sobreviver a um
 // reinicio do app, e SDL_GetTicks zera junto com o processo.
-static long expiraEm;
+static long expiresIn;
 
-static pthread_t fio;
-static int fioVivo, fioPronto;
+static pthread_t thread;
+static int threadAlive, threadReady;
 // 1 quando o fio acabou de conseguir o token e o laco principal ainda nao o
 // aplicou. Aplicar dentro do fio mexeria em trakt.c enquanto a UI le dele.
-static int tokenNovo;
+static int tokenNew;
 
-static char *postar(const char *caminho, const char *corpo, int *status) {
-  char completo[300];
-  const char *cab[2];
-  snprintf(completo, sizeof completo, "%s%s", TRA_BASE, caminho);
+static char *post(const char *path, const char *body, int *status) {
+  char complete[300];
+  const char *header[2];
+  snprintf(complete, sizeof complete, "%s%s", TRA_BASE, path);
   // O Trakt exige o cabecalho de versao da API; sem ele responde 412.
-  cab[0] = "trakt-api-version: 2";
-  cab[1] = NULL;
-  return rede_postar_st(completo, 20, cab, corpo, status);
+  header[0] = "trakt-api-version: 2";
+  header[1] = NULL;
+  return net_post_st(complete, 20, header, body, status);
 }
 
 // ---------------------------------------------------------------- disco
@@ -54,45 +54,45 @@ static char *postar(const char *caminho, const char *corpo, int *status) {
 // exatamente o que aconteceu: o dono autorizou e o app "nao atualizou", porque
 // a instancia que tinha pedido o codigo ja nao existia. O app web guarda o
 // mesmo estado (TraktAuthStore.saveDeviceFlow).
-static void gravarFluxo(void) {
+static void writeStream(void) {
   char buf[600];
-  snprintf(buf, sizeof buf, "%s\t%s\t%s\t%ld\n", deviceCode, userCode, url, expiraEm);
-  dados_gravar(TRA_FLUXO, buf);
+  snprintf(buf, sizeof buf, "%s\t%s\t%s\t%ld\n", deviceCode, userCode, url, expiresIn);
+  data_write(TRA_STREAM, buf);
 }
 
-static void esquecerFluxo(void) {
+static void forgetStream(void) {
   deviceCode[0] = userCode[0] = 0;
-  expiraEm = 0;
-  dados_apagar(TRA_FLUXO);
+  expiresIn = 0;
+  data_erase(TRA_STREAM);
 }
 
-static void gravar(void) {
+static void save(void) {
   char buf[400];
   // Mesmo formato do art/trakt.txt de antes ("token<TAB>clientId"), para o
   // arquivo continuar legivel por quem ja conhecia o de la. A diferenca e o
   // LUGAR: aqui e a pasta da instalacao, nao o pacote.
-  snprintf(buf, sizeof buf, "%s\t%s\n", token, nuvem_trakt_cliente());
-  dados_gravar(TRA_ARQ, buf);
+  snprintf(buf, sizeof buf, "%s\t%s\n", token, cloud_trakt_client());
+  data_write(TRA_FILE, buf);
 }
 
-int traktauth_carregar(void) {
-  char *b = dados_ler(TRA_ARQ);
+int traktauth_load(void) {
+  char *b = data_read(TRA_FILE);
   char *tab;
   if (!b) return 0;
   tab = strchr(b, '\t');
   if (tab) *tab = 0;
-  { char *fim = b + strlen(b);
-    while (fim > b && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0; }
+  { char *end = b + strlen(b);
+    while (end > b && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0; }
   if (b[0]) {
     snprintf(token, sizeof token, "%s", b);
-    trakt_definir(token, nuvem_trakt_cliente());
-    estado = TRA_LIGADO;
+    trakt_set(token, cloud_trakt_client());
+    state = TRA_ON;
   }
   free(b);
   if (token[0]) return 1;
 
   // Sem token, mas pode haver um pedido em andamento de antes do reinicio.
-  { char *f = dados_ler(TRA_FLUXO);
+  { char *f = data_read(TRA_STREAM);
     if (f) {
       char *c[4] = { f, NULL, NULL, NULL };
       int i;
@@ -100,20 +100,20 @@ int traktauth_carregar(void) {
         c[i] = strchr(c[i - 1], '\t');
         if (c[i]) *c[i]++ = 0;
       }
-      { char *fim = f + strlen(f);
-        while (fim > f && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0; }
+      { char *end = f + strlen(f);
+        while (end > f && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0; }
       if (c[3]) {
-        long agora = (long)time(NULL);
+        long now = (long)time(NULL);
         long ate = atol(c[3]);
-        if (ate > agora + 5) {
+        if (ate > now + 5) {
           snprintf(deviceCode, sizeof deviceCode, "%s", c[0]);
           snprintf(userCode, sizeof userCode, "%s", c[1]);
           snprintf(url, sizeof url, "%s", c[2]);
-          expiraEm = ate;
-          estado = TRA_AGUARDANDO;
-          printf("[trakt] retomando o pedido pendente (%lds restantes)\n", ate - agora);
+          expiresIn = ate;
+          state = TRA_WAITING;
+          printf("[trakt] resuming the pending request (%lds left)\n", ate - now);
         } else {
-          dados_apagar(TRA_FLUXO);
+          data_erase(TRA_STREAM);
         }
       }
       free(f);
@@ -121,93 +121,93 @@ int traktauth_carregar(void) {
   return 0;
 }
 
-void traktauth_esquecer(void) {
-  token[0] = refresh[0] = url[0] = erro[0] = 0;
-  estado = TRA_PARADO;
-  dados_apagar(TRA_ARQ);
-  esquecerFluxo();
+void traktauth_forget(void) {
+  token[0] = refresh[0] = url[0] = error[0] = 0;
+  state = TRA_STOPPED;
+  data_erase(TRA_FILE);
+  forgetStream();
 }
 
 // ---------------------------------------------------------------- fluxo
 
-static void *fioPedir(void *u) {
+static void *threadRequest(void *u) {
   Jsw w;
   char *r;
   int st = 0;
   (void)u;
-  erro[0] = userCode[0] = deviceCode[0] = 0;
+  error[0] = userCode[0] = deviceCode[0] = 0;
 
-  if (!nuvem_trakt_cliente()[0] || !nuvem_trakt_segredo()[0]) {
+  if (!cloud_trakt_client()[0] || !cloud_trakt_secret()[0]) {
     // Caso de COMPILACAO, nao do usuario: o pacote saiu sem as chaves do
     // aplicativo. Dizer isso evita a pessoa tentar de novo para sempre.
-    snprintf(erro, sizeof erro, "pacote sem as chaves do Trakt");
-    estado = TRA_ERRO;
-    fioPronto = 1;
+    snprintf(error, sizeof error, "package has no Trakt keys");
+    state = TRA_ERROR;
+    threadReady = 1;
     return NULL;
   }
 
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_cs(&w, "client_id", nuvem_trakt_cliente());
-  jsw_obj_fim(&w);
-  r = postar("/oauth/device/code", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_cs(&w, "client_id", cloud_trakt_client());
+  jsw_obj_end(&w);
+  r = post("/oauth/device/code", jsw_text_final(&w), &st);
+  jsw_free(&w);
 
   if (r && st >= 200 && st < 300) {
-    const char *fim = r + strlen(r);
-    double intervalo, expira;
-    js_texto(r, fim, "device_code", deviceCode, sizeof deviceCode);
-    js_texto(r, fim, "user_code", userCode, sizeof userCode);
-    js_texto(r, fim, "verification_url", url, sizeof url);
-    intervalo = js_num(r, fim, "interval", 0);
-    expira = js_num(r, fim, "expires_in", 0);
-    if (intervalo >= 1.0 && intervalo <= 60.0) pollMs = (unsigned)(intervalo * 1000.0);
-    limiteMs = (expira > 30.0 && expira < 3600.0) ? (unsigned)(expira * 1000.0) : 600000u;
+    const char *end = r + strlen(r);
+    double interval, expires;
+    js_text(r, end, "device_code", deviceCode, sizeof deviceCode);
+    js_text(r, end, "user_code", userCode, sizeof userCode);
+    js_text(r, end, "verification_url", url, sizeof url);
+    interval = js_num(r, end, "interval", 0);
+    expires = js_num(r, end, "expires_in", 0);
+    if (interval >= 1.0 && interval <= 60.0) pollMs = (unsigned)(interval * 1000.0);
+    limitMs = (expires > 30.0 && expires < 3600.0) ? (unsigned)(expires * 1000.0) : 600000u;
   }
   if (!deviceCode[0] || !userCode[0]) {
-    if (st == 429) snprintf(erro, sizeof erro, "o Trakt pediu para esperar; tente daqui a pouco");
-    else snprintf(erro, sizeof erro, "nao consegui pedir o codigo ao Trakt (HTTP %d)", st);
-    estado = TRA_ERRO;
+    if (st == 429) snprintf(error, sizeof error, "Trakt asked us to wait; try again shortly");
+    else snprintf(error, sizeof error, "could not request the code from Trakt (HTTP %d)", st);
+    state = TRA_ERROR;
   } else {
     if (!url[0]) snprintf(url, sizeof url, "https://trakt.tv/activate");
-    expiraEm = (long)time(NULL) + (long)(limiteMs / 1000u);
-    gravarFluxo();
-    estado = TRA_AGUARDANDO;
+    expiresIn = (long)time(NULL) + (long)(limitMs / 1000u);
+    writeStream();
+    state = TRA_WAITING;
   }
   free(r);
-  fioPronto = 1;
+  threadReady = 1;
   return NULL;
 }
 
-static void *fioPoll(void *u) {
+static void *threadPoll(void *u) {
   Jsw w;
   char *r;
   int st = 0;
   (void)u;
 
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
+  jsw_start(&w);
+  jsw_obj_start(&w);
   jsw_cs(&w, "code", deviceCode);
-  jsw_cs(&w, "client_id", nuvem_trakt_cliente());
-  jsw_cs(&w, "client_secret", nuvem_trakt_segredo());
-  jsw_obj_fim(&w);
-  r = postar("/oauth/device/token", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
+  jsw_cs(&w, "client_id", cloud_trakt_client());
+  jsw_cs(&w, "client_secret", cloud_trakt_secret());
+  jsw_obj_end(&w);
+  r = post("/oauth/device/token", jsw_text_final(&w), &st);
+  jsw_free(&w);
 
   if (r && st >= 200 && st < 300) {
     char t[300];
-    if (js_texto(r, r + strlen(r), "access_token", t, sizeof t)) {
+    if (js_text(r, r + strlen(r), "access_token", t, sizeof t)) {
       snprintf(token, sizeof token, "%s", t);
       // O refresh vai junto para a conta: sem ele, o vinculo morre no dia em
       // que o access token vencer e o app web nao teria como renovar.
-      if (!js_texto(r, r + strlen(r), "refresh_token", refresh, sizeof refresh))
+      if (!js_text(r, r + strlen(r), "refresh_token", refresh, sizeof refresh))
         refresh[0] = 0;
-      tokenNovo = 1;
-      esquecerFluxo();
-      estado = TRA_LIGADO;
+      tokenNew = 1;
+      forgetStream();
+      state = TRA_ON;
     } else {
-      snprintf(erro, sizeof erro, "o Trakt respondeu sem token");
-      estado = TRA_ERRO;
+      snprintf(error, sizeof error, "Trakt answered without a token");
+      state = TRA_ERROR;
     }
   } else if (st == 400) {
     /* ainda nao autorizado: seguir perguntando */
@@ -216,88 +216,88 @@ static void *fioPoll(void *u) {
     pollMs += 5000u;
     if (pollMs > 60000u) pollMs = 60000u;
   } else if (st == 409) {
-    snprintf(erro, sizeof erro, "este codigo ja foi usado");
-    esquecerFluxo();
-    estado = TRA_ERRO;
+    snprintf(error, sizeof error, "this code has already been used");
+    forgetStream();
+    state = TRA_ERROR;
   } else if (st == 410) {
-    snprintf(erro, sizeof erro, "o codigo expirou");
-    esquecerFluxo();
-    estado = TRA_ERRO;
+    snprintf(error, sizeof error, "the code expired");
+    forgetStream();
+    state = TRA_ERROR;
   } else if (st == 418) {
-    snprintf(erro, sizeof erro, "autorizacao negada no Trakt");
-    esquecerFluxo();
-    estado = TRA_ERRO;
+    snprintf(error, sizeof error, "autorizacao negada no Trakt");
+    forgetStream();
+    state = TRA_ERROR;
   } else if (st) {
-    snprintf(erro, sizeof erro, "falha ao trocar o codigo (HTTP %d)", st);
-    estado = TRA_ERRO;
+    snprintf(error, sizeof error, "failed to exchange the code (HTTP %d)", st);
+    state = TRA_ERROR;
   }
   free(r);
-  fioPronto = 1;
+  threadReady = 1;
   return NULL;
 }
 
-static void soltar(void *(*rotina)(void *)) {
-  if (fioVivo) return;
-  fioPronto = 0;
-  if (pthread_create(&fio, NULL, rotina, NULL) == 0) { pthread_detach(fio); fioVivo = 1; }
-  else { snprintf(erro, sizeof erro, "sem fio para falar com o Trakt"); estado = TRA_ERRO; }
+static void release(void *(*routine)(void *)) {
+  if (threadAlive) return;
+  threadReady = 0;
+  if (pthread_create(&thread, NULL, routine, NULL) == 0) { pthread_detach(thread); threadAlive = 1; }
+  else { snprintf(error, sizeof error, "no thread to talk to Trakt"); state = TRA_ERROR; }
 }
 
-void traktauth_comecar(void) {
-  if (estado == TRA_PEDINDO || estado == TRA_AGUARDANDO) return;
-  erro[0] = 0;
-  comecouMs = 0;
-  pollMs = TRA_POLL_PADRAO;
-  estado = TRA_PEDINDO;
-  soltar(fioPedir);
+void traktauth_begin(void) {
+  if (state == TRA_REQUESTING || state == TRA_WAITING) return;
+  error[0] = 0;
+  beganMs = 0;
+  pollMs = TRA_POLL_DFLT;
+  state = TRA_REQUESTING;
+  release(threadRequest);
 }
 
-void traktauth_passo(unsigned agoraMs) {
-  if (fioVivo && fioPronto) { fioVivo = 0; fioPronto = 0; }
-  if (fioVivo) return;
+void traktauth_step(unsigned nowMs) {
+  if (threadAlive && threadReady) { threadAlive = 0; threadReady = 0; }
+  if (threadAlive) return;
 
   // Aplicar o token no LACO PRINCIPAL, nunca no fio: trakt.c e lido pela UI.
-  if (tokenNovo) {
-    tokenNovo = 0;
-    trakt_definir(token, nuvem_trakt_cliente());
-    gravar();
+  if (tokenNew) {
+    tokenNew = 0;
+    trakt_set(token, cloud_trakt_client());
+    save();
     // E manda para a CONTA, para os outros aparelhos da pessoa herdarem o
     // vinculo — e a linha `trakt` que hoje nao existe la.
     { // A forma do credential_json e a que o app web grava, para os dois lados
       // lerem a mesma coisa.
       Jsw c;
-      jsw_iniciar(&c);
-      jsw_obj_ini(&c);
+      jsw_start(&c);
+      jsw_obj_start(&c);
       jsw_cs(&c, "access_token", token);
       if (refresh[0]) jsw_cs(&c, "refresh_token", refresh);
       jsw_cs(&c, "token_type", "bearer");
-      jsw_obj_fim(&c);
-      sync_empurrar_credencial("trakt", jsw_texto_final(&c));
-      jsw_livre(&c); }
+      jsw_obj_end(&c);
+      sync_push_credential("trakt", jsw_text_final(&c));
+      jsw_free(&c); }
     printf("[trakt] vinculado nesta TV\n");
     fflush(stdout);
   }
 
-  if (estado != TRA_AGUARDANDO) return;
-  if (!comecouMs) comecouMs = agoraMs;
-  if (expiraEm && (long)time(NULL) >= expiraEm) {
-    snprintf(erro, sizeof erro, "o codigo expirou");
-    esquecerFluxo();
-    estado = TRA_ERRO;
+  if (state != TRA_WAITING) return;
+  if (!beganMs) beganMs = nowMs;
+  if (expiresIn && (long)time(NULL) >= expiresIn) {
+    snprintf(error, sizeof error, "the code expired");
+    forgetStream();
+    state = TRA_ERROR;
     return;
   }
-  if (agoraMs >= proximoPoll) {
-    proximoPoll = agoraMs + pollMs;
-    soltar(fioPoll);
+  if (nowMs >= nextPoll) {
+    nextPoll = nowMs + pollMs;
+    release(threadPoll);
   }
 }
 
-void traktauth_cancelar(void) {
-  if (estado == TRA_PEDINDO || estado == TRA_AGUARDANDO || estado == TRA_ERRO)
-    estado = token[0] ? TRA_LIGADO : TRA_PARADO;
+void traktauth_cancel(void) {
+  if (state == TRA_REQUESTING || state == TRA_WAITING || state == TRA_ERROR)
+    state = token[0] ? TRA_ON : TRA_STOPPED;
 }
 
-TraEstado   traktauth_estado(void) { return estado; }
-const char *traktauth_codigo(void) { return userCode; }
+TraState   traktauth_state(void) { return state; }
+const char *traktauth_code(void) { return userCode; }
 const char *traktauth_url(void)    { return url; }
-const char *traktauth_erro(void)   { return erro; }
+const char *traktauth_error(void)   { return error; }

@@ -1,27 +1,27 @@
-// MENU DE CONTEXTO do cartaz, aberto SEGURANDO OK sobre um card da home.
+// Poster CONTEXT MENU, opened by HOLDING OK over a home card.
 //
-// E o `posterHoldMenu` do app web, e as opcoes sao as dele, medidas no bundle
-// 1.0.4 (getPosterHoldMenuOptions): "Ver detalhes", "Adicionar/Remover da
-// biblioteca" e, so em filme e serie, "Marcar como assistido/nao assistido".
-// Os rotulos sao os do pt-BR do proprio app.
+// This is the web app's `posterHoldMenu`, and the options are its own, measured
+// in bundle 1.0.4 (getPosterHoldMenuOptions): "See details", "Add to/Remove
+// from library" and, only on films and series, "Mark as watched/unwatched".
 //
-// Existe porque as duas acoes de biblioteca so tinham caminho DENTRO da tela de
-// titulo: para marcar um filme como visto era preciso abrir o detalhe, esperar
-// a rede e descer ate o botao. Segurando o OK sobre o cartaz sao dois toques.
+// It exists because the two library actions only had a path INSIDE the title
+// screen: to mark a film as seen you had to open the detail, wait for the
+// network and scroll down to the button. Holding OK over the poster is two
+// presses.
 #ifndef NV_CTXMENU_H
 #define NV_CTXMENU_H
 #include <SDL2/SDL.h>
 
-// `indice` e a posicao no catalogo global.
-// A integracao da pressao longa fica em home.c: ele mede NV_HOLD_MS no KEYUP e
-// chama ctx_abrir somente quando o limiar foi atingido. Este modulo nao mede a
-// tecla nem abre no KEYDOWN; assim o toque curto continua abrindo o detalhe e
-// o modal recebe apenas o foco D-pad depois de estar visivel.
-void ctx_abrir(int indice);
-int  ctx_aberto(void);
-void ctx_evento(const SDL_Event *e);
-void ctx_atualizar(float dt, Uint32 agora);
-void ctx_desenhar(Uint32 agora);
-// Indice do titulo cujo detalhe o dono pediu, ou -1. Consumido uma vez.
-int  ctx_pediu_detalhes(void);
+// `index` is the position in the global catalogue.
+// The long-press integration lives in home.c: it measures NV_HOLD_MS on KEYUP
+// and calls ctx_open only once the threshold is reached. This module does not
+// time the key and does not open on KEYDOWN; that way a short press still opens
+// the detail, and the modal only takes D-pad focus once it is visible.
+void ctx_open(int index_);
+int  ctx_is_open(void);
+void ctx_event(const SDL_Event *e);
+void ctx_update(float dt, Uint32 now);
+void ctx_draw(Uint32 now);
+// Index of the title whose detail the owner asked for, or -1. Consumed once.
+int  ctx_requested_details(void);
 #endif

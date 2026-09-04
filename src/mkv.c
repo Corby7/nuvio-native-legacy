@@ -1,5 +1,5 @@
 #include "mkv.h"
-#include "rede.h"
+#include "net.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -16,7 +16,7 @@
 // O caso que os 2 MB cobriam (capa antes do Tracks) e raro; o custo era pago
 // em TODA reproducao. Perder o idioma num arquivo desses e melhor que engasgar
 // o video em todos.
-#define MKV_TRECHO  (320L * 1024)
+#define MKV_CHUNK  (320L * 1024)
 
 // --- EBML: inteiros de tamanho variavel --------------------------------------
 //
@@ -25,22 +25,22 @@
 // 0x1A45DFA3); no TAMANHO ele e mascara e sai fora. Trocar os dois e o erro
 // classico de quem escreve isto pela primeira vez, e o sintoma e a arvore
 // inteira sair deslocada.
-static int larguraDe(unsigned char b) {
+static int widthOf(unsigned char b) {
   int i;
   for (i = 0; i < 8; i++) if (b & (0x80 >> i)) return i + 1;
   return 0;                       // byte 0x00: invalido em EBML
 }
 
 // Le um ID (mantendo o bit marcador). 0 e o fim ou dado invalido.
-static unsigned long lerId(const unsigned char *p, long resta, int *usou) {
+static unsigned long readId(const unsigned char *p, long remains, int *used) {
   int w, i;
   unsigned long v;
-  if (resta < 1) return 0;
-  w = larguraDe(p[0]);
-  if (w < 1 || w > 4 || resta < w) return 0;
+  if (remains < 1) return 0;
+  w = widthOf(p[0]);
+  if (w < 1 || w > 4 || remains < w) return 0;
   v = 0;
   for (i = 0; i < w; i++) v = (v << 8) | p[i];
-  *usou = w;
+  *used = w;
   return v;
 }
 
@@ -48,25 +48,25 @@ static unsigned long lerId(const unsigned char *p, long resta, int *usou) {
 // tamanho "desconhecido" (todos os bits de dado em 1), que Segment usa em
 // arquivo transmitido ao vivo — ali a leitura continua DENTRO do elemento em
 // vez de pular por cima dele.
-static long lerTam(const unsigned char *p, long resta, int *usou) {
+static long readSize(const unsigned char *p, long remains, int *used) {
   int w, i;
   unsigned long v;
-  int todosUm = 1;
-  if (resta < 1) return -1;
-  w = larguraDe(p[0]);
-  if (w < 1 || w > 8 || resta < w) return -1;
+  int allUm = 1;
+  if (remains < 1) return -1;
+  w = widthOf(p[0]);
+  if (w < 1 || w > 8 || remains < w) return -1;
   v = p[0] & (0xFF >> w);
-  if ((unsigned char)(p[0] & (0xFF >> w)) != (unsigned char)(0xFF >> w)) todosUm = 0;
+  if ((unsigned char)(p[0] & (0xFF >> w)) != (unsigned char)(0xFF >> w)) allUm = 0;
   for (i = 1; i < w; i++) {
-    if (p[i] != 0xFF) todosUm = 0;
+    if (p[i] != 0xFF) allUm = 0;
     v = (v << 8) | p[i];
   }
-  *usou = w;
-  if (todosUm) return -2;
+  *used = w;
+  if (allUm) return -2;
   return (long)v;
 }
 
-static unsigned long lerUint(const unsigned char *p, long n) {
+static unsigned long readUint(const unsigned char *p, long n) {
   unsigned long v = 0;
   long i;
   if (n < 1 || n > 8) return 0;
@@ -74,9 +74,9 @@ static unsigned long lerUint(const unsigned char *p, long n) {
   return v;
 }
 
-static void lerTexto(const unsigned char *p, long n, char *dst, size_t tam) {
+static void readText(const unsigned char *p, long n, char *dst, size_t size) {
   size_t k = (size_t)n;
-  if (k > tam - 1) k = tam - 1;
+  if (k > size - 1) k = size - 1;
   memcpy(dst, p, k);
   dst[k] = 0;
   // O Matroska preenche string com NUL a direita; cortar aqui evita que o
@@ -96,65 +96,65 @@ static void lerTexto(const unsigned char *p, long n, char *dst, size_t tam) {
 #define ID_CODECID     0x86UL
 
 // Le os TrackEntry de dentro de um Tracks ja localizado.
-static int lerTracks(const unsigned char *p, long n, MkvFaixa *saida, int max) {
+static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max) {
   long o = 0;
-  int achou = 0;
-  while (o < n && achou < max) {
+  int found = 0;
+  while (o < n && found < max) {
     int ui = 0, ut = 0;
-    unsigned long id = lerId(p + o, n - o, &ui);
-    long tam;
+    unsigned long id = readId(p + o, n - o, &ui);
+    long size;
     if (!id) break;
-    tam = lerTam(p + o + ui, n - o - ui, &ut);
-    if (tam < 0) break;
+    size = readSize(p + o + ui, n - o - ui, &ut);
+    if (size < 0) break;
     o += ui + ut;
-    if (o + tam > n) break;
+    if (o + size > n) break;
     if (id == ID_TRACKENTRY) {
-      MkvFaixa f;
+      MkvTrack f;
       long q = 0;
       memset(&f, 0, sizeof f);
-      while (q < tam) {
+      while (q < size) {
         int vi = 0, vt = 0;
-        unsigned long fid = lerId(p + o + q, tam - q, &vi);
+        unsigned long fid = readId(p + o + q, size - q, &vi);
         long ftam;
         if (!fid) break;
-        ftam = lerTam(p + o + q + vi, tam - q - vi, &vt);
+        ftam = readSize(p + o + q + vi, size - q - vi, &vt);
         if (ftam < 0) break;
         q += vi + vt;
-        if (q + ftam > tam) break;
+        if (q + ftam > size) break;
         { const unsigned char *v = p + o + q;
-          if (fid == ID_TRACKNUMBER) f.numero = (int)lerUint(v, ftam);
-          else if (fid == ID_TRACKTYPE) f.tipo = (int)lerUint(v, ftam);
+          if (fid == ID_TRACKNUMBER) f.number = (int)readUint(v, ftam);
+          else if (fid == ID_TRACKTYPE) f.kind = (int)readUint(v, ftam);
           else if (fid == ID_LANGUAGE || fid == ID_LANG_BCP47) {
             // BCP47 ganha do ISO 639-2 quando os dois existem: "pt-BR" diz
             // mais que "por", e e o que o dono quer ver na lista.
-            if (fid == ID_LANG_BCP47 || !f.idioma[0])
-              lerTexto(v, ftam, f.idioma, sizeof f.idioma);
+            if (fid == ID_LANG_BCP47 || !f.language[0])
+              readText(v, ftam, f.language, sizeof f.language);
           }
-          else if (fid == ID_NAME)    lerTexto(v, ftam, f.nome,  sizeof f.nome);
-          else if (fid == ID_CODECID) lerTexto(v, ftam, f.codec, sizeof f.codec); }
+          else if (fid == ID_NAME)    readText(v, ftam, f.name,  sizeof f.name);
+          else if (fid == ID_CODECID) readText(v, ftam, f.codec, sizeof f.codec); }
         q += ftam;
       }
-      if (f.numero > 0) saida[achou++] = f;
+      if (f.number > 0) output[found++] = f;
     }
-    o += tam;
+    o += size;
   }
-  return achou;
+  return found;
 }
 
 // Anda pela arvore ate achar Tracks. Entra em Segment (que e um contentor
 // gigante) e PULA o resto — sem o pulo a busca varreria byte a byte e casaria
 // com qualquer coincidencia dentro dos dados de video.
-static int acharTracks(const unsigned char *p, long n, MkvFaixa *saida, int max) {
+static int findTracks(const unsigned char *p, long n, MkvTrack *output, int max) {
   long o = 0;
   while (o < n) {
     int ui = 0, ut = 0;
-    unsigned long id = lerId(p + o, n - o, &ui);
-    long tam;
+    unsigned long id = readId(p + o, n - o, &ui);
+    long size;
     if (!id) return 0;
-    tam = lerTam(p + o + ui, n - o - ui, &ut);
-    if (tam == -1) return 0;
+    size = readSize(p + o + ui, n - o - ui, &ut);
+    if (size == -1) return 0;
     o += ui + ut;
-    if (id == ID_SEGMENT || tam == -2) {
+    if (id == ID_SEGMENT || size == -2) {
       // Segment: descer para dentro. Tamanho desconhecido idem — nao ha por
       // onde pular.
       if (id == ID_SEGMENT) continue;
@@ -162,21 +162,21 @@ static int acharTracks(const unsigned char *p, long n, MkvFaixa *saida, int max)
     }
     if (id == ID_TRACKS) {
       long disp = n - o;
-      if (tam > disp) tam = disp;     // cabecalho maior que o trecho baixado
-      return lerTracks(p + o, tam, saida, max);
+      if (size > disp) size = disp;     // cabecalho maior que o trecho baixado
+      return readTracks(p + o, size, output, max);
     }
-    if (o + tam > n) return 0;        // elemento passa do que baixamos
-    o += tam;
+    if (o + size > n) return 0;        // elemento passa do que baixamos
+    o += size;
   }
   return 0;
 }
 
-int mkv_faixas(const char *url, MkvFaixa *saida, int max) {
+int mkv_tracks(const char *url, MkvTrack *output, int max) {
   char *buf;
   long n = 0;
-  int achou;
-  if (!url || !url[0] || !saida || max < 1) return 0;
-  buf = rede_baixar_trecho(url, 20, 0, MKV_TRECHO - 1, &n);
+  int found;
+  if (!url || !url[0] || !output || max < 1) return 0;
+  buf = net_download_chunk(url, 20, 0, MKV_CHUNK - 1, &n);
   if (!buf) return 0;
   // Assinatura EBML. Sem ela nao e Matroska (pode ser MP4, ou um HTML de erro
   // que o servidor devolveu com 200), e seguir seria interpretar lixo.
@@ -185,9 +185,9 @@ int mkv_faixas(const char *url, MkvFaixa *saida, int max) {
     free(buf);
     return 0;
   }
-  achou = acharTracks((const unsigned char *)buf, n, saida, max);
+  found = findTracks((const unsigned char *)buf, n, output, max);
   free(buf);
-  printf("[mkv] %d faixas lidas do cabecalho (%ld bytes)\n", achou, n);
+  printf("[mkv] %d tracks read from the header (%ld bytes)\n", found, n);
   fflush(stdout);
-  return achou;
+  return found;
 }

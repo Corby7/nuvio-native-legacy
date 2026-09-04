@@ -8,29 +8,29 @@
 // entre programas, entao guardar um conjunto so devolveria lixo no segundo
 // shader que usasse a mesma variavel.
 typedef struct {
-  GLuint prog;
-  GLint rect, tela, tex, foco, par, raio, cor, asp, texAsp;
-} Programa;
-static Programa progs[GFX_NMODOS];
-static int progAtual = -1;
+  GLuint progress;
+  GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect;
+} Program;
+static Program progs[GFX_NMODOS];
+static int progressCurrent = -1;
 // Proporcao da textura corrente, para o "cover". Fica global porque o desenho e
 // imediato: quem chama define antes de cada rect com textura.
-float gfx_tex_aspect_atual = 0.0f;
-float gfx_opacidade_grupo = 1.0f;
+float gfx_tex_aspect_current = 0.0f;
+float gfx_opacity_group = 1.0f;
 // Tamanho real do alvo da tela (em retina, maior que 1920x1080). Guardado aqui
 // porque toda volta de FBO precisa restaurar o viewport com ele.
-static int telaW = (int)NV_TELA_W, telaH = (int)NV_TELA_H;
-void gfx_tamanho_alvo(int w, int h) { telaW = w; telaH = h; }
+static int screenW = (int)NV_TELA_W, screenH = (int)NV_TELA_H;
+void gfx_size_target(int w, int h) { screenW = w; screenH = h; }
 
 static GLuint snapFbo = 0, snapTex = 0;
 static int snapW = 0, snapH = 0;
 // Dois alvos: o desfoque gaussiano e separavel, entao uma passada escreve no
 // segundo e a outra volta para o primeiro.
-static GLuint borFbo[4] = {0,0,0,0}, borTex[4] = {0,0,0,0};
-static int borW = 0, borH = 0;
+static GLuint borderFbo[4] = {0,0,0,0}, borderTex[4] = {0,0,0,0};
+static int borderW = 0, borderH = 0;
 
 static const char *VS =
-  NV_GLSL_PREFIXO
+  NV_GLSL_PREFIX
   "attribute vec2 aPos;\n"
   "uniform vec4 uRect;\n"
   "uniform vec2 uTela;\n"
@@ -49,8 +49,8 @@ static const char *VS =
 // registradores livres significa menos fragmentos em voo ao mesmo tempo — a
 // Mali-G71 desta TV entregava ~40fps com apenas duas camadas de tela cheia.
 // Com um programa enxuto por modo cada desenho usa so o que precisa.
-static const char *FS_CABECA =
-  NV_GLSL_PREFIXO
+static const char *FS_HEAD =
+  NV_GLSL_PREFIX
   "varying vec2 vUv;\n"
   "uniform sampler2D uTex;\n"
   "uniform float uFoco;\n"
@@ -58,7 +58,7 @@ static const char *FS_CABECA =
   "uniform float uRaio;\n"
   "uniform vec4  uCor;\n"
   "uniform float uAspect;\n"
-  "uniform float uTexAsp;   // w/h da TEXTURA; 0 = nao ajustar\n";
+  "uniform float uTexAsp;   // w/h of the TEXTURE; 0 = do not adjust\n";
 
 // SDF de retangulo arredondado, corrigido pela proporcao — sem a correcao o
 // canto de um card landscape sai oval.
@@ -80,7 +80,7 @@ static const char *FS_COVER =
   "  return uv;\n"
   "}\n";
 
-static const char *FS_CORPO[GFX_NMODOS] = {
+static const char *FS_BODY[GFX_NMODOS] = {
   // GFX_CARD — arte com cantos, over-scan de parallax e especular no foco
   "void main(){\n"
   "  float d = sdf(vUv, uRaio, uAspect);\n"
@@ -90,7 +90,7 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   // parallax nunca revele borda vazia (diferenca entre "actual size" e "safe
   // zone" nas tabelas do Top Shelf). Sem ela o clamp estica o pixel da borda.
   "  vec2 uv = clamp((cover(vUv)-0.5)*(0.94-0.05*uFoco)+0.5+uPar, 0.0, 1.0);\n"
-  "  vec3 cor = texture2D(uTex, uv).rgb;\n"
+  "  vec3 color = texture2D(uTex, uv).rgb;\n"
   "  if (uFoco > 0.004) {\n"
   "    float e = (dot(vUv-0.5, vec2(0.5029,-0.8644)) + uPar.x*3.0) * 3.0;\n"
   "    cor += exp(-e*e) * 0.16 * uFoco;\n"
@@ -166,7 +166,7 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   // GFX_FUNDO — arte desfocada por mipmap (uFoco carrega o bias), com o
   // gradiente medido no aparelho: claro no topo, quase preto na base, vinheta
   "void main(){\n"
-  "  // A textura ja chega desfocada pelo gaussiano de duas passadas.\n"
+  "  // The texture already arrives blurred by the two-pass gaussian.\n"
   "  vec3 cb = texture2D(uTex, vec2(vUv.x, 1.0 - vUv.y)).rgb;\n"
   // Curva conferida contra uma captura do app da Apple na mesma TV: a base
   // dele fica bem mais escura que a minha estava (L~39 contra L~84 a 5/6 da
@@ -367,8 +367,8 @@ static const char *FS_CORPO[GFX_NMODOS] = {
   "  float m = 0.0;\n"
   "  for (int i = 0; i < 3; i++) {\n"
   "    float cy = (float(i) - 1.0) * 0.28;\n"
-  "    float larg = (i == 2) ? 0.24 : 0.46;\n"
-  "    vec2 q = abs(p - vec2(0.0, cy)) - vec2(larg, 0.06) + 0.06;\n"
+  "    float wide = (i == 2) ? 0.24 : 0.46;\n"
+  "    vec2 q = abs(p - vec2(0.0, cy)) - vec2(wide, 0.06) + 0.06;\n"
   "    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.06;\n"
   "    m = max(m, smoothstep(0.012, -0.012, d));\n"
   "  }\n"
@@ -456,7 +456,7 @@ static const char *FS_CORPO[GFX_NMODOS] = {
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
-static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
+static const struct { int sdf, cover; } NEEDS[GFX_NMODOS] = {
   {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
   {0,1}, {0,1},
   {1,0},   /* GFX_ANEL */
@@ -470,8 +470,8 @@ static const struct { int sdf, cover; } PRECISA[GFX_NMODOS] = {
   {0,0}    /* GFX_DISCO */
 };
 
-static GLuint compila(GLenum tipo, const char *src) {
-  GLuint s = glCreateShader(tipo);
+static GLuint compiles(GLenum kind, const char *src) {
+  GLuint s = glCreateShader(kind);
   glShaderSource(s, 1, &src, NULL);
   glCompileShader(s);
   GLint ok = 0; glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
@@ -479,37 +479,37 @@ static GLuint compila(GLenum tipo, const char *src) {
   return s;
 }
 
-int gfx_iniciar(void) {
-  GLuint vs = compila(GL_VERTEX_SHADER, VS);
-  char fonte[6000];
+int gfx_start(void) {
+  GLuint vs = compiles(GL_VERTEX_SHADER, VS);
+  char source[6000];
   for (int m = 0; m < GFX_NMODOS; m++) {
-    snprintf(fonte, sizeof fonte, "%s%s%s%s", FS_CABECA,
-             PRECISA[m].sdf ? FS_SDF : "", PRECISA[m].cover ? FS_COVER : "",
-             FS_CORPO[m]);
+    snprintf(source, sizeof source, "%s%s%s%s", FS_HEAD,
+             NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "",
+             FS_BODY[m]);
     GLuint p = glCreateProgram();
     glAttachShader(p, vs);
-    glAttachShader(p, compila(GL_FRAGMENT_SHADER, fonte));
+    glAttachShader(p, compiles(GL_FRAGMENT_SHADER, source));
     glBindAttribLocation(p, 0, "aPos");
     glLinkProgram(p);
     GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
     if (!ok) { char log[700]; glGetProgramInfoLog(p, 700, NULL, log);
-               printf("gfx link modo %d: %s\n", m, log); return 0; }
-    progs[m].prog = p;
+               printf("gfx link mode %d: %s\n", m, log); return 0; }
+    progs[m].progress = p;
     progs[m].rect = glGetUniformLocation(p, "uRect");
-    progs[m].tela = glGetUniformLocation(p, "uTela");
+    progs[m].screen = glGetUniformLocation(p, "uTela");
     progs[m].tex  = glGetUniformLocation(p, "uTex");
-    progs[m].foco = glGetUniformLocation(p, "uFoco");
+    progs[m].focus = glGetUniformLocation(p, "uFoco");
     progs[m].par  = glGetUniformLocation(p, "uPar");
-    progs[m].raio = glGetUniformLocation(p, "uRaio");
-    progs[m].cor  = glGetUniformLocation(p, "uCor");
-    progs[m].asp  = glGetUniformLocation(p, "uAspect");
-    progs[m].texAsp = glGetUniformLocation(p, "uTexAsp");
+    progs[m].radius = glGetUniformLocation(p, "uRaio");
+    progs[m].color  = glGetUniformLocation(p, "uCor");
+    progs[m].aspect  = glGetUniformLocation(p, "uAspect");
+    progs[m].texAspect = glGetUniformLocation(p, "uTexAsp");
     glUseProgram(p);
-    glUniform2f(progs[m].tela, NV_TELA_W, NV_TELA_H);
+    glUniform2f(progs[m].screen, NV_TELA_W, NV_TELA_H);
     glUniform1i(progs[m].tex, 0);
   }
-  glUseProgram(progs[GFX_CARD].prog);
-  progAtual = GFX_CARD;
+  glUseProgram(progs[GFX_CARD].progress);
+  progressCurrent = GFX_CARD;
 
   static const GLfloat quad[] = { 0,0, 1,0, 0,1, 1,1 };
   glEnableVertexAttribArray(0);
@@ -528,53 +528,53 @@ int gfx_iniciar(void) {
   return 1;
 }
 
-void gfx_encerrar(void) {
+void gfx_shutdown(void) {
   for (int m = 0; m < GFX_NMODOS; m++)
-    if (progs[m].prog) { glDeleteProgram(progs[m].prog); progs[m].prog = 0; }
-  progAtual = -1;
+    if (progs[m].progress) { glDeleteProgram(progs[m].progress); progs[m].progress = 0; }
+  progressCurrent = -1;
 }
 
 // Ultima textura vista no bind. O driver ate ignora rebind do mesmo nome, mas
 // so depois de pagar a entrada na chamada — e num quadro cheio de texto a
 // MESMA textura de glifo e desenhada varias vezes seguida.
-static GLuint texAtual = 0;
+static GLuint texCurrent = 0;
 
 // Chamar quando uma textura e destruida (o nome pode ser reutilizado por
 // glGenTextures) ou quando alguem deu glBindTexture por fora do gfx_rect
 // (upload de arte, raster de glifo) — nos dois casos o cache mentiria.
 // tex = 0 significa "esqueca tudo": e o que os uploads usam.
-void gfx_tex_esquecer(GLuint tex) { if (tex == 0 || texAtual == tex) texAtual = 0; }
+void gfx_tex_forget(GLuint tex) { if (tex == 0 || texCurrent == tex) texCurrent = 0; }
 
-int    gfx_n_rect = 0, gfx_n_prog = 0, gfx_n_bind = 0, gfx_n_outros = 0;
-double gfx_ms_rect = 0.0, gfx_ms_outros = 0.0;
+int    gfx_n_rect = 0, gfx_n_progress = 0, gfx_n_bind = 0, gfx_n_others = 0;
+double gfx_ms_rect = 0.0, gfx_ms_others = 0.0;
 // PREENCHIMENTO SUBMETIDO no quadro, em telas cheias (1920x1080 = 1,0).
 // Nesta Mali o custo e de fragmento, nao de chamada: a nota no topo deste
 // arquivo diz que DUAS camadas de tela cheia derrubavam o quadro para ~40fps.
 // Sem contar a area, "quantas camadas cheias tem esta tela" e chute — com o
 // contador e uma medida por quadro.
 double gfx_fill = 0.0;
-int    gfx_n_cheio = 0;   // desenhos que cobrem >= 50% da tela
+int    gfx_n_full = 0;   // desenhos que cobrem >= 50% da tela
 static double gfxFreqMs = 0.0;
-void gfx_novo_quadro(void) {
-  gfx_n_rect = gfx_n_prog = gfx_n_bind = gfx_n_outros = 0;
-  gfx_ms_rect = gfx_ms_outros = 0.0;
-  gfx_fill = 0.0; gfx_n_cheio = 0;
+void gfx_new_frame(void) {
+  gfx_n_rect = gfx_n_progress = gfx_n_bind = gfx_n_others = 0;
+  gfx_ms_rect = gfx_ms_others = 0.0;
+  gfx_fill = 0.0; gfx_n_full = 0;
 }
 // Relogio dos pontos de GL que NAO sao gfx_rect: recorte, FBO do snapshot e as
 // tres passadas do desfoque. Numa GPU de ladrilhos trocar de alvo de render no
 // meio do quadro forca descarga do ladrilho — e o suspeito natural para o custo
 // de CPU que sobra dentro de app_desenhar depois de descontar gfx_rect e texto.
-#define GFX_OUTRO_INI() \
+#define GFX_OUTRO_START() \
   if (gfxFreqMs == 0.0) gfxFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency(); \
   Uint64 tO_ = SDL_GetPerformanceCounter()
-#define GFX_OUTRO_FIM() do { \
-  gfx_ms_outros += (double)(SDL_GetPerformanceCounter() - tO_) * gfxFreqMs; \
-  gfx_n_outros++; } while (0)
+#define GFX_OUTRO_END() do { \
+  gfx_ms_others += (double)(SDL_GetPerformanceCounter() - tO_) * gfxFreqMs; \
+  gfx_n_others++; } while (0)
 
-void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,
-              float parx, float pary, float raio,
+void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
+              float parx, float pary, float radius,
               float cr, float cg, float cb, float ca) {
-  if ((int)modo < 0 || (int)modo >= GFX_NMODOS) return;
+  if ((int)mode < 0 || (int)mode >= GFX_NMODOS) return;
   if (gfxFreqMs == 0.0) gfxFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency();
   (void)gfxFreqMs;
 #ifdef NV_PERF_FINO
@@ -583,24 +583,24 @@ void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,
   gfx_n_rect++;
   { float area = (r.w * r.h) / (NV_TELA_W * NV_TELA_H);
     gfx_fill += area;
-    if (area >= 0.5f) gfx_n_cheio++; }
-  const Programa *P = &progs[modo];
-  if (progAtual != (int)modo) { glUseProgram(P->prog); progAtual = (int)modo; gfx_n_prog++; }
+    if (area >= 0.5f) gfx_n_full++; }
+  const Program *P = &progs[mode];
+  if (progressCurrent != (int)mode) { glUseProgram(P->progress); progressCurrent = (int)mode; gfx_n_progress++; }
   // Uniform que o shader do modo nao declara volta como -1 do link; passar -1
   // ao glUniform e no-op valido mas ainda paga a travessia da chamada GL. Num
   // quadro tipico da home sao centenas de gfx_rect, a maioria em modos que nao
   // usam foco/parallax/texAsp, entao o teste barato aqui poupa a chamada cara.
   glUniform4f(P->rect, r.x, r.y, r.w, r.h);
-  if (P->foco >= 0)   glUniform1f(P->foco, foco);
+  if (P->focus >= 0)   glUniform1f(P->focus, focus);
   if (P->par >= 0)    glUniform2f(P->par, parx, pary);
-  if (P->raio >= 0)   glUniform1f(P->raio, raio);
-  if (P->asp >= 0)    glUniform1f(P->asp, r.h > 0 ? r.w / r.h : 1.0f);
-  if (P->texAsp >= 0) glUniform1f(P->texAsp, gfx_tex_aspect_atual);
-  if (P->cor >= 0)    glUniform4f(P->cor, cr, cg, cb, ca * gfx_opacidade_grupo);
-  if (tex && tex != texAtual) {
+  if (P->radius >= 0)   glUniform1f(P->radius, radius);
+  if (P->aspect >= 0)    glUniform1f(P->aspect, r.h > 0 ? r.w / r.h : 1.0f);
+  if (P->texAspect >= 0) glUniform1f(P->texAspect, gfx_tex_aspect_current);
+  if (P->color >= 0)    glUniform4f(P->color, cr, cg, cb, ca * gfx_opacity_group);
+  if (tex && tex != texCurrent) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
-    texAtual = tex;
+    texCurrent = tex;
     gfx_n_bind++;
   }
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -609,8 +609,8 @@ void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,
 #endif
 }
 
-void gfx_cor(GfxRect r, float raio, float cr, float cg, float cb, float ca) {
-  gfx_rect(r, 0, GFX_COR, 0, 0, 0, raio, cr, cg, cb, ca);
+void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) {
+  gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, radius, cr, cg, cb, ca);
 }
 // Buraco transparente por onde o plano de video do aparelho aparece.
 //
@@ -619,17 +619,17 @@ void gfx_cor(GfxRect r, float raio, float cr, float cg, float cb, float ca) {
 // superficie segue opaca e o video permanece invisivel, sem nenhum erro. E o
 // alpha aqui e o canal de composicao da janela, entao isto so tem efeito com
 // SDL_GL_ALPHA_SIZE 8 pedido antes de criar a janela.
-void gfx_furo(GfxRect r) {
+void gfx_hole(GfxRect r) {
   glDisable(GL_BLEND);
-  gfx_rect(r, 0, GFX_COR, 0, 0, 0, 0.0f, 0, 0, 0, 0);
+  gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, 0.0f, 0, 0, 0, 0);
   glEnable(GL_BLEND);
 }
 
-void gfx_textura(GfxRect r, GLuint tex) {
+void gfx_texture(GfxRect r, GLuint tex) {
   gfx_rect(r, tex, GFX_CARD, 0, 0, 0, 0.0f, 0, 0, 0, 1);
 }
 
-int gfx_snap_iniciar(int w, int h) {
+int gfx_snap_start(int w, int h) {
   snapW = w; snapH = h;
   glGenTextures(1, &snapTex);
   glBindTexture(GL_TEXTURE_2D, snapTex);
@@ -638,14 +638,14 @@ int gfx_snap_iniciar(int w, int h) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  gfx_tex_esquecer(0);  // o bind acima foi por fora do gfx_rect
+  gfx_tex_forget(0);  // o bind acima foi por fora do gfx_rect
   glGenFramebuffers(1, &snapFbo);
   glBindFramebuffer(GL_FRAMEBUFFER, snapFbo);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, snapTex, 0);
   GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   if (st != GL_FRAMEBUFFER_COMPLETE) {
-    printf("snapshot indisponivel (fbo 0x%x) — seguindo sem ele\n", st);
+    printf("snapshot unavailable (fbo 0x%x) — carrying on without it\n", st);
     glDeleteFramebuffers(1, &snapFbo); glDeleteTextures(1, &snapTex);
     snapFbo = snapTex = 0;
     return 0;
@@ -653,64 +653,64 @@ int gfx_snap_iniciar(int w, int h) {
   return 1;
 }
 
-void gfx_snap_comecar(void) {
+void gfx_snap_begin(void) {
   if (!snapFbo) return;
-  GFX_OUTRO_INI();
+  GFX_OUTRO_START();
   glBindFramebuffer(GL_FRAMEBUFFER, snapFbo);
   // uTela continua em coordenadas de tela cheia: o viewport menor faz a
   // reducao sozinho, e nenhum codigo de layout precisa saber que existe FBO.
   glViewport(0, 0, snapW, snapH);
-  GFX_OUTRO_FIM();
+  GFX_OUTRO_END();
 }
 
-void gfx_snap_terminar(void) {
+void gfx_snap_finish(void) {
   if (!snapFbo) return;
-  GFX_OUTRO_INI();
+  GFX_OUTRO_START();
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  glViewport(0, 0, telaW, telaH);
-  GFX_OUTRO_FIM();
+  glViewport(0, 0, screenW, screenH);
+  GFX_OUTRO_END();
 }
 
-void gfx_snap_desenhar(void) {
+void gfx_snap_draw(void) {
   if (!snapTex) return;
   GfxRect r = { 0, 0, NV_TELA_W, NV_TELA_H };
-  gfx_tex_aspect_atual = 0.0f;
+  gfx_tex_aspect_current = 0.0f;
   gfx_rect(r, snapTex, GFX_SNAP, 0, 0.0f, 1.0f, 0.0f, 0, 0, 0, 1.0f);
 }
 
-void gfx_snap_encerrar(void) {
+void gfx_snap_shutdown(void) {
   if (snapFbo) glDeleteFramebuffers(1, &snapFbo);
   if (snapTex) glDeleteTextures(1, &snapTex);
   snapFbo = snapTex = 0;
 }
 
 // --- icones ------------------------------------------------------------------
-static char dirIcones[512];
+static char dirIcons[512];
 
-void gfx_icones_dir(const char *dirArte) {
-  snprintf(dirIcones, sizeof dirIcones, "%s/icones", dirArte ? dirArte : ".");
+void gfx_icons_dir(const char *dirArt) {
+  snprintf(dirIcons, sizeof dirIcons, "%s/icons", dirArt ? dirArt : ".");
 }
 
-void gfx_icone(GfxRect r, const char *nome, float cr, float cg, float cb, float ca) {
+void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca) {
   char cam[600];
   GLuint t;
-  if (!nome || !nome[0] || !dirIcones[0]) return;
+  if (!name || !name[0] || !dirIcons[0]) return;
   // Caminho ABSOLUTO: o diretorio de trabalho do app nao e a pasta da arte, e
   // com caminho relativo o IMG_Load falha em silencio e o icone some sem erro.
   // Mesma armadilha ja documentada em extras_caminho_marca.
-  snprintf(cam, sizeof cam, "%s/%s.png", dirIcones, nome);
+  snprintf(cam, sizeof cam, "%s/%s.png", dirIcons, name);
   // Pede pela largura de desenho: um icone de 38px nao precisa dos 128 do
   // arquivo, e o teto por uso e o que mantem o cache fora do vermelho.
-  t = tex_obter_larg(cam, r.w);
+  t = tex_get_width(cam, r.w);
   if (!t) return;
-  gfx_tex_aspect_atual = 0.0f;   // o arquivo ja e quadrado
-  gfx_rect(r, t, GFX_MARCA, 0, 0, 0, 0.0f, cr, cg, cb, ca);
+  gfx_tex_aspect_current = 0.0f;   // o arquivo ja e quadrado
+  gfx_rect(r, t, GFX_BRAND, 0, 0, 0, 0.0f, cr, cg, cb, ca);
 }
 
-void gfx_recorte(float x, float y, float w, float h) {
-  GFX_OUTRO_INI();
+void gfx_crop(float x, float y, float w, float h) {
+  GFX_OUTRO_START();
   if (w <= 0.0f || h <= 0.0f) { glEnable(GL_SCISSOR_TEST); glScissor(0, 0, 0, 0);
-                                GFX_OUTRO_FIM(); return; }
+                                GFX_OUTRO_END(); return; }
   // Duas conversoes acontecem aqui, e em nenhum outro lugar do app:
   //
   // 1. glScissor conta do canto INFERIOR esquerdo; o resto trabalha com y
@@ -719,38 +719,38 @@ void gfx_recorte(float x, float y, float w, float h) {
   //    tela retina o buffer tem o dobro do tamanho, e sem a escala o recorte
   //    cobria um quarto da area pedida — o menu lateral perdia os dois
   //    primeiros itens e os rotulos saiam cortados no meio da palavra.
-  float ex = (float)telaW / NV_TELA_W, ey = (float)telaH / NV_TELA_H;
+  float ex = (float)screenW / NV_TELA_W, ey = (float)screenH / NV_TELA_H;
   int yy = (int)((NV_TELA_H - (y + h)) * ey);
   glEnable(GL_SCISSOR_TEST);
   glScissor((int)(x * ex), yy, (int)(w * ex), (int)(h * ey));
-  GFX_OUTRO_FIM();
+  GFX_OUTRO_END();
 }
-void gfx_sem_recorte(void) { glDisable(GL_SCISSOR_TEST); }
+void gfx_sem_crop(void) { glDisable(GL_SCISSOR_TEST); }
 
-static int criaAlvo(int i, int w, int h) {
-  glGenTextures(1, &borTex[i]);
-  glBindTexture(GL_TEXTURE_2D, borTex[i]);
+static int createsTarget(int i, int w, int h) {
+  glGenTextures(1, &borderTex[i]);
+  glBindTexture(GL_TEXTURE_2D, borderTex[i]);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  gfx_tex_esquecer(0);  // o bind acima foi por fora do gfx_rect
-  glGenFramebuffers(1, &borFbo[i]);
-  glBindFramebuffer(GL_FRAMEBUFFER, borFbo[i]);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, borTex[i], 0);
+  gfx_tex_forget(0);  // o bind acima foi por fora do gfx_rect
+  glGenFramebuffers(1, &borderFbo[i]);
+  glBindFramebuffer(GL_FRAMEBUFFER, borderFbo[i]);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, borderTex[i], 0);
   GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   return st == GL_FRAMEBUFFER_COMPLETE;
 }
 
-int gfx_borrao_iniciar(int w, int h) {
-  borW = w; borH = h;
+int gfx_blur_start(int w, int h) {
+  borderW = w; borderH = h;
   // 0/1 = par do detalhe (ping-pong do gaussiano), 2/3 = par da home
-  if (!criaAlvo(0, w, h) || !criaAlvo(1, w, h) ||
-      !criaAlvo(2, w, h) || !criaAlvo(3, w, h)) {
-    gfx_borrao_encerrar();
-    printf("desfoque indisponivel: seguindo sem ele\n");
+  if (!createsTarget(0, w, h) || !createsTarget(1, w, h) ||
+      !createsTarget(2, w, h) || !createsTarget(3, w, h)) {
+    gfx_blur_shutdown();
+    printf("blur unavailable: carrying on without it\n");
     return 0;
   }
   return 1;
@@ -758,43 +758,43 @@ int gfx_borrao_iniciar(int w, int h) {
 
 // Desenha a arte no alvo e passa duas vezes o gaussiano. So roda quando a arte
 // muda — o resultado fica guardado na textura.
-void gfx_borrao_gerar(int via, unsigned int tex, float texAspecto) {
+void gfx_blur_generate(int via, unsigned int tex, float texAspect) {
   int a0 = via ? 2 : 0, a1 = via ? 3 : 1;
-  if (!borFbo[a0] || !tex) return;
-  GfxRect cheio = { 0, 0, NV_TELA_W, NV_TELA_H };
-  GFX_OUTRO_INI();
+  if (!borderFbo[a0] || !tex) return;
+  GfxRect full = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GFX_OUTRO_START();
   glDisable(GL_BLEND);
-  glViewport(0, 0, borW, borH);
+  glViewport(0, 0, borderW, borderH);
 
-  glBindFramebuffer(GL_FRAMEBUFFER, borFbo[a0]);
-  gfx_tex_aspect_atual = texAspecto;
-  gfx_rect(cheio, tex, GFX_SNAP, 0, 0, 0, 0.0f, 0, 0, 0, 1.0f);
-  gfx_tex_aspect_atual = 0.0f;
+  glBindFramebuffer(GL_FRAMEBUFFER, borderFbo[a0]);
+  gfx_tex_aspect_current = texAspect;
+  gfx_rect(full, tex, GFX_SNAP, 0, 0, 0, 0.0f, 0, 0, 0, 1.0f);
+  gfx_tex_aspect_current = 0.0f;
 
   // O passo e maior que um texel: com passo de um texel o desfoque mal cobre
   // 4px do alvo, que esticado 4x ainda deixa a estrutura da imagem visivel.
-  float px = NV_BLUR_PASSO / (float)borW, py = NV_BLUR_PASSO / (float)borH;
-  glBindFramebuffer(GL_FRAMEBUFFER, borFbo[a1]);
-  gfx_rect(cheio, borTex[a0], GFX_BLUR, 0, px, 0.0f, 0.0f, 0, 0, 0, 1.0f);
-  glBindFramebuffer(GL_FRAMEBUFFER, borFbo[a0]);
-  gfx_rect(cheio, borTex[a1], GFX_BLUR, 0, 0.0f, py, 0.0f, 0, 0, 0, 1.0f);
+  float px = NV_BLUR_STEP / (float)borderW, py = NV_BLUR_STEP / (float)borderH;
+  glBindFramebuffer(GL_FRAMEBUFFER, borderFbo[a1]);
+  gfx_rect(full, borderTex[a0], GFX_BLUR, 0, px, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+  glBindFramebuffer(GL_FRAMEBUFFER, borderFbo[a0]);
+  gfx_rect(full, borderTex[a1], GFX_BLUR, 0, 0.0f, py, 0.0f, 0, 0, 0, 1.0f);
 
   glEnable(GL_BLEND);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  glViewport(0, 0, telaW, telaH);
-  GFX_OUTRO_FIM();
+  glViewport(0, 0, screenW, screenH);
+  GFX_OUTRO_END();
 }
 
-void gfx_borrao_desenhar(int via, GfxRect r, float alpha) {
+void gfx_blur_draw(int via, GfxRect r, float alpha) {
   int a0 = via ? 2 : 0;
-  if (!borTex[a0]) return;
-  gfx_tex_aspect_atual = 0.0f;
-  gfx_rect(r, borTex[a0], GFX_FUNDO, 0, 0, 0, 0.0f, 0, 0, 0, alpha);
+  if (!borderTex[a0]) return;
+  gfx_tex_aspect_current = 0.0f;
+  gfx_rect(r, borderTex[a0], GFX_BACKGROUND, 0, 0, 0, 0.0f, 0, 0, 0, alpha);
 }
 
-void gfx_borrao_encerrar(void) {
+void gfx_blur_shutdown(void) {
   for (int i = 0; i < 4; i++) {
-    if (borFbo[i]) { glDeleteFramebuffers(1, &borFbo[i]); borFbo[i] = 0; }
-    if (borTex[i]) { glDeleteTextures(1, &borTex[i]); borTex[i] = 0; }
+    if (borderFbo[i]) { glDeleteFramebuffers(1, &borderFbo[i]); borderFbo[i] = 0; }
+    if (borderTex[i]) { glDeleteTextures(1, &borderTex[i]); borderTex[i] = 0; }
   }
 }

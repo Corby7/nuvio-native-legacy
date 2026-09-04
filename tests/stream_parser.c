@@ -11,9 +11,9 @@ int main(void) {
     "%s{\"url\":\"https://example.invalid/%d\",\"behaviorHints\":{\"filename\":\"title.%s\"}}",
     i?",":"",i,i==99?"2160p.DV.Atmos.mp4":"1080p.DVDRip.mkv");
   snprintf(json+n,sizeof json-n,"]}");
-  Stream *v=NULL;int count=stream_extrair(json,"fixture",&v);
-  assert(count==100 && v[99].mp4 && v[99].dolbyVision && v[99].altura==2160);
+  Stream *v=NULL;int count=stream_parse(json,"fixture",&v);
+  assert(count==100 && v[99].mp4 && v[99].dolbyVision && v[99].height==2160);
   assert(!v[0].dolbyVision);free(v);
-  count=stream_extrair("{\"streams\":[]}","fixture",&v);assert(count==0);free(v);
-  puts("PASS ASan/UBSan: parser isolado, 100 fontes, MP4/DV na última posição.");
+  count=stream_parse("{\"streams\":[]}","fixture",&v);assert(count==0);free(v);
+  puts("PASS ASan/UBSan: parser in isolation, 100 sources, MP4/DV in the last position.");
 }

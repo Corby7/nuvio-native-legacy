@@ -1,23 +1,25 @@
-// Guia parental do titulo em reproducao — o painel que o app web mostra no
-// canto superior esquerdo do player quando os controles aparecem
-// (.player-parental-guide). Sao ate cinco linhas "Categoria · Gravidade" com
-// uma barra vertical na cor de destaque a esquerda.
+// Parental guide for the title being played — the panel the web app shows in
+// the top-left corner of the player when the controls appear
+// (.player-parental-guide). Up to five "Category · Severity" lines with a
+// vertical accent-coloured bar on the left.
 //
-// O port desenhava ali outra coisa: um selo de classificacao com o GENERO do
-// titulo ao lado, que nao existe no web. Genero nao e advertencia de conteudo.
+// The port drew something else there: a certification badge with the title's
+// GENRE beside it, which does not exist on the web. A genre is not a content
+// warning.
 #ifndef NV_PARENTAL_H
 #define NV_PARENTAL_H
 
 #define PG_MAX 5
 
-// Pede o guia de `imdb` (formato "tt1234567"). Nao bloqueia: dispara um fio e
-// devolve na hora. Chamar de novo com o MESMO id nao refaz o pedido.
-void parental_pedir(const char *imdb);
+// Requests the guide for `imdb` (in "tt1234567" form). Does not block: it
+// starts a thread and returns immediately. Calling again with the SAME id does
+// not repeat the request.
+void parental_request(const char *imdb);
 
-// Quantas linhas ja chegaram (0 enquanto busca, ou quando o titulo nao tem
-// dado). `rotulo` e a categoria traduzida, `gravidade` o nivel.
+// How many lines have arrived (0 while fetching, or when the title has no
+// data). `label` is the translated category, `severity` the level.
 int  parental_n(void);
-const char *parental_rotulo(int i);
-const char *parental_gravidade(int i);
+const char *parental_label(int i);
+const char *parental_severity(int i);
 
 #endif

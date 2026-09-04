@@ -1,41 +1,42 @@
 #include "focus.h"
 #include <string.h>
 
-void focus_iniciar(Foco *f, int nFileiras, const int *nColunas) {
+void focus_start(Focus *f, int nRows, const int *nColumns) {
   memset(f, 0, sizeof *f);
-  if (nFileiras > FOCUS_MAX_FILEIRAS) nFileiras = FOCUS_MAX_FILEIRAS;
-  f->nFileiras = nFileiras;
-  for (int i = 0; i < nFileiras; i++) f->nColunas[i] = nColunas[i];
+  if (nRows > FOCUS_MAX_ROWS) nRows = FOCUS_MAX_ROWS;
+  f->nRows = nRows;
+  for (int i = 0; i < nRows; i++) f->nColumns[i] = nColumns[i];
 }
 
-int focus_mover(Foco *f, int dx, int dy) {
-  int fAntes = f->fileira, cAntes = f->coluna;
+int focus_mover(Focus *f, int dx, int dy) {
+  int fBefore = f->row, cBefore = f->column;
 
   if (dx) {
-    int novo = f->coluna + dx;
-    if (novo >= 0 && novo < f->nColunas[f->fileira]) f->coluna = novo;
+    int new = f->column + dx;
+    if (new >= 0 && new < f->nColumns[f->row]) f->column = new;
   }
   if (dy) {
-    // PULA fileira vazia. Num filme as fileiras de temporada e de episodio tem
-    // zero colunas, e pousar nelas era foco em coisa que a tela nem desenha: o
-    // D-pad parecia travado e a rolagem ainda mirava o grupo vazio. Uma fileira
-    // sem item nunca deve receber foco, entao a busca segue no mesmo sentido
-    // ate achar uma que tenha — ou desistir na borda, devolvendo 0.
-    int nova = f->fileira + dy;
-    while (nova >= 0 && nova < f->nFileiras && f->nColunas[nova] <= 0) nova += dy;
-    if (nova >= 0 && nova < f->nFileiras) {
-      // guarda onde estava nesta fileira antes de sair
-      f->colunaLembrada[f->fileira] = f->coluna;
-      f->fileira = nova;
-      int alvo = f->colunaLembrada[nova];
-      if (alvo >= f->nColunas[nova]) alvo = f->nColunas[nova] - 1;
-      if (alvo < 0) alvo = 0;
-      f->coluna = alvo;
+    // SKIPS an empty row. On a film the season and episode rows have zero
+    // columns, and landing on them put the focus on something the screen does
+    // not even draw: the D-pad felt stuck and the scroll still aimed at the
+    // empty group. A row with no item must never take focus, so the search
+    // carries on in the same direction until it finds one that has — or gives
+    // up at the edge, returning 0.
+    int new = f->row + dy;
+    while (new >= 0 && new < f->nRows && f->nColumns[new] <= 0) new += dy;
+    if (new >= 0 && new < f->nRows) {
+      // remember where we were in this row before leaving it
+      f->columnRemembered[f->row] = f->column;
+      f->row = new;
+      int target = f->columnRemembered[new];
+      if (target >= f->nColumns[new]) target = f->nColumns[new] - 1;
+      if (target < 0) target = 0;
+      f->column = target;
     }
   }
-  return (f->fileira != fAntes || f->coluna != cAntes);
+  return (f->row != fBefore || f->column != cBefore);
 }
 
-int focus_indice(const Foco *f, int fileira, int coluna) {
-  return (f->fileira == fileira && f->coluna == coluna);
+int focus_index(const Focus *f, int row, int column) {
+  return (f->row == row && f->column == column);
 }

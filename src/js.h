@@ -1,46 +1,47 @@
-// Leitura tolerante de JSON, compartilhada.
+// Shared, tolerant JSON reading.
 //
-// Nao e um analisador completo e nao pretende ser: os formatos daqui (Stremio,
-// Cinemeta, Trakt) sao conhecidos e rasos, e o que importa e NUNCA travar com
-// campo faltando ou tipo inesperado. Cada funcao devolve o que achou ou nada, e
-// quem chama decide. Esta logica nasceu duplicada em addons.c e video.c; virou
-// modulo quando o terceiro consumidor apareceu.
+// It is not a complete parser and does not intend to be: the formats here
+// (Stremio, Cinemeta, Trakt) are known and shallow, and what matters is NEVER
+// falling over on a missing field or an unexpected type. Each function returns
+// what it found or nothing, and the caller decides. This logic started
+// duplicated in addons.c and video.c; it became a module when the third
+// consumer appeared.
 #ifndef NV_JS_H
 #define NV_JS_H
 #include <stddef.h>
 
-// Fim do objeto/array que comeca em `p` (que aponta para '{' ou '['),
-// respeitando aspas e escapes.
-const char *js_fim(const char *p);
+// End of the object/array starting at `p` (which points at '{' or '['),
+// respecting quotes and escapes.
+const char *js_end(const char *p);
 
-// Valor textual de "chave" dentro de [ini,fim). 1 se achou. Escapes \uXXXX
-// viram espaco de proposito: os textos vem cheios de emoji e sao so para
-// exibicao — decodificar UTF-16 aqui seria trabalho sem retorno.
-int js_texto(const char *ini, const char *fim, const char *chave,
-             char *dst, size_t tam);
+// Text value of "key" within [start,end). 1 if found. \uXXXX escapes become a
+// space on purpose: the texts arrive full of emoji and are for display only —
+// decoding UTF-16 here would be work with no return.
+int js_text(const char *start, const char *end, const char *key,
+             char *dst, size_t size);
 
-// Numero de "chave". Exige que o caractere apos a chave seja digito/sinal, o
-// que evita casar com um OBJETO de mesmo nome — o caso real e
-// {"currentTime":{"currentTime":8580}}, onde a primeira ocorrencia da 0.
-double js_num(const char *ini, const char *fim, const char *chave, double padrao);
+// Number for "key". Requires the character after the key to be a digit or a
+// sign, which avoids matching an OBJECT of the same name — the real case is
+// {"currentTime":{"currentTime":8580}}, where the first occurrence gives 0.
+double js_num(const char *start, const char *end, const char *key, double dflt);
 
-// Primeiro elemento do array de nome `chave`; NULL se nao houver. Avance com
-// js_prox.
-const char *js_array(const char *ini, const char *fim, const char *chave);
+// First element of the array named `key`; NULL if there is none. Advance with
+// js_next.
+const char *js_array(const char *start, const char *end, const char *key);
 
 // Proximo elemento do array a partir do fim do anterior; NULL no fim.
-const char *js_prox(const char *fimAnterior);
+const char *js_next(const char *endPrevious);
 
-// Primeiro elemento de um array que e a RAIZ do documento. Toda RPC do
-// Supabase responde `[{...},{...}]` sem chave em volta, e js_array — que
-// procura por nome — nao tem o que procurar ali. Avance com js_prox.
-const char *js_raiz_array(const char *corpo);
+// First element of an array that is the ROOT of the document. Every Supabase
+// RPC answers `[{...},{...}]` with no key around it, and js_array — which
+// searches by name — has nothing to search for there. Advance with js_next.
+const char *js_root_array(const char *body);
 
-// Copia o valor de `chave` como TEXTO JSON CRU, com as chaves e colchetes.
-// Existe para o `credential_json` das credenciais: o app repassa aquele objeto
-// ao servidor sem interpretar, e reconstrui-lo campo a campo perderia tudo que
-// esta versao do app nao conhece. 1 se achou e coube.
-int js_bruto(const char *ini, const char *fim, const char *chave,
-             char *dst, size_t tam);
+// Copies the value of `key` as RAW JSON TEXT, braces and brackets included.
+// It exists for `credential_json`: the app passes that object on to the server
+// uninterpreted, and rebuilding it field by field would lose everything this
+// version of the app does not know about. 1 if found and it fitted.
+int js_raw(const char *start, const char *end, const char *key,
+             char *dst, size_t size);
 
 #endif

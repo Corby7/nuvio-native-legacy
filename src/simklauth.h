@@ -22,23 +22,23 @@
 #define NV_SIMKLAUTH_H
 
 typedef enum {
-  SMK_PARADO = 0,
-  SMK_PEDINDO,
-  SMK_AGUARDANDO,
-  SMK_LIGADO,
-  SMK_ERRO
-} SmkEstado;
+  SMK_STOPPED = 0,
+  SMK_REQUESTING,
+  SMK_WAITING,
+  SMK_ON,
+  SMK_ERROR
+} SmkState;
 
-void simklauth_comecar(void);
-void simklauth_passo(unsigned agoraMs);
+void simklauth_begin(void);
+void simklauth_step(unsigned nowMs);
 
-SmkEstado   simklauth_estado(void);
-const char *simklauth_codigo(void);
+SmkState   simklauth_state(void);
+const char *simklauth_code(void);
 const char *simklauth_url(void);
-const char *simklauth_erro(void);
+const char *simklauth_error(void);
 
-void simklauth_cancelar(void);
-int  simklauth_carregar(void);    // le o token guardado; 1 quando havia
-void simklauth_esquecer(void);
+void simklauth_cancel(void);
+int  simklauth_load(void);    // le o token guardado; 1 quando havia
+void simklauth_forget(void);
 
 #endif

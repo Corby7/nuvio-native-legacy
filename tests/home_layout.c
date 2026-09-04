@@ -4,110 +4,110 @@
 #include "../src/home.c"
 
 int main(void) {
-  assert(MAX_FIL <= FOCUS_MAX_FILEIRAS);
-  assert(perfilCatalogo("Oscars 2026 - Filme") == FILEIRA_COLECAO);
-  assert(perfilCatalogo("NETFLIX - Série") == FILEIRA_SERVICO);
-  assert(perfilCatalogo("For You - Filme") == FILEIRA_NORMAL);
-  assert(larguraDe(FILEIRA_DESTAQUE) > larguraDe(FILEIRA_COLECAO));
-  assert(larguraDe(FILEIRA_COLECAO) > larguraDe(FILEIRA_SERVICO));
-  assert(!temRotulo(FILEIRA_DESTAQUE));
-  assert(!temRotulo(FILEIRA_CATALOGOS));
+  assert(MAX_FILTER <= FOCUS_MAX_ROWS);
+  assert(profileCatalog("Oscars 2026 - Film") == ROW_COLLECTION);
+  assert(profileCatalog("NETFLIX - Series") == ROW_SERVICE);
+  assert(profileCatalog("For You - Film") == ROW_NORMAL);
+  assert(widthOf(ROW_HIGHLIGHT) > widthOf(ROW_COLLECTION));
+  assert(widthOf(ROW_COLLECTION) > widthOf(ROW_SERVICE));
+  assert(!temLabel(ROW_HIGHLIGHT));
+  assert(!temLabel(ROW_CATALOGS));
 
-  CatItem *itensTeste = calloc(48, sizeof *itensTeste);
-  CatFileira fils[16] = {0};
-  assert(itensTeste);
+  CatItem *itemsTeste = calloc(48, sizeof *itemsTeste);
+  CatRow filters[16] = {0};
+  assert(itemsTeste);
   for (int i = 0; i < 16; i++) {
-    snprintf(fils[i].chave, sizeof fils[i].chave, "catalogo_%d", i);
-    snprintf(fils[i].titulo, sizeof fils[i].titulo, "Lista %d", i);
-    snprintf(fils[i].base, sizeof fils[i].base, "https://example.invalid/addon");
-    snprintf(fils[i].tipo, sizeof fils[i].tipo, "movie");
-    snprintf(fils[i].catId, sizeof fils[i].catId, "id%d", i);
-    fils[i].ini = i*3; fils[i].n = 3;
+    snprintf(filters[i].key, sizeof filters[i].key, "catalog_%d", i);
+    snprintf(filters[i].title, sizeof filters[i].title, "List %d", i);
+    snprintf(filters[i].base, sizeof filters[i].base, "https://example.invalid/addon");
+    snprintf(filters[i].kind, sizeof filters[i].kind, "movie");
+    snprintf(filters[i].catId, sizeof filters[i].catId, "id%d", i);
+    filters[i].start = i*3; filters[i].n = 3;
   }
-  snprintf(fils[0].chave, sizeof fils[0].chave, "continue_watching");
-  fils[0].base[0] = fils[0].catId[0] = 0;
-  snprintf(fils[14].titulo, sizeof fils[14].titulo, "Netflix - Filme");
-  snprintf(fils[15].titulo, sizeof fils[15].titulo, "Oscar - Filme");
-  cat_definir_tudo(itensTeste, 48, fils, 16);
-  sincronizarFileiras();
-  assert(nFileiras == 17);
-  assert(foco.nFileiras == 17);
-  assert(fileiras[1].tipo == FILEIRA_SOCIAL && fileiras[1].ini == -1 && fileiras[1].n == 1);
-  assert(fileiras[2].tipo == FILEIRA_DESTAQUE);
+  snprintf(filters[0].key, sizeof filters[0].key, "continue_watching");
+  filters[0].base[0] = filters[0].catId[0] = 0;
+  snprintf(filters[14].title, sizeof filters[14].title, "Netflix - Film");
+  snprintf(filters[15].title, sizeof filters[15].title, "Oscar - Film");
+  cat_set_all(itemsTeste, 48, filters, 16);
+  syncRows();
+  assert(nRows == 17);
+  assert(focus.nRows == 17);
+  assert(rows[1].kind == ROW_SOCIAL && rows[1].start == -1 && rows[1].n == 1);
+  assert(rows[2].kind == ROW_HIGHLIGHT);
   for (int i = 0; i < 16; i++) {
-    int achou = 0;
-    for (int r = 0; r < nFileiras; r++)
-      if (!strcmp(fileiras[r].chave, fils[i].chave)) achou++;
-    assert(achou == 1); // nenhum catálogo removido ou duplicado
+    int found = 0;
+    for (int r = 0; r < nRows; r++)
+      if (!strcmp(rows[r].key, filters[i].key)) found++;
+    assert(found == 1); // nenhum catálogo removido ou duplicado
   }
-  foco.fileira = 0; foco.coluna = 0;
-  for (int i = 0; i < 16; i++) assert(focus_mover(&foco, 0, 1));
-  assert(foco.fileira == 16);
-  assert(!focus_mover(&foco, 0, 1));
+  focus.row = 0; focus.column = 0;
+  for (int i = 0; i < 16; i++) assert(focus_mover(&focus, 0, 1));
+  assert(focus.row == 16);
+  assert(!focus_mover(&focus, 0, 1));
   // Mesma contagem, ordem diferente: manter chave, coluna e scroll.
-  foco.fileira = 5; foco.coluna = 2; scrollX[5] = 123;
-  char chave[192]; snprintf(chave, sizeof chave, "%s", fileiras[5].chave);
-  CatFileira troca = fils[4]; fils[4] = fils[8]; fils[8] = troca;
-  cat_definir_tudo(itensTeste, 48, fils, 16);
-  sincronizarFileiras();
-  assert(!strcmp(fileiras[foco.fileira].chave, chave));
-  assert(foco.coluna == 2);
-  assert(scrollX[foco.fileira] == 123);
-  assert(col_carregar("tests/fixtures/collections") == 2);
+  focus.row = 5; focus.column = 2; scrollX[5] = 123;
+  char key[192]; snprintf(key, sizeof key, "%s", rows[5].key);
+  CatRow swap = filters[4]; filters[4] = filters[8]; filters[8] = swap;
+  cat_set_all(itemsTeste, 48, filters, 16);
+  syncRows();
+  assert(!strcmp(rows[focus.row].key, key));
+  assert(focus.column == 2);
+  assert(scrollX[focus.row] == 123);
+  assert(col_load("tests/fixtures/collections") == 2);
   assert(col_folder(0)->nSources==2);
   assert(col_folder(0)->frames==0);
   assert(col_folder(-1)==NULL);
   const char *ids[]={"", "now_playing_movies","trending_movies","trending_series",
     "ai_movies_for_you","ai_series_for_you","snoak_top100_movies","snoak_top100_series"};
-  for(int i=1;i<8;i++)snprintf(fils[i].catId,sizeof fils[i].catId,"%s",ids[i]);
-  cat_definir_tudo(itensTeste,48,fils,16);filsAplicadas=-1;sincronizarFileiras();
+  for(int i=1;i<8;i++)snprintf(filters[i].catId,sizeof filters[i].catId,"%s",ids[i]);
+  cat_set_all(itemsTeste,48,filters,16);filtersApplied=-1;syncRows();
   // A curadoria ordena os atalhos conhecidos, mas nao apaga fileiras novas
   // declaradas pelo addon. O fixture tem oito chaves fora da tabela editorial.
-  assert(nFileiras>=11);
-  assert(fileiras[1].tipo==FILEIRA_SOCIAL);
-  assert(!strcmp(fileiras[2].titulo,"Recent Release"));
-  assert(!strcmp(fileiras[3].titulo,"Streaming"));
-  assert(fileiras[3].tipo==FILEIRA_CATALOGOS);
-  assert(!strcmp(col_folder(fileiras[3].folders[0])->title,"Netflix"));
-  assert(!strcmp(fileiras[4].titulo,"Trending Movies"));
-  assert(!strcmp(fileiras[6].titulo,"Themes"));
-  assert(!strcmp(fileiras[7].catId,"ai_movies_for_you"));
-  assert(fileiras[9].tipo==FILEIRA_TOP10);
-  assert(fileiras[10].tipo==FILEIRA_TOP10);
-  assert(fileiras[9].stackN==3 && fileiras[9].n==1);
+  assert(nRows>=11);
+  assert(rows[1].kind==ROW_SOCIAL);
+  assert(!strcmp(rows[2].title,"Recent Release"));
+  assert(!strcmp(rows[3].title,"Streaming"));
+  assert(rows[3].kind==ROW_CATALOGS);
+  assert(!strcmp(col_folder(rows[3].folders[0])->title,"Netflix"));
+  assert(!strcmp(rows[4].title,"Trending Movies"));
+  assert(!strcmp(rows[6].title,"Themes"));
+  assert(!strcmp(rows[7].catId,"ai_movies_for_you"));
+  assert(rows[9].kind==ROW_TOP10);
+  assert(rows[10].kind==ROW_TOP10);
+  assert(rows[9].stackN==3 && rows[9].n==1);
   for (int i=8; i<16; i++) {
-    int encontrado=0;
-    for (int r=0; r<nFileiras; r++)
-      if (!strcmp(fileiras[r].chave, fils[i].chave)) encontrado=1;
-    assert(encontrado);
+    int found=0;
+    for (int r=0; r<nRows; r++)
+      if (!strcmp(rows[r].key, filters[i].key)) found=1;
+    assert(found);
   }
-  fileiras[9].n=3;fileiras[9].stackN=0;fileiras[9].verTudo=1;
-  for(int i=0;i<nFileiras;i++)assert(strcmp(fileiras[i].titulo,"Seus catálogos"));
-  snprintf(fils[15].chave,sizeof fils[15].chave,"social_activity");
-  fils[15].base[0]=fils[15].catId[0]=0;
-  cat_definir_tudo(itensTeste,48,fils,16);sincronizarFileiras();
-  int sociais=0;
-  for(int i=0;i<nFileiras;i++)if(fileiras[i].tipo==FILEIRA_SOCIAL){
-    sociais++;assert(fileiras[i].ini==45 && fileiras[i].n==3);
+  rows[9].n=3;rows[9].stackN=0;rows[9].seeAll=1;
+  for(int i=0;i<nRows;i++)assert(strcmp(rows[i].title,"Your catalogues"));
+  snprintf(filters[15].key,sizeof filters[15].key,"social_activity");
+  filters[15].base[0]=filters[15].catId[0]=0;
+  cat_set_all(itemsTeste,48,filters,16);syncRows();
+  int social=0;
+  for(int i=0;i<nRows;i++)if(rows[i].kind==ROW_SOCIAL){
+    social++;assert(rows[i].start==45 && rows[i].n==3);
   }
-  assert(sociais==1); // dados reais substituem vazio, nunca duplicam a fileira
-  assert(fileiras[9].stackN==0 && fileiras[9].n==3 && fileiras[9].verTudo);
+  assert(social==1); // dados reais substituem vazio, nunca duplicam a fileira
+  assert(rows[9].stackN==0 && rows[9].n==3 && rows[9].seeAll);
 
   // Arte de outro titulo nunca e fallback silencioso, mesmo quando o indice
   // esta alem do acervo local. Sem catalogo, os vetores locais continuam
   // disponiveis apenas na mesma posicao.
-  snprintf(itensTeste[0].poster,sizeof itensTeste[0].poster,"own-poster.jpg");
-  snprintf(itensTeste[0].backdrop,sizeof itensTeste[0].backdrop,"own-backdrop.jpg");
-  snprintf(itensTeste[1].poster,sizeof itensTeste[1].poster,"other-poster.jpg");
+  snprintf(itemsTeste[0].poster,sizeof itemsTeste[0].poster,"own-poster.jpg");
+  snprintf(itemsTeste[0].backdrop,sizeof itemsTeste[0].backdrop,"own-backdrop.jpg");
+  snprintf(itemsTeste[1].poster,sizeof itemsTeste[1].poster,"other-poster.jpg");
   nBd=2; nPst=1;
   snprintf(bd[0],sizeof bd[0],"fallback-0.jpg");
   snprintf(bd[1],sizeof bd[1],"fallback-1.jpg");
   snprintf(pst[0],sizeof pst[0],"fallback-poster-0.jpg");
-  cat_definir_tudo(itensTeste,48,NULL,0);
-  assert(!strcmp(arte_por_identidade(0,0),"own-poster.jpg"));
-  assert(!strcmp(arte_por_identidade(0,1),"own-backdrop.jpg"));
-  assert(!strcmp(arte_por_identidade(1,0),"other-poster.jpg"));
-  assert(arte_por_identidade(999,0)==NULL);
+  cat_set_all(itemsTeste,48,NULL,0);
+  assert(!strcmp(art_por_identity(0,0),"own-poster.jpg"));
+  assert(!strcmp(art_por_identity(0,1),"own-backdrop.jpg"));
+  assert(!strcmp(art_por_identity(1,0),"other-poster.jpg"));
+  assert(art_por_identity(999,0)==NULL);
 
   // A integracao de segunda ordem retargeta sem overshoot, e reduced motion
   // pode saltar ao destino sem deixar velocidade residual.
@@ -118,11 +118,11 @@ int main(void) {
     }
     x=anim_mola2(&v,x,0.0f,0.016f,NV_MOLA2_SCROLL);
     assert(x>=0.0f && x<=1.0f);
-    x=anim_mola2_reduzida(&v,x,0.35f,0.016f,NV_MOLA2_SCROLL,1);
+    x=anim_mola2_reduced(&v,x,0.35f,0.016f,NV_MOLA2_SCROLL,1);
     assert(x==0.35f && v==0.0f);
   }
   assert(NV_HERO_FADE_MS>=180.0f && NV_HERO_FADE_MS<=250.0f);
-  free(itensTeste);
+  free(itemsTeste);
   puts("home layout: PASS (fallback, imported collections, requested order, ranks, focus)");
   return 0;
 }

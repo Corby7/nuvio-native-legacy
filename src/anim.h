@@ -1,89 +1,91 @@
-// Animacao por mola criticamente amortecida, por propriedade.
+// Critically damped spring animation, per property.
 //
-// Por que mola e nao easing de duracao fixa: no D-pad o alvo muda no meio do
-// movimento (usuario segura a tecla), e uma tween com duracao precisa ser
-// reiniciada a cada troca — o que produz o "engasgo" tipico. A mola so persegue
-// o alvo novo a partir da posicao atual, sem descontinuidade.
+// Why a spring and not fixed-duration easing: on the D-pad the target changes
+// mid-movement (the user holds the key down), and a tween with a duration has
+// to be restarted on every change — which produces the familiar stutter. The
+// spring simply chases the new target from wherever it is, with no
+// discontinuity.
 #ifndef NV_ANIM_H
 #define NV_ANIM_H
 #include <math.h>
 
-// Independente de framerate: usa exp(-k*dt), nao um passo fixo por quadro.
-static inline float anim_mola(float atual, float alvo, float dt, float rigidez) {
-  return atual + (alvo - atual) * (1.0f - expf(-rigidez * dt));
+// Frame-rate independent: it uses exp(-k*dt), not a fixed step per frame.
+static inline float anim_mola(float current, float target, float dt, float stiffness) {
+  return current + (target - current) * (1.0f - expf(-stiffness * dt));
 }
 static inline float anim_clamp(float v, float lo, float hi) {
   return v < lo ? lo : (v > hi ? hi : v);
 }
-static inline float anim_mistura(float a, float b, float t) { return a + (b - a) * t; }
+static inline float anim_blend(float a, float b, float t) { return a + (b - a) * t; }
 
-// MOLA DE SEGUNDA ORDEM, CRITICAMENTE AMORTECIDA (posicao + velocidade).
+// SECOND-ORDER, CRITICALLY DAMPED SPRING (position + velocity).
 //
-// POR QUE ELA EXISTE, ao lado da de cima. MEDIDO na referencia (video do
-// aparelho, quadros com carimbo de tempo, tecla DIREITA na fileira "Continuar
-// assistindo"): o anel de foco salta para o card novo em UM quadro e e a
-// FILEIRA que desliza um passo de card por baixo dele. O deslize chega a
-// metade do caminho em ~180 ms, a 83% em ~215 ms, e daí decai como uma
-// exponencial de k ~= 12,5 /s ate assentar por volta de 450 ms.
+// WHY IT EXISTS, alongside the one above. MEASURED against the reference
+// (device video, time-stamped frames, RIGHT key on the "Continue watching"
+// row): the focus ring jumps to the new card in ONE frame and it is the ROW
+// that slides one card step underneath it. The slide reaches halfway in
+// ~180 ms, 83% in ~215 ms, and from there decays like an exponential with
+// k ~= 12.5 /s until it settles around 450 ms.
 //
-// Ou seja: comeca DEVAGAR, acelera, e termina com cauda exponencial. A
-// `anim_mola` de primeira ordem faz o contrario — parte com velocidade MAXIMA
-// e so desacelera. Ajustada para acertar o meio (k=4,8) ela ainda estaria em
-// 89% aos 470 ms, onde a referencia ja esta em 99%; ajustada para acertar a
-// cauda (k=12,5) ela cruza a metade aos 55 ms em vez de 180. Nenhum k unico
-// serve, porque a forma e outra.
+// In other words: it starts SLOWLY, accelerates, and ends with an exponential
+// tail. The first-order `anim_spring` does the opposite — it leaves at MAXIMUM
+// speed and only decelerates. Tuned to match the midpoint (k=4.8) it would
+// still be at 89% at 470 ms where the reference is already at 99%; tuned to
+// match the tail (k=12.5) it crosses halfway at 55 ms instead of 180. No single
+// k works, because the shape is different.
 //
-// A criticamente amortecida tem exatamente essa forma: p(t) = 1-(1+wt)e^-wt.
-// Velocidade inicial zero (partida macia), cauda e^-wt (o k medido) e ZERO
-// overshoot — nao "passa do ponto e volta", que e o defeito que a mola crua
-// tem em bloco grande. E, como a de primeira ordem, ela PERSEGUE o alvo: se a
-// tecla fica presa e o alvo muda no meio do voo, nao ha o que reiniciar.
+// The critically damped one has exactly that shape: p(t) = 1-(1+wt)e^-wt. Zero
+// initial velocity (a soft start), an e^-wt tail (the measured k) and ZERO
+// overshoot — it does not "go past and come back", which is the flaw a raw
+// spring has on a large block. And, like the first-order one, it CHASES the
+// target: if the key is held and the target changes mid-flight, there is
+// nothing to restart.
 //
-// `v` e a velocidade, guardada pelo chamador junto da posicao. `w` e a
-// frequencia em rad/s e vale o k da cauda medida.
-static inline float anim_mola2(float *v, float atual, float alvo, float dt, float w) {
-  // Um quadro perdido (aba escondida, decode longo) nao pode virar um passo
-  // gigante. A forma fechada evita o overshoot do Euler semi-implicito e
-  // continua retargetavel quando o D-pad muda o alvo durante o movimento.
-  if (dt <= 0.0f || w <= 0.0f) return atual;
+// `v` is the velocity, kept by the caller alongside the position. `w` is the
+// frequency in rad/s and equals the k of the measured tail.
+static inline float anim_mola2(float *v, float current, float target, float dt, float w) {
+  // A dropped frame (hidden tab, long decode) must not become one giant step.
+  // The closed form avoids the overshoot of semi-implicit Euler and stays
+  // retargetable when the D-pad changes the target mid-movement.
+  if (dt <= 0.0f || w <= 0.0f) return current;
   if (dt > 0.05f) dt = 0.05f;
-  if ((alvo - atual) * (*v) < 0.0f) *v = 0.0f;
-  float x = atual - alvo;
+  if ((target - current) * (*v) < 0.0f) *v = 0.0f;
+  float x = current - target;
   float e = expf(-w * dt);
   float c = (*v + w * x) * dt;
-  float novo = alvo + (x + c) * e;
+  float new = target + (x + c) * e;
   float nv = (*v - w * c) * e;
-  if ((alvo > atual && novo > alvo) || (alvo < atual && novo < alvo)) {
-    novo = alvo;
+  if ((target > current && new > target) || (target < current && new < target)) {
+    new = target;
     nv = 0.0f;
   }
   *v = nv;
-  return novo;
+  return new;
 }
 
-// Reduced motion e uma politica, nao um detalhe de cada tela.
-static inline float anim_reduzida(float atual, float alvo, int reduzida) {
-  return reduzida ? alvo : atual;
+// Reduced motion is a policy, not a detail of each screen.
+static inline float anim_reduced(float current, float target, int reduced) {
+  return reduced ? target : current;
 }
-static inline float anim_mola2_reduzida(float *v, float atual, float alvo,
-                                        float dt, float w, int reduzida) {
-  if (reduzida) { *v = 0.0f; return alvo; }
-  return anim_mola2(v, atual, alvo, dt, w);
+static inline float anim_mola2_reduced(float *v, float current, float target,
+                                        float dt, float w, int reduced) {
+  if (reduced) { *v = 0.0f; return target; }
+  return anim_mola2(v, current, target, dt, w);
 }
 
-// Aceleracao e desaceleracao simetricas, para animacao com relogio proprio.
-static inline float anim_suave(float t) {
+// Symmetric acceleration and deceleration, for animation with its own clock.
+static inline float anim_smooth(float t) {
   t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
   return t * t * (3.0f - 2.0f * t);
 }
 
-// Progresso 0..1 com RELOGIO PROPRIO: anda `dt` segundos em direcao a `alvo`
-// gastando `ms` no percurso inteiro. Usada onde o tempo precisa bater com uma
-// medida (o veu do menu), e nao apenas "assentar rapido".
-static inline float anim_rampa(float p, float alvo, float dt, float ms) {
-  float passo = dt * (1000.0f / ms);
-  if (alvo > p) { p += passo; if (p > alvo) p = alvo; }
-  else          { p -= passo; if (p < alvo) p = alvo; }
+// Progress 0..1 with ITS OWN CLOCK: advances `dt` seconds towards `target`,
+// spending `ms` over the whole journey. Used where the timing has to match a
+// measurement (the menu veil), not merely "settle quickly".
+static inline float anim_ramp(float p, float target, float dt, float ms) {
+  float step = dt * (1000.0f / ms);
+  if (target > p) { p += step; if (p > target) p = target; }
+  else          { p -= step; if (p < target) p = target; }
   return p;
 }
 

@@ -8,7 +8,7 @@ or build it yourself:
 bash tools/arm.sh --ipk
 ```
 
-The package contains **no credentials**. `tools/testa-ipk.sh` proves it, and
+The package contains **no credentials**. `tools/test-ipk.sh` proves it, and
 `arm.sh` aborts and deletes the package if one appears.
 
 ---

@@ -7,12 +7,12 @@
 #include <string.h>
 #include <strings.h>
 
-static int contem(const char *s, const char *termo) {
-  for (; *s; s++) if (!strncasecmp(s, termo, strlen(termo))) return 1;
+static int contains(const char *s, const char *term) {
+  for (; *s; s++) if (!strncasecmp(s, term, strlen(term))) return 1;
   return 0;
 }
 
-// Token isolado reconhece .DV., DV/HDR e [DV], mas nunca DVD/DVDRip.
+// An isolated token matches .DV., DV/HDR and [DV], but never DVD/DVDRip.
 static int token(const char *s, const char *t) {
   size_t n = strlen(t);
   const char *p;
@@ -22,60 +22,60 @@ static int token(const char *s, const char *t) {
   return 0;
 }
 
-int stream_extrair(const char *json, const char *provedor, Stream **saida) {
-  const char *p, *fim;
+int stream_parse(const char *json, const char *provider, Stream **output) {
+  const char *p, *end;
   int n = 0, cap = 0;
   Stream *v = NULL;
-  *saida = NULL;
+  *output = NULL;
   if (!json) return 0;
   p = js_array(json, json + strlen(json), "streams");
   while (p && *p == '{') {
     Stream s = {0};
-    char titulo[2048] = "", texto[5000];
-    fim = js_fim(p);
-    if (!fim || fim <= p) break;
-    js_texto(p, fim, "url", s.url, sizeof s.url);
-    // Nao expor torrents/externalUrl como links diretos nem tocar URL cortada.
+    char title[2048] = "", text[5000];
+    end = js_end(p);
+    if (!end || end <= p) break;
+    js_text(p, end, "url", s.url, sizeof s.url);
+    // Do not expose torrents/externalUrl as direct links, and never play a truncated URL.
     if ((!strncmp(s.url, "http://", 7) || !strncmp(s.url, "https://", 8)) &&
         strlen(s.url) < sizeof s.url - 1) {
-      js_texto(p, fim, "name", s.rotulo, sizeof s.rotulo);
-      js_texto(p, fim, "description", s.descricao, sizeof s.descricao);
-      js_texto(p, fim, "title", titulo, sizeof titulo);
-      js_texto(p, fim, "filename", s.arquivo, sizeof s.arquivo);
-      if (!s.descricao[0]) snprintf(s.descricao, sizeof s.descricao, "%s", titulo);
-      if (!s.rotulo[0]) snprintf(s.rotulo, sizeof s.rotulo, "%s", provedor);
-      snprintf(s.provedor, sizeof s.provedor, "%s", provedor);
-      snprintf(texto, sizeof texto, "%s %s %s %s", s.rotulo, s.descricao, titulo, s.arquivo);
-      s.altura = contem(texto, "2160") || token(texto, "4k") || token(texto, "uhd") ? 2160 :
-                 contem(texto, "1440") ? 1440 : contem(texto, "1080") ? 1080 :
-                 contem(texto, "720") ? 720 : contem(texto, "480") ? 480 : 0;
-      s.dolbyVision = token(texto, "dv") || token(texto, "dovi") ||
-                      contem(texto, "dolby vision") || contem(texto, "dolbyvision");
-      s.dolbyAtmos = token(texto, "atmos");
-      s.badges = badges_detectar(texto);
-      s.mp4 = token(texto, "mp4") || contem(s.url, ".mp4");
-      double bytes = js_num(p, fim, "videoSize", 0);
-      if (bytes > 0) s.tamanhoMB = (long)(bytes / (1024.0 * 1024.0));
+      js_text(p, end, "name", s.label, sizeof s.label);
+      js_text(p, end, "description", s.description, sizeof s.description);
+      js_text(p, end, "title", title, sizeof title);
+      js_text(p, end, "filename", s.file, sizeof s.file);
+      if (!s.description[0]) snprintf(s.description, sizeof s.description, "%s", title);
+      if (!s.label[0]) snprintf(s.label, sizeof s.label, "%s", provider);
+      snprintf(s.provider, sizeof s.provider, "%s", provider);
+      snprintf(text, sizeof text, "%s %s %s %s", s.label, s.description, title, s.file);
+      s.height = contains(text, "2160") || token(text, "4k") || token(text, "uhd") ? 2160 :
+                 contains(text, "1440") ? 1440 : contains(text, "1080") ? 1080 :
+                 contains(text, "720") ? 720 : contains(text, "480") ? 480 : 0;
+      s.dolbyVision = token(text, "dv") || token(text, "dovi") ||
+                      contains(text, "dolby vision") || contains(text, "dolbyvision");
+      s.dolbyAtmos = token(text, "atmos");
+      s.badges = badges_detect(text);
+      s.mp4 = token(text, "mp4") || contains(s.url, ".mp4");
+      double bytes = js_num(p, end, "videoSize", 0);
+      if (bytes > 0) s.sizeMB = (long)(bytes / (1024.0 * 1024.0));
       else {
-        const char *u = strstr(texto, " GB");
-        double escala = 1024;
-        if (!u) { u = strstr(texto, " MB"); escala = 1; }
+        const char *u = strstr(text, " GB");
+        double scale = 1024;
+        if (!u) { u = strstr(text, " MB"); scale = 1; }
         if (u) {
-          const char *ini = u;
-          while (ini > texto && (isdigit((unsigned char)ini[-1]) || ini[-1] == '.')) ini--;
-          if (ini < u) s.tamanhoMB = (long)(atof(ini) * escala);
+          const char *start = u;
+          while (start > text && (isdigit((unsigned char)start[-1]) || start[-1] == '.')) start--;
+          if (start < u) s.sizeMB = (long)(atof(start) * scale);
         }
       }
       if (n == cap) {
-        int nova = cap ? cap * 2 : 32;
-        Stream *tmp = realloc(v, (size_t)nova * sizeof *tmp);
+        int new = cap ? cap * 2 : 32;
+        Stream *tmp = realloc(v, (size_t)new * sizeof *tmp);
         if (!tmp) { free(v); return -1; }
-        v = tmp; cap = nova;
+        v = tmp; cap = new;
       }
       v[n++] = s;
     }
-    p = js_prox(fim);
+    p = js_next(end);
   }
-  *saida = v;
+  *output = v;
   return n;
 }

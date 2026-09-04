@@ -1,34 +1,34 @@
-// Roteador de telas.
+// Screen router.
 //
-// Ate agora o main.c decidia sozinho entre home e detalhe, com um if. Com
-// menu, busca, biblioteca, ajustes e player, esse if viraria um emaranhado onde
-// cada tela precisa saber das outras. Aqui a regra fica num lugar so: existe
-// uma tela CORRENTE, uma PILHA de retorno, e cada tela apenas diz "quero sair"
-// ou "abre este titulo".
+// Until now main.c decided between home and detail on its own, with an if. With
+// a menu, search, library, settings and player, that if would turn into a
+// tangle where every screen has to know about the others. Here the rule lives
+// in one place: there is a CURRENT screen, a return STACK, and each screen only
+// says "I want out" or "open this title".
 #ifndef NV_APP_H
 #define NV_APP_H
 #include <SDL2/SDL.h>
 
-// TELA_LOGIN e TELA_ESCOLHA_PERFIL sao a excecao a ordem de prioridade: quando
-// uma delas esta ativa NADA mais desenha nem recebe tecla. Sem conta nao ha
-// catalogo do usuario, nao ha addons e nao ha progresso — deixar a home
-// aparecer por tras seria mostrar o conteudo de exemplo do pacote como se
-// fosse dele.
+// SCREEN_LOGIN and SCREEN_PROFILE_PICKER are the exception to the priority
+// order: while either is active NOTHING else draws or receives a key. Without
+// an account there is no user catalogue, no addons and no progress — letting
+// home show through behind would be presenting the package's sample content as
+// if it were theirs.
 //
-// TELA_ESCOLHA_PERFIL e a escolha de perfil DA CONTA; TELA_PERFIL, que ja
-// existia, e a tela de estatisticas do Trakt. Nomes proximos, coisas
-// diferentes.
+// SCREEN_PROFILE_PICKER is the ACCOUNT's profile chooser; SCREEN_PROFILE, which
+// already existed, is the Trakt statistics screen. Close names, different
+// things.
 typedef enum {
-  TELA_LOGIN, TELA_ESCOLHA_PERFIL,
-  TELA_HOME, TELA_BUSCA, TELA_BIBLIOTECA, TELA_PERFIL, TELA_AJUSTES,
-  TELA_PLAYER, TELA_SOCIAL
-} Tela;
+  SCREEN_LOGIN, SCREEN_CHOICE_PROFILE,
+  SCREEN_HOME, SCREEN_SEARCH, SCREEN_LIBRARY, SCREEN_PROFILE, SCREEN_SETTINGS,
+  SCREEN_PLAYER, SCREEN_SOCIAL
+} Screen;
 
-int  app_iniciar(const char *dirArte);
-void app_evento(const SDL_Event *e);
-void app_atualizar(float dt, Uint32 agora);
-void app_desenhar(Uint32 agora);
-int  app_quer_sair(void);
-void app_encerrar(void);
+int  app_start(const char *dirArt);
+void app_event(const SDL_Event *e);
+void app_update(float dt, Uint32 now);
+void app_draw(Uint32 now);
+int  app_wants_exit(void);
+void app_shutdown(void);
 
 #endif

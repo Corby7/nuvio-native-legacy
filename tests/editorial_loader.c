@@ -1,9 +1,9 @@
-#include "colecoes.h"
+#include "collections.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 int main(void) {
-  assert(col_carregar("deploy/app/art")>0);
+  assert(col_load("deploy/app/art")>0);
   int checked=0;
   for(int i=0;i<col_n();i++) {
     const ColFolder *f=col_folder(i);

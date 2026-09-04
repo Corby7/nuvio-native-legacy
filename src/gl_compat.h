@@ -24,12 +24,12 @@
   #define GL_FRAMEBUFFER_COMPLETE  GL_FRAMEBUFFER_COMPLETE_EXT
   // GLSL 1.20 nao tem qualificadores de precisao; declara-los quebra a
   // compilacao, entao viram nada.
-  #define NV_GLSL_PREFIXO \
+  #define NV_GLSL_PREFIX \
     "#version 120\n" \
     "#define lowp\n#define mediump\n#define highp\n"
 #else
   #include <GLES2/gl2.h>
-  #define NV_GLSL_PREFIXO "precision mediump float;\n"
+  #define NV_GLSL_PREFIX "precision mediump float;\n"
 #endif
 
 #endif

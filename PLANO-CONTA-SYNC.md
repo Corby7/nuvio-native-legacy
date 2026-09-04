@@ -198,7 +198,7 @@ nativo, porque cada uma existe por causa de perda de dados real:
 Um QR errado NAO da erro: ele desenha, os localizadores ficam no lugar, a tela
 fica bonita, e nenhum celular decodifica. Aconteceu aqui — a ordem dos bits do
 formato estava invertida e a segunda copia mal mapeada, e nada disso e visivel.
-Por isso `tools/qr_conferir.py` DECODIFICA (OpenCV) em vez de comparar com outra
+Por isso `tools/qr_check.py` DECODIFICA (OpenCV) em vez de comparar com outra
 implementacao: duas matrizes podem diferir e as duas serem validas, entao
 comparar matriz nao prova nada. A pergunta util e uma so: um leitor le?
 
@@ -303,7 +303,7 @@ do plano vem depois, como registro.
 |---|---|
 | Build de referencia ANTES de tocar em nada | 0 erro, **0 aviso** |
 | Build depois da migracao | 0 erro, **0 aviso** — nenhum aviso novo |
-| `tools/qr_conferir.py` | TODOS LEGIVEIS |
+| `tools/qr_check.py` | TODOS LEGIVEIS |
 | App aberto sem sessao | abre na tela de login |
 | QR decodificado **da captura de tela do legacy** | `https://nuvio.tv/tv-login?code=ea053e96…` |
 | Ciclo de sync completo | `[addons] 2 vindos da conta`, aplicados na lista do app |
@@ -327,7 +327,7 @@ A migracao e barata porque os modulos novos quase nao dependem do app:
 
 - COPIAR sem alteracao: `jsw.[ch]`, `dados.[ch]`, `nuvem.[ch]`, `sessao.[ch]`,
   `qr.[ch]`, `login.[ch]`, `perfis.[ch]`, `perfilsel.[ch]`, `sync.[ch]`,
-  `tools/env.sh`, `tools/qr_conferir.py`, `tools/qr_despejo.c`.
+  `tools/env.sh`, `tools/qr_check.py`, `tools/qr_dump.c`.
 - APLICAR em `rede.[ch]`: `rede_postar_st` e `rede_baixar_st` (POST e GET que
   devolvem o codigo HTTP). O `rede.c` do legacy tem coisa a mais
   (`rede_baixar_trecho`, `rede_teto`) — aplicar o trecho, nao trocar o arquivo.
@@ -375,7 +375,7 @@ Debian. `tar tzf pacote.ipk` lista SEM ERRO apenas `debian-binary`,
 escrita assim passa sempre, inclusive com o segredo dentro. E preciso
 desempacotar o `ar` e listar o `data.tar.gz`.
 
-`tools/testa-ipk.sh` prova isso sem docker, e foi conferido NOS DOIS SENTIDOS:
+`tools/test-ipk.sh` prova isso sem docker, e foi conferido NOS DOIS SENTIDOS:
 com a exclusao o pacote sai limpo; deixando `trakt.txt` entrar de proposito, o
 teste acusa e devolve 1.
 
@@ -396,7 +396,7 @@ Numa TV de sala, "sair" e a unica barreira entre duas pessoas. Agora existe
 as caixas que o fio de sync preenche — senao um ciclo terminado logo antes do
 logout reaplicaria os addons da conta anterior no `sync_passo` seguinte.
 
-`tests/conta.sh` monta um estado real de usuario logado (2 addons vindos da
+`tests/account.sh` monta um estado real de usuario logado (2 addons vindos da
 conta, Trakt ligado, perfil 3 escolhido, progresso no disco), sai, e confere
 dez itens. Passa nos dez.
 
@@ -434,7 +434,7 @@ QUANDO aplica: so na PRIMEIRA volta depois de entrar ou de trocar de perfil
 volta; reaplicar a cada ciclo desfaria, segundos depois, tudo que a pessoa
 mudasse na propria TV.
 
-`tests/conta_ajustes.c` alimenta um blob com todo valor no OPOSTO do padrao —
+`tests/account_settings.c` alimenta um blob com todo valor no OPOSTO do padrao —
 para que uma opcao nao aplicada apareca como falha em vez de coincidir — e
 confere 23 itens, incluindo os dois casos de recusa. Passa nos 23.
 

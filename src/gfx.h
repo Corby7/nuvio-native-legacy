@@ -8,13 +8,13 @@
 
 typedef enum {
   GFX_CARD   = 0,  // textura com cantos, parallax e especular
-  GFX_SOMBRA = 1,  // sombra difusa atras do card focado
-  GFX_COR    = 2,  // retangulo/pill de cor solida
+  GFX_SHADOW = 1,  // sombra difusa atras do card focado
+  GFX_COLOR    = 2,  // retangulo/pill de cor solida
   GFX_HERO   = 3,  // arte com gradiente para o fundo (aceita alpha p/ crossfade)
-  GFX_VEU    = 4,  // veu escuro na base do card, sob texto sobreposto
-  GFX_TEXTO  = 5,  // glifo: a forma vem do alpha da textura, nao do RGB
-  GFX_FUNDO  = 6,  // arte desfocada por mipmap; `foco` carrega o bias
-  GFX_VEU_TOPO = 7,// degrade escuro do topo para baixo (barra de cabecalho)
+  GFX_VEIL    = 4,  // veu escuro na base do card, sob texto sobreposto
+  GFX_TEXT  = 5,  // glifo: a forma vem do alpha da textura, nao do RGB
+  GFX_BACKGROUND  = 6,  // arte desfocada por mipmap; `foco` carrega o bias
+  GFX_VEIL_TOP = 7,// degrade escuro do topo para baixo (barra de cabecalho)
   GFX_SNAP   = 8,  // imagem ja pronta: sem SDF, sem efeito, so o quad
   GFX_PLAY   = 9,  // triangulo de "reproduzir", apontando para a direita
   GFX_BLUR   = 10, // uma passada de desfoque gaussiano; uPar da a direcao
@@ -22,12 +22,12 @@ typedef enum {
   // horizontal do app web. Um modo so, e nao arte + veu por cima, porque sao
   // duas camadas de tela CHEIA — nesta GPU o custo e de preenchimento, e a
   // segunda passada sozinha derrubava o quadro.
-  GFX_DETALHE = 11,
+  GFX_DETAIL = 11,
   // Hero em tela cheia. Mesma ideia do GFX_HERO, com as rampas do OUTRO estado
   // da preferencia: cobrem mais da tela e sao mais fundas. Dois modos e nao um
   // parametrizado porque as paradas estao anotadas junto das medidas, e e assim
   // que este shader vem sendo mantido.
-  GFX_HERO_CHEIO = 12,
+  GFX_HERO_FULL = 12,
   // Contorno sem miolo, cheio ou tracejado. Usa o mesmo SDF dos outros modos —
   // um anel e `abs(d) < espessura` —, entao serve para retangulo arredondado
   // tanto quanto para circulo (raio 0.5 = circulo).
@@ -40,7 +40,7 @@ typedef enum {
   //
   // Nao pinte o miolo da cor do fundo para simular anel: onde o veu esta em
   // 0.06 o fundo aparece atraves dele e o tampao se ve como mancha clara.
-  GFX_ANEL = 13,
+  GFX_RING = 13,
   // Icones dos botoes redondos da tela de titulo. Existem como SDF pelo mesmo
   // motivo do GFX_PLAY: os glifos sao SVG no web e a familia embarcada nao
   // garante simbolo nenhum. Antes os tres botoes eram "+" e dois "...", que nao
@@ -48,12 +48,12 @@ typedef enum {
   //
   // GFX_OLHO — "marcar como assistido". Lente (dois arcos), iris cheia e, com
   // `parx > 0.5`, o risco na diagonal do estado "nao assistido".
-  GFX_OLHO = 14,
+  GFX_EYE = 14,
   // GFX_FONTES — tres barras empilhadas, simbolo de "lista de fontes". Ocupou o
   // lugar do glifo do YouTube: este app nao toca trailer do YouTube (nao ha
   // extrator de stream), e um botao que promete o que nao faz e pior que um
   // botao com outra funcao. Fontes e coisa que o app SABE fazer.
-  GFX_FONTES = 15,
+  GFX_SOURCES = 15,
   // GFX_MARCA — logo de UMA COR: a forma vem do ALPHA da textura e a cor vem de
   // uCor. E o oposto do GFX_TEXTO, que preserva o RGB da textura.
   //
@@ -65,7 +65,7 @@ typedef enum {
   //
   // Use SO com arte de uma cor. Logo colorido (o dourado, o vermelho) vai por
   // GFX_CARD, senao vira mancha chapada.
-  GFX_MARCA = 16,
+  GFX_BRAND = 16,
   // GFX_VEU_BAIXO — degrade PURAMENTE VERTICAL, transparente em cima e escuro
   // na base. E o par do GFX_VEU_TOPO.
   //
@@ -78,19 +78,19 @@ typedef enum {
   // A curva e o smoothstep ELEVADO AO QUADRADO: um smoothstep simples ainda
   // deixa uma banda percebivel onde a rampa comeca, porque o olho enxerga a
   // segunda derivada. Ao quadrado o inicio e quase plano e a transicao some.
-  GFX_VEU_BAIXO = 17,
+  GFX_VEIL_BOTTOM = 17,
   GFX_SOCIAL = 18, // static wine/coral ambient background, no texture or blur
   // Foto circular sem o SDF de card. O disco tem sua propria mascara radial,
   // para a borda ficar uniforme e sem rebarbas em qualquer tamanho.
   GFX_AVATAR = 19,
   // Retrato editorial: foto limpa ancorada a direita, dessaturada e dissolvida
   // no fundo. Feito para pessoas, nao para backdrops 16:9 com texto embutido.
-  GFX_RETRATO = 20,
+  GFX_PORTRAIT = 20,
   // Disco geometrico sólido. Usado como base do avatar e do foco para que o
   // contorno seja sempre concentrico, em vez de ser pintado sobre a foto.
-  GFX_DISCO = 21,
+  GFX_DISK = 21,
   GFX_NMODOS = 22
-} GfxModo;
+} GfxMode;
 
 typedef struct {
   float x, y, w, h;
@@ -98,9 +98,9 @@ typedef struct {
 
 // Proporcao (w/h) da textura a desenhar. 0 = mapeia direto (texto, veu).
 // Definir ANTES de gfx_rect para que a arte seja recortada, nunca esticada.
-extern float gfx_tex_aspect_atual;
+extern float gfx_tex_aspect_current;
 // Opacidade de grupo: deve voltar a 1 ao terminar o grupo.
-extern float gfx_opacidade_grupo;
+extern float gfx_opacity_group;
 
 // Snapshot: renderiza uma tela inteira para textura, para poder redesenha-la
 // como um unico quad. Existe porque a home continua visivel pela moldura da
@@ -114,7 +114,7 @@ extern float gfx_opacidade_grupo;
 // pintar so a parte que aparece — no detalhe, o cartao cobre o centro e a home
 // atras so e vista pela moldura, entao pintar a tela inteira por baixo dele e
 // trabalho jogado fora.
-void gfx_recorte(float x, float y, float w, float h);
+void gfx_crop(float x, float y, float w, float h);
 
 // --- ICONES ------------------------------------------------------------------
 //
@@ -133,11 +133,11 @@ void gfx_recorte(float x, float y, float w, float h);
 // `nome` e o basename sem extensao: "mais", "visto", "naovisto", "fontes",
 // "play", "pause", "legenda", "audio", "aspecto", "avancar", "episodios",
 // "trailer".
-void gfx_icones_dir(const char *dirArte);
-void gfx_icone(GfxRect r, const char *nome, float cr, float cg, float cb, float ca);
-void gfx_sem_recorte(void);
+void gfx_icons_dir(const char *dirArt);
+void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca);
+void gfx_sem_crop(void);
 
-int  gfx_snap_iniciar(int w, int h);
+int  gfx_snap_start(int w, int h);
 
 // Desfoque por REDUCAO, no lugar do mipmap. O mipmap parecia a saida barata,
 // mas as texturas de arte nao tem lado potencia de dois, e em GLES2 a piramide
@@ -149,23 +149,23 @@ int  gfx_snap_iniciar(int w, int h);
 // porque as duas telas coexistem — o detalhe cobre a home, mas a home continua
 // desenhada por tras dele, e um alvo so faria as duas brigarem pela mesma
 // textura a cada quadro.
-int  gfx_borrao_iniciar(int w, int h);
-void gfx_borrao_gerar(int via, unsigned int tex, float texAspecto);
-void gfx_borrao_desenhar(int via, GfxRect r, float alpha);
-void gfx_borrao_encerrar(void);
-void gfx_snap_comecar(void);   // redireciona o desenho para o snapshot
-void gfx_snap_terminar(void);  // volta para a tela
-void gfx_snap_desenhar(void);  // pinta o snapshot ocupando a tela toda
-void gfx_snap_encerrar(void);
+int  gfx_blur_start(int w, int h);
+void gfx_blur_generate(int via, unsigned int tex, float texAspect);
+void gfx_blur_draw(int via, GfxRect r, float alpha);
+void gfx_blur_shutdown(void);
+void gfx_snap_begin(void);   // redireciona o desenho para o snapshot
+void gfx_snap_finish(void);  // volta para a tela
+void gfx_snap_draw(void);  // pinta o snapshot ocupando a tela toda
+void gfx_snap_shutdown(void);
 
-void gfx_tamanho_alvo(int w, int h);   // drawable real, para restaurar viewport
-int  gfx_iniciar(void);
-void gfx_encerrar(void);
+void gfx_size_target(int w, int h);   // drawable real, para restaurar viewport
+int  gfx_start(void);
+void gfx_shutdown(void);
 
 // O gfx_rect lembra a ultima textura que ele mesmo bindou e pula rebinds
 // repetidos. Quem binda ou destroi textura POR FORA dele precisa avisar:
 // passe o nome destruido, ou 0 para "esqueca tudo" (apos um upload).
-void gfx_tex_esquecer(GLuint tex);
+void gfx_tex_forget(GLuint tex);
 
 // Desenha um retangulo. `foco` 0..1 controla especular/sombra; `parx/pary`
 // deslocam a arte dentro do card (parallax); `raio` em fracao do menor lado.
@@ -186,24 +186,24 @@ void gfx_tex_esquecer(GLuint tex);
 // porque custam DUAS leituras de relogio por desenho — cerca de 250 chamadas
 // por quadro so para medir. Ligue com -DNV_PERF_FINO quando a pergunta voltar.
 extern int    gfx_n_rect;   // chamadas de gfx_rect
-extern int    gfx_n_prog;   // trocas de programa GL (glUseProgram)
+extern int    gfx_n_progress;   // trocas de programa GL (glUseProgram)
 extern int    gfx_n_bind;   // trocas de textura (glBindTexture)
 extern double gfx_ms_rect;  // ms de CPU dentro de gfx_rect
-extern int    gfx_n_outros;  // chamadas de recorte/FBO/desfoque
-extern double gfx_ms_outros; // ms de CPU nesses pontos de GL
+extern int    gfx_n_others;  // chamadas de recorte/FBO/desfoque
+extern double gfx_ms_others; // ms de CPU nesses pontos de GL
 extern double gfx_fill;      // area submetida no quadro, em telas cheias
-extern int    gfx_n_cheio;   // desenhos cobrindo >= 50% da tela
-void gfx_novo_quadro(void);
+extern int    gfx_n_full;   // desenhos cobrindo >= 50% da tela
+void gfx_new_frame(void);
 
-void gfx_rect(GfxRect r, GLuint tex, GfxModo modo, float foco,
-              float parx, float pary, float raio,
+void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
+              float parx, float pary, float radius,
               float cr, float cg, float cb, float ca);
 
 // Atalhos legiveis para os casos comuns.
-void gfx_cor(GfxRect r, float raio, float cr, float cg, float cb, float ca);
+void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
 // Zera cor E alpha do retangulo, com blend desligado, abrindo a superficie para
 // o plano de video que fica atras dela. Ver video.h.
-void gfx_furo(GfxRect r);
-void gfx_textura(GfxRect r, GLuint tex);
+void gfx_hole(GfxRect r);
+void gfx_texture(GfxRect r, GLuint tex);
 
 #endif

@@ -10,16 +10,16 @@
 // peso so achata a hierarquia inteira — foi o que deixava a tela com cara de
 // "tudo do mesmo tamanho, uns maiores".
 typedef enum {
-  TXT_TITULO1, TXT_TITULO2, TXT_TITULO3, TXT_HEADLINE,
+  TXT_TITLE1, TXT_TITLE2, TXT_TITLE3, TXT_HEADLINE,
   TXT_BODY, TXT_CALLOUT, TXT_CAPTION, TXT_CAPTION2, TXT_MINI,
   // Os dois do player vem do app web, nao da escala do tvOS. Ficam no FIM do
   // enum de proposito: a tabela ESTILOS em text.c e indexada por esta ordem, e
   // inserir no meio desloca todos os estilos seguintes em silencio.
-  TXT_PLR_TITULO, TXT_PLR_CORPO, TXT_ROW_TITULO, TXT_HERO_SEC,
+  TXT_PLR_TITLE, TXT_PLR_BODY, TXT_ROW_TITLE, TXT_HERO_SEC,
   // Tela de DETALHE, medidos no app web. Nao reaproveitam nenhum estilo do
   // tvOS porque nenhum bate: a sinopse la e 26/400 e o TXT_CAPTION daqui e
   // 22/400 — quatro pixels que mudam quantas linhas cabem no bloco.
-  TXT_DET_BOTAO,   // .series-primary-btn      25 / 600
+  TXT_DET_BUTTON,   // .series-primary-btn      25 / 600
   TXT_DET_META,    // .series-detail-support   25 / 400
   TXT_DET_SIN,     // .series-detail-description 26 / 400
   TXT_DET_META2,   // .detail-meta-row.secondary 23 / 400
@@ -35,41 +35,41 @@ typedef enum {
   //   .player-ends-at        20 / 400
   //   .player-parental-label 22 / 600
   //   .player-parental-severity e .player-parental-separator 22 / 400
-  TXT_PG_RELOGIO, TXT_PG_FIM, TXT_PG_ROTULO, TXT_PG_GRAV,
-  TXT_PAINEL_TITULO, TXT_PAINEL_ITEM,
-  TXT_CW_TITULO, TXT_CW_META, TXT_CW_BADGE,
+  TXT_PG_CLOCK, TXT_PG_END, TXT_PG_LABEL, TXT_PG_SEV,
+  TXT_PANEL_TITLE, TXT_PANEL_ITEM,
+  TXT_CW_TITLE, TXT_CW_META, TXT_CW_BADGE,
   TXT_RANK,
   // Legenda externa: 50%..200%, em passos de 10. O firmware da C9 oferece
   // apenas cinco degraus; estas fontes pertencem ao overlay do proprio app.
-  TXT_LEG_50, TXT_LEG_60, TXT_LEG_70, TXT_LEG_80,
-  TXT_LEG_90, TXT_LEG_100, TXT_LEG_110, TXT_LEG_120,
-  TXT_LEG_130, TXT_LEG_140, TXT_LEG_150, TXT_LEG_160,
-  TXT_LEG_170, TXT_LEG_180, TXT_LEG_190, TXT_LEG_200,
-  TXT_NFONTES
-} TxtEstilo;
+  TXT_SUB_50, TXT_SUB_60, TXT_SUB_70, TXT_SUB_80,
+  TXT_SUB_90, TXT_SUB_100, TXT_SUB_110, TXT_SUB_120,
+  TXT_SUB_130, TXT_SUB_140, TXT_SUB_150, TXT_SUB_160,
+  TXT_SUB_170, TXT_SUB_180, TXT_SUB_190, TXT_SUB_200,
+  TXT_NFONTS
+} TxtStyle;
 
-typedef struct { GLuint tex; int w, h; } TxtLinha;
+typedef struct { GLuint tex; int w, h; } TxtLine;
 
 // Familia alternativa usada SOMENTE pelo renderer de legenda externa. A
 // interface continua em Inter; misturar a familia da legenda com menus faria
 // a preferencia de reproducao redesenhar o app inteiro.
 typedef enum {
-  TXT_FAMILIA_INTER = 0,
-  TXT_FAMILIA_LG,
-  TXT_FAMILIA_DROID,
-  TXT_FAMILIA_N
-} TxtFamilia;
+  TXT_FAMILY_INTER = 0,
+  TXT_FAMILY_LG,
+  TXT_FAMILY_DROID,
+  TXT_FAMILY_N
+} TxtFamily;
 
-extern const char *const TXT_FAMILIAS_PT[TXT_FAMILIA_N];
+extern const char *const TXT_FAMILIES_PT[TXT_FAMILY_N];
 
 // Instrumentacao: quantas linhas foram RASTERIZADAS (nao vieram do cache) no
 // quadro e quanto tempo isso custou. Rasterizar texto e a operacao mais cara
 // que acontece dentro de um quadro, e sem contador nao da para saber se um
 // jank veio dai ou do upload de textura.
-extern int    txt_rasterizadas;
+extern int    txt_rasterized;
 // Despejos do cache de linhas. Diferente de zero com a tela parada = a tabela
 // nao cabe no que a tela desenha, e o texto pisca.
-extern int    txt_despejos;
+extern int    txt_evictions;
 extern double txt_ms;
 
 // `dirRecursos` e a pasta que contem fonts/. No aparelho e a pasta do app; no
@@ -78,54 +78,54 @@ extern double txt_ms;
 // `escala` e a razao entre o buffer e o canvas de layout (2 numa TV 4K, 1 em
 // 1080p). As fontes sao abertas nesse tamanho e a linha devolvida continua
 // medindo em unidades de layout — ver text.c.
-int  txt_iniciar(const char *dirRecursos, float escala);
-void txt_encerrar(void);
+int  txt_start(const char *dirAssets, float scale);
+void txt_shutdown(void);
 
 // Devolve linha cacheada. Cor em 0..255. Nunca devolve NULL; em falha, w/h = 0.
 // Zera o orcamento de rasterizacao do quadro. Chamar uma vez por quadro, antes
 // de desenhar; sem isso o orcamento se esgota e o texto some.
-void txt_novo_quadro(void);
+void txt_new_frame(void);
 
-TxtLinha txt_linha(TxtEstilo estilo, const char *s, int r, int g, int b, int a);
+TxtLine txt_line(TxtStyle style, const char *s, int r, int g, int b, int a);
 
 // Igual a txt_linha, mas escolhe uma das familias seguras para a legenda. Se a
 // fonte do sistema nao existir (por exemplo na previa do Mac), cai na Inter
 // embarcada e registra o fallback uma vez no log.
-TxtLinha txt_linha_familia(TxtEstilo estilo, const char *s, int r, int g,
-                           int b, int a, TxtFamilia familia);
+TxtLine txt_line_family(TxtStyle style, const char *s, int r, int g,
+                           int b, int a, TxtFamily family);
 
 // Linha que NUNCA passa de `maxW`: corta por palavra (ou por caractere, se uma
 // palavra so ja estourar) e fecha com "…". Conteudo que vem de fora (nome de
 // addon, genero do TMDB) nao tem comprimento garantido, e sem corte ele invade
 // a coluna vizinha — foi o que apareceu no Top 10 e na folha de faixas.
-TxtLinha txt_linha_corta(TxtEstilo estilo, const char *s, int r, int g, int b,
+TxtLine txt_line_trim(TxtStyle style, const char *s, int r, int g, int b,
                          int a, float maxW);
-TxtLinha txt_linha_corta_familia(TxtEstilo estilo, const char *s, int r, int g,
-                                 int b, int a, float maxW, TxtFamilia familia);
+TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
+                                 int b, int a, float maxW, TxtFamily family);
 
 // Desenha no canto superior esquerdo (x,y).
-void txt_desenhar(TxtLinha l, float x, float y);
-void txt_desenhar_alpha(TxtLinha l, float x, float y, float alpha);
+void txt_draw(TxtLine l, float x, float y);
+void txt_draw_alpha(TxtLine l, float x, float y, float alpha);
 
 // Desenha com ESPACAMENTO entre letras (tracking) e devolve a largura total.
 // SDL_ttf nao tem tracking, e o titulo da pagina do tvOS depende dele: sem o
 // espacamento largo o mesmo texto em maiusculas fica com cara de grito, nao de
 // cabecalho. Passe x = -1 para so medir, sem desenhar.
-float txt_tracking(TxtEstilo estilo, const char *s, int r, int g, int b,
+float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
                    float x, float y, float alpha, float tracking);
 
 // Desenha texto QUEBRADO em linhas que cabem em `larg`, devolvendo a altura
 // usada. Sem isso, qualquer texto de tamanho variavel (sinopse de episodio,
 // nome de titulo) vaza para a coluna vizinha — nao existe "escrever curto o
 // suficiente" quando o conteudo vem de fora.
-float txt_bloco(TxtEstilo estilo, const char *s, int r, int g, int b,
-                float x, float y, float larg, float leading, float alpha, int maxLinhas);
+float txt_block(TxtStyle style, const char *s, int r, int g, int b,
+                float x, float y, float width, float leading, float alpha, int maxLines);
 
 // Mesmo bloco, mas ALINHADO A DIREITA: cada linha termina em `xDir`. Os
 // creditos do canto inferior direito precisam disso — alinhados a esquerda,
 // eles ficam com a borda picotada contra a margem do cartao.
-float txt_bloco_dir(TxtEstilo estilo, const char *s, int r, int g, int b,
-                    float xDir, float y, float larg, float leading,
-                    float alpha, int maxLinhas);
+float txt_block_dir(TxtStyle style, const char *s, int r, int g, int b,
+                    float xDir, float y, float width, float leading,
+                    float alpha, int maxLines);
 
 #endif

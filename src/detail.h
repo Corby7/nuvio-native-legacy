@@ -9,25 +9,25 @@
 #include <SDL2/SDL.h>
 #include "home.h"
 
-void detail_abrir(const HomeItem *item);
-int  detail_aberto(void);
+void detail_open(const HomeItem *item);
+int  detail_is_open(void);
 // 0..1 de quanto o detalhe tomou a tela; a home usa para descer as fileiras.
-float detail_progresso(void);        // 1 enquanto a tela existe, inclusive saindo
+float detail_progress(void);        // 1 enquanto a tela existe, inclusive saindo
 // 1 quando o cartao ja cobre a tela inteira e desenhar a home por baixo e
 // trabalho jogado fora. Medido: a home custa o hero em tela cheia mais ~20
 // cards, e sem este corte a pagina de detalhe rodava a 20fps.
-int  detail_cobre_tela(void);
+int  detail_covers_screen(void);
 // 1 quando o cartao ja parou no lugar e nao esta esticado: nesse estado a home
 // atras so aparece pela moldura.
-int  detail_assentado(void);
+int  detail_settled(void);
 
 // Qual titulo do catalogo esta em cena, e os pedidos que a tela nao resolve
 // sozinha: reproduzir e marcar na lista. O detalhe nao chama o player nem a
 // biblioteca direto — quem conhece as outras telas e o roteador.
-int  detail_indice(void);
+int  detail_index(void);
 // Temporada e episodio em foco (1 = ha episodio; 0 = titulo sem episodios).
-int  detail_ep_foco(int *temporada, int *episodio);
-int  detail_pediu_reproduzir(void);   // consome o pedido
+int  detail_ep_focus(int *season, int *episode);
+int  detail_requested_play(void);   // consome o pedido
 
 // Indice do titulo que a tela pediu para ABRIR no lugar do atual, ou -1.
 // Consome o pedido. Nasce de dois lugares: um credito na filmografia de um ator
@@ -35,18 +35,18 @@ int  detail_pediu_reproduzir(void);   // consome o pedido
 // traduzir isso em indice e o catalogo. Quem TROCA de titulo e o roteador em
 // app.c, nao esta tela: reabrir a si mesma no meio do proprio desenho e o tipo
 // de coisa que quebra em silencio.
-int  detail_pediu_abrir(void);
+int  detail_requested_open(void);
 
 // O botao do olho: marcar o titulo como ASSISTIDO. Nao e o mesmo que
 // detail_pediu_marcar, que e "adicionar a lista" — o olho caia no mesmo `else`
 // do botao de fontes e nunca marcou nada.
-int  detail_pediu_assistido(void);
-int  detail_pediu_marcar(void);       // botao "+"
-int  detail_pediu_fontes(void);       // OK segurado, ou o botao "..."
+int  detail_requested_watched(void);
+int  detail_requested_mark(void);       // botao "+"
+int  detail_requested_sources(void);       // OK segurado, ou o botao "..."
 // Botao secundario "Reproduzir desde o inicio", que so existe quando ha
 // progresso. Hoje ele tambem marca `detail_pediu_reproduzir`, porque o roteador
 // ainda nao sabe abrir o player ignorando o ponto salvo.
-int  detail_pediu_do_inicio(void);
+int  detail_requested_do_start(void);
 // --- Pagina do titulo (abaixo da dobra) -------------------------------------
 // TUDO daqui para baixo foi medido no app web LOGADO, em 1920x1080, na serie
 // "Silo" (getBoundingClientRect / getComputedStyle), em 2026-08-31. Os numeros
@@ -71,14 +71,14 @@ int  detail_pediu_do_inicio(void);
 // "elenco + padding" a rolagem batia no teto em 1064 e a fileira de elenco
 // ficava em y=693 em vez de y=364 — meio ecra fora do lugar, e foi assim que
 // apareceu na primeira captura do aparelho.
-#define NV_DETP_FIM         2473.0f
+#define NV_DETP_END         2473.0f
 // Regra de rolagem do web, achada no fonte e conferida com quatro medidas:
 // o topo do GRUPO focado vai para 33% da altura util (40% nas abas). Constantes
 // DETAIL_ROW_FOCUS_TARGET / DETAIL_TAB_FOCUS_TARGET de metaDetailsScreen.js.
 // Conferido: temporadas -> scrollTop 724, episodios -> 838, abas -> 1248,
 // elenco -> 1393. Os quatro batem na casa do pixel.
-#define NV_DETP_ALVO_FILEIRA  0.33f
-#define NV_DETP_ALVO_ABAS     0.40f
+#define NV_DETP_TARGET_ROW  0.33f
+#define NV_DETP_TARGET_TABS     0.40f
 // Vao entre itens de uma linha de meta. O flex declara 24 e o que se mede e 38
 // (borda a borda) nas SEIS ocorrencias: genero->ponto, ponto->ano, ano->IMDb,
 // selo->duracao, duracao->pais, pais->idioma. Mede-se, nao se le.
@@ -87,8 +87,8 @@ int  detail_pediu_do_inicio(void);
 // Topo de cada GRUPO focavel, em coordenada de documento.
 #define NV_DETP_G_TEMP      1080.0f
 #define NV_DETP_G_EP        1194.0f
-#define NV_DETP_G_ABAS      1680.0f
-#define NV_DETP_G_ELENCO    1749.0f
+#define NV_DETP_G_TABS      1680.0f
+#define NV_DETP_G_CAST    1749.0f
 
 // Abas de temporada: 269x80 em x=96, passo 321 (gap 52), raio 40, fonte 32/500.
 // A largura sai do texto + padding, e nao e constante: "Especiais" mede 219.
@@ -110,66 +110,66 @@ int  detail_pediu_do_inicio(void);
 // seja caixa 96..735 x 247..660 — 640x414. O card seguinte comeca em x=767.
 #define NV_DETP_EP_W         640.0f
 #define NV_DETP_EP_H         414.0f   // a caixa E a miniatura: o texto fica dentro
-#define NV_DETP_EP_PASSO     672.0f   // 767 - 96 = 671, arredondado para 640+32
+#define NV_DETP_EP_STEP     672.0f   // 767 - 96 = 671, arredondado para 640+32
 #define NV_DETP_EP_THUMB_H   414.0f
-#define NV_DETP_EP_RAIO       32.0f
-#define NV_DETP_EP_PAD        32.0f   // margem do texto dentro da miniatura
-#define NV_DETP_EP_TEXTO_W   576.0f
+#define NV_DETP_EP_RADIUS       32.0f
+#define NV_DETP_EP_DFLT        32.0f   // margem do texto dentro da miniatura
+#define NV_DETP_EP_TEXT_W   576.0f
 // Selo "EPISÓDIO n": caixa 152x43 em (32,155) dentro do card, tinta do texto
 // em 147..266 — 19 de folga a esquerda. Medido no card 1 de "Furious".
-#define NV_DETP_EP_SELO_Y    124.0f
-#define NV_DETP_EP_SELO_H     38.0f
-#define NV_DETP_EP_SELO_PADX  18.0f
+#define NV_DETP_EP_BADGE_Y    124.0f
+#define NV_DETP_EP_BADGE_H     38.0f
+#define NV_DETP_EP_BADGE_PADX  18.0f
 // Os tres offsets abaixo sao o TOPO DA CAIXA da linha, nao o topo da tinta: a
 // tinta medida (caixa alta do titulo em +221, sinopse em +274, rodape em +349)
 // fica alguns pixels abaixo do topo da caixa que o SDL_ttf devolve, e o
 // desconto e a diferenca entre a ascendente e a altura de caixa alta da Inter
 // no corpo de cada linha.
-#define NV_DETP_EP_TIT_Y     174.0f   // titulo separado do selo
+#define NV_DETP_EP_TITLE_Y     174.0f   // titulo separado do selo
 #define NV_DETP_EP_SIN_Y     224.0f   // tres linhas antes do rodape
 #define NV_DETP_EP_LD_SIN     32.0f
 #define NV_DETP_EP_META_Y    344.0f   // relogio + duracao + data, tinta em +349
-#define NV_DETP_EP_ICONE      28.0f
-#define NV_DETP_EP_BARRA_Y   390.0f   // barra 576x8, raio 999
-#define NV_DETP_EP_BARRA_H     8.0f
+#define NV_DETP_EP_ICON      28.0f
+#define NV_DETP_EP_BAR_Y   390.0f   // barra 576x8, raio 999
+#define NV_DETP_EP_BAR_H     8.0f
 #define NV_DETP_EP_STATUS     48.0f   // circulo tracejado de "nao assistido"
 // Anel de foco. O web usa 2px na miniatura do episodio e 4px nos botoes do
 // hero; aqui fica 4 nos dois, porque a folha declara pixels de CSS e a tela
 // desta pagina roda com um fator de escala de ~1.6 sobre os `clamp` — ou seja,
 // o anel de 2px do episodio chega perto de 3px reais, e 4 e o valor inteiro que
 // mais se aproxima sem sumir na TV.
-#define NV_DETP_ANEL           4.0f
+#define NV_DETP_RING           4.0f
 
 // Abas "Criador e elenco | Avaliacoes | Mais como este | Trailer": fonte 32/500,
 // selecionada branca, as outras #808080; o divisor "|" e 32/700 #808080, com 20
 // de folga de cada lado.
-#define NV_DETP_ABA_Y       1758.0f
-#define NV_DETP_ABA_H         51.0f
-#define NV_DETP_ABA_SEP       20.0f
+#define NV_DETP_TAB_Y       1758.0f
+#define NV_DETP_TAB_H         51.0f
+#define NV_DETP_TAB_SEP       20.0f
 
 // Elenco: card de 220 de largura, passo 270; avatar 140x140 ALINHADO A
 // ESQUERDA do card (nao centralizado); nome 26/500 rgb(179,179,179) e papel
 // 21/400 rgb(128,128,128) abaixo.
 #define NV_DETP_EL_Y        1817.0f
 #define NV_DETP_EL_W         220.0f
-#define NV_DETP_EL_PASSO     270.0f
+#define NV_DETP_EL_STEP     270.0f
 #define NV_DETP_EL_AVATAR    140.0f
-#define NV_DETP_EL_NOME_DY    10.0f   // base do avatar -> topo do nome
-#define NV_DETP_EL_PAPEL_DY   43.0f   // topo do nome -> topo do papel
+#define NV_DETP_EL_NAME_DY    10.0f   // base do avatar -> topo do nome
+#define NV_DETP_EL_ROLE_DY   43.0f   // topo do nome -> topo do papel
 // Altura de uma linha de texto do cartao de elenco (nome ou papel), e o vao
 // MEDIDO entre a base do elenco e o topo do wordmark do Trakt na captura da
 // referencia (~105 px em 1920). Existem para o empilhamento da secao de
 // comentarios na SERIE nao precisar chutar onde o elenco termina — usar
 // NV_DETF_EL_ALT, que e a altura do elenco do FILME, punha a secao POR CIMA
 // dos avatares.
-#define NV_DETP_EL_LINHA      34.0f
+#define NV_DETP_EL_LINE      34.0f
 #define NV_DETP_EL_GAP_TRAKT 105.0f
 
 // Selos da pilha de meta do HERO, medidos na mesma sessao.
 #define NV_DETW_IMDB_W       109.0f   // logo 60x60 + folga + nota 20.7/400
 #define NV_DETW_IMDB_H        60.0f
-#define NV_DETW_SELO_H        45.0f   // .detail-meta-badge, raio 8, borda 1px
-#define NV_DETW_SELO_PADX     10.0f
+#define NV_DETW_BADGE_H        45.0f   // .detail-meta-badge, raio 8, borda 1px
+#define NV_DETW_BADGE_PADX     10.0f
 // Botao secundario "Reproduzir desde o inicio": 345x96, raio 64, fundo #222,
 // texto branco; focado vira #f5f5f5 com texto #111 e o anel de 4px.
 #define NV_DETW_BTN2_PADX     34.0f
@@ -203,8 +203,8 @@ int  detail_pediu_do_inicio(void);
 // "Assistir T1:E1", contra os 321 medidos.
 #define NV_DETW2_BTN_H        94.0f
 #define NV_DETW2_BTN_PADX     54.0f
-#define NV_DETW2_BTN_ICONE_W  28.0f   // triangulo 28x30, centrado na vertical
-#define NV_DETW2_BTN_ICONE_H  30.0f
+#define NV_DETW2_BTN_ICON_W  28.0f   // triangulo 28x30, centrado na vertical
+#define NV_DETW2_BTN_ICON_H  30.0f
 #define NV_DETW2_BTN_GAPI     21.0f   // fim do triangulo -> tinta do rotulo
 #define NV_DETW2_CIRC         96.0f
 #define NV_DETW2_BTN_GAP      24.0f
@@ -220,8 +220,8 @@ int  detail_pediu_do_inicio(void);
 // a pilula vai de 321x94 para 357,6x107,8 (1,114 em x, 1,147 em y) e o circulo
 // de 96 para 110 (1,146 nos dois eixos). Escrever um so fator faria a pilula
 // crescer 10px a mais do que a referencia; ficam os dois, como medidos.
-#define NV_DETW2_FOCO_SX       1.114f
-#define NV_DETW2_FOCO_SY       1.147f
+#define NV_DETW2_FOCUS_SX       1.114f
+#define NV_DETW2_FOCUS_SY       1.147f
 
 // PILHA DE TEXTO. As duas capturas dao as mesmas coordenadas absolutas para o
 // que esta ABAIXO da sinopse (selo do IMDb em y=938, selo de classificacao em
@@ -229,8 +229,8 @@ int  detail_pediu_do_inicio(void);
 // ULTIMA linha cai no mesmo y nas duas. Por isso a pilha e montada de baixo
 // para cima, e nao do logo para baixo.
 #define NV_DETW2_LD_SIN       40.0f   // passo entre linhas da sinopse (medido)
-#define NV_DETW2_SIN_LINHAS       5   // o maximo visto na referencia
-#define NV_DETW2_TEXTO_W    1040.0f   // sinopse e linha de apoio (96..1136)
+#define NV_DETW2_SIN_LINES       5   // o maximo visto na referencia
+#define NV_DETW2_TEXT_W    1040.0f   // sinopse e linha de apoio (96..1136)
 // Distancia entre TOPOS DE CAIXA de linhas vizinhas, ja descontada a metrica da
 // fonte: entre a tinta a referencia da 62 do alto do "R" de "Roteirista" ao
 // alto do "C" da sinopse, e as duas linhas usam o mesmo corpo.
@@ -240,7 +240,7 @@ int  detail_pediu_do_inicio(void);
 #define NV_DETW2_GAP_SIN      33.0f
 // Base da pilula em repouso (606) -> topo da caixa da linha de apoio. A tinta
 // do "R" comeca em 649, e a caixa comeca ~6 acima dela no corpo de 26.
-#define NV_DETW2_GAP_ACOES    37.0f
+#define NV_DETW2_GAP_ACTIONS    37.0f
 
 // META LINHA 1: generos, data e o selo do IMDb, tudo em rgb(179,179,179).
 // A altura da linha e a do selo (30), que e o item mais alto dela.
@@ -256,22 +256,22 @@ int  detail_pediu_do_inicio(void);
 // Ponto separador. Sao DOIS pontos diferentes e a diferenca e so a cor: entre
 // generos ele e rgb(179,179,179) com 11 de folga de cada lado, e entre GRUPOS
 // (generos | data | nota) e rgb(128,128,128) com 30. Os dois medem 6x7.
-#define NV_DETW2_PONTO_D       6.0f
+#define NV_DETW2_DOT_D       6.0f
 #define NV_DETW2_SEP          30.0f
 #define NV_DETW2_BULLET_SEP   11.0f
 
 // META LINHA 2: um selo de CONTORNO com classificacao e status juntos, depois
 // duracao (so em filme) e pais. Caixa de 49 de altura em y=999, raio 8, borda
 // de 2px rgb(107,107,107) — contorno de verdade, sem miolo pintado.
-#define NV_DETW2_SELO_H       49.0f
-#define NV_DETW2_SELO_R        8.0f
-#define NV_DETW2_SELO_PADX    16.0f
-#define NV_DETW2_SELO_BORDA    2.0f
+#define NV_DETW2_BADGE_H       49.0f
+#define NV_DETW2_BADGE_R        8.0f
+#define NV_DETW2_BADGE_PADX    16.0f
+#define NV_DETW2_BADGE_BORDER    2.0f
 // Divisoria interna: barra de 2x24 na mesma cor da borda, com 18 de folga de
 // cada lado. E ela que separa "TV-MA" de "RENOVADA" dentro do mesmo selo.
 #define NV_DETW2_DIV_W         2.0f
 #define NV_DETW2_DIV_H        24.0f
-#define NV_DETW2_DIV_PAD      18.0f
+#define NV_DETW2_DIV_DFLT      18.0f
 
 // --- Pagina do titulo tipo FILME, abaixo da dobra ---------------------------
 //
@@ -302,26 +302,26 @@ int  detail_pediu_do_inicio(void);
 // medida: o Mac parametriza o espacamento por chamada
 // (DetailSectionContainer(horizontalPadding, contentMaxWidth, bottomPadding)),
 // entao nao ha uma constante unica para ler no bytecode.
-#define NV_DETF_HERO_FIM     1080.0f   // o hero ocupa 0..1080, igual a serie
-#define NV_DETF_CAB_H          46.0f   // linha do cabecalho (TXT_HEADLINE, 38)
-#define NV_DETF_CAB_GAP        20.0f   // cabecalho -> conteudo
+#define NV_DETF_HERO_END     1080.0f   // o hero ocupa 0..1080, igual a serie
+#define NV_DETF_HEADER_H          46.0f   // linha do cabecalho (TXT_HEADLINE, 38)
+#define NV_DETF_HEADER_GAP        20.0f   // cabecalho -> conteudo
 #define NV_DETF_SEC_GAP        64.0f   // fim de uma secao -> cabecalho da proxima
-#define NV_DETF_PAD_FIM       130.0f   // padding-bottom do scroller (clamp(116,12vh,168))
+#define NV_DETF_DFLT_END       130.0f   // padding-bottom do scroller (clamp(116,12vh,168))
 
 // ELENCO. Card 220x193, passo 270, avatar 140 alinhado a ESQUERDA do card.
 // Medido no web (.movie-cast-card / .movie-cast-track).
-#define NV_DETF_EL_ALT        193.0f
+#define NV_DETF_EL_HEIGHT        193.0f
 #define NV_DETF_EL_MAX           18    // .slice(0, 18) do web
 
 // TRAILERS. Card 520 de largura, miniatura 520x292 raio 24, passo 582.
 // O selo de play e um circulo de 96 a rgba(0,0,0,.48) com o triangulo de 44.
 #define NV_DETF_TR_W          520.0f
-#define NV_DETF_TR_PASSO      582.0f
+#define NV_DETF_TR_STEP      582.0f
 #define NV_DETF_TR_VIDEO_H    292.0f
-#define NV_DETF_TR_RAIO        24.0f
-#define NV_DETF_TR_NOME_DY    302.0f   // topo do card -> nome (28/500 branco)
-#define NV_DETF_TR_TIPO_DY    344.6f   // topo do card -> subrotulo (24/400 cinza)
-#define NV_DETF_TR_ALT        377.0f
+#define NV_DETF_TR_RADIUS        24.0f
+#define NV_DETF_TR_NAME_DY    302.0f   // topo do card -> nome (28/500 branco)
+#define NV_DETF_TR_KIND_DY    344.6f   // topo do card -> subrotulo (24/400 cinza)
+#define NV_DETF_TR_HEIGHT        377.0f
 #define NV_DETF_TR_PLAY_D      96.0f
 
 // DETALHES DO FILME. Tabela de duas colunas com divisoria por linha.
@@ -348,13 +348,13 @@ int  detail_pediu_do_inicio(void);
 // A chave alinha a esquerda em NV_DETP_X; o valor comeca numa coluna FIXA, e
 // nao depois do texto da chave — senao a segunda coluna serrilha de linha em
 // linha.
-#define NV_DETF_DET_LINHA      68.0f   // passo vertical de uma linha
+#define NV_DETF_DET_LINE      68.0f   // passo vertical de uma linha
 #define NV_DETF_DET_W        1040.0f   // largura da tabela e da divisoria
-#define NV_DETF_DET_CHAVE_W   254.0f   // 24,4% de NV_DETF_DET_W (proporcao do Mac)
+#define NV_DETF_DET_KEY_W   254.0f   // 24,4% de NV_DETF_DET_W (proporcao do Mac)
 #define NV_DETF_DET_MAXL          6    // Status, Lancamento, Duracao, Classif., Pais
 
-void detail_evento(const SDL_Event *e);
-void detail_atualizar(float dt, Uint32 agora);
-void detail_desenhar(Uint32 agora);   // desenhe DEPOIS da home: ele cobre
+void detail_event(const SDL_Event *e);
+void detail_update(float dt, Uint32 now);
+void detail_draw(Uint32 now);   // desenhe DEPOIS da home: ele cobre
 
 #endif

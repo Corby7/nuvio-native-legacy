@@ -36,7 +36,7 @@ por QR, e a sessao sobrevive ao reinicio.
 
 A consequencia para o empacotamento e direta: **`art/*.txt` com credencial nao
 pode ir no `.ipk`**. `tools/arm.sh --ipk` ja empacota de uma copia limpa e
-CONFERE o pacote pronto; `tools/testa-ipk.sh` prova isso sem docker.
+CONFERE o pacote pronto; `tools/test-ipk.sh` prova isso sem docker.
 
 Uma pendencia conhecida: a conta NAO guarda credencial de Trakt
 (`sync_pull_provider_credentials` devolve tmdb, mdblist, debrid:* e outros, mas

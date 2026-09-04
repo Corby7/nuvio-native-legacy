@@ -21,52 +21,52 @@
 // Inicio, que poe a acao secundaria acima do destino padrao — e no D-pad
 // significa que voltar para a home custa um passo a mais que ir buscar.
 typedef enum {
-  MENU_INICIO,
-  MENU_BUSCAR,
-  MENU_BIBLIOTECA,
-  MENU_PERFIL,
-  MENU_AJUSTES,
+  MENU_START,
+  MENU_FETCH,
+  MENU_LIBRARY,
+  MENU_PROFILE,
+  MENU_SETTINGS,
   MENU_N
-} MenuDestino;
+} MenuDestination;
 
 // Zera destino e animacao. So e necessario se o app reinicializar a UI; o
 // estado inicial ja e valido sem chamar (destino = MENU_INICIO, barra fora).
-int  menu_iniciar(void);
+int  menu_start(void);
 
 // Desliza a barra para dentro E entrega o foco a ela. Chamar com o menu ja
 // aberto nao faz nada, entao e seguro ligar direto no ESQUERDA da home.
-void menu_abrir(void);
+void menu_open(void);
 // Fecha sem escolher: o destaque volta para o destino atual.
-void menu_fechar(void);
+void menu_close(void);
 
 // 1 enquanto a barra e dona do D-pad. Vira 0 no instante da escolha, ainda com
 // a animacao de saida rodando — e esse o sinal que o conteudo deve usar para
 // voltar a responder as teclas, senao o D-pad fica morto durante o recolhimento.
-int  menu_aberto(void);
+int  menu_is_open(void);
 // 1 enquanto ainda ha pixel para desenhar (inclui a saida). Serve para o loop
 // decidir se vale sequer chamar menu_desenhar.
-int  menu_visivel(void);
+int  menu_visible(void);
 
 // Destino em vigor (um MenuDestino). menu_definir_destino existe para o app
 // impor o estado inicial ou reagir a uma navegacao que nao veio da barra.
-int  menu_destino(void);
-void menu_definir_destino(int destino);
+int  menu_destination(void);
+void menu_set_destination(int destination);
 // 1 uma unica vez, no quadro em que o usuario escolheu um destino DIFERENTE do
 // que estava em vigor. Consome a flag: quem le, trata. Sem isso o app teria que
 // guardar o destino anterior so para descobrir que ele mudou.
-int  menu_mudou_destino(void);
+int  menu_changed_destination(void);
 
-const char *menu_rotulo(int destino);
+const char *menu_label(int destination);
 
 // 1 uma unica vez, no quadro em que o usuario escolheu o rodape ("trocar de
 // usuario"). Consome a flag, como menu_mudou_destino. Nao e um MenuDestino de
 // proposito: trocar de perfil nao e uma aba do app, e uma acao que devolve a
 // pessoa a tela de escolha.
-int  menu_pediu_trocar(void);
+int  menu_requested_swap(void);
 
-void menu_evento(const SDL_Event *e);
-void menu_atualizar(float dt, Uint32 agora);
+void menu_event(const SDL_Event *e);
+void menu_update(float dt, Uint32 now);
 // Desenhe por ULTIMO: o menu escurece e cobre tudo que veio antes.
-void menu_desenhar(Uint32 agora);
+void menu_draw(Uint32 now);
 
 #endif

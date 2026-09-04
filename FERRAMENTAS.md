@@ -12,8 +12,8 @@ bash tools/mac.sh          # compila e roda no Mac, JÁ LOGADO
 bash tools/arm.sh          # compila para ARM, instala na TV e lança
 bash tools/arm.sh --build  # só compila
 bash tools/arm.sh --ipk    # gera também o .ipk, sem credencial nenhuma dentro
-bash tools/testa-ipk.sh    # prova que o .ipk não leva credencial (sem docker)
-bash tests/conta.sh        # testes de conta: logout, ajustes e QR
+bash tools/test-ipk.sh    # prova que o .ipk não leva credencial (sem docker)
+bash tests/account.sh        # testes de conta: logout, ajustes e QR
 ```
 
 ### A configuração do servidor entra por `-D`, não por arquivo
@@ -69,7 +69,7 @@ pronto**, abortando e apagando o `.ipk` se algum voltar.
 > escrita assim passa sempre, inclusive com o segredo dentro. É preciso
 > desempacotar o `ar` e listar o `data.tar.gz`.
 
-`tools/testa-ipk.sh` prova isso sem docker e foi conferido nos dois sentidos:
+`tools/test-ipk.sh` prova isso sem docker e foi conferido nos dois sentidos:
 com a exclusão o pacote sai limpo; deixando `trakt.txt` entrar de propósito, o
 teste acusa e devolve 1.
 

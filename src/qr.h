@@ -1,39 +1,39 @@
-// Gerador de QR Code, so o necessario para a tela de login.
+// QR Code generator, only as much as the login screen needs.
 //
-// POR QUE ELE EXISTE — e nao era o plano. O plano dizia "mostra o codigo em
-// letras grandes, QR depois". MEDIDO contra o servidor de verdade, a resposta
-// de start_tv_login_session e:
+// WHY IT EXISTS — and it was not the plan. The plan said "show the code in big
+// letters, QR later". MEASURED against the real server, the response from
+// start_tv_login_session is:
 //   {"code":"fa0010cad8b5d2f512e58646ab82ca6b",
 //    "web_url":"https://nuvio.tv/tv-login?code=fa0010cad8b5d2f512e58646ab82ca6b"}
-// Trinta e dois digitos hexadecimais. Ninguem le isso da TV e digita no celular
-// sem errar. O QR deixou de ser enfeite e virou o unico jeito de a pessoa
-// entrar — por isso ele entrou na Fase A.
+// Thirty-two hexadecimal digits. Nobody reads that off a TV and types it into a
+// phone without a mistake. The QR stopped being decoration and became the only
+// way in — which is why it moved into Phase A.
 //
-// ESCOPO DE PROPOSITO ESTREITO: modo BYTE, correcao L, versoes 1 a 6 (ate 41x41
-// modulos, 134 bytes de dados). A partir da versao 7 o simbolo passa a exigir
-// um bloco de informacao de versao com o proprio BCH, e nada aqui precisa
-// disso: a URL de login tem ~55 caracteres e cabe na versao 4. Menos codigo,
-// menos lugar para errar.
+// DELIBERATELY NARROW SCOPE: BYTE mode, L correction, versions 1 to 6 (up to
+// 41x41 modules, 134 bytes of data). From version 7 the symbol starts requiring
+// a version information block with its own BCH, and nothing here needs that:
+// the login URL is ~55 characters and fits in version 4. Less code, fewer
+// places to get it wrong.
 //
-// CONFERIDO contra a implementacao `segno` (Python), modulo a modulo, em varias
-// entradas — inclusive a URL real de login. Ver tools/qr_conferir.py.
+// CHECKED against the `segno` implementation (Python), module by module, across
+// several inputs — including the real login URL. See tools/qr_check.py.
 #ifndef NV_QR_H
 #define NV_QR_H
 
-#define QR_MAX_LADO 41   // versao 6: 17 + 4*6
+#define QR_MAX_SIDE 41   // versao 6: 17 + 4*6
 
 typedef struct {
-  int lado;                                  // 0 quando nao coube
-  unsigned char m[QR_MAX_LADO * QR_MAX_LADO];// 1 = modulo escuro
+  int side;                                  // 0 quando nao coube
+  unsigned char m[QR_MAX_SIDE * QR_MAX_SIDE];// 1 = modulo escuro
 } Qr;
 
-// Codifica `texto`. Devolve 1 em sucesso; 0 quando o texto nao cabe na versao 6
-// (mais de 134 bytes) ou e vazio.
-int qr_gerar(Qr *q, const char *texto);
+// Encodes `text`. Returns 1 on success; 0 when the text does not fit in version
+// 6 (more than 134 bytes) or is empty.
+int qr_generate(Qr *q, const char *text);
 
 static inline int qr_modulo(const Qr *q, int x, int y) {
-  if (!q || x < 0 || y < 0 || x >= q->lado || y >= q->lado) return 0;
-  return q->m[y * q->lado + x];
+  if (!q || x < 0 || y < 0 || x >= q->side || y >= q->side) return 0;
+  return q->m[y * q->side + x];
 }
 
 #endif

@@ -41,7 +41,7 @@ bash tools/arm.sh --ipk        # also produce the .ipk
 Server URLs and client ids are **not in the source**. They travel from a
 `local.properties` file to the compiler command line through `tools/env.sh`; the
 build refuses to package a credential file and deletes the `.ipk` if one appears
-(`tools/testa-ipk.sh` verifies it by extracting the `ar` archive — `tar tzf` on
+(`tools/test-ipk.sh` verifies it by extracting the `ar` archive — `tar tzf` on
 an `.ipk` lists three names and passes even when a secret is inside).
 
 ## Notes for anyone porting to webOS

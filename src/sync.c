@@ -1,13 +1,13 @@
 #include "sync.h"
-#include "sessao.h"
-#include "nuvem.h"
-#include "perfis.h"
-#include "dados.h"
+#include "session.h"
+#include "cloud.h"
+#include "profiles.h"
+#include "data.h"
 #include "addons.h"
 #include "trakt.h"
-#include "catalogo.h"
-#include "ajustes.h"
-#include "descoberta.h"
+#include "catalog.h"
+#include "settings.h"
+#include "discover.h"
 #include "extras.h"
 #include "js.h"
 #include "jsw.h"
@@ -17,23 +17,23 @@
 #include <pthread.h>
 
 #define SY_ADD_MAX   16
-#define SY_PROG_MAX 240
-#define ARQ_PROG "progresso.txt"
+#define SY_PROGRESS_MAX 240
+#define FILE_PROGRESS "progress.txt"
 
-static pthread_t fio;
-static int fioVivo, fioPronto;
-static SyncEstado estado = SYNC_PARADO;
-static char resumo[220] = "sem sincronizar";
-static unsigned ultimoOk;
-static int sujoProgresso, sujoAddons;
+static pthread_t thread;
+static int threadAlive, threadReady;
+static SyncState state = SYNC_STOPPED;
+static char summary[220] = "not synced";
+static unsigned lastOk;
+static int dirtyProgress, dirtyAddons;
 
 // O fio NAO toca no app: ele so preenche estas caixas, e sync_passo aplica no
 // laco principal. Sem essa separacao, uma resposta de rede reescreveria a lista
 // de addons no meio de um quadro que ja estava lendo dela.
-static AddonRemoto addonsRem[SY_ADD_MAX];
+static AddonRemote addonsRem[SY_ADD_MAX];
 static int nAddonsRem, temAddonsRem;
 
-static char traktTok[300];
+static char traktToken[300];
 static int  temTraktRem;
 
 // Chaves de servico que a conta guarda e o app lia de arquivo do dono.
@@ -43,13 +43,13 @@ static int  temTraktRem;
 static char tmdbKey[120], mdbKey[120];
 static int  temTmdb, temMdb;
 
-typedef struct { char imdb[40]; double pos, dur; int temp, ep; } ProgItem;
-static ProgItem progRem[SY_PROG_MAX];
-static int nProgRem;
+typedef struct { char imdb[40]; double pos, duration; int temp, ep; } ProgressItem;
+static ProgressItem progressRem[SY_PROGRESS_MAX];
+static int nProgressRem;
 
 // Contagens do que foi puxado mas o app ainda nao consome. Elas existem para o
 // resumo poder dizer a verdade em vez de "sincronizado" sem qualificar.
-static int cVistos, cBiblio, cSalvos, cColecoes, temAjustesPerfil, temCatHome;
+static int cWatched, cLib, cSaved, cCollections, temSettingsProfile, temCatHome;
 
 // Blob de ajustes do perfil, cru, esperando ser aplicado no fio principal.
 // `aplicarAjustes` comeca ligado: no arranque nao ha mudanca local para
@@ -61,9 +61,9 @@ static int cVistos, cBiblio, cSalvos, cColecoes, temAjustesPerfil, temCatHome;
 // efeito era o recurso simplesmente nao funcionar. O app web guarda no mesmo
 // objeto muito mais chaves do que este app conhece, e escolher um teto aqui e
 // escolher uma conta que nao vai funcionar.
-static char *ajustesBlob;
-static int  temAjustesBlob;
-static int  aplicarAjustes = 1;
+static char *settingsBlob;
+static int  temSettingsBlob;
+static int  applySettings = 1;
 
 // ---------------------------------------------------------------- utilitarios
 
@@ -71,38 +71,38 @@ static int ok2xx(const char *r, int st) { return r && st >= 200 && st < 300; }
 
 // ---------------------------------------------------------------- addons
 
-static void puxarAddons(void) {
-  char consulta[400], dono[80];
+static void pullAddons(void) {
+  char query[400], owner[80];
   char *r;
   int st = 0, k = 0;
   const char *p;
 
-  if (!perfis_dono()[0]) return;
-  nuvem_url_escapar(perfis_dono(), dono, sizeof dono);
+  if (!profiles_owner()[0]) return;
+  cloud_url_escape(profiles_owner(), owner, sizeof owner);
   // MEDIDO: `sync_pull_addons` NAO EXISTE neste servidor (PGRST202), e a
   // tabela `tv_addons` tambem nao (PGRST205). O unico caminho que responde e a
   // tabela `addons`, que e exatamente o caminho feliz do app web.
-  snprintf(consulta, sizeof consulta,
+  snprintf(query, sizeof query,
            "user_id=eq.%s&profile_id=eq.%d&select=*&order=sort_order.asc",
-           dono, perfis_ativo());
+           owner, profiles_active());
   // Com a chave anonima o RLS responde 401 "permission denied for table
   // addons": ler as linhas de alguem exige o token de quem esta pedindo.
-  r = sessao_tabela("addons", consulta, &st);
+  r = session_table("addons", query, &st);
   if (!ok2xx(r, st)) {
-    if (r && nuvem_erro_ausente(r)) printf("[sync] tabela addons ausente\n");
-    else if (st) printf("[sync] leitura de addons: HTTP %d\n", st);
+    if (r && cloud_error_missing(r)) printf("[sync] addons table missing\n");
+    else if (st) printf("[sync] addon read: HTTP %d\n", st);
     free(r);
     return;
   }
-  for (p = js_raiz_array(r); p && k < SY_ADD_MAX; p = js_prox(js_fim(p))) {
-    const char *f = js_fim(p);
+  for (p = js_root_array(r); p && k < SY_ADD_MAX; p = js_next(js_end(p))) {
+    const char *f = js_end(p);
     char b[16];
     memset(&addonsRem[k], 0, sizeof addonsRem[k]);
-    if (!js_texto(p, f, "url", addonsRem[k].url, sizeof addonsRem[k].url)) continue;
-    js_texto(p, f, "name", addonsRem[k].nome, sizeof addonsRem[k].nome);
+    if (!js_text(p, f, "url", addonsRem[k].url, sizeof addonsRem[k].url)) continue;
+    js_text(p, f, "name", addonsRem[k].name, sizeof addonsRem[k].name);
     // Ausente conta como LIGADO: e assim que o web le, e um addon que some por
     // causa de um campo que o servidor nao mandou e pior que um a mais.
-    addonsRem[k].ativo = js_bruto(p, f, "enabled", b, sizeof b)
+    addonsRem[k].active = js_raw(p, f, "enabled", b, sizeof b)
                          ? (strcmp(b, "false") != 0) : 1;
     k++;
   }
@@ -111,78 +111,78 @@ static void puxarAddons(void) {
   temAddonsRem = 1;
 }
 
-static void empurrarAddons(void) {
-  AddonRemoto atuais[SY_ADD_MAX];
+static void pushAddons(void) {
+  AddonRemote current[SY_ADD_MAX];
   Jsw w;
   char *r;
   int st = 0, n, i;
 
-  n = addons_exportar(atuais, SY_ADD_MAX);
+  n = addons_export(current, SY_ADD_MAX);
   // Lista local vazia NAO vira push. Um push vazio apaga os addons da pessoa em
   // todos os aparelhos dela, e "ainda nao carreguei nada" e indistinguivel de
   // "o usuario removeu tudo" deste lado.
   if (n <= 0) return;
 
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_chave(&w, "p_addons");
-  jsw_arr_ini(&w);
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_key(&w, "p_addons");
+  jsw_arr_start(&w);
   for (i = 0; i < n; i++) {
-    jsw_obj_ini(&w);
-    jsw_cs(&w, "url", atuais[i].url);
+    jsw_obj_start(&w);
+    jsw_cs(&w, "url", current[i].url);
     jsw_ci(&w, "sort_order", i);
-    jsw_cb(&w, "enabled", atuais[i].ativo);
-    if (atuais[i].nome[0]) jsw_cs(&w, "name", atuais[i].nome);
-    jsw_obj_fim(&w);
+    jsw_cb(&w, "enabled", current[i].active);
+    if (current[i].name[0]) jsw_cs(&w, "name", current[i].name);
+    jsw_obj_end(&w);
   }
-  jsw_arr_fim(&w);
-  jsw_obj_fim(&w);
-  r = sessao_rpc("sync_push_addons", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  if (!ok2xx(r, st)) printf("[sync] push de addons falhou (HTTP %d)\n", st);
-  else sujoAddons = 0;
+  jsw_arr_end(&w);
+  jsw_obj_end(&w);
+  r = session_rpc("sync_push_addons", jsw_text_final(&w), &st);
+  jsw_free(&w);
+  if (!ok2xx(r, st)) printf("[sync] addon push failed (HTTP %d)\n", st);
+  else dirtyAddons = 0;
   free(r);
 }
 
 // ---------------------------------------------------------------- credenciais
 
-static void puxarCredenciais(void) {
+static void pullCredentials(void) {
   Jsw w;
   char *r;
   int st = 0;
   const char *p;
 
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_obj_fim(&w);
-  r = sessao_rpc("sync_pull_provider_credentials", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_obj_end(&w);
+  r = session_rpc("sync_pull_provider_credentials", jsw_text_final(&w), &st);
+  jsw_free(&w);
   if (!ok2xx(r, st)) { free(r); return; }
 
   // Trakt, debrid e mdblist compartilham as MESMAS RPC, separados so pelo campo
   // `provider`. Uma leitura serve para os tres.
-  for (p = js_raiz_array(r); p; p = js_prox(js_fim(p))) {
-    const char *f = js_fim(p);
-    char prov[48], cred[900];
-    if (!js_texto(p, f, "provider", prov, sizeof prov)) continue;
-    if (!js_bruto(p, f, "credential_json", cred, sizeof cred)) continue;
-    if (!strcmp(prov, "trakt")) {
+  for (p = js_root_array(r); p; p = js_next(js_end(p))) {
+    const char *f = js_end(p);
+    char provider[48], cred[900];
+    if (!js_text(p, f, "provider", provider, sizeof provider)) continue;
+    if (!js_raw(p, f, "credential_json", cred, sizeof cred)) continue;
+    if (!strcmp(provider, "trakt")) {
       // O credential_json pode vir como OBJETO ou como string JSON — o web
       // trata os dois. Aqui basta procurar a chave dentro do texto cru.
       char tk[300];
-      if (js_texto(cred, cred + strlen(cred), "access_token", tk, sizeof tk)) {
-        snprintf(traktTok, sizeof traktTok, "%s", tk);
+      if (js_text(cred, cred + strlen(cred), "access_token", tk, sizeof tk)) {
+        snprintf(traktToken, sizeof traktToken, "%s", tk);
         temTraktRem = 1;
       }
     }
-    else if (!strcmp(prov, "tmdb")) {
-      if (js_texto(cred, cred + strlen(cred), "api_key", tmdbKey, sizeof tmdbKey))
+    else if (!strcmp(provider, "tmdb")) {
+      if (js_text(cred, cred + strlen(cred), "api_key", tmdbKey, sizeof tmdbKey))
         temTmdb = 1;
     }
-    else if (!strcmp(prov, "mdblist")) {
-      if (js_texto(cred, cred + strlen(cred), "api_key", mdbKey, sizeof mdbKey))
+    else if (!strcmp(provider, "mdblist")) {
+      if (js_text(cred, cred + strlen(cred), "api_key", mdbKey, sizeof mdbKey))
         temMdb = 1;
     }
     // debrid:* NAO e aplicado hoje de proposito: as chaves de debrid que este
@@ -195,91 +195,91 @@ static void puxarCredenciais(void) {
 
 // ---------------------------------------------------------------- progresso
 
-static void puxarProgresso(void) {
+static void pullProgress(void) {
   Jsw w;
   char *r;
   int st = 0, k = 0;
   const char *p;
 
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_obj_fim(&w);
-  r = sessao_rpc("sync_pull_watch_progress", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_obj_end(&w);
+  r = session_rpc("sync_pull_watch_progress", jsw_text_final(&w), &st);
+  jsw_free(&w);
   if (!ok2xx(r, st)) { free(r); return; }
 
-  for (p = js_raiz_array(r); p && k < SY_PROG_MAX; p = js_prox(js_fim(p))) {
-    const char *f = js_fim(p);
-    double pos, dur;
+  for (p = js_root_array(r); p && k < SY_PROGRESS_MAX; p = js_next(js_end(p))) {
+    const char *f = js_end(p);
+    double pos, duration;
     int temp, ep;
     char id[40];
-    if (!js_texto(p, f, "content_id", id, sizeof id)) continue;
+    if (!js_text(p, f, "content_id", id, sizeof id)) continue;
     // O web aceita position_ms/duration_ms e position/duration; os primeiros
     // ganham quando existem, porque os segundos ja vem em milissegundos nesta
     // RPC e misturar as duas unidades produz progresso de 100% em tudo.
     pos = js_num(p, f, "position_ms", -1.0);
-    dur = js_num(p, f, "duration_ms", -1.0);
+    duration = js_num(p, f, "duration_ms", -1.0);
     if (pos < 0) pos = js_num(p, f, "position", 0);
-    if (dur < 0) dur = js_num(p, f, "duration", 0);
+    if (duration < 0) duration = js_num(p, f, "duration", 0);
     pos /= 1000.0;
-    dur /= 1000.0;
-    if (dur <= 1.0) continue;
+    duration /= 1000.0;
+    if (duration <= 1.0) continue;
     temp = (int)js_num(p, f, "season", 0);
     ep   = (int)js_num(p, f, "episode", 0);
     if (temp > 0 && ep > 0)
-      snprintf(progRem[k].imdb, sizeof progRem[k].imdb, "%s:%d:%d", id, temp, ep);
+      snprintf(progressRem[k].imdb, sizeof progressRem[k].imdb, "%s:%d:%d", id, temp, ep);
     else
-      snprintf(progRem[k].imdb, sizeof progRem[k].imdb, "%s", id);
-    progRem[k].pos = pos;
-    progRem[k].dur = dur;
-    progRem[k].temp = temp;
-    progRem[k].ep = ep;
+      snprintf(progressRem[k].imdb, sizeof progressRem[k].imdb, "%s", id);
+    progressRem[k].pos = pos;
+    progressRem[k].duration = duration;
+    progressRem[k].temp = temp;
+    progressRem[k].ep = ep;
     k++;
   }
   free(r);
   // Vazio nao apaga nada: quem consome so aplica o que veio.
-  nProgRem = k;
+  nProgressRem = k;
 }
 
 // Le o progresso que ESTE aparelho gravou. E a unica superficie em que o app
 // nativo tem informacao propria de verdade — por isso e a unica, junto dos
 // addons, que ele empurra.
-static int lerProgressoLocal(ProgItem *saida, int max) {
-  char *buf, *linha, *ctx;
+static int readProgressLocal(ProgressItem *output, int max) {
+  char *buf, *line, *ctx;
   int k = 0;
-  buf = dados_ler(ARQ_PROG);
+  buf = data_read(FILE_PROGRESS);
   if (!buf) return 0;
-  for (linha = strtok_r(buf, "\n", &ctx); linha && k < max;
-       linha = strtok_r(NULL, "\n", &ctx)) {
+  for (line = strtok_r(buf, "\n", &ctx); line && k < max;
+       line = strtok_r(NULL, "\n", &ctx)) {
     char id[40];
-    double pos, dur;
-    if (sscanf(linha, "%39s %lf %lf", id, &pos, &dur) != 3) continue;
-    if (dur <= 1.0) continue;
-    snprintf(saida[k].imdb, sizeof saida[k].imdb, "%s", id);
-    saida[k].pos = pos;
-    saida[k].dur = dur;
+    double pos, duration;
+    if (sscanf(line, "%39s %lf %lf", id, &pos, &duration) != 3) continue;
+    if (duration <= 1.0) continue;
+    snprintf(output[k].imdb, sizeof output[k].imdb, "%s", id);
+    output[k].pos = pos;
+    output[k].duration = duration;
     k++;
   }
   free(buf);
   return k;
 }
 
-static void empurrarProgresso(void) {
-  ProgItem local[SY_PROG_MAX];
+static void pushProgress(void) {
+  ProgressItem local[SY_PROGRESS_MAX];
   Jsw w;
   char *r;
   int n, i, st = 0;
 
-  n = lerProgressoLocal(local, SY_PROG_MAX);
+  n = readProgressLocal(local, SY_PROGRESS_MAX);
   if (n <= 0) return;   // vazio nunca vira push; delecao tem RPC propria
 
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_cs(&w, "p_origin_client_id", dados_cliente_id());
-  jsw_chave(&w, "p_entries");
-  jsw_arr_ini(&w);
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_cs(&w, "p_origin_client_id", data_client_id());
+  jsw_key(&w, "p_entries");
+  jsw_arr_start(&w);
   for (i = 0; i < n; i++) {
     // "tt123:4:9" carrega temporada e episodio; o servidor quer os tres campos
     // separados, e mandar o id composto em content_id faria cada episodio
@@ -291,23 +291,23 @@ static void empurrarProgresso(void) {
     dp = strchr(id, ':');
     if (dp) { sscanf(dp + 1, "%d:%d", &temp, &ep); *dp = 0; }
 
-    jsw_obj_ini(&w);
+    jsw_obj_start(&w);
     jsw_cs(&w, "content_id", id);
     jsw_cs(&w, "content_type", (temp > 0) ? "series" : "movie");
     jsw_ci(&w, "position", (long long)(local[i].pos * 1000.0));
-    jsw_ci(&w, "duration", (long long)(local[i].dur * 1000.0));
+    jsw_ci(&w, "duration", (long long)(local[i].duration * 1000.0));
     if (temp > 0) { jsw_ci(&w, "season", temp); jsw_ci(&w, "episode", ep); }
-    else          { jsw_chave(&w, "season"); jsw_nulo(&w);
-                    jsw_chave(&w, "episode"); jsw_nulo(&w); }
+    else          { jsw_key(&w, "season"); jsw_null(&w);
+                    jsw_key(&w, "episode"); jsw_null(&w); }
     jsw_cs(&w, "progress_key", local[i].imdb);
-    jsw_obj_fim(&w);
+    jsw_obj_end(&w);
   }
-  jsw_arr_fim(&w);
-  jsw_obj_fim(&w);
-  r = sessao_rpc("sync_push_watch_progress", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  if (!ok2xx(r, st)) printf("[sync] push de progresso falhou (HTTP %d)\n", st);
-  else sujoProgresso = 0;
+  jsw_arr_end(&w);
+  jsw_obj_end(&w);
+  r = session_rpc("sync_push_watch_progress", jsw_text_final(&w), &st);
+  jsw_free(&w);
+  if (!ok2xx(r, st)) printf("[sync] progress push failed (HTTP %d)\n", st);
+  else dirtyProgress = 0;
   free(r);
 }
 
@@ -321,32 +321,32 @@ static void empurrarProgresso(void) {
 // RPC que o servidor nao tem NAO e perguntada de novo. MEDIDO:
 // `sync_pull_saved_library` nao existe neste servidor, e sem esta lista o app
 // gastaria uma viagem por ciclo, para sempre, contra um 404 que nunca muda.
-#define SY_AUSENTES 8
-static const char *ausentes[SY_AUSENTES];
-static int nAusentes;
+#define SY_MISSING 8
+static const char *missing[SY_MISSING];
+static int nMissing;
 
-static int jaAusente(const char *funcao) {
+static int jaMissing(const char *func) {
   int i;
-  for (i = 0; i < nAusentes; i++)
-    if (!strcmp(ausentes[i], funcao)) return 1;
+  for (i = 0; i < nMissing; i++)
+    if (!strcmp(missing[i], func)) return 1;
   return 0;
 }
 
-static int contarRpc(const char *funcao, const char *corpo) {
+static int countRpc(const char *func, const char *body) {
   char *r;
   int st = 0, k = 0;
   const char *p;
-  if (jaAusente(funcao)) return -1;
-  r = sessao_rpc(funcao, corpo, &st);
+  if (jaMissing(func)) return -1;
+  r = session_rpc(func, body, &st);
   if (!ok2xx(r, st)) {
-    if (r && nuvem_erro_ausente(r)) {
-      printf("[sync] %s nao existe neste servidor\n", funcao);
-      if (nAusentes < SY_AUSENTES) ausentes[nAusentes++] = funcao;
+    if (r && cloud_error_missing(r)) {
+      printf("[sync] %s does not exist on this server\n", func);
+      if (nMissing < SY_MISSING) missing[nMissing++] = func;
     }
     free(r);
     return -1;
   }
-  for (p = js_raiz_array(r); p; p = js_prox(js_fim(p))) k++;
+  for (p = js_root_array(r); p; p = js_next(js_end(p))) k++;
   free(r);
   return k;
 }
@@ -354,42 +354,42 @@ static int contarRpc(const char *funcao, const char *corpo) {
 // O blob de ajustes NAO e contado, e lido: ele e o layout da pessoa. Ate agora
 // esta RPC so alimentava um numero no resumo, e as ~40 preferencias vinham dos
 // padroes transcritos a mao do perfil de quem montou o pacote.
-static int puxarAjustesPerfil(const char *corpo) {
+static int pullSettingsProfile(const char *body) {
   char *r;
   int st = 0, ok = 0;
   const char *p;
-  if (!aplicarAjustes) return temAjustesPerfil;   // nada a fazer nesta volta
-  r = sessao_rpc("sync_pull_profile_settings_blob", corpo, &st);
+  if (!applySettings) return temSettingsProfile;   // nada a fazer nesta volta
+  r = session_rpc("sync_pull_profile_settings_blob", body, &st);
   if (!ok2xx(r, st)) { free(r); return 0; }
   // A resposta e [{ "settings_json": { ... } }]; o que interessa e o objeto de
   // dentro, cru e INTEIRO.
-  p = js_raiz_array(r);
+  p = js_root_array(r);
   if (p) {
-    const char *fimObj = js_fim(p);
+    const char *endObj = js_end(p);
     const char *k = strstr(p, "\"settings_json\"");
-    if (k && k < fimObj) {
+    if (k && k < endObj) {
       const char *v = strchr(k, ':');
       if (v) {
         v++;
         while (*v && (unsigned char)*v <= ' ') v++;
         if (*v == '{') {
-          const char *f = js_fim(v);
+          const char *f = js_end(v);
           size_t n = (size_t)(f - v);
-          char *novo = (char *)malloc(n + 1);
-          if (novo) {
-            memcpy(novo, v, n);
-            novo[n] = 0;
-            free(ajustesBlob);
-            ajustesBlob = novo;
-            temAjustesBlob = 1;
+          char *new = (char *)malloc(n + 1);
+          if (new) {
+            memcpy(new, v, n);
+            new[n] = 0;
+            free(settingsBlob);
+            settingsBlob = new;
+            temSettingsBlob = 1;
             ok = 1;
-            printf("[sync] blob de ajustes: %d bytes\n", (int)n);
+            printf("[sync] settings blob: %d bytes\n", (int)n);
           }
         } else {
           // O web aceita o blob tambem como STRING JSON serializada. Este
           // servidor devolve objeto; se um dia devolver string, o certo e
           // dizer, nao aplicar um pedaco.
-          printf("[sync] blob de ajustes nao veio como objeto; nao aplicado\n");
+          printf("[sync] settings blob did not arrive as an object; not applied\n");
         }
       }
     }
@@ -398,64 +398,64 @@ static int puxarAjustesPerfil(const char *corpo) {
   return ok;
 }
 
-static void puxarSoLeitura(void) {
-  char corpo[160];
-  int perfil = perfis_ativo();
+static void pullSoRead(void) {
+  char body[160];
+  int profile = profiles_active();
 
-  snprintf(corpo, sizeof corpo, "{\"p_profile_id\":%d}", perfil);
-  cBiblio   = contarRpc("sync_pull_library", corpo);
-  cColecoes = contarRpc("sync_pull_collections", corpo);
+  snprintf(body, sizeof body, "{\"p_profile_id\":%d}", profile);
+  cLib   = countRpc("sync_pull_library", body);
+  cCollections = countRpc("sync_pull_collections", body);
 
   // MEDIDO: `p_page` comeca em 1. Com 0 o servidor responde 400 "OFFSET must
   // not be negative" — a conta dele e (p_page - 1) * p_page_size.
-  snprintf(corpo, sizeof corpo,
-           "{\"p_profile_id\":%d,\"p_page\":1,\"p_page_size\":200}", perfil);
-  cVistos = contarRpc("sync_pull_watched_items", corpo);
+  snprintf(body, sizeof body,
+           "{\"p_profile_id\":%d,\"p_page\":1,\"p_page_size\":200}", profile);
+  cWatched = countRpc("sync_pull_watched_items", body);
 
-  snprintf(corpo, sizeof corpo,
-           "{\"p_profile_id\":%d,\"p_limit\":200,\"p_offset\":0}", perfil);
-  cSalvos = contarRpc("sync_pull_saved_library", corpo);
+  snprintf(body, sizeof body,
+           "{\"p_profile_id\":%d,\"p_limit\":200,\"p_offset\":0}", profile);
+  cSaved = countRpc("sync_pull_saved_library", body);
 
-  snprintf(corpo, sizeof corpo,
-           "{\"p_profile_id\":%d,\"p_platform\":\"tv\"}", perfil);
-  temAjustesPerfil = puxarAjustesPerfil(corpo);
+  snprintf(body, sizeof body,
+           "{\"p_profile_id\":%d,\"p_platform\":\"tv\"}", profile);
+  temSettingsProfile = pullSettingsProfile(body);
 
-  snprintf(corpo, sizeof corpo,
-           "{\"p_profile_id\":%d,\"p_platform\":\"home_catalog_shared\"}", perfil);
-  temCatHome = contarRpc("sync_pull_home_catalog_settings", corpo) > 0;
+  snprintf(body, sizeof body,
+           "{\"p_profile_id\":%d,\"p_platform\":\"home_catalog_shared\"}", profile);
+  temCatHome = countRpc("sync_pull_home_catalog_settings", body) > 0;
 }
 
 // ---------------------------------------------------------------- ciclo
 
-static void *rodar(void *u) {
+static void *run(void *u) {
   (void)u;
-  perfis_puxar();
-  puxarAddons();
-  puxarCredenciais();
-  puxarProgresso();
-  puxarSoLeitura();
+  profiles_pull();
+  pullAddons();
+  pullCredentials();
+  pullProgress();
+  pullSoRead();
   // Empurrar DEPOIS de puxar, como o startupSyncService do web: puxar depois
   // de empurrar faria o aparelho sobrescrever com o que ele mesmo mandou.
-  if (sujoAddons)    empurrarAddons();
-  if (sujoProgresso) empurrarProgresso();
+  if (dirtyAddons)    pushAddons();
+  if (dirtyProgress) pushProgress();
 
-  snprintf(resumo, sizeof resumo,
-           "%d addons · %d progressos · %d vistos · %d na lista · %d coleções%s",
-           nAddonsRem, nProgRem, cVistos < 0 ? 0 : cVistos,
-           cBiblio < 0 ? 0 : cBiblio, cColecoes < 0 ? 0 : cColecoes,
+  snprintf(summary, sizeof summary,
+           "%d addons · %d progress · %d watched · %d in list · %d collections%s",
+           nAddonsRem, nProgressRem, cWatched < 0 ? 0 : cWatched,
+           cLib < 0 ? 0 : cLib, cCollections < 0 ? 0 : cCollections,
            temTraktRem ? " · Trakt" : "");
-  estado = SYNC_PRONTO;
-  fioPronto = 1;
+  state = SYNC_READY;
+  threadReady = 1;
   return NULL;
 }
 
-void sync_iniciar(void) {
-  if (fioVivo || !sessao_logada()) return;
-  if (nuvem_freio_ativo()) return;
-  estado = SYNC_RODANDO;
-  fioPronto = 0;
-  if (pthread_create(&fio, NULL, rodar, NULL) == 0) { pthread_detach(fio); fioVivo = 1; }
-  else { estado = SYNC_FALHOU; snprintf(resumo, sizeof resumo, "sem fio para sincronizar"); }
+void sync_start(void) {
+  if (threadAlive || !session_loggedin()) return;
+  if (cloud_brake_active()) return;
+  state = SYNC_RUNNING;
+  threadReady = 0;
+  if (pthread_create(&thread, NULL, run, NULL) == 0) { pthread_detach(thread); threadAlive = 1; }
+  else { state = SYNC_FAILED; snprintf(summary, sizeof summary, "no thread to sync with"); }
 }
 
 // Um ciclo automatico, se ja passou o intervalo. Devolve 1 quando disparou.
@@ -463,111 +463,111 @@ void sync_iniciar(void) {
 // reproducao NAO e — uma rajada de HTTP no meio do video disputa CPU e rede
 // com o decodificador, e um engasgo de imagem custa mais que 5 minutos de
 // atraso no progresso.
-int sync_periodico(unsigned agoraMs) {
-  if (!sessao_logada() || fioVivo) return 0;
-  if (nuvem_freio_ativo()) return 0;
+int sync_periodic(unsigned nowMs) {
+  if (!session_loggedin() || threadAlive) return 0;
+  if (cloud_brake_active()) return 0;
   // Sem nenhum ciclo bem-sucedido ainda, quem manda e quem chamou sync_iniciar
   // — nao adianta insistir por cima de uma falha que o freio ja esta segurando.
-  if (!ultimoOk) return 0;
-  if (agoraMs - ultimoOk < SYNC_INTERVALO_MS) return 0;
-  sync_iniciar();
+  if (!lastOk) return 0;
+  if (nowMs - lastOk < SYNC_INTERVAL_MS) return 0;
+  sync_start();
   return 1;
 }
 
-void sync_passo(unsigned agoraMs) {
-  if (!fioVivo || !fioPronto) return;
-  fioVivo = 0;
-  fioPronto = 0;
+void sync_step(unsigned nowMs) {
+  if (!threadAlive || !threadReady) return;
+  threadAlive = 0;
+  threadReady = 0;
 
-  if (temAddonsRem) { addons_definir_lista(addonsRem, nAddonsRem); temAddonsRem = 0; }
-  if (temTraktRem)  { trakt_definir(traktTok, nuvem_trakt_cliente()); temTraktRem = 0; }
-  if (temTmdb)      { desc_tmdb_definir(tmdbKey);   temTmdb = 0; }
-  if (temMdb)       { extras_definir_chave(mdbKey); temMdb = 0; }
-  if (temAjustesBlob && ajustesBlob) {
-    ajustes_aplicar_blob(ajustesBlob);
-    free(ajustesBlob);
-    ajustesBlob = NULL;
-    temAjustesBlob = 0;
-    aplicarAjustes = 0;   // daqui para frente, o que a pessoa mudar na TV fica
+  if (temAddonsRem) { addons_set_list(addonsRem, nAddonsRem); temAddonsRem = 0; }
+  if (temTraktRem)  { trakt_set(traktToken, cloud_trakt_client()); temTraktRem = 0; }
+  if (temTmdb)      { disc_tmdb_set(tmdbKey);   temTmdb = 0; }
+  if (temMdb)       { extras_set_key(mdbKey); temMdb = 0; }
+  if (temSettingsBlob && settingsBlob) {
+    settings_apply_blob(settingsBlob);
+    free(settingsBlob);
+    settingsBlob = NULL;
+    temSettingsBlob = 0;
+    applySettings = 0;   // daqui para frente, o que a pessoa mudar na TV fica
   }
-  if (nProgRem) {
-    int i, aplicados = 0;
-    for (i = 0; i < nProgRem; i++) {
-      int idx = cat_indice_por_imdb(progRem[i].imdb);
+  if (nProgressRem) {
+    int i, applied = 0;
+    for (i = 0; i < nProgressRem; i++) {
+      int idx = cat_index_por_imdb(progressRem[i].imdb);
       if (idx < 0) continue;
       // O catalogo deste projeto sabe gravar progresso POR EPISODIO. Usar a
       // versao sem temporada/episodio perderia em qual episodio a pessoa
       // parou, que e a informacao que faz a fileira "continue assistindo"
       // valer alguma coisa numa serie.
-      cat_salvar_progresso_ep(idx, progRem[i].pos, progRem[i].dur,
-                              progRem[i].temp, progRem[i].ep);
-      aplicados++;
+      cat_save_progress_ep(idx, progressRem[i].pos, progressRem[i].duration,
+                              progressRem[i].temp, progressRem[i].ep);
+      applied++;
     }
-    printf("[sync] %d de %d progressos casaram com o catalogo\n", aplicados, nProgRem);
-    nProgRem = 0;
+    printf("[sync] %d of %d progress entries matched the catalog\n", applied, nProgressRem);
+    nProgressRem = 0;
   }
-  if (estado == SYNC_PRONTO) ultimoOk = agoraMs;
+  if (state == SYNC_READY) lastOk = nowMs;
 }
 
-SyncEstado  sync_estado(void)      { return estado; }
-const char *sync_resumo(void)      { return resumo; }
-unsigned    sync_ultimo_ok(void)   { return ultimoOk; }
-void        sync_sujar_progresso(void) { sujoProgresso = 1; }
-void        sync_sujar_addons(void)    { sujoAddons = 1; }
-void sync_empurrar_credencial(const char *provider, const char *credJson) {
+SyncState  sync_state(void)      { return state; }
+const char *sync_summary(void)      { return summary; }
+unsigned    sync_last_ok(void)   { return lastOk; }
+void        sync_dirty_progress(void) { dirtyProgress = 1; }
+void        sync_dirty_addons(void)    { dirtyAddons = 1; }
+void sync_push_credential(const char *provider, const char *credJson) {
   Jsw w;
   char *r;
   int st = 0;
-  if (!sessao_logada() || !provider || !*provider || !credJson || !*credJson) return;
-  jsw_iniciar(&w);
-  jsw_obj_ini(&w);
-  jsw_ci(&w, "p_profile_id", perfis_ativo());
-  jsw_cs(&w, "p_origin_client_id", dados_cliente_id());
-  jsw_chave(&w, "p_credentials");
-  jsw_arr_ini(&w);
-  jsw_obj_ini(&w);
+  if (!session_loggedin() || !provider || !*provider || !credJson || !*credJson) return;
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_cs(&w, "p_origin_client_id", data_client_id());
+  jsw_key(&w, "p_credentials");
+  jsw_arr_start(&w);
+  jsw_obj_start(&w);
   jsw_cs(&w, "provider", provider);
-  jsw_chave(&w, "credential_json");
-  jsw_bruto(&w, credJson);
-  jsw_obj_fim(&w);
-  jsw_arr_fim(&w);
-  jsw_obj_fim(&w);
-  r = sessao_rpc("sync_push_provider_credentials", jsw_texto_final(&w), &st);
-  jsw_livre(&w);
-  if (!ok2xx(r, st)) printf("[sync] push de credencial %s falhou (HTTP %d)\n", provider, st);
-  else printf("[sync] credencial %s guardada na conta\n", provider);
+  jsw_key(&w, "credential_json");
+  jsw_raw(&w, credJson);
+  jsw_obj_end(&w);
+  jsw_arr_end(&w);
+  jsw_obj_end(&w);
+  r = session_rpc("sync_push_provider_credentials", jsw_text_final(&w), &st);
+  jsw_free(&w);
+  if (!ok2xx(r, st)) printf("[sync] credential push %s failed (HTTP %d)\n", provider, st);
+  else printf("[sync] credential %s stored in the account\n", provider);
   free(r);
 }
 
-void sync_reaplicar_ajustes(void) { aplicarAjustes = 1; }
+void sync_reapply_settings(void) { applySettings = 1; }
 
-void sync_esquecer_usuario(void) {
+void sync_forget_user(void) {
   // A ordem importa pouco, mas o CONJUNTO nao: cada linha aqui corresponde a
   // uma coisa que sobrevivia ao logout.
-  addons_esquecer();
-  trakt_esquecer();
-  perfis_esquecer();
-  dados_apagar(ARQ_PROG);
+  addons_forget();
+  trakt_forget();
+  profiles_forget();
+  data_erase(FILE_PROGRESS);
 
   // As caixas que o fio preenche tambem: um ciclo que terminou logo antes do
   // logout aplicaria os addons da conta anterior no proximo sync_passo.
   memset(addonsRem, 0, sizeof addonsRem);
   nAddonsRem = 0; temAddonsRem = 0;
-  traktTok[0] = 0; temTraktRem = 0;
+  traktToken[0] = 0; temTraktRem = 0;
   memset(tmdbKey, 0, sizeof tmdbKey); temTmdb = 0;
   memset(mdbKey, 0, sizeof mdbKey);   temMdb = 0;
-  nProgRem = 0;
-  cVistos = cBiblio = cSalvos = cColecoes = 0;
-  temAjustesPerfil = temCatHome = 0;
-  estado = SYNC_PARADO;
-  ultimoOk = 0;
-  sujoProgresso = 0; sujoAddons = 0;
-  free(ajustesBlob);
-  ajustesBlob = NULL;
-  temAjustesBlob = 0;
-  aplicarAjustes = 1;
-  snprintf(resumo, sizeof resumo, "sem conta");
-  printf("[sync] dados do usuario apagados deste aparelho\n");
+  nProgressRem = 0;
+  cWatched = cLib = cSaved = cCollections = 0;
+  temSettingsProfile = temCatHome = 0;
+  state = SYNC_STOPPED;
+  lastOk = 0;
+  dirtyProgress = 0; dirtyAddons = 0;
+  free(settingsBlob);
+  settingsBlob = NULL;
+  temSettingsBlob = 0;
+  applySettings = 1;
+  snprintf(summary, sizeof summary, "no account");
+  printf("[sync] user data erased from this device\n");
 }
 
-void        sync_encerrar(void)    { }
+void        sync_shutdown(void)    { }

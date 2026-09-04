@@ -12,7 +12,7 @@ static const char *ids[]={"r-4k","r-1080","r-720","q-remux","q-bluray","q-webdl"
 static struct {char image[700],name[64];} art[NB];
 static uint64_t bit(const char *id){for(size_t i=0;i<NB;i++)if(!strcmp(id,ids[i]))return UINT64_C(1)<<i;return 0;}
 static int token(const char *s,const char *t){size_t n=strlen(t);for(const char *p=s;(p=strstr(p,t));p++)if((p==s||!isalnum((unsigned char)p[-1]))&&!isalnum((unsigned char)p[n]))return 1;return 0;}
-uint64_t badges_detectar(const char *metadata) {
+uint64_t badges_detect(const char *metadata) {
   char s[4096];size_t n=0;for(;metadata&&metadata[n]&&n<sizeof s-1;n++)s[n]=(char)tolower((unsigned char)metadata[n]);s[n]=0;
   uint64_t m=0;
 #define HAS(t) token(s,t)
@@ -53,23 +53,23 @@ uint64_t badges_detectar(const char *metadata) {
 #undef ADD
   return m;
 }
-uint64_t badges_provedor(const char *name){return badges_detectar(name)&(~UINT64_C(0)<<31);}
-void badges_carregar(const char *dir) {
+uint64_t badges_provider(const char *name){return badges_detect(name)&(~UINT64_C(0)<<31);}
+void badges_load(const char *dir) {
   char path[700];snprintf(path,sizeof path,"%s/badges/index.json",dir);FILE *f=fopen(path,"rb");if(!f)return;
   char body[24000];size_t n=fread(body,1,sizeof body-1,f);body[n]=0;fclose(f);
-  for(const char *p=js_array(body,NULL,"badges");p;p=js_prox(js_fim(p))){char id[48],name[64],file[128];const char *e=js_fim(p);
-    js_texto(p,e,"id",id,sizeof id);js_texto(p,e,"name",name,sizeof name);js_texto(p,e,"image",file,sizeof file);
+  for(const char *p=js_array(body,NULL,"badges");p;p=js_next(js_end(p))){char id[48],name[64],file[128];const char *e=js_end(p);
+    js_text(p,e,"id",id,sizeof id);js_text(p,e,"name",name,sizeof name);js_text(p,e,"image",file,sizeof file);
     if(strchr(file,'/')||strstr(file,".."))continue;
     for(size_t i=0;i<NB;i++)if(!strcmp(ids[i],id)){snprintf(art[i].image,sizeof art[i].image,"%s/badges/%s",dir,file);snprintf(art[i].name,sizeof art[i].name,"%s",name);}
   }
 }
-float badges_desenhar(uint64_t mask,float x,float y,float maxW,float h,float a) {
+float badges_draw(uint64_t mask,float x,float y,float maxW,float h,float a) {
   float start=x;
   for(size_t i=0;i<NB;i++)if((mask&(UINT64_C(1)<<i))&&art[i].image[0]) {
-    GLuint t=tex_obter_larg(art[i].image,128);float aspect=tex_aspecto(art[i].image),w=aspect>0?h*aspect:80;
+    GLuint t=tex_get_width(art[i].image,128);float aspect=tex_aspect(art[i].image),w=aspect>0?h*aspect:80;
     if(w>144)w=144;if(x+w>start+maxW)break;
-    if(t&&aspect>0){float height=w/aspect;gfx_rect((GfxRect){x,y+(h-height)*.5f,w,height},t,GFX_TEXTO,0,0,0,0,1,1,1,a);}
-    else {TxtLinha l=txt_linha_corta(TXT_MINI,art[i].name,225,228,235,255,w);txt_desenhar_alpha(l,x,y+(h-l.h)*.5f,a);}
+    if(t&&aspect>0){float height=w/aspect;gfx_rect((GfxRect){x,y+(h-height)*.5f,w,height},t,GFX_TEXT,0,0,0,0,1,1,1,a);}
+    else {TxtLine l=txt_line_trim(TXT_MINI,art[i].name,225,228,235,255,w);txt_draw_alpha(l,x,y+(h-l.h)*.5f,a);}
     x+=w+14;
   }return x-start;
 }

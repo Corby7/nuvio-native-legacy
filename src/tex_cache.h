@@ -12,25 +12,25 @@
 #define NV_TEX_CACHE_H
 #include "gl_compat.h"
 
-int  tex_iniciar(int max_itens);
+int  tex_start(int max_items);
 
 // Pasta onde as imagens vindas de URL sao guardadas em disco. Sem ela,
 // tex_obter com http(s) simplesmente nao carrega — o app nao quebra, so fica
 // sem arte.
 void tex_cache_dir(const char *dir);
-void tex_encerrar(void);
+void tex_shutdown(void);
 
 // Devolve a textura se ja estiver pronta; senao 0 e enfileira o decode.
 // Nunca bloqueia a thread de desenho.
-GLuint tex_obter(const char *caminho);
+GLuint tex_get(const char *path);
 // Mesma coisa, com teto de 1920: para a arte que ocupa a tela inteira (hero da
 // home, backdrop do detalhe, arte do player). Com o teto comum de 960 essas
 // tres eram decodificadas com metade da resolucao e ampliadas na tela.
-GLuint tex_obter_hero(const char *caminho);
+GLuint tex_get_hero(const char *path);
 
 // Escala entre o pixel do BUFFER e o pixel de layout (1 na TV, 2 no Mac
 // retina). Definir uma vez no arranque, junto com a do texto.
-void tex_escala(float e);
+void tex_scale(float e);
 
 // Como tex_obter, mas dizendo COM QUE LARGURA a arte vai ser desenhada, em
 // pixels de layout. O teto de decodificacao sai dai, em vez do padrao unico de
@@ -39,11 +39,11 @@ void tex_escala(float e);
 // texturas no orcamento e caber ~230.
 //
 // Prefira esta a tex_obter em qualquer arte de lista: e onde o cache estoura.
-GLuint tex_obter_larg(const char *caminho, float largLayout);
+GLuint tex_get_width(const char *path, float widthLayout);
 
 // Proporcao (w/h) da textura ja carregada; 0 se ainda nao esta pronta.
 // Necessaria para o "cover" do shader — sem ela a arte estica.
-float tex_aspecto(const char *caminho);
+float tex_aspect(const char *path);
 
 // 1 quando a arte e uma marca ESCURA E ACROMATICA — o caso do logo preto — e
 // portanto deve ser desenhada tingida (GFX_MARCA) em vez de com as cores dela.
@@ -60,19 +60,19 @@ float tex_aspecto(const char *caminho);
 // na thread de decode, amostrando 1/16 dos pixels opacos.
 //
 // Responde 0 enquanto a textura nao carregou: nao tingir e o padrao seguro.
-int  tex_marca_escura(const char *caminho);
+int  tex_brand_dark(const char *path);
 
 // Chamar uma vez por quadro, na thread de desenho: sobe para a GPU o que a
 // thread de decode terminou. Devolve quantas subiu.
-int tex_bombear(int max_por_quadro);
+int tex_pump(int max_por_frame);
 
 // Telemetria de quadro do cache: quantas buscas por caminho e quanto custaram.
 // acharIndice era LINEAR sobre 192 slots e cada card da lista chama 2-3 vezes
 // por quadro; estes numeros dizem se isso pesa de verdade ou nao.
-extern int    tex_n_busca;
-extern double tex_ms_busca;
-void tex_novo_quadro(void);
+extern int    tex_n_search;
+extern double tex_ms_search;
+void tex_new_frame(void);
 
-void tex_estatisticas(int *itens, int *pendentes, long *bytes);
+void tex_stats(int *items, int *pending, long *bytes);
 
 #endif

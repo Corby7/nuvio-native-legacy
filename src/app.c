@@ -13,121 +13,121 @@
 //   4. a tela corrente (home, busca, biblioteca ou ajustes)
 #include "app.h"
 #include "login.h"
-#include "sessao.h"
-#include "perfis.h"
-#include "perfilsel.h"
+#include "session.h"
+#include "profiles.h"
+#include "profile_select.h"
 #include "sync.h"
 #include "traktauth.h"
 #include "simklauth.h"
 #include "text.h"
-#include "vertudo.h"
+#include "seeall.h"
 #include "ctxmenu.h"
-#include "marco.h"
+#include "mark.h"
 #include <string.h>
 #include "home.h"
 #include "detail.h"
 #include "menu.h"
-#include "busca.h"
-#include "biblioteca.h"
-#include "perfil.h"
+#include "search.h"
+#include "library.h"
+#include "profile.h"
 #include "social.h"
-#include "ajustes.h"
+#include "settings.h"
 #include "player.h"
 #include "streams.h"
 #include "video.h"
 #include "addons.h"
-#include "descoberta.h"
+#include "discover.h"
 #include "trakt.h"
-#include "faixas.h"
-#include "episodios.h"
+#include "tracks.h"
+#include "episodes.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 
 // Link de debrid expira em minutos; um minuto e folga suficiente para o usuario
 // apertar Reproduzir logo depois de abrir o titulo sem pagar uma busca a mais.
-#define NV_LINK_VALIDO_MS 60000
+#define NV_LINK_VALID_MS 60000
 
-static int aguardandoFonte;
-static pthread_t fioFonte;
-static _Atomic int fonteEscolhida = -2;   // release/acquire entre verificacao e UI
+static int waitingSource;
+static pthread_t threadSource;
+static _Atomic int sourceChosen = -2;   // release/acquire entre verificacao e UI
 
-static PerfilDados perfilPendente;
-static int perfilSucesso;
-static _Atomic int perfilCarga; // 0=ocioso, 1=rede, 2=snapshot pronto
-static _Atomic unsigned perfilGeracao = 1;
-static pthread_mutex_t perfilTrava = PTHREAD_MUTEX_INITIALIZER;
-typedef struct { unsigned geracao; int perfil; char conta[96]; } PerfilPedido;
-static void *carregarPerfil(void *u) {
-  PerfilPedido *pedido=u;
-  PerfilDados novo={0};
-  int sucesso=trakt_perfil(&novo);
-  pthread_mutex_lock(&perfilTrava);
+static ProfileData profilePending;
+static int profileSuccess;
+static _Atomic int profileLoad; // 0=ocioso, 1=rede, 2=snapshot pronto
+static _Atomic unsigned profileGeneration = 1;
+static pthread_mutex_t profileLock = PTHREAD_MUTEX_INITIALIZER;
+typedef struct { unsigned generation; int profile; char account[96]; } ProfileRequest;
+static void *loadProfile(void *u) {
+  ProfileRequest *request=u;
+  ProfileData new={0};
+  int success=trakt_profile(&new);
+  pthread_mutex_lock(&profileLock);
   // A troca de conta/perfil invalida a resposta. O worker termina, mas nunca
   // publica uma identidade antiga nem deixa um snapshot obsoleto na fila.
-  if(pedido->geracao==atomic_load_explicit(&perfilGeracao,memory_order_acquire) &&
-     atomic_load_explicit(&perfilCarga,memory_order_relaxed)==1 && sessao_logada() &&
-     perfis_ativo()==pedido->perfil && !strcmp(sessao_usuario(),pedido->conta)){
-    perfilSucesso=sucesso;
-    perfilPendente=novo;
-    atomic_store_explicit(&perfilCarga,2,memory_order_release);
+  if(request->generation==atomic_load_explicit(&profileGeneration,memory_order_acquire) &&
+     atomic_load_explicit(&profileLoad,memory_order_relaxed)==1 && session_loggedin() &&
+     profiles_active()==request->profile && !strcmp(session_user(),request->account)){
+    profileSuccess=success;
+    profilePending=new;
+    atomic_store_explicit(&profileLoad,2,memory_order_release);
   }
-  pthread_mutex_unlock(&perfilTrava);
-  free(pedido);
+  pthread_mutex_unlock(&profileLock);
+  free(request);
   return NULL;
 }
-static void invalidarPerfil(void) {
-  atomic_fetch_add_explicit(&perfilGeracao,1,memory_order_acq_rel);
-  atomic_store_explicit(&perfilCarga,0,memory_order_release);
-  pthread_mutex_lock(&perfilTrava);memset(&perfilPendente,0,sizeof perfilPendente);perfilSucesso=0;pthread_mutex_unlock(&perfilTrava);
-  perfil_definir_dados(NULL);
+static void invalidateProfile(void) {
+  atomic_fetch_add_explicit(&profileGeneration,1,memory_order_acq_rel);
+  atomic_store_explicit(&profileLoad,0,memory_order_release);
+  pthread_mutex_lock(&profileLock);memset(&profilePending,0,sizeof profilePending);profileSuccess=0;pthread_mutex_unlock(&profileLock);
+  profile_set_data(NULL);
 }
-static void pedirPerfil(void) {
+static void requestProfile(void) {
   pthread_t t;
-  int esperado = 0;
-  PerfilPedido *pedido;
-  perfil_definir_carregando(1);
-  if (!atomic_compare_exchange_strong(&perfilCarga, &esperado, 1)) return;
-  pedido=calloc(1,sizeof *pedido);
-  if(!pedido){atomic_store(&perfilCarga,0);perfil_definir_erro("Nao foi possivel iniciar a consulta. Tente novamente.");return;}
-  pedido->geracao=atomic_load_explicit(&perfilGeracao,memory_order_acquire);
-  pedido->perfil=perfis_ativo();
-  snprintf(pedido->conta,sizeof pedido->conta,"%s",sessao_usuario());
-  if (pthread_create(&t, NULL, carregarPerfil, pedido) == 0) pthread_detach(t);
-  else { free(pedido); atomic_store(&perfilCarga,0); perfil_definir_erro("Nao foi possivel iniciar a consulta. Tente novamente."); }
+  int expected = 0;
+  ProfileRequest *request;
+  profile_set_loading(1);
+  if (!atomic_compare_exchange_strong(&profileLoad, &expected, 1)) return;
+  request=calloc(1,sizeof *request);
+  if(!request){atomic_store(&profileLoad,0);profile_set_error("Could not start the query. Try again.");return;}
+  request->generation=atomic_load_explicit(&profileGeneration,memory_order_acquire);
+  request->profile=profiles_active();
+  snprintf(request->account,sizeof request->account,"%s",session_user());
+  if (pthread_create(&t, NULL, loadProfile, request) == 0) pthread_detach(t);
+  else { free(request); atomic_store(&profileLoad,0); profile_set_error("Could not start the query. Try again."); }
 }
 
 // A verificacao faz uma requisicao por fonte candidata e bloqueia; num fio
 // proprio a tela segue em 60fps mostrando "Abrindo fonte".
-static void *escolherFonte(void *u) {
+static void *chooseSource(void *u) {
   (void)u;
   // Ate 8: numa lista tipica de 12, as primeiras costumam ser do mesmo
   // provedor e falham juntas quando o arquivo nao esta em cache. Testar poucas
   // devolvia "nenhuma fonte serve" com fontes boas logo adiante.
-  fonteEscolhida = stream_primeira_boa(8);
+  sourceChosen = stream_first_boa(8);
   return NULL;
 }
-#include "catalogo.h"
+#include "catalog.h"
 #include "gfx.h"
-#include "catalogo.h"
+#include "catalog.h"
 #include "layout.h"
 #include <stdio.h>
 
-static Tela tela = TELA_HOME;
+static Screen screen = SCREEN_HOME;
 static int sair = 0;
 
 // O detalhe precisa do retangulo REAL de onde o card saiu para o voo comecar
 // dali. Cada tela que abre um titulo entrega o seu; quando nenhuma entrega
 // (caso do menu ou de um indice vindo de fora), cai para a tela inteira.
-static void abrirTitulo(const HomeItem *it) {
-  if (it && it->arte) detail_abrir(it);
+static void openTitle(const HomeItem *it) {
+  if (it && it->art) detail_open(it);
 }
 
-static void abrirPorIndice(int i) {
+static void openByIndex(int i) {
   const CatItem *c = cat_item(i);
   if (!c || (!c->backdrop[0] && !c->poster[0])) return;
   HomeItem it;
-  GfxRect tudo = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect all = { 0, 0, NV_TELA_W, NV_TELA_H };
   // O `it` e da PILHA e esta funcao preenchia todos os campos MENOS o indice —
   // que ia como lixo. Como a biblioteca e a busca abrem por aqui, qualquer
   // titulo escolhido nelas levava ao mesmo filme. A home nao sofria porque ela
@@ -138,62 +138,62 @@ static void abrirPorIndice(int i) {
   // Zerar a struct antes garante que o proximo campo novo nasca definido em vez
   // de repetir a historia.
   memset(&it, 0, sizeof it);
-  it.indice = i;
-  it.rect = tudo;
-  it.arte = c->backdrop[0] ? c->backdrop : c->poster;
-  it.titulo = c->titulo;
-  it.genero = c->genero;
+  it.index_ = i;
+  it.rect = all;
+  it.art = c->backdrop[0] ? c->backdrop : c->poster;
+  it.title = c->title;
+  it.genre = c->genre;
   it.meta = c->meta;
-  abrirTitulo(&it);
+  openTitle(&it);
 }
 
 // Monta o id que os addons esperam. Para serie e "tt1234567:temporada:episodio";
 // sem os dois numeros a resposta volta VAZIA com HTTP 200, e era por isso que o
 // addons_buscar cravava ":1:1" — o que fazia toda a serie mostrar as fontes do
 // episodio 1, qualquer que fosse o escolhido.
-static void idDoAlvo(const CatItem *ci, char *dst, size_t n) {
+static void idOfTarget(const CatItem *ci, char *dst, size_t n) {
   int t = 0, e = 0;
   if (!ci) { if (n) dst[0] = 0; return; }
-  if (!strcmp(ci->tipo, "series") && detail_ep_foco(&t, &e) && t > 0 && e > 0)
+  if (!strcmp(ci->kind, "series") && detail_ep_focus(&t, &e) && t > 0 && e > 0)
     snprintf(dst, n, "%.*s:%d:%d", (int)strcspn(ci->imdb,":"),ci->imdb, t, e);
   else
     snprintf(dst, n, "%s", ci->imdb);
 }
 
-static void trocarTela(Tela nova) {
-  if (nova == tela) return;
-  tela = nova;
+static void swapScreen(Screen new) {
+  if (new == screen) return;
+  screen = new;
   // Cada tela zera o proprio estado ao ser aberta: voltar para a busca com o
   // texto de duas navegacoes atras seria lixo, nao memoria util.
-  switch (tela) {
-    case TELA_BUSCA:      busca_iniciar();      break;
-    case TELA_BIBLIOTECA: biblioteca_iniciar(); break;
-    case TELA_PERFIL:     perfil_abrir(); pedirPerfil(); break;
-    case TELA_AJUSTES:    ajustes_iniciar();    break;
+  switch (screen) {
+    case SCREEN_SEARCH:      search_start();      break;
+    case SCREEN_LIBRARY: library_start(); break;
+    case SCREEN_PROFILE:     profile_open(); requestProfile(); break;
+    case SCREEN_SETTINGS:    settings_start();    break;
     default: break;
   }
 }
 
-static void alvoPlayer(char *alvo, size_t tam) {
-  const CatItem *c = cat_item(player_indice());
+static void targetPlayer(char *target, size_t size) {
+  const CatItem *c = cat_item(player_index());
   int t, e;
-  player_episodio_atual(&t, &e);
-  if (!c) { alvo[0] = 0; return; }
-  if (t > 0 && e > 0) snprintf(alvo,tam,"%.*s:%d:%d",(int)strcspn(c->imdb,":"),c->imdb,t,e);
-  else snprintf(alvo,tam,"%s",c->imdb);
+  player_episode_current(&t, &e);
+  if (!c) { target[0] = 0; return; }
+  if (t > 0 && e > 0) snprintf(target,size,"%.*s:%d:%d",(int)strcspn(c->imdb,":"),c->imdb,t,e);
+  else snprintf(target,size,"%s",c->imdb);
 }
-static void buscarParaPlayer(void) {
-  const CatItem *c = cat_item(player_indice());
-  char alvo[64]; alvoPlayer(alvo,sizeof alvo);
-  if (c && alvo[0]) {
-    addons_buscar(alvo,c->tipo);
-    addons_buscar_legendas(alvo,c->tipo);
+static void fetchForPlayer(void) {
+  const CatItem *c = cat_item(player_index());
+  char target[64]; targetPlayer(target,sizeof target);
+  if (c && target[0]) {
+    addons_fetch(target,c->kind);
+    addons_fetch_subtitles(target,c->kind);
   }
 }
-static void episodioDoDetalhe(void) {
+static void episodeOfDetail(void) {
   int t=0,e=0;
-  detail_ep_foco(&t,&e);
-  player_definir_episodio(t,e);
+  detail_ep_focus(&t,&e);
+  player_set_episode(t,e);
 }
 
 // A home carregou? Sem arte no pacote ela nao carrega, e ate agora isso
@@ -202,74 +202,74 @@ static void episodioDoDetalhe(void) {
 // distribuivel, que nao pode levar arte nem credencial de ninguem, esse era o
 // comportamento da PRIMEIRA execucao de todo mundo — o app abria e fechava,
 // antes mesmo da tela de login.
-static int homePronta;
+static int homeReady;
 
-int app_iniciar(const char *dirArte) {
-  homePronta = home_iniciar(dirArte);
-  if (!homePronta)
-    printf("[app] sem arte no pacote: a home so aparece depois do primeiro sync\n");
-  menu_iniciar();
-  perfil_iniciar();
+int app_start(const char *dirArt) {
+  homeReady = home_start(dirArt);
+  if (!homeReady)
+    printf("[app] no art in the package: home only appears after the first sync\n");
+  menu_start();
+  profile_start();
   // Sem conta, o app abre no login. Com sessao gravada ele nem passa por ela —
   // pedir o codigo de novo a cada arranque seria o mesmo que nao ter gravado.
-  if (sessao_logada()) {
-    tela = TELA_HOME;
+  if (session_loggedin()) {
+    screen = SCREEN_HOME;
     // Com sessao gravada o ciclo comeca no arranque: e ele que traz os addons
     // e o Trakt da pessoa, sem os quais a home mostra so o que veio no pacote.
-    sync_iniciar();
+    sync_start();
   } else {
-    tela = TELA_LOGIN;
-    login_iniciar();
+    screen = SCREEN_LOGIN;
+    login_start();
   }
   return 1;
 }
 
-void app_evento(const SDL_Event *e) {
+void app_event(const SDL_Event *e) {
   if (e->type == SDL_QUIT) { sair = 1; return; }
 
   // O login vem antes de tudo, inclusive do player: enquanto nao ha conta o
   // resto do app nao tem dado nenhum para operar. A escolha de perfil vem logo
   // depois, porque e ela que define para QUEM o resto do app vai sincronizar.
-  if (tela == TELA_LOGIN)          { login_evento(e);     return; }
-  if (tela == TELA_ESCOLHA_PERFIL) { perfilsel_evento(e); return; }
+  if (screen == SCREEN_LOGIN)          { login_event(e);     return; }
+  if (screen == SCREEN_CHOICE_PROFILE) { profilesel_event(e); return; }
 
   if(e->type==SDL_KEYDOWN && !e->key.repeat &&
      (e->key.keysym.sym==SDLK_s || e->key.keysym.scancode==NV_SCANCODE_BLUE) &&
-     tela==TELA_HOME && !player_aberto() && !detail_aberto() && !vertudo_aberta() && !menu_aberto()) {
-    if(perfil_aberto() && perfil_lateral())perfil_fechar();
-    else {perfil_abrir_lateral();pedirPerfil();}
+     screen==SCREEN_HOME && !player_is_open() && !detail_is_open() && !seeall_is_open() && !menu_is_open()) {
+    if(profile_is_open() && profile_side())profile_close();
+    else {profile_open_side();requestProfile();}
     return;
   }
 
   // A folha de fontes fica acima de tudo: ela e uma pergunta, e enquanto ela
   // esta em pe nada mais deve responder ao D-pad.
-  if (faixas_aberta()) { faixas_evento(e); return; }
-  if (episodios_aberto()) { episodios_evento(e); return; }
-  if (stream_folha_aberta()) { stream_folha_evento(e); return; }
-  if (player_aberto()) { player_evento(e); return; }
-  if (detail_aberto()) { detail_evento(e); return; }
-  if (perfil_aberto() && perfil_lateral()) { perfil_evento(e); return; }
-  if (menu_aberto())   { menu_evento(e);   return; }
+  if (tracks_is_open()) { tracks_event(e); return; }
+  if (episodes_is_open()) { episodes_event(e); return; }
+  if (stream_sheet_is_open()) { stream_sheet_event(e); return; }
+  if (player_is_open()) { player_event(e); return; }
+  if (detail_is_open()) { detail_event(e); return; }
+  if (profile_is_open() && profile_side()) { profile_event(e); return; }
+  if (menu_is_open())   { menu_event(e);   return; }
   // "Ver tudo" fica ENTRE a home e o detalhe: ela cobre a home e o detalhe
   // cobre ela. Por isso vem depois do detalhe e antes do roteamento por tela.
   // O menu do cartaz fica ACIMA de tudo que a home mostra: ele e modal.
-  if (ctx_aberto())     { ctx_evento(e);     return; }
-  if (vertudo_aberta()) { vertudo_evento(e); return; }
+  if (ctx_is_open())     { ctx_event(e);     return; }
+  if (seeall_is_open()) { seeall_event(e); return; }
 
-  switch (tela) {
-    case TELA_BUSCA:      busca_evento(e);      break;
-    case TELA_BIBLIOTECA: biblioteca_evento(e); break;
-    case TELA_PERFIL:     perfil_evento(e);     break;
-    case TELA_SOCIAL:     social_evento(e);     break;
-    case TELA_AJUSTES:    ajustes_evento(e);    break;
-    default:              home_evento(e);       break;
+  switch (screen) {
+    case SCREEN_SEARCH:      search_event(e);      break;
+    case SCREEN_LIBRARY: library_event(e); break;
+    case SCREEN_PROFILE:     profile_event(e);     break;
+    case SCREEN_SOCIAL:     social_event(e);     break;
+    case SCREEN_SETTINGS:    settings_event(e);    break;
+    default:              home_event(e);       break;
   }
 
   // O menu abre AQUI, no mesmo evento que o pediu, e nao no proximo
   // app_atualizar. Diferido por um quadro, as teclas que vierem logo depois do
   // ESQUERDA — e num controle elas vem — sao entregues a tela de tras, que
   // ainda acha que e a dona do foco.
-  if (tela == TELA_HOME && home_pediu_menu()) menu_abrir();
+  if (screen == SCREEN_HOME && home_requested_menu()) menu_open();
 }
 
 // A tela de detalhe pode pedir para abrir OUTRO titulo (um credito da
@@ -280,11 +280,11 @@ void app_evento(const SDL_Event *e) {
 // app e avisa o Trakt, que e a fonte que o dono usa nos outros aparelhos. Fica
 // no roteador pelo mesmo motivo de tudo mais: e ele que conhece catalogo e
 // Trakt, e a tela de detalhe nao precisa conhecer nenhum dos dois.
-static void marcarAssistidoSeSolicitado(void) {
+static void markWatchedIfRequested(void) {
   const CatItem *c;
   int i;
-  if (!detail_pediu_assistido()) return;
-  i = detail_indice();
+  if (!detail_requested_watched()) return;
+  i = detail_index();
   c = cat_item(i);
   if (!c) return;
   // ALTERNA, e manda para o HISTORICO do Trakt.
@@ -296,38 +296,38 @@ static void marcarAssistidoSeSolicitado(void) {
   //
   // E alterna em vez de so marcar: o icone ja mostra os dois estados, entao um
   // botao que so soma nao teria como desfazer um toque errado.
-  { int visto = (c->progresso >= 90);
-    cat_salvar_progresso(i, visto ? 0.0 : 1.0, 1.0);
-    if (c->imdb[0]) trakt_assistido(c->imdb, !visto);
-    printf("[app] assistido %s: %s\n", visto ? "desmarcado" : "marcado",
-           c->titulo); fflush(stdout); }
+  { int watched = (c->progress >= 90);
+    cat_save_progress(i, watched ? 0.0 : 1.0, 1.0);
+    if (c->imdb[0]) trakt_watched(c->imdb, !watched);
+    printf("[app] watched %s: %s\n", watched ? "unmarked" : "marked",
+           c->title); fflush(stdout); }
 }
 
-static void trocaDeTituloSeSolicitada(void) {
-  int alvo = detail_pediu_abrir();
-  if (alvo >= 0) { abrirPorIndice(alvo); return; }
+static void swapOfTitleIfRequested(void) {
+  int target = detail_requested_open();
+  if (target >= 0) { openByIndex(target); return; }
   // Titulo que veio de FORA do catalogo: a descoberta buscou o meta num fio e
   // avisa aqui quando ele entrou. Abrir no fio da rede seria mexer na tela de
   // outro fio; este e o unico lugar que abre titulo.
-  { int novo = desc_titulo_pronto();
-    if (novo >= 0) abrirPorIndice(novo); }
+  { int new = disc_title_ready();
+    if (new >= 0) openByIndex(new); }
 }
 
-void app_atualizar(float dt, Uint32 agora) {
-  if (tela == TELA_LOGIN) {
-    login_atualizar(dt, agora);
+void app_update(float dt, Uint32 now) {
+  if (screen == SCREEN_LOGIN) {
+    login_update(dt, now);
     // A troca so acontece AQUI, quando a sessao existe de verdade — nao no
     // instante em que o servidor respondeu. Assim a home nunca abre com uma
     // sessao pela metade.
-    if (login_concluido()) {
+    if (login_done()) {
       // Logo apos entrar, o primeiro ciclo de sync: e ele que descobre quantos
       // perfis a conta tem, e sem isso a tela de escolha nao teria o que
       // mostrar.
-      sync_reaplicar_ajustes();
-      sync_iniciar();
-      tela = TELA_ESCOLHA_PERFIL;
-      perfilsel_iniciar();
-      menu_definir_destino(MENU_INICIO);
+      sync_reapply_settings();
+      sync_start();
+      screen = SCREEN_CHOICE_PROFILE;
+      profilesel_start();
+      menu_set_destination(MENU_START);
     }
     return;
   }
@@ -335,141 +335,141 @@ void app_atualizar(float dt, Uint32 agora) {
   // Sessao perdida no meio do uso (renovacao recusada): voltar ao login e a
   // unica saida honesta. Continuar na home mostraria o catalogo de exemplo do
   // pacote como se fosse o da pessoa.
-  if (!sessao_logada()) {
-    invalidarPerfil();
-    tela = TELA_LOGIN;
-    login_iniciar();
+  if (!session_loggedin()) {
+    invalidateProfile();
+    screen = SCREEN_LOGIN;
+    login_start();
     return;
   }
 
-  if (tela == TELA_ESCOLHA_PERFIL) {
-    sync_passo((unsigned)agora);
+  if (screen == SCREEN_CHOICE_PROFILE) {
+    sync_step((unsigned)now);
   // Os vinculos de Trakt e Simkl tambem avancam aqui: os dois fazem poll e
   // precisam de um passo por quadro, como o login da conta.
-  traktauth_passo((unsigned)agora);
-  simklauth_passo((unsigned)agora);
-    perfilsel_atualizar(dt, agora);
-    if (perfilsel_pediu_repetir()) { sync_iniciar(); return; }
-    if (perfilsel_quer_sair()) {
+  traktauth_step((unsigned)now);
+  simklauth_step((unsigned)now);
+    profilesel_update(dt, now);
+    if (profilesel_requested_retry()) { sync_start(); return; }
+    if (profilesel_wants_exit()) {
       // Sem uma escolha confirmada, voltar nao pode escolher o perfil 1 por
       // acidente. A tela continua visivel e aguarda uma escolha explicita.
-      if (!perfis_precisa_escolher()) { tela = TELA_HOME; menu_definir_destino(MENU_INICIO); }
+      if (!profiles_needs_choose()) { screen = SCREEN_HOME; menu_set_destination(MENU_START); }
       return;
     }
-    if (perfilsel_concluido()) {
+    if (profilesel_done()) {
       // O perfil mudou o destino do sync: rodar de novo traz os addons e o
       // progresso DESTE perfil, e nao os do perfil 1 que o primeiro ciclo
       // pegou por falta de escolha.
-      invalidarPerfil();
-      sync_reaplicar_ajustes();
-      sync_iniciar();
-      tela = TELA_HOME;
+      invalidateProfile();
+      sync_reapply_settings();
+      sync_start();
+      screen = SCREEN_HOME;
     }
     return;
   }
 
   // Um ciclo por vez, e so quando a conta existe. O passo e barato: sem fio
   // terminado ele nao faz nada.
-  sync_passo((unsigned)agora);
+  sync_step((unsigned)now);
 
   // Conta com mais de um perfil e nenhum escolhido NESTA instalacao: perguntar.
   // Isto vale tambem para quem abriu o app com sessao ja gravada — o caminho
   // comum depois do primeiro dia. Sem isto o app assumia o perfil 1 para
   // sempre, e `perfis_precisa_escolher()` era codigo morto.
-  if (tela == TELA_HOME && !player_aberto() && !detail_aberto() &&
-      perfis_precisa_escolher()) {
-    tela = TELA_ESCOLHA_PERFIL;
-    perfilsel_iniciar();
+  if (screen == SCREEN_HOME && !player_is_open() && !detail_is_open() &&
+      profiles_needs_choose()) {
+    screen = SCREEN_CHOICE_PROFILE;
+    profilesel_start();
     return;
   }
   // E o ciclo automatico — nunca com o player aberto: rajada de HTTP no meio
   // do video disputa CPU e rede com o decodificador.
-  if (!player_aberto()) sync_periodico((unsigned)agora);
+  if (!player_is_open()) sync_periodic((unsigned)now);
 
   // Durante a verificacao nao substituir a lista que os workers consultam.
-  if (aguardandoFonte != 2) addons_estado();
-  trocaDeTituloSeSolicitada();
-  marcarAssistidoSeSolicitado();
-  if (atomic_load_explicit(&perfilCarga, memory_order_acquire) == 2) {
-    PerfilDados snapshot; int sucesso;
-    pthread_mutex_lock(&perfilTrava); snapshot=perfilPendente; sucesso=perfilSucesso; pthread_mutex_unlock(&perfilTrava);
-    if (sucesso) perfil_definir_dados(&snapshot);
-    else if (!trakt_ativo()) perfil_definir_estado(PERFIL_ESTADO_DESCONECTADO,
-                                                    "Trakt desconectado. Vincule a conta para ver seu perfil.");
-    else perfil_definir_estado(PERFIL_ESTADO_INDISPONIVEL,
-                               "Perfil indisponível. O último resumo continua seguro, se houver.");
-    atomic_store_explicit(&perfilCarga, 0, memory_order_release);
+  if (waitingSource != 2) addons_state();
+  swapOfTitleIfRequested();
+  markWatchedIfRequested();
+  if (atomic_load_explicit(&profileLoad, memory_order_acquire) == 2) {
+    ProfileData snapshot; int success;
+    pthread_mutex_lock(&profileLock); snapshot=profilePending; success=profileSuccess; pthread_mutex_unlock(&profileLock);
+    if (success) profile_set_data(&snapshot);
+    else if (!trakt_active()) profile_set_state(PROFILE_STATE_DISCONNECTED,
+                                                    "Trakt disconnected. Link the account to see your profile.");
+    else profile_set_state(PROFILE_STATE_UNAVAILABLE,
+                               "Profile unavailable. Your last summary is still safe, if there is one.");
+    atomic_store_explicit(&profileLoad, 0, memory_order_release);
   }
-  if ((tela == TELA_PERFIL || perfil_lateral()) && perfil_pediu_atualizar()) pedirPerfil();
-  if (perfil_pediu_completo()) trocarTela(TELA_PERFIL);
-  if (tela==TELA_HOME) {
-    CatItem pessoa;
-    if(home_pediu_pessoa_social(&pessoa)) {
-      social_abrir(&pessoa);trocarTela(TELA_SOCIAL);
+  if ((screen == SCREEN_PROFILE || profile_side()) && profile_requested_update()) requestProfile();
+  if (profile_requested_complete()) swapScreen(SCREEN_PROFILE);
+  if (screen==SCREEN_HOME) {
+    CatItem person;
+    if(home_requested_person_social(&person)) {
+      social_open(&person);swapScreen(SCREEN_SOCIAL);
     }
   }
-  if (tela==TELA_HOME && home_pediu_social()) {
-    trocarTela(TELA_AJUSTES);menu_definir_destino(MENU_AJUSTES);
+  if (screen==SCREEN_HOME && home_requested_social()) {
+    swapScreen(SCREEN_SETTINGS);menu_set_destination(MENU_SETTINGS);
   }
   // Fora da home, o Back tem para onde voltar: a home. So nela ele fecha o app.
-  if (tela != TELA_HOME) {
-    int fechar = (tela == TELA_BUSCA      && busca_quer_sair())
-              || (tela == TELA_BIBLIOTECA && biblioteca_quer_sair())
-              || (tela == TELA_PERFIL      && perfil_quer_sair())
-              || (tela == TELA_SOCIAL      && social_quer_sair())
-              || (tela == TELA_AJUSTES    && ajustes_quer_sair());
-    if (fechar) { trocarTela(TELA_HOME); menu_definir_destino(MENU_INICIO); }
-  } else if (home_quer_sair()) {
+  if (screen != SCREEN_HOME) {
+    int shouldClose = (screen == SCREEN_SEARCH      && search_wants_exit())
+              || (screen == SCREEN_LIBRARY && library_wants_exit())
+              || (screen == SCREEN_PROFILE      && profile_wants_exit())
+              || (screen == SCREEN_SOCIAL      && social_wants_exit())
+              || (screen == SCREEN_SETTINGS    && settings_wants_exit());
+    if (shouldClose) { swapScreen(SCREEN_HOME); menu_set_destination(MENU_START); }
+  } else if (home_wants_exit()) {
     sair = 1;
   }
 
   // Trocar de usuario, pedido pelo rodape da barra lateral. Vem ANTES do
   // destino: as duas coisas saem do mesmo menu, e quem pediu troca nao quer
   // mudar de aba.
-  if (menu_pediu_trocar()) {
-    invalidarPerfil();
-    tela = TELA_ESCOLHA_PERFIL;
-    perfilsel_iniciar();
+  if (menu_requested_swap()) {
+    invalidateProfile();
+    screen = SCREEN_CHOICE_PROFILE;
+    profilesel_start();
     return;
   }
 
-  if (menu_mudou_destino()) {
-    switch (menu_destino()) {
-      case MENU_BUSCAR:     trocarTela(TELA_BUSCA);      break;
-      case MENU_BIBLIOTECA: trocarTela(TELA_BIBLIOTECA); break;
-      case MENU_PERFIL:     perfil_abrir_lateral(); pedirPerfil(); break;
-      case MENU_AJUSTES:    trocarTela(TELA_AJUSTES);    break;
-      default:              trocarTela(TELA_HOME);       break;
+  if (menu_changed_destination()) {
+    switch (menu_destination()) {
+      case MENU_FETCH:     swapScreen(SCREEN_SEARCH);      break;
+      case MENU_LIBRARY: swapScreen(SCREEN_LIBRARY); break;
+      case MENU_PROFILE:     profile_open_side(); requestProfile(); break;
+      case MENU_SETTINGS:    swapScreen(SCREEN_SETTINGS);    break;
+      default:              swapScreen(SCREEN_HOME);       break;
     }
   }
   // Pedidos de abrir um titulo, vindos de qualquer tela.
-  if (!detail_aberto() && !player_aberto()) {
+  if (!detail_is_open() && !player_is_open()) {
     int idx = -1;
     HomeItem it;
-    if (tela == TELA_HOME && home_pediu_abrir()) {
-      if (home_item_focado(&it)) abrirTitulo(&it);
-    } else if (tela == TELA_BUSCA && busca_pediu_abrir(&idx)) {
-      if (busca_item_focado(&it)) abrirTitulo(&it); else abrirPorIndice(idx);
-    } else if (tela == TELA_BIBLIOTECA && biblioteca_pediu_abrir(&idx)) {
-      abrirPorIndice(idx);
-    } else if (tela == TELA_PERFIL) {
-      PerfilDestaque p;
-      if (perfil_item_selecionado(&p) && p.id[0]) {
-        idx = cat_indice_por_imdb(p.id);
-        if (idx >= 0) abrirPorIndice(idx); else desc_pedir_titulo(p.id);
+    if (screen == SCREEN_HOME && home_requested_open()) {
+      if (home_item_focused(&it)) openTitle(&it);
+    } else if (screen == SCREEN_SEARCH && search_requested_open(&idx)) {
+      if (search_item_focused(&it)) openTitle(&it); else openByIndex(idx);
+    } else if (screen == SCREEN_LIBRARY && library_requested_open(&idx)) {
+      openByIndex(idx);
+    } else if (screen == SCREEN_PROFILE) {
+      ProfileHighlight p;
+      if (profile_item_selected(&p) && p.id[0]) {
+        idx = cat_index_por_imdb(p.id);
+        if (idx >= 0) openByIndex(idx); else disc_request_title(p.id);
       }
-    } else if (tela == TELA_SOCIAL) {
-      SocialItemSelecionado s;
-      if (social_item_selecionado(&s) && s.imdb[0]) {
-        idx=cat_indice_por_imdb(s.imdb);
-        if(idx>=0)abrirPorIndice(idx); else desc_pedir_titulo(s.imdb);
+    } else if (screen == SCREEN_SOCIAL) {
+      SocialItemSelected s;
+      if (social_item_selected(&s) && s.imdb[0]) {
+        idx=cat_index_por_imdb(s.imdb);
+        if(idx>=0)openByIndex(idx); else disc_request_title(s.imdb);
       }
     }
   }
 
   // Botoes do detalhe: quem sabe que existe player e biblioteca e o roteador,
   // nao a tela de detalhe.
-  if (detail_aberto()) {
+  if (detail_is_open()) {
     // Reproduzir sem escolher = modo automatico: a regra do stream_automatico
     // (MP4 4K Dolby Vision primeiro, senao o primeiro da lista) decide sozinha.
     // Sem lista, o player abre sem video em vez de nao abrir — a tela dizendo
@@ -481,167 +481,167 @@ void app_atualizar(float dt, Uint32 agora) {
     // nao repetia a busca e a lista continuava a do episodio anterior — meia
     // correcao seria pior que nenhuma, porque a tela mostraria fontes de um
     // episodio com o nome de outro.
-    { static char ultimoAlvo[32] = "";
-      int i = detail_indice();
+    { static char lastTarget[32] = "";
+      int i = detail_index();
       const CatItem *ci = cat_item(i);
-      char alvo[32];
-      idDoAlvo(ci, alvo, sizeof alvo);
-      if (!player_aberto() && aguardandoFonte != 2 && ci && ci->imdb[0] && strcmp(alvo, ultimoAlvo)) {
-        snprintf(ultimoAlvo, sizeof ultimoAlvo, "%s", alvo);
-        { addons_buscar(alvo, ci->tipo); }
+      char target[32];
+      idOfTarget(ci, target, sizeof target);
+      if (!player_is_open() && waitingSource != 2 && ci && ci->imdb[0] && strcmp(target, lastTarget)) {
+        snprintf(lastTarget, sizeof lastTarget, "%s", target);
+        { addons_fetch(target, ci->kind); }
         // Episodios do titulo aberto, na temporada onde o dono parou. Sai da
         // rede na hora: guardar a lista de episodios de 40 titulos no pacote
         // envelhecia a cada temporada nova.
         // No FILME o mesmo fio busca o /meta/movie quando o catalogo ainda nao
         // tem elenco: e de la que saem atores, direcao e generos da pagina.
-        if (!strcmp(ci->tipo, "series") || ci->nElenco == 0) desc_episodios(i, 0);
+        if (!strcmp(ci->kind, "series") || ci->nCast == 0) disc_episodes(i, 0);
         // Legendas do OpenSubtitles junto: sao dezenas por titulo e a busca
         // leva segundos. Pedir so quando o dono abre a folha de faixas faria
         // ele esperar de olho numa lista vazia.
-        addons_buscar_legendas(alvo, ci->tipo);
+        addons_fetch_subtitles(target, ci->kind);
       } }
-    if (detail_pediu_reproduzir() && aguardandoFonte != 2) {
+    if (detail_requested_play() && waitingSource != 2) {
       // A tela abre JA, no estado "abrindo fonte", e a escolha acontece depois.
       // Escolher antes deixaria o botao sem resposta por segundos, e escolher
       // sem verificar entregava o video de aviso do debrid — que toca normal e
       // por isso passa por sucesso.
-      const CatItem *ci = cat_item(detail_indice());
-      player_abrir(detail_indice(), NULL);
-      episodioDoDetalhe();
+      const CatItem *ci = cat_item(detail_index());
+      player_open(detail_index(), NULL);
+      episodeOfDetail();
       // O episodio so fica definitivo DEPOIS de abrir o player. Refaça sempre
       // o pedido de legenda nesse ponto; a busca de prefetch pode ter comecado
       // no episodio anteriormente focado e o worker agora troca para o pedido
       // mais recente sem publicar resultados velhos.
       if (ci && ci->imdb[0]) {
-        char alvoLeg[64]; alvoPlayer(alvoLeg, sizeof alvoLeg);
-        addons_buscar_legendas(alvoLeg, ci->tipo);
+        char targetSub[64]; targetPlayer(targetSub, sizeof targetSub);
+        addons_fetch_subtitles(targetSub, ci->kind);
       }
-      if (stream_idade_ms() > NV_LINK_VALIDO_MS && ci && ci->imdb[0]) {
-        char alvo[32]; idDoAlvo(ci, alvo, sizeof alvo);
-        printf("fonte: lista com %ums, renovando (%s)\n",
-               (unsigned)stream_idade_ms(), alvo);
-        addons_buscar(alvo, ci->tipo);
+      if (stream_idade_ms() > NV_LINK_VALID_MS && ci && ci->imdb[0]) {
+        char target[32]; idOfTarget(ci, target, sizeof target);
+        printf("source: list %ums old, refreshing (%s)\n",
+               (unsigned)stream_idade_ms(), target);
+        addons_fetch(target, ci->kind);
       }
-      aguardandoFonte = 1;
+      waitingSource = 1;
     }
-    if (detail_pediu_marcar()) {
+    if (detail_requested_mark()) {
       // Alterna no Trakt E no espelho local. O estado de partida vem de
       // ci->naLista, que a descoberta preencheu com a watchlist de verdade;
       // sem ele o botao adicionava de novo um titulo que ja estava la.
-      int i = detail_indice();
+      int i = detail_index();
       const CatItem *c = cat_item(i);
-      biblioteca_alternar_lista(i);
-      if (c && c->imdb[0]) trakt_watchlist(c->imdb, !c->naLista);
-      if (c) cat_definir_na_lista(i, !c->naLista);
+      library_toggle_list(i);
+      if (c && c->imdb[0]) trakt_watchlist(c->imdb, !c->naList);
+      if (c) cat_set_na_list(i, !c->naList);
     }
-    if (detail_pediu_fontes())     stream_folha_abrir();
+    if (detail_requested_sources())     stream_sheet_open();
   }
   // Escolher uma fonte na folha inicia a reproducao DELA. Trocar de fonte com o
   // player ja aberto tambem vale: fecha a sessao atual e abre na nova, senao
   // duas ficariam presas no mesmo pipeline.
   // A busca disparada por Reproduzir terminou: agora VERIFICA as fontes, em
   // ordem, ate achar uma que leve ao arquivo — e so entao liga o video.
-  if (aguardandoFonte == 1 && addons_estado() != ADD_BUSCANDO) {
-    aguardandoFonte = 2;
-    fonteEscolhida = -2;
-    if (pthread_create(&fioFonte, NULL, escolherFonte, NULL) != 0) {
-      aguardandoFonte = 0; player_erro_fonte();
+  if (waitingSource == 1 && addons_state() != ADD_SEARCHING) {
+    waitingSource = 2;
+    sourceChosen = -2;
+    if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) {
+      waitingSource = 0; player_error_source();
     }
   }
-  if (aguardandoFonte == 2 && fonteEscolhida != -2) {
-    pthread_join(fioFonte,NULL);
-    const Stream *s = fonteEscolhida >= 0 ? stream_item(fonteEscolhida) : NULL;
-    aguardandoFonte = 0;
-    printf("automatico (verificado): %s\n", s ? s->rotulo : "(nenhuma fonte serve)");
+  if (waitingSource == 2 && sourceChosen != -2) {
+    pthread_join(threadSource,NULL);
+    const Stream *s = sourceChosen >= 0 ? stream_item(sourceChosen) : NULL;
+    waitingSource = 0;
+    printf("automatico (verificado): %s\n", s ? s->label : "(no usable source)");
     // A afirmacao de HDR/DV vai ANTES do tocar: e ela que o bind do ACB
     // descreve ao tv.display. Sem isto o C9 exibe tudo mapeado em SDR.
-    if (s) video_definir_dv(s->dolbyVision);
+    if (s) video_set_dv(s->dolbyVision);
     // Anuncia o CONTENTOR pelo mesmo caminho: e o que dispensa a sonda de
     // Matroska num arquivo que nunca teria um cabecalho desses.
-    if (s) video_definir_mp4(s->mp4 || strstr(s->url, ".mp4") != NULL);
-    marco(s ? "fonte escolhida" : "nenhuma fonte serve");
-    if (player_aberto() && !player_quer_sair()) {
-      stream_definir_atual(fonteEscolhida);
-      if (s) player_definir_fonte(s->url); else player_erro_fonte();
+    if (s) video_set_mp4(s->mp4 || strstr(s->url, ".mp4") != NULL);
+    mark(s ? "source chosen" : "no usable source");
+    if (player_is_open() && !player_wants_exit()) {
+      stream_set_current(sourceChosen);
+      if (s) player_set_source(s->url); else player_error_source();
     }
   }
 
-  int fonte;
-  if (aguardandoFonte != 2 && stream_folha_escolheu(&fonte)) {
-    const Stream *s = stream_item(fonte);
-    printf("fonte escolhida: %s\n", s ? s->rotulo : "?");
-    if (s) video_definir_dv(s->dolbyVision);
+  int source;
+  if (waitingSource != 2 && stream_sheet_chose(&source)) {
+    const Stream *s = stream_item(source);
+    printf("source chosen: %s\n", s ? s->label : "?");
+    if (s) video_set_dv(s->dolbyVision);
     if (s) {
-      aguardandoFonte=0;
-      int titulo=player_aberto()?player_indice():detail_indice(), t=0,e=0;
-      if (player_aberto()) { player_episodio_atual(&t,&e); player_encerrar(); }
-      else detail_ep_foco(&t,&e);
-      player_abrir(titulo,NULL);
-      player_definir_episodio(t,e);
-      stream_definir_atual(fonte);
-      player_definir_fonte(s->url);
+      waitingSource=0;
+      int title=player_is_open()?player_index():detail_index(), t=0,e=0;
+      if (player_is_open()) { player_episode_current(&t,&e); player_shutdown(); }
+      else detail_ep_focus(&t,&e);
+      player_open(title,NULL);
+      player_set_episode(t,e);
+      stream_set_current(source);
+      player_set_source(s->url);
     }
   }
-  if (aguardandoFonte != 2 && player_pediu_fontes()) {
-    stream_folha_contexto(player_linha_episodio());
-    stream_folha_abrir();
+  if (waitingSource != 2 && player_requested_sources()) {
+    stream_sheet_context(player_line_episode());
+    stream_sheet_open();
   }
-  if (aguardandoFonte != 2 && stream_folha_recarregar()) {
-    if (player_aberto()) buscarParaPlayer();
+  if (waitingSource != 2 && stream_sheet_reload()) {
+    if (player_is_open()) fetchForPlayer();
     else {
-      const CatItem *ci=cat_item(detail_indice()); char id[64];
-      idDoAlvo(ci,id,sizeof id);
-      if (ci) addons_buscar(id,ci->tipo);
+      const CatItem *ci=cat_item(detail_index()); char id[64];
+      idOfTarget(ci,id,sizeof id);
+      if (ci) addons_fetch(id,ci->kind);
     }
   }
   { int t,e;
-    if (aguardandoFonte != 2 && episodios_escolheu(&t,&e) && player_aberto()) {
-      int titulo=player_indice();
-      player_encerrar(); player_abrir(titulo,NULL);
-      player_definir_episodio(t,e);
-      marco("buscando fontes"); buscarParaPlayer(); aguardandoFonte=1;
+    if (waitingSource != 2 && episodes_chose(&t,&e) && player_is_open()) {
+      int title=player_index();
+      player_shutdown(); player_open(title,NULL);
+      player_set_episode(t,e);
+      mark("fetching sources"); fetchForPlayer(); waitingSource=1;
     }
   }
   { int t,e;
-    if (aguardandoFonte != 2 && player_pediu_proximo(&t,&e) && player_aberto()) {
-      int titulo=player_indice();
-      player_encerrar(); player_abrir(titulo,NULL); player_definir_episodio(t,e);
-      marco("proximo episodio: buscando fontes"); buscarParaPlayer(); aguardandoFonte=1;
+    if (waitingSource != 2 && player_requested_next(&t,&e) && player_is_open()) {
+      int title=player_index();
+      player_shutdown(); player_open(title,NULL); player_set_episode(t,e);
+      mark("next episode: fetching sources"); fetchForPlayer(); waitingSource=1;
     }
   }
-  episodios_atualizar(dt);
+  episodes_update(dt);
   // Prazo do recuo de Dolby Vision: se a declaracao nao render imagem, o video
   // recarrega sozinho sem ela. Precisa bater todo quadro (ver video.h).
-  video_bombear();
+  video_pump();
   // O player devolve 1 para a coluna de audio e 2 para a de legenda.
-  { int q = player_pediu_faixas();
-    if (q) faixas_abrir_em(q == 2 ? 1 : 0); }
-  faixas_atualizar(dt, agora);
-  stream_folha_atualizar(dt, agora);
+  { int q = player_requested_tracks();
+    if (q) tracks_open_em(q == 2 ? 1 : 0); }
+  tracks_update(dt, now);
+  stream_sheet_update(dt, now);
 
-  if (player_quer_sair() && !player_aberto()) player_encerrar();
+  if (player_wants_exit() && !player_is_open()) player_shutdown();
 
-  player_atualizar(dt, agora);
-  detail_atualizar(dt, agora);
-  menu_atualizar(dt, agora);
-  vertudo_atualizar(dt, agora);
-  ctx_atualizar(dt, agora);
-  { int i = ctx_pediu_detalhes();
+  player_update(dt, now);
+  detail_update(dt, now);
+  menu_update(dt, now);
+  seeall_update(dt, now);
+  ctx_update(dt, now);
+  { int i = ctx_requested_details();
     if (i >= 0) {
       const CatItem *ci = cat_item(i);
       HomeItem it;
       memset(&it, 0, sizeof it);
-      it.indice = i;
+      it.index_ = i;
       it.rect = (GfxRect){ NV_TELA_W * 0.5f - 124.0f, NV_TELA_H * 0.5f - 186.0f,
                            248.0f, 372.0f };
-      it.arte   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
-      it.titulo = ci ? ci->titulo : NULL;
-      it.genero = ci ? ci->genero : NULL;
+      it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
+      it.title = ci ? ci->title : NULL;
+      it.genre = ci ? ci->genre : NULL;
       it.meta   = ci ? ci->meta : NULL;
-      detail_abrir(&it);
+      detail_open(&it);
     } }
   // Titulo escolhido na grade: abre o detalhe, como se tivesse vindo da home.
-  { int idx = vertudo_pediu_abrir();
+  { int idx = seeall_requested_open();
     if (idx >= 0) {
       const CatItem *ci = cat_item(idx);
       // A grade nao tem retangulo de origem para a transicao crescer a partir
@@ -649,65 +649,65 @@ void app_atualizar(float dt, Uint32 agora) {
       // de um cartaz — o detalhe cobre a tela em seguida de qualquer forma.
       HomeItem it;
       memset(&it, 0, sizeof it);
-      it.indice = idx;
+      it.index_ = idx;
       it.rect = (GfxRect){ NV_TELA_W * 0.5f - 124.0f, NV_TELA_H * 0.5f - 186.0f,
                            248.0f, 372.0f };
-      it.arte   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
-      it.titulo = ci ? ci->titulo : NULL;
-      it.genero = ci ? ci->genero : NULL;
+      it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
+      it.title = ci ? ci->title : NULL;
+      it.genre = ci ? ci->genre : NULL;
       it.meta   = ci ? ci->meta : NULL;
-      detail_abrir(&it);
+      detail_open(&it);
     } }
-  switch (tela) {
-    case TELA_BUSCA:      busca_atualizar(dt, agora);      break;
-    case TELA_BIBLIOTECA: biblioteca_atualizar(dt, agora); break;
-    case TELA_PERFIL:     break;
-    case TELA_AJUSTES:    ajustes_atualizar(dt, agora);    break;
-    default:              home_atualizar(dt, agora);       break;
+  switch (screen) {
+    case SCREEN_SEARCH:      search_update(dt, now);      break;
+    case SCREEN_LIBRARY: library_update(dt, now); break;
+    case SCREEN_PROFILE:     break;
+    case SCREEN_SETTINGS:    settings_update(dt, now);    break;
+    default:              home_update(dt, now);       break;
   }
-  perfil_atualizar(dt, agora);
-  if(tela==TELA_SOCIAL) social_atualizar(dt, agora);
+  profile_update(dt, now);
+  if(screen==SCREEN_SOCIAL) social_update(dt, now);
 }
 
-void app_desenhar(Uint32 agora) {
-  if (tela == TELA_LOGIN)          { login_desenhar(agora);     return; }
-  if (tela == TELA_ESCOLHA_PERFIL) { perfilsel_desenhar(agora); return; }
+void app_draw(Uint32 now) {
+  if (screen == SCREEN_LOGIN)          { login_draw(now);     return; }
+  if (screen == SCREEN_CHOICE_PROFILE) { profilesel_draw(now); return; }
 
   // Estado vazio de verdade, em vez de uma tela preta que parece travamento.
-  if (!homePronta && tela == TELA_HOME && !player_aberto() && !detail_aberto()) {
-    GfxRect fundo = { 0, 0, NV_TELA_W, NV_TELA_H };
-    TxtLinha t, sb;
-    gfx_cor(fundo, 0.0f, NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
-    t = txt_linha(TXT_TITULO2, "Preparando seu catálogo…", 255, 255, 255, 255);
-    txt_desenhar(t, (NV_TELA_W - t.w) * 0.5f, 460.0f);
-    sb = txt_linha(TXT_BODY,
-                   sync_estado() == SYNC_RODANDO
-                     ? "Buscando seus addons e o que você estava assistindo."
-                     : "Se isto não sair daqui, confira seus addons na conta.",
+  if (!homeReady && screen == SCREEN_HOME && !player_is_open() && !detail_is_open()) {
+    GfxRect background = { 0, 0, NV_TELA_W, NV_TELA_H };
+    TxtLine t, sb;
+    gfx_color(background, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
+    t = txt_line(TXT_TITLE2, "Preparing your catalogue…", 255, 255, 255, 255);
+    txt_draw(t, (NV_TELA_W - t.w) * 0.5f, 460.0f);
+    sb = txt_line(TXT_BODY,
+                   sync_state() == SYNC_RUNNING
+                     ? "Fetching your addons and what you were watching."
+                     : "If this does not move on, check your addons in the account.",
                    160, 162, 170, 255);
-    txt_desenhar(sb, (NV_TELA_W - sb.w) * 0.5f, 546.0f);
-    if (menu_visivel()) menu_desenhar(agora);
+    txt_draw(sb, (NV_TELA_W - sb.w) * 0.5f, 546.0f);
+    if (menu_visible()) menu_draw(now);
     return;
   }
 
   // O player cobre tudo; desenhar o que esta atras dele e trabalho jogado fora
   // — a mesma conta que ja valia para o cartao de detalhe esticado.
-  if (!player_aberto()) {
+  if (!player_is_open()) {
     // "Ver tudo" cobre a tela de tras por completo (fundo opaco), entao a home
     // nao precisa ser desenhada por baixo — a mesma conta do detail_cobre_tela.
-    if (!detail_cobre_tela() && !vertudo_aberta()) {
-      switch (tela) {
-        case TELA_BUSCA:      busca_desenhar(agora);      break;
-        case TELA_BIBLIOTECA: biblioteca_desenhar(agora); break;
-        case TELA_PERFIL:     perfil_desenhar(agora);     break;
-        case TELA_SOCIAL:     social_desenhar(agora);     break;
-        case TELA_AJUSTES:    ajustes_desenhar(agora);    break;
-        default:              home_desenhar(agora);       break;
+    if (!detail_covers_screen() && !seeall_is_open()) {
+      switch (screen) {
+        case SCREEN_SEARCH:      search_draw(now);      break;
+        case SCREEN_LIBRARY: library_draw(now); break;
+        case SCREEN_PROFILE:     profile_draw(now);     break;
+        case SCREEN_SOCIAL:     social_draw(now);     break;
+        case SCREEN_SETTINGS:    settings_draw(now);    break;
+        default:              home_draw(now);       break;
       }
     }
-    if (!detail_cobre_tela()) vertudo_desenhar(agora);
-    ctx_desenhar(agora);
-    detail_desenhar(agora);
+    if (!detail_covers_screen()) seeall_draw(now);
+    ctx_draw(now);
+    detail_draw(now);
     // A rail NAO existe na tela de detalhe do app web: ela e full-bleed e a
     // coluna de conteudo comeca em x=72, ou seja, DENTRO do que a rail ocuparia.
     // Com a rail por cima, o logo, o botao "Reproduzir" e a linha de duracao
@@ -728,25 +728,25 @@ void app_desenhar(Uint32 agora) {
     // o defeito relatado como "nao ta mostrando o menu e nao tem os ajustes".
     // Guarda repetida em dois lugares para a mesma regra: no de dentro ela
     // significa "nao pinte a faixa", no de fora significava "nao exista".
-    if (menu_visivel() && !detail_aberto())
-      menu_desenhar(agora);
-    if(perfil_lateral() && !detail_aberto()) perfil_desenhar(agora);
+    if (menu_visible() && !detail_is_open())
+      menu_draw(now);
+    if(profile_side() && !detail_is_open()) profile_draw(now);
   }
-  player_desenhar(agora);
-  episodios_desenhar();
-  stream_folha_desenhar(agora);
-  faixas_desenhar(agora);
+  player_draw(now);
+  episodes_draw();
+  stream_sheet_draw(now);
+  tracks_draw(now);
 }
 
-int app_quer_sair(void) { return sair; }
+int app_wants_exit(void) { return sair; }
 
-void app_encerrar(void) {
-  if (aguardandoFonte == 2) pthread_join(fioFonte, NULL);
-  aguardandoFonte = 0;
-  player_encerrar();
-  ajustes_encerrar();
-  biblioteca_encerrar();
-  perfil_encerrar();
-  busca_encerrar();
-  home_encerrar();
+void app_shutdown(void) {
+  if (waitingSource == 2) pthread_join(threadSource, NULL);
+  waitingSource = 0;
+  player_shutdown();
+  settings_shutdown();
+  library_shutdown();
+  profile_shutdown();
+  search_shutdown();
+  home_shutdown();
 }

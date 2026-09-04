@@ -31,26 +31,26 @@
 #define NV_SYNC_H
 
 typedef enum {
-  SYNC_PARADO = 0,
-  SYNC_RODANDO,
-  SYNC_PRONTO,
-  SYNC_FALHOU
-} SyncEstado;
+  SYNC_STOPPED = 0,
+  SYNC_RUNNING,
+  SYNC_READY,
+  SYNC_FAILED
+} SyncState;
 
 // Dispara um ciclo completo (puxa e, onde faz sentido, empurra). Volta na hora.
 // Idempotente enquanto um ciclo estiver em andamento.
-void sync_iniciar(void);
+void sync_start(void);
 
-SyncEstado  sync_estado(void);
-const char *sync_resumo(void);   // uma linha para a tela de ajustes
+SyncState  sync_state(void);
+const char *sync_summary(void);   // uma linha para a tela de ajustes
 
 // Marca uma superficie como suja: o proximo ciclo empurra. Chamar quando o
 // usuario mexe em algo local.
-void sync_sujar_progresso(void);
-void sync_sujar_addons(void);
+void sync_dirty_progress(void);
+void sync_dirty_addons(void);
 
 // Ultimo instante em que um ciclo terminou bem (SDL_GetTicks); 0 se nunca.
-unsigned sync_ultimo_ok(void);
+unsigned sync_last_ok(void);
 
 // Intervalo entre ciclos automaticos. Ate agora o sync so rodava no arranque,
 // depois do login e ao trocar de perfil — entao parar um episodio no celular
@@ -63,16 +63,16 @@ unsigned sync_ultimo_ok(void);
 // e ja houve um episodio de estouro de cota neste projeto em que o efeito
 // colateral (login impossivel, sessao anonima, sync da conta errada) pareceu
 // bug do app. O ciclo tambem so roda com o app em uso, nunca durante o player.
-#define SYNC_INTERVALO_MS 300000u
+#define SYNC_INTERVAL_MS 300000u
 
 // Chamar uma vez por quadro. Nao bloqueia: so recolhe o resultado do fio e
 // aplica no app (lista de addons, credencial do Trakt, progresso).
-void sync_passo(unsigned agoraMs);
+void sync_step(unsigned nowMs);
 
 // Dispara um ciclo se ja passou SYNC_INTERVALO_MS desde o ultimo que deu certo.
 // Nao roda com um ciclo em andamento, com o freio ativo, nem antes do primeiro
 // sucesso. 1 quando disparou.
-int  sync_periodico(unsigned agoraMs);
+int  sync_periodic(unsigned nowMs);
 
 // Apaga do aparelho tudo que pertence a quem estava logado. Chamar JUNTO com
 // sessao_sair() — a sessao sozinha nao basta.
@@ -86,7 +86,7 @@ int  sync_periodico(unsigned agoraMs);
 //
 // Numa TV de sala, "sair" e a unica barreira entre duas pessoas. Ela tem de
 // apagar de verdade.
-void sync_esquecer_usuario(void);
+void sync_forget_user(void);
 
 // Faz o PROXIMO ciclo reaplicar os ajustes vindos da conta. Chamar ao entrar e
 // ao trocar de perfil.
@@ -97,7 +97,7 @@ void sync_esquecer_usuario(void);
 // voltar sozinha. Aplicando so na primeira volta depois de entrar (ou de trocar
 // de perfil), a conta define o ponto de partida e a mudanca local vale pelo
 // resto da sessao.
-void sync_reaplicar_ajustes(void);
+void sync_reapply_settings(void);
 
 // Manda uma credencial de servico para a CONTA, para os outros aparelhos da
 // pessoa herdarem o vinculo. `credJson` e o objeto pronto (o servidor guarda o
@@ -106,8 +106,8 @@ void sync_reaplicar_ajustes(void);
 // Existe por causa do Trakt: a conta do dono nao tinha a linha `trakt`, entao
 // vincular na TV nao ajudava o celular. Vincular aqui passa a ESCREVER na
 // conta, que e o que o app web faz.
-void sync_empurrar_credencial(const char *provider, const char *credJson);
+void sync_push_credential(const char *provider, const char *credJson);
 
-void sync_encerrar(void);
+void sync_shutdown(void);
 
 #endif

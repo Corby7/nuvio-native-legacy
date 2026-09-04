@@ -18,19 +18,19 @@
 #ifndef NV_MKV_H
 #define NV_MKV_H
 
-#define MKV_MAX_FAIXAS 64
+#define MKV_MAX_TRACKS 64
 
 typedef struct {
-  int  numero;        // TrackNumber, o mesmo `trackNum` do sourceInfo da LG
-  int  tipo;          // 1 video, 2 audio, 17 legenda (TrackType do Matroska)
-  char idioma[8];     // "por", "eng"... vazio quando o arquivo nao etiqueta
-  char nome[48];      // Name, quando existe ("Forced", "SDH", "Full")
+  int  number;        // TrackNumber, o mesmo `trackNum` do sourceInfo da LG
+  int  kind;          // 1 video, 2 audio, 17 legenda (TrackType do Matroska)
+  char language[8];     // "por", "eng"... vazio quando o arquivo nao etiqueta
+  char name[48];      // Name, quando existe ("Forced", "SDH", "Full")
   char codec[24];     // CodecID ("S_TEXT/UTF8", "S_HDMV/PGS")
-} MkvFaixa;
+} MkvTrack;
 
 // Le o cabecalho de `url` e preenche `saida`. Devolve quantas faixas achou, 0
 // quando nao deu (nao e MKV, servidor sem Range, cabecalho maior que o trecho).
 // BLOQUEIA: chamar de um fio proprio.
-int mkv_faixas(const char *url, MkvFaixa *saida, int max);
+int mkv_tracks(const char *url, MkvTrack *output, int max);
 
 #endif

@@ -8,24 +8,24 @@
 #include <sys/stat.h>
 #include "gfx.h"
 #include "text.h"
-#include "marco.h"
-#include "rede.h"
+#include "mark.h"
+#include "net.h"
 #include "tex_cache.h"
 #include "home.h"
 #include "text.h"
 #include "detail.h"
-#include "dados.h"
-#include "nuvem.h"
-#include "sessao.h"
-#include "perfis.h"
+#include "data.h"
+#include "cloud.h"
+#include "session.h"
+#include "profiles.h"
 #include "sync.h"
 #include "traktauth.h"
 #include "simklauth.h"
 #include "app.h"
 #include "video.h"
 #include "addons.h"
-#include "ajustes.h"
-#include "descoberta.h"
+#include "settings.h"
+#include "discover.h"
 #include "trakt.h"
 #include "player.h"
 #ifndef __APPLE__
@@ -44,13 +44,13 @@
 // Teclas injetadas por arquivo, para conferir a UI sem alguem no sofa com o
 // controle: escreva "down", "ok", "back"... em /tmp/nuvio-key e o app processa
 // como se viesse do D-pad. Uma tecla por linha, o arquivo e consumido.
-static SDL_Keycode codigoDaTecla(const char *nome) {
-  if (!strcmp(nome, "up"))    return SDLK_UP;
-  if (!strcmp(nome, "down"))  return SDLK_DOWN;
-  if (!strcmp(nome, "left"))  return SDLK_LEFT;
-  if (!strcmp(nome, "right")) return SDLK_RIGHT;
-  if (!strcmp(nome, "ok"))    return SDLK_RETURN;
-  if (!strcmp(nome, "back"))  return SDLK_AC_BACK;
+static SDL_Keycode codeOfKey(const char *name) {
+  if (!strcmp(name, "up"))    return SDLK_UP;
+  if (!strcmp(name, "down"))  return SDLK_DOWN;
+  if (!strcmp(name, "left"))  return SDLK_LEFT;
+  if (!strcmp(name, "right")) return SDLK_RIGHT;
+  if (!strcmp(name, "ok"))    return SDLK_RETURN;
+  if (!strcmp(name, "back"))  return SDLK_AC_BACK;
   return 0;
 }
 
@@ -58,8 +58,8 @@ static SDL_Keycode codigoDaTecla(const char *nome) {
 // arquivos sao criados por root, entao o app (uid 5410) nao consegue remove-los.
 // Enquanto isso nao foi visto, cada pedido era reprocessado a cada quadro —
 // uma unica tecla "down" virava centenas e o foco corria ate o fim da pagina.
-static void consome(const char *caminho) {
-  FILE *f = fopen(caminho, "w");
+static void consume(const char *path) {
+  FILE *f = fopen(path, "w");
   if (f) fclose(f);
 }
 
@@ -81,25 +81,25 @@ static void consome(const char *caminho) {
 // resolucao de um segundo, e duas rajadas de tecla no mesmo segundo seriam
 // tratadas como a mesma. No caminho normal (arquivo do proprio app) o consumo
 // funciona e nada disto entra em jogo.
-static int pedidoNovo(const char *caminho, time_t *bloqueado) {
+static int requestNew(const char *path, time_t *blocked) {
   struct stat st;
-  if (stat(caminho, &st) != 0 || st.st_size <= 0) return 0;
+  if (stat(path, &st) != 0 || st.st_size <= 0) return 0;
   // Pedido que ja foi atendido e nao pode ser esvaziado: ignora enquanto nao
   // mudar. Sem isto ele vale para sempre e o trabalho e refeito por quadro.
-  if (*bloqueado && st.st_mtime == *bloqueado) return 0;
-  *bloqueado = 0;
+  if (*blocked && st.st_mtime == *blocked) return 0;
+  *blocked = 0;
   return 1;
 }
 
 // Esvazia e confere. Devolve 0 quando NAO conseguiu — dono diferente, sticky
 // bit — e nesse caso marca o pedido para ser ignorado ate a data mudar.
-static int consomeOuBloqueia(const char *caminho, time_t *bloqueado) {
+static int consumeOuBlocks(const char *path, time_t *blocked) {
   struct stat st;
-  consome(caminho);
-  if (stat(caminho, &st) == 0 && st.st_size > 0) {
-    *bloqueado = st.st_mtime;
-    printf("[main] %s nao pode ser consumido (dono diferente); ignorando\n",
-           caminho);
+  consume(path);
+  if (stat(path, &st) == 0 && st.st_size > 0) {
+    *blocked = st.st_mtime;
+    printf("[main] %s cannot be consumed (different owner); ignoring\n",
+           path);
     fflush(stdout);
     return 0;
   }
@@ -108,52 +108,52 @@ static int consomeOuBloqueia(const char *caminho, time_t *bloqueado) {
 // stat() e nao fopen+fseek: esta sondagem roda para TRES arquivos em TODO
 // quadro, e cada fopen paga alocacao de FILE e dois syscalls a mais so para
 // descobrir o tamanho. O stat responde a mesma pergunta com um syscall.
-static long tamanhoDe(const char *caminho) {
+static long sizeOf(const char *path) {
   struct stat st;
-  if (stat(caminho, &st) != 0) return -1;
+  if (stat(path, &st) != 0) return -1;
   return (long)st.st_size;
 }
 
 // KEYUP adiado de uma tecla segurada.
-static Uint32 soltarEm = 0;
-static SDL_Keycode soltarTecla = 0;
+static Uint32 releaseIn = 0;
+static SDL_Keycode releaseKey = 0;
 
-static void teclasInjetadas(void (*entregar)(const SDL_Event *)) {
-  if (soltarEm && SDL_GetTicks() >= soltarEm) {
+static void keysInjected(void (*deliver)(const SDL_Event *)) {
+  if (releaseIn && SDL_GetTicks() >= releaseIn) {
     SDL_Event up; SDL_zero(up);
-    up.type = SDL_KEYUP; up.key.keysym.sym = soltarTecla;
-    entregar(&up);
-    soltarEm = 0;
+    up.type = SDL_KEYUP; up.key.keysym.sym = releaseKey;
+    deliver(&up);
+    releaseIn = 0;
   }
-  static time_t bloqueadoKey;
-  if (!pedidoNovo("/tmp/nuvio-key", &bloqueadoKey)) return;
+  static time_t blockedKey;
+  if (!requestNew("/tmp/nuvio-key", &blockedKey)) return;
   FILE *f = fopen("/tmp/nuvio-key", "r");
   if (!f) return;
-  char linha[32];
-  while (fgets(linha, sizeof linha, f)) {
-    char *fim = linha + strlen(linha);
-    while (fim > linha && (fim[-1] == '\n' || fim[-1] == '\r' || fim[-1] == ' ')) *--fim = 0;
+  char line[32];
+  while (fgets(line, sizeof line, f)) {
+    char *end = line + strlen(line);
+    while (end > line && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) *--end = 0;
     // "ok:hold" simula a pressao longa: o KEYUP dela fica agendado para depois
     // do limiar, em vez de vir junto. Sem isso nao da para exercitar por aqui
     // nada que dependa de segurar o botao.
-    int segurar = 0;
-    char *dp = strchr(linha, ':');
-    if (dp && !strcmp(dp + 1, "hold")) { *dp = 0; segurar = 1; }
+    int hold = 0;
+    char *dp = strchr(line, ':');
+    if (dp && !strcmp(dp + 1, "hold")) { *dp = 0; hold = 1; }
 
-    SDL_Keycode k = codigoDaTecla(linha);
+    SDL_Keycode k = codeOfKey(line);
     if (!k) continue;
     SDL_Event e; SDL_zero(e);
     e.type = SDL_KEYDOWN; e.key.keysym.sym = k;
-    entregar(&e);
+    deliver(&e);
 
     // O par KEYUP existe porque parte da interface so decide quando a tecla
     // SOBE — o toque curto contra a pressao longa do OK, por exemplo. Mandar
     // so o KEYDOWN deixava essas acoes mudas.
-    if (segurar) { soltarEm = SDL_GetTicks() + NV_HOLD_MS + 120; soltarTecla = k; }
-    else { e.type = SDL_KEYUP; entregar(&e); }
+    if (hold) { releaseIn = SDL_GetTicks() + NV_HOLD_MS + 120; releaseKey = k; }
+    else { e.type = SDL_KEYUP; deliver(&e); }
   }
   fclose(f);
-  consomeOuBloqueia("/tmp/nuvio-key", &bloqueadoKey);
+  consumeOuBlocks("/tmp/nuvio-key", &blockedKey);
 }
 
 // Tamanho do buffer de onde a captura le. Definido no arranque, junto com o
@@ -163,29 +163,29 @@ static int capW = (int)NV_TELA_W, capH = (int)NV_TELA_H;
 // Mesmo protocolo das outras ferramentas: escreva uma URL em /tmp/nuvio-video e
 // o app toca. E o unico jeito de testar reproducao sem alguem no sofa — e o
 // video nao pode ser conferido por captura, porque vive em outro plano.
-static void videoSeSolicitado(void) {
-  static time_t bloqueado;
+static void videoIfRequested(void) {
+  static time_t blocked;
   char url[1024];
   FILE *f;
-  if (!pedidoNovo("/tmp/nuvio-video", &bloqueado)) return;
+  if (!requestNew("/tmp/nuvio-video", &blocked)) return;
   f = fopen("/tmp/nuvio-video", "r");
   if (!f) return;
   if (fgets(url, sizeof url, f)) {
-    char *fim = url + strlen(url);
-    while (fim > url && (fim[-1] == '\n' || fim[-1] == '\r')) *--fim = 0;
-    printf("[video] pedido: %s\n", url);
+    char *end = url + strlen(url);
+    while (end > url && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0;
+    printf("[video] request: %s\n", url);
     fflush(stdout);
-    if (url[0] == '-') video_parar();
-    else { video_tocar(url); video_janela(0, 0, 1920, 1080); }
+    if (url[0] == '-') video_stop();
+    else { video_play(url); video_window(0, 0, 1920, 1080); }
   }
   fclose(f);
-  consomeOuBloqueia("/tmp/nuvio-video", &bloqueado);
+  consumeOuBlocks("/tmp/nuvio-video", &blocked);
 }
 
-static void capturaSeSolicitado(void) {
-  static time_t bloqueado;
-  if (!pedidoNovo("/tmp/nuvio-shot-req", &bloqueado)) return;
-  consomeOuBloqueia("/tmp/nuvio-shot-req", &bloqueado);
+static void captureIfRequested(void) {
+  static time_t blocked;
+  if (!requestNew("/tmp/nuvio-shot-req", &blocked)) return;
+  consumeOuBlocks("/tmp/nuvio-shot-req", &blocked);
 
   // Le o DRAWABLE inteiro, nao 1920x1080 fixo: em tela retina o buffer e maior
   // que a janela, e ler o tamanho da janela captura so um quarto da imagem.
@@ -201,26 +201,26 @@ static void capturaSeSolicitado(void) {
   // troca R<->B, feita no proprio buffer.
   for (size_t i = 0; i < n; i += 4) { unsigned char t2 = px[i]; px[i] = px[i+2]; px[i+2] = t2; }
 
-  unsigned int tam = 54 + (unsigned int)n;
-  unsigned char cab[54] = {0};
-  cab[0] = 'B'; cab[1] = 'M';
-  cab[2] = tam & 255; cab[3] = (tam >> 8) & 255; cab[4] = (tam >> 16) & 255; cab[5] = (tam >> 24) & 255;
-  cab[10] = 54; cab[14] = 40;
-  cab[18] = w & 255; cab[19] = (w >> 8) & 255;
+  unsigned int size = 54 + (unsigned int)n;
+  unsigned char header[54] = {0};
+  header[0] = 'B'; header[1] = 'M';
+  header[2] = size & 255; header[3] = (size >> 8) & 255; header[4] = (size >> 16) & 255; header[5] = (size >> 24) & 255;
+  header[10] = 54; header[14] = 40;
+  header[18] = w & 255; header[19] = (w >> 8) & 255;
   // altura POSITIVA = linhas de baixo para cima, que e exatamente a ordem em
   // que o glReadPixels devolve. Assim nao ha inversao a fazer.
-  cab[22] = h & 255; cab[23] = (h >> 8) & 255;
-  cab[26] = 1; cab[28] = 32;
-  cab[34] = n & 255; cab[35] = (n >> 8) & 255; cab[36] = (n >> 16) & 255; cab[37] = (n >> 24) & 255;
+  header[22] = h & 255; header[23] = (h >> 8) & 255;
+  header[26] = 1; header[28] = 32;
+  header[34] = n & 255; header[35] = (n >> 8) & 255; header[36] = (n >> 16) & 255; header[37] = (n >> 24) & 255;
 
   // grava num temporario e so entao renomeia: quem le nunca pega arquivo pela metade
   FILE *f = fopen("/tmp/.nuvio-shot.tmp", "wb");
   if (f) {
-    fwrite(cab, 1, 54, f);
+    fwrite(header, 1, 54, f);
     fwrite(px, 1, n, f);
     fclose(f);
     rename("/tmp/.nuvio-shot.tmp", "/tmp/nuvio-shot.bmp");
-    printf("captura: /tmp/nuvio-shot.bmp (%u bytes)\n", tam);
+    printf("capture: /tmp/nuvio-shot.bmp (%u bytes)\n", size);
   }
   free(px);
 }
@@ -247,12 +247,12 @@ int main(int argc, char **argv) {
   // O SAM lanca o app passando o JSON de launch como argv[1], entao so tratamos
   // argv[1] como caminho quando NAO for JSON.
   char dirBuf[512];
-  const char *dirArte = NULL;
-  if (argc > 1 && argv[1][0] != '{') dirArte = argv[1];
-  if (!dirArte) {
+  const char *dirArt = NULL;
+  if (argc > 1 && argv[1][0] != '{') dirArt = argv[1];
+  if (!dirArt) {
     char *base = SDL_GetBasePath();
-    if (base) { snprintf(dirBuf, sizeof dirBuf, "%sart", base); SDL_free(base); dirArte = dirBuf; }
-    else dirArte = "/tmp/art";
+    if (base) { snprintf(dirBuf, sizeof dirBuf, "%sart", base); SDL_free(base); dirArt = dirBuf; }
+    else dirArt = "/tmp/art";
   }
 
   // O compositor do webOS engole o BACK e abre a barra de apps — a menos que a
@@ -307,7 +307,7 @@ int main(int argc, char **argv) {
   SDL_Window *win = SDL_CreateWindow("Nuvio", SDL_WINDOWPOS_CENTERED,
                                      SDL_WINDOWPOS_CENTERED,
                                      (int)NV_TELA_W, (int)NV_TELA_H, flags);
-  if (!win) { printf("janela: %s\n", SDL_GetError()); return 1; }
+  if (!win) { printf("window: %s\n", SDL_GetError()); return 1; }
   // App de TV nao tem ponteiro: o cursor por cima da interface polui a leitura
   // e some sozinho no aparelho, mas nao no Mac.
   SDL_ShowCursor(SDL_DISABLE);
@@ -332,16 +332,16 @@ int main(int argc, char **argv) {
       // compilacao: version ocupa 3 bytes (alinhado a 4), subsystem vem em 4, e
       // a uniao comeca em 8. Para wayland ela e {display, surface, ...}.
       int sub = *(int *)(infoBuf + 4);
-      void **campos = (void **)(infoBuf + 8);
-      void *sup = campos[1];
+      void **fields = (void **)(infoBuf + 8);
+      void *sup = fields[1];
       void *wl = dlopen("libwayland-client.so.0", RTLD_NOW);
       void (*marshal)(void *, unsigned, ...) =
           wl ? (void (*)(void *, unsigned, ...))dlsym(wl, "wl_proxy_marshal") : NULL;
-      printf("syswm sub=%d display=%p surface=%p\n", sub, campos[0], sup);
+      printf("syswm sub=%d display=%p surface=%p\n", sub, fields[0], sup);
       // Opcode 4 de wl_surface e set_opaque_region; NULL = "nada e opaco".
       // Sem commit de proposito: o commit vem do proximo SwapWindow.
-      if (marshal && sup) { marshal(sup, 4, NULL); printf("superficie nao-opaca\n"); }
-      else printf("sem wayland: video nao vai aparecer\n");
+      if (marshal && sup) { marshal(sup, 4, NULL); printf("non-opaque surface\n"); }
+      else printf("no wayland: video will not appear\n");
     }
   }
 #endif
@@ -363,7 +363,7 @@ int main(int argc, char **argv) {
   SDL_GL_GetDrawableSize(win, &dw, &dh);
   SDL_GetWindowSize(win, &jw, &jh);
   printf("GPU: %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
-  printf("janela=%dx%d drawable=%dx%d\n", jw, jh, dw, dh);
+  printf("window=%dx%d drawable=%dx%d\n", jw, jh, dw, dh);
   // Pedir SDL_GL_ALPHA_SIZE nao garante receber: o EGL escolhe a config mais
   // proxima e pode entregar 0 bits de alpha em silencio. Com 0 aqui, o furo da
   // superficie e impossivel e o plano de video NUNCA vai aparecer, por mais
@@ -374,34 +374,34 @@ int main(int argc, char **argv) {
     SDL_GL_GetAttribute(SDL_GL_GREEN_SIZE, &g);
     SDL_GL_GetAttribute(SDL_GL_BLUE_SIZE, &b);
     printf("framebuffer R%d G%d B%d A%d%s\n", r, g, b, a,
-           a > 0 ? "" : "  <<< SEM ALPHA: video nao tem como aparecer"); }
+           a > 0 ? "" : "  <<< NO ALPHA: video has no way to show through"); }
 
   // Em tela retina o drawable e maior que a janela; sem ajustar o viewport, o
   // desenho ocupa um quarto da tela.
   SDL_GL_GetDrawableSize(win, &dw, &dh);
   glViewport(0, 0, dw, dh);
-  gfx_tamanho_alvo(dw, dh);
+  gfx_size_target(dw, dh);
   capW = dw; capH = dh;
 
   // O relogio dos marcos comeca AQUI e nao no topo do main: o que vem antes e
   // parse de argumento e SDL_Init, que nao dependem de nada nosso.
-  marco_iniciar();
+  mark_start();
   // ANTES de tex_iniciar e de app_iniciar, que sao quem cria os fios de rede.
-  rede_preparar();
-  marco("gfx_iniciar");
-  if (!gfx_iniciar()) return 1;
+  net_prepare();
+  mark("gfx_start");
+  if (!gfx_start()) return 1;
   // fonts/ fica ao lado de art/: derruba o ultimo componente do caminho da arte
   char dirRec[512];
-  snprintf(dirRec, sizeof dirRec, "%s", dirArte);
-  char *barra = strrchr(dirRec, '/');
-  if (barra) *barra = 0;
-  txt_iniciar(dirRec, (float)dw / NV_TELA_W);
+  snprintf(dirRec, sizeof dirRec, "%s", dirArt);
+  char *bar = strrchr(dirRec, '/');
+  if (bar) *bar = 0;
+  txt_start(dirRec, (float)dw / NV_TELA_W);
   // A MESMA escala vai para o cache de texturas: e ela que decide o teto de
   // decodificacao de cada arte a partir da largura com que o card a desenha.
   // Sem isto todo card decodificava com o teto unico de 640 e o cache batia no
   // orcamento com ~40 texturas.
-  tex_escala((float)dw / NV_TELA_W);
-  marco("fontes+tex prontos");
+  tex_scale((float)dw / NV_TELA_W);
+  mark("fonts+tex ready");
   // 192 slots, nao 96. O teto de slots so faz sentido junto com o tamanho de
   // cada textura: com o teto unico de 640 cada uma custava 2,4 MB e 96 slots ja
   // estouravam o orcamento de 96 MB (medido: `texturas=40 pend=32 92.3MB` com a
@@ -410,53 +410,53 @@ int main(int argc, char **argv) {
   //
   // Isso tambem dobra o teto de itens EM VOO, que e nMax/3 em slotLivre: a
   // fileira que entra na tela pede tudo de uma vez em vez de pedir aos poucos.
-  tex_iniciar(192);
+  tex_start(192);
   // A conta vem ANTES da UI: app_iniciar decide entre abrir na home e abrir no
   // login, e para decidir ele precisa saber se ha sessao gravada.
-  dados_iniciar(dirArte);
-  nuvem_configurar(dirArte);
-  sessao_iniciar();
-  perfis_carregar_ativo();
+  data_start(dirArt);
+  cloud_configure(dirArt);
+  session_start();
+  profiles_load_active();
   // Vinculos feitos NESTA TV. Vem antes de trakt_carregar (que le o arquivo do
   // pacote) para o vinculo do usuario ganhar do arquivo de quem montou — e num
   // pacote distribuivel esse arquivo nem existe.
-  traktauth_carregar();
-  simklauth_carregar();
-  if (!app_iniciar(dirArte)) return 1;
+  traktauth_load();
+  simklauth_load();
+  if (!app_start(dirArt)) return 1;
   // Progresso e dado DO USUARIO: sai da pasta do pacote, que e a mesma para
   // todo mundo que usar o aparelho, e passa para a pasta da instalacao.
-  if (dados_dir()[0]) cat_dir_gravacao(dados_dir());
+  if (data_dir()[0]) cat_dir_writing(data_dir());
   // A configuracao de addons mora junto da arte. Ausente, o app segue com a
   // lista de exemplo — nunca fica sem nada para mostrar.
-  addons_carregar(dirArte);
+  addons_load(dirArt);
   // Ajustes tambem sao do USUARIO, nao do pacote.
-  ajustes_dir(dados_dir()[0] ? dados_dir() : dirArte);
+  settings_dir(data_dir()[0] ? data_dir() : dirArt);
   { // As imagens vindas de URL ficam ao lado da arte do pacote. Uma vez
     // baixadas valem para sempre: arte de filme nao muda.
     char c[600];
-    snprintf(c, sizeof c, "%s/cache", dirArte);
+    snprintf(c, sizeof c, "%s/cache", dirArt);
     tex_cache_dir(c); }
   // Os icones da interface saem de art/icones (SVG do app web rasterizados).
-  gfx_icones_dir(dirArte);
+  gfx_icons_dir(dirArt);
   // Catalogo da rede. O do pacote ja esta carregado e continua na tela ate a
   // resposta chegar — abrir vazio enquanto busca seria pior que mostrar o de
   // ontem por dois segundos.
-  trakt_carregar(dirArte);
-  desc_tmdb(dirArte);
-  desc_iniciar();
+  trakt_load(dirArt);
+  disc_tmdb(dirArt);
+  disc_start();
   // Metade da resolucao: o snapshot so aparece escurecido e nas bordas.
-  int temSnap = gfx_snap_iniciar((int)NV_TELA_W / 2, (int)NV_TELA_H / 2);
-  int snapValido = 0;
+  int temSnap = gfx_snap_start((int)NV_TELA_W / 2, (int)NV_TELA_H / 2);
+  int snapValid = 0;
   // Alvo minusculo de proposito: e ele esticado que vira o desfoque do fundo.
   // 480x270: com o gaussiano de duas passadas, o que importa nao e o alvo ser
   // minusculo (isso e que produzia blocos ao esticar) e sim o desfoque ser de
   // verdade. Esticado 4x, nenhuma borda de texel aparece.
-  gfx_borrao_iniciar(480, 270);
+  gfx_blur_start(480, 270);
 
-  Uint32 ultRelato = SDL_GetTicks();
-  double txtMsQuadro = 0, piorTxtMs = 0;
-  int    txtNQuadro = 0, piorTxtN = 0;
-  int quadros = 0, janks = 0; double pior = 0;
+  Uint32 lastReport = SDL_GetTicks();
+  double txtMsFrame = 0, worstTxtMs = 0;
+  int    txtNFrame = 0, worstTxtN = 0;
+  int frames = 0, janks = 0; double worst = 0;
 
   // TELEMETRIA POR FASE. O quadro pior custava 22ms num alvo de 20ms e nao
   // havia como saber ONDE. Os relogios sao de CPU (SDL_GetPerformanceCounter)
@@ -467,17 +467,17 @@ int main(int argc, char **argv) {
   // devia — um quadro pesado de GPU aparece como swap grande, um quadro pesado
   // de CPU aparece na fase que o causou.
   double perFreq = (double)SDL_GetPerformanceFrequency();
-  Uint64 ultQuadro = SDL_GetPerformanceCounter();
-  double fEv=0, fBomb=0, fUpd=0, fDes=0, fSwap=0, fAux=0, fClr=0;
-  double pEv=0, pBomb=0, pUpd=0, pDes=0, pSwap=0, pAux=0, pClr=0;
+  Uint64 lastFrame = SDL_GetPerformanceCounter();
+  double fEv=0, fPump=0, fUpd=0, fDes=0, fSwap=0, fAux=0, fColor=0;
+  double pEv=0, pPump=0, pUpd=0, pDes=0, pSwap=0, pAux=0, pColor=0;
   // Dentro de `des`: quanto e travessia de GL e quanto e busca no cache.
-  double fFill=0, pFill=0; int fNCheio=0, pNCheio=0;
-  double fGfxMs=0, fTexMs=0, fOutMs=0; int fNRect=0, fNProg=0, fNBind=0, fNBusca=0, fNOut=0;
-  double pGfxMs=0, pTexMs=0, pOutMs=0; int pNRect=0, pNProg=0, pNBind=0, pNBusca=0, pNOut=0;
+  double fFill=0, pFill=0; int fNFull=0, pNFull=0;
+  double fGfxMs=0, fTexMs=0, fOutMs=0; int fNRect=0, fNProgress=0, fNBind=0, fNSearch=0, fNOut=0;
+  double pGfxMs=0, pTexMs=0, pOutMs=0; int pNRect=0, pNProgress=0, pNBind=0, pNSearch=0, pNOut=0;
 #define NV_T0() (SDL_GetPerformanceCounter())
 #define NV_DT(a) ((SDL_GetPerformanceCounter() - (a)) * 1000.0 / perFreq)
 
-  while (!app_quer_sair()) {
+  while (!app_wants_exit()) {
     SDL_Event e;
     Uint64 tEv = NV_T0();
     // Enquanto o detalhe existe ele fica com o teclado inteiro: a home
@@ -492,15 +492,15 @@ int main(int argc, char **argv) {
         SDL_Event back; SDL_zero(back);
         back.type = SDL_KEYDOWN;
         back.key.keysym.sym = SDLK_AC_BACK;
-        app_evento(&back);
+        app_event(&back);
         continue;
       }
-      app_evento(&e);
+      app_event(&e);
     }
-    teclasInjetadas(app_evento);
+    keysInjected(app_event);
     fEv = NV_DT(tEv);
 
-    Uint32 agora = SDL_GetTicks();
+    Uint32 now = SDL_GetTicks();
     // dt VEM DO RELOGIO DE ALTA RESOLUCAO, nao de SDL_GetTicks.
     //
     // SDL_GetTicks conta em MILISSEGUNDOS INTEIROS. No Mac o app roda sem vsync
@@ -517,23 +517,23 @@ int main(int argc, char **argv) {
     // O clamp continua, mas so como TETO: voltar de suspensao entrega um dt de
     // varios segundos e uma animacao daria um salto. Piso nao existe mais —
     // quadro curto tem de ser um dt curto.
-    Uint64 cQuadro = SDL_GetPerformanceCounter();
-    double dtms = (double)(cQuadro - ultQuadro) * 1000.0 / perFreq;
-    ultQuadro = cQuadro;
+    Uint64 cFrame = SDL_GetPerformanceCounter();
+    double dtms = (double)(cFrame - lastFrame) * 1000.0 / perFreq;
+    lastFrame = cFrame;
     if (dtms > 100.0) dtms = 100.0;
     if (dtms < 0.0) dtms = 0.0;
     float dt = (float)(dtms / 1000.0);
-    if (quadros > 20) {
-      if (dtms > pior) { pior = dtms; piorTxtMs = txtMsQuadro; piorTxtN = txtNQuadro;
-                         pEv=fEv; pBomb=fBomb; pUpd=fUpd; pDes=fDes; pSwap=fSwap; pAux=fAux; pClr=fClr;
-                         pGfxMs=fGfxMs; pTexMs=fTexMs; pNRect=fNRect; pNProg=fNProg;
-                         pNBind=fNBind; pNBusca=fNBusca; pOutMs=fOutMs; pNOut=fNOut; pFill=fFill; pNCheio=fNCheio; }
+    if (frames > 20) {
+      if (dtms > worst) { worst = dtms; worstTxtMs = txtMsFrame; worstTxtN = txtNFrame;
+                         pEv=fEv; pPump=fPump; pUpd=fUpd; pDes=fDes; pSwap=fSwap; pAux=fAux; pColor=fColor;
+                         pGfxMs=fGfxMs; pTexMs=fTexMs; pNRect=fNRect; pNProgress=fNProgress;
+                         pNBind=fNBind; pNSearch=fNSearch; pOutMs=fOutMs; pNOut=fNOut; pFill=fFill; pNFull=fNFull; }
       if (dtms > 33.0) janks++;
     }
     // zera os contadores do quadro que comeca agora; o que foi medido acima
     // pertence ao quadro anterior, que e o que acabou de custar dtms
-    txtMsQuadro = txt_ms; txtNQuadro = txt_rasterizadas;
-    txt_ms = 0.0; txt_rasterizadas = 0;
+    txtMsFrame = txt_ms; txtNFrame = txt_rasterized;
+    txt_ms = 0.0; txt_rasterized = 0;
 
     // TRES por quadro. O limite de 1 vinha de quando TODA arte era decodificada
     // com o teto unico de 640: cada glTexImage2D custava ~2 MB e dois no mesmo
@@ -545,10 +545,10 @@ int main(int argc, char **argv) {
     // envio grande de antes, e a fileira que entra na tela deixa de aparecer aos
     // pedacos.
     Uint64 t0 = NV_T0();
-    tex_bombear(3);
-    fBomb = NV_DT(t0);
+    tex_pump(3);
+    fPump = NV_DT(t0);
     t0 = NV_T0();
-    app_atualizar(dt, agora);
+    app_update(dt, now);
     fUpd = NV_DT(t0);
 
     // RECORTE DESLIGADO ANTES DO CLEAR. glClear respeita o scissor test: se
@@ -558,23 +558,23 @@ int main(int argc, char **argv) {
     // invariante que ninguem verifica — e o sintoma seria justamente uma faixa
     // com conteudo velho, dificil de atribuir a causa. Uma chamada por quadro.
     t0 = NV_T0();
-    gfx_novo_quadro();
-    tex_novo_quadro();
-    gfx_sem_recorte();
-    glClearColor(NV_COR_FUNDO_R, NV_COR_FUNDO_G, NV_COR_FUNDO_B, 1.0f);
+    gfx_new_frame();
+    tex_new_frame();
+    gfx_sem_crop();
+    glClearColor(NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
-    fClr = NV_DT(t0);
+    fColor = NV_DT(t0);
     t0 = NV_T0();
-    txt_novo_quadro();
-    app_desenhar(agora);
+    txt_new_frame();
+    app_draw(now);
     fDes = NV_DT(t0);
-    fGfxMs = gfx_ms_rect; fTexMs = tex_ms_busca;
-    fNRect = gfx_n_rect; fNProg = gfx_n_prog; fNBind = gfx_n_bind; fNBusca = tex_n_busca;
-    fOutMs = gfx_ms_outros; fNOut = gfx_n_outros;
-    fFill = gfx_fill; fNCheio = gfx_n_cheio;
+    fGfxMs = gfx_ms_rect; fTexMs = tex_ms_search;
+    fNRect = gfx_n_rect; fNProgress = gfx_n_progress; fNBind = gfx_n_bind; fNSearch = tex_n_search;
+    fOutMs = gfx_ms_others; fNOut = gfx_n_others;
+    fFill = gfx_fill; fNFull = gfx_n_full;
     t0 = NV_T0();
-    videoSeSolicitado();
-    capturaSeSolicitado();
+    videoIfRequested();
+    captureIfRequested();
     fAux = NV_DT(t0);
     t0 = NV_T0();
     SDL_GL_SwapWindow(win);
@@ -584,17 +584,17 @@ int main(int argc, char **argv) {
     //
     // Bandeira PROPRIA e nao `if (!quadros)`: `quadros` zera a cada relatorio
     // de 3 s, entao aquilo carimbaria "primeiro quadro" tres vezes por minuto.
-    { static int jaCarimbou;
-      if (!jaCarimbou) { jaCarimbou = 1; marco("primeiro quadro na tela"); } }
-    quadros++;
+    { static int jaStamped;
+      if (!jaStamped) { jaStamped = 1; mark("first frame on screen"); } }
+    frames++;
 
-    if (agora - ultRelato >= 3000) {
-      int itens, pend; long bytes;
-      tex_estatisticas(&itens, &pend, &bytes);
-      printf("FPS=%.1f pior=%.1fms janks=%d | pior-quadro: texto %.1fms em %d linhas"
-             " | texturas=%d pend=%d %.1fMB | despejos=%d\n",
-             quadros * 1000.0 / (double)(agora - ultRelato), pior, janks,
-             piorTxtMs, piorTxtN, itens, pend, bytes / 1048576.0, txt_despejos);
+    if (now - lastReport >= 3000) {
+      int items, pending; long bytes;
+      tex_stats(&items, &pending, &bytes);
+      printf("FPS=%.1f worst=%.1fms janks=%d | worst frame: text %.1fms in %d lines"
+             " | textures=%d pending=%d %.1fMB | evictions=%d\n",
+             frames * 1000.0 / (double)(now - lastReport), worst, janks,
+             worstTxtMs, worstTxtN, items, pending, bytes / 1048576.0, txt_evictions);
       fflush(stdout);
       // A MESMA linha vai para um arquivo. No aparelho a saida padrao do app
       // lancado pelo applicationManager nao chega a lugar nenhum que se possa
@@ -603,32 +603,32 @@ int main(int argc, char **argv) {
       // ha como MEDIR quadro no aparelho — so olhar e achar.
       { FILE *fp = fopen("/tmp/nuvio-fps.txt", "w");
         if (fp) {
-          fprintf(fp, "drawable=%dx%d FPS=%.1f pior=%.1fms janks=%d"
-                  " texto=%.1fms/%d texturas=%d %.1fMB"
-                  " | pior: ev=%.1f bomb=%.1f upd=%.1f clr=%.1f des=%.1f aux=%.1f swap=%.1f"
+          fprintf(fp, "drawable=%dx%d FPS=%.1f worst=%.1fms janks=%d"
+                  " text=%.1fms/%d textures=%d %.1fMB"
+                  " | worst: ev=%.1f pump=%.1f upd=%.1f clr=%.1f draw=%.1f aux=%.1f swap=%.1f"
                   " | des: gfx=%.1f/%d(p%d,b%d) tex=%.2f/%d out=%.1f/%d fill=%.2fx(cheias=%d)"
-                  " | despejos=%d\n",
+                  " | evictions=%d\n",
                   dw, dh,
-                  quadros * 1000.0 / (double)(agora - ultRelato), pior, janks,
-                  piorTxtMs, piorTxtN, itens, bytes / 1048576.0,
-                  pEv, pBomb, pUpd, pClr, pDes, pAux, pSwap,
-                  pGfxMs, pNRect, pNProg, pNBind, pTexMs, pNBusca, pOutMs, pNOut, pFill, pNCheio,
-                  txt_despejos);
+                  frames * 1000.0 / (double)(now - lastReport), worst, janks,
+                  worstTxtMs, worstTxtN, items, bytes / 1048576.0,
+                  pEv, pPump, pUpd, pColor, pDes, pAux, pSwap,
+                  pGfxMs, pNRect, pNProgress, pNBind, pTexMs, pNSearch, pOutMs, pNOut, pFill, pNFull,
+                  txt_evictions);
           fclose(fp);
         } }
-      quadros = 0; ultRelato = agora; pior = 0; janks = 0; piorTxtMs = 0; piorTxtN = 0;
-      txt_despejos = 0;
-      pEv=pBomb=pUpd=pDes=pSwap=pAux=pClr=0;
-      pGfxMs=pTexMs=pOutMs=0; pNRect=pNProg=pNBind=pNBusca=pNOut=0; pFill=0; pNCheio=0;
+      frames = 0; lastReport = now; worst = 0; janks = 0; worstTxtMs = 0; worstTxtN = 0;
+      txt_evictions = 0;
+      pEv=pPump=pUpd=pDes=pSwap=pAux=pColor=0;
+      pGfxMs=pTexMs=pOutMs=0; pNRect=pNProgress=pNBind=pNSearch=pNOut=0; pFill=0; pNFull=0;
     }
   }
 
-  gfx_borrao_encerrar();
-  gfx_snap_encerrar();
-  app_encerrar();
-  tex_encerrar();
-  txt_encerrar();
-  gfx_encerrar();
+  gfx_blur_shutdown();
+  gfx_snap_shutdown();
+  app_shutdown();
+  tex_shutdown();
+  txt_shutdown();
+  gfx_shutdown();
   SDL_GL_DeleteContext(ctx);
   SDL_DestroyWindow(win);
   IMG_Quit();

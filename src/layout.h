@@ -20,7 +20,7 @@
 // recuo, e a rail acrescenta os 144 dela quando esta aberta. Nao sao dois
 // layouts — e `collapseSidebar` em layoutPreferences.js, que o perfil do dono
 // tem em true. Com ela recolhida a home comeca em 104.
-#define NV_CONTENT_PAD          104.0f
+#define NV_CONTENT_DFLT          104.0f
 
 // Hero em TELA CHEIA (`modernHeroFullScreenBackdropEnabled`, tambem true no
 // perfil do dono). MEDIDO: .home-modern-hero-media 1920x1062 em (0,0), imagem
@@ -47,26 +47,26 @@
 // Fica em 1080 assim mesmo: e o valor CORRETO para a tela, o excedente e
 // descartado sem custo, e se um firmware devolver a superficie inteira a arte
 // passa a cobrir sozinha.
-#define NV_HERO_CHEIO_H        1080.0f
-#define NV_HERO_CHEIO_COPY_Y     40.0f
+#define NV_HERO_FULL_H        1080.0f
+#define NV_HERO_FULL_COPY_Y     40.0f
 // Com o hero em TELA CHEIA o bloco de texto sobe: o web poe o logo em y=65 e a
 // linha de meta em 257, contra 135 e 327 do hero de faixa. MEDIDO na sessao
 // logada, que e a que tem `modernHeroFullScreenBackdropEnabled`. O port usava os
 // numeros da faixa nos dois modos, e por isso o texto todo ficava 70px baixo
 // demais — foi o que o dono descreveu como margem errada.
 // A sinopse fica em 411 nos DOIS modos; so o que esta acima dela se desloca.
-#define NV_HERO_CHEIO_LOGO_Y     65.0f
-#define NV_HERO_CHEIO_META_Y    257.0f
+#define NV_HERO_FULL_LOGO_Y     65.0f
+#define NV_HERO_FULL_META_Y    257.0f
 // Em tela cheia o logo pode ser BEM maior: 640 de largura contra os 440 do hero
 // de faixa. MEDIDO na sessao logada (.home-hero-logo = 640x160 em 104,65). O
 // port limitava a 440 nos dois modos, e era isso que deixava a arte do titulo
 // pequena — um dos pontos que o dono levantou olhando a referencia.
-#define NV_LOGO_HERO_CHEIO_MAX_W 640.0f
+#define NV_LOGO_HERO_FULL_MAX_W 640.0f
 // LINHA SECUNDARIA, que so existe em tela cheia: "2H RESTANTES • 6.3 • EN".
 // y=341, altura 38, fonte 18 peso 600, rgba(255,255,255,0.88). Fica ENTRE a
 // linha de meta (257) e a sinopse (411); sem ela sobrava um vao no meio do
 // bloco, que e parte do que se lia como espacamento errado.
-#define NV_HERO_CHEIO_SEC_Y     341.0f
+#define NV_HERO_FULL_SEC_Y     341.0f
 // Respiro entre a base do bloco de texto do hero e o titulo da primeira
 // fileira, e entre as linhas do proprio bloco. Vem da diferenca medida nas
 // capturas: a sinopse termina ~48px acima do titulo da fileira, e as linhas do
@@ -79,7 +79,7 @@
 //         = 52% de 1080 + 40 = 601,6  ->  base do bloco em y = 478,4
 // e o topo das fileiras cai nos mesmos 518,4 que NV_SHELF_TOP ja usa.
 #define NV_HERO_COPY_GAP        40.0f   // --modern-hero-copy-bottom-gap
-#define NV_HERO_COPY_LINHA      16.0f   // gap do flex column
+#define NV_HERO_COPY_LINE      16.0f   // gap do flex column
 
 // Scancode do BACK no SDL da LG (SDL_SCANCODE_WEBOS_BACK). Nao esta no
 // SDL_scancode.h padrao, por isso vem como numero.
@@ -96,8 +96,8 @@
 // laterais. Medido nas fotos de referencia: bate com 90.
 // Safe area OFICIAL do tvOS: 80px nas laterais, 60px em cima e embaixo (HIG
 // Layout). O valor 90 que estava aqui era chute meu.
-#define NV_MARGEM_X      80.0f
-#define NV_MARGEM_Y      60.0f
+#define NV_MARGIN_X      80.0f
+#define NV_MARGIN_Y      60.0f
 
 // No layout moderno legacy a arte ocupa a faixa superior (72% da largura e
 // ~650px de altura); o viewport de fileiras permanece fixo nos 52% inferiores.
@@ -112,21 +112,21 @@
 #define NV_HERO_BASE     570.0f
 // A partir de quanta rolagem o bloco do hero comeca a sumir, e em quantos px
 // ele desaparece por completo.
-#define NV_HERO_FADE_INI 420.0f
+#define NV_HERO_FADE_START 420.0f
 #define NV_HERO_FADE_EXT 260.0f
-#define NV_FUNDO_ESCURO   0.40f   // quanto o fundo da home escurece a arte
+#define NV_BACKGROUND_DARK   0.40f   // quanto o fundo da home escurece a arte
 // A partir de quanta rolagem a ARTE do hero comeca a sumir, e em quantos px
 // ela desaparece. Depois disso o que se ve e o fundo desfocado.
-#define NV_HERO_ARTE_INI 300.0f
-#define NV_HERO_ARTE_EXT 520.0f
-#define NV_HERO_BOTAO_H   68.0f
+#define NV_HERO_ART_START 300.0f
+#define NV_HERO_ART_EXT 520.0f
+#define NV_HERO_BUTTON_H   68.0f
 #define NV_HERO_NBOTOES      3
 // MEDIDO no app web: .home-modern-hero-media em x=555, y=0, 1421x670, com a
 // arte em object-fit:cover. Os degrades que dissolvem a borda esquerda e a base
 // estao no shader GFX_HERO, com as paradas anotadas la.
-#define NV_HERO_ARTE_X   555.0f
-#define NV_HERO_ARTE_W  1421.0f
-#define NV_HERO_ARTE_H   670.0f
+#define NV_HERO_ART_X   555.0f
+#define NV_HERO_ART_W  1421.0f
+#define NV_HERO_ART_H   670.0f
 // CSS (components.css:6755): .home-hero-logo em modern tem height E max-height
 // --modern-hero-logo-max-height (200px), width min(100%, 440px), object-fit
 // contain com object-position LEFT TOP. Ou seja a caixa mede sempre 440x200 e
@@ -156,8 +156,8 @@
 //
 // O limiar de luminancia e 80 e nao 70 por causa do 27, que mede 74: com 70 ele
 // escapava por quatro pontos e continuava sumindo na tela.
-#define NV_LOGO_LUM_MIN     80
-#define NV_LOGO_CROMA_MAX   45
+#define NV_LOGO_LUMA_MIN     80
+#define NV_LOGO_CHROMA_MAX   45
 #define NV_LOGO_HERO_MAX_W 440.0f
 // Posicoes ABSOLUTAS do bloco de texto do hero, medidas no app web com a home
 // no topo. Antes isto era ancorado na BASE (base = 1080 - NV_HERO_BASE) e
@@ -227,7 +227,7 @@
 // Passo entre fileiras MEDIDO: titulo da fileira 0 em y=518, da fileira 1 em
 // y=934 -> 416. Desses, 46 sao do cabecalho ate os cards (518 -> 564) e 322 do
 // card, sobrando 48 de respiro entre uma fileira e a proxima.
-#define NV_FILEIRA_GAP  48.0f
+#define NV_ROW_GAP  48.0f
 
 // POSTER DEITADO (`modernLandscapePostersEnabled`). MEDIDO no app web com a
 // preferencia ligada: `.home-poster-card.is-landscape` = 318 de largura, moldura
@@ -247,13 +247,13 @@
 #define NV_CARD_LAND_W   318.0f
 #define NV_CARD_LAND_H   182.9f   // 178.875 de moldura + 2px de borda em cima e embaixo
 #define NV_CARD_LAND_ART 178.875f
-#define NV_FILEIRA_GAP_LAND 24.0f
+#define NV_ROW_GAP_LAND 24.0f
 // A legenda do card deitado fica DENTRO da moldura: left/right 14, bottom 12,
 // largura maxima 76% do card, sobre um degrade que cobre 54% da altura.
-#define NV_LAND_COPY_PAD  14.0f
+#define NV_LAND_COPY_DFLT  14.0f
 #define NV_LAND_COPY_BASE 12.0f
 #define NV_LAND_COPY_MAXW 0.76f
-#define NV_LAND_VEU       0.54f
+#define NV_LAND_VEIL       0.54f
 
 // Rotulo abaixo do poster (`posterLabelsEnabled`). `.home-poster-copy`: padding
 // 8px 2px 0, altura fixa `--home-poster-copy-height: 74px`, titulo 16/500 e
@@ -271,7 +271,7 @@
 #define NV_POSTER_W      212.0f
 #define NV_POSTER_H      322.0f
 // O Top 10 reserva espaco abaixo do poster para o rotulo de genero.
-#define NV_TOP10_ROTULO   38.0f
+#define NV_TOP10_LABEL   38.0f
 #define NV_POSTER_NUM_W  118.0f   // faixa do numeral gigante do Top 10
 
 // CORRIGIDO apos foto de referencia: no Apple TV os metadados do card grande
@@ -282,19 +282,19 @@
 // proporcao fica perto de 3:2. Como nossa arte de origem e backdrop 16:9, o
 // shader recorta (cover) em vez de esticar; sem isso a imagem deforma, que foi
 // exatamente o defeito que apareceu na primeira tentativa.
-#define NV_DESTAQUE_W    419.0f
-#define NV_CW_PAD          18.0f
+#define NV_HIGHLIGHT_W    419.0f
+#define NV_CW_DFLT          18.0f
 #define NV_CW_BAR_H         4.0f
 #define NV_CW_BAR_BOTTOM   10.0f
-#define NV_CW_BADGE_PAD_X  14.0f
-#define NV_CW_BADGE_PAD_Y   8.0f
+#define NV_CW_BADGE_DFLT_X  14.0f
+#define NV_CW_BADGE_DFLT_Y   8.0f
 #define NV_CW_BADGE_RADIUS  7.0f
-#define NV_DESTAQUE_H    236.0f   // continue watching: 419 x 236
+#define NV_HIGHLIGHT_H    236.0f   // continue watching: 419 x 236
                                   // (16:9 -> 3:2 -> 4:3 -> +20%: cada passo foi
                                   //  comparado lado a lado na TV)
 
 // Hero-carrossel: tempo em cada arte e duracao do crossfade.
-#define NV_HERO_INTERVALO_MS  7000
+#define NV_HERO_INTERVAL_MS  7000
 // APAGAR a arte velha, NAO dissolver uma na outra.
 //
 // MEDIDO na referencia (screenrecord do aparelho, quadros com carimbo de tempo,
@@ -325,20 +325,20 @@
 // 220 ms: acima do intervalo de repeticao do D-pad segurado (~130 ms nesta TV),
 // entao atravessar a fileira nao dispara nenhuma troca; e curto o bastante para
 // que parar no card e ver o fundo responder pareca imediato.
-#define NV_HERO_REPOUSO_MS    220
+#define NV_HERO_IDLE_MS    220
 #define NV_HERO_DOT           9.0f
 #define NV_HERO_DOT_GAP      14.0f
 
 // Tipografia (px em 1080p)
 // Escala tipografica do tvOS em 1080p (1pt = 1px). Os pesos vem do arquivo:
 // a TV so tem Light e Regular da fonte LG, entao o negrito e sintetico.
-#define NV_FT_TITULO1    76
+#define NV_FT_TITLE1    76
 // 56 e nao os 57 da escala do tvOS: hoje este estilo so serve a
 // `.library-page-title` e aos titulos de estado vazio da busca e da biblioteca,
 // e os tres medem 56 no web. O cabecalho da pagina de titulo do app da Apple,
 // que era o dono do 57, nao existe mais no port.
-#define NV_FT_TITULO2    56
-#define NV_FT_TITULO3    48
+#define NV_FT_TITLE2    56
+#define NV_FT_TITLE3    48
 #define NV_FT_HEADLINE   38
 // Os corpos pequenos ficam ABAIXO da tabela do tvOS de proposito. A escala
 // oficial pressupoe a SF Pro, e a Inter — que e a substituta possivel aqui — e
@@ -364,31 +364,31 @@
 // referencia, altura 25,2 contra 32,0 — razao 1,27 nos dois eixos. 26 x 1,27 =
 // 33. O 26 vinha do `.home-row-title` do web; o web e a TCL divergem aqui e a
 // TCL manda, por ser o aparelho.
-#define NV_FT_ROW_TITULO 33
+#define NV_FT_ROW_TITLE 33
 // .home-modern-hero-secondary: 18/600 na sessao logada.
 #define NV_FT_HERO_SEC   18   // --modern-hero-secondary-size (212*0.085)
 #define NV_FT_HERO_META  21   // --modern-hero-meta-size (212*0.1), peso 500
 #define NV_FT_HERO_SIN   22   // --modern-hero-description-size, peso 400
 // Tela de DETALHE, medidos no app web rodando (getBoundingClientRect e
 // getComputedStyle sobre .series-detail-shell), nao lidos da folha.
-#define NV_FT_DET_BOTAO  25   // .series-primary-btn (peso 600)
+#define NV_FT_DET_BUTTON  25   // .series-primary-btn (peso 600)
 #define NV_FT_DET_META   25   // .series-detail-support e .detail-meta-row
 #define NV_FT_DET_SIN    26   // .series-detail-description
 #define NV_FT_DET_META2  23   // .detail-meta-row.secondary
-#define NV_FT_PLR_TITULO 56   // .player-title
-#define NV_FT_PLR_CORPO  32   // .player-subtitle e .player-time-label
+#define NV_FT_PLR_TITLE 56   // .player-title
+#define NV_FT_PLR_BODY  32   // .player-subtitle e .player-time-label
 // Canto superior do player. O relogio e o "Termina as" vem do bloco ATV
 // (components.css:15282), ja convertidos para o canvas de 1920; o guia
 // parental nao e refeito la e fica com os 22 da regra base.
-#define NV_FT_PG_RELOGIO 26   // .player-clock
-#define NV_FT_PG_FIM     20   // .player-ends-at
-#define NV_FT_PG_ROTULO  22   // .player-parental-label
+#define NV_FT_PG_CLOCK 26   // .player-clock
+#define NV_FT_PG_END     20   // .player-ends-at
+#define NV_FT_PG_LABEL  22   // .player-parental-label
 #define NV_FT_PG_GRAV    22   // .player-parental-severity
 // Entrelinha (leading) OFICIAL de cada estilo. Usar a altura que o SDL_ttf
 // devolve nao e a mesma coisa: ela varia com os acentos da linha, entao um
 // paragrafo fica com espacamento irregular linha a linha.
-#define NV_LD_TITULO1    96
-#define NV_LD_TITULO3    56
+#define NV_LD_TITLE1    96
+#define NV_LD_TITLE3    56
 #define NV_LD_HEADLINE   46
 #define NV_LD_BODY       32
 #define NV_LD_CAPTION    29
@@ -398,7 +398,7 @@
 // solidos de branco puro, sem rampa, por fora da caixa do elemento. Vale para
 // card de home, card de episodio, botao de detalhe e tecla de teclado — um
 // numero so. NV_DETW_ANEL ja era 4 e so era aplicado no detalhe.
-#define NV_ANEL_FOCO      4.0f
+#define NV_RING_FOCUS      4.0f
 
 // Area util explicita da home: a rail pode variar, mas o texto e o foco nunca
 // encostam na safe area direita.
@@ -416,14 +416,14 @@
 //
 // Excecao legitima: o botao primario do detalhe ("Reproduzir") e branco com
 // texto preto nos DOIS apps. Esse continua como esta.
-#define NV_COR_FOCO_R     0.188f
-#define NV_COR_FOCO_G     0.188f
-#define NV_COR_FOCO_B     0.188f
+#define NV_COLOR_FOCUS_R     0.188f
+#define NV_COLOR_FOCUS_G     0.188f
+#define NV_COLOR_FOCUS_B     0.188f
 
 // Raios, em fracao do menor lado (o shader usa SDF normalizado)
-#define NV_RAIO_CARD     0.055f
-#define NV_RAIO_PILL     0.5f
-#define NV_RAIO_BADGE    0.18f
+#define NV_RADIUS_CARD     0.055f
+#define NV_RADIUS_PILL     0.5f
+#define NV_RADIUS_BADGE    0.18f
 
 // Fundo: #0D0D0D. Aqui estava #252629, com a justificativa de que "o
 // quase-preto fazia os cards flutuarem no vazio" — mas a referencia E
@@ -434,35 +434,35 @@
 // a uma distancia de (1,2,0) do fundo — contraste 1,0:1, ou seja, INVISIVEL. Os
 // posteres "que nao apareciam" apareciam: como retangulos da cor exata do
 // fundo. Ver NV_COR_ESQUELETO logo abaixo.
-#define NV_COR_FUNDO_R   0.051f
-#define NV_COR_FUNDO_G   0.051f
-#define NV_COR_FUNDO_B   0.051f
+#define NV_COLOR_BACKGROUND_R   0.051f
+#define NV_COLOR_BACKGROUND_G   0.051f
+#define NV_COLOR_BACKGROUND_B   0.051f
 
 // Superficie de CARD SEM ARTE (#2C2C2C). MEDIDO na referencia, que a desenha
 // solida na caixa exata do card enquanto a imagem nao chega — luminancia ~22x
 // a do fundo, impossivel nao ver. E o que faz "carregando" ler como carregando
 // em vez de como quebrado.
-#define NV_COR_ESQUELETO_R 0.173f
-#define NV_COR_ESQUELETO_G 0.173f
-#define NV_COR_ESQUELETO_B 0.173f
+#define NV_COLOR_SKELETON_R 0.173f
+#define NV_COLOR_SKELETON_G 0.173f
+#define NV_COLOR_SKELETON_B 0.173f
 
 // Foco: escala 1.05-1.10x na HIG. Usamos 1.09 no card.
 // Escala do foco DERIVADA das tabelas oficiais de Top Shelf, que publicam
 // tamanho focado e nao focado: poster 2:3 e quadrado crescem ~14%, card 16:9
 // cresce ~9%. Eu usava 9% para tudo, o que deixava o poster subdimensionado.
-#define NV_FOCO_ESCALA   0.09f    // cards 16:9
-#define NV_FOCO_ESCALA_P 0.14f    // posters 2:3 e circulos
+#define NV_FOCUS_SCALE   0.09f    // cards 16:9
+#define NV_FOCUS_SCALE_P 0.14f    // posters 2:3 e circulos
 // O item em foco tambem SOBE, nao so cresce: no tvOS ele se levanta em direcao
 // ao espectador e a sombra cai por baixo. Sem o deslocamento, escala e sombra
 // juntas leem como "a imagem inchou", nao como "esta item veio para frente".
-#define NV_FOCO_LIFT      8.0f
+#define NV_FOCUS_LIFT      8.0f
 // Sombra do item em foco. Numeros de reimplementacoes de terceiros do efeito
 // do tvOS (a Apple nao publica os dela): raio 25px, deslocada 16px para baixo,
 // preto a 30%. O deslocamento vertical importa mais do que parece — sombra
 // centrada le como halo, sombra caida le como objeto levantado.
-#define NV_FOCO_SOMBRA   25.0f
-#define NV_SOMBRA_DY     16.0f
-#define NV_SOMBRA_ALFA   0.30f
+#define NV_FOCUS_SHADOW   25.0f
+#define NV_SHADOW_DY     16.0f
+#define NV_SHADOW_ALFA   0.30f
 
 // Molas: rigidez usada em anim_mola(). ~250-350ms de assentamento, sem overshoot.
 // Ganhar foco e mais rapido que perder: assimetria que a Apple declara no HIG
@@ -479,7 +479,7 @@
 // aqui vinha do HIG do tvOS, nao desta interface: na referencia os dois lados
 // levam o mesmo tempo, e com tempos diferentes existe um instante com DOIS
 // aneis na tela, que a referencia nunca mostra.
-#define NV_MOLA_FOCO     25.0f    // entrando no foco  (95% em 120ms)
+#define NV_MOLA_FOCUS     25.0f    // entrando no foco  (95% em 120ms)
 #define NV_MOLA_DESFOCO  25.0f    // saindo dele       (mesmo tempo: ver acima)
 #define NV_MOLA_SCROLL    8.0f
 // Frequencia (rad/s) da mola de 2a ordem que rola as fileiras da home. Vale o
@@ -488,7 +488,7 @@
 // p(t)=1-(1+wt)e^-wt cruza a metade em 1,678/w = 146 ms com w=11,5, e o medido
 // foi ~145 ms. Ver anim_mola2() em anim.h para o porque da troca de mola.
 #define NV_MOLA2_SCROLL  11.5f
-#define NV_MOLA_TELA      9.0f
+#define NV_MOLA_SCREEN      9.0f
 // Abertura da PAGINA de secoes do detalhe. MEDIDO na folha do app web:
 // `.series-detail-shell.detail-scrolled .series-detail-backdrop` vai a
 // `opacity: 0.15` em 0.8s cubic-bezier(0.4, 0, 0.2, 1). exp(-3.8*0.8) = 0.05,
@@ -547,14 +547,14 @@
 #define NV_DETW_LOGO_H    200.0f
 #define NV_DETW_LOGO_MAXW 1000.0f
 #define NV_DETW_LOGO_GAP   40.0f   // base do logo ao topo da linha de acoes
-#define NV_DETW_ACOES_H   108.0f   // inclui os 6px de padding do anel de foco
+#define NV_DETW_ACTIONS_H   108.0f   // inclui os 6px de padding do anel de foco
 #define NV_DETW_BTN_H      96.0f
 #define NV_DETW_BTN_PADX   48.0f
 // 34 e nao os 16 que o `gap` do flex declara. MEDIDO nos dois estados: o icone
 // comeca em 126 e o rotulo em 196, e o icone tem 36 de largura — sobra 34. A
 // folha mente aqui, como mentia no corpo do titulo do player.
 #define NV_DETW_BTN_GAPI   34.0f   // icone -> rotulo
-#define NV_DETW_BTN_ICONE  36.0f
+#define NV_DETW_BTN_ICON  36.0f
 #define NV_DETW_CIRC       84.0f
 // Os botoes ficam em FLUXO, com 63px entre um e o outro. As posicoes
 // x=439/586/734 que estavam aqui nao sao constantes: sao o que da a conta
@@ -563,20 +563,20 @@
 // botoes vizinhos e 63, e o primario muda de largura com o rotulo — "Retomar
 // T2E3" da 334 no lugar de 298, e tudo a direita anda junto.
 #define NV_DETW_BTN_GAP    63.0f
-#define NV_DETW_ANEL        4.0f   // box-shadow 0 0 0 4px #fff do item focado
-#define NV_DETW_GAP_ACOES  30.0f   // acoes -> "Diretor:"
+#define NV_DETW_RING        4.0f   // box-shadow 0 0 0 4px #fff do item focado
+#define NV_DETW_GAP_ACTIONS  30.0f   // acoes -> "Diretor:"
 #define NV_DETW_GAP_SUP    24.0f   // "Diretor:" -> sinopse
 #define NV_DETW_GAP_SIN    24.0f   // sinopse -> pilha de meta
-#define NV_DETW_TEXTO_W  1040.0f   // largura de sinopse e linha de apoio
+#define NV_DETW_TEXT_W  1040.0f   // largura de sinopse e linha de apoio
 #define NV_DETW_LD_SUP     36.0f   // line-height da linha de apoio
 #define NV_DETW_LD_SIN     39.0f   // line-height da sinopse
-#define NV_DETW_SIN_LINHAS    3    // 117 / 39
+#define NV_DETW_SIN_LINES    3    // 117 / 39
 #define NV_DETW_META_GAP   26.0f   // gap 16 + margin-top 10 da segunda linha
 // Linha de retomada, so quando o titulo tem progresso. MEDIDA na sessao logada
 // (Silo, 45%): 1720x37 em (72,633), fonte 22.66/400 rgba(255,255,255,0.82),
 // entre a linha de acoes e a linha de apoio.
-#define NV_DETW_RETOM_H    37.0f
-#define NV_DETW_GAP_RETOM  22.0f   // acoes -> retomada (633 - 611)
+#define NV_DETW_RESUME_H    37.0f
+#define NV_DETW_GAP_RESUME  22.0f   // acoes -> retomada (633 - 611)
 #define NV_DETW_LD_META    35.0f
 #define NV_DETW_LD_META2   31.0f
 #define NV_DETW_META_SEP   24.0f   // gap do flex, dos dois lados do ponto
@@ -604,25 +604,25 @@
 //                          data 20/400 rgb(179) (margin-top 4)
 //                          passo horizontal 280 (248 + 32)
 //   passo entre fileiras 562.4
-#define NV_BUSCA_HEAD_Y     22.0f
-#define NV_BUSCA_HEAD_H    110.0f
-#define NV_BUSCA_BTN       110.0f
-#define NV_BUSCA_BTN_GAP    48.0f
-#define NV_BUSCA_BTN_ICONE  54.0f
-#define NV_BUSCA_RAIO       22.0f
-#define NV_BUSCA_CAMPO_PADX 32.0f
-#define NV_BUSCA_VAZIO_Y   148.0f
-#define NV_BUSCA_VAZIO_ICO 136.0f
-#define NV_BUSCA_VAZIO_TIT 378.5f
-#define NV_BUSCA_VAZIO_SUB 446.7f
-#define NV_BUSCA_ROW_SUB    55.8f   // topo do titulo -> topo do subtitulo
-#define NV_BUSCA_ROW_TRILHO 92.3f   // topo do titulo -> topo dos cards
-#define NV_BUSCA_ROW_PASSO 562.4f
-#define NV_BUSCA_CARD_W    248.0f
-#define NV_BUSCA_CARD_PASSO 280.0f
-#define NV_BUSCA_POSTER_H  372.0f
-#define NV_BUSCA_NOME_GAP    8.0f
-#define NV_BUSCA_DATA_GAP    4.0f
+#define NV_SEARCH_HEAD_Y     22.0f
+#define NV_SEARCH_HEAD_H    110.0f
+#define NV_SEARCH_BTN       110.0f
+#define NV_SEARCH_BTN_GAP    48.0f
+#define NV_SEARCH_BTN_ICON  54.0f
+#define NV_SEARCH_RADIUS       22.0f
+#define NV_SEARCH_FIELD_PADX 32.0f
+#define NV_SEARCH_EMPTY_Y   148.0f
+#define NV_SEARCH_EMPTY_ICO 136.0f
+#define NV_SEARCH_EMPTY_TITLE 378.5f
+#define NV_SEARCH_EMPTY_SUB 446.7f
+#define NV_SEARCH_ROW_SUB    55.8f   // topo do titulo -> topo do subtitulo
+#define NV_SEARCH_ROW_RAIL 92.3f   // topo do titulo -> topo dos cards
+#define NV_SEARCH_ROW_STEP 562.4f
+#define NV_SEARCH_CARD_W    248.0f
+#define NV_SEARCH_CARD_STEP 280.0f
+#define NV_SEARCH_POSTER_H  372.0f
+#define NV_SEARCH_NAME_GAP    8.0f
+#define NV_SEARCH_DATE_GAP    4.0f
 
 // ---------------------------------------------------------------------------
 // Tela de BIBLIOTECA — MEDIDA no app web rodando.
@@ -649,39 +649,39 @@
 //                        com 24 de gutter), poster 2:3 = 268x402 raio 24 com
 //                        borda de 4px POR DENTRO, titulo 32/500 lh 1.18 a 16 do
 //                        poster; passo de linha 487.8 (455.8 + 32)
-#define NV_BIB_X            96.0f
-#define NV_BIB_Y            48.0f
-#define NV_BIB_W          1728.0f
-#define NV_BIB_DIR        1824.0f
-#define NV_BIB_MODO_Y      136.0f
-#define NV_BIB_MODO_W      150.0f
-#define NV_BIB_MODO_H       56.0f
-#define NV_BIB_MODO_PASSO  182.0f
-#define NV_BIB_PICK_Y      212.0f
-#define NV_BIB_PICK_W      840.0f
-#define NV_BIB_PICK_H      110.0f
-#define NV_BIB_PICK_PASSO  888.0f
-#define NV_BIB_PICK_RAIO    36.0f
-#define NV_BIB_PICK_PADX    28.0f
-#define NV_BIB_PICK_PADY    18.0f
-#define NV_BIB_VAZIO_Y     354.0f
-#define NV_BIB_GRADE_Y     354.0f
-#define NV_BIB_COLUNAS         6
-#define NV_BIB_CARD_W      268.0f
-#define NV_BIB_CARD_GAP     24.0f
-#define NV_BIB_POSTER_H    402.0f
-#define NV_BIB_POSTER_BORDA  4.0f
-#define NV_BIB_TIT_GAP      16.0f
-#define NV_BIB_LINHA_PASSO 487.8f
+#define NV_LIB_X            96.0f
+#define NV_LIB_Y            48.0f
+#define NV_LIB_W          1728.0f
+#define NV_LIB_DIR        1824.0f
+#define NV_LIB_MODE_Y      136.0f
+#define NV_LIB_MODE_W      150.0f
+#define NV_LIB_MODE_H       56.0f
+#define NV_LIB_MODE_STEP  182.0f
+#define NV_LIB_PICK_Y      212.0f
+#define NV_LIB_PICK_W      840.0f
+#define NV_LIB_PICK_H      110.0f
+#define NV_LIB_PICK_STEP  888.0f
+#define NV_LIB_PICK_RADIUS    36.0f
+#define NV_LIB_PICK_PADX    28.0f
+#define NV_LIB_PICK_PADY    18.0f
+#define NV_LIB_EMPTY_Y     354.0f
+#define NV_LIB_GRID_Y     354.0f
+#define NV_LIB_COLUMNS         6
+#define NV_LIB_CARD_W      268.0f
+#define NV_LIB_CARD_GAP     24.0f
+#define NV_LIB_POSTER_H    402.0f
+#define NV_LIB_POSTER_BORDER  4.0f
+#define NV_LIB_TITLE_GAP      16.0f
+#define NV_LIB_LINE_STEP 487.8f
 // `.library-grid-card.focused { transform: scale(1.02) }` com origem no topo —
 // e a UNICA escala de foco que sobrou em qualquer tela deste app, e ela e do
 // web: as outras eram das tabelas de Top Shelf do tvOS e foram removidas.
-#define NV_BIB_FOCO_ESCALA  0.02f
+#define NV_LIB_FOCUS_SCALE  0.02f
 
-#define NV_DET_MARGEM_X  120.0f
-#define NV_DET_MARGEM_Y   38.0f
-#define NV_DET_PAD        44.0f   // medido: texto a 44px da borda do cartao
-#define NV_DET_BOTAO_H    70.0f   // medido: pilula 254x70, raio = h/2
+#define NV_DET_MARGIN_X  120.0f
+#define NV_DET_MARGIN_Y   38.0f
+#define NV_DET_DFLT        44.0f   // medido: texto a 44px da borda do cartao
+#define NV_DET_BUTTON_H    70.0f   // medido: pilula 254x70, raio = h/2
 #define NV_DET_BASE      163.0f   // medido: fim do botao ate a base da tela
 // Altura do logo do titulo. Bate com a altura de tinta medida na referencia
 // (cap 83px), com folga para as letras que descem.
@@ -689,8 +689,8 @@
 #define NV_LOGO_MAX_W    620.0f
 // No cabecalho da pagina o logo aparece menor que no cartao — ali ele e a
 // etiqueta da tela, nao o protagonista.
-#define NV_LOGO_CAB_H     62.0f
-#define NV_LOGO_CAB_MAX_W 420.0f
+#define NV_LOGO_HEADER_H     62.0f
+#define NV_LOGO_HEADER_MAX_W 420.0f
 // Logo dentro do card destaque da home, no tamanho do card sem foco. Ele cresce
 // junto com o card, senao o titulo "descola" da arte ao ganhar foco.
 #define NV_LOGO_CARD_H    54.0f
@@ -701,12 +701,12 @@
 #define NV_DET_PARALLAX  0.12f
 // Quanto a arte cresce ao virar fundo da pagina esticada, e quanto escurece.
 // Os dois juntos e que a transformam de foto em campo de cor.
-#define NV_DET_ZOOM_FUNDO  1.35f
-#define NV_DET_ESCURO_FUNDO 0.62f
+#define NV_DET_ZOOM_BACKGROUND  1.35f
+#define NV_DET_DARK_BACKGROUND 0.62f
 // Nivel de mipmap amostrado no fundo da pagina: quanto maior, mais borrado.
 // Medido: no fundo da pagina NENHUMA estrutura menor que ~250px sobrevive — e
 // praticamente um gradiente de manchas. Bias 5.5 preservava detalhe demais.
-#define NV_BLUR_PASSO       2.4f   // passo do gaussiano, em texels do alvo
+#define NV_BLUR_STEP       2.4f   // passo do gaussiano, em texels do alvo
 // Teto de memoria das texturas. A TV tem cota, e a arte de verdade e grande:
 // um backdrop 1920x1080 ocupa 8 MB depois de decodificado.
 // 72 MB foi o teto posto depois de um "double free" — mas aquele estouro veio
@@ -714,11 +714,11 @@
 // demais. Com o catalogo dinamico sao ~48 titulos x 2 imagens, e a 72 o cache
 // vivia encostado no limite (medido: 70,7 MB com 46 texturas), despejando e
 // rebaixando sem parar — 12 a 15 janks por segundo durante a navegacao.
-#define NV_TEX_ORCAMENTO_MB 96
+#define NV_TEX_BUDGET_MB 96
 // Secoes da pagina do titulo.
-#define NV_ABA_W          236.0f   // medido
-#define NV_ABA_H           63.0f   // medido; capsule (raio = h/2)
-#define NV_ABA_PITCH      277.0f   // medido: texto a texto
+#define NV_TAB_W          236.0f   // medido
+#define NV_TAB_H           63.0f   // medido; capsule (raio = h/2)
+#define NV_TAB_PITCH      277.0f   // medido: texto a texto
 // Medido: miniatura 410x228, texto ABAIXO dela, base da miniatura ao rotulo
 // "EPISODIO n" 18px, e do fim do texto ao proximo cabecalho 143px.
 #define NV_EP_H           512.0f   // miniatura + rotulo + titulo + 5 linhas + data
@@ -728,14 +728,14 @@
 // praticamente zero nos titulos grandes — o oposto do reflexo de apertar
 // titulos que vem do design web. O cabecalho da pagina e a excecao: ele e
 // maiusculo e espacado de proposito, e da para ver isso na foto do aparelho.
-#define NV_TRACKING_CAB     9.0f   // medido contra a captura do aparelho
+#define NV_TRACKING_HEADER     9.0f   // medido contra a captura do aparelho
 // Espacamentos verticais MEDIDOS na pagina expandida.
 // 64 e nao 84: o valor medido (84) e onde comeca a TINTA das maiusculas, e o
 // desenho do texto parte do topo da caixa da linha, uns 20px acima disso.
-#define NV_PG_TOPO         64.0f
-#define NV_PG_TIT_ABAS     82.0f   // base do titulo ao topo das abas
+#define NV_PG_TOP         64.0f
+#define NV_PG_TITLE_TABS     82.0f   // base do titulo ao topo das abas
 #define NV_PG_SEC_CARDS    22.0f   // cabecalho de secao ao topo dos cards
-#define NV_PG_ENTRE_SEC   143.0f   // fim de uma secao ao cabecalho da proxima
+#define NV_PG_BETWEEN_SEC   143.0f   // fim de uma secao ao cabecalho da proxima
 #define NV_ONDE_W         420.0f
 #define NV_ONDE_H         106.0f
 #define NV_SOBRE_H        150.0f

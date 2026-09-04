@@ -1,12 +1,12 @@
 // Exercises the real paged reader with a fake network, including stale responses.
 #include <assert.h>
 #include <unistd.h>
-#include "../src/descoberta.c"
+#include "../src/discover.c"
 static int calls;
 static pthread_mutex_t fakeLock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t fakeCond=PTHREAD_COND_INITIALIZER;
 static int slowStarted,releaseSlow;
-char *rede_baixar(const char *url,int timeout) {
+char *net_download(const char *url,int timeout) {
   (void)timeout;calls++;
   if(strstr(url,"/slow/")) {
     pthread_mutex_lock(&fakeLock);slowStarted=1;pthread_cond_broadcast(&fakeCond);
@@ -20,20 +20,20 @@ char *rede_baixar(const char *url,int timeout) {
   if(strstr(url,"skip=3"))return strdup("{\"metas\":[]}");
   return strdup("{\"metas\":[{\"id\":\"tt1\",\"name\":\"First\",\"poster\":\"1.jpg\"},{\"id\":\"tt2\",\"name\":\"Second\",\"poster\":\"2.jpg\"}]}");
 }
-static void waitDone(void) {for(int i=0;i<2000&&desc_vertudo_carregando();i++)usleep(1000);assert(!desc_vertudo_carregando());}
+static void waitDone(void) {for(int i=0;i<2000&&disc_seeall_loading();i++)usleep(1000);assert(!disc_seeall_loading());}
 int main(void) {
-  desc_vertudo_abrir("https://example.invalid","movie","rank");waitDone();
-  assert(desc_vertudo_n()==2&&!desc_vertudo_fim());
-  desc_vertudo_mais();waitDone();assert(desc_vertudo_n()==3);
-  CatItem i;assert(desc_vertudo_item(2,&i)&&!strcmp(i.imdb,"tt3"));
-  desc_vertudo_mais();waitDone();assert(desc_vertudo_fim());
-  desc_vertudo_abrir("https://example.invalid/slow","movie","slow");
+  disc_seeall_open("https://example.invalid","movie","rank");waitDone();
+  assert(disc_seeall_n()==2&&!disc_seeall_end());
+  disc_seeall_more();waitDone();assert(disc_seeall_n()==3);
+  CatItem i;assert(disc_seeall_item(2,&i)&&!strcmp(i.imdb,"tt3"));
+  disc_seeall_more();waitDone();assert(disc_seeall_end());
+  disc_seeall_open("https://example.invalid/slow","movie","slow");
   pthread_mutex_lock(&fakeLock);while(!slowStarted)pthread_cond_wait(&fakeCond,&fakeLock);pthread_mutex_unlock(&fakeLock);
-  desc_vertudo_abrir("https://example.invalid/new","series","new");
+  disc_seeall_open("https://example.invalid/new","series","new");
   pthread_mutex_lock(&fakeLock);releaseSlow=1;pthread_cond_broadcast(&fakeCond);pthread_mutex_unlock(&fakeLock);
-  waitDone();assert(desc_vertudo_n()==2);assert(desc_vertudo_item(0,&i)&&!strcmp(i.tipo,"series")&&!strcmp(i.imdb,"tt1"));
-  desc_vertudo_abrir("https://example.invalid/error","movie","error");waitDone();assert(desc_vertudo_erro()&&!desc_vertudo_fim());
-  int before=calls;desc_vertudo_mais();waitDone();assert(calls>before);
-  desc_vertudo_abrir("https://example.invalid/empty","movie","empty");waitDone();assert(!desc_vertudo_erro()&&desc_vertudo_fim()&&desc_vertudo_n()==0);
+  waitDone();assert(disc_seeall_n()==2);assert(disc_seeall_item(0,&i)&&!strcmp(i.kind,"series")&&!strcmp(i.imdb,"tt1"));
+  disc_seeall_open("https://example.invalid/error","movie","error");waitDone();assert(disc_seeall_error()&&!disc_seeall_end());
+  int before=calls;disc_seeall_more();waitDone();assert(calls>before);
+  disc_seeall_open("https://example.invalid/empty","movie","empty");waitDone();assert(!disc_seeall_error()&&disc_seeall_end()&&disc_seeall_n()==0);
   puts("collections data: PASS (short pages, rank order, stale tab discarded, retry, empty)");
 }
