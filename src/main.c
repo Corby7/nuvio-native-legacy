@@ -183,6 +183,39 @@ static void videoIfRequested(void) {
   consumeOrBlocks("/tmp/nuvio-video", &blocked);
 }
 
+// Mesmo protocolo do /tmp/nuvio-video, para o RECORTE: escreva oito numeros
+//
+//   sx sy sw sh dx dy dw dh
+//
+// e o app manda esse par fonte/destino ao plano. Existe porque o zoom e a unica
+// parte do video que NAO da para conferir pelo log do pipeline: o uMS nao sabe
+// que houve recorte, quem sabe e o compositor, e o plano nao pode ser
+// fotografado. Sem isto, a unica forma de testar os modos de proporcao e pedir
+// para alguem olhar a TV e descrever o que ve.
+static void rectIfRequested(void) {
+  static time_t blocked;
+  char line[256];
+  FILE *f;
+  if (!requestNew("/tmp/nuvio-rect", &blocked)) return;
+  f = fopen("/tmp/nuvio-rect", "r");
+  if (!f) return;
+  if (fgets(line, sizeof line, f)) {
+    int sx, sy, sw, sh, dx, dy, dw, dh;
+    if (sscanf(line, "%d %d %d %d %d %d %d %d",
+               &sx, &sy, &sw, &sh, &dx, &dy, &dw, &dh) == 8) {
+      printf("[video] rect request: source %d,%d %dx%d -> destination %d,%d %dx%d\n",
+             sx, sy, sw, sh, dx, dy, dw, dh);
+      fflush(stdout);
+      video_window_source(sx, sy, sw, sh, dx, dy, dw, dh);
+    } else {
+      printf("[video] rect request: expected 8 numbers\n");
+      fflush(stdout);
+    }
+  }
+  fclose(f);
+  consumeOrBlocks("/tmp/nuvio-rect", &blocked);
+}
+
 static void captureIfRequested(void) {
   static time_t blocked;
   if (!requestNew("/tmp/nuvio-shot-req", &blocked)) return;
@@ -589,6 +622,7 @@ int main(int argc, char **argv) {
     t0 = NV_T0();
     plane_pump();
     videoIfRequested();
+    rectIfRequested();
     captureIfRequested();
     fAux = NV_DT(t0);
     t0 = NV_T0();

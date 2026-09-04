@@ -52,11 +52,61 @@ laptop on the same network:
   per-session bind to go stale.
 - The interface holds 60.0 fps / 0 janks *while* decoding.
 
-**Still unverified:** that a person sitting in front of the TV sees the picture.
-Nothing in this project can answer that from a terminal — the plane is invisible
-to `glReadPixels` and to the TV's capture service — so every claim above is a
-state-and-log claim. Also unverified on the C3: the zoom/crop modes with a real
-non-identity source region, and HDR or Dolby Vision material of any kind.
+### Codec and HDR support, measured on the C3
+
+Each row played from a laptop over HTTP; the verdict is what the pipeline itself
+reported back in `videoInfo`/`sourceInfo`, with no errors and `currentTime`
+advancing.
+
+| Source | Result |
+|---|---|
+| H.264 8-bit + AAC, MP4 | plays |
+| HEVC 8-bit + AAC, MP4 (`profile main`) | plays |
+| **HEVC 10-bit HDR10, MKV** | **plays, `hdrType: HDR10`** |
+| H.264 + **AC3** 5.1, MKV | plays |
+| H.264 + **E-AC3** 5.1, MKV | plays |
+| H.264 + **DTS** 5.1, MKV | plays |
+| H.264 3840x2160, MP4 | plays |
+
+HDR is real, not just decoded: the mastering-display metadata arrives intact
+(`maxContentLightLevel: 1000`, `maxPicAverageLightLevel: 400`, BT.2020 primaries,
+`transferCharacteristics: 16` = PQ) and the pipeline classifies the stream as
+HDR10 on its own. Nothing in this app asserts an HDR type any more — that was
+the ACB's job and it is gone. The badge shown to the user comes from what the
+pipeline reports, never from what the addon claimed.
+
+Source cropping works: a non-identity `source` region is accepted and applied
+(`[plane] source 480,270 960x540 -> destination 0,0 1920x1080`), which is what
+the zoom modes are built on.
+
+### Known limitation: no request headers
+
+**A source that needs an HTTP header will not play.** The `load` payload carries
+a URI and nothing else, and the pipeline fetches it with its own GStreamer HTTP
+client:
+
+```
+GET /auth/test.mp4 auth=None ua='GStreamer souphttpsrc (compatible; LG NetCast.TV-2013)'
+-> 401
+[video] ev {"error":{"errorCode":40401,"errorText":"server error:40401"}}
+[video] ev {"error":{"errorCode":206,"errorText":"Media Authorized Error"}}
+```
+
+That is measured, not theoretical. It affects debrid or proxied sources that
+authenticate with a header rather than a pre-signed URL. The web app hits the
+same wall — `<video>` cannot attach headers either — and works around it with a
+local proxy that injects them (`js/platform/webos/webosPlaybackProxy.js`); the
+same approach is the fix here.
+
+Useful while debugging: `errorCode 404xx` encodes the HTTP status the pipeline
+got, so `40401` is a 401 and `40403` is a 403/404. That is the difference
+between "the server refused us" and "the pipeline cannot play this".
+
+**Still unverified:** that a person sitting in front of the TV sees the picture,
+and that the cropped rectangle lands where it should. Nothing in this project
+can answer either from a terminal — the plane is invisible to `glReadPixels` and
+to the TV's capture service — so every claim above is a state-and-log claim.
+Dolby Vision is also untested; the `DolbyHdrInfo` opt-in remains off by default.
 
 The package the current tree builds is **~24 MB**, nearly all of it prebaked
 artwork — whoever installs it sees the packager's catalogue before signing in.

@@ -161,6 +161,45 @@ The second line is the one to read when video does not appear. `[plane]` covers
 the exported surface and the window id, `[video]` the LS2 pipeline, and the
 order in which they stop tells you which half failed.
 
+## 1b. Testing playback without anyone on the sofa
+
+Two `/tmp` hooks drive the player directly, so a whole codec matrix runs in ONE
+app session — which matters, because relaunching costs backend quota.
+
+```bash
+# play something
+$SSH 'echo "http://<your-ip>:8099/open/file.mkv" > /tmp/nuvio-video'
+$SSH 'echo "-" > /tmp/nuvio-video'        # stop
+
+# place the plane: sx sy sw sh  dx dy dw dh
+$SSH 'echo "480 270 960 540 0 0 1920 1080" > /tmp/nuvio-rect'   # 2x centre zoom
+```
+
+`/tmp/nuvio-rect` exists because the crop is the one part of playback the
+pipeline log cannot answer for: the uMS does not know a crop happened — the
+compositor does — and the plane cannot be photographed.
+
+**Read the verdict from the pipeline, not from the screen.** `videoInfo` gives
+the codec, dimensions, `hdrType` and the HDR SEI; `sourceInfo` gives the
+container and the audio/video track list. Those two lines say what the TV
+actually negotiated:
+
+```bash
+$SSH 'grep -a videoInfo /tmp/nuvio.log | tail -1'
+$SSH 'grep -a sourceInfo /tmp/nuvio.log | tail -1'
+```
+
+Generate test material with the ffmpeg already in the sibling web checkout
+(`NuvioWeb/node_modules/ffmpeg-static/ffmpeg`) — an HDR10 file needs
+`-pix_fmt yuv420p10le`, `-color_primaries bt2020 -color_trc smpte2084
+-colorspace bt2020nc` and an x265 `master-display=...:max-cll=...` string, or
+the TV correctly reports it as SDR and the test proves nothing.
+
+A file written into `/tmp` over ssh belongs to `prisoner` (uid 5514) while the
+app runs as uid 6435, so the app cannot delete it and logs `cannot be consumed
+(different owner); ignoring`. It still acts on it — writing again with a fresh
+mtime re-triggers — but clean the files up afterwards.
+
 ## 2. Screen capture
 
 The framebuffer cannot be read even as root (`/dev/fb0` →
