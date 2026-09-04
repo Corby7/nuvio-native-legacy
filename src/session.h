@@ -1,23 +1,24 @@
-// A conta: tokens em disco, login de TV por codigo, renovacao e saida.
+// The account: tokens on disk, TV login by code, refresh and sign-out.
 //
-// Este e o modulo que troca os arquivos de segredo do dono (art/trakt.txt,
-// art/addons.txt) por uma sessao de verdade. Enquanto ele nao existir, o .ipk
-// nao pode ser distribuido: ele entrega o token Trakt e as chaves de debrid de
-// quem o montou.
+// This is the module that swaps the owner's secret files (art/trakt.txt,
+// art/addons.txt) for a real session. Until it exists, the .ipk cannot be
+// distributed: it hands over the Trakt token and the debrid keys of whoever
+// built it.
 //
-// FLUXO, lido de js/core/auth/qrLoginService.js. Nao e o login por e-mail e
-// senha do web, e nao por preferencia: o teclado do busca.c so tem "a-z0-9",
-// sem maiuscula, sem "@" e sem ponto. Um e-mail nao e digitavel neste app hoje.
-//   1. sessao ANONIMA (POST /auth/v1/signup; se recusar, /auth/v1/token?
-//      grant_type=anonymous). Sem ela o servidor responde 401 as duas RPC
-//      seguintes.
-//   2. start_tv_login_session -> devolve um CODIGO.
-//   3. a pessoa abre a URL no celular e digita o codigo.
-//   4. poll_tv_login_session ate autorizar.
+// THE FLOW, read from js/core/auth/qrLoginService.js. It is not the web's
+// email-and-password login, and not by preference: the keyboard in search.c only
+// has "a-z0-9", no capitals, no "@" and no dot. An email is not typeable in this
+// app today.
+//   1. an ANONYMOUS session (POST /auth/v1/signup; if refused, /auth/v1/token?
+//      grant_type=anonymous). Without it the server answers 401 to the next two
+//      RPCs.
+//   2. start_tv_login_session -> returns a CODE.
+//   3. the person opens the URL on their phone and types the code.
+//   4. poll_tv_login_session until authorised.
 //   5. /functions/v1/tv-logins-exchange -> access_token + refresh_token.
 //
-// O passo 1 e o que mais surpreende: parece que o login comeca do zero, mas a
-// TV ja precisa estar autenticada como ALGUEM para pedir um codigo.
+// Step 1 is the surprising one: it looks like the login starts from nothing, but
+// the TV already has to be authenticated as SOMEBODY to ask for a code.
 #ifndef NV_SESSION_H
 #define NV_SESSION_H
 
@@ -45,30 +46,30 @@ const char *session_user(void);         // `sub` do JWT; "" quando deslogado
 // enquanto um fluxo estiver em andamento.
 void session_login_begin(void);
 
-// Faz um passo do fluxo. Chamar uma vez por quadro; nao bloqueia. E aqui que o
-// poll e reagendado — nao existe temporizador escondido dentro do modulo.
+// Takes one step of the flow. Call once per frame; does not block. This is where
+// the poll is rescheduled — there is no hidden timer inside the module.
 void session_step(unsigned nowMs);
 
 void session_cancel(void);
 
-// Apaga tokens do disco e da memoria. Depois disto o app volta a nao ter conta
-// nenhuma — e e isso que o usuario espera de "sair".
+// Deletes tokens from disk and from memory. After this the app has no account at
+// all again — and that is what the user expects from "sign out".
 void session_exit(void);
 
-// RPC AUTENTICADA como o usuario. Devolve o corpo (free pelo chamador) ou NULL.
-// Em 401 renova o token e repete UMA vez; se a renovacao falhar, a sessao cai
-// para SES_DESLOGADO em vez de ficar num limbo em que o app parece logado e
-// nada sincroniza. BLOQUEIA — chamar de um fio de sync, nunca do laco de
-// desenho.
+// An RPC AUTHENTICATED as the user. Returns the body (caller frees) or NULL. On a
+// 401 it refreshes the token and retries ONCE; if the refresh fails, the session
+// drops to SESS_LOGGEDOUT rather than sitting in a limbo where the app looks
+// signed in and nothing syncs. BLOCKS — call from a sync thread, never from the
+// draw loop.
 char *session_rpc(const char *func, const char *bodyJson, int *status);
 
-// Mesma coisa para /functions/v1/<nome>.
+// The same thing for /functions/v1/<name>.
 char *session_func(const char *name, const char *bodyJson, int *status);
 
-// LEITURA de tabela como o usuario. Existe porque nem toda superficie tem RPC:
-// a lista de addons so sai da tabela `addons`, e ler com a chave anonima
-// devolve 401 "permission denied for table addons" — o RLS precisa do token de
-// quem esta pedindo para saber quais linhas sao dele.
+// A table READ as the user. It exists because not every surface has an RPC: the
+// addon list only comes from the `addons` table, and reading with the anonymous
+// key returns 401 "permission denied for table addons" — the RLS needs the token
+// of whoever is asking to know which rows are theirs.
 char *session_table(const char *table, const char *query, int *status);
 
 #endif

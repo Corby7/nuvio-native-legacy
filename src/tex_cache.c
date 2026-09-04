@@ -36,7 +36,7 @@ typedef struct {
   // hero era decodificado com metade da resolucao e esticado para 1920 na tela,
   // que e o borrao que o dono viu.
   int limit;
-  unsigned long uso;  // contador LRU
+  unsigned long usage;  // contador LRU
   // Luminancia media dos pixels OPACOS, 0..255; -1 enquanto nao se sabe.
   // Medida uma vez, na thread de decode. Serve ao logo do titulo: o TMDB nao
   // marca claro/escuro em lugar nenhum (o ranking do proprio app web e so
@@ -120,7 +120,7 @@ static SDL_cond *condFree;
 // mais rapido do que dois de decode a esvaziam, entao o descarte virava a regra
 // e nao a excecao. Esperar aqui e o que faz a rede andar no passo do decode em
 // vez de atropela-lo.
-static void paraDecode(int idx) {
+static void forDecode(int idx) {
   for (;;) {
     int next = (decEnd + 1) % MAX_QUEUE;
     if (next != decStart) {
@@ -192,7 +192,7 @@ void tex_new_frame(void) {
 // de suspeitos do quadro de 22ms e as duas foram DESCARTADAS POR MEDIDA; nao
 // vale trocar isto por tabela de hash. O relogio fica atras de NV_PERF_FINO
 // porque custava duas leituras por consulta.
-#ifdef NV_PERF_FINO
+#ifdef NV_PERF_FINE
 #define SEARCH_MEASURE(idx, cam, h) do { \
   if (texFreqMs == 0.0) texFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency(); \
   Uint64 t0_ = SDL_GetPerformanceCounter(); \
@@ -231,7 +231,7 @@ static int findIndex(const char *path, unsigned long h) {
 //
 // Um terco dos slots mantem o fio de decodificacao ocupado e ainda deixa dois
 // tercos para o que ja esta na tela.
-static int emVoo(void) {
+static int inFlight(void) {
   int n = 0;
   for (int i = 0; i < nMax; i++)
     if (items[i].state == PENDING || items[i].state == DECODED) n++;
@@ -239,7 +239,7 @@ static int emVoo(void) {
 }
 
 static int slotFree(void) {
-  if (emVoo() >= nMax / 3) return -1;   // pede de novo no proximo quadro
+  if (inFlight() >= nMax / 3) return -1;   // pede de novo no proximo quadro
   for (int i = 0; i < nMax; i++) if (items[i].state == EMPTY) return i;
   // Slot que ja desistiu vale mais como vaga que um PRONTO em uso: reaproveita
   // antes de despejar arte que esta na tela.
@@ -252,7 +252,7 @@ static int slotFree(void) {
   int best = -1; unsigned long smaller = ~0UL;
   for (int i = 0; i < nMax; i++) {
     if (items[i].state != READY) continue;
-    if (items[i].uso < smaller) { smaller = items[i].uso; best = i; }
+    if (items[i].usage < smaller) { smaller = items[i].usage; best = i; }
   }
   if (best >= 0) {
     if (items[best].tex) { gfx_tex_forget(items[best].tex); glDeleteTextures(1, &items[best].tex); }
@@ -270,7 +270,7 @@ static void prune(void) {
     int best = -1; unsigned long smaller = ~0UL;
     for (int i = 0; i < nMax; i++) {
       if (items[i].state != READY) continue;
-      if (items[i].uso < smaller) { smaller = items[i].uso; best = i; }
+      if (items[i].usage < smaller) { smaller = items[i].usage; best = i; }
     }
     if (best < 0) break;          // so restou o que esta em voo
     if (items[best].tex) { gfx_tex_forget(items[best].tex); glDeleteTextures(1, &items[best].tex); }
@@ -504,7 +504,7 @@ static int threadNet(void *arg) {
       SDL_UnlockMutex(mtx);
       continue;
     }
-    paraDecode(idx);
+    forDecode(idx);
     SDL_UnlockMutex(mtx);
   }
 }
@@ -720,7 +720,7 @@ static GLuint tex_get_limit(const char *path, int limit) {
       int next = (queueEnd + 1) % MAX_QUEUE;
       if (next != queueStart) {
         items[i].state = PENDING;
-        items[i].uso = ++lruClock;
+        items[i].usage = ++lruClock;
         queue[queueEnd] = i; queueEnd = next; SDL_CondSignal(cond);
       }
     }
@@ -730,7 +730,7 @@ static GLuint tex_get_limit(const char *path, int limit) {
   if (i >= 0) {
     items[i].lastFrame = frameCurrent;
     items[i].lastRequest = SDL_GetTicks();
-    items[i].uso = ++lruClock;
+    items[i].usage = ++lruClock;
     // PROMOCAO: a mesma arte pode ser pedida como poster (960) e depois como
     // hero (1920). Se o teto novo e maior e a textura pronta ficou menor que
     // ele, refaz — senao o hero herda para sempre a versao pequena que o card
@@ -758,7 +758,7 @@ static GLuint tex_get_limit(const char *path, int limit) {
       items[new].hash = h;
       items[new].limit = limit;
       items[new].state = PENDING;
-      items[new].uso = ++lruClock;
+      items[new].usage = ++lruClock;
       items[new].lastFrame = frameCurrent;
       items[new].lastRequest = SDL_GetTicks();
       int next = (queueEnd + 1) % MAX_QUEUE;
@@ -820,11 +820,11 @@ int tex_brand_dark(const char *path) {
   return r;
 }
 
-int tex_pump(int max_por_frame) {
+int tex_pump(int max_per_frame) {
   int rose = 0;
   Uint64 start = SDL_GetPerformanceCounter();
   double freq = (double)SDL_GetPerformanceFrequency();
-  for (int step = 0; step < max_por_frame; step++) {
+  for (int step = 0; step < max_per_frame; step++) {
     if (rose > 0 &&
         (double)(SDL_GetPerformanceCounter() - start) * 1000.0 / freq >=
             NV_TEX_UPLOAD_BUDGET_MS)

@@ -1,47 +1,48 @@
-# Rascunho de post — NAO PUBLICADO
+# Post draft — NOT PUBLISHED
 
-Escrito para você revisar e postar. Eu não publico nada.
+Written for you to review and post. I do not publish anything.
 
-**Antes de postar, decida duas coisas:**
+**Before posting, decide two things:**
 
-1. **Atribuição.** O texto abaixo diz "port nativo do Nuvio". Se o Nuvio não é
-   seu, deixe isso explícito e credite quem é. Se é, troque para primeira pessoa.
-2. **Onde.** r/webos e r/LGOLED são os candidatos óbvios; cada um tem regra
-   própria sobre link de download e autopromoção. Leia as regras da barra
-   lateral antes — post removido por regra não volta.
+1. **Attribution.** The text below says "native port of Nuvio". If Nuvio is not
+   yours, make that explicit and credit whoever it belongs to. If it is, switch
+   to first person.
+2. **Where.** r/webos and r/LGOLED are the obvious candidates; each has its own
+   rule about download links and self-promotion. Read the sidebar rules first —
+   a post removed by rule does not come back.
 
-Além disso: **nada aqui foi testado em TV sem root.** O texto já diz isso. Não
-tire essa frase — é ela que evita que alguém instale, o vídeo dê tela preta, e
-você vire o cara que prometeu.
+Also: **nothing here has been tested on a TV without root.** The text already
+says so. Do not remove that line — it is what stops someone installing it,
+getting a black screen for video, and you becoming the person who promised.
 
-## Onde os links entram, e por que não no corpo
+## Where the links go, and why not in the body
 
-Um post anterior no r/Nuvio caiu por **"Reddit's filters"** — antispam do SITE,
-não moderador (a mensagem é diferente de "removed by moderators"). Causa
-provável: idade/karma da conta, ou links demais no corpo.
+An earlier post on r/Nuvio was caught by **"Reddit's filters"** — the SITE's
+antispam, not a moderator (that message differs from "removed by moderators").
+Likely cause: account age/karma, or too many links in the body.
 
-Por isso: **corpo sem link nenhum.** Estes vão no PRIMEIRO COMENTÁRIO:
+So: **no links at all in the body.** These go in the FIRST COMMENT:
 
-- Código: https://github.com/iqui27/nuvio-native-legacy
+- Code: https://github.com/iqui27/nuvio-native-legacy
 - Download (.ipk, 175 MB): https://github.com/iqui27/nuvio-native-legacy/releases/tag/v1.0.1
 
-Se cair mesmo assim, **modmail** pedindo aprovação — o post fica na fila de
-filtrados, não some.
+If it still gets caught, **modmail** asking for approval — the post sits in the
+filtered queue, it does not vanish.
 
-## O vídeo
+## The video
 
-`~/Desktop/nuvio-demo-1080p60.mp4` — 2 min, 1920x1080, **7194 quadros em
-119,98 s = 59,96 fps medidos**. Sobe como vídeo nativo do Reddit; eles
-re-codificam, então não conte com os 60fps sobreviverem ao player deles — é por
-isso que o número está escrito no corpo do post.
+`~/Desktop/nuvio-demo-1080p60.mp4` — 2 min, 1920x1080, **7194 frames in
+119.98 s = 59.96 fps measured**. Upload it as a native Reddit video; they
+re-encode, so do not count on the 60fps surviving their player — which is why
+the number is written into the post body.
 
-E ele mostra **só a interface**: o build do Mac não tem pipeline de vídeo, e na
-TV nenhuma captura por software fotografa o vídeo (plano de hardware). Se
-alguém pedir prova de reprodução, só com captura HDMI.
+And it shows **the interface only**: the Mac build has no video pipeline, and on
+the TV no software capture can photograph the video (hardware plane). If anyone
+asks for proof of playback, that needs an HDMI capture.
 
 ---
 
-## Título (escolha um)
+## Title (pick one)
 
 - Native C/SDL2 port of a streaming app for webOS — 60fps on a 2019 C9
 - I ported a webOS streaming app from JS to native C — 60fps on a 5-year-old OLED
@@ -49,7 +50,7 @@ alguém pedir prova de reprodução, só com captura HDMI.
 
 ---
 
-## Corpo
+## Body
 
 Over the past weeks I ported a webOS streaming app from its JavaScript/Chromium
 build to a native C app on SDL2 + GLES2. It runs on a 2019 LG C9 (webOS 4.10).
@@ -105,12 +106,12 @@ the SDL/GLES setup on a TV this old.
 
 ---
 
-## Se pedirem provas ou imagens
+## If they ask for proof or images
 
-Anexe capturas reais, não montagem. As que já existem nesta sessão: a tela de
-login com QR, a escolha de perfil, a home com Continuar Assistindo, e Ajustes →
-Conta.
+Attach real captures, not a mock-up. The ones that already exist from this
+session: the login screen with the QR, the profile picker, the home with
+Continue Watching, and Settings → Account.
 
-**Cuidado óbvio, e vale repetir:** as capturas da home mostram o SEU acervo,
-os nomes dos SEUS perfis e as atividades dos SEUS amigos no Trakt. Recorte ou
-troque de perfil antes de postar.
+**An obvious caution, worth repeating:** the home captures show YOUR library,
+the names of YOUR profiles and the activity of YOUR friends on Trakt. Crop them
+or switch profile before posting.

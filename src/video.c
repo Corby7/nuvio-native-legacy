@@ -145,8 +145,8 @@ void video_choose_subtitle(int i) { (void)i; }
 void video_subtitle_external(const char *u) { (void)u; }
 void video_subtitle_style(const VideoSubtitleStyle *e) { (void)e; }
 void video_set_mp4(int m) { (void)m; }
-int  video_tem_atmos(void) { return 0; }
-int  video_tem_dolby_vision(void) { return 0; }
+int  video_has_atmos(void) { return 0; }
+int  video_has_dolby_vision(void) { return 0; }
 const char *video_hdr(void) { return "none"; }
 int  video_width(void) { return 0; }
 int  video_height(void) { return 0; }
@@ -227,7 +227,7 @@ static int       vidAtmos, vidDV;
 // Estado do recuo de Dolby Vision (ver o bloco em video_tocar). Declarados
 // AQUI e nao junto da funcao porque o parser do videoInfo, bem acima, marca
 // viuVideo — e no C a ordem de declaracao manda.
-static int       dvInLoad, dvInset, viuVideo;
+static int       dvInLoad, dvInset, sawVideo;
 
 // Faixas lidas do sourceInfo. Guardadas porque a tela precisa delas a cada
 // quadro e reprocessar o JSON no desenho seria desperdicio.
@@ -374,11 +374,11 @@ static void wait_(int ms) { struct timespec t; t.tv_sec = ms / 1000;
 // (SMPTE 2084) — e o par que HDR10 e DV pedem; SDR fica em 2 (unspecified),
 // que e o que sempre foi mandado e toca.
 static void buildVideoDate(char *vd, size_t n, const char *ctx,
-                            const char *htipo, int first, int trans, int matrix) {
+                            const char *hKind, int first, int trans, int matrix) {
   const char *scan = strstr(vidScan, "inter") ? "VIDEO_INTERLACED"
                    : "VIDEO_PROGRESSIVE";
   char color[768] = "";
-  if (!strcmp(htipo, "HDR10")) {
+  if (!strcmp(hKind, "HDR10")) {
     snprintf(color, sizeof color,
       "\"mediaSei\":{\"displayPrimariesX0\":%ld,\"displayPrimariesX1\":%ld,"
       "\"displayPrimariesX2\":%ld,\"displayPrimariesY0\":%ld,"
@@ -391,7 +391,7 @@ static void buildVideoDate(char *vd, size_t n, const char *ctx,
       seiX0, seiX1, seiX2, seiY0, seiY1, seiY2, seiMaxCLL, seiMaxLuma,
       seiMaxFALL, seiMinLuma, seiWhiteX, seiWhiteY,
       first, matrix, trans);
-  } else if (!strcmp(htipo, "none")) {
+  } else if (!strcmp(hKind, "none")) {
     snprintf(color, sizeof color,
       "\"mediaSei\":{\"displayPrimariesX0\":0,\"displayPrimariesX1\":0,"
       "\"displayPrimariesX2\":0,\"displayPrimariesY0\":0,"
@@ -418,7 +418,7 @@ static void buildVideoDate(char *vd, size_t n, const char *ctx,
     "\"path\":\"network\","
     "\"pixelAspectRatio\":{\"height\":1,\"width\":1},"
     "\"rotation\":\"0\",\"scanType\":\"%s\",\"specificRendering\":\"none\""
-    "}}", ctx, vidBits, vidRate, htipo, vidH, vidW, color, scan);
+    "}}", ctx, vidBits, vidRate, hKind, vidH, vidW, color, scan);
 }
 
 static void *prenderPlane(void *u) {
@@ -444,24 +444,24 @@ static void *prenderPlane(void *u) {
     // Enquanto isso nao existia, "none" ia sempre: o C9 exibia o video
     // mapeado em SDR e o modo HDR/DV da TV nunca ligava — exatamente o
     // sintoma do teste 4K.
-    char htipo[24];
+    char hKind[24];
     int first = 2, trans = 2, matrix = 2;
-    if (strcmp(hdrKind, "none")) { snprintf(htipo, sizeof htipo, "%s", hdrKind);
+    if (strcmp(hdrKind, "none")) { snprintf(hKind, sizeof hKind, "%s", hdrKind);
                                   first = vuiFirst; trans = vuiTrans; matrix = vuiMatrix; }
     else if (!strcasecmp(vidHdr, "DolbyVision") || vidDV) {
-                                  snprintf(htipo, sizeof htipo, "DolbyVision"); }
+                                  snprintf(hKind, sizeof hKind, "DolbyVision"); }
     else if (!strcasecmp(vidHdr, "HDR10")) {
-                                  snprintf(htipo, sizeof htipo, "HDR10");
+                                  snprintf(hKind, sizeof hKind, "HDR10");
                                   first = vuiFirst; trans = vuiTrans; matrix = vuiMatrix; }
-    else                           snprintf(htipo, sizeof htipo, "none");
+    else                           snprintf(hKind, sizeof hKind, "none");
     char vd[2048];
-    buildVideoDate(vd, sizeof vd, my, htipo, first, trans, matrix);
+    buildVideoDate(vd, sizeof vd, my, hKind, first, trans, matrix);
     { char ad[160];
       snprintf(ad, sizeof ad,
                "{\"context\":\"%s\",\"audio\":{\"immersive\":\"none\"}}", my);
       int rvd = acbVideoDate(acb, vd, &task);
-      printf("[video] videoData=%d (hdrType=%s)\n", rvd, htipo);
-      if (!strcmp(htipo, "DolbyVision") && !strcasecmp(vidHdr, "HDR10")) {
+      printf("[video] videoData=%d (hdrType=%s)\n", rvd, hKind);
+      if (!strcmp(hKind, "DolbyVision") && !strcasecmp(vidHdr, "HDR10")) {
         // O ACB aceita DolbyVision e a TV acende o badge mesmo quando o
         // demuxer do MKV so entregou a camada HDR10 — nesse caso o plano fica
         // sem imagem. O retorno sincrono nao detecta isso. Depois de negociar
@@ -470,7 +470,7 @@ static void *prenderPlane(void *u) {
         buildVideoDate(vd, sizeof vd, my, "HDR10", vuiFirst, vuiTrans, vuiMatrix);
         printf("[video] MKV DV delivered as HDR10; real fallback: %d\n",
                acbVideoDate(acb, vd, &task));
-      } else if (!strcmp(htipo, "DolbyVision") && !strcasecmp(vidHdr, "none")) {
+      } else if (!strcmp(hKind, "DolbyVision") && !strcasecmp(vidHdr, "none")) {
         // Profile DV que o demuxer desta TV nao reconheceu nem como camada
         // HDR10. O badge liga, mas nao ha quadro DV; voltar a SDR garante
         // imagem. MP4 reconhecido vem como DolbyVision e nao entra aqui.
@@ -478,10 +478,10 @@ static void *prenderPlane(void *u) {
         buildVideoDate(vd, sizeof vd, my, "none", 2, 2, 2);
         printf("[video] DV not recognised by the decoder; SDR fallback: %d\n",
                acbVideoDate(acb, vd, &task));
-      } else if (rvd != 1 && strcmp(htipo, "none")) {
+      } else if (rvd != 1 && strcmp(hKind, "none")) {
         buildVideoDate(vd, sizeof vd, my, "none", 2, 2, 2);
         printf("[video] videoData refused hdrType=%s, retrying without HDR: %d\n",
-               htipo, acbVideoDate(acb, vd, &task));
+               hKind, acbVideoDate(acb, vd, &task));
       }
       printf("[video] audioData=%d\n", acbAudioDate(acb, ad, &task));
       fflush(stdout);
@@ -500,7 +500,7 @@ fora:
   return NULL;
 }
 
-static int aoEvent(LSHandle *h, LSMessage *m, void *u) {
+static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m);
   unsigned mySession = (unsigned)(uintptr_t)u;
   (void)h;
@@ -624,7 +624,7 @@ static int aoEvent(LSHandle *h, LSMessage *m, void *u) {
   }
 
   if (strstr(p, "videoInfo")) {
-    viuVideo = 1;   // fecha o prazo do recuo de DV
+    sawVideo = 1;   // fecha o prazo do recuo de DV
     double v;
     v = numberOf(p, "\"width\":");      if (v > 0) vidW = (int)v;
     v = numberOf(p, "\"height\":");     if (v > 0) vidH = (int)v;
@@ -843,7 +843,7 @@ static void callIn(const char *service, const char *method,
     printf("[video] %s/%s failed\n", service, method);
 }
 
-static int aoLoad(LSHandle *h, LSMessage *m, void *u) {
+static int onLoad(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m), *q;
   char b[256];
   unsigned mySession = (unsigned)(uintptr_t)u;
@@ -873,7 +873,7 @@ static int aoLoad(LSHandle *h, LSMessage *m, void *u) {
   snprintf(b, sizeof b, "{\"connectionId\":\"%s\"}", media);
   call("notifyForeground", b, soLog);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", media);
-  callCtx("subscribe", b, aoEvent, (void *)(uintptr_t)mySession);
+  callCtx("subscribe", b, onEvent, (void *)(uintptr_t)mySession);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"type\":\"video\",\"index\":0}", media);
   call("selectTrack", b, soLog);
   snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", media);
@@ -966,7 +966,7 @@ int video_start(void) {
 // nao reportar videoInfo em NV_DV_PRAZO_MS, recarrega a mesma URL sem o bloco.
 // O custo e alguns segundos no arquivo que nao aceita; o ganho e nunca ficar
 // sem imagem por causa de uma afirmacao nossa.
-#define NV_DV_PRAZO_MS 7000
+#define NV_DV_DEADLINE_MS 7000
 
 
 // --- idioma das legendas lido do proprio arquivo -----------------------------
@@ -1096,7 +1096,7 @@ void video_pump(void) {
   //
   // A funcao fica porque a batida por quadro e util assim que existir um sinal
   // melhor (contador de quadros, ou o proprio perfil lido do MKV).
-  (void)dvInLoad; (void)dvInset; (void)viuVideo;
+  (void)dvInLoad; (void)dvInset; (void)sawVideo;
   (void)msOfLoad; (void)urlCurrent; (void)nowMs; (void)playInternal;
 }
 
@@ -1106,7 +1106,7 @@ static int playInternal(const char *url, int comDV) {
   if (!on && !video_start()) return 0;
   video_stop();
   mySession = ++session;
-  viuVideo = 0;
+  sawVideo = 0;
   // O retangulo aplicado e da SESSAO: sem zerar, uma sessao nova que calcule o
   // mesmo rect cairia no "ja e esse" e nunca chegaria a mandar nada ao plano.
   // (semUms NAO zera: se esta TV nao entende o recorte de fonte, nao passa a
@@ -1201,7 +1201,7 @@ static int playInternal(const char *url, int comDV) {
       "\"uri\":\"%s\",\"type\":\"media\"}", dolby, url);
   printf("[video] URL: %s\n", url); fflush(stdout);
   msOfLoad = nowMs();
-  callCtx("load", load, aoLoad, (void *)(uintptr_t)mySession);
+  callCtx("load", load, onLoad, (void *)(uintptr_t)mySession);
   return 1;
 }
 
@@ -1305,16 +1305,16 @@ void video_window(int x, int y, int w, int h) {
 // tela cheia. Perde-se o zoom, que e um recurso; nao se perde a imagem, que e o
 // filme. Errar para o lado de continuar mostrando video e a unica escolha
 // defensavel enquanto isto nao foi medido.
-static int semUms;   // 1 depois que o uMS recusou o setDisplayWindow
+static int withoutUms;   // 1 depois que o uMS recusou o setDisplayWindow
 
-static int aoWindow(LSHandle *h, LSMessage *m, void *u) {
+static int onWindow(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m);
   (void)h; (void)u;
   printf("[video] setDisplayWindow -> %s\n", p ? p : "(null)");
   fflush(stdout);
   if (p && strstr(p, "\"returnValue\":false")) {
     long task = 0;
-    semUms = 1;
+    withoutUms = 1;
     printf("[video] uMS refused the source crop; falling back to full screen via ACB\n");
     fflush(stdout);
     windowX = windowY = 0; windowW = 1920; windowH = 1080;
@@ -1340,7 +1340,7 @@ void video_window_source(int sx, int sy, int sw, int sh,
   if (sw < 2 || sh < 2 || dw < 1 || dh < 1) return;
   // O uMS ja recusou uma vez nesta sessao: nao insistir. Cada tentativa nova
   // seria outra chance de deixar o plano num estado sem imagem.
-  if (semUms) { video_window(dx, dy, dw, dh); return; }
+  if (withoutUms) { video_window(dx, dy, dw, dh); return; }
   // Destino preso a tela: o mesmo limite que vale para o acbJanela.
   if (dx < 0) { dw += dx; dx = 0; }
   if (dy < 0) { dh += dy; dy = 0; }
@@ -1373,9 +1373,9 @@ void video_window_source(int sx, int sy, int sw, int sh,
     if (r) return;
     printf("[video] acb refused the crop; falling back to full screen\n"); fflush(stdout);
   }
-  semUms = 1;
+  withoutUms = 1;
   video_window(dx, dy, dw, dh);
-  (void)b; (void)aoWindow;
+  (void)b; (void)onWindow;
 }
 
 double video_pos(void)      { return posSeg; }
@@ -1395,7 +1395,7 @@ const VideoTrack *video_audio(int i)   { return (i >= 0 && i < nAudio) ? &trackA
 const VideoTrack *video_subtitle(int i) { return (i >= 0 && i < nSub) ? &trackSub[i] : NULL; }
 int  video_audio_current(void)   { return audioCurrent; }
 int  video_subtitle_current(void) { return subCurrent; }
-int  video_tem_atmos(void)        { return vidAtmos; }
+int  video_has_atmos(void)        { return vidAtmos; }
 // O SELO agora sai do PIPELINE, nao da afirmacao da fonte.
 //
 // `vidDV` e o que o addon AFIRMOU sobre a URL, e continua sendo o que o bind
@@ -1409,7 +1409,7 @@ int  video_tem_atmos(void)        { return vidAtmos; }
 //
 // Antes do videoInfo chegar, vidHdr e "none" e a resposta e 0: nenhum selo por
 // alguns segundos e honesto; um selo que aparece e depois se desmente, nao.
-int  video_tem_dolby_vision(void) {
+int  video_has_dolby_vision(void) {
   return !strcasecmp(vidHdr, "DolbyVision") || !strcasecmp(vidHdr, "dolby_vision");
 }
 // hdrType cru do pipeline, para a tela poder dizer "HDR10" quando for HDR10 em
@@ -1455,11 +1455,11 @@ void video_choose_subtitle(int i) {
 // nada do video anterior. Reaplicado em loadCompleted e sempre que a legenda e
 // (re)selecionada.
 static VideoSubtitleStyle style = { 120, 0, 0, 3, 1, 0, 0, 0 };
-static int temStyle;
+static int hasStyle;
 
 static void applyStyle(void) {
   char b[256];
-  if (!on || !media[0] || !temStyle) return;
+  if (!on || !media[0] || !hasStyle) return;
   /* Embutida ainda pertence ao uMS: reduz o percentual aos cinco degraus. */
   { int p=style.size, t=p<=70?0:p<=100?1:p<=130?2:p<=165?3:4;
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"fontSize\":%d}", media, t);
@@ -1505,11 +1505,11 @@ static void applyStyle(void) {
 void video_subtitle_style(const VideoSubtitleStyle *e) {
   if (!e) return;
   style = *e;
-  temStyle = 1;
+  hasStyle = 1;
   applyStyle();
 }
 
-void video_set_mp4(int ehMp4) { sourceMp4 = ehMp4; }
+void video_set_mp4(int isMp4) { sourceMp4 = isMp4; }
 
 void video_subtitle_external(const char *url) {
   char b[1400], recognizable[1024];

@@ -75,7 +75,7 @@ typedef struct {
   // Ficam no item e nao numa tabela a parte da biblioteca porque o catalogo e
   // reconstruido da rede — uma tabela por indice apontaria para outro titulo
   // depois da primeira atualizacao.
-  int  naList, naCollection;
+  int  inList, inCollection;
   char imdb[16];
   char kind[8];
   // Autoria do feed social, separada dos metadados do filme.
@@ -151,7 +151,7 @@ const CatItem *cat_item(int i);
 // mesma para todo mundo que usar o aparelho. Chamar depois de cat_carregar.
 void cat_dir_writing(const char *dir);
 
-int cat_index_por_imdb(const char *imdb);
+int cat_index_by_imdb(const char *imdb);
 
 // Acrescenta um titulo ao FIM e devolve o indice, ou -1. Para o titulo que veio
 // de fora do catalogo (filmografia de ator, "Mais como este"). Ver a nota sobre
@@ -169,7 +169,7 @@ int cat_append_lote(const CatItem *v, int count, int *outputIdx);
 // Atualiza o espelho local de "esta na watchlist". A verdade e o Trakt, mas
 // esperar o proximo ciclo de descoberta para o botao mudar de cara faria o
 // toque parecer sem efeito.
-void cat_set_na_list(int i, int naList);
+void cat_set_in_list(int i, int inList);
 
 // Grava onde o dono parou NESTE app. Ate agora o progresso so era LIDO (do app
 // web); sem isto, assistir pelo app nativo nao mudava nada na tela.

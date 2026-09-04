@@ -92,7 +92,7 @@ void episodes_event(const SDL_Event *ev) {
   }
 }
 void episodes_update(float dt) {
-  anim = anim_mola(anim, is_open ? 1 : 0, dt, NV_MOLA_SCREEN);
+  anim = anim_spring(anim, is_open ? 1 : 0, dt, NV_SPRING_SCREEN);
   if(!is_open && anim<.005f) return;
   disc_episodes_pending();
   int n = nLines();
@@ -101,20 +101,20 @@ void episodes_update(float dt) {
     locateCurrent=0;
   }
   if (focus >= n) focus = n > 0 ? n - 1 : 0;
-  float area = NV_TELA_H - EP_TOP - 36;
+  float area = NV_SCREEN_H - EP_TOP - 36;
   float max = n * EP_ROW - area;
   float target = scroll;
   if(focus*EP_ROW<scroll) target=focus*EP_ROW;
   if((focus+1)*EP_ROW>scroll+area) target=(focus+1)*EP_ROW-area;
   if (target > max) target = max;
   if (target < 0) target = 0;
-  scroll = anim_mola(scroll, target, dt, NV_MOLA_SCROLL);
+  scroll = anim_spring(scroll, target, dt, NV_SPRING_SCROLL);
 }
 void episodes_draw(void) {
   if (anim < .005f) return;
-  float x = NV_TELA_W - EP_W + (1 - anim) * EP_W;
-  gfx_color((GfxRect){0,0,NV_TELA_W,NV_TELA_H},0,.02f,.02f,.025f,.35f*anim);
-  gfx_color((GfxRect){x,0,EP_W,NV_TELA_H},.025f,.095f,.095f,.10f,anim);
+  float x = NV_SCREEN_W - EP_W + (1 - anim) * EP_W;
+  gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,.02f,.02f,.025f,.35f*anim);
+  gfx_color((GfxRect){x,0,EP_W,NV_SCREEN_H},.025f,.095f,.095f,.10f,anim);
   txt_draw_alpha(txt_line(TXT_PANEL_TITLE,"Episodes",240,241,243,255),x+40,44,anim);
   gfx_color((GfxRect){x+EP_W-146,44,110,50},.3f,group==-1?.94f:.14f,group==-1?.94f:.14f,group==-1?.95f:.15f,anim);
   int color = group == -1 ? 25 : 230;
@@ -131,12 +131,12 @@ void episodes_draw(void) {
     txt_draw_alpha(l,tx+(196-l.w)*.5f,138,anim);
     if (sel && group==0) gfx_color((GfxRect){tx+30,184,136,2},0,.94f,.94f,.95f,anim);
   }
-  gfx_sem_crop();
-  gfx_crop(x+36,EP_TOP,EP_W-72,NV_TELA_H-EP_TOP-32);
+  gfx_no_crop();
+  gfx_crop(x+36,EP_TOP,EP_W-72,NV_SCREEN_H-EP_TOP-32);
   int n=nLines();
   for (int i=0;i<n;i++) {
     float y=EP_TOP+i*EP_ROW-scroll;
-    if (y+EP_ROW<EP_TOP || y>NV_TELA_H-32) continue;
+    if (y+EP_ROW<EP_TOP || y>NV_SCREEN_H-32) continue;
     const CatEp *ep=epLine(i);
     int sel=group==1 && i==focus;
     GfxRect r={x+40,y,EP_W-80,EP_ROW-14};
@@ -166,9 +166,9 @@ void episodes_draw(void) {
   if(!n) txt_block(TXT_PG_END,disc_episodes_loading(title)?
     "Loading episodes…":"Episodes unavailable. Select the season and press OK to try again.",
     196,198,204,x+56,EP_TOP+40,EP_W-112,28,anim,4);
-  gfx_sem_crop();
+  gfx_no_crop();
   if(n) {
     char counter[48];snprintf(counter,sizeof counter,"%d of %d episodes",focus+1,n);
-    txt_draw_alpha(txt_line(TXT_MINI,counter,166,168,174,255),x+40,NV_TELA_H-26,anim);
+    txt_draw_alpha(txt_line(TXT_MINI,counter,166,168,174,255),x+40,NV_SCREEN_H-26,anim);
   }
 }

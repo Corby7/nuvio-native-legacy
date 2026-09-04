@@ -50,7 +50,7 @@
 #define LIB_FILTER_PICK   1
 #define LIB_FILTER_GRID  2
 #define LIB_MAX_LINES (FOCUS_MAX_ROWS - LIB_FILTER_GRID)
-#define LIB_GRID_BASE (NV_TELA_H - NV_MARGIN_Y)
+#define LIB_GRID_BASE (NV_SCREEN_H - NV_MARGIN_Y)
 // Em quantos px um poster desaparece ao subir por baixo do cabecalho. O recorte
 // de tesoura resolveria, mas gfx_recorte assume alvo 1:1 com a tela e o Mac em
 // retina entrega o dobro; o esmaecimento nao depende do drawable.
@@ -96,7 +96,7 @@ static float stepLine(void)  { return NV_LIB_LINE_STEP; }
 static float stepColumn(void) { return NV_LIB_CARD_W + NV_LIB_CARD_GAP; }
 static int   nLines(void)     { return (nFilter + NV_LIB_COLUMNS - 1) / NV_LIB_COLUMNS; }
 
-static int ehSeries(const CatItem *ci) {
+static int isSeries(const CatItem *ci) {
   return ci && (!strcmp(ci->kind, "series") || ci->nSeasons > 0
                 || ci->season > 0);
 }
@@ -126,12 +126,12 @@ static void rebuild(void) {
     // a marca "salvo" migrava sozinha para um filme que ninguem salvou. A marca
     // tem de viver no item, e vive (CatItem.naLista / .naColecao, preenchidos
     // com a lista de verdade do Trakt).
-    int enters = (mode == MODE_SAVED) ? ci->naList
-                                      : (ci->naCollection || bought[i]);
+    int enters = (mode == MODE_SAVED) ? ci->inList
+                                      : (ci->inCollection || bought[i]);
     if (!enters) continue;
     totalMode++;
-    if (kind == KIND_MOVIE && ehSeries(ci)) continue;
-    if (kind == KIND_SERIES && !ehSeries(ci)) continue;
+    if (kind == KIND_MOVIE && isSeries(ci)) continue;
+    if (kind == KIND_SERIES && !isSeries(ci)) continue;
     // `hideUnreleasedContent`: sem ano em `meta` o titulo ainda nao estreou do
     // ponto de vista do catalogo, e a preferencia manda escondê-lo.
     if (settings_hide_unreleased() && !ci->meta[0]) continue;
@@ -190,12 +190,12 @@ int library_start(void) {
 
 void library_shutdown(void) { }
 
-int library_na_list(int i) {
+int library_in_list(int i) {
   // A verdade e a marca DO ITEM, que a descoberta preenche com a watchlist do
   // Trakt. O vetor por indice que respondia aqui apontava para outro titulo
   // assim que o catalogo era reconstruido.
   const CatItem *c = cat_item(i);
-  return c ? c->naList : 0;
+  return c ? c->inList : 0;
 }
 int library_bought(int i) { return (i >= 0 && i < CAT_MAX) ? bought[i] : 0; }
 void library_toggle_list(int i) {
@@ -272,21 +272,21 @@ void library_update(float dt, Uint32 now) {
   (void)now;
   for (int a = 0; a < LIB_N_MODES; a++) {
     float target = (focus.row == LIB_FILTER_MODE && focus.column == a) ? 1.0f : 0.0f;
-    animMode[a] = anim_mola(animMode[a], target, dt,
-                            target > animMode[a] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+    animMode[a] = anim_spring(animMode[a], target, dt,
+                            target > animMode[a] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
   for (int p = 0; p < 2; p++) {
     float target = (focus.row == LIB_FILTER_PICK && focus.column == p) ? 1.0f : 0.0f;
-    animPick[p] = anim_mola(animPick[p], target, dt,
-                            target > animPick[p] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+    animPick[p] = anim_spring(animPick[p], target, dt,
+                            target > animPick[p] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
   int lines = nLines();
   if (lines > LIB_MAX_LINES) lines = LIB_MAX_LINES;
   for (int r = 0; r < lines; r++)
     for (int c = 0; c < NV_LIB_COLUMNS; c++) {
       float target = focus_index(&focus, LIB_FILTER_GRID + r, c) ? 1.0f : 0.0f;
-      animFocus[r][c] = anim_mola(animFocus[r][c], target, dt,
-                                 target > animFocus[r][c] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+      animFocus[r][c] = anim_spring(animFocus[r][c], target, dt,
+                                 target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
   // Rola o MINIMO para a linha focada caber inteira na area util. Com o foco no
@@ -301,7 +301,7 @@ void library_update(float dt, Uint32 now) {
     target = 0.0f;
   }
   if (target < 0.0f) target = 0.0f;
-  scrollY = anim_mola(scrollY, target, dt, NV_MOLA_SCROLL);
+  scrollY = anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
 }
 
 // Pilula de modo. Escolhida sem foco fica com fundo #303030 e borda branca; com
@@ -382,7 +382,7 @@ void library_draw(Uint32 now) {
   (void)now;
   // Fundo opaco proprio: a biblioteca cobre a tela inteira e nao pode contar com
   // quem desenhou antes dela.
-  GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
   // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
   // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill
@@ -431,7 +431,7 @@ void library_draw(Uint32 now) {
   for (int passe = 0; passe < 2; passe++)
     for (int r = 0; r < lines; r++) {
       float top = NV_LIB_GRID_Y + r * stepL - scrollY;
-      if (top > NV_TELA_H || top + heightLine() < -80.0f) continue;
+      if (top > NV_SCREEN_H || top + heightLine() < -80.0f) continue;
       // O que sobe para baixo do cabecalho some antes de cruza-lo: sem o
       // esmaecimento, poster e seletor se leem um sobre o outro.
       float a = anim_clamp((top - (NV_LIB_PICK_Y + NV_LIB_PICK_H * 0.5f)) / LIB_FADE,

@@ -29,7 +29,7 @@ int  extras_votes_trakt(void);
 // a fileira mostra so as duas que temos por conta propria.
 typedef enum {
   EX_TRAKT, EX_IMDB, EX_TMDB, EX_TOMATOES, EX_AUDIENCE, EX_METACRITIC,
-  EX_LETTERBOXD, EX_NFONTES
+  EX_LETTERBOXD, EX_NSOURCES
 } ExSource;
 
 // Le art/mdblist.txt. Sem ele o modulo funciona com Trakt e IMDb apenas.

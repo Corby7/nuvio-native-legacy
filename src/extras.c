@@ -9,13 +9,13 @@
 #include <stdlib.h>
 
 static int  scoreTrakt, votesTrakt;
-static int  scores[EX_NFONTES];
+static int  scores[EX_NSOURCES];
 static char mdbKey[80];
 static char dirArtEx[512];
 
 // Nome do provedor na api do mdbList E nome do arquivo de marca em art/marcas.
 // A ordem e a do enum, que e a do renderExternalRatingsRow do web.
-static const char *SOURCE[EX_NFONTES] = {
+static const char *SOURCE[EX_NSOURCES] = {
   "trakt", "imdb", "tmdb", "tomatoes", "audience", "metacritic", "letterboxd"
 };
 
@@ -32,7 +32,7 @@ static const char *SOURCE[EX_NFONTES] = {
 // (metaDetailsScreen.js:732) imprime o numero como veio, entao la o TMDB
 // aparece como "70.0" ao lado de um IMDb "6.2". Aqui o TMDB vira "70%", que e
 // o que o numero de fato e.
-static int emTenths(double v) {
+static int inTenths(double v) {
   int n = (int)(v * 10.0 + 0.5);
   if (n < 0) n = 0;
   if (n > 1000) n = 1000;
@@ -67,10 +67,10 @@ void extras_load(const char *dirArt) {
 }
 
 int extras_score(int source) {
-  return (source >= 0 && source < EX_NFONTES) ? scores[source] : 0;
+  return (source >= 0 && source < EX_NSOURCES) ? scores[source] : 0;
 }
 const char *extras_source_brand(int source) {
-  return (source >= 0 && source < EX_NFONTES) ? SOURCE[source] : "";
+  return (source >= 0 && source < EX_NSOURCES) ? SOURCE[source] : "";
 }
 
 const char *extras_path_brand(int source) {
@@ -79,7 +79,7 @@ const char *extras_path_brand(int source) {
   // relativo o arquivo simplesmente nao era achado e o cartao saia sem logo,
   // sem erro nenhum. O catalogo ja faz assim (catalogo.c:79).
   static char cam[600];
-  if (source < 0 || source >= EX_NFONTES) return "";
+  if (source < 0 || source >= EX_NSOURCES) return "";
   snprintf(cam, sizeof cam, "%s/brands/%s.png", dirArtEx, SOURCE[source]);
   return cam;
 }
@@ -174,7 +174,7 @@ static void finishSearch(const char *id) {
 
 // O Trakt devolve a nota como fracao de 0 a 10 com casas ("7.83521"); o resto
 // do app guarda nota em 0..100 inteiro, como o campo `nota` do catalogo.
-static int para100(double v) {
+static int to100(double v) {
   int n = (int)(v * 10.0 + 0.5);
   if (n < 0) n = 0;
   if (n > 100) n = 100;
@@ -190,7 +190,7 @@ static void numaLine(char *s) {
 
 static void *fetch(void *arg) {
   const char *header[4];
-  char aut[200], key[140], url[200], id[24];
+  char auth[200], key[140], url[200], id[24];
   const char *kind;
   char *body;
   int series;
@@ -204,7 +204,7 @@ static void *fetch(void *arg) {
   kind = series ? "shows" : "movies";
   pthread_mutex_unlock(&lock);
 
-  if (!trakt_headers(header, aut, sizeof aut, key, sizeof key)) {
+  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) {
     finishSearch(id);
     return NULL;
   }
@@ -279,7 +279,7 @@ static void *fetch(void *arg) {
   snprintf(url, sizeof url, "https://api.trakt.tv/%s/%s/ratings", kind, id);
   body = net_download_com(url, 12, header);
   if (body) {
-    int n = para100(js_num(body, NULL, "rating", 0.0));
+    int n = to100(js_num(body, NULL, "rating", 0.0));
     int v = (int)js_num(body, NULL, "votes", 0.0);
     free(body);
     pthread_mutex_lock(&lock);
@@ -324,7 +324,7 @@ static void *fetch(void *arg) {
     headerJ[0] = kj; headerJ[1] = NULL; headerJ[2] = NULL;
     snprintf(bodyPost, sizeof bodyPost,
              "{\"ids\":[\"%s\"],\"provider\":\"imdb\"}", id);
-    for (k = 0; k < EX_NFONTES; k++) {
+    for (k = 0; k < EX_NSOURCES; k++) {
       char u[300], *rp;
       snprintf(u, sizeof u, "https://api.mdblist.com/rating/%s/%s?apikey=%s",
                series ? "show" : "movie", SOURCE[k], mdbKey);
@@ -333,7 +333,7 @@ static void *fetch(void *arg) {
       { double v = js_num(rp, NULL, "rating", -1.0);
         free(rp);
         if (v >= 0.0) {
-          int c = emTenths(v);
+          int c = inTenths(v);
           pthread_mutex_lock(&lock);
           if (!strcmp(id, idRequest)) scores[k] = c;
           pthread_mutex_unlock(&lock);
@@ -654,9 +654,9 @@ static void *fetch(void *arg) {
   }
 
   { int k, q = 0;
-    for (k = 0; k < EX_NFONTES; k++) if (scores[k]) q++;
+    for (k = 0; k < EX_NSOURCES; k++) if (scores[k]) q++;
     printf("[extras] %s -> scores=%d/%d comments=%d rel=%d seasons=%d\n", id, q,
-           EX_NFONTES, nComment, nRel, nSeasons); }
+           EX_NSOURCES, nComment, nRel, nSeasons); }
   printf("[extras] collection \"%s\" -> %d | rel[0] poster=%s\n", colName, nCol,
          nRel ? rel[0].poster : "(none)"); fflush(stdout);
   fflush(stdout);
@@ -717,7 +717,7 @@ int extras_comment_likes(int i) {
 
 static void *fetchEpComment(void *arg) {
   const char *header[4];
-  char aut[200], key[140], url[260], show[24];
+  char auth[200], key[140], url[260], show[24];
   char *body;
   int t, e;
   (void)arg;
@@ -727,7 +727,7 @@ static void *fetchEpComment(void *arg) {
   t = epReqTemp; e = epReqNum;
   pthread_mutex_unlock(&lock);
 
-  if (!trakt_headers(header, aut, sizeof aut, key, sizeof key)) {
+  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) {
     pthread_mutex_lock(&lock); epThreadAlive = 0; pthread_mutex_unlock(&lock);
     return NULL;
   }

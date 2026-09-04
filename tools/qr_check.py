@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""Confere o gerador de QR DECODIFICANDO o que ele desenha.
+"""Checks the QR generator by DECODING what it draws.
 
-Comparar com outra implementacao nao serve como prova: dois simbolos podem
-diferir modulo a modulo (enchimento diferente, outra mascara escolhida) e os
-dois serem validos. O que importa e uma so pergunta — um leitor de verdade le?
-Por isso a conferencia decodifica com o OpenCV em vez de comparar matrizes.
+Comparing against another implementation is not proof: two symbols can differ
+module by module (different padding, a different mask chosen) and both be valid.
+Only one question matters — does a real reader read it? So this check decodes
+with OpenCV instead of comparing matrices.
 
-Isto NAO e paranoia: um QR errado nao da erro. Ele desenha, fica bonito na
-tela, os localizadores estao no lugar, e nenhum celular decodifica. Foi
-exatamente o que aconteceu aqui — a ordem dos bits do formato estava invertida
-e so o decodificador acusou.
+This is NOT paranoia: a wrong QR raises no error. It draws, it looks fine on
+screen, the finder patterns are in place, and no phone decodes it. That is
+exactly what happened here — the format bits were in reverse order and only the
+decoder caught it.
 
-Preparo (uma vez):
+Setup (once):
     python3 -m venv /tmp/qrvenv && /tmp/qrvenv/bin/pip install opencv-python-headless numpy
 
-Uso:
-    cc tools/qr_despejo.c src/qr.c -o /tmp/qr_despejo -Isrc
-    /tmp/qrvenv/bin/python tools/qr_conferir.py /tmp/qr_despejo
+Usage:
+    cc tools/qr_dump.c src/qr.c -o /tmp/qr_dump -Isrc
+    /tmp/qrvenv/bin/python tools/qr_check.py /tmp/qr_dump
 """
 import subprocess
 import sys
@@ -24,66 +24,66 @@ import sys
 import cv2
 import numpy as np
 
-# Um caso por motivo, nao por capricho:
-CASOS = [
-    "https://nuvio.tv/tv-login?code=fa0010cad8b5d2f512e58646ab82ca6b",  # o caso real
-    "https://nuvio.tv/tv-login?code=00000000000000000000000000000000",  # dados quase todos iguais
-    "A",                    # a menor entrada possivel
+# One case per reason, not per whim:
+CASES = [
+    "https://nuvio.tv/tv-login?code=fa0010cad8b5d2f512e58646ab82ca6b",  # the real case
+    "https://nuvio.tv/tv-login?code=00000000000000000000000000000000",  # data almost all identical
+    "A",                    # the smallest possible input
     "HELLO WORLD",
     "12345678901234567",
-    "x" * 53,               # ultimo que cabe na versao 3
-    "y" * 54,               # o primeiro que forca a versao 4
-    "z" * 78,               # ultimo da versao 4
-    "w" * 106,              # versao 5
-    "k" * 134,              # versao 6, o limite do modulo
+    "x" * 53,               # the last that fits in version 3
+    "y" * 54,               # the first that forces version 4
+    "z" * 78,               # the last of version 4
+    "w" * 106,              # version 5
+    "k" * 134,              # version 6, the module's limit
 ]
-# Acima do limite o app TEM de recusar em vez de desenhar algo truncado.
-CASOS_QUE_DEVEM_FALHAR = ["q" * 135, ""]
+# Above the limit the app MUST refuse rather than draw something truncated.
+CASES_THAT_MUST_FAIL = ["q" * 135, ""]
 
 
-def matriz(binario, texto):
-    saida = subprocess.run([binario, texto], capture_output=True, text=True)
-    linhas = saida.stdout.strip().splitlines()
-    if not linhas or linhas[0].startswith("nao coube"):
+def matrix(binary, text):
+    output = subprocess.run([binary, text], capture_output=True, text=True)
+    lines = output.stdout.strip().splitlines()
+    if not lines or lines[0].startswith("did not fit"):
         return None
-    return [l.strip() for l in linhas[1:]]
+    return [l.strip() for l in lines[1:]]
 
 
-def decodificar(m, escala=8, quieta=4):
-    lado = len(m)
-    img = np.full((lado + 2 * quieta, lado + 2 * quieta), 255, dtype=np.uint8)
-    img[quieta:quieta + lado, quieta:quieta + lado] = np.array(
-        [[0 if c == "1" else 255 for c in linha] for linha in m], dtype=np.uint8
+def decode(m, scale=8, quiet=4):
+    side = len(m)
+    img = np.full((side + 2 * quiet, side + 2 * quiet), 255, dtype=np.uint8)
+    img[quiet:quiet + side, quiet:quiet + side] = np.array(
+        [[0 if c == "1" else 255 for c in line] for line in m], dtype=np.uint8
     )
-    img = cv2.resize(img, None, fx=escala, fy=escala, interpolation=cv2.INTER_NEAREST)
-    texto, _, _ = cv2.QRCodeDetector().detectAndDecode(img)
-    return texto
+    img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
+    text, _, _ = cv2.QRCodeDetector().detectAndDecode(img)
+    return text
 
 
 def main():
-    binario = sys.argv[1] if len(sys.argv) > 1 else "/tmp/qr_despejo"
-    falhas = 0
-    for texto in CASOS:
-        m = matriz(binario, texto)
-        rot = texto if len(texto) <= 34 else f"{texto[:10]}…({len(texto)}B)"
+    binary = sys.argv[1] if len(sys.argv) > 1 else "/tmp/qr_dump"
+    failures = 0
+    for text in CASES:
+        m = matrix(binary, text)
+        label = text if len(text) <= 34 else f"{text[:10]}…({len(text)}B)"
         if m is None:
-            print(f"FALHA  {rot}: o app recusou, mas isto cabe")
-            falhas += 1
+            print(f"FAIL   {label}: the app refused it, but this fits")
+            failures += 1
             continue
-        lido = decodificar(m)
-        if lido == texto:
-            print(f"ok     {rot}: {len(m)}x{len(m)} decodificado igual")
+        read = decode(m)
+        if read == text:
+            print(f"ok     {label}: {len(m)}x{len(m)} decoded identically")
         else:
-            print(f"FALHA  {rot}: {len(m)}x{len(m)} decodificou como {lido[:34]!r}")
-            falhas += 1
-    for texto in CASOS_QUE_DEVEM_FALHAR:
-        if matriz(binario, texto) is None:
-            print(f"ok     ({len(texto)}B): recusado, como esperado")
+            print(f"FAIL   {label}: {len(m)}x{len(m)} decoded as {read[:34]!r}")
+            failures += 1
+    for text in CASES_THAT_MUST_FAIL:
+        if matrix(binary, text) is None:
+            print(f"ok     ({len(text)}B): refused, as expected")
         else:
-            print(f"FALHA  ({len(texto)}B): devia ter sido recusado")
-            falhas += 1
-    print("\n" + ("TODOS LEGIVEIS" if not falhas else f"{falhas} FALHA(S)"))
-    return 1 if falhas else 0
+            print(f"FAIL   ({len(text)}B): should have been refused")
+            failures += 1
+    print("\n" + ("ALL READABLE" if not failures else f"{failures} FAILURE(S)"))
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

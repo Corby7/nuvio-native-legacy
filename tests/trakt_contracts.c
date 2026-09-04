@@ -28,9 +28,9 @@ char *net_post_st(const char *url, int seconds, const char *const *header,
   return strdup("");
 }
 
-int cat_index_por_imdb(const char *imdb) { return !strcmp(imdb, "tt1234567") ? 0 : -1; }
-void cat_set_na_list(int index_, int naList) { (void)index_; (void)naList; }
-const char *cat_kind_por_imdb(const char *imdb) { (void)imdb; return "movie"; }
+int cat_index_by_imdb(const char *imdb) { return !strcmp(imdb, "tt1234567") ? 0 : -1; }
+void cat_set_in_list(int index_, int inList) { (void)index_; (void)inList; }
+const char *cat_kind_by_imdb(const char *imdb) { (void)imdb; return "movie"; }
 void cat_history_set_id(const char *imdb, const char *kind, int watched) {
   (void)imdb; (void)kind; (void)watched;
 }

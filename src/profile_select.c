@@ -80,7 +80,7 @@ static void *threadVerify(void *u) {
 static void choose(int i) {
   const AccountProfile *p = profiles_item(i);
   if (!p) return;
-  if (p->temPin) { pinOf = i; pin[0] = 0; pinFocus = 0; pinWrong = pinNet = 0; return; }
+  if (p->hasPin) { pinOf = i; pin[0] = 0; pinFocus = 0; pinWrong = pinNet = 0; return; }
   profiles_set_active(p->index_);
   done = 1;
 }
@@ -146,8 +146,8 @@ void profilesel_update(float dt, Uint32 now) {
   int reduced=settings_animations_reduced();
   for (i = 0; i < ACCOUNT_PROFILE_MAX; i++) {
     float target = (i == focus && pinOf < 0) ? 1.0f : 0.0f;
-    animFocus[i] = anim_mola(animFocus[i], target, dt,
-                            target > animFocus[i] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+    animFocus[i] = anim_spring(animFocus[i], target, dt,
+                            target > animFocus[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     if(reduced)animFocus[i]=target;
   }
   { int result = atomic_load(&resultPin);
@@ -192,37 +192,37 @@ static void drawPin(void) {
   static const char *ROT[12] = { "0","1","2","3","4","5","6","7","8","9","←","OK" };
   const AccountProfile *p = profiles_item(pinOf);
   float widthGrid = 5 * PS_KEY + 4 * PS_KEY_GAP;
-  float x0 = (NV_TELA_W - widthGrid) * 0.5f;
+  float x0 = (NV_SCREEN_W - widthGrid) * 0.5f;
   float y0 = 520.0f;
   int i;
   char mascara[PS_PIN_MAX + 1];
   size_t n = strlen(pin), k;
 
-  { GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, 0.0f, 0.0f, 0.0f, 0.72f); }
 
   { char t[128];
     TxtLine l;
     snprintf(t, sizeof t, "PIN de %s", p ? p->name : "profile");
     l = txt_line(TXT_TITLE3, t, 255, 255, 255, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, 350.0f); }
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 350.0f); }
 
   // Pontos, nunca os digitos: alguem passando na sala nao precisa ler o PIN.
   for (k = 0; k < n && k < PS_PIN_MAX; k++) mascara[k] = '*';
   mascara[k] = 0;
   { TxtLine l = txt_line(TXT_TITLE1, n ? mascara : "—", 255, 255, 255, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, 420.0f); }
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 420.0f); }
 
   if (pinNet) {
     TxtLine l = txt_line(TXT_BODY, "No connection. Try again.", 236, 150, 150, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, 480.0f);
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 480.0f);
   } else if (pinWrong) {
     TxtLine l = txt_line(TXT_BODY, "PIN incorreto", 236, 108, 108, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, 480.0f);
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 480.0f);
   }
   if (verifying) {
     TxtLine l = txt_line(TXT_BODY, "checking…", 176, 178, 186, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, 480.0f);
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 480.0f);
   }
 
   for (i = 0; i < 12; i++) {
@@ -242,11 +242,11 @@ void profilesel_draw(Uint32 now) {
   float widthTotal, x, y;
   (void)now;
 
-  { GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f); }
 
   { TxtLine t = txt_line(TXT_TITLE1, "Who is watching?", 255, 255, 255, 255);
-    txt_draw(t, (NV_TELA_W - t.w) * 0.5f, 200.0f); }
+    txt_draw(t, (NV_SCREEN_W - t.w) * 0.5f, 200.0f); }
 
   // Enquanto a lista nao chega, dizer isso. Uma tela com titulo e nada abaixo
   // le como travamento.
@@ -256,12 +256,12 @@ void profilesel_draw(Uint32 now) {
       "Loading the profiles on your account…";
     TxtLine e = txt_line(TXT_BODY, msg,
                            160, 162, 170, 255);
-    txt_draw(e, (NV_TELA_W - e.w) * 0.5f, 430.0f);
+    txt_draw(e, (NV_SCREEN_W - e.w) * 0.5f, 430.0f);
     return;
   }
 
   widthTotal = PS_COLS * PS_AVATAR + (PS_COLS - 1) * PS_GAP;
-  x = (NV_TELA_W - widthTotal) * 0.5f;
+  x = (NV_SCREEN_W - widthTotal) * 0.5f;
   for (i = 0; i < n; i++) {
     const AccountProfile *p = profiles_item(i);
     float f = animFocus[i];
@@ -294,7 +294,7 @@ void profilesel_draw(Uint32 now) {
       name = txt_line_trim(TXT_BODY, p->name, c, c, c, 255, PS_AVATAR + PS_GAP); }
     txt_draw(name, px + (PS_AVATAR - name.w) * 0.5f, y + PS_AVATAR + 20.0f);
 
-    if (p->temPin) {
+    if (p->hasPin) {
       // A PALAVRA, nao um cadeado. O emoji U+1F512 nao existe na fonte
       // embarcada e sai como retangulo vazio — a mesma armadilha que gfx.h ja
       // registra sobre o U+25B6 ("depender do glifo da fonte e loteria"), e na
@@ -307,7 +307,7 @@ void profilesel_draw(Uint32 now) {
   { TxtLine d = txt_line(TXT_CAPTION,
                            "Arrows: move  ·  OK: choose",
                            182,184,194,255);
-    txt_draw(d,(NV_TELA_W-d.w)*.5f,870.0f); }
+    txt_draw(d,(NV_SCREEN_W-d.w)*.5f,870.0f); }
 
   if (pinOf >= 0) drawPin();
 }

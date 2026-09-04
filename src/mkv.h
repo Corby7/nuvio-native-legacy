@@ -1,20 +1,20 @@
-// Leitura do CABECALHO de um Matroska, so para descobrir o idioma das faixas.
+// Reading a Matroska HEADER, only to discover the tracks' languages.
 //
-// POR QUE ISTO EXISTE. O pipeline da LG devolve, no sourceInfo, o idioma de
-// cada faixa de AUDIO ("en", "es", "fr", "it") e NENHUM idioma de legenda:
-// medido num arquivo do dono com 43 legendas, todas com
-// "language":"(null)", e os unicos campos do subtitleTrackInfo sao trackNum,
-// language, type e periodStart. Nao ha outro campo para ler — a informacao
-// simplesmente nao sai do pipeline.
+// WHY THIS EXISTS. The LG pipeline returns, in sourceInfo, the language of every
+// AUDIO track ("en", "es", "fr", "it") and NO subtitle language: measured on a
+// file of the owner's with 43 subtitles, all of them "language":"(null)", and
+// the only fields in subtitleTrackInfo are trackNum, language, type and
+// periodStart. There is no other field to read — the information simply does not
+// come out of the pipeline.
 //
-// O app web mostra os idiomas porque o NAVEGADOR demuxa o arquivo por conta
-// propria e expoe textTracks. Este modulo faz a mesma coisa em pequeno: baixa
-// os primeiros megabytes por Range e le o elemento Tracks do EBML.
+// The web app shows the languages because the BROWSER demuxes the file itself
+// and exposes textTracks. This module does the same thing in miniature: it
+// downloads the first few megabytes by Range and reads the EBML Tracks element.
 //
-// NAO E UM DEMUXER. Nao decodifica nada, nao segue Cues, nao le Clusters. Anda
-// pela arvore de elementos ate Segment > Tracks e para. Qualquer coisa que nao
-// case com o esperado faz a leitura desistir em silencio — o chamador continua
-// com "Legenda N", que e o que havia antes.
+// IT IS NOT A DEMUXER. It decodes nothing, follows no Cues, reads no Clusters.
+// It walks the element tree as far as Segment > Tracks and stops. Anything that
+// does not match what it expects makes the read give up silently — the caller
+// carries on with "Subtitle N", which is what there was before.
 #ifndef NV_MKV_H
 #define NV_MKV_H
 
@@ -28,9 +28,9 @@ typedef struct {
   char codec[24];     // CodecID ("S_TEXT/UTF8", "S_HDMV/PGS")
 } MkvTrack;
 
-// Le o cabecalho de `url` e preenche `saida`. Devolve quantas faixas achou, 0
-// quando nao deu (nao e MKV, servidor sem Range, cabecalho maior que o trecho).
-// BLOQUEIA: chamar de um fio proprio.
+// Reads `url`'s header and fills `out`. Returns how many tracks it found, 0 when
+// it did not work (not an MKV, a server without Range, a header larger than the
+// chunk). BLOCKS: call from a thread of your own.
 int mkv_tracks(const char *url, MkvTrack *output, int max);
 
 #endif

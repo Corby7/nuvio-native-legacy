@@ -1,43 +1,66 @@
 #!/bin/bash
-# Le local.properties (o MESMO file do app web) e imprime os -D que a
-# compilacao precisa. Nada de segredo enters em file de code: o value viaja
-# da propriedade direto para a line de comando do compilador.
+# Reads local.properties (the SAME file as the web app) and prints the -D flags
+# the build needs. No secret goes into a source file: the value travels from the
+# property straight to the compiler's command line.
 #
-# A anon key do Supabase e publica por projeto — e o que o RLS waits receive, e
-# o app web ja a publica no bundle. Quem NAO pode enter no pacote e o que hoje
-# esta em art/trakt.txt e art/addons.txt: aquilo e credencial de PESSOA.
+# The Supabase anon key is public per project — it is what the RLS expects to
+# receive, and the web app already publishes it in its bundle. What must NOT go
+# into the package is what lives in art/trakt.txt and art/addons.txt today: that
+# is a PERSON's credential.
 #
 #   eval "cc src/*.c $(tools/env.sh) ..."
 set -e
 
-PROP="${NUVIO_PROPERTIES:-$(cd "$(dirname "$0")/../.." && pwd)/NuvioWeb-0.3.38-beta/local.properties}"
+# The sibling web checkout has been called both NuvioWeb-0.3.38-beta and
+# NuvioWeb. Try each in turn rather than hard-coding one: getting this wrong
+# fails SILENTLY, and the only symptom is a login screen with no server.
+if [ -z "${NUVIO_PROPERTIES:-}" ]; then
+  PARENT=$(cd "$(dirname "$0")/../.." && pwd)
+  for candidate in "$PARENT/NuvioWeb-0.3.38-beta" "$PARENT/NuvioWeb"; do
+    if [ -f "$candidate/local.properties" ]; then
+      NUVIO_PROPERTIES="$candidate/local.properties"
+      break
+    fi
+  done
+fi
+PROP="${NUVIO_PROPERTIES:-}"
 
+# The same setting has two spellings across the checkouts (NUVIO_SUPABASE_URL in
+# the older one, SUPABASE_URL in the newer). Accept either: a missing value here
+# produces a build that runs and cannot log in, which is the hardest kind of
+# failure to attribute.
 value() {
   [ -f "$PROP" ] || return 0
-  sed -n "s/^$1=//p" "$PROP" | head -1 | tr -d '\r'
+  for key in "$@"; do
+    v=$(sed -n "s/^$key=//p" "$PROP" | head -1 | tr -d '\r')
+    if [ -n "$v" ]; then printf '%s' "$v"; return 0; fi
+  done
+  return 0
 }
 
-URL=$(value NUVIO_SUPABASE_URL)
-KEY=$(value NUVIO_SUPABASE_ANON_KEY)
-TVB=$(value TV_LOGIN_WEB_BASE_URL)
+URL=$(value NUVIO_SUPABASE_URL SUPABASE_URL)
+KEY=$(value NUVIO_SUPABASE_ANON_KEY SUPABASE_ANON_KEY)
+TVB=$(value TV_LOGIN_WEB_BASE_URL TV_LOGIN_REDIRECT_BASE_URL)
 TRK=$(value TRAKT_CLIENT_ID)
 TRS=$(value TRAKT_CLIENT_SECRET)
 SMK=$(value SIMKL_CLIENT_ID)
 SMA=$(value SIMKL_APP_NAME)
 
 if [ -z "$URL" ] || [ -z "$KEY" ]; then
-  # Falhar em silencio produziria um .ipk que abre, mostra a screen de login e
-  # nunca sai dela. O warning vai para stderr para nao sujar os -D no stdout.
-  echo "env.sh: sem NUVIO_SUPABASE_URL/ANON_KEY em $PROP -- o app vai compilar SEM login" >&2
+  # Failing silently would produce an .ipk that opens, shows the login screen
+  # and never leaves it. The warning goes to stderr so it does not pollute the
+  # -D flags on stdout.
+  echo "env.sh: no SUPABASE URL/ANON_KEY in ${PROP:-<no local.properties found>} -- the app will build WITHOUT login" >&2
 fi
 
-# --env-file: escreve as variaveis num file para o `docker run --env-file`.
-# Existe porque a compilacao ARM roda DENTRO de um container: passar os -D na
-# line de comando exigiria aspas dentro de aspas dentro de `sh -c`, e o error
-# ali e mudo — o compilador recebe a macro empty e o app sai SEM LOGIN, que foi
-# exatamente o que aconteceu no first deploy para a TV.
+# --env-file: writes the variables to a file for `docker run --env-file`.
+# It exists because the ARM build runs INSIDE a container: passing the -D flags
+# on the command line would need quotes inside quotes inside `sh -c`, and the
+# failure there is silent — the compiler receives an empty macro and the app
+# ships WITHOUT LOGIN, which is exactly what happened on the first deploy to the
+# TV.
 if [ "$1" = "--env-file" ]; then
-  [ -n "$2" ] || { echo "env.sh --env-file precisa do path" >&2; exit 2; }
+  [ -n "$2" ] || { echo "env.sh --env-file needs a path" >&2; exit 2; }
   {
     printf 'NV_SUPABASE_URL=%s\n' "$URL"
     printf 'NV_SUPABASE_ANON_KEY=%s\n' "$KEY"

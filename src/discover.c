@@ -192,7 +192,7 @@ static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
 
 // Definida adiante, junto do resto do parse de meta do Stremio; declarada aqui
 // porque a busca, logo abaixo, monta CatItem a partir da mesma resposta.
-static int deMeta(const char *start, const char *end, const char *kind, CatItem *d);
+static int ofMeta(const char *start, const char *end, const char *kind, CatItem *d);
 
 // --- BUSCA POR TITULO --------------------------------------------------------
 //
@@ -245,7 +245,7 @@ static int readSearch(const char *kind, const char *term, CatItem *output,
   p = js_array(body, NULL, "metas");
   while (p && n < max) {
     const char *f = js_end(p);
-    if (deMeta(p, f, kind, &output[n])) n++;
+    if (ofMeta(p, f, kind, &output[n])) n++;
     p = js_next(f);
   }
   free(body);
@@ -262,7 +262,7 @@ static int readSearch(const char *kind, const char *term, CatItem *output,
 // Antes so o Cinemeta era consultado, e era isso que o dono via como "nao ta
 // procurando em todos os catalogos" — porque de fato nao estava.
 #define SEARCH_TARGETS  16
-#define SEARCH_POR_TARGET 12          // uma fileira por alvo, 12 cabem na tela
+#define SEARCH_PER_TARGET 12          // uma fileira por alvo, 12 cabem na tela
 #define SEARCH_THREADS    3            // quantos alvos em voo ao mesmo tempo
 
 typedef struct {
@@ -280,7 +280,7 @@ static int       nTargets;
 // numa lista unica) e o que permite uma fileira por catalogo, com a origem, e o
 // que deixa a tela mostrar o primeiro que responder sem esperar o mais lento.
 static struct {
-  CatItem items[SEARCH_POR_TARGET];
+  CatItem items[SEARCH_PER_TARGET];
   int     n;
   int     generation;
 } resTarget[SEARCH_TARGETS];
@@ -340,7 +340,7 @@ static int queryTarget(const TargetSearch *a, const char *term,
   p = js_array(body, NULL, "metas");
   while (p && n < max) {
     const char *f = js_end(p);
-    if (deMeta(p, f, a->kind, &output[n])) n++;
+    if (ofMeta(p, f, a->kind, &output[n])) n++;
     p = js_next(f);
   }
   free(body);
@@ -352,8 +352,8 @@ static void *threadSearch(void *arg) {
   for (;;) {
     TargetSearch a;
     char term[96];
-    int meu, g;
-    CatItem found[SEARCH_POR_TARGET];
+    int mine, g;
+    CatItem found[SEARCH_PER_TARGET];
     int n;
 
     pthread_mutex_lock(&searchLock);
@@ -362,21 +362,21 @@ static void *threadSearch(void *arg) {
       pthread_mutex_unlock(&searchLock);
       return NULL;
     }
-    meu = nextTarget++;
-    a = targets[meu];
+    mine = nextTarget++;
+    a = targets[mine];
     g = generation;
     snprintf(term, sizeof term, "%s", searchRequest);
     pthread_mutex_unlock(&searchLock);
 
-    n = queryTarget(&a, term, found, SEARCH_POR_TARGET);
+    n = queryTarget(&a, term, found, SEARCH_PER_TARGET);
 
     pthread_mutex_lock(&searchLock);
     // Geracao velha = o dono digitou outra coisa enquanto isto voltava. O
     // resultado nasceu obsoleto; descartar e mais barato que mostrar e trocar.
     if (g == generation) {
-      memcpy(resTarget[meu].items, found, sizeof(CatItem) * (size_t)n);
-      resTarget[meu].n = n;
-      resTarget[meu].generation = g;
+      memcpy(resTarget[mine].items, found, sizeof(CatItem) * (size_t)n);
+      resTarget[mine].n = n;
+      resTarget[mine].generation = g;
       snprintf(searchTerm, sizeof searchTerm, "%s", term);
     }
     pthread_mutex_unlock(&searchLock);
@@ -470,7 +470,7 @@ int disc_searching(void) {
 
 // Um item do catalogo montado a partir de um meta do Stremio. Devolve 1 se
 // deu para aproveitar (precisa de nome e de alguma arte).
-static int deMeta(const char *start, const char *end, const char *kind, CatItem *d) {
+static int ofMeta(const char *start, const char *end, const char *kind, CatItem *d) {
   char v[900];
   memset(d, 0, sizeof *d);
   if (!js_text(start, end, "name", d->title, sizeof d->title)) return 0;
@@ -576,7 +576,7 @@ static int readCatalog(const char *base, const char *kind, const char *id,
   p = js_array(body, NULL, "metas");
   while (p && n < max && n < count) {
     const char *f = js_end(p);
-    if (deMeta(p, f, kind, &output[n])) n++;
+    if (ofMeta(p, f, kind, &output[n])) n++;
     p = js_next(f);
   }
   free(body);
@@ -600,7 +600,7 @@ static int readCatalog(const char *base, const char *kind, const char *id,
 #define DECL_MAX 256
 // Quantos itens cada fileira mostra. A home desenha no maximo MAX_CARDS (12) e
 // buscar mais e trafego que ninguem ve.
-#define MAX_POR_ROW 12
+#define MAX_PER_ROW 12
 
 static CatRow filtersBuilt[CAT_FILTER_MAX];
 static int nRowsBuilt;
@@ -682,13 +682,13 @@ static int off(const Decl *d) {
 // E por isso que a home mostra "For You - Filme" e nao "for you".
 static void formatTitle(const char *name, const char *kind, char *dst, size_t size) {
   const char *label = strcmp(kind, "series") ? "Film" : "S\xc3\xa9rie";
-  const char *cru    = strcmp(kind, "series") ? "Movie" : "Series";
-  size_t ln = strlen(name), lr = strlen(label), lc = strlen(cru);
-  int jaTem = 0;
+  const char *raw    = strcmp(kind, "series") ? "Movie" : "Series";
+  size_t ln = strlen(name), lr = strlen(label), lc = strlen(raw);
+  int alreadyHas = 0;
   if (!name[0]) { snprintf(dst, size, "%s", label); return; }
-  if (ln >= lr && !strcasecmp(name + ln - lr, label)) jaTem = 1;
-  if (ln >= lc && !strcasecmp(name + ln - lc, cru))    jaTem = 1;
-  if (jaTem) snprintf(dst, size, "%s", name);
+  if (ln >= lr && !strcasecmp(name + ln - lr, label)) alreadyHas = 1;
+  if (ln >= lc && !strcasecmp(name + ln - lc, raw))    alreadyHas = 1;
+  if (alreadyHas) snprintf(dst, size, "%s", name);
   else       snprintf(dst, size, "%s - %s", name, label);
   if (dst[0] >= 'a' && dst[0] <= 'z') dst[0] = (char)(dst[0] - 32);
 }
@@ -787,7 +787,7 @@ static int readManifest(const char *base, Decl *output, int max) {
 
 typedef struct {
   const Decl *d;
-  CatItem items[MAX_POR_ROW];
+  CatItem items[MAX_PER_ROW];
   int  n;
   int  ready;
 } TaskCat;
@@ -799,20 +799,20 @@ static pthread_mutex_t catLock = PTHREAD_MUTEX_INITIALIZER;
 static void *threadCatalog(void *u) {
   (void)u;
   for (;;) {
-    int meu, got;
+    int mine, got;
     const Decl *d;
     pthread_mutex_lock(&catLock);
     if (nextTask >= nTasks) { pthread_mutex_unlock(&catLock); return NULL; }
-    meu = nextTask++;
-    d = tasks[meu].d;
+    mine = nextTask++;
+    d = tasks[mine].d;
     pthread_mutex_unlock(&catLock);
 
-    got = readCatalog(d->base, d->kind, d->id, tasks[meu].items,
-                      MAX_POR_ROW, MAX_POR_ROW);
+    got = readCatalog(d->base, d->kind, d->id, tasks[mine].items,
+                      MAX_PER_ROW, MAX_PER_ROW);
 
     pthread_mutex_lock(&catLock);
-    tasks[meu].n = got;
-    tasks[meu].ready = 1;
+    tasks[mine].n = got;
+    tasks[mine].ready = 1;
     pthread_mutex_unlock(&catLock);
   }
 }
@@ -917,7 +917,7 @@ static void *build(void *u) {
     // para o app inteiro so porque o Xperience, lido antes, declara 605
     // catalogos. lerManifesto ja para de GRAVAR sozinho quando enche.
     for (i = 0; i < addons_n(); i++) {
-      if (!addons_tem_catalog(i)) continue;
+      if (!addons_has_catalog(i)) continue;
       nDecl += readManifest(addons_base(i), decls + nDecl, DECL_MAX - nDecl);
     }
     printf("[disc] %d catalogues declared by the addons\n", nDecl);
@@ -989,7 +989,7 @@ static void *build(void *u) {
           }
           got = tasks[k].n;
           if (!got) continue;   // fileira vazia nao vira titulo pendurado
-          ENSURES(MAX_POR_ROW + 2);
+          ENSURES(MAX_PER_ROW + 2);
           if (got > cap - n) got = cap - n;
           if (got <= 0) continue;
           memcpy(lote + n, tasks[k].items, sizeof(CatItem) * (size_t)got);
@@ -1087,7 +1087,7 @@ void disc_start(void) {
 // transferencia inteira. Quatro respostas cobrem a navegacao normal de ida e
 // volta sem deixar o uso de memoria crescer sem limite.
 #define META_CACHE_N 4
-static struct { char id[24]; char *body; unsigned uso; } metaCache[META_CACHE_N];
+static struct { char id[24]; char *body; unsigned usage; } metaCache[META_CACHE_N];
 static unsigned metaClock;
 static pthread_mutex_t metaLock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1096,7 +1096,7 @@ static char *metaCacheGet(const char *id) {
   pthread_mutex_lock(&metaLock);
   for (int i = 0; i < META_CACHE_N; i++)
     if (metaCache[i].body && !strcmp(metaCache[i].id, id)) {
-      metaCache[i].uso = ++metaClock;
+      metaCache[i].usage = ++metaClock;
       r = strdup(metaCache[i].body); /* o fio trabalha em copia estavel */
       break;
     }
@@ -1111,11 +1111,11 @@ static void metaCacheStore(const char *id, const char *body) {
   pthread_mutex_lock(&metaLock);
   for (int i = 0; i < META_CACHE_N; i++) {
     if (metaCache[i].body && !strcmp(metaCache[i].id, id)) { slot = i; break; }
-    if (!metaCache[i].body || metaCache[i].uso < metaCache[slot].uso) slot = i;
+    if (!metaCache[i].body || metaCache[i].usage < metaCache[slot].usage) slot = i;
   }
   free(metaCache[slot].body);
   metaCache[slot].body = copy;
-  metaCache[slot].uso = ++metaClock;
+  metaCache[slot].usage = ++metaClock;
   snprintf(metaCache[slot].id, sizeof metaCache[slot].id, "%s", id);
   pthread_mutex_unlock(&metaLock);
 }
@@ -1177,7 +1177,7 @@ static void *fetchEps(void *u) {
   // nota — antes so os titulos enriquecidos no catalogo tinham elenco, e a
   // pagina do filme abria sem a fileira. O que e so de serie (episodios,
   // temporadas) e pulado abaixo.
-  int ehMovie = strcmp(orig->kind, "series") != 0;
+  int isMovie = strcmp(orig->kind, "series") != 0;
   base = *orig;
   it = &base;
   { const char *dp;
@@ -1185,7 +1185,7 @@ static void *fetchEps(void *u) {
     dp = strchr(series, ':');
     if (dp) *(char *)dp = 0;
     snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA,
-             ehMovie ? "movie" : "series", series); }
+             isMovie ? "movie" : "series", series); }
 
   body = metaCacheGet(series);
   mark(body ? "episodes: meta from cache" : "episodes: downloading meta");
@@ -1195,7 +1195,7 @@ static void *fetchEps(void *u) {
     if (!body) { threadEpAlive = 0; return NULL; }
     metaCacheStore(series, body);
   }
-  if (!ehMovie) publishEpisodes(body, targetItem, it->title);
+  if (!isMovie) publishEpisodes(body, targetItem, it->title);
   // A MESMA resposta traz elenco, direcao e a lista de temporadas. Buscar de
   // novo para cada uma seria tres viagens ao mesmo lugar.
   {
@@ -1351,7 +1351,7 @@ static void *threadSeeAll(void *u) {
   for(const char *p=first;p;p=js_next(js_end(p))) {
     const char *f=js_end(p);raw++;
     CatItem it;
-    if (deMeta(p, f, type, &it)) {
+    if (ofMeta(p, f, type, &it)) {
       pthread_mutex_lock(&seeallLock);
       int duplicate=0;
       for(int i=0;i<seeallN;i++)if(it.imdb[0]&&!strcmp(seeallItems[i].imdb,it.imdb)&&!strcmp(seeallItems[i].kind,it.kind)){duplicate=1;break;}
@@ -1486,7 +1486,7 @@ static void *fetchTitle(void *arg) {
       sobIndex = -1; sobThreadAlive = 0; return NULL;
     }
     // Ja temos? Entao e so abrir.
-    { int j = cat_index_por_imdb(id);
+    { int j = cat_index_by_imdb(id);
       if (j >= 0) { sobIndex = j; sobThreadAlive = 0; return NULL; } }
   }
 
@@ -1497,7 +1497,7 @@ static void *fetchTitle(void *arg) {
     if (!body) continue;
     { const char *m = strstr(body, "\"meta\"");
       CatItem it;
-      if (m && deMeta(m, NULL, kind, &it)) {
+      if (m && ofMeta(m, NULL, kind, &it)) {
         // O id do proprio pedido manda: o Cinemeta as vezes devolve o campo
         // vazio, e sem ele o titulo entraria no catalogo sem chave e nao
         // poderia ser reaberto nem casar com progresso.
@@ -1533,7 +1533,7 @@ void disc_request_title(const char *imdb) {
             if (k >= sizeof id) k = sizeof id - 1;
             memcpy(id, imdb, k); id[k] = 0; }
   else snprintf(id, sizeof id, "%s", imdb);
-  if (cat_index_por_imdb(id) >= 0) return;   // ja temos
+  if (cat_index_by_imdb(id) >= 0) return;   // ja temos
   snprintf(sobId, sizeof sobId, "%s", id);
   sobTmdb = 0;
   sobIndex = -1;

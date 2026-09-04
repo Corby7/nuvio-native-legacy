@@ -1,8 +1,8 @@
-// Tela de perfil e estatisticas do Trakt.
+// The Trakt profile and statistics screen.
 //
-// O modulo e deliberadamente "burro" sobre rede: ele recebe um snapshot de
-// dados pronto, guarda uma copia e desenha. Isso permite ao app buscar Trakt em
-// uma worker sem jamais bloquear o quadro de SDL/GLES da TV.
+// The module is deliberately "stupid" about the network: it receives a finished
+// data snapshot, keeps a copy and draws. That lets the app fetch Trakt on a
+// worker without ever blocking the TV's SDL/GLES frame.
 #ifndef NV_PROFILE_H
 #define NV_PROFILE_H
 
@@ -52,8 +52,8 @@ typedef struct {
   ProfileGenre genres[PROFILE_MAX_GENRES];
   int nHighlights;
   ProfileHighlight highlights[PROFILE_MAX_HIGHLIGHTS];
-  // Zero e o padrao seguro para produtores antigos. O snapshot mensal nao
-  // comprova cobertura anual nem uma sequencia que cruza a virada do mes.
+  // Zero is the safe default for older producers. A monthly snapshot proves
+  // neither annual coverage nor a streak that crosses the turn of the month.
   int partial;
   int yearComplete;
   int streakComplete;
@@ -66,14 +66,14 @@ typedef enum {
   PROFILE_STATE_READY,
   PROFILE_STATE_STALE,
   PROFILE_STATE_ERROR,
-  PROFILE_STATE_SEM_ACTIVITY,
+  PROFILE_STATE_NO_ACTIVITY,
   PROFILE_STATE_PRIVATE,
   PROFILE_STATE_DISCONNECTED,
   PROFILE_STATE_UNAVAILABLE
 } ProfileState;
 
-// Identificador opaco de uma obra selecionada. O roteador resolve o item no
-// catalogo atual antes de abrir o detalhe, sem inventar metadados.
+// An opaque identifier for a selected title. The router resolves the item in the
+// current catalogue before opening the detail, without inventing metadata.
 typedef struct {
   char id[64];
   char title[128];
@@ -90,12 +90,14 @@ void profile_close(void);
 int  profile_is_open(void);
 int  profile_wants_exit(void);       // consome o pedido de voltar
 
-// Enquanto carrega, a tela preserva a estrutura com esqueletos. Um snapshot
-// NULL/sem atividade produz o estado vazio, nunca numeros inventados.
+// While loading, the screen preserves the structure with skeletons. A NULL
+// snapshot, or one with no activity, produces the empty state — never invented
+// numbers.
 void profile_set_loading(int loading);
 void profile_set_data(const ProfileData *data);
-// Preserva o ultimo snapshot ao falhar uma atualizacao. Sem snapshot, OK
-// pede nova tentativa. O chamador faz a rede e consome a flag abaixo.
+// Preserves the last snapshot when an update fails. With no snapshot, OK asks
+// for another attempt. The caller does the network work and consumes the flag
+// below.
 void profile_set_error(const char *message);
 void profile_set_state(ProfileState state, const char *message);
 ProfileState profile_state(void);
@@ -105,8 +107,9 @@ void profile_event(const SDL_Event *e);
 void profile_update(float dt, Uint32 now);
 void profile_draw(Uint32 now);
 
-// Retorna 1 uma vez apos OK num destaque. `saida`, se nao NULL, recebe copia
-// estavel do item para o app abrir detalhes sem depender do storage interno.
+// Returns 1 once after OK on a highlight. `out`, if not NULL, receives a stable
+// copy of the item so the app can open the detail without depending on internal
+// storage.
 int profile_item_selected(ProfileHighlight *output);
 
 #endif

@@ -23,7 +23,7 @@ int  seeall_is_open(void);
 void seeall_event(const SDL_Event *e);
 void seeall_update(float dt, Uint32 now);
 void seeall_draw(Uint32 now);
-// Indice no catalogo global do titulo que o dono abriu, ou -1. Consumido uma
-// vez: o roteador chama, abre o detalhe e a tela se fecha.
+// Index in the global catalogue of the title the owner opened, or -1. Consumed
+// once: the router calls, opens the detail and the screen closes.
 int  seeall_requested_open(void);
 #endif

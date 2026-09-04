@@ -50,7 +50,7 @@
 // de descoberta nesta tela nativa. O campo ocupa toda a largura disponivel.
 #define SEARCH_HEAD_Y     NV_SEARCH_HEAD_Y
 #define SEARCH_HEAD_H     NV_SEARCH_HEAD_H
-#define SEARCH_DIR       (NV_TELA_W - NV_CONTENT_DFLT)   // 1816
+#define SEARCH_DIR       (NV_SCREEN_W - NV_CONTENT_DFLT)   // 1816
 
 // --- Teclado (divergencia deliberada; ver o topo) ----------------------------
 #define SEARCH_KEY_W     74.0f
@@ -68,9 +68,9 @@
 // --- Fileiras de resultado (geometria do web) --------------------------------
 #define SEARCH_RES_X       (SEARCH_KB_X + SEARCH_KB_W + 64.0f)
 #define SEARCH_RES_Y       NV_SEARCH_EMPTY_Y
-#define SEARCH_RES_AREA_H  (NV_TELA_H - NV_MARGIN_Y - SEARCH_RES_Y)
+#define SEARCH_RES_AREA_H  (NV_SCREEN_H - NV_MARGIN_Y - SEARCH_RES_Y)
 #define SEARCH_MAX_ROWS FOCUS_MAX_ROWS
-#define SEARCH_MAX_POR_FILTER  12
+#define SEARCH_MAX_PER_FILTER  12
 
 #define SEARCH_KB_X        NV_CONTENT_DFLT
 
@@ -86,18 +86,18 @@ static char queryFiltered[SEARCH_MAX_QUERY];
 static struct {
   const char *title;      // nome do catalogo ("Top 100 Today - Filme")
   const char *origin;      // "from <addon>"; vazio quando nao se sabe
-  int items[SEARCH_MAX_POR_FILTER];
+  int items[SEARCH_MAX_PER_FILTER];
   int n;
 } filter[SEARCH_MAX_ROWS];
 static int nFilter = 0;
 static int sair = 0;
 static int request = -1;             // indice de catalogo escolhido, -1 = nenhum
 static float animKey[SEARCH_KB_ROWS][SEARCH_KB_COLS];
-static float animRes[SEARCH_MAX_ROWS][SEARCH_MAX_POR_FILTER];
+static float animRes[SEARCH_MAX_ROWS][SEARCH_MAX_PER_FILTER];
 static float scrollY = 0.0f, scrollTarget = 0.0f;
 static float scrollX[SEARCH_MAX_ROWS];
 static HomeItem itemFocus;
-static int   temItemFocus = 0;
+static int   hasItemFocus = 0;
 
 static const int KB_COLUMNS[SEARCH_KB_ROWS] = { 6, 6, 6, 6, 6, 6, 3 };
 // Minusculas como no aparelho: o campo mostra o que foi digitado, e uma consulta
@@ -182,27 +182,27 @@ static void refilter(void) {
   // seria abrivel.
   { int targetIdx, nTargets = disc_search_n_targets();
     for (targetIdx = 0; targetIdx < nTargets && nFilter < SEARCH_MAX_ROWS; targetIdx++) {
-      int nRem = disc_search_target_n(targetIdx, target), i;
+      int nRemote = disc_search_target_n(targetIdx, target), i;
       // DOIS PASSOS, e a separacao e o conserto: primeiro junta os que ainda
       // NAO estao no catalogo, depois acrescenta TODOS numa troca de bloco so.
       //
       // Antes era cat_acrescentar por resultado, e cada chamada copia o
       // catalogo inteiro: com 300 titulos, ~2,3 MB por copia, ate 40 vezes, no
       // fio de DESENHO, a cada tecla digitada. A busca engasgava por isso.
-      CatItem new[SEARCH_MAX_POR_FILTER];
-      int idxNew[SEARCH_MAX_POR_FILTER];
+      CatItem new[SEARCH_MAX_PER_FILTER];
+      int idxNew[SEARCH_MAX_PER_FILTER];
       int found = 0, nNew = 0;
-      int posNew[SEARCH_MAX_POR_FILTER];   // onde cada novo entra em fil[].itens
-      if (nRem <= 0) continue;
-      for (i = 0; i < nRem && found < SEARCH_MAX_POR_FILTER; i++) {
+      int posNew[SEARCH_MAX_PER_FILTER];   // onde cada novo entra em fil[].itens
+      if (nRemote <= 0) continue;
+      for (i = 0; i < nRemote && found < SEARCH_MAX_PER_FILTER; i++) {
         CatItem it;
         int idx;
         if (!disc_search_target_item(targetIdx, i, &it)) continue;
         // Ja esta no catalogo? Reaproveita o indice em vez de duplicar o card.
-        idx = it.imdb[0] ? cat_index_por_imdb(it.imdb) : -1;
+        idx = it.imdb[0] ? cat_index_by_imdb(it.imdb) : -1;
         if (idx >= 0) {
           filter[nFilter].items[found++] = idx;
-        } else if (nNew < SEARCH_MAX_POR_FILTER) {
+        } else if (nNew < SEARCH_MAX_PER_FILTER) {
           new[nNew] = it;
           posNew[nNew] = found++;   // reserva o lugar; o indice vem depois
           nNew++;
@@ -235,7 +235,7 @@ static void refilter(void) {
     const CatRow *cf = cat_row(r);
     if (!cf) break;
     int found = 0;
-    for (int i = 0; i < cf->n && found < SEARCH_MAX_POR_FILTER; i++) {
+    for (int i = 0; i < cf->n && found < SEARCH_MAX_PER_FILTER; i++) {
       const CatItem *ci = cat_item(cf->start + i);
       if (!ci) continue;
       char title[320];
@@ -314,7 +314,7 @@ int search_start(void) {
   nQuery = 0; query[0] = 0;
   queryFiltered[0] = 0;
   scrollY = scrollTarget = 0.0f;
-  temItemFocus = 0;
+  hasItemFocus = 0;
   memset(animKey, 0, sizeof animKey);
   memset(animRes, 0, sizeof animRes);
   memset(scrollX, 0, sizeof scrollX);
@@ -322,7 +322,7 @@ int search_start(void) {
   return 1;
 }
 
-void search_shutdown(void) { temItemFocus = 0; }
+void search_shutdown(void) { hasItemFocus = 0; }
 int  search_wants_exit(void) { return sair; }
 
 int search_requested_open(int *indexCatalog) {
@@ -333,7 +333,7 @@ int search_requested_open(int *indexCatalog) {
 }
 
 int search_item_focused(HomeItem *out) {
-  if (!temItemFocus || !out) return 0;
+  if (!hasItemFocus || !out) return 0;
   *out = itemFocus;
   return 1;
 }
@@ -427,14 +427,14 @@ void search_update(float dt, Uint32 now) {
   for (int f = 0; f < SEARCH_KB_ROWS; f++)
     for (int c = 0; c < KB_COLUMNS[f]; c++) {
       float target = (panel == 0 && focus_index(&focusKb, f, c)) ? 1.0f : 0.0f;
-      animKey[f][c] = anim_mola(animKey[f][c], target, dt,
-                                  target > animKey[f][c] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+      animKey[f][c] = anim_spring(animKey[f][c], target, dt,
+                                  target > animKey[f][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
   for (int r = 0; r < SEARCH_MAX_ROWS; r++)
-    for (int c = 0; c < SEARCH_MAX_POR_FILTER; c++) {
+    for (int c = 0; c < SEARCH_MAX_PER_FILTER; c++) {
       float target = (panel == 1 && focus_index(&focusRes, r, c)) ? 1.0f : 0.0f;
-      animRes[r][c] = anim_mola(animRes[r][c], target, dt,
-                                target > animRes[r][c] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+      animRes[r][c] = anim_spring(animRes[r][c], target, dt,
+                                target > animRes[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
   // Rola so o necessario para a fileira em foco caber inteira na area util —
@@ -449,18 +449,18 @@ void search_update(float dt, Uint32 now) {
     // Rolagem horizontal da fileira em foco, mesma regra da home.
     int r = focusRes.row;
     float util = SEARCH_DIR - SEARCH_RES_X;
-    float esq = focusRes.column * NV_SEARCH_CARD_STEP;
-    float dir = esq + NV_SEARCH_CARD_W;
+    float left = focusRes.column * NV_SEARCH_CARD_STEP;
+    float dir = left + NV_SEARCH_CARD_W;
     float targetX = scrollX[r];
     if (dir - targetX > util) targetX = dir - util;
-    if (esq - targetX < 0.0f) targetX = esq;
+    if (left - targetX < 0.0f) targetX = left;
     if (targetX < 0.0f) targetX = 0.0f;
-    scrollX[r] = anim_mola(scrollX[r], targetX, dt, NV_MOLA_SCROLL);
+    scrollX[r] = anim_spring(scrollX[r], targetX, dt, NV_SPRING_SCROLL);
   } else {
     scrollTarget = 0.0f;
   }
   if (scrollTarget < 0.0f) scrollTarget = 0.0f;
-  scrollY = anim_mola(scrollY, scrollTarget, dt, NV_MOLA_SCROLL);
+  scrollY = anim_spring(scrollY, scrollTarget, dt, NV_SPRING_SCROLL);
 }
 
 // --- Desenho -----------------------------------------------------------------
@@ -558,7 +558,7 @@ static void drawEmpty(void) {
 
 static void drawResults(Uint32 now) {
   (void)now;
-  temItemFocus = 0;
+  hasItemFocus = 0;
   if (nFilter == 0) { drawEmpty(); return; }
 
   gfx_crop(SEARCH_RES_X - 8.0f, SEARCH_RES_Y - 30.0f,
@@ -566,7 +566,7 @@ static void drawResults(Uint32 now) {
 
   for (int r = 0; r < nFilter; r++) {
     float ry = SEARCH_RES_Y + r * NV_SEARCH_ROW_STEP - scrollY;
-    if (ry > NV_TELA_H + 100.0f || ry + NV_SEARCH_ROW_STEP < -100.0f) continue;
+    if (ry > NV_SCREEN_H + 100.0f || ry + NV_SEARCH_ROW_STEP < -100.0f) continue;
 
     // Titulo do catalogo 48/600 e a origem 20/400 logo abaixo (margin-top 4).
     TxtLine tt = txt_line_trim(TXT_TITLE3, filter[r].title, 255, 255, 255, 255,
@@ -635,17 +635,17 @@ static void drawResults(Uint32 now) {
           itemFocus.title = ci->title;
           itemFocus.genre = ci->genre;
           itemFocus.meta   = ci->meta;
-          temItemFocus = 1;
+          hasItemFocus = 1;
         }
       }
   }
-  gfx_sem_crop();
+  gfx_no_crop();
 }
 
 void search_draw(Uint32 now) {
   // Fundo #0d0d0d, medido no .search-screen-shell do web — mais escuro que o
   // cinza da home, e o web usa o mesmo tom nas duas.
-  GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
   // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
   // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill

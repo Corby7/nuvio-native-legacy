@@ -9,8 +9,9 @@
 // Endereco em js/config.js do app web: PARENTAL_GUIDE_API_URL.
 #define PG_URL "https://api.tiffara.com/titles/%s/parentsGuide"
 
-// A ORDEM importa: e a mesma em que o web lista as categorias
-// (parentalGuideRepository.js:86), e por isso a mesma em que aparecem na tela.
+// THE ORDER matters: it is the same one the web lists the categories in
+// (parentalGuideRepository.js:86), and therefore the same one they appear in on
+// screen.
 static const struct { const char *key, *label; } CATS[PG_MAX] = {
   { "SEXUAL_CONTENT",              "Nudez" },
   { "VIOLENCE",                    "Viol\xc3\xaa" "ncia" },
@@ -41,10 +42,10 @@ static const char *labelLevel(const char *level) {
   return NULL;
 }
 
-// Gravidade DOMINANTE de uma categoria, pela regra do web (resolveSeverity):
-// o nivel mais votado entre os diferentes de "none"; descartado quando "none"
-// tem tantos votos quanto ele ou mais. Sem essa segunda metade, todo filme
-// mostraria as cinco linhas, porque sempre ha algum voto em tudo.
+// The DOMINANT severity of a category, by the web's rule (resolveSeverity): the
+// most-voted level among those other than "none"; discarded when "none" has as
+// many votes as it or more. Without that second half, every film would show all
+// five lines, because there is always some vote on everything.
 static const char *dominant(const char *start, const char *end) {
   const char *bq = js_array(start, end, "severityBreakdowns");
   char best[16] = "";
@@ -80,8 +81,8 @@ static void *fetch(void *arg) {
   if (body) {
     struct { const char *r, *g; } found[PG_MAX];
     int n = 0, k;
-    // Uma passada por categoria e nao uma pelo array: assim a ordem da tela e
-    // a de CATS, e nao a ordem em que a API devolveu.
+    // One pass per category rather than one over the array: that way the
+    // screen's order is CATS's, not the order the API returned.
     for (k = 0; k < PG_MAX; k++) {
       const char *q = js_array(body, NULL, "parentsGuide");
       while (q) {
@@ -98,8 +99,8 @@ static void *fetch(void *arg) {
     }
     free(body);
     pthread_mutex_lock(&lock);
-    // So publica se o titulo ainda e este: trocar de filme durante a busca
-    // deixaria o aviso do anterior na tela do seguinte.
+    // Only publishes if the title is still this one: changing film during the
+    // fetch would leave the previous one's warning on the next one's screen.
     if (!strcmp(id, idRequest)) {
       for (k = 0; k < n; k++) {
         lines[k].label = found[k].r;

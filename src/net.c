@@ -41,7 +41,7 @@ typedef struct { char *p; size_t n; } Bucket;
 
 static char *net_download_internal(const char *url, int seconds, long *size,
                                  const char *const *header);
-static char *net_download_interno2(const char *url, int seconds, long *size,
+static char *net_download_internal2(const char *url, int seconds, long *size,
                                   const char *const *header, int *status);
 
 // Teto opcional de bytes para a proxima transferencia; 0 = sem teto. Existe
@@ -153,15 +153,15 @@ char *net_download_com(const char *url, int seconds, const char *const *header) 
 
 char *net_download_st(const char *url, int seconds, const char *const *header,
                      int *status) {
-  return net_download_interno2(url, seconds, NULL, header, status);
+  return net_download_internal2(url, seconds, NULL, header, status);
 }
 
 static char *net_download_internal(const char *url, int seconds, long *size,
                                  const char *const *header) {
-  return net_download_interno2(url, seconds, size, header, NULL);
+  return net_download_internal2(url, seconds, size, header, NULL);
 }
 
-static char *net_download_interno2(const char *url, int seconds, long *size,
+static char *net_download_internal2(const char *url, int seconds, long *size,
                                   const char *const *header, int *status) {
   Bucket b = { NULL, 0 };
   void *c, *list = NULL;

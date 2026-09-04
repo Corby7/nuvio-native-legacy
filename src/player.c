@@ -408,13 +408,13 @@ void player_sub_style_changed(void) {
 static float aspectFrame(void) {
   int w = video_width(), h = video_height();
   if (w > 0 && h > 0) return (float)w / (float)h;
-  return NV_TELA_W / NV_TELA_H;
+  return NV_SCREEN_W / NV_SCREEN_H;
 }
 
 typedef struct { float x, y, w, h; } PlrRect;
 
 static PlrRect aspectRect(int mode) {
-  const float screen = NV_TELA_W / NV_TELA_H;
+  const float screen = NV_SCREEN_W / NV_SCREEN_H;
   float q = aspectFrame();
   float bw, bh, sx = 1.0f, sy = 1.0f;
   PlrRect r;
@@ -423,18 +423,18 @@ static PlrRect aspectRect(int mode) {
   // 1) o object-fit do modo. Os tres casos sao os do ASPECT_MODE_DEFINITIONS.
   switch (mode) {
     case PLR_ASPECT_STRETCH:                       // fill
-      bw = NV_TELA_W; bh = NV_TELA_H;
+      bw = NV_SCREEN_W; bh = NV_SCREEN_H;
       break;
     case PLR_ASPECT_CROP:                          // cover
     case PLR_ASPECT_ZOOM_LIGHT:
     case PLR_ASPECT_ZOOM_CINEMA:
     case PLR_ASPECT_FIT_HEIGHT:
-      if (q > screen) { bh = NV_TELA_H; bw = bh * q; }
-      else          { bw = NV_TELA_W; bh = bw / q; }
+      if (q > screen) { bh = NV_SCREEN_H; bw = bh * q; }
+      else          { bw = NV_SCREEN_W; bh = bw / q; }
       break;
     default:                                    // contain
-      if (q > screen) { bw = NV_TELA_W; bh = bw / q; }
-      else          { bh = NV_TELA_H; bw = bh * q; }
+      if (q > screen) { bw = NV_SCREEN_W; bh = bw / q; }
+      else          { bh = NV_SCREEN_H; bw = bh * q; }
       break;
   }
 
@@ -452,8 +452,8 @@ static PlrRect aspectRect(int mode) {
 
   r.w = bw * sx;
   r.h = bh * sy;
-  r.x = (NV_TELA_W - r.w) * 0.5f;
-  r.y = (NV_TELA_H - r.h) * 0.5f;
+  r.x = (NV_SCREEN_W - r.w) * 0.5f;
+  r.y = (NV_SCREEN_H - r.h) * 0.5f;
   return r;
 }
 
@@ -463,8 +463,8 @@ static PlrRect aspectVisible(int mode) {
   PlrRect r = aspectRect(mode), d;
   d.x = r.x < 0.0f ? 0.0f : r.x;
   d.y = r.y < 0.0f ? 0.0f : r.y;
-  d.w = (r.x + r.w > NV_TELA_W ? NV_TELA_W : r.x + r.w) - d.x;
-  d.h = (r.y + r.h > NV_TELA_H ? NV_TELA_H : r.y + r.h) - d.y;
+  d.w = (r.x + r.w > NV_SCREEN_W ? NV_SCREEN_W : r.x + r.w) - d.x;
+  d.h = (r.y + r.h > NV_SCREEN_H ? NV_SCREEN_H : r.y + r.h) - d.y;
   if (d.w < 0.0f) d.w = 0.0f;
   if (d.h < 0.0f) d.h = 0.0f;
   return d;
@@ -744,7 +744,7 @@ void player_event(const SDL_Event *e) {
 void player_update(float dt, Uint32 now) {
   if (!is_open) return;
 
-  entry = anim_mola(entry, exiting ? 0.0f : 1.0f, dt, NV_MOLA_SCREEN);
+  entry = anim_spring(entry, exiting ? 0.0f : 1.0f, dt, NV_SPRING_SCREEN);
   // Marca o primeiro quadro COM IMAGEM. E daqui que a guia parental conta o
   // tempo dela — contar da abertura da tela faria a guia gastar o prazo
   // enquanto o app ainda procurava fonte, e ela sumiria antes de o filme
@@ -786,12 +786,12 @@ void player_update(float dt, Uint32 now) {
       !stream_sheet_is_open() && !tracks_is_open() && now - lastInput > PLR_HIDES_MS) visible = 0;
   if (epT > 0 && !strstr(lineEp, " · ")) player_set_episode(epT, epE);
 
-  anim = anim_mola(anim, visible ? 1.0f : 0.0f, dt,
-                   visible ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+  anim = anim_spring(anim, visible ? 1.0f : 0.0f, dt,
+                   visible ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   for (int i = 0; i < PLR_NBTNS; i++) {
     float target = (visible && button == i) ? 1.0f : 0.0f;
-    focusB[i] = anim_mola(focusB[i], target, dt,
-                         target > focusB[i] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+    focusB[i] = anim_spring(focusB[i], target, dt,
+                         target > focusB[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
 }
 
@@ -875,7 +875,7 @@ static void drawSubtitleExternal(void){
   base-=(subStyle.position-3)*48.f;
   float y=base-total;
   for(int i=0;i<n;i++){
-    TxtLine l=color[i];float x=(NV_TELA_W-l.w)*.5f;
+    TxtLine l=color[i];float x=(NV_SCREEN_W-l.w)*.5f;
     if(subStyle.background){float fa=subStyle.background*.16f*alpha;gfx_color((GfxRect){x-18,y-6,l.w+36,l.h+12},.16f,0,0,0,fa);}
     if(border[i].tex){float d=subStyle.border==2?4.f:2.f;
       txt_draw_alpha(border[i],x+d,y+d,.82f*alpha);
@@ -923,7 +923,7 @@ void player_draw(Uint32 now) {
   // Sem pipeline, o lugar do quadro fica com a arte-chave parada. GFX_CARD com
   // raio 0 e o quad de tela inteira: o recorte (cover) do shader e o que impede
   // a arte 16:9 de esticar quando a tela nao for exatamente 16:9.
-  GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   if (player_com_video()) {
     // O furo acompanha o MESMO retangulo que foi ao plano de hardware, cortado
     // na tela. Furar sempre a tela inteira, como antes, deixava faixa preta nos
@@ -935,7 +935,7 @@ void player_draw(Uint32 now) {
     // Fora do furo fica PRETO, e nao a arte-chave: e o que a TV mostra ao lado
     // do plano de video, e pintar outra coisa ali criaria uma borda que nao
     // existe no aparelho.
-    if (hole.w < NV_TELA_W - 0.5f || hole.h < NV_TELA_H - 0.5f)
+    if (hole.w < NV_SCREEN_W - 0.5f || hole.h < NV_SCREEN_H - 0.5f)
       gfx_color(screen, 0.0f, 0, 0, 0, 1.0f);
     if (hole.w > 0.0f && hole.h > 0.0f) gfx_hole(hole);
   } else {
@@ -954,41 +954,41 @@ void player_draw(Uint32 now) {
   // Um giro exigiria rotacao no shader; tres pontos em contrafase dizem a mesma
   // coisa com o que ja existe, e leem bem de longe.
   if (player_loading()) {
-    GfxRect dark = { 0, 0, NV_TELA_W, NV_TELA_H };
+    GfxRect dark = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     int k;
     gfx_color(dark, 0.0f, 0, 0, 0, 0.55f * entry);
     GLuint logo = c && c->logo[0] ? tex_get_width(c->logo, 520) : 0;
     if (logo) {
       float ar = tex_aspect(c->logo), w = 520, h = ar > 0 ? w / ar : 120;
       if (h > 160) { h = 160; w = h * ar; }
-      gfx_rect((GfxRect){(NV_TELA_W-w)*.5f,NV_TELA_H*.5f-h-60,w,h},logo,
+      gfx_rect((GfxRect){(NV_SCREEN_W-w)*.5f,NV_SCREEN_H*.5f-h-60,w,h},logo,
                tex_brand_dark(c->logo)?GFX_BRAND:GFX_TEXT,0,0,0,0,.95f,.95f,.97f,entry);
     } else {
       TxtLine t = txt_line_trim(TXT_PLR_TITLE,c?c->title:"Reproduzindo",240,241,244,255,680);
-      txt_draw_alpha(t,(NV_TELA_W-t.w)*.5f,NV_TELA_H*.5f-150,entry);
+      txt_draw_alpha(t,(NV_SCREEN_W-t.w)*.5f,NV_SCREEN_H*.5f-150,entry);
     }
     // Anel com cauda luminosa, animado sem novas texturas por quadro.
     for (k = 0; k < 12; k++) {
       float ang = k * 6.2831853f / 12.0f + now * .006f;
       float br = .18f + .82f * k / 11.0f;
-      GfxRect pt = {NV_TELA_W*.5f + cosf(ang)*24 - 4,
-                    NV_TELA_H*.5f + sinf(ang)*24 - 4,8,8};
+      GfxRect pt = {NV_SCREEN_W*.5f + cosf(ang)*24 - 4,
+                    NV_SCREEN_H*.5f + sinf(ang)*24 - 4,8,8};
       gfx_color(pt,.5f,.95f,.95f,.97f,br*entry);
     }
     { TxtLine lc = txt_line(TXT_CALLOUT, "Opening source", 236, 237, 242, 255);
-      txt_draw_alpha(lc, NV_TELA_W * 0.5f - lc.w * 0.5f,
-                         NV_TELA_H * 0.5f + 50, 0.85f * entry); }
+      txt_draw_alpha(lc, NV_SCREEN_W * 0.5f - lc.w * 0.5f,
+                         NV_SCREEN_H * 0.5f + 50, 0.85f * entry); }
     if (lineEp[0]) {
       TxtLine le = txt_line_trim(TXT_PG_END,lineEp,196,198,204,255,680);
-      txt_draw_alpha(le,(NV_TELA_W-le.w)*.5f,NV_TELA_H*.5f+94,entry);
+      txt_draw_alpha(le,(NV_SCREEN_W-le.w)*.5f,NV_SCREEN_H*.5f+94,entry);
     }
   }
   if (errorSource) {
     gfx_color(screen,0,.02f,.02f,.025f,.65f);
     TxtLine er=txt_line(TXT_CALLOUT,"Could not open the source",240,241,243,255);
-    txt_draw_alpha(er,(NV_TELA_W-er.w)*.5f,400,entry);
+    txt_draw_alpha(er,(NV_SCREEN_W-er.w)*.5f,400,entry);
     TxtLine aj=txt_line(TXT_PG_END,"Open Sources to choose another option or reload.",192,194,200,255);
-    txt_draw_alpha(aj,(NV_TELA_W-aj.w)*.5f,448,entry);
+    txt_draw_alpha(aj,(NV_SCREEN_W-aj.w)*.5f,448,entry);
   }
 
   // --- aviso de troca de modo de proporcao ---------------------------------
@@ -1007,7 +1007,7 @@ void player_draw(Uint32 now) {
     TxtLine l = txt_line(TXT_PLR_TITLE, player_aspect_label(aspect),
                            243, 248, 255, 242);
     float pw = (float)l.w + 128.0f, ph = 128.0f;
-    GfxRect pil = { (NV_TELA_W - pw) * 0.5f, 160.0f, pw, ph };
+    GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 160.0f, pw, ph };
     // Raio e FRACAO do menor lado (ver gfx.h): 0.5 e a pilula completa.
     gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.88f * at);
     txt_draw_alpha(l, pil.x + (pw - l.w) * 0.5f,
@@ -1026,12 +1026,12 @@ void player_draw(Uint32 now) {
   // titulo e a barra; o de cima existe porque os selos e a classificacao ficam
   // no alto e sem ele sumiriam sobre cena clara. Ambos acompanham a animacao
   // dos controles: fixos, deixariam sombra permanente em toda cena.
-  GfxRect veil = { 0, NV_TELA_H - PLR_GRADIENT_BOTTOM, NV_TELA_W, PLR_GRADIENT_BOTTOM };
+  GfxRect veil = { 0, NV_SCREEN_H - PLR_GRADIENT_BOTTOM, NV_SCREEN_W, PLR_GRADIENT_BOTTOM };
   // GFX_VEU_BAIXO e nao GFX_VEU: aquele escurece tambem a ESQUERDA (feito para
   // o hero da home) e deixava o canto superior esquerdo deste retangulo escuro
   // com o direito transparente — a borda entre os dois lia como uma placa.
   gfx_rect(veil, 0, GFX_VEIL_BOTTOM, 0, 0, 0, 0.0f, 0, 0, 0, 0.86f * a);
-  { GfxRect top = { 0, 0, NV_TELA_W, PLR_GRADIENT_TOP };
+  { GfxRect top = { 0, 0, NV_SCREEN_W, PLR_GRADIENT_TOP };
     gfx_rect(top, 0, GFX_VEIL_TOP, 0, 0, 0, 0.0f, 0, 0, 0, 0.70f * a); }
 
   // O bloco inteiro desliza junto: titulo, barra e icones sao UM objeto que
@@ -1054,7 +1054,7 @@ void player_draw(Uint32 now) {
   // web lida ao contrario: a fileira de botoes encosta na margem inferior, a
   // barra fica 16px acima dela e a meta 12px acima da barra. A margem e
   // --player-controls-y (48), nao a margem geral do app.
-  float yRowTop = NV_TELA_H - PLR_DFLT_Y - PLR_BTN_D + scrolldown;
+  float yRowTop = NV_SCREEN_H - PLR_DFLT_Y - PLR_BTN_D + scrolldown;
   float cyButtons = yRowTop + PLR_BTN_D * 0.5f;
   float yBar   = yRowTop - PLR_GAP_ROW - PLR_RAIL_H;
 
@@ -1065,7 +1065,7 @@ void player_draw(Uint32 now) {
   // so pelos botoes, entao ela fica sempre em 6.
   // DE PONTA A PONTA: encosta nas duas bordas da tela. Com margem ela lia como
   // um componente solto no meio do rodape; encostada, ela e a borda do video.
-  float bx = 0.0f, bw = NV_TELA_W;
+  float bx = 0.0f, bw = NV_SCREEN_W;
   // MARGEM DE SEGURANCA para o CONTEUDO (titulo, meta, botoes, relogio).
   //
   // O trilho continua de ponta a ponta de proposito — encostado, ele le como a
@@ -1199,9 +1199,9 @@ void player_draw(Uint32 now) {
     // por cima de um fluxo HDR10, e o dono confia nele justamente para saber se
     // pegou a versao boa. Quando o pipeline diz HDR10, o selo diz HDR10 — calar
     // seria esconder metade da resposta.
-    if (video_tem_dolby_vision())                  badges[nBadges++] = "Dolby Vision";
+    if (video_has_dolby_vision())                  badges[nBadges++] = "Dolby Vision";
     else if (!strcasecmp(video_hdr(), "HDR10"))    badges[nBadges++] = "HDR10";
-    if (video_tem_atmos())        badges[nBadges++] = "Dolby Atmos";
+    if (video_has_atmos())        badges[nBadges++] = "Dolby Atmos";
 
     // RELOGIO e "Termina as", que sao o que o web poe neste canto
     // (.player-controls-top, playerScreen.js:5846). Os selos de qualidade sao
@@ -1224,8 +1224,8 @@ void player_draw(Uint32 now) {
         snprintf(end, sizeof end, "Termina \xc3\xa0" "s %s", h2); }
       TxtLine lh = txt_line(TXT_PG_CLOCK, hora, 255, 255, 255, 255);
       TxtLine lf = txt_line(TXT_PG_END, end, 255, 255, 255, 255);
-      txt_draw_alpha(lh, NV_TELA_W - PLR_DFLT_X - lh.w, yRel, a * 0.96f);
-      txt_draw_alpha(lf, NV_TELA_W - PLR_DFLT_X - lf.w, yRel + lh.h + 2.0f,
+      txt_draw_alpha(lh, NV_SCREEN_W - PLR_DFLT_X - lh.w, yRel, a * 0.96f);
+      txt_draw_alpha(lf, NV_SCREEN_W - PLR_DFLT_X - lf.w, yRel + lh.h + 2.0f,
                          a * 0.78f);
       yRel += lh.h + 2.0f + lf.h;
     }
@@ -1248,7 +1248,7 @@ void player_draw(Uint32 now) {
         float e  = 1.0f - (1.0f - ts) * (1.0f - ts);   // desaceleracao
         TxtLine l = txt_line(TXT_MINI, badges[i], 236, 237, 242, 255);
         if (e > 0.004f)
-          txt_draw_alpha(l, NV_TELA_W - PLR_DFLT_X - l.w,
+          txt_draw_alpha(l, NV_SCREEN_W - PLR_DFLT_X - l.w,
                              sy + (1.0f - e) * 10.0f, a * 0.85f * e);
         sy += l.h + 6.0f;
       } }

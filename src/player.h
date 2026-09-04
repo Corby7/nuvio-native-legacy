@@ -3,16 +3,16 @@
 #ifndef NV_PLAYER_H
 #define NV_PLAYER_H
 
-// VideoLegendaEstilo vem daqui: o estilo da legenda e guardado nas
-// preferencias do player, mas quem o define e o modulo de video.
+// VideoSubtitleStyle comes from there: the subtitle style is kept in the
+// player's preferences, but the video module is what defines it.
 #include "video.h"
 #include "catalog.h"
 #include <SDL2/SDL.h>
 
-// Abre a reproducao do titulo `indiceCatalogo` (indice circular, igual ao do
-// catalogo). Titulo, logo, sinopse e arte saem dali.
+// Opens playback of title `catalogIndex` (a circular index, the same as the
+// catalogue's). Title, logo, synopsis and art all come from there.
 //
-// Com NULL, aguarda a consulta de fontes; nao simula uma reproducao.
+// With NULL, it waits for the source query; it does not fake a playback.
 void player_open(int indexCatalog, const char *url);
 void player_set_episode(int season, int episode);
 void player_episode_current(int *season, int *episode);
@@ -23,20 +23,21 @@ int player_requested_next(int *season, int *episode);
 const CatEp *player_next_episode(void);
 void player_error_source(void);
 
-// 1 quando ha video de verdade por tras desta sessao. O desenho usa isto para
-// nao pintar a arte-chave por cima do plano de video.
+// 1 when there is real video behind this session. The drawing uses this so it
+// does not paint the key art over the video plane.
 int  player_com_video(void);
 int  player_requested_tracks(void);   // CIMA no player abre audio/legendas
 
-// 1 enquanto a fonte abre. A tela mostra a arte-chave e um indicador; sem isso
-// o usuario aperta Reproduzir e encara uma tela parada sem saber se funcionou.
+// 1 while the source is opening. The screen shows the key art and an indicator;
+// without it the user presses Play and stares at a still screen with no idea
+// whether it worked.
 int  player_loading(void);
-// Exposto para regressao de D-pad: BAIXO na fileira deve fechar a barra.
+// Exposed for the D-pad regression: DOWN on the row should close the bar.
 int  player_controls_visible(void);
 
-// Liga a fonte numa sessao ja aberta. Existe porque o link so pode ser pedido
-// no ultimo instante (ver stream_idade_ms), entao a tela abre antes de haver
-// URL e o video entra quando chega.
+// Attaches the source to an already-open session. It exists because the link can
+// only be requested at the last moment (see stream_age_ms), so the screen opens
+// before there is a URL and the video comes in when it arrives.
 void player_set_source(const char *url);
 
 int  player_is_open(void);   // 1 enquanto a tela existe, inclusive durante o fade de saida
@@ -46,26 +47,27 @@ void player_draw(Uint32 now);
 int  player_wants_exit(void);  // 1 assim que o Back foi apertado
 void player_shutdown(void);
 
-// --- MODOS DE PROPORCAO -----------------------------------------------------
-// Os OITO modos do app web, na mesma ordem e com os mesmos fatores
-// (js/core/player/playerAspect.js). A ordem importa: e ela que o ciclo percorre,
-// e trocar a ordem aqui muda o que o dono encontra ao apertar a tecla.
+// --- ASPECT MODES ------------------------------------------------------------
+// The web app's EIGHT modes, in the same order and with the same factors
+// (js/core/player/playerAspect.js). The order matters: it is the one the cycle
+// walks, and changing it here changes what the owner finds when they press the
+// key.
 //
-// POR QUE ZOOM, e nao object-fit: a barra preta de um filme widescreen esta
-// EMBUTIDA no quadro. Um 2.39:1 entregue como 3840x2160 tem proporcao de quadro
-// 1.778 — a mesma da tela — entao "encaixar" e "preencher" dao exatamente a
-// mesma imagem e nenhum dos dois corta coisa alguma. Cortar exige AMPLIAR e
-// deixar o excesso sair da tela.
+// WHY ZOOM, and not object-fit: a widescreen film's black bars are BAKED INTO
+// the frame. A 2.39:1 delivered as 3840x2160 has a frame aspect of 1.778 — the
+// same as the screen — so "fit" and "fill" give exactly the same image and
+// neither crops anything. Cropping requires ENLARGING and letting the excess run
+// off the screen.
 //
-// Os fatores sao 16/9 dividido pela proporcao do filme, nao numeros escolhidos
-// a gosto:  2.35:1 -> 1.32,  2.39:1 -> 1.34,  2.76:1 -> 1.55. O ULTRA existe
-// porque o CINEMA (1.34) ainda deixa barra visivel num 2.76:1 — observado na
-// TV do dono, nao deduzido.
+// The factors are 16/9 divided by the film's aspect, not numbers picked to
+// taste:  2.35:1 -> 1.32,  2.39:1 -> 1.34,  2.76:1 -> 1.55. ULTRA exists because
+// CINEMA (1.34) still leaves a visible bar on a 2.76:1 — observed on the owner's
+// TV, not deduced.
 //
-// No nativo o video NAO e um elemento HTML: e um plano de hardware atras da
-// superficie GL, posicionado por video_janela(). Entao cada modo vira um
-// RETANGULO, e o "excesso que sai da viewport" do web vira um retangulo com
-// coordenadas negativas e tamanho maior que a tela.
+// In the native app the video is NOT an HTML element: it is a hardware plane
+// behind the GL surface, positioned by video_window(). So each mode becomes a
+// RECTANGLE, and the web's "excess that leaves the viewport" becomes a rectangle
+// with negative coordinates and a size larger than the screen.
 typedef enum {
   PLR_ASPECT_ORIGINAL = 0,   // "Fit (Original)"  contain, sem zoom  — PADRAO
   PLR_ASPECT_CROP,           // "Crop"            cover
@@ -82,8 +84,8 @@ typedef enum {
 #define PLR_ZOOM_LIGHT    1.15f
 #define PLR_ZOOM_CINEMA  1.34f
 #define PLR_ZOOM_ULTRA   1.55f
-// Quanto tempo o aviso de troca de modo fica na tela. 1400ms e o setTimeout do
-// showAspectToast do web.
+// How long the mode-change notice stays on screen. 1400ms is the setTimeout in
+// the web's showAspectToast.
 #define PLR_TOAST_MS     1400u
 
 int         player_aspect(void);              // modo atual (PlrAspecto)
@@ -91,9 +93,10 @@ const char *player_aspect_label(int mode);   // "Cinema Zoom", "Encaixar"...
 void        player_aspect_set(int mode);  // aplica e grava
 void        player_aspect_cycle(void);       // proximo modo + aviso na tela
 
-// ESTILO DA LEGENDA, guardado em art/player.txt junto com o aspecto: e
-// preferencia do APARELHO e nao do titulo. A folha de faixas edita a struct e
-// chama player_leg_estilo_mudou(), que aplica no pipeline e grava.
+// THE SUBTITLE STYLE, stored in art/player.txt alongside the aspect: it is a
+// DEVICE preference and not a title's. The tracks sheet edits the struct and
+// calls player_sub_style_changed(), which applies it to the pipeline and
+// saves.
 VideoSubtitleStyle *player_sub_style(void);
 void player_sub_style_changed(void);
 

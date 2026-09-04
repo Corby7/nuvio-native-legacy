@@ -63,13 +63,13 @@ static void testar(void) {
   assert(nc==2&&lc[0].start==1.0&&lc[0].end==3.25&&!strcmp(lc[0].text,"Hello & welcome"));free(lc);
   IntroChunk it[3];int ni=intro_parse("{\"intro\":{\"start_sec\":12,\"end_sec\":44},\"recap\":null,\"outro\":{\"start_sec\":3000,\"end_sec\":3060}}",it,3);
   assert(ni==2&&it[0].kind==INTRO_OPENING&&it[0].end==44&&it[1].kind==INTRO_CREDITS);
-  char legurl[256];
-  video_normalize_url_subtitle("https://subs.example/file/123",legurl,sizeof legurl);
-  assert(!strcmp(legurl,"https://subs.example/file/123.srt"));
-  video_normalize_url_subtitle("https://subs.example/file/123?x=1",legurl,sizeof legurl);
-  assert(!strcmp(legurl,"https://subs.example/file/123.srt?x=1"));
-  video_normalize_url_subtitle("https://subs.example/file/123.VTT?x=1",legurl,sizeof legurl);
-  assert(!strcmp(legurl,"https://subs.example/file/123.VTT?x=1"));
+  char subUrl[256];
+  video_normalize_url_subtitle("https://subs.example/file/123",subUrl,sizeof subUrl);
+  assert(!strcmp(subUrl,"https://subs.example/file/123.srt"));
+  video_normalize_url_subtitle("https://subs.example/file/123?x=1",subUrl,sizeof subUrl);
+  assert(!strcmp(subUrl,"https://subs.example/file/123.srt?x=1"));
+  video_normalize_url_subtitle("https://subs.example/file/123.VTT?x=1",subUrl,sizeof subUrl);
+  assert(!strcmp(subUrl,"https://subs.example/file/123.VTT?x=1"));
   p+=snprintf(json+p,sizeof json-p,"{\"streams\":[");
   for(int i=0;i<40;i++) p+=snprintf(json+p,sizeof json-p,
     "%s{\"name\":\"Source %d\",\"url\":\"https://example.invalid/%d\",\"behaviorHints\":{\"filename\":\"Silo.S02E04.%s\"}}",
@@ -79,8 +79,8 @@ static void testar(void) {
   assert(n==40 && v[37].dolbyVision && v[37].mp4 && v[37].dolbyAtmos && v[37].height==2160);
   assert(!v[0].dolbyVision);
   stream_set_list(v,n);free(v);
-  assert(stream_n()==40 && stream_automatico()==37 && stream_item(40)==NULL);
-  stream_set_list(NULL,0);assert(stream_n()==0 && stream_automatico()==-1);
+  assert(stream_n()==40 && stream_automatic()==37 && stream_item(40)==NULL);
+  stream_set_list(NULL,0);assert(stream_n()==0 && stream_automatic()==-1);
   n=stream_parse("{\"streams\":[{\"infoHash\":\"abc\"},{\"externalUrl\":\"https://example.invalid\"},{\"url\":\"https://example.invalid/a.mp4\",\"title\":\"4K [DV] Atmos\"}]}","Fixture",&v);
   assert(n==1 && v[0].mp4 && v[0].dolbyVision && v[0].height==2160);free(v);
   char longa[4500];memset(longa,'a',sizeof longa);memcpy(longa,"https://example.invalid/",24);longa[4090]=0;
@@ -103,7 +103,7 @@ static void testar(void) {
   assert(strstr(player_line_episode(),"T2E4") && strstr(player_line_episode(),"Episode 24"));
   assert(player_next_episode()&&player_next_episode()->season==2&&player_next_episode()->episode==5);
   keyPlayer(SDLK_RIGHT);keyPlayer(SDLK_RIGHT);keyPlayer(SDLK_RETURN);
-  assert(player_requested_tracks()==2); /* Play, proporção, legendas: sem saltos. */
+  assert(player_requested_tracks()==2); /* Play, aspect, subtitles: no gaps. */
   assert(player_controls_visible());
   keyPlayer(SDLK_DOWN);assert(!player_controls_visible());
   keyPlayer(SDLK_DOWN);assert(player_controls_visible());
@@ -247,7 +247,7 @@ int main(int argc,char **argv) {
   cat_load("deploy/app/art");
   CatItem c={0};if(cat_n())c=*cat_item(0);
   for(int i=0;i<cat_n();i++) if(!strcmp(cat_item(i)->title,"Silo")){c=*cat_item(i);break;}
-  /* O pacote pode nao conter Silo: nao combinar o logo de outra obra. */
+  /* The package may not contain Silo: do not match another title's logo. */
   if(strcmp(c.title,"Silo"))c.logo[0]=c.backdrop[0]=c.poster[0]=0;
   c.imdb[0]=0;snprintf(c.kind,sizeof c.kind,"series");snprintf(c.title,sizeof c.title,"Silo");
   c.nSeasons=3;c.seasons[0]=1;c.seasons[1]=2;c.seasons[2]=3;cat_set(&c,1);

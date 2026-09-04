@@ -1,26 +1,28 @@
 #!/bin/bash
-# Compila e roda no Mac, com a mesma folder de art do pacote da TV.
+# Build and run on the Mac, against the same art folder the TV package uses.
 #
-# FICA LOGADO ENTRE EXECUCOES. A session mora em $NUVIO_DATA, que here aponta
-# para ~/.nuvio: logue UMA vez (escaneando o QR da screen) e todo arranque
-# seguinte abre com a account dentro, porque o refresh token se renova sozinho.
-# CONFERIDO: 1o arranque "[session] logado como ..."; reiniciando sem escanear
-# nada, "[session] session restaurada ..." e "[addons] N vindos da account".
+# IT STAYS SIGNED IN BETWEEN RUNS. The session lives in $NUVIO_DATA, which here
+# points at ~/.nuvio: sign in ONCE (scanning the QR on screen) and every
+# following start opens with the account already in, because the refresh token
+# renews itself.
+# CONFIRMED: first start "[session] signed in as ..."; restarting without
+# scanning anything, "[session] session restored ..." and
+# "[addons] N from the account".
 #
-# Para testar como um user NOVO (a first execucao de quem instala),
-# aponte a variavel para uma folder empty:
+# To test as a NEW user (the first run of whoever installs it), point the
+# variable at an empty folder:
 #     NUVIO_DATA=/tmp/nuvio-new bash tools/mac.sh
 #
-# "Sair da account", em Ajustes, apaga ~/.nuvio inteiro (session, ajustes e
-# progress) — after disso e preciso escanear de new.
+# "Sign out", in Settings, erases the whole of ~/.nuvio (session, settings and
+# progress) — after that you have to scan again.
 set -e
 cd "$(dirname "$0")/.."
-# Os -D do servidor saem do MESMO local.properties do app web (tools/env.sh).
-# Sem eles o app compiles, instala e abre — e o unico sintoma e a screen de login
-# dizendo "Este pacote foi montado sem servidor". Nenhum desses values enters em
-# file de code versionado.
+# The server -D flags come from the SAME local.properties as the web app
+# (tools/env.sh). Without them the app compiles, installs and opens — and the
+# only symptom is the login screen saying "This package was built without a
+# server." None of those values goes into a versioned source file.
 ENV_D=$(tools/env.sh)
-# Fora da folder do pacote: o Mac nao deve gravar session dentro de deploy/.
+# Outside the package folder: the Mac must not write the session into deploy/.
 export NUVIO_DATA="${NUVIO_DATA:-$HOME/.nuvio}"
 eval cc src/*.c -o /tmp/nuvio-native-legacy-mac -O1 -g "$ENV_D" \
   -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \

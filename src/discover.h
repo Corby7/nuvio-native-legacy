@@ -1,13 +1,14 @@
-// Monta o catalogo EM EXECUCAO, a partir da rede.
+// Assembles the catalogue AT RUNTIME, from the network.
 //
-// Antes tudo vinha de arquivos gerados a mao (catalogo.txt, ids.txt,
-// episodios.txt) com a arte baixada junto do pacote. Funcionava, mas
-// congelava: recomendacao de ontem, episodio da temporada de ontem, e cada
-// mudanca exigia regerar e reinstalar. Agora as fileiras vem dos catalogos dos
-// addons do dono e os episodios vem do Cinemeta na hora que o titulo abre.
+// Everything used to come from hand-generated files (catalog.txt, ids.txt,
+// episodes.txt) with the art downloaded alongside the package. It worked, but it
+// froze: yesterday's recommendation, yesterday's season episode, and every
+// change meant regenerating and reinstalling. Now the rows come from the owner's
+// addons' catalogues and the episodes come from Cinemeta the moment the title
+// opens.
 //
-// Os arquivos continuam servindo de RESERVA: sem rede, o app abre com o que
-// veio no pacote em vez de abrir vazio.
+// The files still serve as a FALLBACK: with no network, the app opens with what
+// came in the package instead of opening empty.
 #ifndef NV_DISCOVER_H
 #define NV_DISCOVER_H
 #include <stddef.h>
@@ -16,95 +17,98 @@
 // Dispara a montagem do catalogo num fio proprio. Volta na hora.
 void disc_start(void);
 
-// Le a chave do TMDB (art/tmdb.txt). Sem ela o elenco fica so com nomes, sem
-// foto nem personagem.
+// Reads the TMDB key (art/tmdb.txt). Without it the cast has only names, no
+// photo and no character.
 void disc_tmdb(const char *dirArt);
 
-// Chave do TMDB vinda da CONTA, no lugar de art/tmdb.txt. MEDIDO na conta do
-// dono: `sync_pull_provider_credentials` devolve o provedor "tmdb" com um
-// campo `api_key`. Enquanto a chave sair do arquivo, ela vai dentro do .ipk e
-// e a chave de quem montou o pacote — cota dele, para todo mundo que instalar.
+// The TMDB key from the ACCOUNT, in place of art/tmdb.txt. MEASURED on the
+// owner's account: `sync_pull_provider_credentials` returns the "tmdb" provider
+// with an `api_key` field. As long as the key comes from the file, it travels
+// inside the .ipk and it is the key of whoever built the package — their quota,
+// for everyone who installs it.
 void disc_tmdb_set(const char *key);
 
-// A chave do TMDB ja carregada. Devolve "" quando art/tmdb.txt nao existe.
-// O modulo `pessoa` precisa dela para a filmografia, e ler o arquivo duas vezes
-// daria duas fontes de verdade para o mesmo segredo.
+// The TMDB key as already loaded. Returns "" when art/tmdb.txt does not exist.
+// The `person` module needs it for the filmography, and reading the file twice
+// would give two sources of truth for the same secret.
 const char *disc_key_tmdb(void);
 
-// "2026-07-29" -> "29 de julho de 2026". Vive aqui porque a descoberta ja
-// precisava dela para a data de episodio; a tabela "Detalhes do Filme" e o
-// segundo consumidor, e duplicar a lista de meses era pedir para as duas
-// divergirem. Entrada fora do padrao ISO sai como veio.
+// "2026-07-29" -> "29 July 2026". It lives here because discovery already needed
+// it for the episode date; the "Film Details" table is the second consumer, and
+// duplicating the month list would be asking for the two to drift apart. Input
+// outside the ISO format comes back as it arrived.
 void disc_date_long(const char *iso, char *dst, size_t size);
 
-// Nome de genero em portugues ("Action" -> "Ação"). O Cinemeta e o catalogo do
-// pacote guardam os generos em INGLES, e eles apareciam crus numa interface em
-// portugues. Genero fora da tabela sai como veio.
+// Canonical genre label. Cinemeta and the packaged catalogue store genres in
+// English, but not consistently ("Sci-Fi" from one source, "Science Fiction"
+// from another, hyphenated forms that read as identifiers). The table
+// normalises those; a genre outside it comes back as it arrived.
 const char *disc_genre_label(const char *g);
 
-// --- busca por titulo --------------------------------------------------------
-// Consulta o Cinemeta em filme e serie. NAO BLOQUEIA: dispara um fio e volta na
-// hora; chamar de novo com o mesmo termo nao refaz o pedido, e com termo
-// diferente faz o fio em voo descartar o resultado velho e ir atras do novo (o
-// dono continua digitando enquanto a rede responde).
+// --- search by title ---------------------------------------------------------
+// Queries Cinemeta for both film and series. DOES NOT BLOCK: it starts a thread
+// and returns immediately; calling again with the same term does not repeat the
+// request, and with a different term the in-flight thread discards the old result
+// and goes after the new one (the owner keeps typing while the network answers).
 //
-// Existe porque a tela de busca so filtrava o que ja estava em memoria, e
-// procurar qualquer coisa fora das primeiras linhas de cada catalogo nao
-// achava nada.
+// It exists because the search screen only filtered what was already in memory,
+// and looking for anything outside the first rows of each catalogue found
+// nothing.
 void disc_fetch(const char *term);
 
-// Quantos resultados ha PARA ESTE TERMO. Devolve 0 quando o que chegou e de uma
-// consulta anterior — assim a tela nunca mostra o resultado de outra palavra.
+// How many results there are FOR THIS TERM. Returns 0 when what arrived belongs
+// to an earlier query — so the screen never shows another word's results.
 int  disc_search_n(const char *term);
 
 // Copia o resultado `i`. 1 se copiou.
 int  disc_search_item(int i, CatItem *dst);
 
-// --- busca em VARIOS catalogos ----------------------------------------------
+// --- searching ACROSS SEVERAL catalogues -------------------------------------
 //
-// Um "alvo" e um catalogo que declara busca no manifesto. Sao os 2 do Cinemeta
-// mais os que os addons do dono declararem (hoje 8: Xperience, AIOStreams por
-// TMDB e por TVDB, e Akashi TV — filme e serie em cada um).
+// A "target" is a catalogue that declares search in its manifest. There are
+// Cinemeta's 2 plus whatever the owner's addons declare (today 8: Xperience,
+// AIOStreams by TMDB and by TVDB, and Akashi TV — film and series in each).
 //
-// A tela desenha UMA FILEIRA POR ALVO, na ordem em que os alvos foram
-// registrados, pulando os que ainda nao responderam ou vieram vazios. Assim o
-// primeiro catalogo a responder ja aparece, em vez de a tela esperar o mais
-// lento de dez.
+// The screen draws ONE ROW PER TARGET, in the order the targets were registered,
+// skipping those that have not answered yet or came back empty. That way the
+// first catalogue to answer appears straight away, instead of the screen waiting
+// on the slowest of ten.
 int  disc_search_n_targets(void);
 const char *disc_search_target_title(int target);   // "Filmes", "Séries"
 const char *disc_search_target_addon(int target);    // "Cinemeta", "Xperience"
 int  disc_search_target_n(int target, const char *term);
 int  disc_search_target_item(int target, int i, CatItem *dst);
-// Sobe a cada termo novo. Quem guarda posicao de foco entre quadros deve
-// reajustar quando este numero mudar.
+// Goes up with every new term. Anything that keeps a focus position between
+// frames should readjust when this number changes.
 int  disc_search_generation(void);
 
-// Registro dos alvos, chamado pelo carregamento dos manifestos. `zerar` repoe
-// so o Cinemeta.
+// Registers the targets, called by the manifest loading. `reset` puts back
+// Cinemeta only.
 void disc_targets_search_reset(void);
 void disc_target_search(const char *base, const char *kind, const char *id,
                      const char *title, const char *addon);
 
-// 1 enquanto busca; a home pode usar isto para um indicador.
+// 1 while searching; the home can use this for an indicator.
 int  disc_searching(void);
 
-// Pede os episodios do titulo `indiceItem` na temporada `temporada`
-// (0 = a temporada onde o dono parou, ou a primeira). Idempotente: pedir duas
-// vezes a mesma coisa nao refaz a busca.
-// --- VER TUDO: um catalogo inteiro, em paginas ------------------------------
+// Requests the episodes of title `itemIndex` in season `season` (0 = the season
+// the owner stopped on, or the first). Idempotent: asking twice for the same
+// thing does not repeat the fetch.
+// --- SEE ALL: a whole catalogue, in pages ------------------------------------
 //
-// A home mostra 12 itens por fileira (MAX_POR_FILEIRA). O catalogo tem mais, e
-// o protocolo Stremio pagina por `skip`:
-//   <base>/catalog/<tipo>/<id>/skip=<n>.json
-// E o mesmo caminho da busca, com outro filtro no lugar do termo.
+// The home shows 12 items per row (MAX_PER_ROW). The catalogue has more, and the
+// Stremio protocol pages by `skip`:
+//   <base>/catalog/<type>/<id>/skip=<n>.json
+// It is the same path as the search, with a different filter in place of the
+// term.
 //
-// Assincrono, como todo o resto: dispara e volta na hora. Quem desenha pergunta
-// quantos ja chegaram.
+// Asynchronous, like everything else: it fires and returns immediately. Whatever
+// draws asks how many have arrived.
 #define SEEALL_MAX 1000
 
-// Comeca (ou continua) a leitura do catalogo. `pagina` 0 e o inicio; cada
-// pagina seguinte pede skip = pagina * VT_PASSO. Repetir a mesma pagina nao
-// refaz o pedido.
+// Starts (or continues) reading the catalogue. `page` 0 is the beginning; each
+// following page asks for skip = page * SEEALL_STEP. Repeating the same page does
+// not repeat the request.
 void disc_seeall_open(const char *base, const char *kind, const char *catId);
 void disc_seeall_filter(const char *base, const char *kind, const char *catId, const char *genre);
 int disc_seeall_error(void);
@@ -114,26 +118,27 @@ void disc_seeall_more(void);
 int  disc_seeall_n(void);
 int  disc_seeall_item(int i, CatItem *dst);
 int  disc_seeall_loading(void);
-// 1 quando a ultima pagina veio curta: nao ha mais o que pedir.
+// 1 when the last page came back short: there is nothing more to ask for.
 int  disc_seeall_end(void);
 void disc_seeall_close(void);
 
 void disc_episodes(int indexItem, int season);
-// Solta o pedido de episodios que chegou enquanto outro carregava. Chame por
-// quadro; sem isto uma troca de temporada feita durante um carregamento fica
-// pendurada e a lista nunca chega na temporada escolhida.
+// Releases the episode request that arrived while another was loading. Call it
+// per frame; without this a season change made during a load hangs and the list
+// never reaches the chosen season.
 void disc_episodes_pending(void);
 int disc_episodes_loading(int indexItem);
 
-// Busca o meta de um titulo que o catalogo NAO tem e o acrescenta ao fim.
-// Nao bloqueia. Serve ao credito de um ator e ao item de "Mais como este":
-// sem isto, tudo que estivesse fora do catalogo do dono nao abria.
+// Fetches the meta of a title the catalogue does NOT have and appends it to the
+// end. Does not block. It serves an actor's credit and the "More like this"
+// item: without it, anything outside the owner's catalogue would not open.
 void disc_request_title(const char *imdb);
-// Mesma coisa a partir do id do TMDB, que e o que o credito de um ator traz.
-// `tipo` e "movie" ou "tv". Resolve o IMDb por external_ids antes de pedir o
-// meta — uma chamada a mais, so quando o dono abre o credito.
+// The same thing starting from the TMDB id, which is what an actor's credit
+// carries. `type` is "movie" or "tv". It resolves the IMDb id through
+// external_ids before asking for the meta — one extra call, only when the owner
+// opens the credit.
 void disc_request_title_tmdb(long tmdbId, const char *kind);
-// Indice do titulo que acabou de entrar, ou -1. CONSOME o resultado.
+// Index of the title that has just been added, or -1. CONSUMES the result.
 int  disc_title_ready(void);
 int  disc_title_searching(void);
 

@@ -1,12 +1,13 @@
 #!/bin/bash
-# Testes da account. PRECISAM DE REDE: falam com o servidor de verdade.
+# Account tests. THEY NEED THE NETWORK: they talk to the real server.
 #
 #   bash tests/account.sh
 #
-# O de ajustes nao precisa de rede. O de logout abre uma session ANONIMA e a grava como se fosse de user. Nao e
-# gambiarra de teste: o user anonimo tem account real no servidor (o proprio
-# app web faz isso before de pedir o code de login), com addons semeados. E o
-# unico jeito de exercitar o ciclo inteiro sem alguem autorizando no celular.
+# The settings one needs no network. The sign-out one opens an ANONYMOUS session
+# and writes it as if it were a user's. That is not a testing hack: the
+# anonymous user has a real account on the server (the web app itself does this
+# before asking for the login code), with addons seeded. It is the only way to
+# exercise the whole cycle without somebody authorising on a phone.
 set -e
 cd "$(dirname "$0")/.."
 ENV_D=$(tools/env.sh)

@@ -30,7 +30,7 @@
 // existe no Chromium 53 da TV e que sem `fixed` o painel sumia assim que o dono
 // descia. Aqui nao ha fluxo nenhum — ele so nao recebe scrollY.
 #define SEEALL_PAN_W   336.0f
-#define SEEALL_PAN_X   (NV_TELA_W - 104.0f - SEEALL_PAN_W)
+#define SEEALL_PAN_X   (NV_SCREEN_W - 104.0f - SEEALL_PAN_W)
 #define SEEALL_PAN_Y   SEEALL_TOP
 #define SEEALL_PAN_ART_H 330.0f
 #define SEEALL_PAN_ART_W 220.0f
@@ -98,7 +98,7 @@ void seeall_open(const char *base, const char *kind, const char *catId,
   is_open = 1; focus = 0; scrollY = 0.0f; velY = 0.0f; reqOpen = -1;
   memset(tabAnim, 0, sizeof tabAnim);
   snprintf(title, sizeof title, "%s", title ? title : "");
-  collection=col_por_catalog(base,kind,catId);timeline=collection&&!strcmp(collection->group,"Directors");
+  collection=col_by_catalog(base,kind,catId);timeline=collection&&!strcmp(collection->group,"Directors");
   source=tabCursor=tabFocus=0;orderN=-1;
   if(collection) {
     for(int i=0;i<collection->nSources;i++)if(!strcmp(collection->sources[i].catId,catId)&&!strcmp(collection->sources[i].type,kind)){source=tabCursor=i;break;}
@@ -141,7 +141,7 @@ void seeall_event(const SDL_Event *e) {
     // possa abri-lo por indice, que e como todo o app trabalha.
     CatItem it;
     if (viewItem(focus, &it)) {
-      int idx = it.imdb[0] ? cat_index_por_imdb(it.imdb) : -1;
+      int idx = it.imdb[0] ? cat_index_by_imdb(it.imdb) : -1;
       if (idx < 0) idx = cat_append(&it);
       if (idx >= 0) { reqOpen = idx; } // conserva a lista e a posição ao voltar
     }
@@ -155,12 +155,12 @@ void seeall_update(float dt, Uint32 now) {
   float target, maxY;
   int n = nItems(), lines;
   (void)now;
-  anim = anim_mola(anim, is_open ? 1.0f : 0.0f, dt, NV_MOLA_SCREEN);
+  anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
   if (!is_open) return;
   for (int i = 0; i < COL_SOURCE_MAX; i++) {
     float targetTab = collection && tabFocus && i == tabCursor ? 1.0f : 0.0f;
-    tabAnim[i] = anim_mola(tabAnim[i], targetTab, dt,
-                           targetTab > tabAnim[i] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+    tabAnim[i] = anim_spring(tabAnim[i], targetTab, dt,
+                           targetTab > tabAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
   if(timeline&&n!=orderN) {
     int old=orderN>0&&focus<orderN?order[focus]:-1;int years[SEEALL_MAX];
@@ -171,13 +171,13 @@ void seeall_update(float dt, Uint32 now) {
   lines = (n + SEEALL_COLS - 1) / SEEALL_COLS;
   // Mira a linha focada a 30% da altura util, como o resto do app faz.
   target = SEEALL_TOP + (float)(focus / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y)
-       - NV_TELA_H * 0.30f;
+       - NV_SCREEN_H * 0.30f;
   if(tabFocus)target=0;
-  maxY = SEEALL_TOP + (float)lines * (SEEALL_CARD_H + SEEALL_GAP_Y) - NV_TELA_H + 120.0f;
+  maxY = SEEALL_TOP + (float)lines * (SEEALL_CARD_H + SEEALL_GAP_Y) - NV_SCREEN_H + 120.0f;
   if (maxY < 0.0f) maxY = 0.0f;
   if (target < 0.0f) target = 0.0f;
   if (target > maxY) target = maxY;
-  scrollY = anim_mola2(&velY, scrollY, target, dt, NV_MOLA2_SCROLL);
+  scrollY = anim_spring2(&velY, scrollY, target, dt, NV_SPRING2_SCROLL);
 }
 
 // PAINEL DA DIREITA: o que a grade sozinha nao diz — sinopse, generos, nota.
@@ -252,7 +252,7 @@ static void panel(float a) {
   if (it.synopsis[0]) {
     // Ate onde couber sem passar da base util (o web corta em
     // max-height: 100% - 210).
-    int lines = (int)((NV_TELA_H - 48.0f - y) / 34.0f);
+    int lines = (int)((NV_SCREEN_H - 48.0f - y) / 34.0f);
     if (lines > 8) lines = 8;
     if (lines > 0)
       txt_block(TXT_DET_META2, it.synopsis, 236, 236, 236,
@@ -303,7 +303,7 @@ static void themeBackground(float a) {
       GLuint tex=art[0]?tex_get_hero(art):0;
       if(tex) {
         gfx_tex_aspect_current=tex_aspect(art);
-        gfx_rect((GfxRect){0,0,NV_TELA_W,620},tex,GFX_HERO_FULL,
+        gfx_rect((GfxRect){0,0,NV_SCREEN_W,620},tex,GFX_HERO_FULL,
                  0,0,0,0,0,0,0,a*.38f);
         gfx_tex_aspect_current=0;
       }
@@ -315,11 +315,11 @@ static void themeHeader(float a,float x0) {
   float r,g,b;colorCollection(&r,&g,&b);
   TxtLine eyebrow=txt_line(TXT_HERO_META,labelGroup(),197,202,211,255);
   txt_draw_alpha(eyebrow,x0,40,a);
-  int ehDirector=collection&&!strcasecmp(collection->group,"Directors");
+  int isDirector=collection&&!strcasecmp(collection->group,"Directors");
   // O wordmark de uma coleção de diretores pode conter cabeça ou lettering
   // composto. No cabeçalho da filmografia, o nome textual e o retrato limpo
   // deixam a identidade legível sem duplicar a mesma informação visual.
-  GLuint logo=!ehDirector&&collection&&!collection->editorial&&collection->logo[0]
+  GLuint logo=!isDirector&&collection&&!collection->editorial&&collection->logo[0]
              ?tex_get_width(collection->logo,560):0;
   float aspect=logo?tex_aspect(collection->logo):0;
   if(logo&&aspect>0) {
@@ -336,7 +336,7 @@ static void themeHeader(float a,float x0) {
   TxtLine sub=txt_line_trim(TXT_DET_META2,caption,196,202,213,255,960);txt_draw_alpha(sub,x0,192,a);
   if(collection&&collection->nSources>1) {
     int first=tabCursor>3?tabCursor-3:0;
-    gfx_crop(x0-6,244,NV_TELA_W-x0-90,72);
+    gfx_crop(x0-6,244,NV_SCREEN_W-x0-90,72);
     for(int i=first;i<collection->nSources&&i<first+6;i++) {
       float x=x0+(i-first)*322.0f;const ColSource *s=&collection->sources[i];
       int f=tabFocus&&tabCursor==i, selected=source==i;
@@ -355,7 +355,7 @@ static void themeHeader(float a,float x0) {
       char label[180];snprintf(label,sizeof label,"%s · %s",s->title,!strcmp(s->type,"series")?"Series":"Films");
       TxtLine t=txt_line_trim(TXT_HERO_META,label,f?22:238,f?24:240,f?28:245,255,276);
       txt_draw_alpha(t,pill.x+(pill.w-t.w)*.5f,pill.y+(pill.h-t.h)*.5f,a);
-    }gfx_sem_crop();
+    }gfx_no_crop();
   }
 }
 
@@ -385,7 +385,7 @@ void seeall_draw(Uint32 now) {
   int n = nItems(), i;
   (void)now;
   if (a < 0.01f) return;
-  { GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, a); }
   themeBackground(a);
 
@@ -395,7 +395,7 @@ void seeall_draw(Uint32 now) {
   // TRAS dele ao rolar — o titulo ficava sobre imagem em movimento e virava
   // "fundo". O recorte resolve sem precisar de faixa opaca: o que sobe alem do
   // topo simplesmente nao e desenhado.
-  gfx_crop(0.0f, SEEALL_TOP - 12.0f, NV_TELA_W, NV_TELA_H - SEEALL_TOP + 12.0f);
+  gfx_crop(0.0f, SEEALL_TOP - 12.0f, NV_SCREEN_W, NV_SCREEN_H - SEEALL_TOP + 12.0f);
   for (i = 0; i < n; i++) {
     float cx = x0 + (float)(i % SEEALL_COLS) * (SEEALL_CARD_W + SEEALL_GAP_X);
     float cy = SEEALL_TOP + (float)(i / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y) - scrollY;
@@ -407,7 +407,7 @@ void seeall_draw(Uint32 now) {
     // app, e a grade lia como outra tela.
     float radius = settings_radius_poster_px() / SEEALL_CARD_W;
     int sel = (i == focus);
-    if (cy > NV_TELA_H || cy + SEEALL_CARD_H + 40.0f < SEEALL_TOP - 12.0f) continue;
+    if (cy > NV_SCREEN_H || cy + SEEALL_CARD_H + 40.0f < SEEALL_TOP - 12.0f) continue;
     if(timeline){timelineCard(i,cy,a,x0);continue;}
     if (!viewItem(i, &it)) continue;
     { GfxRect r = { cx, cy, SEEALL_CARD_W, SEEALL_CARD_H };
@@ -440,7 +440,7 @@ void seeall_draw(Uint32 now) {
   }
   if(!n&&disc_seeall_loading())for(int i=0;i<5;i++)
     gfx_color((GfxRect){x0+i*264,SEEALL_TOP,248,372},.06f,.12f,.13f,.15f,a);
-  gfx_sem_crop();
+  gfx_no_crop();
 
   // CABECALHO por cima do recorte, entao ele nunca compete com a arte.
   themeHeader(a,x0);

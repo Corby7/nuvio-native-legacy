@@ -1,10 +1,10 @@
-// Injeta teclas no device do controle remoto da TV.
+// Injects keys into the TV remote's input device.
 //
-// Existe para poder navegar em QUALQUER app — inclusive o da Apple, que e a
-// referencia — e capturar a mesma tela nos dois. Sem isto, comparar o nosso app
-// com o original dependia de alguem com o controle na mao.
+// It exists so you can navigate ANY app — including Apple's, which is the
+// reference — and capture the same screen in both. Without it, comparing our app
+// against the original depended on somebody holding the remote.
 //
-// Uso: nvkey /dev/input/event1 up down left right ok back ...
+// Usage: nvkey /dev/input/event1 up down left right ok back ...
 #include <fcntl.h>
 #include <linux/input.h>
 #include <stdio.h>
@@ -20,13 +20,13 @@ static int code(const char *name) {
   if (!strcmp(name, "ok"))    return KEY_ENTER;
   if (!strcmp(name, "back"))  return KEY_BACK;
   if (!strcmp(name, "home"))  return KEY_HOMEPAGE;
-  // aceita codigo numerico cru: o Back do controle da LG nao e o KEY_BACK do
-  // kernel, e descobrir qual e exige tentar
+  // accepts a raw numeric code: the LG remote's Back is not the kernel's
+  // KEY_BACK, and finding out which it is means trying
   if (name[0] >= '0' && name[0] <= '9') return atoi(name);
   return -1;
 }
 
-static void manda(int fd, int kind, int cod, int value) {
+static void sends(int fd, int kind, int cod, int value) {
   struct input_event e;
   memset(&e, 0, sizeof e);
   e.type = kind; e.code = cod; e.value = value;
@@ -40,11 +40,11 @@ int main(int argc, char **argv) {
   for (int i = 2; i < argc; i++) {
     int c = code(argv[i]);
     if (c < 0) { printf("unknown key: %s\n", argv[i]); continue; }
-    manda(fd, EV_KEY, c, 1); manda(fd, EV_SYN, SYN_REPORT, 0);
+    sends(fd, EV_KEY, c, 1); sends(fd, EV_SYN, SYN_REPORT, 0);
     usleep(60000);
-    manda(fd, EV_KEY, c, 0); manda(fd, EV_SYN, SYN_REPORT, 0);
-    // pausa entre teclas: navegacao de TV tem animacao, e sem esperar o
-    // aplicativo engole as teclas seguintes
+    sends(fd, EV_KEY, c, 0); sends(fd, EV_SYN, SYN_REPORT, 0);
+    // a pause between keys: TV navigation is animated, and without waiting the
+    // application swallows the following keys
     usleep(420000);
   }
   close(fd);

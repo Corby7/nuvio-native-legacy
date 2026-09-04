@@ -1,9 +1,9 @@
-// Perfil e Stats: relatorio editorial escuro, pensado para leitura a 3 metros.
+// Profile and Stats: a dark editorial report, designed to be read from 3 metres.
 //
-// A composicao evita uma grade de cards identicos. O resumo e tipografico, o
-// streak e um calendario, generos viram uma faixa proporcional e os titulos
-// mais vistos ganham paineis largos com arte. O acento violeta pertence aos
-// dados, enquanto o foco continua branco como no restante do native legacy.
+// The composition avoids a grid of identical cards. The summary is typographic,
+// the streak is a calendar, genres become a proportional band and the
+// most-watched titles get wide panels with art. The violet accent belongs to the
+// data, while the focus stays white as in the rest of the legacy native app.
 #include "profile.h"
 #include "anim.h"
 #include "gfx.h"
@@ -17,7 +17,7 @@
 #include <string.h>
 
 #define PF_X             settings_content_x()
-#define PF_W            (NV_TELA_W-PF_X-104.0f)
+#define PF_W            (NV_SCREEN_W-PF_X-104.0f)
 #define PF_TOP           62.0f
 #define PF_SUMMARY_Y       92.0f
 #define PF_HIGHLIGHTS_Y   500.0f
@@ -29,7 +29,7 @@
 #define PF_CARD_H        112.0f
 #define PF_CARD_GAP       28.0f
 #define PF_WARNING_H        54.0f
-#define PF_WARNING_Y       (NV_TELA_H-PF_WARNING_H-12.0f)
+#define PF_WARNING_Y       (NV_SCREEN_H-PF_WARNING_H-12.0f)
 #define PF_CONTENT_H    (PF_WARNING_Y-12.0f)
 
 static const float SECTION_Y[PF_SECTIONS] = {
@@ -41,8 +41,8 @@ static const uint32_t PALETTE[PROFILE_MAX_GENRES] = {
 };
 
 static ProfileData data;
-static int is_open, sair, loading, temData;
-static int temIdentity;
+static int is_open, sair, loading, hasData;
+static int hasIdentity;
 static int section, item, chosen = -1;
 static int day, requestUpdate;
 static int side, complete, sideFocus;
@@ -80,14 +80,14 @@ static void ring(GfxRect r, float radius, float a) {
   float smaller = r.w < r.h ? r.w : r.h;
   gfx_rect(r, 0, GFX_RING, 0, NV_RING_FOCUS/smaller, 0, radius, 0.96f, 0.96f, 0.98f, a);
 }
-static int visible(float y, float h) { return y+h-scroll>=0 && y-scroll<NV_TELA_H; }
+static int visible(float y, float h) { return y+h-scroll>=0 && y-scroll<NV_SCREEN_H; }
 static void trim(TxtStyle e,const char *s,int c,float x,float y,float w,float a) {
   txt_draw_alpha(txt_line_trim(e,s,c,c,c,255,w),x,y-scroll,a);
 }
 
 int profile_start(void) {
   memset(&data, 0, sizeof(data));
-  is_open = sair = temData = temIdentity = loading = 0;
+  is_open = sair = hasData = hasIdentity = loading = 0;
   state = PF_LOADING;
   section = item = 0; chosen = -1;
   day = requestUpdate = 0; error[0] = 0;
@@ -111,18 +111,18 @@ int profile_is_open(void) { return is_open; }
 int profile_wants_exit(void) { int q = sair; sair = 0; return q; }
 void profile_set_loading(int v) {
   loading = !!v;
-  if(loading) state=temData?PF_UPDATING:PF_LOADING;
+  if(loading) state=hasData?PF_UPDATING:PF_LOADING;
 }
 void profile_set_error(const char *m) {
   snprintf(error,sizeof(error),"%s",m&&m[0]?m:"Could not update the history.");
-  loading=0; state=temData?PF_STALE:PF_ERROR;
+  loading=0; state=hasData?PF_STALE:PF_ERROR;
 }
 void profile_set_state(ProfileState new, const char *m) {
   if (m && m[0]) snprintf(error, sizeof error, "%s", m);
-  else if (new == PROFILE_STATE_READY || new == PROFILE_STATE_SEM_ACTIVITY) error[0] = 0;
+  else if (new == PROFILE_STATE_READY || new == PROFILE_STATE_NO_ACTIVITY) error[0] = 0;
   loading = new == PROFILE_STATE_LOADING || new == PROFILE_STATE_UPDATING;
   state = new;
-  if ((new == PROFILE_STATE_PRIVATE || new == PROFILE_STATE_DISCONNECTED || new == PROFILE_STATE_UNAVAILABLE) && temData)
+  if ((new == PROFILE_STATE_PRIVATE || new == PROFILE_STATE_DISCONNECTED || new == PROFILE_STATE_UNAVAILABLE) && hasData)
     state = PROFILE_STATE_STALE;
 }
 ProfileState profile_state(void) { return state; }
@@ -130,14 +130,14 @@ int profile_requested_update(void) { int p=requestUpdate; requestUpdate=0; retur
 
 void profile_set_data(const ProfileData *d) {
   if (!d) {
-    memset(&data,0,sizeof(data));temData=temIdentity=loading=0;
+    memset(&data,0,sizeof(data));hasData=hasIdentity=loading=0;
     section=item=day=0;scroll=scrollTarget=velScroll=0;
     chosen=-1;error[0]=0;state=PROFILE_STATE_LOADING;return;
   }
   data = *d;
-  // O produtor pode preencher buffers fixos ate o ultimo byte. Fechar todos
-  // aqui mantem as chamadas de texto e de textura seguras mesmo com payload
-  // truncado vindo da rede.
+  // The producer may fill fixed buffers right to the last byte. Terminating them
+  // all here keeps the text and texture calls safe even with a truncated payload
+  // arriving from the network.
   data.name[sizeof(data.name)-1] = 0;
   data.user[sizeof(data.user)-1] = 0;
   data.avatar[sizeof(data.avatar)-1] = 0;
@@ -147,7 +147,7 @@ void profile_set_data(const ProfileData *d) {
   if(data.plays<0)data.plays=0;
   if(data.movies<0)data.movies=0;
   if(data.episodes<0)data.episodes=0;
-  // Calendario mensal: no maximo 31 dias, mesmo que o array tenha 42 slots.
+  // A monthly calendar: 31 days at most, even though the array has 42 slots.
   data.nDays = limit(data.nDays, 0, 31);
   data.firstDayWeek = limit(data.firstDayWeek, 0, 6);
   data.nGenres = limit(data.nGenres, 0, PROFILE_MAX_GENRES);
@@ -162,13 +162,13 @@ void profile_set_data(const ProfileData *d) {
     p->detail[sizeof(p->detail)-1]=0; p->poster[sizeof(p->poster)-1]=0;
     p->backdrop[sizeof(p->backdrop)-1]=0;
   }
-  temIdentity = data.name[0] || data.user[0] || data.avatar[0];
-  temData = temIdentity || data.minutes > 0 || data.plays > 0 ||
+  hasIdentity = data.name[0] || data.user[0] || data.avatar[0];
+  hasData = hasIdentity || data.minutes > 0 || data.plays > 0 ||
              data.movies > 0 || data.episodes > 0 || data.nHighlights > 0;
   loading = 0;
-  error[0]=0; state=temData?(data.plays||data.nHighlights?PF_READY:PROFILE_STATE_SEM_ACTIVITY):PF_ERROR; chosen=-1;
+  error[0]=0; state=hasData?(data.plays||data.nHighlights?PF_READY:PROFILE_STATE_NO_ACTIVITY):PF_ERROR; chosen=-1;
   day=limit(day,0,data.nDays?data.nDays-1:0);
-  if(!temData){section=0;scroll=scrollTarget=velScroll=0;}
+  if(!hasData){section=0;scroll=scrollTarget=velScroll=0;}
   if (item >= data.nHighlights) item = data.nHighlights ? data.nHighlights - 1 : 0;
 }
 
@@ -196,14 +196,14 @@ void profile_event(const SDL_Event *e) {
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE || k == SDLK_DELETE) {
     profile_close(); return;
   }
-  if(k==SDLK_r || ((!temData || error[0]) &&
+  if(k==SDLK_r || ((!hasData || error[0]) &&
      (k==SDLK_RETURN || k==SDLK_KP_ENTER))) {
     if(!loading)requestUpdate=1;
     return;
   }
-  if (!temData) return;
-  // O calendario recebe o D-pad real, com continuidade entre semanas. Sair
-  // pela primeira/ultima semana devolve a navegacao para as secoes.
+  if (!hasData) return;
+  // The calendar takes the real D-pad, with continuity between weeks. Leaving
+  // through the first or last week hands navigation back to the sections.
   if(section==2 && data.nDays>0) {
     if(k==SDLK_LEFT && day>0){day--;return;}
     if(k==SDLK_RIGHT && day+1<data.nDays){day++;return;}
@@ -230,18 +230,18 @@ void profile_event(const SDL_Event *e) {
 void profile_update(float dt, Uint32 now) {
   (void)now;
   int reduced=settings_animations_reduced();
-  entry = anim_mola(entry, is_open ? 1.0f : 0.0f, dt, NV_MOLA_SCREEN);
+  entry = anim_spring(entry, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
   if (!is_open && entry < 0.002f) entry = 0;
   float target = SECTION_Y[section] - (section == 0 ? PF_SUMMARY_Y : 120.0f);
-  float maxScroll = fmax0(PF_DOC_H - NV_TELA_H + 54.0f);
+  float maxScroll = fmax0(PF_DOC_H - NV_SCREEN_H + 54.0f);
   scrollTarget = anim_clamp(target, 0, maxScroll);
-  scroll = anim_mola2(&velScroll, scroll, scrollTarget, dt, NV_MOLA2_SCROLL);
+  scroll = anim_spring2(&velScroll, scroll, scrollTarget, dt, NV_SPRING2_SCROLL);
   if(reduced) { entry=is_open?1:0;scroll=scrollTarget;velScroll=0; }
   for (int i = 0; i < PF_SECTIONS; i++)
-    focusSec[i] = anim_mola(focusSec[i], i == section ? 1.0f : 0.0f, dt, NV_MOLA_FOCUS);
+    focusSec[i] = anim_spring(focusSec[i], i == section ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
   for (int i = 0; i < PROFILE_MAX_HIGHLIGHTS; i++)
-    focusItem[i] = anim_mola(focusItem[i], section == 1 && i == item ? 1.0f : 0.0f,
-                            dt, NV_MOLA_FOCUS);
+    focusItem[i] = anim_spring(focusItem[i], section == 1 && i == item ? 1.0f : 0.0f,
+                            dt, NV_SPRING_FOCUS);
   if(reduced) {
     for(int i=0;i<PF_SECTIONS;i++)focusSec[i]=(i==section);
     for(int i=0;i<PROFILE_MAX_HIGHLIGHTS;i++)focusItem[i]=(section==1&&i==item);
@@ -396,8 +396,8 @@ static void drawActivity(float a) {
   if(data.nDays)snprintf(b,sizeof(b),"Day %d: %u plays",day+1,data.activity[day]);
   else snprintf(b,sizeof(b),"Daily activity unavailable");
   trim(TXT_CAPTION,b,226,PF_X+32,PF_ACT_Y+450,panel.w-64,a);
-  // Legenda separada do calendario: leitura numerica continua acessivel sem
-  // depender de distinguir cinco tons de violeta na tela.
+  // A legend separate from the calendar: the numeric reading stays accessible
+  // without depending on telling five shades of violet apart on screen.
   float lx=PF_X+454;
   text(TXT_CAPTION,"Plays",205,lx,PF_ACT_Y+106,a);
   for(int i=0;i<5;i++) {
@@ -485,7 +485,7 @@ static void drawHighlights(float a) {
     if(section==1 && item==i)ring((GfxRect){r.x-NV_RING_FOCUS,r.y-NV_RING_FOCUS,
                               r.w+NV_RING_FOCUS*2,r.h+NV_RING_FOCUS*2},.047f,a);
   }
-  gfx_sem_crop();
+  gfx_no_crop();
 }
 
 void profile_draw(Uint32 now) {
@@ -505,11 +505,11 @@ void profile_draw(Uint32 now) {
     }
     const char *msg=error[0]?error:loading?"Loading history…":data.period;
     txt_draw_alpha(txt_line_trim(TXT_BODY,msg,193,186,202,255,688),x+44,220,a);
-    if(!loading && !error[0] && !temData)
+    if(!loading && !error[0] && !hasData)
       txt_draw_alpha(txt_line(TXT_BODY,"No activity in this period",221,217,228,255),x+44,270,a);
-    if(temData) {
-      const char *sem[]={"D","S","T","Q","Q","S","S"};
-      for(int c=0;c<7;c++)txt_draw_alpha(txt_line(TXT_CAPTION,sem[c],185,177,197,255),x+63+c*94,280,a);
+    if(hasData) {
+      const char *without[]={"D","S","T","Q","Q","S","S"};
+      for(int c=0;c<7;c++)txt_draw_alpha(txt_line(TXT_CAPTION,without[c],185,177,197,255),x+63+c*94,280,a);
       unsigned max=0;for(int d=0;d<data.nDays;d++)if(data.activity[d]>max)max=data.activity[d];
       for(int d=0;d<data.nDays;d++) {
         int slot=d+data.firstDayWeek;float v=max?(float)data.activity[d]/max:0.0f;
@@ -527,15 +527,15 @@ void profile_draw(Uint32 now) {
     }
     return;
   }
-  gfx_color((GfxRect){0,0,NV_TELA_W,NV_TELA_H},0,
+  gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,
           NV_COLOR_BACKGROUND_R,NV_COLOR_BACKGROUND_G,NV_COLOR_BACKGROUND_B,a);
-  gfx_crop(0,0,NV_TELA_W,PF_CONTENT_H);
-  if(loading && !temData) drawLoading(now,a);
-  else if(!temData) drawEmpty(a);
+  gfx_crop(0,0,NV_SCREEN_W,PF_CONTENT_H);
+  if(loading && !hasData) drawLoading(now,a);
+  else if(!hasData) drawEmpty(a);
   else {
     drawSummary(a); drawActivity(a); drawGenres(a); drawHighlights(a);
   }
-  gfx_sem_crop();
+  gfx_no_crop();
   char warningBuf[320];
   const char *warning=NULL;
   if(error[0]){

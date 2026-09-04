@@ -24,7 +24,7 @@ int  library_requested_open(int *indexCatalog);
 // detail screen (the "+" button), not the library: without this the "My List"
 // tab could only be fed from inside this module, and the detail's "+" would
 // have nowhere to write.
-int  library_na_list(int indexCatalog);
+int  library_in_list(int indexCatalog);
 void library_toggle_list(int indexCatalog);
 int  library_bought(int indexCatalog);
 

@@ -89,14 +89,14 @@ void login_event(const SDL_Event *e) {
 
 void login_update(float dt, Uint32 now) {
   session_step((unsigned)now);
-  animButton = anim_mola(animButton, 1.0f, dt, NV_MOLA_FOCUS);
+  animButton = anim_spring(animButton, 1.0f, dt, NV_SPRING_FOCUS);
   pulse += dt;
 }
 
 static void lineCentered(TxtStyle st, const char *s, int r, int g, int b,
                           float y, float alpha) {
   TxtLine l = txt_line_trim(st, s, r, g, b, 255, LG_BLOCK_W);
-  txt_draw_alpha(l, (NV_TELA_W - l.w) * 0.5f, y, alpha);
+  txt_draw_alpha(l, (NV_SCREEN_W - l.w) * 0.5f, y, alpha);
 }
 
 void login_draw(Uint32 now) {
@@ -104,7 +104,7 @@ void login_draw(Uint32 now) {
   float y;
   (void)now;
 
-  { GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f); }
 
   y = 118.0f;
@@ -140,9 +140,9 @@ void login_draw(Uint32 now) {
         // tela, a zona de silencio da textura sozinha ja bastaria, mas a
         // moldura arredondada faz o bloco ler como um cartao e nao como um
         // buraco branco no meio da tela.
-        GfxRect frame = { (NV_TELA_W - LG_QR_SIDE - 32.0f) * 0.5f, y - 16.0f,
+        GfxRect frame = { (NV_SCREEN_W - LG_QR_SIDE - 32.0f) * 0.5f, y - 16.0f,
                             LG_QR_SIDE + 32.0f, LG_QR_SIDE + 32.0f };
-        GfxRect r = { (NV_TELA_W - LG_QR_SIDE) * 0.5f, y, LG_QR_SIDE, LG_QR_SIDE };
+        GfxRect r = { (NV_SCREEN_W - LG_QR_SIDE) * 0.5f, y, LG_QR_SIDE, LG_QR_SIDE };
         gfx_color(frame, 0.06f, 1.0f, 1.0f, 1.0f, 1.0f);
         gfx_tex_aspect_current = 0.0f;   // 1:1, sem recorte
         gfx_rect(r, texQr, GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
@@ -181,11 +181,11 @@ void login_draw(Uint32 now) {
       lineCentered(TXT_HEADLINE, msg[0] ? msg : "Could not reach the server.",
                     236, 108, 108, y, 1.0f);
       y += 96.0f;
-      { GfxRect pill = { (NV_TELA_W - LG_PILL_W) * 0.5f, y, LG_PILL_W, LG_PILL_H };
+      { GfxRect pill = { (NV_SCREEN_W - LG_PILL_W) * 0.5f, y, LG_PILL_W, LG_PILL_H };
         TxtLine t;
         gfx_color(pill, NV_RADIUS_PILL, 1.0f, 1.0f, 1.0f, 0.92f * animButton);
         t = txt_line(TXT_BODY, "Try again", 24, 24, 26, 255);
-        txt_draw_alpha(t, (NV_TELA_W - t.w) * 0.5f,
+        txt_draw_alpha(t, (NV_SCREEN_W - t.w) * 0.5f,
                            y + (LG_PILL_H - t.h) * 0.5f, animButton); }
       break;
     }

@@ -9,9 +9,10 @@
 static char dir[512];
 static char clientId[64];
 
-// Tenta criar a pasta e escrever nela. Criar nao basta: em varios pontos do
-// sistema de arquivos do aparelho o mkdir passa e o open falha depois, e um
-// teste que so olha o mkdir escolheria uma pasta onde nada e gravado.
+// Tries to create the folder and write in it. Creating is not enough: at
+// several points in the device's filesystem the mkdir succeeds and the open
+// fails afterwards, and a test that only looks at the mkdir would choose a
+// folder where nothing gets written.
 static int serve(const char *candidate) {
   char teste[600];
   FILE *f;
@@ -40,9 +41,9 @@ void data_start(const char *dirArt) {
     snprintf(lar, sizeof lar, "%s/.nuvio", home);
     candidates[n++] = lar;
   }
-  // Pasta de trabalho do modo desenvolvedor do webOS. Existe e e gravavel nos
-  // aparelhos onde este app roda hoje; num aparelho de loja pode nao existir, e
-  // por isso ela e candidata e nao resposta.
+  // The working folder of webOS developer mode. It exists and is writable on
+  // the devices this app runs on today; on a shop-bought device it may not
+  // exist, which is why it is a candidate and not an answer.
   candidates[n++] = "/media/developer/temp/nuvio";
   if (dirArt && *dirArt) candidates[n++] = dirArt;
 
@@ -167,9 +168,10 @@ const char *data_client_id(void) {
     if (clientId[0]) return clientId;
   }
 
-  // Formato de UUID v4 porque e o que o servidor recebe do Android e do web; a
-  // aleatoriedade nao precisa ser criptografica — este numero identifica um
-  // aparelho para nao ecoar a propria escrita, nao protege nada.
+  // UUID v4 format because that is what the server receives from Android and
+  // from the web; the randomness does not need to be cryptographic — this number
+  // identifies a device so it does not echo its own write, it protects
+  // nothing.
   data_uuid(clientId, sizeof clientId);
 
   { char line[64];

@@ -9,14 +9,14 @@
 
 #define TMDB "https://api.themoviedb.org/3"
 
-// Nomeada porque a ordenacao por popularidade precisa de uma variavel
-// temporaria do mesmo tipo, e struct anonima nao permite declarar outra.
+// Named because sorting by popularity needs a temporary variable of the same
+// type, and an anonymous struct does not let you declare another.
 typedef struct {
   char t[120], p[80], y[8], po[160], im[16];
-  // O credito de combined_credits NAO tem imdb_id — esse campo so existe no
-  // endpoint detalhado do titulo. Sem guardar o id do TMDB e o tipo, nao havia
-  // como traduzir o credito em nada que o Cinemeta entenda, e o OK nao fazia
-  // coisa nenhuma (o `im` ficava sempre vazio).
+  // A combined_credits credit has NO imdb_id — that field only exists on the
+  // title's detailed endpoint. Without keeping the TMDB id and the type, there
+  // was no way to translate the credit into anything Cinemeta understands, and
+  // OK did nothing at all (`im` was always empty).
   long tmdb;
   char kind[8];          // "movie" ou "tv"
   double pop;
@@ -31,7 +31,7 @@ static int  ready, threadAlive;
 static pthread_t thread;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-// known_for_department vem em ingles do TMDB mesmo com language=pt-BR.
+// known_for_department arrives in English from TMDB even with language=pt-BR.
 static const char *translatesArea(const char *s) {
   if (!strcmp(s, "Acting"))    return "Atua\xc3\xa7\xc3\xa3" "o";
   if (!strcmp(s, "Directing")) return "Dire\xc3\xa7\xc3\xa3" "o";
@@ -56,9 +56,10 @@ static void *fetch(void *arg) {
     return NULL;
   }
 
-  // O MESMO pedido do web (castDetailScreen.js:204): a ficha e os creditos
-  // combinados numa chamada so. Separado seriam dois pedidos para desenhar uma
-  // tela — e o segundo so serve se o primeiro deu certo.
+  // The SAME request as the web's (castDetailScreen.js:204): the profile and
+  // the combined credits in a single call. Split apart it would be two requests
+  // to draw one screen — and the second is only useful if the first
+  // succeeded.
   snprintf(url, sizeof url,
            "%s/person/%ld?api_key=%s&language=pt-BR"
            "&append_to_response=combined_credits", TMDB, id, key);
@@ -81,9 +82,9 @@ static void *fetch(void *arg) {
           path[0] == '/')
         snprintf(f, sizeof f, "https://image.tmdb.org/t/p/w342%s", path); }
 
-    // `combined_credits.cast` — o array vem depois da chave, e js_array acha o
-    // primeiro "cast" do documento. O objeto raiz nao tem outro "cast", entao
-    // e este.
+    // `combined_credits.cast` — the array comes after the key, and js_array
+    // finds the document's first "cast". The root object has no other "cast", so
+    // this is the one.
     { const char *p = js_array(body, NULL, "cast");
       while (p && k < PES_MAX) {
         const char *end = js_end(p);
@@ -109,9 +110,9 @@ static void *fetch(void *arg) {
         p = js_next(end);
       } }
 
-    // Por POPULARIDADE, como o web (`right.popularity - left.popularity`). A
-    // ordem que o TMDB devolve e cronologica, e com ela os trabalhos pelos
-    // quais a pessoa e conhecida ficam no fim da lista.
+    // By POPULARITY, like the web (`right.popularity - left.popularity`). The
+    // order TMDB returns is chronological, and with it the work the person is
+    // known for ends up at the end of the list.
     { int i, j;
       for (i = 1; i < k; i++) {
         Credit tmp = ach[i];
@@ -154,8 +155,8 @@ void person_request(long tmdbId, const char *nameKnown, const char *photoKnown) 
   if (idRequest == tmdbId) { pthread_mutex_unlock(&lock); return; }
   idRequest = tmdbId;
   nCred = 0; ready = 0; bio[0] = 0; area[0] = 0;
-  // O nome e a foto que o elenco ja tinha entram na hora, para a tela abrir
-  // com conteudo em vez de vazia enquanto a rede responde.
+  // The name and photo the cast already had go in immediately, so the screen
+  // opens with content instead of empty while the network answers.
   snprintf(nameSeed, sizeof nameSeed, "%s", nameKnown ? nameKnown : "");
   snprintf(photoSeed, sizeof photoSeed, "%s", photoKnown ? photoKnown : "");
   snprintf(name, sizeof name, "%s", nameSeed);

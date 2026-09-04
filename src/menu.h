@@ -1,25 +1,28 @@
-// Menu lateral (a "sidebar" do app Apple TV na LG).
+// The side menu (the Apple TV app's "sidebar" on the LG).
 //
-// Ele nao e uma tela: e uma camada que aparece POR CIMA do conteudo e toma o
-// D-pad enquanto esta visivel. Por isso a API foge do padrao de tela em dois
-// pontos, de proposito:
-//   - nao tem menu_encerrar: texto e icones usam os caches de text.c e gfx.c;
-//     o modulo nao possui alocacoes independentes.
-//   - nao tem menu_quer_sair: fechar o menu nunca fecha o app. O Back aqui so
-//     devolve o foco ao conteudo, e quem decide sair continua sendo a home.
+// It is not a screen: it is a layer that appears OVER the content and takes the
+// D-pad while it is visible. That is why the API departs from the screen pattern
+// in two places, on purpose:
+//   - there is no menu_shutdown: text and icons use text.c's and gfx.c's caches;
+//     the module owns no allocations of its own.
+//   - there is no menu_wants_exit: closing the menu never closes the app. Back
+//     here only hands focus back to the content, and the home remains the one
+//     that decides about leaving.
 //
-// O ciclo no aparelho: o foco esta na primeira coluna de uma fileira, o usuario
-// aperta ESQUERDA, a barra desliza da borda e ganha o foco. DIREITA ou OK
-// escolhe o destino e devolve o foco ao conteudo.
+// The cycle on the device: focus is on the first column of a row, the user
+// presses LEFT, the bar slides in from the edge and takes focus. RIGHT or OK
+// picks the destination and hands focus back to the content.
 #ifndef NV_MENU_H
 #define NV_MENU_H
 #include <SDL2/SDL.h>
 
-// Os destinos do app, na ordem em que aparecem na barra. MENU_N fecha o enum
-// para quem quiser dimensionar vetor por destino sem repetir o numero 4.
-// ORDEM DA REFERENCIA: Inicio primeiro, depois Busca. Estava Busca antes de
-// Inicio, que poe a acao secundaria acima do destino padrao — e no D-pad
-// significa que voltar para a home custa um passo a mais que ir buscar.
+// The app's destinations, in the order they appear on the bar. MENU_N closes the
+// enum for anyone who wants to size an array per destination without repeating
+// the number 4.
+// THE REFERENCE'S ORDER: Home first, then Search. Search used to come before
+// Home, which puts the secondary action above the default destination — and on a
+// D-pad that means getting back to the home costs one step more than going to
+// search.
 typedef enum {
   MENU_START,
   MENU_FETCH,
@@ -29,39 +32,43 @@ typedef enum {
   MENU_N
 } MenuDestination;
 
-// Zera destino e animacao. So e necessario se o app reinicializar a UI; o
-// estado inicial ja e valido sem chamar (destino = MENU_INICIO, barra fora).
+// Resets the destination and the animation. It is only needed if the app
+// reinitialises the UI; the initial state is already valid without calling it
+// (destination = MENU_START, bar out).
 int  menu_start(void);
 
-// Desliza a barra para dentro E entrega o foco a ela. Chamar com o menu ja
-// aberto nao faz nada, entao e seguro ligar direto no ESQUERDA da home.
+// Slides the bar in AND hands it the focus. Calling it with the menu already
+// open does nothing, so it is safe to wire straight to the home's LEFT.
 void menu_open(void);
-// Fecha sem escolher: o destaque volta para o destino atual.
+// Closes without choosing: the highlight goes back to the current destination.
 void menu_close(void);
 
-// 1 enquanto a barra e dona do D-pad. Vira 0 no instante da escolha, ainda com
-// a animacao de saida rodando — e esse o sinal que o conteudo deve usar para
-// voltar a responder as teclas, senao o D-pad fica morto durante o recolhimento.
+// 1 while the bar owns the D-pad. It becomes 0 at the instant of the choice,
+// with the exit animation still running — that is the signal the content should
+// use to start responding to keys again, otherwise the D-pad is dead during the
+// retraction.
 int  menu_is_open(void);
-// 1 enquanto ainda ha pixel para desenhar (inclui a saida). Serve para o loop
-// decidir se vale sequer chamar menu_desenhar.
+// 1 while there is still a pixel to draw (the exit included). It lets the loop
+// decide whether calling menu_draw is worth it at all.
 int  menu_visible(void);
 
-// Destino em vigor (um MenuDestino). menu_definir_destino existe para o app
-// impor o estado inicial ou reagir a uma navegacao que nao veio da barra.
+// The destination in force (a MenuDestination). menu_set_destination exists so
+// the app can impose the initial state or react to navigation that did not come
+// from the bar.
 int  menu_destination(void);
 void menu_set_destination(int destination);
-// 1 uma unica vez, no quadro em que o usuario escolheu um destino DIFERENTE do
-// que estava em vigor. Consome a flag: quem le, trata. Sem isso o app teria que
-// guardar o destino anterior so para descobrir que ele mudou.
+// 1 exactly once, on the frame where the user chose a destination DIFFERENT from
+// the one in force. Consumes the flag: whoever reads it, handles it. Without
+// this the app would have to keep the previous destination just to discover it
+// had changed.
 int  menu_changed_destination(void);
 
 const char *menu_label(int destination);
 
-// 1 uma unica vez, no quadro em que o usuario escolheu o rodape ("trocar de
-// usuario"). Consome a flag, como menu_mudou_destino. Nao e um MenuDestino de
-// proposito: trocar de perfil nao e uma aba do app, e uma acao que devolve a
-// pessoa a tela de escolha.
+// 1 exactly once, on the frame where the user chose the footer ("switch user").
+// Consumes the flag, like menu_changed_destination. It is deliberately not a
+// MenuDestination: switching profile is not a tab of the app, it is an action
+// that returns the person to the picker screen.
 int  menu_requested_swap(void);
 
 void menu_event(const SDL_Event *e);

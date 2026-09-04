@@ -211,7 +211,7 @@ int  detail_requested_do_start(void);
 // Glifo dentro do circular: 32 num circulo de 96 em repouso e 36 num de 110
 // focado — 0,333 do diametro nos dois. Estava 0,45, que vinha de uma captura
 // solta do dono e engordava o "+" ate quase encostar na borda.
-#define NV_DETW2_CIRC_GLIFO    0.333f
+#define NV_DETW2_CIRC_GLYPH    0.333f
 // FOCO: o aparelho NAO desenha anel. O item focado CRESCE, com o centro parado,
 // e o circular escuro ainda troca de cor (#222 -> #f5f5f5, glifo branco -> #111).
 // A pilula branca fica branca nos dois estados: e o tamanho que diz o foco.

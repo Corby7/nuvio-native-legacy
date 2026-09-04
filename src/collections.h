@@ -15,6 +15,6 @@ int col_load(const char *dir);
 int col_n(void);
 const ColFolder *col_folder(int i);
 int col_group(const char *name, int *indices, int max);
-const ColFolder *col_por_catalog(const char *base, const char *type, const char *id);
+const ColFolder *col_by_catalog(const char *base, const char *type, const char *id);
 void col_color(const ColFolder *f, float *r, float *g, float *b);
 #endif

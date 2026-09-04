@@ -35,9 +35,9 @@ static char traktSecret[128] = NV_TRAKT_CLIENT_SECRET;
 static char simklClient[200] = NV_SIMKL_CLIENT_ID;
 static char simklApp[80] = NV_SIMKL_APP;
 
-// Freio: instante (em segundos) ate quando ninguem tenta, e quantas falhas
-// seguidas ja aconteceram. O intervalo dobra a cada falha ate o teto — o mesmo
-// desenho do syncBackoffPolicy do web.
+// The brake: the instant (in seconds) until which nobody tries, and how many
+// consecutive failures have happened. The interval doubles on each failure up to
+// the cap — the same design as the web's syncBackoffPolicy.
 #define BRAKE_MIN   5
 #define BRAKE_MAX 300
 static long brakeAte = 0;
@@ -62,16 +62,17 @@ int cloud_configure(const char *dirArt) {
       printf("[cloud] configuration from art/cloud.txt\n");
     }
   }
-  // Barra no fim quebraria toda concatenacao com o caminho da RPC: o web
-  // normaliza a base do mesmo jeito.
+  // A trailing slash would break every concatenation with the RPC path: the web
+  // normalises the base the same way.
   { char *end = url + strlen(url);
     while (end > url && end[-1] == '/') *--end = 0; }
   { char *end = baseLogin + strlen(baseLogin);
     while (end > baseLogin && end[-1] == '/') *--end = 0; }
 
   if (!url[0] || !anon[0]) {
-    // Dizer isto alto importa: sem configuracao o app nao "fica sem sync", ele
-    // fica sem LOGIN, e a tela vai parecer quebrada sem explicar por que.
+    // Saying this loudly matters: with no configuration the app is not merely
+    // "without sync", it is without LOGIN, and the screen will look broken
+    // without explaining why.
     printf("[cloud] NOT CONFIGURED (url=%s key=%s): login and sync are off\n",
            url[0] ? "ok" : "empty", anon[0] ? "ok" : "empty");
     return 0;
@@ -92,7 +93,7 @@ const char *cloud_simkl_app(void) { return simklApp; }
 char *cloud_post(const char *path, const char *bodyJson,
                  const char *bearer, int *status) {
   char complete[900];
-  char headerApi[1300], headerAut[1300];
+  char headerApi[1300], headerAuth[1300];
   const char *header[3];
   if (status) *status = 0;
   if (!cloud_ready() || !path) return NULL;
@@ -100,12 +101,12 @@ char *cloud_post(const char *path, const char *bodyJson,
   snprintf(complete, sizeof complete, "%s%s%s", url,
            path[0] == '/' ? "" : "/", path);
   snprintf(headerApi, sizeof headerApi, "apikey: %s", anon);
-  snprintf(headerAut, sizeof headerAut, "Authorization: Bearer %s",
+  snprintf(headerAuth, sizeof headerAuth, "Authorization: Bearer %s",
            (bearer && *bearer) ? bearer : anon);
   header[0] = headerApi;
-  header[1] = headerAut;
+  header[1] = headerAuth;
   header[2] = NULL;
-  // Content-Type: application/json ja e posto por rede_postar.
+  // Content-Type: application/json is already set by net_post.
   return net_post_st(complete, 25, header, bodyJson ? bodyJson : "{}", status);
 }
 
@@ -142,17 +143,17 @@ void cloud_url_escape(const char *value, char *dst, unsigned size) {
 
 char *cloud_table(const char *table, const char *query,
                    const char *bearer, int *status) {
-  char complete[1200], headerApi[1300], headerAut[1300];
+  char complete[1200], headerApi[1300], headerAuth[1300];
   const char *header[3];
   if (status) *status = 0;
   if (!cloud_ready() || !table) return NULL;
   snprintf(complete, sizeof complete, "%s/rest/v1/%s%s%s", url, table,
            (query && *query) ? "?" : "", (query && *query) ? query : "");
   snprintf(headerApi, sizeof headerApi, "apikey: %s", anon);
-  snprintf(headerAut, sizeof headerAut, "Authorization: Bearer %s",
+  snprintf(headerAuth, sizeof headerAuth, "Authorization: Bearer %s",
            (bearer && *bearer) ? bearer : anon);
   header[0] = headerApi;
-  header[1] = headerAut;
+  header[1] = headerAuth;
   header[2] = NULL;
   return net_download_st(complete, 25, header, status);
 }

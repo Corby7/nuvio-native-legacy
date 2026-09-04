@@ -1,55 +1,56 @@
-// Ponte com os addons (protocolo Stremio) — as fontes de verdade.
+// The bridge to the addons (the Stremio protocol) — the real sources.
 //
-// Um addon e uma URL base; as fontes de um titulo saem de
+// An addon is a base URL; a title's sources come from
 //   <base>/stream/<movie|series>/<id>.json
-// e vem como {"streams":[{name,title|description,url,behaviorHints},...]}.
-// Nao ha autenticacao propria: a chave, quando existe, ja vem embutida no
-// caminho da URL do addon (por isso addons.txt e conteudo sensivel do dono e
-// nao deve ir para repositorio nenhum).
+// and arrive as {"streams":[{name,title|description,url,behaviorHints},...]}.
+// There is no authentication of its own: the key, where there is one, is already
+// embedded in the addon's URL path (which is why addons.txt is the owner's
+// sensitive content and must not go into any repository).
 //
-// A busca BLOQUEIA e roda num fio proprio. O resultado entra por
-// stream_definir_lista, e a tela so precisa olhar addons_estado().
+// The fetch BLOCKS and runs on a thread of its own. The result comes in through
+// stream_set_list, and the screen only needs to look at addons_state().
 #ifndef NV_ADDONS_H
 #define NV_ADDONS_H
 
 typedef enum { ADD_STOPPED = 0, ADD_SEARCHING, ADD_READY, ADD_EMPTY } AddState;
 
-// Le art/addons.txt (nome<TAB>url por linha). Sem ele a lista fica vazia.
+// Reads art/addons.txt (name<TAB>url per line). Without it the list stays empty.
 int  addons_load(const char *dirArt);
 
-// Lista vinda da CONTA, substituindo o arquivo. E isto que torna o pacote
-// distribuivel: enquanto a lista sair de art/addons.txt, o .ipk carrega as
-// chaves de debrid de quem o montou embutidas nas URLs.
+// The list from the ACCOUNT, replacing the file. This is what makes the package
+// distributable: as long as the list comes from art/addons.txt, the .ipk carries
+// the debrid keys of whoever built it, embedded in the URLs.
 //
-// Uma lista VAZIA e ignorada de proposito. O servidor pode responder vazio por
-// perfil errado, 401 mal tratado ou queda — e nenhum desses e "o usuario
-// removeu todos os addons". Trocar por vazio deixaria a pessoa sem fonte
-// nenhuma e sem entender por que.
+// An EMPTY list is ignored on purpose. The server can answer empty because of
+// the wrong profile, a mishandled 401 or an outage — and none of those is "the
+// user removed all their addons". Replacing with empty would leave the person
+// with no source at all and no idea why.
 typedef struct { char name[64]; char url[600]; int active; } AddonRemote;
 int  addons_set_list(const AddonRemote *list, int n);
 
-// Lista atual, para o sync poder empurrar de volta o que este aparelho tem.
+// The current list, so the sync can push back what this device has.
 int  addons_export(AddonRemote *output, int max);
 
-// Esquece a lista da conta. Chamado ao SAIR: sem isto, a proxima pessoa a usar
-// esta TV navega com os addons da anterior — e como as chaves de debrid vao
-// embutidas nas URLs, ela tambem consome a assinatura da anterior — ate o
-// primeiro sync terminar. Ficar sem fonte por alguns segundos e o
-// comportamento correto de "ninguem logado".
+// Forgets the account's list. Called on SIGN-OUT: without it, the next person to
+// use this TV browses with the previous person's addons — and since the debrid
+// keys travel embedded in the URLs, they also consume the previous person's
+// subscription — until the first sync finishes. Having no source for a few
+// seconds is the correct behaviour for "nobody signed in".
 void addons_forget(void);
 int  addons_n(void);
 const char *addons_base(int i);   // URL base, sem /manifest.json
-int  addons_tem_catalog(int i);  // 1 quando o addon fornece catalogo
+int  addons_has_catalog(int i);  // 1 quando o addon fornece catalogo
 
-// Dispara a busca das fontes de `imdb` ("tt1234567", ou "tt1234567:1:2" para
-// episodio). Volta na hora; o resultado chega por stream_definir_lista.
+// Fires the fetch for `imdb`'s sources ("tt1234567", or "tt1234567:1:2" for an
+// episode). Returns immediately; the result arrives through stream_set_list.
 void addons_fetch(const char *imdb, const char *kind);
 
-// --- legendas externas (OpenSubtitles) ---------------------------------------
-// Addon de legenda responde em /subtitles/<tipo>/<id>.json com
-// {"subtitles":[{lang,url,subtitleFileName,...}]}. Sao dezenas por titulo, a
-// maioria em idiomas que nao interessam — por isso a lista e FILTRADA por
-// idioma antes de chegar na tela: 70 linhas para rolar seria pior que nenhuma.
+// --- external subtitles (OpenSubtitles) --------------------------------------
+// A subtitle addon answers at /subtitles/<type>/<id>.json with
+// {"subtitles":[{lang,url,subtitleFileName,...}]}. There are dozens per title,
+// most in languages that are of no interest — which is why the list is FILTERED
+// by language before it reaches the screen: 70 rows to scroll through would be
+// worse than none.
 #define SUB_MAX 12
 
 typedef struct {

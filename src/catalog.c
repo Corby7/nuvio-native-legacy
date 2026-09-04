@@ -107,8 +107,8 @@ void cat_history_set_id(const char *imdb, const char *kind, int watched) {
 // Compatibilidade para chamadores antigos que so conhecem o IMDb. A serie e
 // inferida do proprio catalogo quando possivel; o sufixo de episodio e o
 // fallback para itens que ainda nao entraram no vetor.
-const char *cat_kind_por_imdb(const char *imdb) {
-  int i = cat_index_por_imdb(imdb);
+const char *cat_kind_by_imdb(const char *imdb) {
+  int i = cat_index_by_imdb(imdb);
   if (i >= 0 && cat_item(i)) return cat_item(i)->kind;
   return (imdb && strchr(imdb, ':')) ? "series" : "movie";
 }
@@ -475,7 +475,7 @@ void cat_dir_writing(const char *dir) {
   if (dir && *dir) snprintf(dirWriting, sizeof dirWriting, "%s", dir);
 }
 
-int cat_index_por_imdb(const char *imdb) {
+int cat_index_by_imdb(const char *imdb) {
   int i;
   if (!imdb || !imdb[0]) return -1;
   for (i = 0; i < cat_n(); i++) {
@@ -571,9 +571,9 @@ const CatRow *cat_row(int r) {
 //     valendo e nao precisam ser derrubadas;
 //   - `n` NAO e zerado: subir a contagem depois que o bloco novo ja esta
 //     publicado e seguro, e zerar faria a home piscar a cada titulo aberto.
-void cat_set_na_list(int i, int naList) {
+void cat_set_in_list(int i, int inList) {
   if (!items || n <= 0 || i < 0 || i >= n) return;
-  items[i].naList = naList ? 1 : 0;
+  items[i].inList = inList ? 1 : 0;
 }
 
 // Atualiza um espelho de item somente quando o indice ainda pertence ao bloco
@@ -617,7 +617,7 @@ int cat_append_lote(const CatItem *v, int count, int *outputIdx) {
 }
 
 int cat_append(const CatItem *item) {
-  static CatItem *garbageAcr;
+  static CatItem *garbageAccum;
   CatItem *new;
   int newN;
   if (!item || n < 1) return -1;
@@ -627,8 +627,8 @@ int cat_append(const CatItem *item) {
   if (!new) return -1;
   memcpy(new, items, sizeof(CatItem) * (size_t)n);
   memcpy(&new[n], item, sizeof(CatItem));
-  free(garbageAcr);
-  garbageAcr = items;
+  free(garbageAccum);
+  garbageAccum = items;
   items = new;
   nAllocated = newN;
   n = newN;
@@ -787,10 +787,10 @@ int cat_similar(int index_, int *output, int max) {
   // Sem nenhum genero em comum a fileira ficaria vazia; ai vale mais mostrar os
   // vizinhos do mesmo tipo que sumir com a secao.
   for (i = 0; i < m && k < max; i++) {
-    int j, ja = 0;
+    int j, already = 0;
     if (i == index_) continue;
-    for (j = 0; j < k; j++) if (output[j] == i) { ja = 1; break; }
-    if (ja) continue;
+    for (j = 0; j < k; j++) if (output[j] == i) { already = 1; break; }
+    if (already) continue;
     if (base->kind[0] && items[i].kind[0] && strcmp(base->kind, items[i].kind)) continue;
     output[k++] = i;
   }

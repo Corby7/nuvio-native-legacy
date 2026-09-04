@@ -36,7 +36,7 @@ void jsw_obj_end(Jsw *w);
 void jsw_arr_start(Jsw *w);
 void jsw_arr_end(Jsw *w);
 
-// Chave dentro de um objeto. O proximo jsw_* escreve o valor dela.
+// A key inside an object. The next jsw_* writes its value.
 void jsw_key(Jsw *w, const char *name);
 
 void jsw_str(Jsw *w, const char *s);     // string com escape; NULL vira null

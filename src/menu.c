@@ -71,7 +71,7 @@ static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Profile and 
 // ela como destino.
 #define NV_MENU_FOOTER_H   112.0f
 #define NV_MENU_AVATAR      56.0f
-#define NV_MENU_FOCOS      (MENU_N + 1)
+#define NV_MENU_FOCUSES      (MENU_N + 1)
 #define MENU_FOOTER         MENU_N
 
 static int   requestedSwap = 0;
@@ -81,16 +81,16 @@ static int   line   = MENU_START;   // destaque; so vira destino ao escolher
 static int   changed   = 0;
 static float slides = 0.0f;
 static float expands = 0.0f;
-static float animFocus[NV_MENU_FOCOS];
+static float animFocus[NV_MENU_FOCUSES];
 static void icon(int d, float cx, float cy, float s, float r, float g, float b, float a);
 static void drawFooter(float px, float w, float alpha, float focus);
 
 // O legacy deixa a rail de 144px sempre visível. O menu expandido é uma
 // camada adicional; não deslocamos o conteúdo quando ele fecha.
 static void drawRailFixed(void) {
-  GfxRect panel = { 0, 0, NV_LEGACY_RAIL_W, NV_TELA_H };
+  GfxRect panel = { 0, 0, NV_LEGACY_RAIL_W, NV_SCREEN_H };
   gfx_color(panel, 0.0f, 0.055f, 0.058f, 0.064f, 1.0f);
-  float y = (NV_TELA_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
+  float y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
   for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H) {
     int current = (i == destination);
     float luma = current ? 1.0f : 0.60f;
@@ -164,7 +164,7 @@ void menu_event(const SDL_Event *e) {
   if (k == SDLK_RIGHT || k == SDLK_RETURN || k == SDLK_KP_ENTER) { choose(); return; }
   // Sem rotacao nas pontas: a barra e curta e o usuario ve as quatro linhas de
   // uma vez, entao dar a volta no fim da lista le como falha, nao como atalho.
-  if (k == SDLK_DOWN && line < NV_MENU_FOCOS - 1) line++;
+  if (k == SDLK_DOWN && line < NV_MENU_FOCUSES - 1) line++;
   else if (k == SDLK_UP && line > 0)       line--;
   // ESQUERDA morre aqui de proposito: a barra ja e a borda da tela.
 }
@@ -180,10 +180,10 @@ void menu_update(float dt, Uint32 now) {
   float ms   = is_open ? NV_MENU_OPEN_MS : NV_MENU_CLOSE_MS;
   slides = anim_ramp(slides, target, dt, ms);
   expands = anim_ramp(expands, target, dt, ms * NV_MENU_EXP_LENTO);
-  for (int i = 0; i < NV_MENU_FOCOS; i++) {
+  for (int i = 0; i < NV_MENU_FOCUSES; i++) {
     float a = (is_open && i == line) ? 1.0f : 0.0f;
-    animFocus[i] = anim_mola(animFocus[i], a, dt,
-                            a > animFocus[i] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+    animFocus[i] = anim_spring(animFocus[i], a, dt,
+                            a > animFocus[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
 }
 
@@ -224,7 +224,7 @@ static void drawFooter(float px, float w, float alpha, float focus) {
   // Acima da area segura, nao colado na base: numa TV os ultimos 60px podem
   // estar fora do painel (overscan), e o nome do usuario e justamente o que
   // some primeiro.
-  float y = NV_TELA_H - NV_MARGIN_Y - NV_MENU_FOOTER_H;
+  float y = NV_SCREEN_H - NV_MARGIN_Y - NV_MENU_FOOTER_H;
   float cx = px + NV_MENU_ICON_CX;
   float cy = y + NV_MENU_FOOTER_H * 0.5f;
   float cr, cg, cb;
@@ -296,21 +296,21 @@ void menu_draw(Uint32 now) {
   float entry = anim_smooth(slides);
   float px = -w * (1.0f - entry);
 
-  GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   gfx_color(screen, 0.0f, 0, 0, 0, NV_MENU_VEIL * slides);
 
   // Painel quase opaco e um pouco mais escuro que NV_COR_FUNDO: encostado no
   // fundo da home ele precisa de uma aresta propria, senao a barra parece um
   // pedaco da tela que escureceu sozinho.
-  GfxRect panel = { px, 0, w, NV_TELA_H };
+  GfxRect panel = { px, 0, w, NV_SCREEN_H };
   gfx_color(panel, 0.0f, 0.075f, 0.078f, 0.086f, 0.97f * entry);
 
   // Tudo daqui para baixo fica preso ao painel. Sem o recorte, o rotulo — que e
   // desenhado no x fixo do texto — vaza para o conteudo enquanto a barra ainda
   // esta estreita, e ve-se a palavra aparecendo fora dela.
-  gfx_crop(px, 0, w, NV_TELA_H);
+  gfx_crop(px, 0, w, NV_SCREEN_H);
 
-  float y = (NV_TELA_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
+  float y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
   for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H) {
     float f = animFocus[i];
     float cy = y + NV_MENU_LINE_H * 0.5f;
@@ -359,5 +359,5 @@ void menu_draw(Uint32 now) {
 
   drawFooter(px, w, entry, animFocus[MENU_FOOTER]);
 
-  gfx_sem_crop();
+  gfx_no_crop();
 }

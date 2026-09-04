@@ -111,7 +111,7 @@ static void clear(void) {
 // formatos que aparecem: /auth/v1/signup, /auth/v1/token e a funcao de troca —
 // todos trazem access_token/refresh_token, uns na raiz, outros dentro de
 // "session".
-static int storeTokens(const char *body, int ehAnon) {
+static int storeTokens(const char *body, int isAnon) {
   const char *end, *sess;
   char a[3000], r[3000];
   if (!body) return 0;
@@ -129,7 +129,7 @@ static int storeTokens(const char *body, int ehAnon) {
   if (!a[0]) return 0;
   snprintf(access_, sizeof access_, "%s", a);
   snprintf(refresh, sizeof refresh, "%s", r);
-  anon = ehAnon ? 1 : 0;
+  anon = isAnon ? 1 : 0;
   readJwt(access_);
   writeSession();
   return 1;

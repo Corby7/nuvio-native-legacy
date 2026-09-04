@@ -8,8 +8,8 @@
 #ifndef NV_LAYOUT_H
 #define NV_LAYOUT_H
 
-#define NV_TELA_W        1920.0f
-#define NV_TELA_H        1080.0f
+#define NV_SCREEN_W        1920.0f
+#define NV_SCREEN_H        1080.0f
 
 // O shell legacy usa uma rail de 72dp (144px no canvas 1080p) e inicia o
 // conteúdo 104px depois dela, como no CSS .home-main + --home-content-start.
@@ -90,7 +90,7 @@
 // que o botao nao respondeu.
 #define NV_HOLD_MS       500
 // fatia da fileira vizinha que fica visivel acima/abaixo da fileira em foco
-#define NV_ESPIA_VIZINHA 0.10f
+#define NV_PEEK_NEIGHBOUR 0.10f
 
 // Safe area: HIG pede >=60pt das bordas; overscan classico usa 80-90 nas
 // laterais. Medido nas fotos de referencia: bate com 90.
@@ -120,7 +120,7 @@
 #define NV_HERO_ART_START 300.0f
 #define NV_HERO_ART_EXT 520.0f
 #define NV_HERO_BUTTON_H   68.0f
-#define NV_HERO_NBOTOES      3
+#define NV_HERO_NBUTTONS      3
 // MEDIDO no app web: .home-modern-hero-media em x=555, y=0, 1421x670, com a
 // arte em object-fit:cover. Os degrades que dissolvem a borda esquerda e a base
 // estao no shader GFX_HERO, com as paradas anotadas la.
@@ -383,7 +383,7 @@
 #define NV_FT_PG_CLOCK 26   // .player-clock
 #define NV_FT_PG_END     20   // .player-ends-at
 #define NV_FT_PG_LABEL  22   // .player-parental-label
-#define NV_FT_PG_GRAV    22   // .player-parental-severity
+#define NV_FT_PG_SEV    22   // .player-parental-severity
 // Entrelinha (leading) OFICIAL de cada estilo. Usar a altura que o SDL_ttf
 // devolve nao e a mesma coisa: ela varia com os acentos da linha, entao um
 // paragrafo fica com espacamento irregular linha a linha.
@@ -479,22 +479,22 @@
 // aqui vinha do HIG do tvOS, nao desta interface: na referencia os dois lados
 // levam o mesmo tempo, e com tempos diferentes existe um instante com DOIS
 // aneis na tela, que a referencia nunca mostra.
-#define NV_MOLA_FOCUS     25.0f    // entrando no foco  (95% em 120ms)
-#define NV_MOLA_DESFOCO  25.0f    // saindo dele       (mesmo tempo: ver acima)
-#define NV_MOLA_SCROLL    8.0f
+#define NV_SPRING_FOCUS     25.0f    // entrando no foco  (95% em 120ms)
+#define NV_SPRING_BLUR  25.0f    // saindo dele       (mesmo tempo: ver acima)
+#define NV_SPRING_SCROLL    8.0f
 // Frequencia (rad/s) da mola de 2a ordem que rola as fileiras da home. Vale o
 // k da CAUDA medida no deslize da referencia (~12,5 /s); 11,5 e o valor que
 // faz a curva inteira bater, porque nessa mola a cauda e so metade do ajuste:
 // p(t)=1-(1+wt)e^-wt cruza a metade em 1,678/w = 146 ms com w=11,5, e o medido
 // foi ~145 ms. Ver anim_mola2() em anim.h para o porque da troca de mola.
-#define NV_MOLA2_SCROLL  11.5f
-#define NV_MOLA_SCREEN      9.0f
+#define NV_SPRING2_SCROLL  11.5f
+#define NV_SPRING_SCREEN      9.0f
 // Abertura da PAGINA de secoes do detalhe. MEDIDO na folha do app web:
 // `.series-detail-shell.detail-scrolled .series-detail-backdrop` vai a
 // `opacity: 0.15` em 0.8s cubic-bezier(0.4, 0, 0.2, 1). exp(-3.8*0.8) = 0.05,
 // ou seja 95% do caminho em 800ms. Com NV_MOLA_TELA (9.0) a mola assenta em
 // ~330ms e a arte apaga num piscar, que e menos da metade do tempo do web.
-#define NV_MOLA_PAGINA    3.8f
+#define NV_SPRING_PAGE    3.8f
 
 // Tela de detalhe: um CARTAO da arte cobrindo quase tudo, com a home aparecendo
 // pela moldura. O voo do card usa NV_MOLA_TELA, mais lenta que a do foco de
@@ -736,12 +736,12 @@
 #define NV_PG_TITLE_TABS     82.0f   // base do titulo ao topo das abas
 #define NV_PG_SEC_CARDS    22.0f   // cabecalho de secao ao topo dos cards
 #define NV_PG_BETWEEN_SEC   143.0f   // fim de uma secao ao cabecalho da proxima
-#define NV_ONDE_W         420.0f
-#define NV_ONDE_H         106.0f
-#define NV_SOBRE_H        150.0f
+#define NV_WHERE_W         420.0f
+#define NV_WHERE_H         106.0f
+#define NV_ABOUT_H        150.0f
 #define NV_DET_GAP        35.0f   // medido: gutter entre cartao e vizinho
 // Quanto o cartao passa do tamanho final antes de assentar. Sem esse estouro a
 // abertura parece "aparecer maior"; com ele, parece vir para a frente.
-#define NV_DET_ESTOURO   0.035f
+#define NV_DET_OVERFLOW   0.035f
 
 #endif

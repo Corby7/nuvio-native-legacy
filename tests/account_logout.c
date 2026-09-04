@@ -1,9 +1,10 @@
-// Sair da conta apaga MESMO o usuario anterior?
+// Does signing out REALLY erase the previous user?
 //
-// O defeito: sessao_sair() apagava so o token. Este teste monta um estado de
-// usuario logado de verdade (sessao, addons vindos da conta, perfil ativo
-// gravado, progresso no disco), sai, e confere item a item. Compilar nao prova
-// nada aqui — o defeito era justamente codigo ausente, que compila perfeito.
+// The defect: session_exit() deleted only the token. This test builds a genuine
+// signed-in state (session, addons from the account, saved active profile,
+// progress on disk), signs out, and checks item by item. Compiling proves
+// nothing here — the defect was precisely absent code, which compiles
+// perfectly.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,8 +19,8 @@
 #include "js.h"
 
 static int failures;
-static void checks(const char *o_que, int ok, const char *detail) {
-  printf("  %-42s %s%s%s\n", o_que, ok ? "ok" : "FAILED",
+static void checks(const char *what, int ok, const char *detail) {
+  printf("  %-42s %s%s%s\n", what, ok ? "ok" : "FAILED",
          detail && *detail ? "  " : "", detail ? detail : "");
   if (!ok) failures++;
 }
@@ -45,8 +46,8 @@ int main(void) {
   data_write("session.txt", file);
   session_start();
 
-  // Estado de "usuario usando o app": sync traz addons, ele escolhe perfil e
-  // assiste alguma coisa.
+  // The state of "a user using the app": sync brings addons, they pick a
+  // profile and watch something.
   sync_start();
   for (i = 0; i < 60 && sync_state() == SYNC_RUNNING; i++) usleep(500000);
   sync_step(1000);
@@ -75,7 +76,7 @@ int main(void) {
   checks("progress.txt erased",         !exists("progress.txt"), "");
   checks("account owner forgotten",       profiles_owner()[0] == 0, "");
 
-  // O ciclo seguinte NAO pode reaplicar o que ficou na caixa do fio.
+  // The next cycle must NOT reapply what was left in the thread's box.
   sync_step(2000);
   checks("sync_step does not resurrect addons", addons_n() == 0, "");
 

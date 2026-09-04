@@ -83,7 +83,7 @@ static int indexCurrent(void) {
   int found;
   if (n < 1 || idx < 0 || idx >= n) return -1;
   if (operationImdb[0]) {
-    found = cat_index_por_imdb(operationImdb);
+    found = cat_index_by_imdb(operationImdb);
     // A resposta pode chegar depois de a descoberta trocar o bloco. Nunca
     // reutilizar `idx` nesse caso, pois ele pode ser outro titulo.
     return found;
@@ -104,7 +104,7 @@ static void build(void) {
       ops[nOps].rot = intent ? "Adding to library..."
                                : "Removing from library...";
     else
-      ops[nOps].rot = ci->naList ? "Remove from library"
+      ops[nOps].rot = ci->inList ? "Remove from library"
                                   : "Add to library";
     ops[nOps].action = OP_LIST; nOps++;
   }
@@ -156,7 +156,7 @@ static void apply(void) {
     case OP_LIST:
       // Captura a intencao ANTES de qualquer escrita. O mesmo valor segue para
       // o POST e so chega ao espelho local depois de uma resposta 2xx.
-      intent = !ci->naList;
+      intent = !ci->inList;
       snprintf(operationImdb, sizeof operationImdb, "%s", ci->imdb);
       operation = CTX_OP_LIST;
       mirrorApplied = 0;
@@ -214,12 +214,12 @@ void ctx_update(float dt, Uint32 now) {
   if (settings_animations_reduced())
     anim = is_open ? 1.0f : 0.0f;
   else
-    anim = anim_mola(anim, is_open ? 1.0f : 0.0f, dt, NV_MOLA_SCREEN);
+    anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
   for (i = 0; i < CTX_MAX; i++)
     focusAnim[i] = settings_animations_reduced()
       ? (is_open && focus == i ? 1.0f : 0.0f)
-      : anim_mola(focusAnim[i], is_open && focus == i ? 1.0f : 0.0f,
-                  dt, NV_MOLA_FOCUS);
+      : anim_spring(focusAnim[i], is_open && focus == i ? 1.0f : 0.0f,
+                  dt, NV_SPRING_FOCUS);
 
   current = indexCurrent();
   if (is_open && current < 0) { is_open = 0; return; }
@@ -232,7 +232,7 @@ void ctx_update(float dt, Uint32 now) {
         const CatItem *ci = cat_item(current);
         if (ci && new == CTX_CONFIRMED) {
           if (operation == CTX_OP_LIST) {
-            cat_set_na_list(current, intent);
+            cat_set_in_list(current, intent);
           } else {
             cat_history_set_id(ci->imdb, ci->kind, intent);
           }
@@ -258,10 +258,10 @@ void ctx_draw(Uint32 now) {
     t = txt_line(TXT_CAPTION2,
                   p >= 1.0f ? "Release to open options" : "Hold OK for options",
                   220, 224, 232, 255);
-    txt_draw_alpha(t, (NV_TELA_W - t.w) * 0.5f, NV_TELA_H - 124.0f, 0.94f);
-    gfx_color((GfxRect){ (NV_TELA_W - 420.0f) * 0.5f, NV_TELA_H - 82.0f,
+    txt_draw_alpha(t, (NV_SCREEN_W - t.w) * 0.5f, NV_SCREEN_H - 124.0f, 0.94f);
+    gfx_color((GfxRect){ (NV_SCREEN_W - 420.0f) * 0.5f, NV_SCREEN_H - 82.0f,
                        420.0f, 8.0f }, 4.0f, 0.18f, 0.2f, 0.23f, 0.96f);
-    gfx_color((GfxRect){ (NV_TELA_W - 420.0f) * 0.5f, NV_TELA_H - 82.0f,
+    gfx_color((GfxRect){ (NV_SCREEN_W - 420.0f) * 0.5f, NV_SCREEN_H - 82.0f,
                        420.0f * p, 8.0f }, 4.0f, 0.78f, 0.84f, 0.96f, 0.98f);
   }
   if (a < 0.01f) return;
@@ -279,7 +279,7 @@ void ctx_draw(Uint32 now) {
   else if (stateOperation == CTX_FAILURE)
     message = "Could not update. Try again.";
 
-  states[0] = ci->naList ? "In library" : "Not in library";
+  states[0] = ci->inList ? "In library" : "Not in library";
   if (!strcmp(ci->kind, "movie") || !strcmp(ci->kind, "series")) {
     { int history = cat_history_state_item(indexCurrent());
       states[1] = history == 1 ? "Watched"
@@ -289,13 +289,13 @@ void ctx_draw(Uint32 now) {
     nStates = 2;
   }
 
-  { GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, 0, 0, 0, 0.72f * a); }
 
   height = CTX_DFLT * 2.0f + CTX_HEADER +
         (float)nOps * (CTX_LINE + CTX_GAP) - CTX_GAP + CTX_FOOTER;
-  x = (NV_TELA_W - CTX_W) * 0.5f;
-  y = (NV_TELA_H - height) * 0.5f;
+  x = (NV_SCREEN_W - CTX_W) * 0.5f;
+  y = (NV_SCREEN_H - height) * 0.5f;
   // Sobe do fundo enquanto aparece, como as outras folhas do app.
   y += (1.0f - a) * 40.0f;
 

@@ -16,7 +16,7 @@ const ColFolder *col_folder(int i) { return i>=0&&i<count?&folders[i]:NULL; }
 int col_group(const char *name,int *indices,int max) {
   int n=0;for(int i=0;i<count&&n<max;i++) if(!strcasecmp(name,folders[i].group)) indices[n++]=i;return n;
 }
-const ColFolder *col_por_catalog(const char *base,const char *type,const char *id) {
+const ColFolder *col_by_catalog(const char *base,const char *type,const char *id) {
   for(int i=0;i<count;i++) for(int s=0;s<folders[i].nSources;s++) {
     const ColSource *v=&folders[i].sources[s];
     if(!strcmp(v->base,base)&&!strcmp(v->type,type)&&!strcmp(v->catId,id)) return &folders[i];

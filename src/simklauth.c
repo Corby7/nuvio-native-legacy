@@ -12,7 +12,7 @@
 
 #define SMK_FILE  "simkl.txt"
 #define SMK_BASE "https://api.simkl.com"
-// O Simkl nao devolve `interval`; 5s e o passo que o app web usa.
+// Simkl does not return `interval`; 5s is the step the web app uses.
 #define SMK_POLL_MS 5000u
 
 static SmkState state = SMK_STOPPED;
@@ -25,8 +25,9 @@ static unsigned nextPoll, beganMs, limitMs = 900000u;
 static pthread_t thread;
 static int threadAlive, threadReady, tokenNew;
 
-// Todo pedido leva client_id, app-name e app-version na QUERY — nao em
-// cabecalho. Sem eles o Simkl responde erro sem dizer o que faltou.
+// Every request carries client_id, app-name and app-version in the QUERY — not
+// in a header. Without them Simkl answers with an error that does not say what
+// was missing.
 static char *take(const char *path, int *status) {
   char complete[500], cid[200], name[120];
   const char *header[2];
@@ -83,8 +84,8 @@ static void *threadRequest(void *u) {
     const char *end = r + strlen(r);
     double expires;
     js_text(r, end, "user_code", userCode, sizeof userCode);
-    // O campo aparece nas duas grafias na documentacao; aceitar as duas evita
-    // uma tela vazia por causa de um "i" a menos.
+    // The field appears with both spellings in the documentation; accepting
+    // both avoids an empty screen over a missing "i".
     if (!js_text(r, end, "verification_url", url, sizeof url))
       js_text(r, end, "verification_uri", url, sizeof url);
     expires = js_num(r, end, "expires_in", 0);
@@ -113,13 +114,13 @@ static void *threadPoll(void *u) {
     const char *end = r + strlen(r);
     js_text(r, end, "result", res, sizeof res);
     if (!strcmp(res, "KO")) {
-      /* ainda nao autorizado */
+      /* not authorised yet */
     } else if (js_text(r, end, "access_token", t, sizeof t) && t[0]) {
       snprintf(token, sizeof token, "%s", t);
       tokenNew = 1;
       state = SMK_ON;
     } else {
-      // Resposta que nao e KO nem traz token: o Simkl invalidou este PIN.
+      // A response that is neither KO nor carries a token: Simkl invalidated this PIN.
       snprintf(error, sizeof error, "Simkl invalidated this code");
       state = SMK_ERROR;
     }

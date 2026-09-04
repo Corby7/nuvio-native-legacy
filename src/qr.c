@@ -72,7 +72,7 @@ static void rs(const unsigned char *data, int nData, int nEc, unsigned char *out
 // padrao de tempo e nenhum leitor acharia o simbolo.
 static unsigned char func[QR_MAX_SIDE * QR_MAX_SIDE];
 
-static void por(Qr *q, int x, int y, int v) {
+static void per(Qr *q, int x, int y, int v) {
   if (x < 0 || y < 0 || x >= q->side || y >= q->side) return;
   q->m[y * q->side + x] = (unsigned char)(v ? 1 : 0);
 }
@@ -81,7 +81,7 @@ static void mark(const Qr *q, int x, int y) {
   if (x < 0 || y < 0 || x >= q->side || y >= q->side) return;
   func[y * q->side + x] = 1;
 }
-static int ehFunc(const Qr *q, int x, int y) { return func[y * q->side + x]; }
+static int isFunc(const Qr *q, int x, int y) { return func[y * q->side + x]; }
 
 static void locator(Qr *q, int cx, int cy) {
   int dx, dy;
@@ -91,7 +91,7 @@ static void locator(Qr *q, int cx, int cy) {
       int x = cx + dx, y = cy + dy;
       int d = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy) ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
       if (x < 0 || y < 0 || x >= q->side || y >= q->side) continue;
-      por(q, x, y, d != 2 && d != 4);
+      per(q, x, y, d != 2 && d != 4);
       mark(q, x, y);
     }
   }
@@ -102,7 +102,7 @@ static void alignment(Qr *q, int cx, int cy) {
   for (dy = -2; dy <= 2; dy++) {
     for (dx = -2; dx <= 2; dx++) {
       int d = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy) ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
-      por(q, cx + dx, cy + dy, d != 1);
+      per(q, cx + dx, cy + dy, d != 1);
       mark(q, cx + dx, cy + dy);
     }
   }
@@ -118,12 +118,12 @@ static void defaults(Qr *q, int version) {
   locator(q, 3, n - 4);
 
   for (i = 8; i < n - 8; i++) {          // padroes de tempo
-    por(q, i, 6, !(i & 1)); mark(q, i, 6);
-    por(q, 6, i, !(i & 1)); mark(q, 6, i);
+    per(q, i, 6, !(i & 1)); mark(q, i, 6);
+    per(q, 6, i, !(i & 1)); mark(q, 6, i);
   }
   if (version >= 2) alignment(q, ALIGN[version], ALIGN[version]);
 
-  por(q, 8, n - 8, 1); mark(q, 8, n - 8);   // modulo escuro fixo
+  per(q, 8, n - 8, 1); mark(q, 8, n - 8);   // modulo escuro fixo
 
   // Area do formato: reservada agora, escrita depois de escolher a mascara.
   for (i = 0; i <= 8; i++) { mark(q, i, 8); mark(q, 8, i); }
@@ -224,16 +224,16 @@ static void writeFormat(Qr *q, int m) {
     // NENHUM leitor decodifica. Conferido lendo o formato de um simbolo gerado
     // por outra implementacao e comparando com o valor calculado aqui.
     #define BIT_F(k) ((f >> (14 - (k))) & 1)
-    for (i = 0; i <= 5; i++)  por(q, i, 8, BIT_F(i));
-    por(q, 7, 8, BIT_F(6));
-    por(q, 8, 8, BIT_F(7));
-    por(q, 8, 7, BIT_F(8));
-    for (i = 9; i <= 14; i++) por(q, 8, 14 - i, BIT_F(i));
+    for (i = 0; i <= 5; i++)  per(q, i, 8, BIT_F(i));
+    per(q, 7, 8, BIT_F(6));
+    per(q, 8, 8, BIT_F(7));
+    per(q, 8, 7, BIT_F(8));
+    for (i = 9; i <= 14; i++) per(q, 8, 14 - i, BIT_F(i));
     // Segunda copia: os 7 primeiros bits descem pela COLUNA 8 a partir da base,
     // e os 8 ultimos correm pela LINHA 8 ate a borda direita. A divisao NAO e
     // 8+7 como a da primeira copia.
-    for (i = 0; i <= 6; i++)  por(q, 8, n - 1 - i, BIT_F(i));
-    for (i = 7; i <= 14; i++) por(q, n - 15 + i, 8, BIT_F(i));
+    for (i = 0; i <= 6; i++)  per(q, 8, n - 1 - i, BIT_F(i));
+    for (i = 7; i <= 14; i++) per(q, n - 15 + i, 8, BIT_F(i));
     #undef BIT_F
   }
 }
@@ -262,20 +262,20 @@ int qr_generate(Qr *q, const char *text) {
   // --- fluxo de bits
   memset(bits, 0, sizeof bits);
   { int k;
-    #define POR_BITS(value, count) \
+    #define PER_BITS(value, count) \
       for (k = (count) - 1; k >= 0; k--) { \
         if (((value) >> k) & 1) bits[nBits >> 3] |= (unsigned char)(0x80 >> (nBits & 7)); \
         nBits++; }
-    POR_BITS(4, 4);            // modo byte
-    POR_BITS(nText, 8);       // contagem (8 bits ate a versao 9)
-    for (i = 0; i < nText; i++) { POR_BITS((unsigned char)text[i], 8); }
+    PER_BITS(4, 4);            // modo byte
+    PER_BITS(nText, 8);       // contagem (8 bits ate a versao 9)
+    for (i = 0; i < nText; i++) { PER_BITS((unsigned char)text[i], 8); }
     // Terminador de ate 4 zeros e alinhamento ao byte; depois o enchimento
     // alternado da norma.
     { int missing = nData * 8 - nBits;
       int term = missing > 4 ? 4 : missing;
-      POR_BITS(0, term); }
-    while (nBits & 7) { POR_BITS(0, 1); }
-    #undef POR_BITS
+      PER_BITS(0, term); }
+    while (nBits & 7) { PER_BITS(0, 1); }
+    #undef PER_BITS
   }
   { int nBytes = nBits / 8, toggles = 0;
     while (nBytes < nData) bits[nBytes++] = (toggles++ & 1) ? 0x11 : 0xEC; }
@@ -317,9 +317,9 @@ int qr_generate(Qr *q, const char *text) {
         line = up ? q->side - 1 - i : i;
         for (j = 0; j < 2; j++) {
           int x = col - j;
-          if (ehFunc(q, x, line)) continue;
+          if (isFunc(q, x, line)) continue;
           if (bit < total) {
-            por(q, x, line, (output[bit >> 3] >> (7 - (bit & 7))) & 1);
+            per(q, x, line, (output[bit >> 3] >> (7 - (bit & 7))) & 1);
             bit++;
           }
         }
@@ -337,7 +337,7 @@ int qr_generate(Qr *q, const char *text) {
       memcpy(q->m, base, sizeof base);
       for (y = 0; y < q->side; y++)
         for (x = 0; x < q->side; x++)
-          if (!ehFunc(q, x, y) && mascara(i, x, y))
+          if (!isFunc(q, x, y) && mascara(i, x, y))
             q->m[y * q->side + x] ^= 1;
       writeFormat(q, i);
       p = penalty(q);
@@ -347,7 +347,7 @@ int qr_generate(Qr *q, const char *text) {
     { int x, y;
       for (y = 0; y < q->side; y++)
         for (x = 0; x < q->side; x++)
-          if (!ehFunc(q, x, y) && mascara(best, x, y))
+          if (!isFunc(q, x, y) && mascara(best, x, y))
             q->m[y * q->side + x] ^= 1; }
     writeFormat(q, best);
   }

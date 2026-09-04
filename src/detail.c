@@ -92,7 +92,7 @@ static int  ratTemp;
 #define PES_CARD_W   212.0f
 #define PES_CARD_H   318.0f
 #define PES_CARD_GAP  32.0f
-#define PES_POR_LINE  6
+#define PES_PER_LINE  6
 
 static int  button = 0;      // botao em foco no hero
 static int  reqPlay = 0, reqMark = 0, reqSources = 0;
@@ -125,7 +125,7 @@ typedef enum { SEC_SEASONS, SEC_EPISODES, SEC_TABS_INFO, SEC_CAST,
 // Definida adiante, junto do resto das consultas ao catalogo; declarada aqui
 // porque recalcularLayout, cabecalhoDe e nAvaliaveis, todas acima dela,
 // precisam separar serie de filme.
-static int ehSeries(void);
+static int isSeries(void);
 static float heightHeaderComments(void);
 static int seasonIn(int c);
 static float baseOfTabActive(void);
@@ -164,7 +164,7 @@ static float docEnd = NV_DETP_END;
 // pelo caminho antigo, e "Elenco" ficaria repetindo a aba "Criador e elenco"
 // logo acima (ver detail.c:1611).
 static const char *headerOf(int r) {
-  if (ehSeries()) return NULL;
+  if (isSeries()) return NULL;
   switch (r) {
     case SEC_CAST:   return "Cast";
     case SEC_TRAILERS:     return "Trailers";
@@ -207,12 +207,12 @@ static void goToSeason(int c) {
 // vazia ocupa altura (ver recalcularLayout) e recebe esqueleto.
 static int castLoading(void) {
   const CatItem *ci = cat_item(idx);
-  return !ehSeries() && ci && ci->nCast == 0 && disc_episodes_loading(idx);
+  return !isSeries() && ci && ci->nCast == 0 && disc_episodes_loading(idx);
 }
 
 static void recomputeLayout(void) {
   int r;
-  if (ehSeries()) {
+  if (isSeries()) {
     // As quatro primeiras vem de MEDIDA ABSOLUTA na referencia; nao sao um
     // empilhamento. As de baixo (comentarios) sim: elas ficam depois do elenco,
     // cuja altura e conhecida.
@@ -264,7 +264,7 @@ static void recomputeLayout(void) {
     // Fim REAL do documento, nao os 2473 da serie: um filme e bem mais curto e
     // copiar aquele numero deixaria a pagina rolar para muito depois do fim.
     docEnd = y - NV_DETF_SEC_GAP + NV_DETF_DFLT_END;
-    if (docEnd < NV_TELA_H) docEnd = NV_TELA_H; }
+    if (docEnd < NV_SCREEN_H) docEnd = NV_SCREEN_H; }
 }
 
 // As abas sao DINAMICAS, como no web: renderSeriesInsightSection
@@ -300,8 +300,8 @@ static int scoreOf(int i) {
 // mostrar em cada caso.
 static int nRateable(void) {
   int i, n = 0;
-  if (ehSeries() && extras_n_seasons() > 0) return extras_n_seasons();
-  for (i = 0; i < EX_NFONTES; i++) {
+  if (isSeries() && extras_n_seasons() > 0) return extras_n_seasons();
+  for (i = 0; i < EX_NSOURCES; i++) {
     int v = extras_score(i);
     if (i == EX_IMDB && !v) v = scoreOf(idx);
     if (v) n++;
@@ -384,7 +384,7 @@ static const char *artOf(int i) {
   return NULL;
 }
 
-static int artDetailEhPoster(int i) {
+static int artDetailIsPoster(int i) {
   const CatItem *c = cat_item(i);
   return c && !c->backdrop[0] && c->poster[0];
 }
@@ -409,7 +409,7 @@ static void drawArtDetail(GfxRect target, GLuint tex, const char *art,
   }
   gfx_tex_aspect_current = 0.0f;
 }
-static int ehSeries(void) {
+static int isSeries(void) {
   const CatItem *ci = cat_item(idx);
   if (!ci) return 0;
   if (ci->kind[0]) return strcmp(ci->kind, "series") == 0;
@@ -420,7 +420,7 @@ static float smooth(float x) {
   x = anim_clamp(x, 0.0f, 1.0f);
   return 1.0f - (1.0f - x) * (1.0f - x) * (1.0f - x);
 }
-static float fase2(void) { return smooth((t - 0.45f) / 0.55f); }
+static float phase2(void) { return smooth((t - 0.45f) / 0.55f); }
 
 // A Inter embarcada so tem Regular, Medium e Bold, e a pagina pede 500, 600 e
 // 800 em corpos (32, 26, 21) que so existem em Regular na tabela de text.c —
@@ -444,7 +444,7 @@ void detail_open(const HomeItem *it) {
   // desenho: as abas so aparecem depois que o dado chega, e pedir no desenho
   // faria a barra de abas surgir com o titulo ja na tela.
   { const CatItem *ci = cat_item(idx);
-    if (ci && ci->imdb[0]) extras_request(ci->imdb, ehSeries(), ci->tmdb); }
+    if (ci && ci->imdb[0]) extras_request(ci->imdb, isSeries(), ci->tmdb); }
   // A aba marcada tem de ser a da temporada que os episodios trazem. Comecando
   // sempre em 0, uma serie cujo primeiro episodio carregado e da 4 abria com
   // "Temporada 1" aceso — o rotulo desmentia a lista logo abaixo.
@@ -563,8 +563,8 @@ static void backdropRect(GfxRect *r, float *opacity) {
   home_hero_rect(&de.x, &de.y, &de.w, &de.h);
   r->x = de.x + (0.0f - de.x) * s;
   r->y = de.y + (0.0f - de.y) * s;
-  r->w = de.w + (NV_TELA_W - de.w) * s;
-  r->h = de.h + (NV_TELA_H - de.h) * s;
+  r->w = de.w + (NV_SCREEN_W - de.w) * s;
+  r->h = de.h + (NV_SCREEN_H - de.h) * s;
   // Sobe RAPIDO (s*3, nao s): a arte por baixo e a mesma, entao a rampa so
   // troca a vinheta do hero pela do detalhe.
   *opacity = anim_clamp(s * 3.0f, 0.0f, 1.0f);
@@ -592,7 +592,7 @@ int detail_covers_screen(void) {
     backdropRect(&r, &opacity);
     if (opacity < 0.999f) return 0;
     return r.x <= 0.5f && r.y <= 0.5f &&
-           r.x + r.w >= NV_TELA_W - 0.5f && r.y + r.h >= NV_TELA_H - 0.5f;
+           r.x + r.w >= NV_SCREEN_W - 0.5f && r.y + r.h >= NV_SCREEN_H - 0.5f;
   }
 }
 
@@ -617,31 +617,31 @@ static int buildDetails(LineDet *o, int max) {
   const CatItem *ci = cat_item(idx);
   const char *v;
 
-  #define DET_POE(K, S) do {                                   \
+  #define DET_PLACE(K, S) do {                                   \
     if ((n) < (max) && (S) && (S)[0]) {                        \
       o[n].key = (K);                                        \
       snprintf(o[n].value, sizeof o[n].value, "%s", (S));      \
       n++;                                                     \
     } } while (0)
 
-  DET_POE("Status", extras_profile_status());
+  DET_PLACE("Status", extras_profile_status());
   { char dt[48]; disc_date_long(extras_profile_release(), dt, sizeof dt);
-    DET_POE("Release", dt); }
+    DET_PLACE("Release", dt); }
   { char d[32]; durationText(extras_profile_duration(), d, sizeof d);
-    DET_POE("Runtime", d); }
+    DET_PLACE("Runtime", d); }
   // Classificacao: a da ficha do TMDB e a boa. A do catalogo serve de reserva,
   // e desde que o "14" cravado saiu de descoberta.c ela so tem valor quando
   // veio do arquivo de catalogo, que e dado de verdade.
   v = extras_profile_age_rating();
   if (!v || !v[0]) v = (ci && ci->age_rating[0]) ? ci->age_rating : NULL;
-  DET_POE("Rating", v);
+  DET_PLACE("Rating", v);
   // Pais: a lista completa do TMDB quando ha; senao o unico que o Cinemeta da.
   v = extras_profile_countries();
   if (!v || !v[0]) v = (ci && ci->pais[0]) ? ci->pais : NULL;
-  DET_POE("Country of Origin", v);
-  DET_POE("Directing", (ci && ci->directing[0]) ? ci->directing : NULL);
+  DET_PLACE("Country of Origin", v);
+  DET_PLACE("Directing", (ci && ci->directing[0]) ? ci->directing : NULL);
 
-  #undef DET_POE
+  #undef DET_PLACE
   return n;
 }
 
@@ -676,7 +676,7 @@ static int sectionN(int r) {
       // Filme nao tem temporada: a fileira SOME em vez de mostrar abas que nao
       // levam a lugar nenhum. E o que o web faz — a `.series-season-row` so
       // existe no layout de serie.
-      if (!ehSeries()) return 0;
+      if (!isSeries()) return 0;
       if (ci && ci->nSeasons > 0)
         return ci->nSeasons < N_ITEMS ? ci->nSeasons : N_ITEMS;
       return 0;
@@ -691,7 +691,7 @@ static int sectionN(int r) {
     // com as duas coisas ao mesmo tempo — a barra E os cabecalhos.
     case SEC_TABS_INFO: {
       int n;
-      if (!ehSeries()) return 0;
+      if (!isSeries()) return 0;
       n = nTabsInfo();
       return n > 1 ? n : 0;
     }
@@ -715,7 +715,7 @@ static int sectionN(int r) {
         // as duas pilulas do seletor "Série | Episódio". Em filme nao ha
         // episodio: sobra uma coluna so, para o foco poder pousar na fileira e
         // a pagina rolar ate os cartoes.
-        case TAB_COMMENTS:  n = ehSeries() ? 2 : 1; break;
+        case TAB_COMMENTS:  n = isSeries() ? 2 : 1; break;
         default:               n = (ci && ci->nCast > 0) ? ci->nCast : 0;
       }
       return n < NV_DETF_EL_MAX ? n : NV_DETF_EL_MAX;
@@ -727,11 +727,11 @@ static int sectionN(int r) {
     // filme: os dados sempre estiveram la (o log mostra "coment=8 rel=12"),
     // mas sem aba e sem secao nao havia como chegar neles.
     case SEC_TRAILERS:
-      if (ehSeries()) return 0;
+      if (isSeries()) return 0;
       return extras_n_trailers();
     case SEC_RELATED: {
       int n;
-      if (ehSeries()) return 0;
+      if (isSeries()) return 0;
       n = extras_n_related();
       return n < N_ITEMS ? n : N_ITEMS;
     }
@@ -754,7 +754,7 @@ static int sectionN(int r) {
     // ela rola para a tela e pronto. Zero colunas faria focus_mover PULA-LA
     // (focus.c:25) e a secao viraria inalcancavel — logo, tambem irrolavel.
     case SEC_DETAILS:
-      if (ehSeries()) return 0;
+      if (isSeries()) return 0;
       return nLinesDetail() > 0 ? 1 : 0;
   }
   return 0;
@@ -776,7 +776,7 @@ static int sectionN(int r) {
 // serie inteira", que nao e coisa que o Trakt guarde por titulo.
 //
 // Este arquivo desenhava TRES nos dois casos.
-static int nButtons(void) { return ehSeries() ? 3 : 4; }
+static int nButtons(void) { return isSeries() ? 3 : 4; }
 
 // Que ACAO esta na posicao `n` da linha. As acoes tem numeros fixos (0
 // primario, 1 lista, 2 assistido, 3 fontes) porque detail_evento decide por
@@ -784,7 +784,7 @@ static int nButtons(void) { return ehSeries() ? 3 : 4; }
 // serie o segundo circular (que e o de fontes) dispararia "marcar assistido".
 enum { ACTION_PRIMARY = 0, ACTION_LIST = 1, ACTION_WATCHED = 2, ACTION_SOURCES = 3 };
 static int actionIn(int n) {
-  if (n >= 2 && ehSeries()) return n + 1;   // serie pula o olho
+  if (n >= 2 && isSeries()) return n + 1;   // serie pula o olho
   return n;
 }
 
@@ -808,14 +808,14 @@ void detail_event(const SDL_Event *e) {
         case SDLK_LEFT:  if (personFocus > 0) personFocus--; return;
         case SDLK_RIGHT: if (personFocus + 1 < n) personFocus++; return;
         case SDLK_UP:
-          if (personFocus >= PES_POR_LINE) personFocus -= PES_POR_LINE;
-          if (personFocus / PES_POR_LINE < personLine) personLine--;
+          if (personFocus >= PES_PER_LINE) personFocus -= PES_PER_LINE;
+          if (personFocus / PES_PER_LINE < personLine) personLine--;
           return;
         case SDLK_DOWN:
-          if (personFocus + PES_POR_LINE < n) personFocus += PES_POR_LINE;
+          if (personFocus + PES_PER_LINE < n) personFocus += PES_PER_LINE;
           // A grade ROLA quando o foco passa da segunda linha visivel. Duas
           // linhas cabem na tela; a terceira em diante entra empurrando.
-          if (personFocus / PES_POR_LINE > personLine + 1) personLine++;
+          if (personFocus / PES_PER_LINE > personLine + 1) personLine++;
           return;
         case SDLK_AC_BACK: personIs_open = 0; return;
         case SDLK_RETURN:
@@ -828,7 +828,7 @@ void detail_event(const SDL_Event *e) {
           // vazia e pior que o botao nao responder. Buscar meta sob demanda e
           // trabalho a parte.
           const char *id = person_credit_imdb(personFocus);
-          int target = id[0] ? cat_index_por_imdb(id) : -1;
+          int target = id[0] ? cat_index_by_imdb(id) : -1;
           if (target >= 0) { reqOpen = target; personIs_open = 0; }
           // Nao esta no catalogo: busca o meta e abre quando chegar. Quem
           // termina o trabalho e o roteador, que ja acompanha o resultado.
@@ -851,7 +851,7 @@ void detail_event(const SDL_Event *e) {
   // fileira — e o mesmo que o web faz, onde a lista tem foco proprio.
   // No painel de notas por episodio, esquerda/direita trocam de TEMPORADA.
   if (e->type == SDL_KEYDOWN && focus.row == SEC_CAST && !personIs_open &&
-      tabIdOf(tabInfo) == TAB_RATINGS && ehSeries() &&
+      tabIdOf(tabInfo) == TAB_RATINGS && isSeries() &&
       extras_n_seasons() > 0) {
     int nt = extras_n_seasons();
     if (e->key.keysym.sym == SDLK_RIGHT && ratTemp + 1 < nt) { ratTemp++; return; }
@@ -880,7 +880,7 @@ void detail_event(const SDL_Event *e) {
           if (t > 0) disc_request_title_tmdb(t, "movie");
         } else {
           const char *id = extras_related_imdb(relFocus);
-          int target = cat_index_por_imdb(id);
+          int target = cat_index_by_imdb(id);
           if (target >= 0) reqOpen = target;
           else if (id[0]) disc_request_title(id);
         }
@@ -933,7 +933,7 @@ void detail_event(const SDL_Event *e) {
       // serie — abre do catalogo quando ja temos meta, senao pede e o roteador
       // termina quando chegar.
       const char *id = extras_related_imdb(focus.column);
-      int target = id[0] ? cat_index_por_imdb(id) : -1;
+      int target = id[0] ? cat_index_by_imdb(id) : -1;
       if (target >= 0) reqOpen = target;
       else if (id[0]) disc_request_title(id);
     } else if (focus.row == SEC_SEASONS) {
@@ -1125,7 +1125,7 @@ void detail_update(float dt, Uint32 now) {
   // SELETOR DE COMENTARIOS, pela mesma regra: mover o foco ja troca a fonte.
   // Sem repouso — sao duas pilulas, e a da serie ja esta em memoria; so a do
   // episodio custa uma viagem, e ela e disparada uma vez por episodio.
-  if (level >= 1 && focus.row == SEC_COMMENTS && ehSeries()) {
+  if (level >= 1 && focus.row == SEC_COMMENTS && isSeries()) {
     if (focus.column != commentEp) commentEp = focus.column;
     if (commentEp) {
       const CatItem *ci = cat_item(idx);
@@ -1140,17 +1140,17 @@ void detail_update(float dt, Uint32 now) {
   // contagem do quadro anterior deixaria o layout um quadro atrasado — visivel
   // como um tranco quando o elenco ou os trailers chegam.
   recomputeLayout();
-  t  = anim_mola(t,  exiting ? 0.0f : 1.0f, dt, NV_MOLA_SCREEN);
+  t  = anim_spring(t,  exiting ? 0.0f : 1.0f, dt, NV_SPRING_SCREEN);
   // Rigidez propria: o web leva 0.8s para apagar o backdrop (cubic-bezier
   // .4,0,.2,1), e a mola de NV_MOLA_TELA assenta em ~330ms.
-  pg = anim_mola(pg, level >= 1 ? 1.0f : 0.0f, dt, NV_MOLA_PAGINA);
+  pg = anim_spring(pg, level >= 1 ? 1.0f : 0.0f, dt, NV_SPRING_PAGE);
   if (exiting && t < 0.02f) { is_open = 0; exiting = 0; t = 0.0f; return; }
 
   for (int r = 0; r < N_SECTIONS; r++)
     for (int c = 0; c < sectionN(r) && c < N_ITEMS; c++) {
       float target = (level >= 1 && focus_index(&focus, r, c)) ? 1.0f : 0.0f;
-      animFocus[r][c] = anim_mola(animFocus[r][c], target, dt,
-                                 target > animFocus[r][c] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+      animFocus[r][c] = anim_spring(animFocus[r][c], target, dt,
+                                 target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
   // --- rolagem HORIZONTAL da fileira focada ---------------------------------
@@ -1161,7 +1161,7 @@ void detail_update(float dt, Uint32 now) {
     if (r >= 0 && r < N_SECTIONS && sectionN(r) > 0) {
       float x = xItem(r, focus.column) - NV_DETP_X;
       float w = widthItem(r, focus.column);
-      float vista = NV_TELA_W - NV_DETP_X * 2;
+      float vista = NV_SCREEN_W - NV_DETP_X * 2;
       float target = scrollSec[r];
       if (r == SEC_EPISODES) target = x;
       else {
@@ -1175,7 +1175,7 @@ void detail_update(float dt, Uint32 now) {
         else if (x < target + 24.0f)             target = x - 24.0f;
       }
       if (target < 0.0f) target = 0.0f;
-      scrollSec[r] = anim_mola(scrollSec[r], target, dt, NV_MOLA_SCROLL);
+      scrollSec[r] = anim_spring(scrollSec[r], target, dt, NV_SPRING_SCROLL);
     } }
 
   // --- rolagem VERTICAL -----------------------------------------------------
@@ -1186,12 +1186,12 @@ void detail_update(float dt, Uint32 now) {
     // Mira o topo do CONTEUDO (o trilho), nao o do grupo: o cabecalho da secao
     // fica acima e entra na tela junto, de graca. E o que focusInList faz no
     // web — `target.closest(".movie-cast-track, ...")`.
-    float maxY = docEnd - NV_TELA_H;
-    targetY = contentSec[focus.row] - NV_TELA_H * targetSec[focus.row];
+    float maxY = docEnd - NV_SCREEN_H;
+    targetY = contentSec[focus.row] - NV_SCREEN_H * targetSec[focus.row];
     if (targetY > maxY) targetY = maxY;
     if (targetY < 0.0f) targetY = 0.0f;
   }
-  scrollY = anim_mola(scrollY, targetY, dt, NV_MOLA_SCROLL);
+  scrollY = anim_spring(scrollY, targetY, dt, NV_SPRING_SCROLL);
 }
 
 // ---------------------------------------------------------------------------
@@ -1246,7 +1246,7 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
     // circulo de 96 em repouso e 36 dentro do de 110 focado — 0,333 nos dois.
     // Estava 0,45, de uma captura solta, e o glifo quase encostava na borda.
     // Sai de `r` (ja escalado) para que o icone cresca junto com o botao.
-    float g = r.w * NV_DETW2_CIRC_GLIFO;
+    float g = r.w * NV_DETW2_CIRC_GLYPH;
     GfxRect ig = { cx - g * 0.5f, cy - g * 0.5f, g, g };
     if (icon == 1) {
       // O botao MOSTRA O ESTADO: com o titulo ja na watchlist o "+" some e
@@ -1254,7 +1254,7 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
       // O estado vem de ci->naLista, que a descoberta preenche com a lista de
       // verdade do Trakt.
       const CatItem *ci = cat_item(idx);
-      gfx_icon(ig, (ci && ci->naList) ? "watched" : "more", ic, ic, ic, a);
+      gfx_icon(ig, (ci && ci->inList) ? "watched" : "more", ic, ic, ic, a);
     } else if (icon == 2) {
       // ASSISTIDO: olho aberto quando ja viu, olho riscado quando nao. Antes o
       // icone era sempre o mesmo e nao dizia estado nenhum — era so um enfeite
@@ -1392,9 +1392,9 @@ static float drawBadgeImdb(float x, float yCenter, int score, float a) {
 // `dir` pode ser NULL: sem status o selo tem so a classificacao e NENHUMA
 // divisoria. Nao ha valor de reserva — o CatItem nao tem campo de status, e
 // carimbar "LANÇADO" em tudo seria dado inventado, que ja custou caro aqui.
-static float drawBadgeMeta(float x, float y, const char *esq, const char *dir,
+static float drawBadgeMeta(float x, float y, const char *left, const char *dir,
                              float a) {
-  TxtLine le = txt_line(TXT_DET_META2, esq, 179, 179, 179, 255);
+  TxtLine le = txt_line(TXT_DET_META2, left, 179, 179, 179, 255);
   TxtLine ld = { 0, 0, 0 };
   float w = NV_DETW2_BADGE_PADX * 2 + le.w;
   if (dir && dir[0]) {
@@ -1438,7 +1438,7 @@ static void heroWeb(float a, float offset) {
   // Em serie o web escreve "Roteirista:"/"Criador:"; em filme, "Diretor:".
   char sup[192] = "";
   if (ci && ci->directing[0])
-    snprintf(sup, sizeof sup, "%s: %s", ehSeries() ? "Roteirista" : "Director",
+    snprintf(sup, sizeof sup, "%s: %s", isSeries() ? "Roteirista" : "Director",
              ci->directing);
 
   const char *sin = synopsisOf(idx);
@@ -1485,7 +1485,7 @@ static void heroWeb(float a, float offset) {
   // Aqui eram duas linhas — uma so com generos, outra com ano e duracao — e o
   // selo do IMDb ficava sozinho encostado na borda direita da tela, a meio
   // metro do bloco de texto a que pertence.
-  float temResume = (ci && ci->progress > 0) ? 1.0f : 0.0f;
+  float hasResume = (ci && ci->progress > 0) ? 1.0f : 0.0f;
   float hSin = 0.0f;
   if (sin) hSin = txt_block(TXT_DET_SIN, sin, 255, 255, 255, -1.0f, 0.0f,
                             NV_DETW2_TEXT_W, NV_DETW2_LD_SIN, 0.0f,
@@ -1517,7 +1517,7 @@ static void heroWeb(float a, float offset) {
     if (w > NV_DETW_LOGO_MAXW) { w = NV_DETW_LOGO_MAXW; h = w / aspect; }
       // O logo assenta acima do que vier primeiro: a linha de retomada quando ha
     // progresso, senao a propria linha de acoes.
-    float baseLogo = (temResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
+    float baseLogo = (hasResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
     GfxRect r = { NV_DETW2_X, baseLogo - h, w, h };
     gfx_tex_aspect_current = 0.0f;   // o logo ja vem na proporcao certa
     // LOGO PRETO VIRA BRANCO. O TMDB serve a mesma marca em versao clara e
@@ -1546,7 +1546,7 @@ static void heroWeb(float a, float offset) {
       // Mesma ancora do logo: acima da retomada quando ha, senao das acoes. A
       // altura da CAIXA continua sendo a do logo, para que a linha de acoes nao
       // pule entre um titulo com logo e outro sem.
-      float baseLogo = (temResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
+      float baseLogo = (hasResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
       txt_draw_alpha(t2, NV_DETW2_X,
                          baseLogo - NV_DETW_LOGO_H
                                   + (NV_DETW_LOGO_H - t2.h) * 0.5f, a);
@@ -1569,7 +1569,7 @@ static void heroWeb(float a, float offset) {
   // era dado como impossivel aqui; e possivel desde que extras_ep_visto existe.
   char rot[48];
   { int t = 0, e = 0, de = 0;
-    if (ehSeries() && episodeTarget(&t, &e, &de) && t > 0 && e > 0 && de >= 2)
+    if (isSeries() && episodeTarget(&t, &e, &de) && t > 0 && e > 0 && de >= 2)
       snprintf(rot, sizeof rot, "%s T%dE%d",
                de == 2 ? "Resume" : "Next", t, e);
     else if (ci && ci->progress > 0) snprintf(rot, sizeof rot, "Resume");
@@ -1725,7 +1725,7 @@ static void heroWeb(float a, float offset) {
     float x = NV_DETW2_X, yc = yMeta2 + NV_DETW2_BADGE_H * 0.5f;
     int something = 0;
     const char *status=NULL,*raw=extras_profile_status();
-    if(ehSeries()) {
+    if(isSeries()) {
       if(!strcmp(raw,"canceled")||!strcmp(raw,"Canceled"))status="CANCELADA";
       else if(!strcmp(raw,"ended")||!strcmp(raw,"Ended"))status="FINALIZADA";
       else if(!strcmp(raw,"returning series"))status="NOW SHOWING";
@@ -1736,7 +1736,7 @@ static void heroWeb(float a, float offset) {
                            ci && ci->age_rating[0] ? status : NULL, a);
       something = 1;
     }
-    if (!ehSeries() && duration[0]) {
+    if (!isSeries() && duration[0]) {
       if (something) { drawDot(x + NV_DETW2_SEP, yc, 0.502f, a);
                   x += NV_DETW2_SEP * 2 + NV_DETW2_DOT_D; }
       TxtLine ld = txt_line(TXT_DET_META2, duration, 255, 255, 255, 255);
@@ -2303,7 +2303,7 @@ static void drawScoresEpisode(float x, float y, float a) {
       int nd = extras_ep_score(ratTemp, i);
       float cr, cg, cb, tx;
       char ep[8], nv[8];
-      if (gx + RAT_PIL_W > NV_TELA_W - NV_DETP_X) break;
+      if (gx + RAT_PIL_W > NV_SCREEN_W - NV_DETP_X) break;
       colorOfScore(nd, &cr, &cg, &cb, &tx);
       gfx_color((GfxRect){ gx, gy, RAT_PIL_W, RAT_PIL_H }, 14.0f / RAT_PIL_H,
               cr, cg, cb, a);
@@ -2325,7 +2325,7 @@ static void drawScoresEpisode(float x, float y, float a) {
 
 static void drawRatings(float x, float y, float a) {
   int i, col = 0;
-  for (i = 0; i < EX_NFONTES; i++) {
+  for (i = 0; i < EX_NSOURCES; i++) {
     int v = extras_score(i);
     char txt[8];
     // Sem mdbList o IMDb ainda vem do catalogo, que guarda 0..100; no vetor a
@@ -2368,16 +2368,16 @@ static int relIndex(void) {
 
 static void drawRelated(float x, float y, float a) {
   int n = extras_n_related(), i;
-  int naList = relInList();
+  int inList = relInList();
   int foc = relIndex();
   for (i = 0; i < n && i < 7; i++) {
     float cx = x + i * (REL_CARD_W + REL_CARD_GAP);
     GfxRect r = { cx, y, REL_CARD_W, REL_CARD_H };
-    int lit = naList && i == foc;
+    int lit = inList && i == foc;
     const char *po = extras_related_poster(i);
     GLuint t = po[0] ? tex_get_width(po, REL_CARD_W) : 0;
     float radius = radiusPoster(REL_CARD_W, REL_CARD_H);
-    if (cx + REL_CARD_W > NV_TELA_W - NV_DETP_X) break;
+    if (cx + REL_CARD_W > NV_SCREEN_W - NV_DETP_X) break;
     if (lit) {
       GfxRect ring = { r.x - 4, r.y - 4, r.w + 8, r.h + 8 };
       gfx_color(ring, radius, 1, 1, 1, a);
@@ -2474,7 +2474,7 @@ static float baseOfTabActive(void) {
       return NV_DETP_EL_Y + 40.0f + REL_CARD_H + 12.0f
            + NV_DETP_EL_LINE * 2.0f;          // titulo + ano sob o cartaz
     case TAB_RATINGS:
-      if (ehSeries() && extras_n_seasons() > 0)
+      if (isSeries() && extras_n_seasons() > 0)
         return NV_DETP_EL_Y + 40.0f + RAT_TEMP_H + 18.0f + RAT_PIL_H;
       return NV_DETP_EL_Y + 40.0f + RATING_CARD_H;
     case TAB_COLLECTION: {
@@ -2489,7 +2489,7 @@ static float baseOfTabActive(void) {
 }
 
 static float heightHeaderComments(void) {
-  return 46.0f + 44.0f + (ehSeries() ? COM_PILL_H : 0.0f) + 28.0f;
+  return 46.0f + 44.0f + (isSeries() ? COM_PILL_H : 0.0f) + 28.0f;
 }
 
 // Rotulos do seletor, em escopo de arquivo: a contagem de colunas e a largura
@@ -2502,9 +2502,9 @@ static const char *COM_ROT[2] = { "Series", "Episode" };
 // Os cartoes precisavam virar colunas: eles eram desenhados tres e ponto, sem
 // foco, entao os outros cinco que o Trakt manda (EX_COMENT_MAX = 8) eram
 // inalcancaveis — foi o "nao tava dando pra navegar nos comentarios".
-static int nPillsCom(void) { return ehSeries() ? 2 : 0; }
+static int nPillsCom(void) { return isSeries() ? 2 : 0; }
 static int nCardsCom(void) {
-  int n = (ehSeries() && commentEp) ? extras_n_comments_ep()
+  int n = (isSeries() && commentEp) ? extras_n_comments_ep()
                                  : extras_n_comments();
   return n > EX_COMMENT_MAX ? EX_COMMENT_MAX : n;
 }
@@ -2567,7 +2567,7 @@ static float headerComments(float x, float y, float a) {
 
   // As duas pilulas. Em FILME so existe a da serie — nao ha episodio —, entao a
   // fileira inteira some em vez de mostrar um controle morto.
-  if (ehSeries()) {
+  if (isSeries()) {
     float px = x;
     int k;
     int row = SEC_COMMENTS;
@@ -2616,14 +2616,14 @@ static float headerComments(float x, float y, float a) {
 }
 
 static void drawComments(float x, float y, float a) {
-  int daSeries = !(ehSeries() && commentEp);
-  int n = daSeries ? extras_n_comments() : extras_n_comments_ep();
+  int ofSeries = !(isSeries() && commentEp);
+  int n = ofSeries ? extras_n_comments() : extras_n_comments_ep();
   int i;
   y = headerComments(x, y, a);
   // Carregando e "nao ha" sao a MESMA lista vazia; sem separar os dois o
   // episodio parecia nunca ter comentario nenhum.
   if (n == 0) {
-    const char *msg = (!daSeries && extras_comments_ep_loading())
+    const char *msg = (!ofSeries && extras_comments_ep_loading())
                     ? "Loading comments…"
                     : "No comments yet.";
     TxtLine l = txt_line(TXT_DET_META2, msg, 150, 154, 163, 255);
@@ -2642,7 +2642,7 @@ static void drawComments(float x, float y, float a) {
     // Fora da tela dos dois lados: nem desenha. Sao ate 8 cartoes de 722 px, e
     // pintar os que ninguem ve custa preenchimento num aparelho onde ele e o
     // recurso escasso.
-    if (cx > NV_TELA_W || cx + COM_CARD_W < 0.0f) continue;
+    if (cx > NV_SCREEN_W || cx + COM_CARD_W < 0.0f) continue;
     char footer[64];
     px = cx + COM_DFLT; width = COM_CARD_W - COM_DFLT * 2;
     frame(card, 20.0f, a);
@@ -2656,7 +2656,7 @@ static void drawComments(float x, float y, float a) {
     }
 
     { TxtLine lu = txt_line_trim(TXT_ROW_TITLE,
-                                    daSeries ? extras_comment_user(i)
+                                    ofSeries ? extras_comment_user(i)
                                             : extras_comment_ep_user(i),
                                     245, 248, 255, 255, width);
       txt_draw_alpha(lu, px, y + COM_DFLT, a); }
@@ -2664,14 +2664,14 @@ static void drawComments(float x, float y, float a) {
     // O texto para ANTES do rodape: sem o teto de linhas ele passava por cima
     // das curtidas. 5 linhas e o que cabe entre o nome e o rodape com o leading
     // de 34.
-    txt_block(TXT_DET_META2, daSeries ? extras_comment_text(i)
+    txt_block(TXT_DET_META2, ofSeries ? extras_comment_text(i)
                                      : extras_comment_ep_text(i),
               200, 205, 214,
               px, y + COM_DFLT + 46.0f, width, 34.0f, a * 0.95f, 5);
 
-    { int score = daSeries ? extras_comment_score(i)
+    { int score = ofSeries ? extras_comment_score(i)
                          : extras_comment_ep_score(i);
-      int cur  = daSeries ? extras_comment_likes(i)
+      int cur  = ofSeries ? extras_comment_likes(i)
                          : extras_comment_ep_likes(i);
       if (score > 0)
         snprintf(footer, sizeof footer, "%d/10   %d likes", score, cur);
@@ -2696,7 +2696,7 @@ static void drawSection(int r, float a, Uint32 now) {
     if (r == SEC_CAST && tab == TAB_RATINGS) {
       // Serie com notas por episodio mostra o painel do web; o resto (filme, ou
       // serie sem essa fonte) cai nos cartoes de nota.
-      if (ehSeries() && extras_n_seasons() > 0)
+      if (isSeries() && extras_n_seasons() > 0)
         drawScoresEpisode(NV_DETP_X, yTab, a);
       else
         drawRatings(NV_DETP_X, yTab, a);
@@ -2717,7 +2717,7 @@ static void drawSection(int r, float a, Uint32 now) {
   // de temporadas comeca em 1080 e a pilula e desenhada em 1160), por isso as
   // duas constantes coexistem em vez de uma sair da outra.
   float y;
-  if (!ehSeries()) y = contentSec[r];
+  if (!isSeries()) y = contentSec[r];
   else switch (r) {
     case SEC_SEASONS: y = NV_DETP_TEMP_Y; break;
     case SEC_EPISODES:  y = NV_DETP_EP_Y;   break;
@@ -2752,19 +2752,19 @@ static void drawSection(int r, float a, Uint32 now) {
   // que a fileira e, e o rotulo acima dela repetia a palavra duas vezes em
   // linhas seguidas. No FILME cada secao continua carregando o proprio nome,
   // porque la nao existe a barra de abas para dizer o que e o que.
-  { const char *header = ehSeries() ? NULL : headerOf(r);
+  { const char *header = isSeries() ? NULL : headerOf(r);
     if (header) {
       TxtLine lc = txt_line(TXT_HEADLINE, header, 245, 248, 255, 255);
       txt_draw_alpha(lc, NV_DETP_X, y - lc.h - NV_DETF_HEADER_GAP, a);
     } }
   { float height = heightSection(r);
-    if (y > NV_TELA_H || y + height < -40.0f) return; }
+    if (y > NV_SCREEN_H || y + height < -40.0f) return; }
 
   for (int c = 0; c < n && c < N_ITEMS; c++) {
     float f = animFocus[r][c];
     float x = xItem(r, c) - scrollSec[r];
     float w = widthItem(r, c);
-    if (x > NV_TELA_W || x + w < -w) continue;
+    if (x > NV_SCREEN_W || x + w < -w) continue;
     switch (r) {
       case SEC_SEASONS: {
         GfxRect b = { x, y, w, NV_DETP_TEMP_H };
@@ -2802,19 +2802,19 @@ static void drawSection(int r, float a, Uint32 now) {
 static void drawSkeletonEpisodes(float a) {
   int c;
   float yt, ye;
-  if (!ehSeries() || cat_n_episodes(idx) > 0 ||
+  if (!isSeries() || cat_n_episodes(idx) > 0 ||
       !disc_episodes_loading(idx)) return;
   yt = NV_DETP_TEMP_Y - scrollY;
   ye = NV_DETP_EP_Y - scrollY;
 
-  if (yt < NV_TELA_H && yt + NV_DETP_TEMP_H > 0) {
+  if (yt < NV_SCREEN_H && yt + NV_DETP_TEMP_H > 0) {
     for (c = 0; c < 3; c++) {
       float w = c == 0 ? 238.0f : 214.0f;
       GfxRect p = { NV_DETP_X + c * 276.0f, yt, w, NV_DETP_TEMP_H };
       gfx_color(p, 0.5f, 0.17f, 0.18f, 0.20f, a * 0.62f);
     }
   }
-  if (ye < NV_TELA_H && ye + NV_DETP_EP_H > 0) {
+  if (ye < NV_SCREEN_H && ye + NV_DETP_EP_H > 0) {
     for (c = 0; c < 3; c++) {
       float x = NV_DETP_X + c * NV_DETP_EP_STEP;
       GfxRect card = { x, ye, NV_DETP_EP_W, NV_DETP_EP_H };
@@ -2840,7 +2840,7 @@ static void drawSkeletonEpisodes(float a) {
 static void drawSkeletonCast(float a) {
   if (!castLoading()) return;
   float y = contentSec[SEC_CAST] - scrollY;
-  if (y > NV_TELA_H || y + NV_DETF_EL_HEIGHT < -40.0f) return;
+  if (y > NV_SCREEN_H || y + NV_DETF_EL_HEIGHT < -40.0f) return;
   { TxtLine lc = txt_line(TXT_HEADLINE, "Cast", 245, 248, 255, 255);
     txt_draw_alpha(lc, NV_DETP_X, y - lc.h - NV_DETF_HEADER_GAP, a); }
   for (int c = 0; c < 6; c++) {
@@ -2863,7 +2863,7 @@ static void drawSkeletonCast(float a) {
 // o mesmo raio dos outros.
 
 static void drawPerson(float a) {
-  GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, a);
 
   { GLuint t = person_photo()[0] ? tex_get(person_photo()) : 0;
@@ -2896,14 +2896,14 @@ static void drawPerson(float a) {
     TxtLine lt = txt_line(TXT_HEADLINE, "Filmografia", 245, 248, 255, 255);
     txt_draw_alpha(lt, x0, 96.0f, a);
     for (i = 0; i < n; i++) {
-      int col = i % PES_POR_LINE, lin = i / PES_POR_LINE;
+      int col = i % PES_PER_LINE, lin = i / PES_PER_LINE;
       float x = x0 + col * (PES_CARD_W + PES_CARD_GAP);
       float y = 96.0f + lt.h + 28.0f + (lin - personLine) * (PES_CARD_H + 92.0f);
       if (lin < personLine) continue;
       GfxRect r = { x, y, PES_CARD_W, PES_CARD_H };
       const char *po = person_credit_poster(i);
       GLuint t = po[0] ? tex_get_width(po, PES_CARD_W) : 0;
-      if (y + PES_CARD_H > NV_TELA_H - 24.0f) break;
+      if (y + PES_CARD_H > NV_SCREEN_H - 24.0f) break;
       if (i == personFocus) {
         GfxRect ring = { r.x - 4, r.y - 4, r.w + 8, r.h + 8 };
         gfx_color(ring, radiusPoster(PES_CARD_W, PES_CARD_H), 1, 1, 1, a);
@@ -2940,7 +2940,7 @@ static void drawDirectorDetail(const CatItem *ci, float a, float pg) {
   const char *photo;
   GLuint tex;
   GfxRect r;
-  if (!ci || ehSeries() || !ci->directing[0] || a <= 0.005f) return;
+  if (!ci || isSeries() || !ci->directing[0] || a <= 0.005f) return;
   director_request(ci->directing);
   photo = director_photo(ci->directing);
   if (!photo[0]) return;
@@ -2962,13 +2962,13 @@ static void drawDirectorDetail(const CatItem *ci, float a, float pg) {
 
 void detail_draw(Uint32 now) {
   if (!is_open) return;
-  float s = smooth(t), a2 = fase2();
+  float s = smooth(t), a2 = phase2();
 
   if (!detail_covers_screen()) {
-    GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+    GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, s);   // #0d0d0d, o fundo do web
   }
-  gfx_sem_crop();
+  gfx_no_crop();
 
   // --- backdrop full-bleed --------------------------------------------------
   // A tela de detalhe e uma imagem de 1920x1080 em (0,0) com a vinheta por cima;
@@ -2993,7 +2993,7 @@ void detail_draw(Uint32 now) {
   GfxRect target; float aEntry;
   backdropRect(&target, &aEntry);
   const char *art = artOf(idx);
-  int artPoster = artDetailEhPoster(idx);
+  int artPoster = artDetailIsPoster(idx);
   // Backdrop em tela cheia: pede o teto de 1920. Com o teto comum de 960 a arte
   // era decodificada com metade da resolucao e ampliada ao dobro na tela.
   GLuint tex = art ? tex_get_hero(art) : 0;
@@ -3011,7 +3011,7 @@ void detail_draw(Uint32 now) {
   // Fica quando a tela NAO esta coberta: ai embaixo ha a home, e o veu e o que
   // a apaga.
   if (pg > 0.01f && !detail_covers_screen()) {
-    GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+    GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, pg);
   }
   // 4o parametro = forca da VINHETA, nao "foco". Vai a 0 junto com a rolagem,
@@ -3028,7 +3028,7 @@ void detail_draw(Uint32 now) {
   // O conteudo SOBE para o lugar enquanto aparece, no lugar de so surgir: e a
   // contraparte do texto da home, que desce e apaga. Junto, le como um bloco
   // trocando de arranjo, que e o que o dono pediu.
-  heroWeb(a2, -scrollY + (1.0f - a2) * NV_TELA_H * 0.05f);
+  heroWeb(a2, -scrollY + (1.0f - a2) * NV_SCREEN_H * 0.05f);
 
 
   if (pg <= 0.01f && scrollY < 1.0f) {

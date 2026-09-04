@@ -1,32 +1,35 @@
-// Sincronizacao com a conta: e isto que faz o app nativo se comportar como o
-// oficial na TV de outra pessoa.
+// Synchronisation with the account: this is what makes the native app behave
+// like the official one on somebody else's TV.
 //
-// O QUE ELE SUBSTITUI: hoje os addons e o token do Trakt sao arquivos de texto
-// dentro do pacote (art/addons.txt, art/trakt.txt), o que torna o .ipk
-// indistribuivel — ele entrega as credenciais de quem o montou. Depois deste
-// modulo, os dois vem da conta de quem logou.
+// WHAT IT REPLACES: today the addons and the Trakt token are text files inside
+// the package (art/addons.txt, art/trakt.txt), which makes the .ipk
+// undistributable — it hands over the credentials of whoever built it. After
+// this module, both come from the account of whoever signed in.
 //
-// ONDE ELE ESCREVE E ONDE NAO ESCREVE — a distincao mais importante do arquivo:
+// WHERE IT WRITES AND WHERE IT DOES NOT — the most important distinction in this
+// file:
 //
-//   PUXA E EMPURRA (o app tem a informacao de verdade):
-//     addons, credenciais (Trakt, TMDB, mdblist), progresso de reproducao.
+//   PULLS AND PUSHES (the app holds the real information):
+//     addons, credentials (Trakt, TMDB, mdblist), playback progress.
 //
-// MEDIDO na conta do dono: sync_pull_provider_credentials devolve animeskip,
-// debrid:premiumize, debrid:realdebrid, debrid:torbox, introdb, mdblist e tmdb
-// — e NENHUM "trakt". O leitor de trakt fica aqui porque a RPC e a mesma e a
-// linha aparece sozinha assim que o app web a escrever; ate la o vinculo Trakt
-// deste app continua saindo de art/trakt.txt, que NAO pode ir no pacote.
-//   SO PUXA (o app le, mas nao tem edicao local para empurrar):
-//     perfis, vistos, biblioteca, salvos, colecoes, ajustes do perfil,
-//     catalogos da home.
+// MEASURED on the owner's account: sync_pull_provider_credentials returns
+// animeskip, debrid:premiumize, debrid:realdebrid, debrid:torbox, introdb,
+// mdblist and tmdb — and NO "trakt". The trakt reader stays here because the RPC
+// is the same and the row will appear on its own as soon as the web app writes
+// it; until then this app's Trakt link still comes from art/trakt.txt, which
+// CANNOT go in the package.
+//   ONLY PULLS (the app reads, but has no local editing to push):
+//     profiles, watched, library, saved, collections, profile settings, home
+//     catalogues.
 //
-// Isto NAO e preguica, e a regra de seguranca numero 2 da secao 1.6 do plano.
-// Empurrar uma superficie que o app nao edita significaria mandar uma lista
-// VAZIA para o servidor, e uma lista vazia apaga o que existe nos outros
-// aparelhos da pessoa. Empurrar so o que o app realmente possui e a unica
-// forma segura de participar de um sync bidirecional sem ter todas as telas.
+// This is NOT laziness, it is safety rule number 2 from section 1.6 of the plan.
+// Pushing a surface the app does not edit would mean sending an EMPTY list to
+// the server, and an empty list erases what exists on the person's other
+// devices. Pushing only what the app actually owns is the only safe way to take
+// part in a two-way sync without having every screen.
 //
-// Todas as chamadas de rede acontecem num fio proprio. A UI so consulta estado.
+// Every network call happens on a thread of its own. The UI only queries
+// state.
 #ifndef NV_SYNC_H
 #define NV_SYNC_H
 
@@ -37,75 +40,77 @@ typedef enum {
   SYNC_FAILED
 } SyncState;
 
-// Dispara um ciclo completo (puxa e, onde faz sentido, empurra). Volta na hora.
-// Idempotente enquanto um ciclo estiver em andamento.
+// Fires a full cycle (pulls and, where it makes sense, pushes). Returns
+// immediately. Idempotent while a cycle is in progress.
 void sync_start(void);
 
 SyncState  sync_state(void);
 const char *sync_summary(void);   // uma linha para a tela de ajustes
 
-// Marca uma superficie como suja: o proximo ciclo empurra. Chamar quando o
-// usuario mexe em algo local.
+// Marks a surface dirty: the next cycle pushes it. Call when the user changes
+// something locally.
 void sync_dirty_progress(void);
 void sync_dirty_addons(void);
 
-// Ultimo instante em que um ciclo terminou bem (SDL_GetTicks); 0 se nunca.
+// The last instant a cycle finished successfully (SDL_GetTicks); 0 if never.
 unsigned sync_last_ok(void);
 
-// Intervalo entre ciclos automaticos. Ate agora o sync so rodava no arranque,
-// depois do login e ao trocar de perfil — entao parar um episodio no celular
-// nao aparecia na TV sem fechar e reabrir o app, que e o oposto do que a conta
-// promete.
+// The interval between automatic cycles. Until now the sync only ran at
+// startup, after login and when switching profile — so stopping an episode on
+// the phone did not show up on the TV without closing and reopening the app,
+// which is the opposite of what the account promises.
 //
-// 5 minutos, e nao 30 segundos: o ciclo sao ~8 requisicoes (perfis, travas,
-// addons, credenciais, progresso e as so-leitura). A TV fica LIGADA horas na
-// mesma tela, entao um intervalo curto vira um martelo constante no backend —
-// e ja houve um episodio de estouro de cota neste projeto em que o efeito
-// colateral (login impossivel, sessao anonima, sync da conta errada) pareceu
-// bug do app. O ciclo tambem so roda com o app em uso, nunca durante o player.
+// 5 minutes, and not 30 seconds: the cycle is ~8 requests (profiles, locks,
+// addons, credentials, progress and the read-only ones). The TV stays ON for
+// hours on the same screen, so a short interval becomes a constant hammer on the
+// backend — and this project already had a quota-overrun episode where the side
+// effect (login impossible, anonymous session, syncing the wrong account) looked
+// like a bug in the app. The cycle also only runs with the app in use, never
+// during playback.
 #define SYNC_INTERVAL_MS 300000u
 
-// Chamar uma vez por quadro. Nao bloqueia: so recolhe o resultado do fio e
-// aplica no app (lista de addons, credencial do Trakt, progresso).
+// Call once per frame. Does not block: it only collects the thread's result and
+// applies it to the app (addon list, Trakt credential, progress).
 void sync_step(unsigned nowMs);
 
-// Dispara um ciclo se ja passou SYNC_INTERVALO_MS desde o ultimo que deu certo.
-// Nao roda com um ciclo em andamento, com o freio ativo, nem antes do primeiro
-// sucesso. 1 quando disparou.
+// Fires a cycle if SYNC_INTERVAL_MS has passed since the last successful one.
+// Does not run with a cycle in progress, with the brake on, or before the first
+// success. 1 when it fired.
 int  sync_periodic(unsigned nowMs);
 
-// Apaga do aparelho tudo que pertence a quem estava logado. Chamar JUNTO com
-// sessao_sair() — a sessao sozinha nao basta.
+// Erases from the device everything belonging to whoever was signed in. Call it
+// TOGETHER with session_exit() — the session alone is not enough.
 //
-// O defeito que isto conserta: sair da conta apagava o token e mais nada. A
-// lista de addons continuava em memoria (com as chaves de debrid embutidas nas
-// URLs), o token do Trakt continuava valido e ESCREVENDO o que a proxima
-// pessoa assistisse na conta de quem saiu, o perfil ativo continuava gravado —
-// entao o primeiro sync da conta seguinte escreveria progresso no
-// `p_profile_id` da anterior — e o progresso.txt da anterior seguia no disco.
+// The defect this fixes: signing out deleted the token and nothing else. The
+// addon list stayed in memory (with the debrid keys embedded in the URLs), the
+// Trakt token stayed valid and kept WRITING whatever the next person watched
+// into the departing person's account, the active profile stayed saved — so the
+// next account's first sync would write progress under the previous
+// `p_profile_id` — and the previous person's progress.txt was still on disk.
 //
-// Numa TV de sala, "sair" e a unica barreira entre duas pessoas. Ela tem de
-// apagar de verdade.
+// On a living-room TV, "sign out" is the only barrier between two people. It has
+// to erase for real.
 void sync_forget_user(void);
 
-// Faz o PROXIMO ciclo reaplicar os ajustes vindos da conta. Chamar ao entrar e
-// ao trocar de perfil.
+// Makes the NEXT cycle reapply the settings that came from the account. Call it
+// on sign-in and on switching profile.
 //
-// Por que nao aplicar em TODO ciclo: o app nativo le os ajustes do perfil mas
-// nao os escreve de volta. Reaplicar sempre desfaria, na volta seguinte, tudo
-// que a pessoa mudasse na propria TV — ela mexeria numa opcao e veria a opcao
-// voltar sozinha. Aplicando so na primeira volta depois de entrar (ou de trocar
-// de perfil), a conta define o ponto de partida e a mudanca local vale pelo
-// resto da sessao.
+// Why not apply on EVERY cycle: the native app reads the profile's settings but
+// does not write them back. Always reapplying would undo, on the next pass,
+// anything the person changed on the TV itself — they would touch an option and
+// watch it revert on its own. Applying only on the first pass after signing in
+// (or switching profile), the account sets the starting point and the local
+// change holds for the rest of the session.
 void sync_reapply_settings(void);
 
-// Manda uma credencial de servico para a CONTA, para os outros aparelhos da
-// pessoa herdarem o vinculo. `credJson` e o objeto pronto (o servidor guarda o
-// que vier). BLOQUEIA — chamar de um fio, ou aceitar o custo de uma viagem.
+// Sends a service credential to the ACCOUNT, so the person's other devices
+// inherit the link. `credJson` is the finished object (the server stores
+// whatever arrives). BLOCKS — call from a thread, or accept the cost of one
+// round trip.
 //
-// Existe por causa do Trakt: a conta do dono nao tinha a linha `trakt`, entao
-// vincular na TV nao ajudava o celular. Vincular aqui passa a ESCREVER na
-// conta, que e o que o app web faz.
+// It exists because of Trakt: the owner's account had no `trakt` row, so linking
+// on the TV did not help the phone. Linking here now WRITES into the account,
+// which is what the web app does.
 void sync_push_credential(const char *provider, const char *credJson);
 
 void sync_shutdown(void);

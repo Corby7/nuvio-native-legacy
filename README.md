@@ -63,7 +63,12 @@ Written down because each one cost a day:
 
 ## Documentation
 
-Most design documents are in Portuguese, since they were written for the author:
-[PORT-LEGACY.md](PORT-LEGACY.md), [PLANO-CONTA-SYNC.md](PLANO-CONTA-SYNC.md),
-[MEDIDAS-WEB.md](MEDIDAS-WEB.md), [FERRAMENTAS.md](FERRAMENTAS.md).
-[INSTALL.md](INSTALL.md) and this file are in English.
+- [PORT-LEGACY.md](PORT-LEGACY.md) — what this build is, and what it is not
+- [ACCOUNT-SYNC-PLAN.md](ACCOUNT-SYNC-PLAN.md) — the account, the sync contract
+  and every RPC, with what was measured against the real server
+- [WEB-MEASUREMENTS.md](WEB-MEASUREMENTS.md) — every dimension measured in the
+  running web app, the reference for the 1:1 port
+- [SUBTITLE-PERFORMANCE-PLAN.md](SUBTITLE-PERFORMANCE-PLAN.md) — subtitle styling
+  through the TV pipeline, and where the perceived slowness actually is
+- [TOOLS.md](TOOLS.md) — building, logging, screen capture and key injection
+- [INSTALL.md](INSTALL.md) — installing on another TV

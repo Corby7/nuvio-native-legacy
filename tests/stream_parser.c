@@ -1,4 +1,4 @@
-// Parser isolado: permite ASan sem carregar o inicializador de SDL do macOS.
+// The parser in isolation: allows ASan without loading macOS's SDL initialiser.
 #include "streams.h"
 #include <assert.h>
 #include <stdio.h>

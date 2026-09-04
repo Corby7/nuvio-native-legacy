@@ -164,13 +164,13 @@ static void cycleStyle(int line) {
 // Rotulo da linha `i` da coluna de legenda. Ate video_n_legenda() sao as
 // embutidas; depois vem as do OpenSubtitles.
 static const char *labelSubtitle(int i, const char **brand) {
-  int emb = video_n_subtitle();
+  int embedded = video_n_subtitle();
   *brand = NULL;
-  if (i < emb) {
+  if (i < embedded) {
     const VideoTrack *f = video_subtitle(i);
     return f ? f->label : "";
   }
-  { const Subtitle *l = addons_subtitle(i - emb);
+  { const Subtitle *l = addons_subtitle(i - embedded);
     if (!l) return "";
     *brand = "OpenSubtitles";
     return l->label; }
@@ -181,11 +181,11 @@ static void apply(void) {
     video_choose_audio(focus[0]);
   } else {
     int i = focus[1] - 1;
-    int emb = video_n_subtitle();
+    int embedded = video_n_subtitle();
     if (i < 0)        { video_choose_subtitle(-1); subtitle_off(); subExternal = -1; }
-    else if (i < emb) { video_choose_subtitle(i);  subtitle_off(); subExternal = -1; }
+    else if (i < embedded) { video_choose_subtitle(i);  subtitle_off(); subExternal = -1; }
     else {
-      const Subtitle *l = addons_subtitle(i - emb);
+      const Subtitle *l = addons_subtitle(i - embedded);
       // So marca como ativa se houve o que aplicar: sem a URL o uMS nao recebe
       // nada, e a folha diria "ativa" sobre uma legenda que nunca subiu.
       if (l) {
@@ -221,7 +221,7 @@ void tracks_event(const SDL_Event *e) {
 
 void tracks_update(float dt, Uint32 now) {
   (void)now;
-  anim = anim_mola(anim, is_open ? 1.0f : 0.0f, dt, NV_MOLA_SCREEN);
+  anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
 }
 
 // Traz a linha focada para dentro da janela visivel, mexendo o MINIMO: so
@@ -275,9 +275,9 @@ void tracks_draw(Uint32 now) {
   (void)now;
   if(anim<.01f) return;
   float a=anim;
-  gfx_color((GfxRect){0,0,NV_TELA_W,NV_TELA_H},0,.025f,.025f,.03f,.88f*a);
+  gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,.025f,.025f,.03f,.88f*a);
   txt_draw_alpha(txt_line(TXT_PANEL_TITLE,mode?"Subtitles":"Audio",242,243,245,255),56,48,a);
-  txt_draw_alpha(txt_line(TXT_PG_END,"Back to close",180,182,188,255),NV_TELA_W-250,60,a);
+  txt_draw_alpha(txt_line(TXT_PG_END,"Back to close",180,182,188,255),NV_SCREEN_W-250,60,a);
   visible=7;
   adjustScroll();
   if(!mode) column_draw(0,76,720,138,a);

@@ -142,7 +142,7 @@ const char *addons_base(int i) {
 
 // Quarta coluna de addons.txt. Como a de stream, ausente vale 1 — arquivo
 // antigo continua funcionando, so faz uma consulta a mais que pode dar vazio.
-int addons_tem_catalog(int i) {
+int addons_has_catalog(int i) {
   return (i >= 0 && i < nAddon) ? addon[i].catalog : 0;
 }
 AddState addons_state(void) {
@@ -348,10 +348,10 @@ static void *fetchSubtitles(void *u) {
         // Seis por idioma e um limite deliberado para navegacao por D-pad.
         for (group = 0; group < 2; group++) {
           const char *q = p;
-          int noGroup = 0, j;
+          int inGroup = 0, j;
           for (j = 0; j < nFound; j++)
-            if (groupLanguage(found[j].language) == group) noGroup++;
-          while (q && nFound < SUB_MAX && noGroup < SUB_MAX / 2) {
+            if (groupLanguage(found[j].language) == group) inGroup++;
+          while (q && nFound < SUB_MAX && inGroup < SUB_MAX / 2) {
             const char *f = js_end(q);
             char l[16] = "", name[120] = "";
             Subtitle *d = &found[nFound];
@@ -367,7 +367,7 @@ static void *fetchSubtitles(void *u) {
               else
                 snprintf(d->label, sizeof d->label, "%s%s%.36s",
                          nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
-              nFound++; noGroup++;
+              nFound++; inGroup++;
             }
             q = js_next(f);
           }
@@ -448,22 +448,22 @@ static pthread_mutex_t addLock = PTHREAD_MUTEX_INITIALIZER;
 static void *threadSources(void *u) {
   (void)u;
   for (;;) {
-    int meu, i;
+    int mine, i;
     char url[900], *body;
     pthread_mutex_lock(&addLock);
     if (nextBucket >= nBuckets) { pthread_mutex_unlock(&addLock); return NULL; }
-    meu = nextBucket++;
+    mine = nextBucket++;
     pthread_mutex_unlock(&addLock);
-    i = buckets[meu].idx;
+    i = buckets[mine].idx;
     snprintf(url, sizeof url, "%s/stream/%s/%s.json",
              addon[i].base, targetKind, targetId);
     // 12 s e nao 25: com os addons em paralelo o timeout deixa de ser somado,
     // mas continua sendo o tempo que o dono espera pelo mais lento.
     body = net_download(url, 12);
     if (!body) { printf("[addons] %s: no response\n", addon[i].name); continue; }
-    buckets[meu].n = stream_parse(body, addon[i].name, &buckets[meu].found);
+    buckets[mine].n = stream_parse(body, addon[i].name, &buckets[mine].found);
     printf("[addons] %s: %d sources (%u bytes)\n",
-           addon[i].name, buckets[meu].n, (unsigned)strlen(body));
+           addon[i].name, buckets[mine].n, (unsigned)strlen(body));
     free(body);
   }
 }

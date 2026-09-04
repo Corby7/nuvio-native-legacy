@@ -41,7 +41,7 @@
 #define SETTING_LIST_W     1120.0f
 #define SETTING_DFLT           34.0f    // borda da linha ao texto
 #define SETTING_TOP        (NV_MARGIN_Y + 118.0f)   // abaixo do titulo da tela
-#define SETTING_BASE        (NV_TELA_H - NV_MARGIN_Y - 48.0f)
+#define SETTING_BASE        (NV_SCREEN_H - NV_MARGIN_Y - 48.0f)
 // Raio da linha em fracao do menor lado (o SDF do shader e normalizado):
 // 12px sobre 88 de altura.
 #define SETTING_RADIUS           0.14f
@@ -56,7 +56,7 @@ typedef enum {
   // Conteudo da Home
   SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_RAIL_BLUR, SETTING_HERO, SETTING_HERO_CATALOGS,
   SETTING_DISCOVER, SETTING_LABELS, SETTING_NAME_ADDON, SETTING_SUFFIX_KIND,
-  SETTING_HIDE_NLANC, SETTING_SCORES_HOME, SETTING_GRADIENT_CLASSIC,
+  SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME, SETTING_GRADIENT_CLASSIC,
   // Continuar assistindo
   SETTING_CW_ON, SETTING_CW_STYLE, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
   SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN, SETTING_CW_ORDER,
@@ -110,7 +110,7 @@ typedef struct {
 } Option;
 
 #define ESC(rot, vals, count) { rot, OP_CHOICE, vals, count, 0, 0, 0, NULL }
-#define NUM(rot, lo, hi, st, suf) { rot, OP_NUMBER, NULL, 0, lo, hi, st, suf }
+#define NUM(rot, lo, hi, st, suffix) { rot, OP_NUMBER, NULL, 0, lo, hi, st, suffix }
 #define READ(rot)            { rot, OP_READ, NULL, 0, 0, 0, 0, NULL }
 #define ACTION(rot)           { rot, OP_ACTION,    NULL, 0, 0, 0, 0, NULL }
 
@@ -213,7 +213,7 @@ static const char *KEY[] = {
 // aparece na hora: so quando o ajustes.txt passa a existir, o strcmp(NULL,...)
 // derruba o app no arranque seguinte. Foi exatamente o que aconteceu, e o
 // unico sintoma na TV foi o app abrir e fechar.
-typedef char checked_uma_key_por_option[
+typedef char checked_one_key_per_option[
   (sizeof KEY / sizeof *KEY == SETTING_N) ? 1 : -1];
 
 // Onde cada secao comeca e quantas opcoes ela tem. Secao e um agrupamento
@@ -303,57 +303,57 @@ static int sair = 0;
 // "Todos" quando heroCatalogKeys esta vazio — e o caso do perfil do dono.
 static int heroCatalogs = 0;
 
-static int lig(int op)  { return value[op] == 0; }
+static int on(int op)  { return value[op] == 0; }
 
 int settings_animations_reduced(void) { return value[SETTING_ANIM] == 1; }
-int settings_dolby_vision(void)        { return lig(SETTING_DV); }
-int settings_dolby_atmos(void)         { return lig(SETTING_ATMOS); }
+int settings_dolby_vision(void)        { return on(SETTING_DV); }
+int settings_dolby_atmos(void)         { return on(SETTING_ATMOS); }
 
 // `collapseSidebar: modernSidebar ? false : Boolean(collapseSidebar)` — a barra
 // moderna DESLIGA o recolhimento, e nao o contrario. Copiado de
 // normalizeLayoutPreferences para nao inventar precedencia.
-int settings_rail_modern(void)        { return lig(SETTING_RAIL_MODERN); }
-int settings_rail_collapsed(void)      { return settings_rail_modern() ? 0 : lig(SETTING_RAIL); }
-int settings_rail_modern_blur(void)   { return lig(SETTING_RAIL_BLUR); }
-int settings_hero_on(void)         { return lig(SETTING_HERO); }
-int settings_hero_full(void)          { return lig(SETTING_HERO_FULL); }
-int settings_posters_landscape(void)   { return lig(SETTING_LANDSCAPE); }
-int settings_gradient_focus_classic(void) { return lig(SETTING_GRADIENT_CLASSIC); }
+int settings_rail_modern(void)        { return on(SETTING_RAIL_MODERN); }
+int settings_rail_collapsed(void)      { return settings_rail_modern() ? 0 : on(SETTING_RAIL); }
+int settings_rail_modern_blur(void)   { return on(SETTING_RAIL_BLUR); }
+int settings_hero_on(void)         { return on(SETTING_HERO); }
+int settings_hero_full(void)          { return on(SETTING_HERO_FULL); }
+int settings_posters_landscape(void)   { return on(SETTING_LANDSCAPE); }
+int settings_gradient_focus_classic(void) { return on(SETTING_GRADIENT_CLASSIC); }
 
-int settings_labels_poster(void)      { return lig(SETTING_LABELS); }
-int settings_name_addon(void)          { return lig(SETTING_NAME_ADDON); }
-int settings_suffix_kind(void)         { return lig(SETTING_SUFFIX_KIND); }
-int settings_hide_unreleased(void){ return lig(SETTING_HIDE_NLANC); }
-int settings_date_full(void)       { return lig(SETTING_DET_DATE_FULL); }
+int settings_labels_poster(void)      { return on(SETTING_LABELS); }
+int settings_name_addon(void)          { return on(SETTING_NAME_ADDON); }
+int settings_suffix_kind(void)         { return on(SETTING_SUFFIX_KIND); }
+int settings_hide_unreleased(void){ return on(SETTING_HIDE_UNRELEASED); }
+int settings_date_full(void)       { return on(SETTING_DET_DATE_FULL); }
 int settings_scores_home(void)          { return value[SETTING_SCORES_HOME] == 0; }
 int settings_local_discover(void)     { return value[SETTING_DISCOVER]; }
 int settings_discover_na_search(void)  { return value[SETTING_DISCOVER] == 0; }
 
-int settings_cw_on(void)           { return lig(SETTING_CW_ON); }
+int settings_cw_on(void)           { return on(SETTING_CW_ON); }
 int settings_cw_style(void)           { return value[SETTING_CW_STYLE]; }
-int settings_cw_thumb_episode(void)   { return lig(SETTING_CW_THUMB); }
-int settings_cw_blur_next(void) { return lig(SETTING_CW_BLUR_NEXT); }
-int settings_cw_do_episode_more_alto(void) { return lig(SETTING_CW_FURTHEST); }
-int settings_cw_show_unaired(void)  { return lig(SETTING_CW_NOT_SHOWN); }
+int settings_cw_thumb_episode(void)   { return on(SETTING_CW_THUMB); }
+int settings_cw_blur_next(void) { return on(SETTING_CW_BLUR_NEXT); }
+int settings_cw_do_episode_more_alto(void) { return on(SETTING_CW_FURTHEST); }
+int settings_cw_show_unaired(void)  { return on(SETTING_CW_NOT_SHOWN); }
 int settings_cw_order(void)            { return value[SETTING_CW_ORDER]; }
 
-int settings_blur_unwatched(void) { return lig(SETTING_DET_BLUR_NOT_WATCHED); }
-int settings_button_trailer(void)       { return lig(SETTING_DET_TRAILER); }
-int settings_meta_external(void)        { return lig(SETTING_DET_META_EXT); }
+int settings_blur_unwatched(void) { return on(SETTING_DET_BLUR_NOT_WATCHED); }
+int settings_button_trailer(void)       { return on(SETTING_DET_TRAILER); }
+int settings_meta_external(void)        { return on(SETTING_DET_META_EXT); }
 
-int   settings_expand_poster(void)   { return lig(SETTING_EXPAND); }
+int   settings_expand_poster(void)   { return on(SETTING_EXPAND); }
 float settings_expand_poster_delay(void) { return (float)value[SETTING_EXPAND_DELAY]; }
-int   settings_navigation_horizontal_fast(void) { return lig(SETTING_NAV_FAST); }
+int   settings_navigation_horizontal_fast(void) { return on(SETTING_NAV_FAST); }
 
-int   settings_depth(void)      { return lig(SETTING_DEPTH); }
+int   settings_depth(void)      { return on(SETTING_DEPTH); }
 float settings_depth_border(void)     { return value[SETTING_DEPTH_BORDER] / 100.0f; }
 float settings_depth_brightness(void)    { return value[SETTING_DEPTH_BRIGHTNESS] / 100.0f; }
 float settings_depth_coverage(void) { return value[SETTING_DEPTH_COVERAGE] / 100.0f; }
-int   settings_depth_posters(void)   { return lig(SETTING_DEPTH_POSTERS); }
-int   settings_depth_cw(void)        { return lig(SETTING_DEPTH_CW); }
-int   settings_depth_episodes(void) { return lig(SETTING_DEPTH_EPS); }
-int   settings_depth_cast(void)    { return lig(SETTING_DEPTH_CAST); }
-int   settings_depth_trailers(void)  { return lig(SETTING_DEPTH_TRAILERS); }
+int   settings_depth_posters(void)   { return on(SETTING_DEPTH_POSTERS); }
+int   settings_depth_cw(void)        { return on(SETTING_DEPTH_CW); }
+int   settings_depth_episodes(void) { return on(SETTING_DEPTH_EPS); }
+int   settings_depth_cast(void)    { return on(SETTING_DEPTH_CAST); }
+int   settings_depth_trailers(void)  { return on(SETTING_DEPTH_TRAILERS); }
 
 int   settings_width_poster_dp(void) { return value[SETTING_WIDTH_DP]; }
 int   settings_radius_poster_dp(void)    { return value[SETTING_RADIUS_DP]; }
@@ -402,7 +402,7 @@ static void camelToSnake(const char *src, char *dst, size_t size) {
   dst[w] = 0;
 }
 
-static int equalSemBox(const char *a, const char *b) {
+static int equalWithoutBox(const char *a, const char *b) {
   for (; *a && *b; a++, b++) {
     char x = (*a >= 'A' && *a <= 'Z') ? (char)(*a - 'A' + 'a') : *a;
     char y = (*b >= 'A' && *b <= 'Z') ? (char)(*b - 'A' + 'a') : *b;
@@ -528,7 +528,7 @@ int settings_apply_blob(const char *json) {
       // web os escreve em minuscula. Ler so o codigo do web levava a rejeitar
       // o valor de verdade — e a rejeicao era CORRETA (melhor manter que
       // inventar), mas o efeito era o ajuste nunca chegar.
-      if (lit) { int k; for (k = 0; lit[k]; k++) if (!equalSemBox(lit[k], text)) { new = k; break; } }
+      if (lit) { int k; for (k = 0; lit[k]; k++) if (!equalWithoutBox(lit[k], text)) { new = k; break; } }
       if (new < 0) {
         // Valor que este app nao conhece (versao nova do web, opcao nova).
         // Manter o que esta e a resposta certa: escolher um padrao aqui
@@ -766,8 +766,8 @@ void settings_update(float dt, Uint32 now) {
   (void)now;
   for (int i = 0; i < SETTING_N; i++) {
     float target = (i == focusOp) ? 1.0f : 0.0f;
-    animFocus[i] = settings_animations_reduced() ? target : anim_mola(animFocus[i], target, dt,
-                            target > animFocus[i] ? NV_MOLA_FOCUS : NV_MOLA_DESFOCO);
+    animFocus[i] = settings_animations_reduced() ? target : anim_spring(animFocus[i], target, dt,
+                            target > animFocus[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
   // Rola o minimo para a linha focada caber, e leva junto o cabecalho da secao
   // quando a linha e a primeira dela — sem isso, entrar numa secao mostra a
@@ -780,7 +780,7 @@ void settings_update(float dt, Uint32 now) {
   if (base - target > SETTING_BASE - SETTING_TOP) target = base - (SETTING_BASE - SETTING_TOP);
   if (top - target < 0.0f)              target = top;
   if (target < 0.0f) target = 0.0f;
-  scrollY = settings_animations_reduced() ? target : anim_mola(scrollY, target, dt, NV_MOLA_SCROLL);
+  scrollY = settings_animations_reduced() ? target : anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
 }
 
 // Texto do valor de uma linha. Buffer estatico porque so uma linha e desenhada
@@ -850,10 +850,10 @@ static void drawLine(int op, float y, float f) {
   // elas, nada na tela diz que esquerda/direita e o gesto certo.
   if (canMudar && f > 0.02f) {
     TxtLine dir = txt_line(TXT_CAPTION2, "\xe2\x96\xb6", cv, cv, cv, 255);
-    TxtLine esq = txt_line(TXT_CAPTION2, "\xe2\x97\x80", cv, cv, cv, 255);
+    TxtLine left = txt_line(TXT_CAPTION2, "\xe2\x97\x80", cv, cv, cv, 255);
     txt_draw_alpha(dir, xDir - dir.w, y + (SETTING_LINE_H - dir.h) * 0.5f, aText * f);
-    txt_draw_alpha(esq, valueDir - val.w - 16.0f - esq.w,
-                       y + (SETTING_LINE_H - esq.h) * 0.5f, aText * f);
+    txt_draw_alpha(left, valueDir - val.w - 16.0f - left.w,
+                       y + (SETTING_LINE_H - left.h) * 0.5f, aText * f);
   }
   txt_draw_alpha(val, valueDir - val.w, vy, aText);
 }
@@ -864,8 +864,8 @@ static void drawLine(int op, float y, float f) {
 // login da conta.
 static void drawLink(const char *service, const char *code,
                            const char *address, const char *failure, int waiting) {
-  GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
-  GfxRect card = { (NV_TELA_W - 1000.0f) * 0.5f, 250.0f, 1000.0f, 560.0f };
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+  GfxRect card = { (NV_SCREEN_W - 1000.0f) * 0.5f, 250.0f, 1000.0f, 560.0f };
   TxtLine l;
   char t[80];
   float y = 300.0f;
@@ -878,44 +878,44 @@ static void drawLink(const char *service, const char *code,
 
   snprintf(t, sizeof t, "Connect %s", service);
   l = txt_line(TXT_TITLE2, t, 255, 255, 255, 255);
-  txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+  txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
   y += 92.0f;
 
   if (failure && failure[0]) {
     l = txt_line(TXT_HEADLINE, failure, 236, 108, 108, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
     y += 70.0f;
     l = txt_line(TXT_CAPTION, "OK to try again · Back to close",
                   150, 152, 160, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
     return;
   }
   if (!code || !code[0]) {
     l = txt_line(TXT_HEADLINE, "Preparing the code…", 210, 212, 220, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
     return;
   }
 
   l = txt_line(TXT_BODY, "No celular, abra:", 176, 178, 186, 255);
-  txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+  txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
   y += 52.0f;
   l = txt_line(TXT_TITLE3, address && address[0] ? address : "-", 255, 255, 255, 255);
-  txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+  txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
   y += 92.0f;
   l = txt_line(TXT_BODY, "and enter the code:", 176, 178, 186, 255);
-  txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+  txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
   y += 66.0f;
 
   // Espacamento entre letras: um codigo curto sem tracking le como palavra, e
   // a pessoa transcreve errado.
   { float width = txt_tracking(TXT_TITLE1, code, 255, 255, 255, -1.0f, 0.0f, 1.0f, 16.0f);
     txt_tracking(TXT_TITLE1, code, 255, 255, 255,
-                 (NV_TELA_W - width) * 0.5f, y, 1.0f, 16.0f); }
+                 (NV_SCREEN_W - width) * 0.5f, y, 1.0f, 16.0f); }
   y += 130.0f;
 
   if (waiting) {
     l = txt_line(TXT_CAPTION, "Waiting for authorisation…", 150, 152, 160, 255);
-    txt_draw(l, (NV_TELA_W - l.w) * 0.5f, y);
+    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
   }
 }
 
@@ -923,7 +923,7 @@ void settings_draw(Uint32 now) {
   (void)now;
   // Fundo opaco proprio: a tela cobre tudo e nao pode depender de quem desenhou
   // antes dela — sem isto a home aparece entre as linhas da lista.
-  GfxRect screen = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
   // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
   // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill
@@ -942,7 +942,7 @@ void settings_draw(Uint32 now) {
   txt_draw(context, SETTING_LIST_X, NV_MARGIN_Y + title.h + 10.0f);
 
   float hx = SETTING_LIST_X + SETTING_LIST_W + 52.0f;
-  float hw = NV_TELA_W - NV_MARGIN_X - hx;
+  float hw = NV_SCREEN_W - NV_MARGIN_X - hx;
   if (hw > 240.0f) {
     TxtLine kind = txt_line(TXT_CAPTION, inactive(focusOp) ? "Option unavailable"
                         : soRead(focusOp) ? "Information" : "Personalizar", 168, 171, 180, 255);
@@ -976,7 +976,7 @@ void settings_draw(Uint32 now) {
       y += SETTING_LINE_H + SETTING_LINE_GAP;
     }
   }
-  gfx_sem_crop();
+  gfx_no_crop();
 
   float total = yOfOption(SETTING_N - 1) + SETTING_LINE_H;
   float window = SETTING_BASE - SETTING_TOP;

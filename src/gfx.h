@@ -89,7 +89,7 @@ typedef enum {
   // Disco geometrico sólido. Usado como base do avatar e do foco para que o
   // contorno seja sempre concentrico, em vez de ser pintado sobre a foto.
   GFX_DISK = 21,
-  GFX_NMODOS = 22
+  GFX_NMODES = 22
 } GfxMode;
 
 typedef struct {
@@ -135,7 +135,7 @@ void gfx_crop(float x, float y, float w, float h);
 // "trailer".
 void gfx_icons_dir(const char *dirArt);
 void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca);
-void gfx_sem_crop(void);
+void gfx_no_crop(void);
 
 int  gfx_snap_start(int w, int h);
 

@@ -22,9 +22,9 @@ static void readOwner(void) {
   if (owner[0]) return;
   r = session_rpc("get_sync_owner", "{}", &st);
   if (r && st >= 200 && st < 300) {
-    // MEDIDO: a resposta e uma string JSON CRUA — "441bf572-…" — e nao um
-    // objeto. js_texto nao serve aqui; o valor esta entre as aspas do corpo
-    // inteiro.
+    // MEASURED: the response is a RAW JSON string — "441bf572-…" — and not an
+    // object. js_text is no use here; the value sits between the quotes of the
+    // whole body.
     const char *a = strchr(r, '"');
     const char *b = a ? strchr(a + 1, '"') : NULL;
     if (a && b && b > a + 1 && (size_t)(b - a - 1) < sizeof owner) {
@@ -34,9 +34,9 @@ static void readOwner(void) {
   }
   free(r);
   if (!owner[0]) {
-    // Sem o dono, a leitura da tabela de addons nao tem por quem filtrar. Cair
-    // no `sub` do token e a aproximacao correta: numa conta que nao e
-    // compartilhada os dois sao a mesma coisa.
+    // Without the owner, reading the addons table has nobody to filter by.
+    // Falling back to the token's `sub` is the right approximation: on an
+    // account that is not shared the two are the same thing.
     snprintf(owner, sizeof owner, "%s", session_user());
     printf("[profiles] get_sync_owner did not answer; using the token sub\n");
   }
@@ -52,10 +52,10 @@ int profiles_pull(void) {
   r = session_rpc("sync_pull_profiles", "{}", &st);
   if (!r || st < 200 || st >= 300) { free(r); return n; }
 
-  // Lista vazia NAO apaga o que ja esta em memoria: e a mesma regra que o app
-  // web aplica em toda superficie. Resposta vazia pode ser perfil errado, 401
-  // mal tratado ou servidor fora do ar, e nenhum desses e "o usuario apagou os
-  // perfis".
+  // An empty list does NOT erase what is already in memory: it is the same rule
+  // the web app applies on every surface. An empty response can be the wrong
+  // profile, a mishandled 401 or a server that is down, and none of those is
+  // "the user deleted their profiles".
   { int new = 0;
     AccountProfile tmp[ACCOUNT_PROFILE_MAX];
     memset(tmp, 0, sizeof tmp);
@@ -80,7 +80,7 @@ int profiles_pull(void) {
   }
   free(r);
 
-  // Travas: um perfil com PIN nao pode ser aberto so por estar na lista.
+  // Locks: a profile with a PIN cannot be opened merely by being in the list.
   r = session_rpc("sync_pull_profile_locks", "{}", &st);
   if (r && st >= 200 && st < 300) {
     for (p = js_root_array(r); p; p = js_next(js_end(p))) {
@@ -89,14 +89,15 @@ int profiles_pull(void) {
       char b[16];
       int i, locked;
       if (!idx) idx = (int)js_num(p, f, "profile_index", 0);
-      // MEDIDO: esta RPC devolve UMA LINHA POR PERFIL, com `pin_enabled` false
-      // quando nao ha PIN — nao e uma lista so dos travados. Marcar todo perfil
-      // que aparece aqui trancava TODOS eles, e como nenhum tem PIN nenhuma
-      // digitacao seria aceita: ninguem entraria na propria conta.
+      // MEASURED: this RPC returns ONE ROW PER PROFILE, with `pin_enabled`
+      // false when there is no PIN — it is not a list of only the locked ones.
+      // Marking every profile that appears here locked ALL of them, and since
+      // none has a PIN no typing would be accepted: nobody would get into their
+      // own account.
       locked = js_raw(p, f, "pin_enabled", b, sizeof b)
                 ? (strcmp(b, "true") == 0) : 0;
       for (i = 0; i < n; i++)
-        if (list[i].index_ == idx) list[i].temPin = locked;
+        if (list[i].index_ == idx) list[i].hasPin = locked;
     }
   }
   free(r);

@@ -1,14 +1,14 @@
-# Toolchain de compilacao cruzada para o app nativo (webOS 4 / ARMv7).
+# Cross-compilation toolchain for the native app (webOS 4 / ARMv7).
 #
-# Esta receita existe porque a imagem foi montada a mao em 30/08 e se perdeu:
-# sem Dockerfile versionado nao havia como reconstruir o ambiente, e sem
-# binario ARM nao ha o que instalar na TV. Nao apague.
+# This recipe exists because the image was assembled by hand on 30/08 and then
+# lost: with no versioned Dockerfile there was no way to rebuild the environment,
+# and with no ARM binary there is nothing to install on the TV. Do not delete.
 #
 #   docker build --platform linux/arm64 -t nuvio-webos-sdk tools/
 #
-# O SDK e o buildroot da openlgtv. `relocate-sdk.sh` precisa rodar uma vez
-# depois de extrair: o buildroot grava caminhos absolutos do host onde foi
-# gerado, e sem relocar o gcc nao acha o proprio sysroot.
+# The SDK is openlgtv's buildroot. `relocate-sdk.sh` has to run once after
+# extraction: the buildroot records absolute paths from the host it was
+# generated on, and without relocating, gcc cannot find its own sysroot.
 FROM debian:bookworm-slim
 
 ARG SDK_URL=https://github.com/openlgtv/buildroot-nc4/releases/download/webos-a38c582/arm-webos-linux-gnueabi_sdk-buildroot-aarch64.tar.gz

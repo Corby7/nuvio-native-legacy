@@ -1,34 +1,35 @@
-// Texto: SDL_ttf rasteriza para textura, com cache por (fonte,tamanho,string).
-// Sem cache, cada quadro rasterizaria os mesmos titulos de fileira de novo —
-// rasterizacao de texto e cara e o conteudo aqui muda pouco.
+// Text: SDL_ttf rasterises to a texture, cached by (font, size, string). Without
+// the cache, every frame would rasterise the same row titles again — text
+// rasterisation is expensive and the content here changes little.
 #ifndef NV_TEXT_H
 #define NV_TEXT_H
 #include "gl_compat.h"
 
-// Escala do tvOS. Cada estilo carrega tamanho E peso: no aparelho a diferenca
-// entre um titulo e um subtitulo vem tanto do peso quanto do corpo, e usar um
-// peso so achata a hierarquia inteira — foi o que deixava a tela com cara de
-// "tudo do mesmo tamanho, uns maiores".
+// The tvOS scale. Each style carries a size AND a weight: on the device the
+// difference between a title and a subtitle comes as much from the weight as
+// from the size, and using a single weight flattens the whole hierarchy — that
+// is what made the screen look like "everything the same size, some bigger".
 typedef enum {
   TXT_TITLE1, TXT_TITLE2, TXT_TITLE3, TXT_HEADLINE,
   TXT_BODY, TXT_CALLOUT, TXT_CAPTION, TXT_CAPTION2, TXT_MINI,
-  // Os dois do player vem do app web, nao da escala do tvOS. Ficam no FIM do
-  // enum de proposito: a tabela ESTILOS em text.c e indexada por esta ordem, e
-  // inserir no meio desloca todos os estilos seguintes em silencio.
+  // The player's two come from the web app, not from the tvOS scale. They sit at
+  // the END of the enum on purpose: the STYLES table in text.c is indexed by this
+  // order, and inserting in the middle shifts every following style silently.
   TXT_PLR_TITLE, TXT_PLR_BODY, TXT_ROW_TITLE, TXT_HERO_SEC,
-  // Tela de DETALHE, medidos no app web. Nao reaproveitam nenhum estilo do
-  // tvOS porque nenhum bate: a sinopse la e 26/400 e o TXT_CAPTION daqui e
-  // 22/400 — quatro pixels que mudam quantas linhas cabem no bloco.
+  // The DETAIL screen, measured in the web app. They reuse no tvOS style because
+  // none matches: the synopsis there is 26/400 and TXT_CAPTION here is 22/400 —
+  // four pixels that change how many lines fit in the block.
   TXT_DET_BUTTON,   // .series-primary-btn      25 / 600
   TXT_DET_META,    // .series-detail-support   25 / 400
   TXT_DET_SIN,     // .series-detail-description 26 / 400
   TXT_DET_META2,   // .detail-meta-row.secondary 23 / 400
-  // Linha de meta do HERO: 21 / 500, rgb(179,179,179). Nao e o TXT_CAPTION
-  // (22/400) nem o TXT_CALLOUT (28/500) — um erra o peso, o outro o corpo, e a
-  // linha ficava ou apagada demais ou grossa demais contra a arte.
+  // The HERO's meta line: 21 / 500, rgb(179,179,179). It is neither TXT_CAPTION
+  // (22/400) nor TXT_CALLOUT (28/500) — one gets the weight wrong, the other the
+  // size, and the line came out either too faint or too heavy against the art.
   TXT_HERO_META,
-  // Sinopse do hero: .home-hero-description, 22/400 branco cheio. O TXT_CAPTION
-  // tem o mesmo corpo mas e cinza — a cor vem de quem desenha, o estilo nao.
+  // The hero's synopsis: .home-hero-description, 22/400 full white. TXT_CAPTION
+  // has the same size but is grey — the colour comes from whoever draws, not
+  // from the style.
   TXT_HERO_SIN,
   // Canto superior do PLAYER, do bloco #playerUiRoot do web:
   //   .player-clock          26 / 600
@@ -62,42 +63,45 @@ typedef enum {
 
 extern const char *const TXT_FAMILIES_PT[TXT_FAMILY_N];
 
-// Instrumentacao: quantas linhas foram RASTERIZADAS (nao vieram do cache) no
-// quadro e quanto tempo isso custou. Rasterizar texto e a operacao mais cara
-// que acontece dentro de um quadro, e sem contador nao da para saber se um
-// jank veio dai ou do upload de textura.
+// Instrumentation: how many lines were RASTERISED (rather than coming from the
+// cache) in the frame, and what that cost. Rasterising text is the most
+// expensive operation inside a frame, and without a counter there is no telling
+// whether a jank came from there or from a texture upload.
 extern int    txt_rasterized;
-// Despejos do cache de linhas. Diferente de zero com a tela parada = a tabela
-// nao cabe no que a tela desenha, e o texto pisca.
+// Evictions from the line cache. Anything other than zero with the screen idle
+// means the table does not fit what the screen draws, and the text flickers.
 extern int    txt_evictions;
 extern double txt_ms;
 
-// `dirRecursos` e a pasta que contem fonts/. No aparelho e a pasta do app; no
-// Mac, a pasta do pacote — sem esse parametro a fonte so era procurada ao lado
-// do executavel, e rodar local caia direto no fallback.
-// `escala` e a razao entre o buffer e o canvas de layout (2 numa TV 4K, 1 em
-// 1080p). As fontes sao abertas nesse tamanho e a linha devolvida continua
-// medindo em unidades de layout — ver text.c.
+// `dirAssets` is the folder containing fonts/. On the device it is the app's
+// folder; on the Mac, the package's — without this parameter the font was only
+// looked for next to the executable, and running locally fell straight to the
+// fallback.
+// `scale` is the ratio between the buffer and the layout canvas (2 on a 4K TV, 1
+// at 1080p). The fonts are opened at that size and the returned line still
+// measures in layout units — see text.c.
 int  txt_start(const char *dirAssets, float scale);
 void txt_shutdown(void);
 
-// Devolve linha cacheada. Cor em 0..255. Nunca devolve NULL; em falha, w/h = 0.
-// Zera o orcamento de rasterizacao do quadro. Chamar uma vez por quadro, antes
-// de desenhar; sem isso o orcamento se esgota e o texto some.
+// Returns a cached line. Colour in 0..255. Never returns NULL; on failure,
+// w/h = 0.
+// Resets the frame's rasterisation budget. Call once per frame, before drawing;
+// without it the budget runs out and the text disappears.
 void txt_new_frame(void);
 
 TxtLine txt_line(TxtStyle style, const char *s, int r, int g, int b, int a);
 
-// Igual a txt_linha, mas escolhe uma das familias seguras para a legenda. Se a
-// fonte do sistema nao existir (por exemplo na previa do Mac), cai na Inter
-// embarcada e registra o fallback uma vez no log.
+// Like txt_line, but picks one of the families that are safe for subtitles. If
+// the system font does not exist (in the Mac preview, for instance), it falls
+// back to the embedded Inter and logs the fallback once.
 TxtLine txt_line_family(TxtStyle style, const char *s, int r, int g,
                            int b, int a, TxtFamily family);
 
-// Linha que NUNCA passa de `maxW`: corta por palavra (ou por caractere, se uma
-// palavra so ja estourar) e fecha com "…". Conteudo que vem de fora (nome de
-// addon, genero do TMDB) nao tem comprimento garantido, e sem corte ele invade
-// a coluna vizinha — foi o que apareceu no Top 10 e na folha de faixas.
+// A line that NEVER exceeds `maxW`: it trims by word (or by character, if a
+// single word already overflows) and closes with "…". Content that comes from
+// outside (an addon's name, a TMDB genre) has no guaranteed length, and without
+// trimming it invades the neighbouring column — which is what showed up in the
+// Top 10 and on the tracks sheet.
 TxtLine txt_line_trim(TxtStyle style, const char *s, int r, int g, int b,
                          int a, float maxW);
 TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
@@ -107,23 +111,23 @@ TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
 void txt_draw(TxtLine l, float x, float y);
 void txt_draw_alpha(TxtLine l, float x, float y, float alpha);
 
-// Desenha com ESPACAMENTO entre letras (tracking) e devolve a largura total.
-// SDL_ttf nao tem tracking, e o titulo da pagina do tvOS depende dele: sem o
-// espacamento largo o mesmo texto em maiusculas fica com cara de grito, nao de
-// cabecalho. Passe x = -1 para so medir, sem desenhar.
+// Draws with letter SPACING (tracking) and returns the total width. SDL_ttf has
+// no tracking, and the tvOS page title depends on it: without the wide spacing
+// the same text in capitals reads as shouting, not as a heading. Pass x = -1 to
+// measure only, without drawing.
 float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
                    float x, float y, float alpha, float tracking);
 
-// Desenha texto QUEBRADO em linhas que cabem em `larg`, devolvendo a altura
-// usada. Sem isso, qualquer texto de tamanho variavel (sinopse de episodio,
-// nome de titulo) vaza para a coluna vizinha — nao existe "escrever curto o
-// suficiente" quando o conteudo vem de fora.
+// Draws text WRAPPED into lines that fit `width`, returning the height used.
+// Without this, any variable-length text (an episode synopsis, a title's name)
+// spills into the neighbouring column — there is no "writing short enough" when
+// the content comes from outside.
 float txt_block(TxtStyle style, const char *s, int r, int g, int b,
                 float x, float y, float width, float leading, float alpha, int maxLines);
 
-// Mesmo bloco, mas ALINHADO A DIREITA: cada linha termina em `xDir`. Os
-// creditos do canto inferior direito precisam disso — alinhados a esquerda,
-// eles ficam com a borda picotada contra a margem do cartao.
+// The same block, but RIGHT-ALIGNED: every line ends at `xRight`. The credits in
+// the bottom-right corner need this — left-aligned, their edge comes out ragged
+// against the card's margin.
 float txt_block_dir(TxtStyle style, const char *s, int r, int g, int b,
                     float xDir, float y, float width, float leading,
                     float alpha, int maxLines);

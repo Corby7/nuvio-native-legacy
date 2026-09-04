@@ -6,33 +6,37 @@ product
 
 ## Users
 
-Pessoas assistindo a filmes e séries na LG webOS com controle remoto. O Mac
-serve para validar a mesma interface nativa. A leitura deve funcionar a distância.
+People watching films and series on LG webOS with a remote control. The Mac
+build exists to validate the same native interface. It has to stay readable
+from across the room.
 
 ## Product Purpose
 
-Portar o Nuvio oficial para C e SDL2/GLES2, mantendo catálogo, addons, Trakt e
-reprodução. PORT-LEGACY.md define o app NuvioWeb como referência funcional e
-visual; MEDIDAS-WEB.md registra dimensões medidas no aplicativo de referência.
+Port the official Nuvio to C and SDL2/GLES2, keeping the catalogue, addons,
+Trakt and playback. PORT-LEGACY.md sets the NuvioWeb app as the functional and
+visual reference; WEB-MEASUREMENTS.md records dimensions measured in that
+reference application.
 
 ## Brand Personality
 
-Familiar, discreto e legível. O conteúdo ocupa o centro da experiência.
+Familiar, understated and legible. The content sits at the centre of the
+experience.
 
 ## Anti-references
 
-Não importar o contrato Apple TV do protótipo separado. Não esconder opções
-reais do addon atrás de listas de demonstração, nem apresentar metadados inventados.
+Do not import the Apple TV contract from the separate prototype. Do not hide
+real addon options behind demo lists, and do not present invented metadata.
 
 ## Design Principles
 
-- Preservar a continuidade da reprodução ao consultar episódios e fontes.
-- Diferenciar foco de seleção e de conteúdo atualmente em reprodução.
-- Mostrar o estado real de carregamento, ausência de dados e falha.
-- Seguir as medidas e referências do oficial, adaptadas ao controle remoto.
+- Preserve playback continuity while browsing episodes and sources.
+- Distinguish focus from selection and from what is currently playing.
+- Show the real state of loading, missing data and failure.
+- Follow the official app's measurements and references, adapted to a remote.
 
 ## Accessibility & Inclusion
 
-Navegação completa por D-pad e teclado, foco inequívoco, contraste sobre vídeo,
-texto com truncamento seguro e acesso a áudio e legendas. Esses critérios vêm
-do contrato espacial e das funções existentes do player, não de certificação WCAG.
+Full D-pad and keyboard navigation, unambiguous focus, contrast over video, text
+that truncates safely, and access to audio and subtitles. These criteria come
+from the spatial contract and the player's existing functions, not from WCAG
+certification.

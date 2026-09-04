@@ -26,8 +26,8 @@ typedef struct {
   char key[288];
   unsigned long hash;   // FNV-1a da chave, para pular o strcmp
   TxtLine line;
-  unsigned long uso;
-  unsigned long frameUso;
+  unsigned long usage;
+  unsigned long frameUsage;
   int busy;
 } Entry;
 
@@ -94,7 +94,7 @@ static Entry cache[MAX_LINES];
 // um ou dois quadros depois, o que ninguem ve; o tranco, todo mundo ve.
 // 2 e nao 4: com 4 o pior quadro media 6 ms so de texto, e o objetivo aqui e
 // que NENHUMA parte sozinha coma mais que um terco do quadro.
-#define TXT_POR_FRAME 2
+#define TXT_PER_FRAME 2
 static int traceThisFrame;
 static unsigned long frameTxt = 1;
 
@@ -171,7 +171,7 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_PG_CLOCK, WEIGHT_MEDIUM  },  // .player-clock (26/600)
   { NV_FT_PG_END,     WEIGHT_REGULAR },  // .player-ends-at (20/400)
   { NV_FT_PG_LABEL,  WEIGHT_MEDIUM  },  // .player-parental-label (22/600)
-  { NV_FT_PG_GRAV,    WEIGHT_REGULAR },  // .player-parental-severity (22/400)
+  { NV_FT_PG_SEV,    WEIGHT_REGULAR },  // .player-parental-severity (22/400)
   { 36, WEIGHT_REGULAR },             // cabecalhos dos paineis do player oficial
   { 24, WEIGHT_BOLD },                // episodio/fonte dentro da lista
   { 28, WEIGHT_MEDIUM },              // titulo no card Continuar assistindo
@@ -471,15 +471,15 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
     int i = (int)((h + (unsigned long)k) % MAX_LINES);
     if (!cache[i].busy) { free_ = i; break; }
     if (cache[i].hash == h && strcmp(cache[i].key, key) == 0) {
-      cache[i].uso = ++lruClock;
-      cache[i].frameUso = frameTxt;
+      cache[i].usage = ++lruClock;
+      cache[i].frameUsage = frameTxt;
       return cache[i].line;
     }
   }
 
   // Orcamento estourado: devolve vazio e tenta de novo no proximo quadro. A
   // linha aparece com um quadro de atraso em vez de travar o atual.
-  if (traceThisFrame >= TXT_POR_FRAME) return empty;
+  if (traceThisFrame >= TXT_PER_FRAME) return empty;
   traceThisFrame++;
   int slot = free_;
   if (slot < 0) {
@@ -487,9 +487,9 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
     // acontece no maximo TXT_POR_QUADRO vezes por quadro, nao por linha.
     unsigned long smaller = ~0UL;
     for (int i = 0; i < MAX_LINES; i++)
-      if (cache[i].busy && cache[i].frameUso != frameTxt &&
-          cache[i].uso < smaller) {
-        smaller = cache[i].uso;
+      if (cache[i].busy && cache[i].frameUsage != frameTxt &&
+          cache[i].usage < smaller) {
+        smaller = cache[i].usage;
         slot = i;
       }
   }
@@ -527,8 +527,8 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   cache[slot].line.h = (int)(cv->h / scaleTxt + 0.5f);
   txt_rasterized++;
   txt_ms += (double)(SDL_GetPerformanceCounter() - t0) * 1000.0 / (double)SDL_GetPerformanceFrequency();
-  cache[slot].uso = ++lruClock;
-  cache[slot].frameUso = frameTxt;
+  cache[slot].usage = ++lruClock;
+  cache[slot].frameUsage = frameTxt;
   SDL_FreeSurface(cv);
   return cache[slot].line;
 }

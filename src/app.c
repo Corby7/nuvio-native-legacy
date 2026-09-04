@@ -104,7 +104,7 @@ static void *chooseSource(void *u) {
   // Ate 8: numa lista tipica de 12, as primeiras costumam ser do mesmo
   // provedor e falham juntas quando o arquivo nao esta em cache. Testar poucas
   // devolvia "nenhuma fonte serve" com fontes boas logo adiante.
-  sourceChosen = stream_first_boa(8);
+  sourceChosen = stream_first_good(8);
   return NULL;
 }
 #include "catalog.h"
@@ -127,7 +127,7 @@ static void openByIndex(int i) {
   const CatItem *c = cat_item(i);
   if (!c || (!c->backdrop[0] && !c->poster[0])) return;
   HomeItem it;
-  GfxRect all = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect all = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   // O `it` e da PILHA e esta funcao preenchia todos os campos MENOS o indice —
   // que ia como lixo. Como a biblioteca e a busca abrem por aqui, qualquer
   // titulo escolhido nelas levava ao mesmo filme. A home nao sofria porque ela
@@ -455,13 +455,13 @@ void app_update(float dt, Uint32 now) {
     } else if (screen == SCREEN_PROFILE) {
       ProfileHighlight p;
       if (profile_item_selected(&p) && p.id[0]) {
-        idx = cat_index_por_imdb(p.id);
+        idx = cat_index_by_imdb(p.id);
         if (idx >= 0) openByIndex(idx); else disc_request_title(p.id);
       }
     } else if (screen == SCREEN_SOCIAL) {
       SocialItemSelected s;
       if (social_item_selected(&s) && s.imdb[0]) {
-        idx=cat_index_por_imdb(s.imdb);
+        idx=cat_index_by_imdb(s.imdb);
         if(idx>=0)openByIndex(idx); else disc_request_title(s.imdb);
       }
     }
@@ -516,10 +516,10 @@ void app_update(float dt, Uint32 now) {
         char targetSub[64]; targetPlayer(targetSub, sizeof targetSub);
         addons_fetch_subtitles(targetSub, ci->kind);
       }
-      if (stream_idade_ms() > NV_LINK_VALID_MS && ci && ci->imdb[0]) {
+      if (stream_age_ms() > NV_LINK_VALID_MS && ci && ci->imdb[0]) {
         char target[32]; idOfTarget(ci, target, sizeof target);
         printf("source: list %ums old, refreshing (%s)\n",
-               (unsigned)stream_idade_ms(), target);
+               (unsigned)stream_age_ms(), target);
         addons_fetch(target, ci->kind);
       }
       waitingSource = 1;
@@ -531,8 +531,8 @@ void app_update(float dt, Uint32 now) {
       int i = detail_index();
       const CatItem *c = cat_item(i);
       library_toggle_list(i);
-      if (c && c->imdb[0]) trakt_watchlist(c->imdb, !c->naList);
-      if (c) cat_set_na_list(i, !c->naList);
+      if (c && c->imdb[0]) trakt_watchlist(c->imdb, !c->inList);
+      if (c) cat_set_in_list(i, !c->inList);
     }
     if (detail_requested_sources())     stream_sheet_open();
   }
@@ -632,7 +632,7 @@ void app_update(float dt, Uint32 now) {
       HomeItem it;
       memset(&it, 0, sizeof it);
       it.index_ = i;
-      it.rect = (GfxRect){ NV_TELA_W * 0.5f - 124.0f, NV_TELA_H * 0.5f - 186.0f,
+      it.rect = (GfxRect){ NV_SCREEN_W * 0.5f - 124.0f, NV_SCREEN_H * 0.5f - 186.0f,
                            248.0f, 372.0f };
       it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
       it.title = ci ? ci->title : NULL;
@@ -650,7 +650,7 @@ void app_update(float dt, Uint32 now) {
       HomeItem it;
       memset(&it, 0, sizeof it);
       it.index_ = idx;
-      it.rect = (GfxRect){ NV_TELA_W * 0.5f - 124.0f, NV_TELA_H * 0.5f - 186.0f,
+      it.rect = (GfxRect){ NV_SCREEN_W * 0.5f - 124.0f, NV_SCREEN_H * 0.5f - 186.0f,
                            248.0f, 372.0f };
       it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
       it.title = ci ? ci->title : NULL;
@@ -675,17 +675,17 @@ void app_draw(Uint32 now) {
 
   // Estado vazio de verdade, em vez de uma tela preta que parece travamento.
   if (!homeReady && screen == SCREEN_HOME && !player_is_open() && !detail_is_open()) {
-    GfxRect background = { 0, 0, NV_TELA_W, NV_TELA_H };
+    GfxRect background = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     TxtLine t, sb;
     gfx_color(background, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
     t = txt_line(TXT_TITLE2, "Preparing your catalogue…", 255, 255, 255, 255);
-    txt_draw(t, (NV_TELA_W - t.w) * 0.5f, 460.0f);
+    txt_draw(t, (NV_SCREEN_W - t.w) * 0.5f, 460.0f);
     sb = txt_line(TXT_BODY,
                    sync_state() == SYNC_RUNNING
                      ? "Fetching your addons and what you were watching."
                      : "If this does not move on, check your addons in the account.",
                    160, 162, 170, 255);
-    txt_draw(sb, (NV_TELA_W - sb.w) * 0.5f, 546.0f);
+    txt_draw(sb, (NV_SCREEN_W - sb.w) * 0.5f, 546.0f);
     if (menu_visible()) menu_draw(now);
     return;
   }

@@ -10,7 +10,7 @@
 #include <math.h>
 
 // Frame-rate independent: it uses exp(-k*dt), not a fixed step per frame.
-static inline float anim_mola(float current, float target, float dt, float stiffness) {
+static inline float anim_spring(float current, float target, float dt, float stiffness) {
   return current + (target - current) * (1.0f - expf(-stiffness * dt));
 }
 static inline float anim_clamp(float v, float lo, float hi) {
@@ -43,7 +43,7 @@ static inline float anim_blend(float a, float b, float t) { return a + (b - a) *
 //
 // `v` is the velocity, kept by the caller alongside the position. `w` is the
 // frequency in rad/s and equals the k of the measured tail.
-static inline float anim_mola2(float *v, float current, float target, float dt, float w) {
+static inline float anim_spring2(float *v, float current, float target, float dt, float w) {
   // A dropped frame (hidden tab, long decode) must not become one giant step.
   // The closed form avoids the overshoot of semi-implicit Euler and stays
   // retargetable when the D-pad changes the target mid-movement.
@@ -67,10 +67,10 @@ static inline float anim_mola2(float *v, float current, float target, float dt, 
 static inline float anim_reduced(float current, float target, int reduced) {
   return reduced ? target : current;
 }
-static inline float anim_mola2_reduced(float *v, float current, float target,
+static inline float anim_spring2_reduced(float *v, float current, float target,
                                         float dt, float w, int reduced) {
   if (reduced) { *v = 0.0f; return target; }
-  return anim_mola2(v, current, target, dt, w);
+  return anim_spring2(v, current, target, dt, w);
 }
 
 // Symmetric acceleration and deceleration, for animation with its own clock.

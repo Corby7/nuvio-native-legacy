@@ -1,23 +1,24 @@
-// Vincular o Trakt na propria TV, pelo fluxo de DEVICE CODE do Trakt.
+// Linking Trakt on the TV itself, through Trakt's DEVICE CODE flow.
 //
-// POR QUE ISTO EXISTE. MEDIDO na conta do dono: a RPC de credenciais do Nuvio
-// (`sync_pull_provider_credentials`) devolve tmdb, mdblist, animeskip, introdb
-// e os debrid — e NENHUM `trakt`. Como `art/trakt.txt` deixou de ir no pacote
-// (era credencial de quem montou), quem instalasse ficaria sem Trakt, e e dele
-// que sai o "Continuar assistindo". Esperar o app web escrever a linha na conta
-// resolveria so para quem ja usa o app web.
+// WHY THIS EXISTS. MEASURED on the owner's account: Nuvio's credentials RPC
+// (`sync_pull_provider_credentials`) returns tmdb, mdblist, animeskip, introdb
+// and the debrid providers — and NO `trakt`. Since `art/trakt.txt` stopped
+// shipping in the package (it was the packager's credential), whoever installed
+// it would have no Trakt, and Trakt is where "Continue watching" comes from.
+// Waiting for the web app to write the row into the account would only help
+// people who already use the web app.
 //
-// O fluxo e o proprio do Trakt, o mesmo que o app web usa:
+// The flow is Trakt's own, the same one the web app uses:
 //   POST https://api.trakt.tv/oauth/device/code  {client_id}
 //     -> {device_code, user_code, verification_url, expires_in, interval}
 //   POST /oauth/device/token  {code, client_id, client_secret}
-//     -> 200 com o token; 400 ainda nao autorizado; 409 ja usado;
-//        410 expirou; 418 negado; 429 devagar.
+//     -> 200 with the token; 400 not authorised yet; 409 already used;
+//        410 expired; 418 denied; 429 slow down.
 //
-// DIFERENCA IMPORTANTE PARA A TELA DE LOGIN DA CONTA: o `user_code` do Trakt e
-// CURTO (8 caracteres) e o endereco e fixo. Isso da para ler da TV e digitar no
-// celular — nao precisa de QR, ao contrario dos 32 digitos hexadecimais do
-// login da conta.
+// AN IMPORTANT DIFFERENCE FROM THE ACCOUNT LOGIN SCREEN: Trakt's `user_code` is
+// SHORT (8 characters) and the address is fixed. That can be read off the TV and
+// typed into a phone — it needs no QR, unlike the 32 hexadecimal digits of the
+// account login.
 #ifndef NV_TRAKTAUTH_H
 #define NV_TRAKTAUTH_H
 
@@ -32,8 +33,9 @@ typedef enum {
 // Comeca o fluxo num fio proprio. Idempotente enquanto um estiver em andamento.
 void traktauth_begin(void);
 
-// Um passo. Chamar uma vez por quadro; nao bloqueia. E aqui que o poll e
-// reagendado — o intervalo vem do proprio Trakt, e sobe quando ele manda 429.
+// One step. Call once per frame; does not block. This is where the poll is
+// rescheduled — the interval comes from Trakt itself, and goes up when it sends
+// a 429.
 void traktauth_step(unsigned nowMs);
 
 TraState   traktauth_state(void);
@@ -43,8 +45,8 @@ const char *traktauth_error(void);
 
 void traktauth_cancel(void);
 
-// Carrega o token guardado nesta instalacao e o aplica em trakt.c. Chamar no
-// arranque, depois de dados_iniciar. 1 quando havia token.
+// Loads the token saved on this installation and applies it in trakt.c. Call at
+// startup, after data_start. 1 when there was a token.
 int  traktauth_load(void);
 
 // Esquece o vinculo (chamado ao sair da conta).

@@ -1,5 +1,6 @@
-// Sem janela, rede ou TV: valida composição editorial e foco sobre dados reais
-// de catálogo (fixtures), usando a implementação da Home e do catálogo.
+// No window, network or TV: validates the editorial composition and the focus
+// against real catalogue data (fixtures), using the Home and catalogue
+// implementations.
 #include <assert.h>
 #include "../src/home.c"
 
@@ -10,8 +11,8 @@ int main(void) {
   assert(profileCatalog("For You - Film") == ROW_NORMAL);
   assert(widthOf(ROW_HIGHLIGHT) > widthOf(ROW_COLLECTION));
   assert(widthOf(ROW_COLLECTION) > widthOf(ROW_SERVICE));
-  assert(!temLabel(ROW_HIGHLIGHT));
-  assert(!temLabel(ROW_CATALOGS));
+  assert(!hasLabel(ROW_HIGHLIGHT));
+  assert(!hasLabel(ROW_CATALOGS));
 
   CatItem *itemsTeste = calloc(48, sizeof *itemsTeste);
   CatRow filters[16] = {0};
@@ -61,8 +62,9 @@ int main(void) {
     "ai_movies_for_you","ai_series_for_you","snoak_top100_movies","snoak_top100_series"};
   for(int i=1;i<8;i++)snprintf(filters[i].catId,sizeof filters[i].catId,"%s",ids[i]);
   cat_set_all(itemsTeste,48,filters,16);filtersApplied=-1;syncRows();
-  // A curadoria ordena os atalhos conhecidos, mas nao apaga fileiras novas
-  // declaradas pelo addon. O fixture tem oito chaves fora da tabela editorial.
+  // The curation orders the known shortcuts, but does not erase new rows
+  // declared by the addon. The fixture has eight keys outside the editorial
+  // table.
   assert(nRows>=11);
   assert(rows[1].kind==ROW_SOCIAL);
   assert(!strcmp(rows[2].title,"Recent Release"));
@@ -93,9 +95,9 @@ int main(void) {
   assert(social==1); // dados reais substituem vazio, nunca duplicam a fileira
   assert(rows[9].stackN==0 && rows[9].n==3 && rows[9].seeAll);
 
-  // Arte de outro titulo nunca e fallback silencioso, mesmo quando o indice
-  // esta alem do acervo local. Sem catalogo, os vetores locais continuam
-  // disponiveis apenas na mesma posicao.
+  // Another title's art is never a silent fallback, even when the index is
+  // beyond the local library. With no catalogue, the local arrays stay available
+  // only at the same position.
   snprintf(itemsTeste[0].poster,sizeof itemsTeste[0].poster,"own-poster.jpg");
   snprintf(itemsTeste[0].backdrop,sizeof itemsTeste[0].backdrop,"own-backdrop.jpg");
   snprintf(itemsTeste[1].poster,sizeof itemsTeste[1].poster,"other-poster.jpg");
@@ -104,21 +106,21 @@ int main(void) {
   snprintf(bd[1],sizeof bd[1],"fallback-1.jpg");
   snprintf(pst[0],sizeof pst[0],"fallback-poster-0.jpg");
   cat_set_all(itemsTeste,48,NULL,0);
-  assert(!strcmp(art_por_identity(0,0),"own-poster.jpg"));
-  assert(!strcmp(art_por_identity(0,1),"own-backdrop.jpg"));
-  assert(!strcmp(art_por_identity(1,0),"other-poster.jpg"));
-  assert(art_por_identity(999,0)==NULL);
+  assert(!strcmp(art_by_identity(0,0),"own-poster.jpg"));
+  assert(!strcmp(art_by_identity(0,1),"own-backdrop.jpg"));
+  assert(!strcmp(art_by_identity(1,0),"other-poster.jpg"));
+  assert(art_by_identity(999,0)==NULL);
 
-  // A integracao de segunda ordem retargeta sem overshoot, e reduced motion
-  // pode saltar ao destino sem deixar velocidade residual.
+  // The second-order integration retargets without overshoot, and reduced
+  // motion can jump to the destination leaving no residual velocity.
   { float x=0, v=0;
     for (int i=0; i<60; i++) {
-      x=anim_mola2(&v,x,1.0f,0.016f,NV_MOLA2_SCROLL);
+      x=anim_spring2(&v,x,1.0f,0.016f,NV_SPRING2_SCROLL);
       assert(x>=0.0f && x<=1.0f);
     }
-    x=anim_mola2(&v,x,0.0f,0.016f,NV_MOLA2_SCROLL);
+    x=anim_spring2(&v,x,0.0f,0.016f,NV_SPRING2_SCROLL);
     assert(x>=0.0f && x<=1.0f);
-    x=anim_mola2_reduced(&v,x,0.35f,0.016f,NV_MOLA2_SCROLL,1);
+    x=anim_spring2_reduced(&v,x,0.35f,0.016f,NV_SPRING2_SCROLL,1);
     assert(x==0.35f && v==0.0f);
   }
   assert(NV_HERO_FADE_MS>=180.0f && NV_HERO_FADE_MS<=250.0f);

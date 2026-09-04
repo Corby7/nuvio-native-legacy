@@ -42,7 +42,7 @@ static const char *containerOf(const Stream *s) {
 
 static Uint32 receivedIn;
 
-Uint32 stream_idade_ms(void) {
+Uint32 stream_age_ms(void) {
   return receivedIn ? SDL_GetTicks() - receivedIn : 0xFFFFFFFFu;
 }
 
@@ -129,13 +129,13 @@ static pthread_mutex_t seeLock = PTHREAD_MUTEX_INITIALIZER;
 static void *threadVerify(void *u) {
   (void)u;
   for (;;) {
-    int meu, i;
+    int mine, i;
     char end[900];
     pthread_mutex_lock(&seeLock);
     if (nextCheck >= nChecks) { pthread_mutex_unlock(&seeLock); return NULL; }
-    meu = nextCheck++;
+    mine = nextCheck++;
     pthread_mutex_unlock(&seeLock);
-    i = checks[meu].idx;
+    i = checks[mine].idx;
     if (!list[i].url[0]) continue;
     // 10 s e nao 20: em paralelo o timeout deixa de ser somado, mas continua
     // sendo o tempo que o dono espera pela mais lenta.
@@ -147,11 +147,11 @@ static void *threadVerify(void *u) {
       printf("[source] %d is a warning (%.60s)\n", i, end);
       continue;
     }
-    checks[meu].ok = 1;
+    checks[mine].ok = 1;
   }
 }
 
-int stream_first_boa(int attempts) {
+int stream_first_good(int attempts) {
   int *used, nu = 0;
   int total = stream_n();
   int chosen = -1;
@@ -201,7 +201,7 @@ int stream_first_boa(int attempts) {
   return chosen;
 }
 
-int stream_automatico(void) {
+int stream_automatic(void) {
   if (!stream_n()) return -1;
   int best = 0;
   long larger = points(&list[0]);
@@ -271,16 +271,16 @@ void stream_sheet_event(const SDL_Event *e) {
 }
 void stream_sheet_update(float dt, Uint32 now) {
   (void)now;
-  anim=anim_mola(anim,is_open?1:0,dt,NV_MOLA_SCREEN);
+  anim=anim_spring(anim,is_open?1:0,dt,NV_SPRING_SCREEN);
   updateProviders();
   int nf=nFiltered();
   if(group==1 && focus>=nf) focus=nf>0?nf-1:0;
-  float area=NV_TELA_H-SHEET_TOP-32;
+  float area=NV_SCREEN_H-SHEET_TOP-32;
   float max=nf*SHEET_LINE-area;
   float target=focus*SHEET_LINE-(area-SHEET_LINE)*.5f;
   if(target>max) target=max;
   if(target<0) target=0;
-  scroll=anim_mola(scroll,target,dt,NV_MOLA_SCROLL);
+  scroll=anim_spring(scroll,target,dt,NV_SPRING_SCROLL);
 }
 int stream_sheet_chose(int *out) {
   if(choice<0) return 0;
@@ -290,9 +290,9 @@ int stream_sheet_chose(int *out) {
 void stream_sheet_draw(Uint32 now) {
   (void)now;
   if(anim<.005f) return;
-  float x=NV_TELA_W-SHEET_W+(1-anim)*SHEET_W;
-  gfx_color((GfxRect){0,0,NV_TELA_W,NV_TELA_H},0,.02f,.02f,.025f,.35f*anim);
-  gfx_color((GfxRect){x,0,SHEET_W,NV_TELA_H},.025f,.095f,.095f,.10f,anim);
+  float x=NV_SCREEN_W-SHEET_W+(1-anim)*SHEET_W;
+  gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,.02f,.02f,.025f,.35f*anim);
+  gfx_color((GfxRect){x,0,SHEET_W,NV_SCREEN_H},.025f,.095f,.095f,.10f,anim);
   txt_draw_alpha(txt_line(TXT_PANEL_TITLE,"Sources",240,241,243,255),x+40,44,anim);
   for(int i=0;i<2;i++) {
     float bx=x+SHEET_W-284+i*128;
@@ -314,12 +314,12 @@ void stream_sheet_draw(Uint32 now) {
     if(sel && group==0) gfx_color((GfxRect){tx+16,237,w-32,2},0,.94f,.94f,.95f,anim);
     tx+=w+12;
   }
-  gfx_sem_crop();
-  gfx_crop(x+36,SHEET_TOP,SHEET_W-72,NV_TELA_H-SHEET_TOP-32);
+  gfx_no_crop();
+  gfx_crop(x+36,SHEET_TOP,SHEET_W-72,NV_SCREEN_H-SHEET_TOP-32);
   int nf=nFiltered();
   for(int row=0;row<nf;row++) {
     float y=SHEET_TOP+row*SHEET_LINE-scroll;
-    if(y+SHEET_LINE<SHEET_TOP || y>NV_TELA_H-32) continue;
+    if(y+SHEET_LINE<SHEET_TOP || y>NV_SCREEN_H-32) continue;
     int i=filtered(row),sel=group==1 && focus==row;
     const Stream *s=&list[i];
     GfxRect r={x+40,y,SHEET_W-80,SHEET_LINE-14};
@@ -346,5 +346,5 @@ void stream_sheet_draw(Uint32 now) {
     const char *s=addons_state()==ADD_SEARCHING?"Fetching sources from the addons…":"No direct source available. Use Reload to try again.";
     txt_block(TXT_PG_END,s,196,199,204,x+56,SHEET_TOP+40,SHEET_W-112,28,anim,3);
   }
-  gfx_sem_crop();
+  gfx_no_crop();
 }

@@ -1,50 +1,51 @@
-# Nuvio 1.0.1 — port nativo legacy
+# Nuvio 1.0.1 — legacy native port
 
-Este build é separado do protótipo `nuvio-native` (layout Apple TV). A fonte
-de verdade é o app `NuvioWeb-0.3.38-beta` na branch `legacy-tv`, tag
-`v1.0.1+legacy.1`.
+This build is separate from the `nuvio-native` prototype (the Apple TV layout).
+The source of truth is the `NuvioWeb-0.3.38-beta` app on the `legacy-tv` branch,
+tag `v1.0.1+legacy.1`.
 
-## Contrato visual
+## Visual contract
 
-- rail lateral fixa de 144px, expandida apenas ao abrir o menu;
-- hero moderno no topo, mídia à direita e texto à esquerda;
-- viewport de fileiras independente, com `Continue Assistindo` em 419×236 e
-  cards retrato de 212×318, gap de 24px;
-- foco por borda/escala e navegação espacial por D-pad;
-- busca, biblioteca e ajustes respeitam a mesma área útil depois da rail.
+- a fixed 144px side rail, expanded only when the menu opens;
+- a modern hero at the top, media on the right and text on the left;
+- an independent row viewport, with `Continue Watching` at 419×236 and portrait
+  cards at 212×318, 24px gap;
+- focus by border/scale, and spatial D-pad navigation;
+- search, library and settings respect the same usable area after the rail.
 
-O código nativo mantém o cache assíncrono de imagens, cliente de addons/Trakt,
-pipeline de vídeo e telemetria de frame do protótipo. Nenhum token visual ou
-comportamento do layout Apple TV é usado como requisito deste build.
+The native code keeps the prototype's asynchronous image cache, addon/Trakt
+client, video pipeline and frame telemetry. No visual token or behaviour from
+the Apple TV layout is treated as a requirement of this build.
 
-## Identidade e build
+## Identity and build
 
-Durante a validação o pacote usa o id `space.nuvio.native.legacy`, para poder
-ser instalado ao lado do protótipo sem sobrescrevê-lo. A versão exibida é
-`1.0.1`; o id pode voltar a `space.nuvio.native` somente quando este build
-substituir oficialmente o protótipo.
+During validation the package uses the id `space.nuvio.native.legacy`, so it can
+be installed alongside the prototype without overwriting it. The displayed
+version is `1.0.1`; the id may go back to `space.nuvio.native` only once this
+build officially replaces the prototype.
 
 ```bash
 bash tools/mac.sh
 ```
 
-## Conta, e o que o pacote pode levar
+## The account, and what the package may carry
 
-Este build deixou de ser um app de UM dono. Addons, ajustes do perfil, chave do
-TMDB e progresso vem da CONTA de quem loga (ver PLANO-CONTA-SYNC.md); o login e
-por QR, e a sessao sobrevive ao reinicio.
+This build stopped being a ONE-owner app. Addons, profile settings, the TMDB key
+and watch progress come from the ACCOUNT of whoever signs in (see
+ACCOUNT-SYNC-PLAN.md); login is by QR, and the session survives a restart.
 
-A consequencia para o empacotamento e direta: **`art/*.txt` com credencial nao
-pode ir no `.ipk`**. `tools/arm.sh --ipk` ja empacota de uma copia limpa e
-CONFERE o pacote pronto; `tools/test-ipk.sh` prova isso sem docker.
+The consequence for packaging is direct: **an `art/*.txt` holding a credential
+must not go into the `.ipk`**. `tools/arm.sh --ipk` already packages from a
+clean copy and CHECKS the finished package; `tools/test-ipk.sh` proves it
+without docker.
 
-Uma pendencia conhecida: a conta NAO guarda credencial de Trakt
-(`sync_pull_provider_credentials` devolve tmdb, mdblist, debrid:* e outros, mas
-nenhum `trakt`). Como `art/trakt.txt` nao vai mais no pacote, quem instalar fica
-sem Trakt ate logar no app web uma vez.
+One known gap: the account does NOT store a Trakt credential
+(`sync_pull_provider_credentials` returns tmdb, mdblist, debrid:* and others,
+but no `trakt`). Since `art/trakt.txt` no longer ships in the package, whoever
+installs it has no Trakt until they sign in to the web app once.
 
-O script compila todos os módulos SDL2/GLES2 para validação no Mac. O arquivo
-`deploy/app/nuvio-proto` que veio da cópia é apenas um artefato de referência e
-não deve ser distribuído: o pacote webOS precisa substituir esse executável
-por um binário ARM compilado a partir deste diretório, mantendo o manifesto
-`space.nuvio.native.legacy`.
+The script compiles every SDL2/GLES2 module for validation on the Mac. The
+`deploy/app/nuvio-proto` file that came with the copy is only a reference
+artefact and must not be distributed: the webOS package needs to replace that
+executable with an ARM binary compiled from this directory, keeping the
+`space.nuvio.native.legacy` manifest.

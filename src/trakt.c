@@ -22,13 +22,13 @@ static volatile int listState, historyState;
 // Mantem o contrato antigo (so IMDb) sem perder o tipo quando o item ja esta
 // no catalogo. O sufixo de episodio continua sendo um fallback para chamadas
 // antigas feitas antes de o catalogo estar montado.
-extern const char *cat_kind_por_imdb(const char *imdb);
+extern const char *cat_kind_by_imdb(const char *imdb);
 extern void cat_history_set_id(const char *imdb, const char *kind, int watched);
 
 static const char *kind_item(const char *kind, const char *imdb) {
   if (kind && (!strcmp(kind, "series") || !strcmp(kind, "show"))) return "series";
   if (kind && !strcmp(kind, "movie")) return "movie";
-  return cat_kind_por_imdb(imdb);
+  return cat_kind_by_imdb(imdb);
 }
 static pthread_mutex_t lockList = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t lockHistory = PTHREAD_MUTEX_INITIALIZER;
@@ -69,12 +69,12 @@ int trakt_set(const char *tk, const char *cli) {
 }
 
 
-int trakt_headers(const char **header, char *aut, size_t nAut,
+int trakt_headers(const char **header, char *auth, size_t nAuth,
                      char *key, size_t nKey) {
   if (!on) return 0;
-  snprintf(aut, nAut, "Authorization: Bearer %s", token);
+  snprintf(auth, nAuth, "Authorization: Bearer %s", token);
   snprintf(key, nKey, "trakt-api-key: %s", client);
-  header[0] = aut; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
+  header[0] = auth; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
   return 1;
 }
 
@@ -157,20 +157,20 @@ static int decorate(CatItem *d, const char *kind) {
 // preservada porque cada fio escreve na posicao que ja era dele.
 #define TK_THREADS 3
 
-typedef struct { CatItem *d; char kind[8]; int ok; } TaskEnf;
-static TaskEnf *enfTasks;
-static int enfN, enfNext;
-static pthread_mutex_t enfLock = PTHREAD_MUTEX_INITIALIZER;
+typedef struct { CatItem *d; char kind[8]; int ok; } TaskDecorate;
+static TaskDecorate *decorateTasks;
+static int decorateN, decorateNext;
+static pthread_mutex_t decorateLock = PTHREAD_MUTEX_INITIALIZER;
 
 static void *threadDecorate(void *u) {
   (void)u;
   for (;;) {
-    int meu;
-    pthread_mutex_lock(&enfLock);
-    if (enfNext >= enfN) { pthread_mutex_unlock(&enfLock); return NULL; }
-    meu = enfNext++;
-    pthread_mutex_unlock(&enfLock);
-    enfTasks[meu].ok = decorate(enfTasks[meu].d, enfTasks[meu].kind);
+    int mine;
+    pthread_mutex_lock(&decorateLock);
+    if (decorateNext >= decorateN) { pthread_mutex_unlock(&decorateLock); return NULL; }
+    mine = decorateNext++;
+    pthread_mutex_unlock(&decorateLock);
+    decorateTasks[mine].ok = decorate(decorateTasks[mine].d, decorateTasks[mine].kind);
   }
 }
 
@@ -214,14 +214,14 @@ static void loadHistoryReal(const char *const *header) {
 
 int trakt_resume(CatItem *output, int max) {
   const char *header[4];
-  char aut[200], key[140];
+  char auth[200], key[140];
   char *body;
   const char *p;
   int n = 0;
   if (!on) return 0;
-  snprintf(aut, sizeof aut, "Authorization: Bearer %s", token);
+  snprintf(auth, sizeof auth, "Authorization: Bearer %s", token);
   snprintf(key, sizeof key, "trakt-api-key: %s", client);
-  header[0] = aut;
+  header[0] = auth;
   header[1] = "trakt-api-version: 2";
   header[2] = key;
   header[3] = NULL;
@@ -278,24 +278,24 @@ int trakt_resume(CatItem *output, int max) {
   // simplesmente nao contava — agora o item ja esta na posicao, entao os que
   // falharam saem por compactacao, preservando a ordem do historico.
   if (n > 0) {
-    enfTasks = calloc((size_t)n, sizeof(TaskEnf));
-    if (enfTasks) {
+    decorateTasks = calloc((size_t)n, sizeof(TaskDecorate));
+    if (decorateTasks) {
       pthread_t threads[TK_THREADS];
       int created = 0, q, r, w;
       for (q = 0; q < n; q++) {
-        enfTasks[q].d = &output[q];
-        snprintf(enfTasks[q].kind, sizeof enfTasks[q].kind, "%s", output[q].kind);
+        decorateTasks[q].d = &output[q];
+        snprintf(decorateTasks[q].kind, sizeof decorateTasks[q].kind, "%s", output[q].kind);
       }
-      enfN = n; enfNext = 0;
+      decorateN = n; decorateNext = 0;
       for (q = 0; q < TK_THREADS; q++)
         if (pthread_create(&threads[created], NULL, threadDecorate, NULL) == 0) created++;
       if (!created) threadDecorate(NULL);      // sem fios: em serie, mesmo resultado
       for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
 
       for (r = 0, w = 0; r < n; r++)
-        if (enfTasks[r].ok) { if (w != r) output[w] = output[r]; w++; }
+        if (decorateTasks[r].ok) { if (w != r) output[w] = output[r]; w++; }
       n = w;
-      free(enfTasks); enfTasks = NULL; enfN = 0;
+      free(decorateTasks); decorateTasks = NULL; decorateN = 0;
     } else {
       // Sem memoria para a fila: em serie, no proprio fio.
       int r, w;
@@ -348,11 +348,11 @@ static char *socialByFollowed(const char *const *header, int max) {
 
 int trakt_social(CatItem *output, int max) {
   const char *header[4];
-  char aut[200], key[140], *body;
+  char auth[200], key[140], *body;
   const char *p;
   int n = 0;
   if (!on || max < 1) return 0;
-  if (!trakt_headers(header, aut, sizeof aut, key, sizeof key)) return 0;
+  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) return 0;
   body = net_download_com(
     "https://api.trakt.tv/users/me/friends/activities?extended=full&page=1&limit=12",
     20, header);
@@ -425,10 +425,10 @@ int trakt_social(CatItem *output, int max) {
   // O feed ja vem ordenado do mais recente. A arte e resolvida em paralelo,
   // com o mesmo limite de tres conexoes usado pelo Continue Assistindo.
   if (n > 0) {
-    TaskEnf *tasksSoc = calloc((size_t)n, sizeof *tasksSoc);
+    TaskDecorate *tasksSoc = calloc((size_t)n, sizeof *tasksSoc);
     if (tasksSoc) {
       pthread_t threads[TK_THREADS]; int created = 0, q;
-      enfTasks = tasksSoc; enfN = n; enfNext = 0;
+      decorateTasks = tasksSoc; decorateN = n; decorateNext = 0;
       for (q = 0; q < n; q++) {
         tasksSoc[q].d = &output[q];
         snprintf(tasksSoc[q].kind, sizeof tasksSoc[q].kind, "%s", output[q].kind);
@@ -438,7 +438,7 @@ int trakt_social(CatItem *output, int max) {
       if (!created) threadDecorate(NULL);
       for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
       // Arte indisponivel nao pode apagar uma pessoa real do feed.
-      free(tasksSoc); enfTasks = NULL; enfN = 0;
+      free(tasksSoc); decorateTasks = NULL; decorateN = 0;
     }
   }
   printf("[trakt] %d friend activities\n", n); fflush(stdout);
@@ -478,14 +478,14 @@ static void profileGenresJson(ProfileData *d, const char *b, const char *f) {
 }
 
 int trakt_profile(ProfileData *d) {
-  const char *header[4]; char aut[200],key[140],url[360],*body;
+  const char *header[4]; char auth[200],key[140],url[360],*body;
   time_t now=time(NULL); struct tm tmv=*localtime(&now);
   char start[48]; int daysInMonth;
   ProfileHighlight *ranking;
   int nRanking = 0;
   if (!d || !on) return 0;
   memset(d,0,sizeof *d);
-  if (!trakt_headers(header,aut,sizeof aut,key,sizeof key)) return 0;
+  if (!trakt_headers(header,auth,sizeof auth,key,sizeof key)) return 0;
   static const char *months[]={"January","February","March","April","May","June","July","August","September","October","November","December"};
   snprintf(d->period,sizeof d->period,"%s %d",months[tmv.tm_mon],tmv.tm_year+1900);
   struct tm first=tmv;
@@ -564,13 +564,13 @@ int trakt_profile(ProfileData *d) {
 
 int trakt_list(const char *which, CatItem *output, int max) {
   const char *header[4];
-  char aut[200], key[140], url[160], *body;
+  char auth[200], key[140], url[160], *body;
   const char *p;
   int n = 0, step;
   if (!on) return 0;
-  snprintf(aut, sizeof aut, "Authorization: Bearer %s", token);
+  snprintf(auth, sizeof auth, "Authorization: Bearer %s", token);
   snprintf(key, sizeof key, "trakt-api-key: %s", client);
-  header[0] = aut; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
+  header[0] = auth; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
 
   // Filmes e series vem em endpoints separados; misturar as duas listas na
   // mesma fileira e o que o dono ve como "Minha Lista".
@@ -599,8 +599,8 @@ int trakt_list(const char *which, CatItem *output, int max) {
         if (imdb[0]) {
           snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
           snprintf(d->kind, sizeof d->kind, "%s", step ? "series" : "movie");
-          if (!strcmp(which, "watchlist")) d->naList = 1;
-          else                            d->naCollection = 1;
+          if (!strcmp(which, "watchlist")) d->inList = 1;
+          else                            d->inCollection = 1;
           // Arte SEM consultar: as URLs do metahub sao deterministicas pelo id
           // do IMDb (verificado, 200 em todos os testados). Uma consulta por
           // item custava ~0,3 s e limitava a lista a dez; assim ela pode ter o
@@ -651,7 +651,7 @@ static int threadBrandAlive;
 
 static void *sendBrand(void *u) {
   const char *header[4];
-  char aut[200], key[140], body[400], *r;
+  char auth[200], key[140], body[400], *r;
   char id[24];
   int t = 0, e = 0;
   const char *dp;
@@ -664,9 +664,9 @@ static void *sendBrand(void *u) {
   if (pct < 0.0) pct = 0.0;
   if (pct > 100.0) pct = 100.0;
 
-  snprintf(aut, sizeof aut, "Authorization: Bearer %s", token);
+  snprintf(auth, sizeof auth, "Authorization: Bearer %s", token);
   snprintf(key, sizeof key, "trakt-api-key: %s", client);
-  header[0] = aut; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
+  header[0] = auth; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
 
   // Pause preserva o ponto; stop registra a conclusao. Mantemos o limiar
   // conservador de 90% deste cliente. Pause sozinho nunca conclui o episodio.
@@ -715,7 +715,7 @@ static pthread_t threadList;
 
 static void *sendList(void *u) {
   const char *header[4];
-  char aut[200], key[140], url[120], body[200], id[24], kindItemBuf[8];
+  char auth[200], key[140], url[120], body[200], id[24], kindItemBuf[8];
   char *resp;
   int status = 0, confirmed;
   int add;
@@ -725,7 +725,7 @@ static void *sendList(void *u) {
   snprintf(kindItemBuf, sizeof kindItemBuf, "%s", targetListKind);
   add = targetAdd;
   pthread_mutex_unlock(&lockList);
-  if (!trakt_headers(header, aut, sizeof aut, key, sizeof key)) {
+  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) {
     stateWrite(&listState, TK_OP_FAILURE);
     pthread_mutex_lock(&lockList); threadListAlive = 0; pthread_mutex_unlock(&lockList);
     return NULL;
@@ -767,7 +767,7 @@ static char      targetHistoryKind[8];
 
 static void *sendHistory(void *u) {
   const char *header[4];
-  char aut[200], key[140], url[120], body[200], id[24], kindItemBuf[8];
+  char auth[200], key[140], url[120], body[200], id[24], kindItemBuf[8];
   char *resp;
   int status = 0, confirmed;
   int mark;
@@ -777,7 +777,7 @@ static void *sendHistory(void *u) {
   snprintf(kindItemBuf, sizeof kindItemBuf, "%s", targetHistoryKind);
   mark = historyAdd;
   pthread_mutex_unlock(&lockHistory);
-  if (!trakt_headers(header, aut, sizeof aut, key, sizeof key)) {
+  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) {
     stateWrite(&historyState, TK_OP_FAILURE);
     pthread_mutex_lock(&lockHistory); threadHistoryAlive = 0; pthread_mutex_unlock(&lockHistory);
     return NULL;
@@ -863,9 +863,9 @@ int trakt_watchlist_kind(const char *imdb, const char *kind, int add) {
 }
 
 void trakt_watched(const char *imdb, int mark) {
-  (void)trakt_watched_kind(imdb, cat_kind_por_imdb(imdb), mark);
+  (void)trakt_watched_kind(imdb, cat_kind_by_imdb(imdb), mark);
 }
 
 void trakt_watchlist(const char *imdb, int add) {
-  (void)trakt_watchlist_kind(imdb, cat_kind_por_imdb(imdb), add);
+  (void)trakt_watchlist_kind(imdb, cat_kind_by_imdb(imdb), add);
 }

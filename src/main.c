@@ -93,7 +93,7 @@ static int requestNew(const char *path, time_t *blocked) {
 
 // Esvazia e confere. Devolve 0 quando NAO conseguiu — dono diferente, sticky
 // bit — e nesse caso marca o pedido para ser ignorado ate a data mudar.
-static int consumeOuBlocks(const char *path, time_t *blocked) {
+static int consumeOrBlocks(const char *path, time_t *blocked) {
   struct stat st;
   consume(path);
   if (stat(path, &st) == 0 && st.st_size > 0) {
@@ -153,12 +153,12 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
     else { e.type = SDL_KEYUP; deliver(&e); }
   }
   fclose(f);
-  consumeOuBlocks("/tmp/nuvio-key", &blockedKey);
+  consumeOrBlocks("/tmp/nuvio-key", &blockedKey);
 }
 
 // Tamanho do buffer de onde a captura le. Definido no arranque, junto com o
 // viewport.
-static int capW = (int)NV_TELA_W, capH = (int)NV_TELA_H;
+static int capW = (int)NV_SCREEN_W, capH = (int)NV_SCREEN_H;
 
 // Mesmo protocolo das outras ferramentas: escreva uma URL em /tmp/nuvio-video e
 // o app toca. E o unico jeito de testar reproducao sem alguem no sofa — e o
@@ -179,13 +179,13 @@ static void videoIfRequested(void) {
     else { video_play(url); video_window(0, 0, 1920, 1080); }
   }
   fclose(f);
-  consumeOuBlocks("/tmp/nuvio-video", &blocked);
+  consumeOrBlocks("/tmp/nuvio-video", &blocked);
 }
 
 static void captureIfRequested(void) {
   static time_t blocked;
   if (!requestNew("/tmp/nuvio-shot-req", &blocked)) return;
-  consumeOuBlocks("/tmp/nuvio-shot-req", &blocked);
+  consumeOrBlocks("/tmp/nuvio-shot-req", &blocked);
 
   // Le o DRAWABLE inteiro, nao 1920x1080 fixo: em tela retina o buffer e maior
   // que a janela, e ler o tamanho da janela captura so um quarto da imagem.
@@ -306,7 +306,7 @@ int main(int argc, char **argv) {
   // nao muda nada, no Mac (retina) ela e 2 e a previa deixa de mentir.
   SDL_Window *win = SDL_CreateWindow("Nuvio", SDL_WINDOWPOS_CENTERED,
                                      SDL_WINDOWPOS_CENTERED,
-                                     (int)NV_TELA_W, (int)NV_TELA_H, flags);
+                                     (int)NV_SCREEN_W, (int)NV_SCREEN_H, flags);
   if (!win) { printf("window: %s\n", SDL_GetError()); return 1; }
   // App de TV nao tem ponteiro: o cursor por cima da interface polui a leitura
   // e some sozinho no aparelho, mas nao no Mac.
@@ -395,12 +395,12 @@ int main(int argc, char **argv) {
   snprintf(dirRec, sizeof dirRec, "%s", dirArt);
   char *bar = strrchr(dirRec, '/');
   if (bar) *bar = 0;
-  txt_start(dirRec, (float)dw / NV_TELA_W);
+  txt_start(dirRec, (float)dw / NV_SCREEN_W);
   // A MESMA escala vai para o cache de texturas: e ela que decide o teto de
   // decodificacao de cada arte a partir da largura com que o card a desenha.
   // Sem isto todo card decodificava com o teto unico de 640 e o cache batia no
   // orcamento com ~40 texturas.
-  tex_scale((float)dw / NV_TELA_W);
+  tex_scale((float)dw / NV_SCREEN_W);
   mark("fonts+tex ready");
   // 192 slots, nao 96. O teto de slots so faz sentido junto com o tamanho de
   // cada textura: com o teto unico de 640 cada uma custava 2,4 MB e 96 slots ja
@@ -445,7 +445,7 @@ int main(int argc, char **argv) {
   disc_tmdb(dirArt);
   disc_start();
   // Metade da resolucao: o snapshot so aparece escurecido e nas bordas.
-  int temSnap = gfx_snap_start((int)NV_TELA_W / 2, (int)NV_TELA_H / 2);
+  int hasSnap = gfx_snap_start((int)NV_SCREEN_W / 2, (int)NV_SCREEN_H / 2);
   int snapValid = 0;
   // Alvo minusculo de proposito: e ele esticado que vira o desfoque do fundo.
   // 480x270: com o gaussiano de duas passadas, o que importa nao e o alvo ser
@@ -468,8 +468,8 @@ int main(int argc, char **argv) {
   // de CPU aparece na fase que o causou.
   double perFreq = (double)SDL_GetPerformanceFrequency();
   Uint64 lastFrame = SDL_GetPerformanceCounter();
-  double fEv=0, fPump=0, fUpd=0, fDes=0, fSwap=0, fAux=0, fColor=0;
-  double pEv=0, pPump=0, pUpd=0, pDes=0, pSwap=0, pAux=0, pColor=0;
+  double fEv=0, fPump=0, fUpd=0, fDraw=0, fSwap=0, fAux=0, fColor=0;
+  double pEv=0, pPump=0, pUpd=0, pDraw=0, pSwap=0, pAux=0, pColor=0;
   // Dentro de `des`: quanto e travessia de GL e quanto e busca no cache.
   double fFill=0, pFill=0; int fNFull=0, pNFull=0;
   double fGfxMs=0, fTexMs=0, fOutMs=0; int fNRect=0, fNProgress=0, fNBind=0, fNSearch=0, fNOut=0;
@@ -525,7 +525,7 @@ int main(int argc, char **argv) {
     float dt = (float)(dtms / 1000.0);
     if (frames > 20) {
       if (dtms > worst) { worst = dtms; worstTxtMs = txtMsFrame; worstTxtN = txtNFrame;
-                         pEv=fEv; pPump=fPump; pUpd=fUpd; pDes=fDes; pSwap=fSwap; pAux=fAux; pColor=fColor;
+                         pEv=fEv; pPump=fPump; pUpd=fUpd; pDraw=fDraw; pSwap=fSwap; pAux=fAux; pColor=fColor;
                          pGfxMs=fGfxMs; pTexMs=fTexMs; pNRect=fNRect; pNProgress=fNProgress;
                          pNBind=fNBind; pNSearch=fNSearch; pOutMs=fOutMs; pNOut=fNOut; pFill=fFill; pNFull=fNFull; }
       if (dtms > 33.0) janks++;
@@ -560,14 +560,14 @@ int main(int argc, char **argv) {
     t0 = NV_T0();
     gfx_new_frame();
     tex_new_frame();
-    gfx_sem_crop();
+    gfx_no_crop();
     glClearColor(NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     fColor = NV_DT(t0);
     t0 = NV_T0();
     txt_new_frame();
     app_draw(now);
-    fDes = NV_DT(t0);
+    fDraw = NV_DT(t0);
     fGfxMs = gfx_ms_rect; fTexMs = tex_ms_search;
     fNRect = gfx_n_rect; fNProgress = gfx_n_progress; fNBind = gfx_n_bind; fNSearch = tex_n_search;
     fOutMs = gfx_ms_others; fNOut = gfx_n_others;
@@ -584,8 +584,8 @@ int main(int argc, char **argv) {
     //
     // Bandeira PROPRIA e nao `if (!quadros)`: `quadros` zera a cada relatorio
     // de 3 s, entao aquilo carimbaria "primeiro quadro" tres vezes por minuto.
-    { static int jaStamped;
-      if (!jaStamped) { jaStamped = 1; mark("first frame on screen"); } }
+    { static int alreadyStamped;
+      if (!alreadyStamped) { alreadyStamped = 1; mark("first frame on screen"); } }
     frames++;
 
     if (now - lastReport >= 3000) {
@@ -611,14 +611,14 @@ int main(int argc, char **argv) {
                   dw, dh,
                   frames * 1000.0 / (double)(now - lastReport), worst, janks,
                   worstTxtMs, worstTxtN, items, bytes / 1048576.0,
-                  pEv, pPump, pUpd, pColor, pDes, pAux, pSwap,
+                  pEv, pPump, pUpd, pColor, pDraw, pAux, pSwap,
                   pGfxMs, pNRect, pNProgress, pNBind, pTexMs, pNSearch, pOutMs, pNOut, pFill, pNFull,
                   txt_evictions);
           fclose(fp);
         } }
       frames = 0; lastReport = now; worst = 0; janks = 0; worstTxtMs = 0; worstTxtN = 0;
       txt_evictions = 0;
-      pEv=pPump=pUpd=pDes=pSwap=pAux=pColor=0;
+      pEv=pPump=pUpd=pDraw=pSwap=pAux=pColor=0;
       pGfxMs=pTexMs=pOutMs=0; pNRect=pNProgress=pNBind=pNSearch=pNOut=0; pFill=0; pNFull=0;
     }
   }

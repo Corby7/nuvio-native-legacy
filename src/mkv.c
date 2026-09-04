@@ -115,24 +115,24 @@ static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max)
       while (q < size) {
         int vi = 0, vt = 0;
         unsigned long fid = readId(p + o + q, size - q, &vi);
-        long ftam;
+        long fontSize;
         if (!fid) break;
-        ftam = readSize(p + o + q + vi, size - q - vi, &vt);
-        if (ftam < 0) break;
+        fontSize = readSize(p + o + q + vi, size - q - vi, &vt);
+        if (fontSize < 0) break;
         q += vi + vt;
-        if (q + ftam > size) break;
+        if (q + fontSize > size) break;
         { const unsigned char *v = p + o + q;
-          if (fid == ID_TRACKNUMBER) f.number = (int)readUint(v, ftam);
-          else if (fid == ID_TRACKTYPE) f.kind = (int)readUint(v, ftam);
+          if (fid == ID_TRACKNUMBER) f.number = (int)readUint(v, fontSize);
+          else if (fid == ID_TRACKTYPE) f.kind = (int)readUint(v, fontSize);
           else if (fid == ID_LANGUAGE || fid == ID_LANG_BCP47) {
             // BCP47 ganha do ISO 639-2 quando os dois existem: "pt-BR" diz
             // mais que "por", e e o que o dono quer ver na lista.
             if (fid == ID_LANG_BCP47 || !f.language[0])
-              readText(v, ftam, f.language, sizeof f.language);
+              readText(v, fontSize, f.language, sizeof f.language);
           }
-          else if (fid == ID_NAME)    readText(v, ftam, f.name,  sizeof f.name);
-          else if (fid == ID_CODECID) readText(v, ftam, f.codec, sizeof f.codec); }
-        q += ftam;
+          else if (fid == ID_NAME)    readText(v, fontSize, f.name,  sizeof f.name);
+          else if (fid == ID_CODECID) readText(v, fontSize, f.codec, sizeof f.codec); }
+        q += fontSize;
       }
       if (f.number > 0) output[found++] = f;
     }

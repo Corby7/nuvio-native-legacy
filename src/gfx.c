@@ -11,7 +11,7 @@ typedef struct {
   GLuint progress;
   GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect;
 } Program;
-static Program progs[GFX_NMODOS];
+static Program progs[GFX_NMODES];
 static int progressCurrent = -1;
 // Proporcao da textura corrente, para o "cover". Fica global porque o desenho e
 // imediato: quem chama define antes de cada rect com textura.
@@ -19,7 +19,7 @@ float gfx_tex_aspect_current = 0.0f;
 float gfx_opacity_group = 1.0f;
 // Tamanho real do alvo da tela (em retina, maior que 1920x1080). Guardado aqui
 // porque toda volta de FBO precisa restaurar o viewport com ele.
-static int screenW = (int)NV_TELA_W, screenH = (int)NV_TELA_H;
+static int screenW = (int)NV_SCREEN_W, screenH = (int)NV_SCREEN_H;
 void gfx_size_target(int w, int h) { screenW = w; screenH = h; }
 
 static GLuint snapFbo = 0, snapTex = 0;
@@ -80,7 +80,7 @@ static const char *FS_COVER =
   "  return uv;\n"
   "}\n";
 
-static const char *FS_BODY[GFX_NMODOS] = {
+static const char *FS_BODY[GFX_NMODES] = {
   // GFX_CARD — arte com cantos, over-scan de parallax e especular no foco
   "void main(){\n"
   "  float d = sdf(vUv, uRaio, uAspect);\n"
@@ -93,11 +93,11 @@ static const char *FS_BODY[GFX_NMODOS] = {
   "  vec3 color = texture2D(uTex, uv).rgb;\n"
   "  if (uFoco > 0.004) {\n"
   "    float e = (dot(vUv-0.5, vec2(0.5029,-0.8644)) + uPar.x*3.0) * 3.0;\n"
-  "    cor += exp(-e*e) * 0.16 * uFoco;\n"
-  "    cor *= (0.80 + 0.20*uFoco);\n"
-  "    cor += smoothstep(0.010,0.0,abs(d)) * uFoco * 0.35;\n"
-  "  } else cor *= 0.80;\n"
-  "  gl_FragColor = vec4(cor, m * uCor.a);\n"
+  "    color += exp(-e*e) * 0.16 * uFoco;\n"
+  "    color *= (0.80 + 0.20*uFoco);\n"
+  "    color += smoothstep(0.010,0.0,abs(d)) * uFoco * 0.35;\n"
+  "  } else color *= 0.80;\n"
+  "  gl_FragColor = vec4(color, m * uCor.a);\n"
   "}\n",
 
   // GFX_SOMBRA — mancha difusa atras do item em foco
@@ -456,7 +456,7 @@ static const char *FS_BODY[GFX_NMODOS] = {
 };
 
 // Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
-static const struct { int sdf, cover; } NEEDS[GFX_NMODOS] = {
+static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
   {0,1}, {0,1},
   {1,0},   /* GFX_ANEL */
@@ -482,7 +482,7 @@ static GLuint compiles(GLenum kind, const char *src) {
 int gfx_start(void) {
   GLuint vs = compiles(GL_VERTEX_SHADER, VS);
   char source[6000];
-  for (int m = 0; m < GFX_NMODOS; m++) {
+  for (int m = 0; m < GFX_NMODES; m++) {
     snprintf(source, sizeof source, "%s%s%s%s", FS_HEAD,
              NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "",
              FS_BODY[m]);
@@ -505,7 +505,7 @@ int gfx_start(void) {
     progs[m].aspect  = glGetUniformLocation(p, "uAspect");
     progs[m].texAspect = glGetUniformLocation(p, "uTexAsp");
     glUseProgram(p);
-    glUniform2f(progs[m].screen, NV_TELA_W, NV_TELA_H);
+    glUniform2f(progs[m].screen, NV_SCREEN_W, NV_SCREEN_H);
     glUniform1i(progs[m].tex, 0);
   }
   glUseProgram(progs[GFX_CARD].progress);
@@ -529,7 +529,7 @@ int gfx_start(void) {
 }
 
 void gfx_shutdown(void) {
-  for (int m = 0; m < GFX_NMODOS; m++)
+  for (int m = 0; m < GFX_NMODES; m++)
     if (progs[m].progress) { glDeleteProgram(progs[m].progress); progs[m].progress = 0; }
   progressCurrent = -1;
 }
@@ -574,14 +574,14 @@ void gfx_new_frame(void) {
 void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
               float parx, float pary, float radius,
               float cr, float cg, float cb, float ca) {
-  if ((int)mode < 0 || (int)mode >= GFX_NMODOS) return;
+  if ((int)mode < 0 || (int)mode >= GFX_NMODES) return;
   if (gfxFreqMs == 0.0) gfxFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency();
   (void)gfxFreqMs;
-#ifdef NV_PERF_FINO
+#ifdef NV_PERF_FINE
   Uint64 t0 = SDL_GetPerformanceCounter();
 #endif
   gfx_n_rect++;
-  { float area = (r.w * r.h) / (NV_TELA_W * NV_TELA_H);
+  { float area = (r.w * r.h) / (NV_SCREEN_W * NV_SCREEN_H);
     gfx_fill += area;
     if (area >= 0.5f) gfx_n_full++; }
   const Program *P = &progs[mode];
@@ -604,7 +604,7 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
     gfx_n_bind++;
   }
   glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-#ifdef NV_PERF_FINO
+#ifdef NV_PERF_FINE
   gfx_ms_rect += (double)(SDL_GetPerformanceCounter() - t0) * gfxFreqMs;
 #endif
 }
@@ -673,7 +673,7 @@ void gfx_snap_finish(void) {
 
 void gfx_snap_draw(void) {
   if (!snapTex) return;
-  GfxRect r = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect r = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   gfx_tex_aspect_current = 0.0f;
   gfx_rect(r, snapTex, GFX_SNAP, 0, 0.0f, 1.0f, 0.0f, 0, 0, 0, 1.0f);
 }
@@ -719,13 +719,13 @@ void gfx_crop(float x, float y, float w, float h) {
   //    tela retina o buffer tem o dobro do tamanho, e sem a escala o recorte
   //    cobria um quarto da area pedida — o menu lateral perdia os dois
   //    primeiros itens e os rotulos saiam cortados no meio da palavra.
-  float ex = (float)screenW / NV_TELA_W, ey = (float)screenH / NV_TELA_H;
-  int yy = (int)((NV_TELA_H - (y + h)) * ey);
+  float ex = (float)screenW / NV_SCREEN_W, ey = (float)screenH / NV_SCREEN_H;
+  int yy = (int)((NV_SCREEN_H - (y + h)) * ey);
   glEnable(GL_SCISSOR_TEST);
   glScissor((int)(x * ex), yy, (int)(w * ex), (int)(h * ey));
   GFX_OUTRO_END();
 }
-void gfx_sem_crop(void) { glDisable(GL_SCISSOR_TEST); }
+void gfx_no_crop(void) { glDisable(GL_SCISSOR_TEST); }
 
 static int createsTarget(int i, int w, int h) {
   glGenTextures(1, &borderTex[i]);
@@ -761,7 +761,7 @@ int gfx_blur_start(int w, int h) {
 void gfx_blur_generate(int via, unsigned int tex, float texAspect) {
   int a0 = via ? 2 : 0, a1 = via ? 3 : 1;
   if (!borderFbo[a0] || !tex) return;
-  GfxRect full = { 0, 0, NV_TELA_W, NV_TELA_H };
+  GfxRect full = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   GFX_OUTRO_START();
   glDisable(GL_BLEND);
   glViewport(0, 0, borderW, borderH);

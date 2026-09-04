@@ -17,13 +17,15 @@ typedef enum {
   ROW_CATALOGS    // atalhos para catálogos existentes, não títulos
 } KindRow;
 
-// O item sob o foco, com o retangulo que ele ocupa na tela NESTE quadro. A
-// transicao para o detalhe parte dai: o card nao "abre uma tela nova", ele voa
-// ate virar o hero — e sem o rect de origem real a animacao teria que chutar
-// de onde veio, que e exatamente o que faz uma transicao parecer barata.
+// The item under the focus, with the rectangle it occupies on screen THIS
+// frame. The transition to the detail starts from there: the card does not "open
+// a new screen", it flies until it becomes the hero — and without the real
+// source rect the animation would have to guess where it came from, which is
+// exactly what makes a transition look cheap.
 typedef struct {
-  // Indice NO CATALOGO do card focado. Faltava, e por isso o detalhe abria
-  // sempre o item 0: a tela de destino nao tinha como saber o que fora aberto.
+  // The focused card's index IN THE CATALOGUE. It was missing, which is why the
+  // detail always opened item 0: the destination screen had no way to know what
+  // had been opened.
   int index_;
   GfxRect rect;
   const char *art;
@@ -41,13 +43,13 @@ void home_event(const SDL_Event *e);
 void home_update(float dt, Uint32 now);
 void home_draw(Uint32 now);
 
-// Onde a ARTE do hero foi desenhada no ultimo quadro. A tela de detalhe usa
-// isto para nascer com o backdrop no mesmo lugar — o fundo do detalhe E a arte
-// do titulo em foco, e ela nao deve reaparecer, deve continuar.
+// Where the hero's ART was drawn on the last frame. The detail screen uses this
+// to be born with the backdrop in the same place — the detail's background IS
+// the focused title's art, and it should not reappear, it should continue.
 void home_hero_rect(float *x, float *y, float *w, float *h);
 void home_shutdown(void);
-// Registra o titulo interrompido para a faixa contextual "Retomar agora".
-// A faixa so existe enquanto o progresso fizer sentido (nem inicio nem fim).
+// Records the interrupted title for the contextual "Resume now" band. The band
+// only exists while the progress makes sense (neither the start nor the end).
 void home_registrar_return(int index_, double posSeg, double durationSeg);
 int  home_wants_exit(void);
 int  home_requested_open(void);   // OK pressionado: consome o pedido

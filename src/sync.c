@@ -30,26 +30,26 @@ static int dirtyProgress, dirtyAddons;
 // O fio NAO toca no app: ele so preenche estas caixas, e sync_passo aplica no
 // laco principal. Sem essa separacao, uma resposta de rede reescreveria a lista
 // de addons no meio de um quadro que ja estava lendo dela.
-static AddonRemote addonsRem[SY_ADD_MAX];
-static int nAddonsRem, temAddonsRem;
+static AddonRemote addonsRemote[SY_ADD_MAX];
+static int nAddonsRemote, hasAddonsRemote;
 
 static char traktToken[300];
-static int  temTraktRem;
+static int  hasTraktRemote;
 
 // Chaves de servico que a conta guarda e o app lia de arquivo do dono.
 // MEDIDO na conta real: os provedores presentes sao animeskip, debrid:*,
 // introdb, mdblist e tmdb — e NAO ha "trakt". O leitor de trakt continua aqui
 // porque a RPC e a mesma e a linha aparece assim que o app web a escrever.
 static char tmdbKey[120], mdbKey[120];
-static int  temTmdb, temMdb;
+static int  hasTmdb, hasMdb;
 
 typedef struct { char imdb[40]; double pos, duration; int temp, ep; } ProgressItem;
-static ProgressItem progressRem[SY_PROGRESS_MAX];
-static int nProgressRem;
+static ProgressItem progressRemote[SY_PROGRESS_MAX];
+static int nProgressRemote;
 
 // Contagens do que foi puxado mas o app ainda nao consome. Elas existem para o
 // resumo poder dizer a verdade em vez de "sincronizado" sem qualificar.
-static int cWatched, cLib, cSaved, cCollections, temSettingsProfile, temCatHome;
+static int cWatched, cLib, cSaved, cCollections, hasSettingsProfile, hasCatHome;
 
 // Blob de ajustes do perfil, cru, esperando ser aplicado no fio principal.
 // `aplicarAjustes` comeca ligado: no arranque nao ha mudanca local para
@@ -62,7 +62,7 @@ static int cWatched, cLib, cSaved, cCollections, temSettingsProfile, temCatHome;
 // objeto muito mais chaves do que este app conhece, e escolher um teto aqui e
 // escolher uma conta que nao vai funcionar.
 static char *settingsBlob;
-static int  temSettingsBlob;
+static int  hasSettingsBlob;
 static int  applySettings = 1;
 
 // ---------------------------------------------------------------- utilitarios
@@ -97,18 +97,18 @@ static void pullAddons(void) {
   for (p = js_root_array(r); p && k < SY_ADD_MAX; p = js_next(js_end(p))) {
     const char *f = js_end(p);
     char b[16];
-    memset(&addonsRem[k], 0, sizeof addonsRem[k]);
-    if (!js_text(p, f, "url", addonsRem[k].url, sizeof addonsRem[k].url)) continue;
-    js_text(p, f, "name", addonsRem[k].name, sizeof addonsRem[k].name);
+    memset(&addonsRemote[k], 0, sizeof addonsRemote[k]);
+    if (!js_text(p, f, "url", addonsRemote[k].url, sizeof addonsRemote[k].url)) continue;
+    js_text(p, f, "name", addonsRemote[k].name, sizeof addonsRemote[k].name);
     // Ausente conta como LIGADO: e assim que o web le, e um addon que some por
     // causa de um campo que o servidor nao mandou e pior que um a mais.
-    addonsRem[k].active = js_raw(p, f, "enabled", b, sizeof b)
+    addonsRemote[k].active = js_raw(p, f, "enabled", b, sizeof b)
                          ? (strcmp(b, "false") != 0) : 1;
     k++;
   }
   free(r);
-  nAddonsRem = k;
-  temAddonsRem = 1;
+  nAddonsRemote = k;
+  hasAddonsRemote = 1;
 }
 
 static void pushAddons(void) {
@@ -174,16 +174,16 @@ static void pullCredentials(void) {
       char tk[300];
       if (js_text(cred, cred + strlen(cred), "access_token", tk, sizeof tk)) {
         snprintf(traktToken, sizeof traktToken, "%s", tk);
-        temTraktRem = 1;
+        hasTraktRemote = 1;
       }
     }
     else if (!strcmp(provider, "tmdb")) {
       if (js_text(cred, cred + strlen(cred), "api_key", tmdbKey, sizeof tmdbKey))
-        temTmdb = 1;
+        hasTmdb = 1;
     }
     else if (!strcmp(provider, "mdblist")) {
       if (js_text(cred, cred + strlen(cred), "api_key", mdbKey, sizeof mdbKey))
-        temMdb = 1;
+        hasMdb = 1;
     }
     // debrid:* NAO e aplicado hoje de proposito: as chaves de debrid que este
     // app usa ja vem embutidas na URL do addon (ver addons.h), entao aplicar a
@@ -228,18 +228,18 @@ static void pullProgress(void) {
     temp = (int)js_num(p, f, "season", 0);
     ep   = (int)js_num(p, f, "episode", 0);
     if (temp > 0 && ep > 0)
-      snprintf(progressRem[k].imdb, sizeof progressRem[k].imdb, "%s:%d:%d", id, temp, ep);
+      snprintf(progressRemote[k].imdb, sizeof progressRemote[k].imdb, "%s:%d:%d", id, temp, ep);
     else
-      snprintf(progressRem[k].imdb, sizeof progressRem[k].imdb, "%s", id);
-    progressRem[k].pos = pos;
-    progressRem[k].duration = duration;
-    progressRem[k].temp = temp;
-    progressRem[k].ep = ep;
+      snprintf(progressRemote[k].imdb, sizeof progressRemote[k].imdb, "%s", id);
+    progressRemote[k].pos = pos;
+    progressRemote[k].duration = duration;
+    progressRemote[k].temp = temp;
+    progressRemote[k].ep = ep;
     k++;
   }
   free(r);
   // Vazio nao apaga nada: quem consome so aplica o que veio.
-  nProgressRem = k;
+  nProgressRemote = k;
 }
 
 // Le o progresso que ESTE aparelho gravou. E a unica superficie em que o app
@@ -325,7 +325,7 @@ static void pushProgress(void) {
 static const char *missing[SY_MISSING];
 static int nMissing;
 
-static int jaMissing(const char *func) {
+static int alreadyMissing(const char *func) {
   int i;
   for (i = 0; i < nMissing; i++)
     if (!strcmp(missing[i], func)) return 1;
@@ -336,7 +336,7 @@ static int countRpc(const char *func, const char *body) {
   char *r;
   int st = 0, k = 0;
   const char *p;
-  if (jaMissing(func)) return -1;
+  if (alreadyMissing(func)) return -1;
   r = session_rpc(func, body, &st);
   if (!ok2xx(r, st)) {
     if (r && cloud_error_missing(r)) {
@@ -358,7 +358,7 @@ static int pullSettingsProfile(const char *body) {
   char *r;
   int st = 0, ok = 0;
   const char *p;
-  if (!applySettings) return temSettingsProfile;   // nada a fazer nesta volta
+  if (!applySettings) return hasSettingsProfile;   // nada a fazer nesta volta
   r = session_rpc("sync_pull_profile_settings_blob", body, &st);
   if (!ok2xx(r, st)) { free(r); return 0; }
   // A resposta e [{ "settings_json": { ... } }]; o que interessa e o objeto de
@@ -381,7 +381,7 @@ static int pullSettingsProfile(const char *body) {
             new[n] = 0;
             free(settingsBlob);
             settingsBlob = new;
-            temSettingsBlob = 1;
+            hasSettingsBlob = 1;
             ok = 1;
             printf("[sync] settings blob: %d bytes\n", (int)n);
           }
@@ -418,11 +418,11 @@ static void pullSoRead(void) {
 
   snprintf(body, sizeof body,
            "{\"p_profile_id\":%d,\"p_platform\":\"tv\"}", profile);
-  temSettingsProfile = pullSettingsProfile(body);
+  hasSettingsProfile = pullSettingsProfile(body);
 
   snprintf(body, sizeof body,
            "{\"p_profile_id\":%d,\"p_platform\":\"home_catalog_shared\"}", profile);
-  temCatHome = countRpc("sync_pull_home_catalog_settings", body) > 0;
+  hasCatHome = countRpc("sync_pull_home_catalog_settings", body) > 0;
 }
 
 // ---------------------------------------------------------------- ciclo
@@ -441,9 +441,9 @@ static void *run(void *u) {
 
   snprintf(summary, sizeof summary,
            "%d addons · %d progress · %d watched · %d in list · %d collections%s",
-           nAddonsRem, nProgressRem, cWatched < 0 ? 0 : cWatched,
+           nAddonsRemote, nProgressRemote, cWatched < 0 ? 0 : cWatched,
            cLib < 0 ? 0 : cLib, cCollections < 0 ? 0 : cCollections,
-           temTraktRem ? " · Trakt" : "");
+           hasTraktRemote ? " · Trakt" : "");
   state = SYNC_READY;
   threadReady = 1;
   return NULL;
@@ -479,32 +479,32 @@ void sync_step(unsigned nowMs) {
   threadAlive = 0;
   threadReady = 0;
 
-  if (temAddonsRem) { addons_set_list(addonsRem, nAddonsRem); temAddonsRem = 0; }
-  if (temTraktRem)  { trakt_set(traktToken, cloud_trakt_client()); temTraktRem = 0; }
-  if (temTmdb)      { disc_tmdb_set(tmdbKey);   temTmdb = 0; }
-  if (temMdb)       { extras_set_key(mdbKey); temMdb = 0; }
-  if (temSettingsBlob && settingsBlob) {
+  if (hasAddonsRemote) { addons_set_list(addonsRemote, nAddonsRemote); hasAddonsRemote = 0; }
+  if (hasTraktRemote)  { trakt_set(traktToken, cloud_trakt_client()); hasTraktRemote = 0; }
+  if (hasTmdb)      { disc_tmdb_set(tmdbKey);   hasTmdb = 0; }
+  if (hasMdb)       { extras_set_key(mdbKey); hasMdb = 0; }
+  if (hasSettingsBlob && settingsBlob) {
     settings_apply_blob(settingsBlob);
     free(settingsBlob);
     settingsBlob = NULL;
-    temSettingsBlob = 0;
+    hasSettingsBlob = 0;
     applySettings = 0;   // daqui para frente, o que a pessoa mudar na TV fica
   }
-  if (nProgressRem) {
+  if (nProgressRemote) {
     int i, applied = 0;
-    for (i = 0; i < nProgressRem; i++) {
-      int idx = cat_index_por_imdb(progressRem[i].imdb);
+    for (i = 0; i < nProgressRemote; i++) {
+      int idx = cat_index_by_imdb(progressRemote[i].imdb);
       if (idx < 0) continue;
       // O catalogo deste projeto sabe gravar progresso POR EPISODIO. Usar a
       // versao sem temporada/episodio perderia em qual episodio a pessoa
       // parou, que e a informacao que faz a fileira "continue assistindo"
       // valer alguma coisa numa serie.
-      cat_save_progress_ep(idx, progressRem[i].pos, progressRem[i].duration,
-                              progressRem[i].temp, progressRem[i].ep);
+      cat_save_progress_ep(idx, progressRemote[i].pos, progressRemote[i].duration,
+                              progressRemote[i].temp, progressRemote[i].ep);
       applied++;
     }
-    printf("[sync] %d of %d progress entries matched the catalog\n", applied, nProgressRem);
-    nProgressRem = 0;
+    printf("[sync] %d of %d progress entries matched the catalog\n", applied, nProgressRemote);
+    nProgressRemote = 0;
   }
   if (state == SYNC_READY) lastOk = nowMs;
 }
@@ -551,20 +551,20 @@ void sync_forget_user(void) {
 
   // As caixas que o fio preenche tambem: um ciclo que terminou logo antes do
   // logout aplicaria os addons da conta anterior no proximo sync_passo.
-  memset(addonsRem, 0, sizeof addonsRem);
-  nAddonsRem = 0; temAddonsRem = 0;
-  traktToken[0] = 0; temTraktRem = 0;
-  memset(tmdbKey, 0, sizeof tmdbKey); temTmdb = 0;
-  memset(mdbKey, 0, sizeof mdbKey);   temMdb = 0;
-  nProgressRem = 0;
+  memset(addonsRemote, 0, sizeof addonsRemote);
+  nAddonsRemote = 0; hasAddonsRemote = 0;
+  traktToken[0] = 0; hasTraktRemote = 0;
+  memset(tmdbKey, 0, sizeof tmdbKey); hasTmdb = 0;
+  memset(mdbKey, 0, sizeof mdbKey);   hasMdb = 0;
+  nProgressRemote = 0;
   cWatched = cLib = cSaved = cCollections = 0;
-  temSettingsProfile = temCatHome = 0;
+  hasSettingsProfile = hasCatHome = 0;
   state = SYNC_STOPPED;
   lastOk = 0;
   dirtyProgress = 0; dirtyAddons = 0;
   free(settingsBlob);
   settingsBlob = NULL;
-  temSettingsBlob = 0;
+  hasSettingsBlob = 0;
   applySettings = 1;
   snprintf(summary, sizeof summary, "no account");
   printf("[sync] user data erased from this device\n");

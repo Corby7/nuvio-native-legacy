@@ -103,17 +103,18 @@ static void *fetch(void *arg) {
       char cam[128] = "", person[96] = "", department[64] = "";
       js_text(r, fr, "name", person, sizeof person);
       js_text(r, fr, "known_for_department", department, sizeof department);
-      // O resultado precisa casar com o nome pedido. Se o TMDB explicita
-      // outra área, rejeitamos o homônimo em vez de roubar o retrato de um
-      // ator com o mesmo nome. Departamento vazio ainda será confirmado pelo
-      // endpoint da pessoa.
+      // The result has to match the name asked for. If TMDB states a
+      // different area, we reject the namesake rather than steal the portrait
+      // of an actor with the same name. An empty department will still be
+      // confirmed by the person endpoint.
       if (sameName(person, f->name) &&
           (!department[0] || isDirecting(department))) {
         id = (long)js_num(r, fr, "id", 0.0);
         if (js_text(r, fr, "profile_path", cam, sizeof cam) && cam[0] == '/')
-          // w500 fica borrado quando o retrato sobe para o hero/detalhe da TV.
-          // A origem original preserva cabelo, olhos e recorte; o cache limita
-          // o decode ao tamanho real de desenho, então não pesa a tela inteira.
+          // w500 goes blurry when the portrait is scaled up to the TV's
+          // hero/detail. The original source preserves hair, eyes and framing;
+          // the cache limits the decode to the real drawing size, so it does not
+          // weigh on the whole screen.
           snprintf(photo, sizeof photo, "https://image.tmdb.org/t/p/original%s", cam);
           { const char *k = js_array(r, fr, "known_for"); size_t z = 0; int n = 0;
           while (k && n < 4) {
@@ -176,8 +177,8 @@ static void *fetch(void *arg) {
   fflush(stdout);
   return NULL;
 failure:
-  // Nao publica foto parcial antes da identidade ser confirmada. A proxima
-  // chamada pode tentar novamente com backoff, sem bloquear o fio de desenho.
+  // Does not publish a partial photo before the identity is confirmed. The next
+  // call can try again with backoff, without blocking the drawing thread.
   failed(f);
   return NULL;
 }
@@ -202,8 +203,9 @@ void director_request(const char *name) {
   pthread_t t; pthread_attr_t at;
   pthread_attr_init(&at); pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
   if (pthread_create(&t, &at, fetch, f) != 0) {
-    // Mesmo a falha local de criar a thread precisa entrar no mesmo backoff
-    // das falhas de rede; caso contrario cada frame tentaria criar outra.
+    // Even a local failure to create the thread has to enter the same backoff
+    // as the network failures; otherwise every frame would try to create
+    // another.
     failed(f);
   }
   pthread_attr_destroy(&at);
@@ -222,8 +224,8 @@ const char *director_photo(const char *name) {
   static char photoReturn[200];
   pthread_mutex_lock(&lock);
   const Profile *f = name ? find(name) : NULL;
-  // A imagem so e publicada junto da identidade confirmada; uma resposta
-  // parcial nunca pode vestir o detalhe com a foto de um homonimo.
+  // The image is only published together with the confirmed identity; a partial
+  // response must never dress the detail with a namesake's photo.
   if (f && f->photo[0] && f->state == 2)
     snprintf(photoReturn, sizeof photoReturn, "%s", f->photo);
   else

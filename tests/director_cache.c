@@ -1,5 +1,6 @@
-// Sem rede real: confirma que a busca nao aceita homonimo de ator e publica
-// a ficha somente depois de validar o nome e o departamento no TMDB.
+// No real network: confirms the search does not accept an actor of the same
+// name, and publishes the profile only after validating both the name and the
+// department against TMDB.
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>

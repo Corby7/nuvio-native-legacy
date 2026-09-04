@@ -13,9 +13,9 @@
 #include "settings.h"
 
 static int failures;
-static void checks(const char *o_que, int got, int expected) {
+static void checks(const char *what, int got, int expected) {
   int ok = got == expected;
-  printf("  %-46s %s (got %d, expected %d)\n", o_que, ok ? "ok    " : "FAILED", got, expected);
+  printf("  %-46s %s (got %d, expected %d)\n", what, ok ? "ok    " : "FAILED", got, expected);
   if (!ok) failures++;
 }
 
