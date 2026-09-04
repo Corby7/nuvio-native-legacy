@@ -136,3 +136,24 @@ int js_raw(const char *start, const char *end, const char *key,
   dst[n] = 0;
   return 1;
 }
+
+// "key": true|false within [start,end).
+//
+// It exists because `enabled` and `pinToTop` are the first booleans this app
+// has had to read, and js_num cannot stand in: it requires a digit or a sign
+// after the key precisely so that it never matches an object, so on `true` it
+// silently returns the default. A preference that reads as its default no
+// matter what the server said is the kind of bug that looks like the server's.
+int js_flag(const char *start, const char *end, const char *key, int dflt) {
+  char needle[64];
+  const char *p;
+  if (!start || !end || !key) return dflt;
+  snprintf(needle, sizeof needle, "\"%s\"", key);
+  p = strstr(start, needle);
+  if (!p || p >= end) return dflt;
+  p += strlen(needle);
+  while (p < end && (*p == ' ' || *p == ':')) p++;
+  if (p + 4 <= end && !strncmp(p, "true", 4))  return 1;
+  if (p + 5 <= end && !strncmp(p, "false", 5)) return 0;
+  return dflt;
+}

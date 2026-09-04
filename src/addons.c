@@ -80,8 +80,26 @@ int addons_load(const char *dirArt) {
   return nAddon;
 }
 
+// Assinatura da lista corrente: soma dos bases. Serve so para responder "mudou
+// ou nao", entao um FNV-1a basta — nao ha nada de seguranca aqui.
+static unsigned listSignature(void) {
+  unsigned h = 2166136261u;
+  int i;
+  for (i = 0; i < nAddon; i++) {
+    const char *s;
+    for (s = addon[i].base; *s; s++) { h ^= (unsigned char)*s; h *= 16777619u; }
+    h ^= '\n'; h *= 16777619u;
+  }
+  return h;
+}
+
+static int listChanged;
+
+int addons_took_change(void) { int v = listChanged; listChanged = 0; return v; }
+
 int addons_set_list(const AddonRemote *new, int n) {
   int i, accepted = 0;
+  unsigned before = listSignature();
   if (!new || n <= 0) {
     // Vazio nao substitui. Ver o comentario no cabecalho: uma resposta vazia
     // nao se distingue de uma delecao, e a diferenca entre as duas e a pessoa
@@ -113,7 +131,9 @@ int addons_set_list(const AddonRemote *new, int n) {
     return 0;
   }
   nAddon = accepted;
-  printf("[addons] %d from the account\n", nAddon);
+  if (listSignature() != before) listChanged = 1;
+  printf("[addons] %d from the account%s\n", nAddon,
+         listChanged ? " (list changed; the home rows will be rebuilt)" : "");
   return nAddon;
 }
 

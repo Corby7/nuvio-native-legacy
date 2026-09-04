@@ -17,6 +17,34 @@
 // Dispara a montagem do catalogo num fio proprio. Volta na hora.
 void disc_start(void);
 
+// --- HOME ROW PREFERENCES, FROM THE ACCOUNT ---------------------------------
+//
+// The order of the home rows, which of them are hidden and what they are called
+// belong to the PERSON, not to the addon: the web app keeps them in
+// `homeCatalogPrefs` and syncs them through `sync_pull_home_catalog_settings`.
+// Until this existed the native app only read a local `rows.txt` that nothing
+// ever wrote, so the rows came out in whatever order the manifest happened to
+// declare — and with 151 catalogues declared and only 16 rows shown, what the
+// person had actually chosen was usually below the cut.
+//
+// The key is `<addonId>_<type>_<catalogId>`, byte for byte the same key the web
+// app builds (`buildCatalogOrderKey`), which is what lets the two agree.
+//
+// Call begin, then add once per item IN ORDER, then end.
+void disc_prefs_begin(void);
+void disc_prefs_add(const char *key, int enabled, const char *customTitle);
+void disc_prefs_end(void);
+
+// Asks for the rows to be built AGAIN, once whatever is running has finished.
+// Call it when the addon list changes — the account's list arrives from the sync
+// long after the first build, which ran with no addons at all.
+void disc_rebuild(void);
+
+// Call ONCE PER FRAME. Starts a requested rebuild as soon as no build is in
+// flight. Without it a rebuild asked for during the first build is simply lost,
+// which is exactly the race it has to survive.
+void disc_step(void);
+
 // Reads the TMDB key (art/tmdb.txt). Without it the cast has only names, no
 // photo and no character.
 void disc_tmdb(const char *dirArt);

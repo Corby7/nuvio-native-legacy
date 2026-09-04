@@ -613,6 +613,10 @@ void app_update(float dt, Uint32 now) {
   // Prazo do recuo de Dolby Vision: se a declaracao nao render imagem, o video
   // recarrega sozinho sem ela. Precisa bater todo quadro (ver video.h).
   video_pump();
+  // Remontagem pedida quando a lista de addons da conta chegou. Aqui, e nao no
+  // sync_step, porque a primeira montagem pode ainda estar rodando naquele
+  // instante e o pedido precisa sobreviver ate ela terminar.
+  disc_step();
   // O player devolve 1 para a coluna de audio e 2 para a de legenda.
   { int q = player_requested_tracks();
     if (q) tracks_open_em(q == 2 ? 1 : 0); }

@@ -28,6 +28,16 @@ int  addons_load(const char *dirArt);
 typedef struct { char name[64]; char url[600]; int active; } AddonRemote;
 int  addons_set_list(const AddonRemote *list, int n);
 
+// 1 if the last addons_set_list actually CHANGED the list. Reads and clears.
+//
+// WHY IT EXISTS: the account's addon list arrives from the sync, which lands
+// well AFTER the home screen has already been assembled — the home was built
+// from an empty list, found no catalogues, and fell back to the packaged one.
+// Whoever applies the list has to be able to ask for the rows to be rebuilt,
+// and only when something really changed: rebuilding on every sync would
+// reshuffle the home under the person using it.
+int  addons_took_change(void);
+
 // The current list, so the sync can push back what this device has.
 int  addons_export(AddonRemote *output, int max);
 

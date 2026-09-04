@@ -9,6 +9,7 @@
 #include "settings.h"
 #include "discover.h"
 #include "extras.h"
+#include "collections.h"
 #include "js.h"
 #include "jsw.h"
 #include <stdio.h>
@@ -65,6 +66,13 @@ static char *settingsBlob;
 static int  hasSettingsBlob;
 static int  applySettings = 1;
 
+// As COLECOES do dono, cruas, esperando o fio principal. Pela mesma razao do
+// blob de ajustes e da lista de addons: `folders[]` de collections.c e lido pelo
+// desenho a cada quadro, e reescrever de outro fio corromperia a home no meio de
+// um quadro que ja estava percorrendo a lista.
+static char *collectionsBlob;
+static int  hasCollectionsBlob;
+
 // ---------------------------------------------------------------- utilitarios
 
 static int ok2xx(const char *r, int st) { return r && st >= 200 && st < 300; }
@@ -98,7 +106,18 @@ static void pullAddons(void) {
     const char *f = js_end(p);
     char b[16];
     memset(&addonsRemote[k], 0, sizeof addonsRemote[k]);
-    if (!js_text(p, f, "url", addonsRemote[k].url, sizeof addonsRemote[k].url)) continue;
+    // MESMA ARMADILHA DAS COLECOES, e aqui ela custa um addon inteiro: js_text
+    // recusa em silencio quando o valor nao cabe, e addons que guardam a
+    // configuracao dentro da URL passam facil dos 600 bytes deste campo. Sem
+    // esta linha o addon simplesmente nao existiria para o app, sem uma palavra
+    // no log dizendo por que.
+    if (!js_text(p, f, "url", addonsRemote[k].url, sizeof addonsRemote[k].url)) {
+      char name[64] = "";
+      js_text(p, f, "name", name, sizeof name);
+      printf("[sync] addon '%s' SKIPPED: its URL does not fit in %d bytes\n",
+             name[0] ? name : "(unnamed)", (int)sizeof addonsRemote[k].url);
+      continue;
+    }
     js_text(p, f, "name", addonsRemote[k].name, sizeof addonsRemote[k].name);
     // Ausente conta como LIGADO: e assim que o web le, e um addon que some por
     // causa de um campo que o servidor nao mandou e pior que um a mais.
@@ -398,13 +417,107 @@ static int pullSettingsProfile(const char *body) {
   return ok;
 }
 
+// As COLECOES do dono. Ate aqui esta RPC tambem so alimentava um numero.
+//
+// Guarda o corpo cru em vez de interpretar aqui: quem interpreta e o
+// collections.c, no fio principal, porque a lista que ele escreve e a que o
+// desenho le a cada quadro.
+static int pullCollections(const char *body) {
+  static const char *FUNC = "sync_pull_collections";
+  char *r;
+  int st = 0, k = 0;
+  const char *p;
+  if (alreadyMissing(FUNC)) return -1;
+  r = session_rpc(FUNC, body, &st);
+  if (!ok2xx(r, st)) {
+    if (r && cloud_error_missing(r)) {
+      printf("[sync] %s does not exist on this server\n", FUNC);
+      if (nMissing < SY_MISSING) missing[nMissing++] = FUNC;
+    }
+    free(r);
+    return -1;
+  }
+  for (p = js_root_array(r); p; p = js_next(js_end(p))) k++;
+  free(collectionsBlob);
+  collectionsBlob = r;          // a posse passa para a caixa; nao liberar aqui
+  hasCollectionsBlob = 1;
+  return k;
+}
+
+// AS PREFERENCIAS DE FILEIRA DA HOME, que ate agora eram baixadas e jogadas
+// fora.
+//
+// Esta RPC ja era chamada — por countRpc, que le o corpo inteiro so para contar
+// quantos itens vieram e devolver um numero para o resumo. A ordem que a pessoa
+// escolheu no app web, o que ela escondeu e os nomes que ela deu chegavam ate a
+// TV e morriam ali. Com 151 catalogos declarados e teto de 16 fileiras, o que
+// aparecia na home era o comeco do manifesto do addon, nunca a escolha do dono.
+//
+// O formato do item vem do homeCatalogSettingsSyncService do web:
+//   {"addon_id":..,"type":..,"catalog_id":..,"enabled":bool,"order":n,
+//    "custom_title":"","is_collection":bool,"collection_id":""}
+// e a chave e addon_id + "_" + type + "_" + catalog_id, identica a que o
+// discover monta para cada catalogo declarado.
+static int pullHomeCatalog(const char *body) {
+  static const char *FUNC = "sync_pull_home_catalog_settings";
+  char *r;
+  int st = 0, n = 0, nCollection = 0;
+  const char *root, *item;
+  if (alreadyMissing(FUNC)) return 0;
+  r = session_rpc(FUNC, body, &st);
+  if (!ok2xx(r, st)) {
+    if (r && cloud_error_missing(r)) {
+      printf("[sync] %s does not exist on this server\n", FUNC);
+      if (nMissing < SY_MISSING) missing[nMissing++] = FUNC;
+    }
+    free(r);
+    return 0;
+  }
+  root = js_root_array(r);
+  if (!root) { free(r); return 0; }
+  // O corpo e [{"settings_json":{... ,"items":[...]}}].
+  item = js_array(root, js_end(root), "items");
+  if (!item) {
+    printf("[sync] home catalog settings: no \"items\"\n");
+    free(r);
+    return 0;
+  }
+  disc_prefs_begin();
+  for (; item; item = js_next(js_end(item))) {
+    const char *f = js_end(item);
+    char addonId[96] = "", type[16] = "", catId[96] = "", title[96] = "";
+    char key[192];
+    if (js_flag(item, f, "is_collection", 0)) { nCollection++; continue; }
+    js_text(item, f, "addon_id",   addonId, sizeof addonId);
+    js_text(item, f, "type",       type,    sizeof type);
+    js_text(item, f, "catalog_id", catId,   sizeof catId);
+    js_text(item, f, "custom_title", title, sizeof title);
+    if (!addonId[0] || !type[0] || !catId[0]) continue;
+    snprintf(key, sizeof key, "%s_%s_%s", addonId, type, catId);
+    disc_prefs_add(key, js_flag(item, f, "enabled", 1), title);
+    n++;
+  }
+  disc_prefs_end();
+  // As colecoes do dono entram na MESMA ordenacao no web, e este app ainda nao
+  // tem de onde tirar o conteudo delas. Contar e dizer quantas sao e melhor do
+  // que ignora-las em silencio: e a diferenca entre "nao tenho colecoes" e
+  // "tenho e este app ainda nao as mostra".
+  if (nCollection)
+    printf("[sync] %d collection(s) in the home order; this app does not build "
+           "collection rows yet\n", nCollection);
+  free(r);
+  return n;
+}
+
 static void pullSoRead(void) {
   char body[160];
   int profile = profiles_active();
 
   snprintf(body, sizeof body, "{\"p_profile_id\":%d}", profile);
   cLib   = countRpc("sync_pull_library", body);
-  cCollections = countRpc("sync_pull_collections", body);
+  // COLECOES: baixadas inteiras agora, e nao apenas contadas. O corpo fica
+  // guardado para o fio principal aplicar (ver collectionsBlob).
+  cCollections = pullCollections(body);
 
   // MEDIDO: `p_page` comeca em 1. Com 0 o servidor responde 400 "OFFSET must
   // not be negative" — a conta dele e (p_page - 1) * p_page_size.
@@ -422,7 +535,11 @@ static void pullSoRead(void) {
 
   snprintf(body, sizeof body,
            "{\"p_profile_id\":%d,\"p_platform\":\"home_catalog_shared\"}", profile);
-  hasCatHome = countRpc("sync_pull_home_catalog_settings", body) > 0;
+  hasCatHome = pullHomeCatalog(body) > 0;
+  // A home ja foi montada com a ordem do manifesto. Com a ordem do dono em maos,
+  // as fileiras sao remontadas — e agora as 16 que cabem sao as 16 que ela
+  // escolheu, e nao as 16 primeiras que o addon declarou.
+  if (hasCatHome) disc_rebuild();
 }
 
 // ---------------------------------------------------------------- ciclo
@@ -479,7 +596,22 @@ void sync_step(unsigned nowMs) {
   threadAlive = 0;
   threadReady = 0;
 
-  if (hasAddonsRemote) { addons_set_list(addonsRemote, nAddonsRemote); hasAddonsRemote = 0; }
+  if (hasAddonsRemote) {
+    addons_set_list(addonsRemote, nAddonsRemote);
+    hasAddonsRemote = 0;
+    // A home foi montada ANTES desta lista chegar, portanto sem addon nenhum:
+    // zero manifestos lidos, zero catalogos, e a home caindo para o catalogo do
+    // pacote. Agora que ha lista, as fileiras sao remontadas.
+    if (addons_took_change()) disc_rebuild();
+  }
+  if (hasCollectionsBlob && collectionsBlob) {
+    // Fio principal: aqui e o unico lugar de onde a lista de colecoes pode ser
+    // reescrita sem disputar com o desenho.
+    if (col_load_account(collectionsBlob) > 0) disc_rebuild();
+    free(collectionsBlob);
+    collectionsBlob = NULL;
+    hasCollectionsBlob = 0;
+  }
   if (hasTraktRemote)  { trakt_set(traktToken, cloud_trakt_client()); hasTraktRemote = 0; }
   if (hasTmdb)      { disc_tmdb_set(tmdbKey);   hasTmdb = 0; }
   if (hasMdb)       { extras_set_key(mdbKey); hasMdb = 0; }

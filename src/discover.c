@@ -627,14 +627,52 @@ typedef struct {
 //   ordem     <chave>
 //   desligada <chave-ou-chave-de-desativar>
 //   titulo    <chave><TAB><titulo>
-#define PREF_MAX 64
+// 64 nao dava: uma conta com o AIOMetadata sozinha declara 151 catalogos, e a
+// ordem guardada cobre TODOS eles. Cortada em 64, a ordem do dono valia so para
+// o comeco da lista e o resto voltava a ordem do manifesto — o que aparecia como
+// "a home nao respeita o que eu configurei".
+#define PREF_MAX 256
 static char prefOrder[PREF_MAX][192];   static int nPrefOrder;
 static char prefOff[PREF_MAX][352];     static int nPrefOff;
 static struct { char key[192], title[96]; } prefTitle[PREF_MAX];
 static int nPrefTitle;
+
+// 1 quando as preferencias vieram da CONTA. A conta ganha do arquivo local, como
+// no web, onde o blob dedicado ganha da copia que viaja no blob de perfil.
+static int prefsFromAccount;
+
+void disc_prefs_begin(void) {
+  nPrefOrder = nPrefOff = nPrefTitle = 0;
+  prefsFromAccount = 0;
+}
+
+void disc_prefs_add(const char *key, int enabled, const char *customTitle) {
+  if (!key || !*key) return;
+  // A ORDEM E A ORDEM DE CHEGADA. O servidor ja manda os itens na sequencia que
+  // a pessoa escolheu (o campo `order` e o indice dela), entao reordenar aqui so
+  // criaria uma segunda opiniao sobre a mesma coisa.
+  if (nPrefOrder < PREF_MAX) snprintf(prefOrder[nPrefOrder++], 192, "%s", key);
+  if (!enabled && nPrefOff < PREF_MAX) snprintf(prefOff[nPrefOff++], 352, "%s", key);
+  if (customTitle && *customTitle && nPrefTitle < PREF_MAX) {
+    snprintf(prefTitle[nPrefTitle].key, 192, "%s", key);
+    snprintf(prefTitle[nPrefTitle].title, 96, "%s", customTitle);
+    nPrefTitle++;
+  }
+}
+
+void disc_prefs_end(void) {
+  prefsFromAccount = nPrefOrder > 0;
+  printf("[disc] account row prefs: %d ordered, %d disabled, %d renamed\n",
+         nPrefOrder, nPrefOff, nPrefTitle);
+  fflush(stdout);
+}
+
 static void readPrefs(void) {
   char path[600], line[600];
   FILE *f;
+  // A CONTA GANHA DO ARQUIVO. Zerar aqui apagaria o que o sync acabou de
+  // entregar, e a home voltaria a ordem do manifesto sem nenhum sinal disso.
+  if (prefsFromAccount) return;
   nPrefOrder = nPrefOff = nPrefTitle = 0;
   if (!dirArtDisc[0]) return;
   snprintf(path, sizeof path, "%s/rows.txt", dirArtDisc);
@@ -693,15 +731,41 @@ static void formatTitle(const char *name, const char *kind, char *dst, size_t si
   if (dst[0] >= 'a' && dst[0] <= 'z') dst[0] = (char)(dst[0] - 32);
 }
 
+// Host de uma URL, para LOGAR sem vazar segredo. O caminho de um addon carrega
+// a chave do debrid e o token do dono; o host nao. Um log que nao se pode
+// mostrar a ninguem acaba nao sendo lido.
+static void hostOf(const char *url, char *dst, size_t size) {
+  const char *a = strstr(url ? url : "", "://");
+  const char *b;
+  size_t n;
+  a = a ? a + 3 : (url ? url : "");
+  b = strchr(a, '/');
+  n = b ? (size_t)(b - a) : strlen(a);
+  if (n >= size) n = size - 1;
+  memcpy(dst, a, n);
+  dst[n] = 0;
+}
+
 // Le <base>/manifest.json e acrescenta os catalogos declarados.
 static int readManifest(const char *base, Decl *output, int max) {
   char url[900], addonId[96] = "", name[96], kind[8], id[96];
+  char host[128];
   char *body;
   const char *p, *end;
   int n = 0;
   snprintf(url, sizeof url, "%s/manifest.json", base);
+  hostOf(url, host, sizeof host);
   body = net_download(url, 20);
-  if (!body) return 0;
+  // POR QUE ISTO E LOGADO. Um addon que nao responde, ou que responde algo sem
+  // "catalogs", produzia exatamente o mesmo resultado visivel que um addon que
+  // simplesmente nao tem catalogos: a home caia para o catalogo do pacote e
+  // ninguem sabia de qual dos dois se tratava. "0 catalogos declarados" e a
+  // soma; estas linhas dizem QUEM contribuiu com zero e por que.
+  if (!body) {
+    printf("[disc] manifest %s: NO RESPONSE (network, TLS or 404)\n", host);
+    fflush(stdout);
+    return 0;
+  }
   end = body + strlen(body);
   js_text(body, end, "id", addonId, sizeof addonId);
   p = js_array(body, end, "catalogs");
@@ -767,6 +831,15 @@ static int readManifest(const char *base, Decl *output, int max) {
     }
     p = js_next(f);
   }
+  { size_t bytes = strlen(body);
+    const char *has = js_array(body, end, "catalogs");
+    if (!has)
+      printf("[disc] manifest %s: %u bytes, NO \"catalogs\" array\n",
+             host, (unsigned)bytes);
+    else
+      printf("[disc] manifest %s: %u bytes, %d catalogue(s) usable\n",
+             host, (unsigned)bytes, n);
+    fflush(stdout); }
   free(body);
   return n;
 }
@@ -1071,6 +1144,30 @@ void disc_start(void) {
   searching = 1;
   if (pthread_create(&thread, NULL, build, NULL) != 0) searching = 0;
   else pthread_detach(thread);
+}
+
+// PEDIDO de remontagem, e nao a remontagem em si.
+//
+// O caso que isto conserta: a lista de addons vem da CONTA, e chega pelo sync
+// bem depois de a home ja estar montada. A primeira montagem rodava com zero
+// addons, lia zero manifestos, achava zero catalogos e caia para o catalogo do
+// pacote — e nada nunca reavaliava isso. O dono via o catalogo de quem empacotou
+// o app em vez dos proprios catalogos, em toda abertura, porque a lista tambem
+// nao fica guardada entre sessoes.
+//
+// Fica como PEDIDO porque a primeira montagem pode ainda estar rodando quando o
+// sync responde: disc_start desiste em silencio se ha uma em curso, e a chamada
+// se perderia justamente na corrida que este codigo existe para resolver.
+static volatile int rebuildWanted;
+
+void disc_rebuild(void) { rebuildWanted = 1; }
+
+void disc_step(void) {
+  if (!rebuildWanted || searching) return;
+  rebuildWanted = 0;
+  printf("[disc] rebuilding the rows with the account's addons\n");
+  fflush(stdout);
+  disc_start();
 }
 
 // --- episodios sob demanda ---------------------------------------------------

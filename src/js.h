@@ -25,6 +25,11 @@ int js_text(const char *start, const char *end, const char *key,
 // {"currentTime":{"currentTime":8580}}, where the first occurrence gives 0.
 double js_num(const char *start, const char *end, const char *key, double dflt);
 
+// Boolean for "key". js_num cannot do this: it demands a digit or a sign after
+// the key (so it never matches an object of the same name), which means it
+// returns the default for `true` and for `false` alike.
+int js_flag(const char *start, const char *end, const char *key, int dflt);
+
 // First element of the array named `key`; NULL if there is none. Advance with
 // js_next.
 const char *js_array(const char *start, const char *end, const char *key);

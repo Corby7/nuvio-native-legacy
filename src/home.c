@@ -589,6 +589,10 @@ static void syncRows(void) {
     revision = (revision ^ (unsigned)cf->start) * 16777619u;
     revision = (revision ^ (unsigned)cf->n) * 16777619u;
   }
+  // As COLECOES entram na conta. Sem isto, uma colecao que chega da conta depois
+  // do catalogo nao muda a revisao, o retorno logo abaixo corta a remontagem, e
+  // a fileira dela nunca chega a existir.
+  revision = (revision ^ col_revision()) * 16777619u;
   // Guardado ANTES do laco abaixo, que sobrescreve fileiras[]: depois dele nao
   // ha mais como saber em que fileira o foco estava.
   char keyFocus[192];
@@ -647,6 +651,26 @@ static void syncRows(void) {
   }
   if (col_n()) {
     Row orig[MAX_FILTER];int total=destination;memcpy(orig,rows,sizeof orig);destination=0;
+    // pinToTop: as colecoes que o dono fixou vao PRIMEIRO e nao sao cortadas.
+    // E o passo 5 do algoritmo do web, que estava descrito em catalogo.h e nao
+    // existia aqui — e sem ele uma colecao caia no fim, atras de 16 fileiras de
+    // catalogo, ou seja: fora da tela, que e o mesmo que nao existir.
+    for(int i=0;i<col_n() && destination<MAX_FILTER;i++) {
+      const ColFolder *folder=col_folder(i);
+      char key[192];
+      int already=0;
+      if(!folder||!folder->group[0]||!col_group_pinned(folder->group))continue;
+      snprintf(key,sizeof key,"collection_%s",folder->group);
+      for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,key)){already=1;break;}
+      if(already)continue;
+      { Row v={0};
+        v.n=col_group(folder->group,v.folders,MAX_CARDS);
+        if(!v.n)continue;
+        v.kind=ROW_CATALOGS;
+        snprintf(v.key,sizeof v.key,"%s",key);
+        snprintf(v.title,sizeof v.title,"%s",folder->group);
+        rows[destination++]=v; }
+    }
     const char *ids[]={"continue_watching","social_activity","now_playing_movies","@Streaming",
       "trending_movies","trending_series","@Themes","ai_movies_for_you",
       "ai_series_for_you","snoak_top100_movies","snoak_top100_series",
@@ -660,10 +684,14 @@ static void syncRows(void) {
     // catalogos e grupos que nao estavam nesta tabela continuam acessiveis.
     for(size_t s=0;s<sizeof ids/sizeof ids[0] && destination<MAX_FILTER;s++) {
       if(ids[s][0]=='@') {
-        Row v={0};v.n=col_group(ids[s]+1,v.folders,MAX_CARDS);
+        Row v={0};int already=0;
+        v.n=col_group(ids[s]+1,v.folders,MAX_CARDS);
         if(!v.n)continue;
         v.kind=ROW_CATALOGS;
         snprintf(v.key,sizeof v.key,"collection_%s",ids[s]+1);
+        // Pode ja ter entrado pelo passo do pinToTop acima.
+        for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,v.key)){already=1;break;}
+        if(already)continue;
         snprintf(v.title,sizeof v.title,"%s",names[s]);rows[destination++]=v;
       } else for(int k=0;k<total;k++) {
         if(strcmp(orig[k].catId,ids[s])&&strcmp(orig[k].key,ids[s]))continue;
