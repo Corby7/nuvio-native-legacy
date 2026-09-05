@@ -285,10 +285,18 @@ static void drawPlaceholderHero(GfxRect r, const CatItem *item, float alpha) {
   }
 }
 
-static void drawArtMissing(GfxRect r, float radius, const CatItem *item,
-                               float alpha) {
+// The solid card surface, with nothing written on it. This is the LOADING
+// state: the art has a URL and the decode thread is on it. Same skeleton the
+// library grid and see-all already draw while they wait — the home was the only
+// screen captioning that wait as a failure.
+static void drawArtSkeleton(GfxRect r, float radius, float alpha) {
   gfx_color(r, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
           NV_COLOR_SKELETON_B, alpha);
+}
+
+static void drawArtMissing(GfxRect r, float radius, const CatItem *item,
+                               float alpha) {
+  drawArtSkeleton(r, radius, alpha);
   TxtLine state = txt_line_trim(TXT_CAPTION, "Art unavailable",
                                     184, 188, 198, 255, r.w - 32.0f);
   float center = r.y + r.h * 0.5f;
@@ -301,6 +309,17 @@ static void drawArtMissing(GfxRect r, float radius, const CatItem *item,
     txt_draw_alpha(name, r.x + (r.w - name.w) * 0.5f,
                        center + 12.0f, alpha * 0.78f);
   }
+}
+
+// A card with no texture is in ONE OF TWO states and they do not look alike to
+// the viewer: the art is on its way, or there is no art. tex_get* answer 0 for
+// both, so asking the texture alone gets it wrong for the whole download — and
+// that is the "Art unavailable" that clears the moment the card opens: nothing
+// was missing, the caption just went up before the image landed.
+static void drawArtAbsent(GfxRect r, float radius, const char *art,
+                                   const CatItem *item, float alpha) {
+  if (!art || tex_failed(art)) drawArtMissing(r, radius, item, alpha);
+  else                         drawArtSkeleton(r, radius, alpha);
 }
 
 // Escolha de formato para cards. O helper arteDoItem acima informa se precisou
@@ -1330,13 +1349,13 @@ static void drawHero(Uint32 now, float output) {
     // percurso quase parado no comeco, entao rampa reta le como corte na saida.
     (void)drawArtHero(r, modeHero, cAnt, artB,
                           anim_smooth(heroSai) * aArt);
-  } else if (heroSai > 0.0f) {
+  } else if (heroSai > 0.0f && (!artB || tex_failed(artB))) {
     drawPlaceholderHero(r, cAnt, anim_smooth(heroSai) * aArt);
   }
   if (tCurrent && heroEnters > 0.0f) {
     (void)drawArtHero(r, modeHero, ci, artA,
                           anim_smooth(heroEnters) * aArt);
-  } else if (!tCurrent) {
+  } else if (!artA || tex_failed(artA)) {
     drawPlaceholderHero(r, ci,
                            aArt * (heroEnters > 0.0f ? 1.0f : heroEnters));
   }
@@ -1736,7 +1755,7 @@ void home_draw(Uint32 now) {
               const char *pa=art_by_format(it,0);
               GLuint tx=pa?tex_get_width(pa,178):0;
               if(tx){gfx_tex_aspect_current=tex_aspect(pa);gfx_rect(pr,tx,GFX_CARD,0,0,0,.055f,1,1,1,1);gfx_tex_aspect_current=0;}
-              else drawArtMissing(pr,.055f,it,1);
+              else drawArtAbsent(pr,.055f,pa,it,1);
             }
             txt_draw(txt_line(TXT_CAPTION,"TOP 100   ·   Explore the first 10",242,235,248,255),px+24,py+h-42);
             if(focus.row==r)hasItemFocus=0;
@@ -1884,7 +1903,7 @@ void home_draw(Uint32 now) {
             //
             // A referencia usa #2C2C2C sobre #0D0D0D: luminancia ~22x a do
             // fundo, impossivel nao ver.
-            drawArtMissing(card, radius, cItem, 1.0f);
+            drawArtAbsent(card, radius, path, cItem, 1.0f);
           }
           // SELO DE ASSISTIDO: disco branco com um "v" escuro, no canto
           // superior direito do poster. A referencia o tem e nos nao tinhamos

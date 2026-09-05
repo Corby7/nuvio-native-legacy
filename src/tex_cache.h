@@ -45,6 +45,16 @@ GLuint tex_get_width(const char *path, float widthLayout);
 // Needed for the shader's "cover" — without it the art stretches.
 float tex_aspect(const char *path);
 
+// 1 when the cache has GIVEN UP on this art: the decode failed and the retries
+// are spent. It answers 0 while a request is still in flight.
+//
+// It exists because from the outside a decode in flight and a dead URL look
+// IDENTICAL — tex_get* answer 0 for both — and a caller that writes "Art
+// unavailable" on a 0 is lying for the whole length of the download. The
+// threshold is the same >= 3 failures that slotFree uses to reuse the slot:
+// below it a retry is still scheduled, so the art is late, not missing.
+int  tex_failed(const char *path);
+
 // 1 when the art is a DARK AND ACHROMATIC mark — the black-logo case — and so
 // should be drawn tinted (GFX_MARK) instead of with its own colours.
 //

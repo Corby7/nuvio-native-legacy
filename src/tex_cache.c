@@ -805,6 +805,20 @@ float tex_aspect(const char *path) {
   return a;
 }
 
+int tex_failed(const char *path) {
+  int r = 0;
+  unsigned long h;
+  int i;
+  if (!path || !*path) return 0;
+  h = hashPath(path);
+  SEARCH_MEASURE(i, path, h);
+  // A path the cache has never seen is not a failure: it is about to be asked
+  // for. Only a spent FAILED entry answers yes.
+  if (i >= 0 && items[i].state == FAILED && items[i].failures >= 3) r = 1;
+  SDL_UnlockMutex(mtx);
+  return r;
+}
+
 int tex_brand_dark(const char *path) {
   int r = 0;
   unsigned long h;
