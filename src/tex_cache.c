@@ -1,5 +1,6 @@
 #include "tex_cache.h"
 #include "net.h"
+#include "webp.h"
 #include "gfx.h"
 #include <sys/stat.h>
 #include <unistd.h>
@@ -542,6 +543,15 @@ static int threadDecode(void *arg) {
     limit = items[idx].limit > 0 ? items[idx].limit : NV_TEX_WIDTH_MAX;
     SDL_UnlockMutex(mtx);
 
+    // THE ORIGIN, KEPT. `path` is about to be overwritten with the cache path,
+    // and after that the only name a failure can report is an FNV hash — which
+    // says nothing about WHERE the art came from or WHOSE it is. Two images
+    // failing for an unknown reason could not be chased any further than
+    // "d7098286.jpg", a file that no longer exists by the time anyone looks.
+    char origin[512];
+    strncpy(origin, path, sizeof origin - 1);
+    origin[sizeof origin - 1] = 0;
+
     // O download JA ACONTECEU no fio de rede; aqui garantirLocal so traduz a
     // URL para o caminho do cache, sem tocar a rede.
     { char local[600];
@@ -553,6 +563,21 @@ static int threadDecode(void *arg) {
     if (bruta) {
       conv = SDL_ConvertSurfaceFormat(bruta, SDL_PIXELFORMAT_ABGR8888, 0);
       SDL_FreeSurface(bruta);
+    } else {
+      // WEBP, WHICH THIS TV'S SDL_image CANNOT READ. Measured on the C3:
+      // IMG_Init answers 0x3 (JPG and PNG only) and says "WEBP images are not
+      // supported", even though the library exports IMG_LoadWEBP_RW and
+      // /usr/lib/libwebp.so.7 is installed. So the file is handed to libwebp
+      // directly — see webp.c.
+      //
+      // AFTER IMG_Load and not before: JPEG and PNG are the overwhelming
+      // majority and must not pay for a file read that would tell them nothing.
+      // webp_load already returns NULL for anything that is not WebP, so this
+      // costs one open on a path that had failed anyway.
+      //
+      // It comes back as ABGR8888, which is the format the conversion above
+      // produces, so there is nothing left to convert.
+      conv = webp_load(path);
     }
     // TETO DE LARGURA. Antes a arte vinha do pacote ja reduzida; agora vem da
     // rede no tamanho que o servidor tiver, e um backdrop de 1920 custa 8 MB
@@ -633,7 +658,33 @@ static int threadDecode(void *arg) {
     SDL_UnlockMutex(mtx);
 
     if (failed) {
-      printf("[tex] decode failed (%s): %.70s\n", IMG_GetError(), path);
+      // THE END OF THE PATH, NOT THE START. With %.70s this printed exactly the
+      // 70 characters of the application directory and stopped — every line
+      // identical, and no way to tell a packaged badge from a cached download.
+      // What identifies the file is the last component.
+      const char *leaf = strrchr(path, '/');
+      // WHAT THE FILE ACTUALLY IS, read here because the next line deletes it.
+      // "Unsupported image format" is SDL_image saying no loader recognised the
+      // bytes; it does not say WHICH format it declined, and without that the
+      // only way forward is guessing. The first twelve bytes name the container
+      // outright: 'ftypavif' for AVIF, "RIFF..WEBP", the two bytes of a JPEG,
+      // or an HTML error page that arrived with a 200.
+      char head[13];
+      int got = 0;
+      { FILE *hf = fopen(path, "rb");
+        if (hf) { got = (int)fread(head, 1, 12, hf); fclose(hf); } }
+      printf("[tex] decode failed (%s): %s\n", IMG_GetError(),
+             leaf ? leaf + 1 : path);
+      if (got > 0) {
+        int q;
+        printf("[tex]   bytes:");
+        for (q = 0; q < got; q++) printf(" %02x", (unsigned char)head[q]);
+        printf("  '");
+        for (q = 0; q < got; q++)
+          putchar((head[q] >= 32 && head[q] < 127) ? head[q] : '.');
+        printf("'\n");
+      }
+      printf("[tex]   from: %.180s\n", origin);
       fflush(stdout);
       // Arquivo LOCAL que nao decodifica esta envenenado: garantirLocal o
       // aceita para sempre por ter mais de 512 bytes, entao sem apagar aqui o

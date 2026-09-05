@@ -343,7 +343,24 @@ int main(int argc, char **argv) {
   SDL_SetHint("SDL_WEBOS_ACCESS_POLICY_KEYS_BACK", "true");
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) { printf("SDL_Init: %s\n", SDL_GetError()); return 1; }
-  IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG);
+  // THE FLAG IS ASKED FOR AND THE C3 REFUSES IT. Kept deliberately, with the
+  // measurement, so nobody spends the afternoon discovering this twice.
+  //
+  // MEASURED on the C3 (webOS 23) with a test binary run on the device:
+  //     IMG_Init -> 0x3  JPG:yes PNG:yes WEBP:NO
+  //     IMG_GetError: 'WEBP images are not supported'
+  //     IMG_isWEBP on a real WebP: 0
+  // The TV's libSDL2_image EXPORTS IMG_LoadWEBP_RW and IMG_isWEBP, and
+  // /usr/lib/libwebp.so.7 is installed — but the library has no reference to
+  // libwebp at all and those symbols are stubs. Asking for the format is free
+  // and would start working on a firmware that ships a real decoder; believing
+  // the exported symbol is what costs time.
+  //
+  // The consequence is not academic: art/badges holds 42 .webp files and they
+  // account for most of the "[tex] decode failed (Unsupported image format)"
+  // lines, against ZERO network errors. WebP that arrives from the network
+  // cannot be drawn either. Fixing it means not handing this TV a WebP.
+  IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG | IMG_INIT_WEBP);
 
 #ifdef __APPLE__
   // Perfil de compatibilidade: e o unico do macOS que ainda aceita GLSL 1.20 e
