@@ -21,15 +21,15 @@
 // vazia: melhor mostrar a data crua que engolir o dado.
 void disc_date_long(const char *iso, char *dst, size_t size) {
   static const char *MONTH[12] = {
-    "janeiro", "fevereiro", "mar\xc3\xa7o", "abril", "maio", "junho",
-    "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
   };
   if (!iso || !dst || size == 0) { if (dst && size) dst[0] = 0; return; }
   if (strlen(iso) >= 10 && iso[4] == '-') {
     int month = (iso[5] - '0') * 10 + (iso[6] - '0');
     int day = (iso[8] - '0') * 10 + (iso[9] - '0');
     if (month >= 1 && month <= 12) {
-      snprintf(dst, size, "%d de %s de %c%c%c%c",
+      snprintf(dst, size, "%d %s %c%c%c%c",
                day, MONTH[month - 1], iso[0], iso[1], iso[2], iso[3]);
       return;
     }
@@ -627,18 +627,19 @@ typedef struct {
 //   ordem     <chave>
 //   desligada <chave-ou-chave-de-desativar>
 //   titulo    <chave><TAB><titulo>
-// 64 nao dava: uma conta com o AIOMetadata sozinha declara 151 catalogos, e a
-// ordem guardada cobre TODOS eles. Cortada em 64, a ordem do dono valia so para
-// o comeco da lista e o resto voltava a ordem do manifesto — o que aparecia como
-// "a home nao respeita o que eu configurei".
+// 64 was not enough: an account with AIOMetadata alone declares 151 catalogues,
+// and the saved order covers ALL of them. Cut at 64, the owner's order applied
+// only to the start of the list and the rest fell back to the manifest's order —
+// which showed up as "the home ignores what I configured".
 #define PREF_MAX 256
 static char prefOrder[PREF_MAX][192];   static int nPrefOrder;
 static char prefOff[PREF_MAX][352];     static int nPrefOff;
 static struct { char key[192], title[96]; } prefTitle[PREF_MAX];
 static int nPrefTitle;
 
-// 1 quando as preferencias vieram da CONTA. A conta ganha do arquivo local, como
-// no web, onde o blob dedicado ganha da copia que viaja no blob de perfil.
+// 1 when the preferences came from the ACCOUNT. The account wins over the local
+// file, as on the web, where the dedicated blob wins over the copy that travels
+// inside the profile blob.
 static int prefsFromAccount;
 
 void disc_prefs_begin(void) {
@@ -648,9 +649,9 @@ void disc_prefs_begin(void) {
 
 void disc_prefs_add(const char *key, int enabled, const char *customTitle) {
   if (!key || !*key) return;
-  // A ORDEM E A ORDEM DE CHEGADA. O servidor ja manda os itens na sequencia que
-  // a pessoa escolheu (o campo `order` e o indice dela), entao reordenar aqui so
-  // criaria uma segunda opiniao sobre a mesma coisa.
+  // THE ORDER IS THE ARRIVAL ORDER. The server already sends the items in the
+  // sequence the person chose (the `order` field is their index), so sorting
+  // again here would only create a second opinion about the same thing.
   if (nPrefOrder < PREF_MAX) snprintf(prefOrder[nPrefOrder++], 192, "%s", key);
   if (!enabled && nPrefOff < PREF_MAX) snprintf(prefOff[nPrefOff++], 352, "%s", key);
   if (customTitle && *customTitle && nPrefTitle < PREF_MAX) {
@@ -658,6 +659,33 @@ void disc_prefs_add(const char *key, int enabled, const char *customTitle) {
     snprintf(prefTitle[nPrefTitle].title, 96, "%s", customTitle);
     nPrefTitle++;
   }
+}
+
+// Reading the preferences, for whoever assembles the rows.
+//
+// The account's ordered list mixes CATALOGUES and COLLECTIONS, and this file can
+// only resolve catalogues — collections exist only for home.c. So the order is
+// exposed raw instead of applied here: the home is what can match both kinds,
+// and it needs the whole sequence, gaps and all.
+int disc_prefs_n(void) { return nPrefOrder; }
+
+const char *disc_prefs_key(int i) {
+  return (i >= 0 && i < nPrefOrder) ? prefOrder[i] : "";
+}
+
+int disc_prefs_hidden(const char *key) {
+  int i;
+  if (!key || !*key) return 0;
+  for (i = 0; i < nPrefOff; i++) if (!strcmp(prefOff[i], key)) return 1;
+  return 0;
+}
+
+const char *disc_prefs_title(const char *key) {
+  int i;
+  if (!key || !*key) return NULL;
+  for (i = 0; i < nPrefTitle; i++)
+    if (!strcmp(prefTitle[i].key, key)) return prefTitle[i].title;
+  return NULL;
 }
 
 void disc_prefs_end(void) {
@@ -670,8 +698,9 @@ void disc_prefs_end(void) {
 static void readPrefs(void) {
   char path[600], line[600];
   FILE *f;
-  // A CONTA GANHA DO ARQUIVO. Zerar aqui apagaria o que o sync acabou de
-  // entregar, e a home voltaria a ordem do manifesto sem nenhum sinal disso.
+  // THE ACCOUNT WINS OVER THE FILE. Clearing here would wipe what the sync just
+  // delivered, and the home would fall back to the manifest's order with nothing
+  // to show for it.
   if (prefsFromAccount) return;
   nPrefOrder = nPrefOff = nPrefTitle = 0;
   if (!dirArtDisc[0]) return;
@@ -719,7 +748,7 @@ static int off(const Decl *d) {
 // maiuscula e, se o nome ja NAO termina com o rotulo do tipo, " - <tipo>".
 // E por isso que a home mostra "For You - Filme" e nao "for you".
 static void formatTitle(const char *name, const char *kind, char *dst, size_t size) {
-  const char *label = strcmp(kind, "series") ? "Film" : "S\xc3\xa9rie";
+  const char *label = strcmp(kind, "series") ? "Film" : "Series";
   const char *raw    = strcmp(kind, "series") ? "Movie" : "Series";
   size_t ln = strlen(name), lr = strlen(label), lc = strlen(raw);
   int alreadyHas = 0;
@@ -731,9 +760,9 @@ static void formatTitle(const char *name, const char *kind, char *dst, size_t si
   if (dst[0] >= 'a' && dst[0] <= 'z') dst[0] = (char)(dst[0] - 32);
 }
 
-// Host de uma URL, para LOGAR sem vazar segredo. O caminho de um addon carrega
-// a chave do debrid e o token do dono; o host nao. Um log que nao se pode
-// mostrar a ninguem acaba nao sendo lido.
+// The host of a URL, so it can be LOGGED without leaking a secret. An addon's
+// path carries the debrid key and the owner's token; the host does not. A log
+// nobody can show to anyone ends up being a log nobody reads.
 static void hostOf(const char *url, char *dst, size_t size) {
   const char *a = strstr(url ? url : "", "://");
   const char *b;
@@ -756,11 +785,11 @@ static int readManifest(const char *base, Decl *output, int max) {
   snprintf(url, sizeof url, "%s/manifest.json", base);
   hostOf(url, host, sizeof host);
   body = net_download(url, 20);
-  // POR QUE ISTO E LOGADO. Um addon que nao responde, ou que responde algo sem
-  // "catalogs", produzia exatamente o mesmo resultado visivel que um addon que
-  // simplesmente nao tem catalogos: a home caia para o catalogo do pacote e
-  // ninguem sabia de qual dos dois se tratava. "0 catalogos declarados" e a
-  // soma; estas linhas dizem QUEM contribuiu com zero e por que.
+  // WHY THIS IS LOGGED. An addon that does not answer, or answers something with
+  // no "catalogs", produced exactly the same visible result as an addon that
+  // simply has no catalogues: the home fell back to the packaged catalogue and
+  // nobody could tell which of the two had happened. "0 catalogues declared" is
+  // the total; these lines say WHO contributed zero, and why.
   if (!body) {
     printf("[disc] manifest %s: NO RESPONSE (network, TLS or 404)\n", host);
     fflush(stdout);
@@ -768,6 +797,10 @@ static int readManifest(const char *base, Decl *output, int max) {
   }
   end = body + strlen(body);
   js_text(body, end, "id", addonId, sizeof addonId);
+  // The id is REMEMBERED on the addon. This is the only place in the app where a
+  // base and an id meet, and it is how the owner's collection sources — which
+  // reference catalogues by addonId — find the address to fetch from.
+  addons_note_id(base, addonId);
   p = js_array(body, end, "catalogs");
   // Sem `n < max` na condicao: o vetor de fileiras pode encher, mas a varredura
   // continua ate o fim do manifesto porque os catalogos de BUSCA costumam estar
@@ -1146,18 +1179,18 @@ void disc_start(void) {
   else pthread_detach(thread);
 }
 
-// PEDIDO de remontagem, e nao a remontagem em si.
+// A REQUEST to rebuild, not the rebuild itself.
 //
-// O caso que isto conserta: a lista de addons vem da CONTA, e chega pelo sync
-// bem depois de a home ja estar montada. A primeira montagem rodava com zero
-// addons, lia zero manifestos, achava zero catalogos e caia para o catalogo do
-// pacote — e nada nunca reavaliava isso. O dono via o catalogo de quem empacotou
-// o app em vez dos proprios catalogos, em toda abertura, porque a lista tambem
-// nao fica guardada entre sessoes.
+// The case this fixes: the addon list comes from the ACCOUNT and arrives with the
+// sync, well after the home has already been assembled. The first build ran with
+// zero addons, read zero manifests, found zero catalogues and fell back to the
+// packaged catalogue — and nothing ever reconsidered it. The owner saw the
+// packager's catalogue instead of their own, on every launch, because the list is
+// not kept between sessions either.
 //
-// Fica como PEDIDO porque a primeira montagem pode ainda estar rodando quando o
-// sync responde: disc_start desiste em silencio se ha uma em curso, e a chamada
-// se perderia justamente na corrida que este codigo existe para resolver.
+// It stays a REQUEST because the first build may still be running when the sync
+// answers: disc_start gives up silently while one is in flight, and the call
+// would be lost in exactly the race this code exists to resolve.
 static volatile int rebuildWanted;
 
 void disc_rebuild(void) { rebuildWanted = 1; }

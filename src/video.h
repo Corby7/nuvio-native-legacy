@@ -143,11 +143,11 @@ typedef struct {
   int family;    // TxtFamilia; aplicada ao overlay externo (OpenSubtitles)
 } VideoSubtitleStyle;
 
-#define VIDEO_SUB_NCORES 6
+#define VIDEO_SUB_NCOLORS 6
 // The names the uMS accepts in charColor. Exposed because the sheet draws the
 // labels and needs the same order.
-extern const char *const VIDEO_SUB_COLORS[VIDEO_SUB_NCORES];
-extern const char *const VIDEO_SUB_COLORS_PT[VIDEO_SUB_NCORES];
+extern const char *const VIDEO_SUB_COLORS[VIDEO_SUB_NCOLORS];
+extern const char *const VIDEO_SUB_COLORS_LABEL[VIDEO_SUB_NCOLORS];
 
 // Applies now, if there is a session. The style is KEPT and reapplied on every
 // load: the pipeline is born again with each video and does not carry the

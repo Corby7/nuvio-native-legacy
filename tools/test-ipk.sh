@@ -36,20 +36,20 @@ cp -R deploy/app "$STAGE/app"
 rm -rf "$STAGE/app/art/cache"
 for f in $PERSONAL_FILES; do rm -f "$STAGE/app/art/$f"; done
 
-SAIDA=$(mktemp -d)
-"$ARES" "$STAGE/app" -o "$SAIDA" >/dev/null
-IPK=$(ls -t "$SAIDA"/*.ipk | head -1)
+OUTDIR=$(mktemp -d)
+"$ARES" "$STAGE/app" -o "$OUTDIR" >/dev/null
+IPK=$(ls -t "$OUTDIR"/*.ipk | head -1)
 
 LISTING=$(cd "$STAGE" && ar x "$IPK" 2>/dev/null && tar tzf data.tar.gz 2>/dev/null)
 [ -z "$LISTING" ] && { echo "ABORTED: could not read the package to check it"; exit 1; }
 
-echo "pacote de teste: $(du -h "$IPK" | cut -f1)"
-echo "arquivos .txt dentro de art/:"
+echo "test package: $(du -h "$IPK" | cut -f1)"
+echo "art/*.txt files inside the package:"
 printf '%s\n' "$LISTING" | grep -E "art/.*\.txt$" | sed 's|.*/art/|  |' | sort
 LEAKED=""
 for f in $PERSONAL_FILES; do
   printf '%s\n' "$LISTING" | grep -q "art/$f$" && LEAKED="$LEAKED $f"
 done
-rm -rf "$SAIDA"
-if [ -n "$LEAKED" ]; then echo "FAILED: o pacote leva credencial ->$LEAKED"; exit 1; fi
-echo "OK: nenhuma credencial no pacote"
+rm -rf "$OUTDIR"
+if [ -n "$LEAKED" ]; then echo "FAILED: the package carries a credential ->$LEAKED"; exit 1; fi
+echo "OK: no credential in the package"

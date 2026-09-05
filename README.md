@@ -25,6 +25,29 @@ job was done by `libAcbAPI`, which does not exist from webOS 5 onwards.
 - Addons, layout settings, TMDB key and watch progress come from the account
 - Trakt and Simkl linked from the TV itself, through their device-code flows
 - Continue Watching, library, search, collections, director pages, settings
+- **The home is the owner's home**: the addons' catalogues, the owner's own
+  collections, and both in the order chosen in the web app — hidden rows hidden,
+  renamed rows renamed, pinned collections first
+
+### How the home is assembled
+
+Worth knowing, because three separate faults here all looked like "the app
+ignores my setup":
+
+- The addon list arrives from the account **after** the first home build, so the
+  rows are rebuilt when it lands (`disc_rebuild`). Without that the app read zero
+  manifests and fell back to the catalogue baked into the package — the
+  packager's, not yours.
+- The row order comes from `sync_pull_home_catalog_settings`, one list that
+  interleaves catalogues (`<addonId>_<type>_<catalogId>`) and collections
+  (`collection_<id>`). The keys are byte-identical to the web app's, which is
+  what lets the two agree.
+- A collection's source names its catalogue by **addon id**, not by URL: these
+  addons embed their whole configuration in the address, which runs past 4 KB.
+  The id is resolved against the *installed* addon at fetch time — the same rule
+  the web app follows (`findAddonForSource` matches on id first).
+- Row cap is 24 (`CAT_FILTER_MAX`), raised from the web's 16 for legacy TVs after
+  measuring 60.0 fps / 0 janks and 85 MB RSS on the C3 with 28 rows on screen.
 
 ## What is not verified
 

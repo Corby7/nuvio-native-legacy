@@ -33,12 +33,12 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 // known_for_department arrives in English from TMDB even with language=pt-BR.
 static const char *translatesArea(const char *s) {
-  if (!strcmp(s, "Acting"))    return "Atua\xc3\xa7\xc3\xa3" "o";
-  if (!strcmp(s, "Directing")) return "Dire\xc3\xa7\xc3\xa3" "o";
-  if (!strcmp(s, "Writing"))   return "Roteiro";
-  if (!strcmp(s, "Production"))return "Produ\xc3\xa7\xc3\xa3" "o";
-  if (!strcmp(s, "Sound"))     return "Som";
-  if (!strcmp(s, "Camera"))    return "Fotografia";
+  if (!strcmp(s, "Acting"))    return "Acting";
+  if (!strcmp(s, "Directing")) return "Directing";
+  if (!strcmp(s, "Writing"))   return "Writing";
+  if (!strcmp(s, "Production"))return "Production";
+  if (!strcmp(s, "Sound"))     return "Sound";
+  if (!strcmp(s, "Camera"))    return "Cinematography";
   return s;
 }
 

@@ -307,7 +307,7 @@ static char   dirPrefs[512];
 // "Slight/Cinema/Ultra Zoom", "Fit Height", "Fit Width" — o resto do app fala
 // portugues, entao traduzir aqui e o que mantem a tela coerente.
 static const char *ASPECT_LABEL[PLR_ASPECT_N] = {
-  "Original", "Recortar", "Stretch", "Light zoom",
+  "Original", "Crop", "Stretch", "Light zoom",
   "Cinema zoom", "Ultra zoom", "Fit height", "Fit width"
 };
 
@@ -342,7 +342,7 @@ static VideoSubtitleStyle subStyle = { 120, 0, 0, 3, 1, 0, 0, TXT_FAMILY_INTER }
 // defaults; the file is rewritten with the new names on the next change.
 static const char *canonicalKey(const char *k) {
   static const struct { const char *old, *new; } T[] = {
-    { "aspecto",       "aspect"         }, { "leg_tamanho", "sub_size"     },
+    { "aspect",       "aspect"         }, { "leg_tamanho", "sub_size"     },
     { "leg_cor",       "sub_color"      }, { "leg_fundo",   "sub_background" },
     { "leg_pos",       "sub_position"   }, { "leg_borda",   "sub_border"   },
     { "leg_atraso",    "sub_delay"      }, { "leg_opacidade","sub_opacity" },
@@ -369,7 +369,7 @@ static void prefsRead(void) {
       if(v>=0&&v<=4)subStyle.size=old[v];
       else if(v>=50&&v<=200)subStyle.size=(v/10)*10;
     }
-    else if (!strcmp(key, "sub_color")     && v >= 0 && v < VIDEO_SUB_NCORES) subStyle.color = v;
+    else if (!strcmp(key, "sub_color")     && v >= 0 && v < VIDEO_SUB_NCOLORS) subStyle.color = v;
     else if (!strcmp(key, "sub_background")   && v >= 0 && v <= 4)  subStyle.background = v;
     else if (!strcmp(key, "sub_position")     && v >= 0 && v <= 7)  subStyle.position = v;
     else if (!strcmp(key, "sub_border")   && v >= 0 && v <= 2)  subStyle.border = v;
@@ -835,7 +835,7 @@ static void iconAudio(float cx, float cy, float a, float luma) {
 }
 
 static void iconAspect(float cx, float cy, float a, float luma) {
-  iconFile(cx, cy, a, luma, "aspecto", PLR_ICON_H * 1.15f);
+  iconFile(cx, cy, a, luma, "aspect", PLR_ICON_H * 1.15f);
 }
 
 // Um botao circular do transporte: translucido quando solto, branco quando em
@@ -848,9 +848,9 @@ static void buttonCircle(float cx, float cy, float f, float a, int sel) {
 }
 
 static void colorSubtitle(int i,int *r,int *g,int *b){
-  static const unsigned char c[VIDEO_SUB_NCORES][3]={
+  static const unsigned char c[VIDEO_SUB_NCOLORS][3]={
     {255,255,255},{255,222,48},{64,224,112},{78,156,255},{255,80,80},{18,18,18}};
-  if(i<0||i>=VIDEO_SUB_NCORES)i=0;*r=c[i][0];*g=c[i][1];*b=c[i][2];
+  if(i<0||i>=VIDEO_SUB_NCOLORS)i=0;*r=c[i][0];*g=c[i][1];*b=c[i][2];
 }
 
 /* O uMS da C9 limita fonte e escala. OpenSubtitles passa por este overlay
@@ -902,7 +902,7 @@ static void drawActionsEpisode(void){
     const char *rot=kind==INTRO_SUMMARY?"Skip recap":"Skip intro";
     TxtLine t=txt_line(TXT_BODY,rot,250,250,252,255);float w=t.w+116;
     GfxRect p={64,730,w,88};gfx_color(p,.5f,.075f,.075f,.085f,.94f*entry);
-    gfx_icon((GfxRect){88,752,44,44},"avancar",1,1,1,entry);txt_draw_alpha(t,148,752,entry);
+    gfx_icon((GfxRect){88,752,44,44},"forward",1,1,1,entry);txt_draw_alpha(t,148,752,entry);
   }
 }
 
@@ -964,7 +964,7 @@ void player_draw(Uint32 now) {
       gfx_rect((GfxRect){(NV_SCREEN_W-w)*.5f,NV_SCREEN_H*.5f-h-60,w,h},logo,
                tex_brand_dark(c->logo)?GFX_BRAND:GFX_TEXT,0,0,0,0,.95f,.95f,.97f,entry);
     } else {
-      TxtLine t = txt_line_trim(TXT_PLR_TITLE,c?c->title:"Reproduzindo",240,241,244,255,680);
+      TxtLine t = txt_line_trim(TXT_PLR_TITLE,c?c->title:"Playing",240,241,244,255,680);
       txt_draw_alpha(t,(NV_SCREEN_W-t.w)*.5f,NV_SCREEN_H*.5f-150,entry);
     }
     // Anel com cauda luminosa, animado sem novas texturas por quadro.
@@ -1124,7 +1124,7 @@ void player_draw(Uint32 now) {
   // Texto tambem e o que o resto da tela usa (o relogio, o tempo, os selos),
   // entao o canto passa a ter UMA gramatica so.
   float hTitle, yTitle;
-  { const char *name = (c && c->title[0]) ? c->title : "Reproduzindo";
+  { const char *name = (c && c->title[0]) ? c->title : "Playing";
     TxtLine lt = txt_line_trim(TXT_PLR_TITLE, name, 255, 255, 255, 255,
                                   cw * 0.62f);
     hTitle = (float)lt.h;
@@ -1221,7 +1221,7 @@ void player_draw(Uint32 now) {
         struct tm lf; char h2[8];
         localtime_r(&t2, &lf);
         strftime(h2, sizeof h2, "%H:%M", &lf);
-        snprintf(end, sizeof end, "Termina \xc3\xa0" "s %s", h2); }
+        snprintf(end, sizeof end, "Ends at %s", h2); }
       TxtLine lh = txt_line(TXT_PG_CLOCK, hora, 255, 255, 255, 255);
       TxtLine lf = txt_line(TXT_PG_END, end, 255, 255, 255, 255);
       txt_draw_alpha(lh, NV_SCREEN_W - PLR_DFLT_X - lh.w, yRel, a * 0.96f);

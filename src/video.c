@@ -17,11 +17,11 @@
 // FORA do #if do aparelho: a folha de faixas desenha os rotulos tambem no Mac,
 // onde o resto do modulo e stub. Deixa-los no lado da TV quebrava a ligacao da
 // build de desenvolvimento — que e onde a interface e conferida.
-const char *const VIDEO_SUB_COLORS[VIDEO_SUB_NCORES] = {
+const char *const VIDEO_SUB_COLORS[VIDEO_SUB_NCOLORS] = {
   "white", "yellow", "green", "blue", "red", "black"
 };
-const char *const VIDEO_SUB_COLORS_PT[VIDEO_SUB_NCORES] = {
-  "White", "Amarelo", "Verde", "Azul", "Vermelho", "Preto"
+const char *const VIDEO_SUB_COLORS_LABEL[VIDEO_SUB_NCOLORS] = {
+  "White", "Yellow", "Green", "Blue", "Red", "Black"
 };
 
 static int extSubtitle(const char *start, const char *end) {
@@ -171,29 +171,29 @@ static void *(*loopNew)(void *, int);
 static void  (*loopRun)(void *);
 static void  (*loopStop)(void *);
 
-// O PLANO DE VIDEO NAO MORA MAIS AQUI. Ate o webOS 4 ele era conduzido pela
-// libAcbAPI, e o motivo nunca foi o plano: o app se registra no LS2 como
-// com.webos.media.client.nuvio, e esse papel NAO alcanca o
-// com.webos.service.tv.display ("Not permitted to send to ..."). A libAcbAPI
-// alcancava, e servia de procurador.
+// THE VIDEO PLANE NO LONGER LIVES HERE. Up to webOS 4 it was driven by
+// libAcbAPI, and the reason was never the plane itself: the app registers on LS2
+// as com.webos.media.client.nuvio, and that role does NOT reach
+// com.webos.service.tv.display ("Not permitted to send to ..."). libAcbAPI did
+// reach it, and served as a proxy.
 //
-// Nesta TV (OLED55C32LA, webOS 23) a libAcbAPI.so.1 NAO EXISTE — `find /` nao
-// devolve nada — e o dlopen dela derrubava junto a metade LS2, que funciona
-// perfeitamente. O substituto nao e outro procurador: a superficie do app se
-// EXPORTA pelo compositor (plane.c), que devolve um windowId, e esse id vai no
-// load do com.webos.media. O servico de display nunca e endereçado, entao o
-// problema de permissao deixa de existir.
+// On this TV (OLED55C32LA, webOS 23) libAcbAPI.so.1 DOES NOT EXIST — `find /`
+// returns nothing — and dlopening it took down the LS2 half with it, which works
+// perfectly well. The replacement is not another proxy: the app's surface EXPORTS
+// itself through the compositor (plane.c), which hands back a windowId, and that
+// id travels in the com.webos.media load. The display service is never addressed,
+// so the permission problem stops existing.
 //
-// O que sobrou neste arquivo e so o pipeline: LS2 -> com.webos.media.
+// What is left in this file is only the pipeline: LS2 -> com.webos.media.
 static LSHandle *bus;
 static void     *loop;
 static pthread_t thread;
-// Retangulo pedido pela UI. Guardado porque a janela so pode ser aplicada
-// depois que ha midia presa, que chega muito depois de quem pediu.
+// The rectangle the UI asked for. Kept because the window can only be applied
+// once there is media attached, which arrives long after whoever asked.
 static int       windowX, windowY, windowW = 1920, windowH = 1080;
-// Pedido de reaplicar o retangulo vindo de um callback do LS2. O Wayland
-// pertence ao fio de desenho e os callbacks do LS2 rodam no fio do GMainLoop,
-// entao o que atravessa os dois e ESTA marca, lida pelo video_pump.
+// A request to reapply the rectangle, raised from an LS2 callback. Wayland
+// belongs to the drawing thread and LS2 callbacks run on the GMainLoop thread, so
+// what crosses between them is THIS flag, read by video_pump.
 static volatile int windowDirty;
 // Ultimo par fonte/destino aplicado pelo setDisplayWindow do uMS, para nao
 // repetir a mesma chamada a cada quadro. fonX = -1 quer dizer "nada aplicado".
@@ -442,12 +442,12 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     int wasW = vidW, wasH = vidH;
     v = numberOf(p, "\"width\":");      if (v > 0) vidW = (int)v;
     v = numberOf(p, "\"height\":");     if (v > 0) vidH = (int)v;
-    // O TAMANHO REAL DO QUADRO chegou. Ate aqui vidW/vidH valiam 1920x1080 por
-    // falta de coisa melhor, e a regiao de FONTE mandada ao compositor usava
-    // esse palpite: num arquivo 3840x1606 isso nao e "sem recorte", e um
-    // recorte do canto superior esquerdo, ampliado — uma imagem errada que
-    // parece defeito de zoom e nao falta de medida. Remarcar faz o video_pump
-    // reenviar o par com o tamanho certo, no fio de desenho.
+    // THE REAL FRAME SIZE has arrived. Until now vidW/vidH were 1920x1080 for
+    // want of anything better, and the SOURCE region sent to the compositor used
+    // that guess: on a 3840x1606 file that is not "no crop", it is a crop of the
+    // top-left corner, blown up — a wrong picture that looks like a zoom bug
+    // rather than a missing measurement. Flagging it makes video_pump resend the
+    // pair with the right size, on the drawing thread.
     if (vidW != wasW || vidH != wasH) windowDirty = 1;
     v = numberOf(p, "\"frameRate\":");  if (v > 0) vidRate = (int)v;
     v = numberOf(p, "\"bitRate\":");    if (v > 0) vidBits = (long)v;
@@ -514,7 +514,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
       double target = posOnLoad;
       posOnLoad = 0.0;
       video_fetch(target);
-      mark("retomado apos queda do pipeline");
+      mark("resumed after the pipeline died");
     }
     // O pipeline e novo: o estilo da legenda nao sobrevive ao load anterior.
     applyStyle();
@@ -523,14 +523,15 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
       cronLoad = 1;
       printf("[video] load->loadCompleted %lums\n", msSinceRequest());
     }
-    // NAO HA MAIS BIND POR SESSAO. O plano ja esta preso a superficie exportada
-    // desde o arranque, e o pipeline foi mandado para ele pelo windowId que
-    // viajou no proprio load. O fio de bind com pausas entre os passos, que
-    // existia porque cada chamada do AcbAPI era assincrona, sumiu junto com o
-    // ACB — e com ele o bug da "segunda reproducao preta com som", que era o
-    // ACB apontando para o mediaId morto da sessao anterior.
+    // THERE IS NO PER-SESSION BIND ANY MORE. The plane has been attached to the
+    // exported surface since startup, and the pipeline was pointed at it by the
+    // windowId that travelled in the load itself. The bind thread with pauses
+    // between steps, which existed because every AcbAPI call was asynchronous,
+    // went away with the ACB — and with it the "second playback, black with
+    // sound" bug, which was the ACB still pointing at the previous session's dead
+    // mediaId.
     //
-    // O retangulo, esse sim, e reaplicado: ver windowDirty abaixo.
+    // The rectangle IS reapplied, though: see windowDirty below.
     windowDirty = 1;
   }
   if (strstr(p, "bufferRange")) {
@@ -558,11 +559,11 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   }
   if (strstr(p, "playing")) {
     playing = 1;
-    // NAO aplicar o retangulo AQUI. Este callback roda no fio do GMainLoop do
-    // LS2, e o Wayland pertence ao fio de desenho: mandar um request do fio
-    // errado corrompe a fila do compositor, e o sintoma nao e um erro — e o
-    // cliente desconectado, ou seja, o app inteiro morre sem log.
-    // Marca, e o video_pump aplica no fio certo.
+    // Do NOT apply the rectangle HERE. This callback runs on LS2's GMainLoop
+    // thread, and Wayland belongs to the drawing thread: sending a request from
+    // the wrong thread corrupts the compositor's queue, and the symptom is not an
+    // error — it is a disconnected client, i.e. the whole app dies with no log.
+    // Flag it, and video_pump applies it on the right thread.
     windowDirty = 1;
   }
   if (strstr(p, "paused")) {
@@ -604,7 +605,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
       audioOnLoad = audioCurrent;
       subOnLoad   = subCurrent;
       snprintf(subUrlOnLoad, sizeof subUrlOnLoad, "%s", subUrlCurrent);
-      mark("pipeline morreu: recarregando");
+      mark("pipeline died: reloading");
     }
   }
   { double v = numberOf(p, "\"currentTime\":");
@@ -646,15 +647,15 @@ static void callCtx(const char *method, const char *load, Filter cb,
     printf("[video] %s failed\n", method);
 }
 
-// NAO EXISTE MAIS CHAMADA A OUTRO SERVICO. Havia aqui um `callIn` generico,
-// escrito para alcancar o com.webos.service.tv.display: o recorte de fonte nao
-// mora no com.webos.media (ele responde `Unknown method "setDisplayWindow" for
-// category "/"`, e o `ls-monitor -i com.webos.media` confirma). Aquele caminho
-// nunca chegou a ser usado, porque o hub recusa este app no tv.display, e foi
-// por isso que a libAcbAPI virou procuradora.
+// THERE IS NO SECOND-SERVICE CALL ANY MORE. There used to be a generic `callIn`
+// here, written to reach com.webos.service.tv.display: the source crop does not
+// live in com.webos.media (it answers `Unknown method "setDisplayWindow" for
+// category "/"`, and `ls-monitor -i com.webos.media` confirms it). That path was
+// never actually used, because the hub refuses this app on tv.display — which is
+// why libAcbAPI became the proxy in the first place.
 //
-// O recorte agora e uma propriedade da superficie exportada e quem o aplica e o
-// compositor (plane.c), entao nao ha segundo servico a chamar.
+// The crop is now a property of the exported surface and the compositor applies
+// it (plane.c), so there is no second service to call.
 
 static int onLoad(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m), *q;
@@ -707,10 +708,11 @@ int video_start(void) {
   L = dlopen("libluna-service2.so.3", RTLD_NOW);
   if (!L) L = dlopen("libluna-service2.so", RTLD_NOW);
   G = dlopen("libglib-2.0.so.0", RTLD_NOW);
-  // A libAcbAPI SAIU DAQUI. Ela era exigida junto com estas duas, e nesta TV
-  // nao existe: o dlopen falhava e levava consigo a metade LS2, que funciona.
-  // O plano de video agora vem do compositor (plane.c), e quem nao tem plano
-  // ainda tem pipeline — a falha passa a ser "sem imagem", nao "sem video".
+  // libAcbAPI IS GONE FROM HERE. It used to be required alongside these two, and
+  // on this TV it does not exist: the dlopen failed and took the working LS2 half
+  // down with it. The video plane now comes from the compositor (plane.c), and
+  // whoever has no plane still has a pipeline — the failure becomes "no picture",
+  // not "no video".
   if (!L || !G) { printf("[video] libs: %s\n", dlerror()); return 0; }
 
   SIM(L, lsRegister, "LSRegister");
@@ -735,9 +737,9 @@ int video_start(void) {
   pthread_create(&thread, NULL, runLoop, NULL);
 
   on = 1;
-  // O windowId vem do plane.c, que exportou a superficie no arranque. Se ele
-  // estiver vazio aqui, o load ainda assim SAI — e falha em silencio, que e o
-  // que esta linha existe para tornar visivel no log.
+  // The windowId comes from plane.c, which exported the surface at startup. If it
+  // is empty here the load still GOES OUT — and fails silently, which is what this
+  // line exists to make visible in the log.
   printf("[video] ready (window id '%s')\n", plane_window_id()); fflush(stdout);
   return 1;
 }
@@ -839,10 +841,11 @@ int video_play(const char *url) {
 // Chamado uma vez por quadro. So existe para o prazo acima: sem ele o recuo
 // dependeria de o usuario perceber que nao ha imagem e sair da tela.
 void video_pump(void) {
-  // Reaplica o retangulo pedido de dentro de um callback do LS2. Aqui estamos
-  // no fio de desenho, que e o dono da conexao Wayland — o unico lugar de onde
-  // um request pode sair. plane_forget zera a memoria de "ja e esse retangulo",
-  // porque o pedido veio justamente de quem suspeita que o plano o perdeu.
+  // Reapplies a rectangle requested from inside an LS2 callback. Here we are on
+  // the drawing thread, which owns the Wayland connection — the only place a
+  // request may be sent from. plane_forget clears the "same rectangle already"
+  // memory, because the request came from something that suspects the plane lost
+  // it.
   if (windowDirty) {
     windowDirty = 0;
     if (media[0]) { plane_forget(); pushWindow(); }
@@ -905,8 +908,8 @@ static int playInternal(const char *url, int comDV) {
   seiX0 = seiX1 = seiX2 = seiY0 = seiY1 = seiY2 = 0;
   seiWhiteX = seiWhiteY = seiMinLuma = seiMaxLuma = seiMaxCLL = seiMaxFALL = 0;
   vuiFirst = vuiTrans = vuiMatrix = 2;
-  // A afirmacao de DV da fonte escolhida sobrevive ao reset: e ela que decide o
-  // DolbyHdrInfo do load abaixo. Sem ela, toda sessao nasceria "none".
+  // The chosen source's DV claim survives the reset: it is what decides the
+  // DolbyHdrInfo of the load below. Without it every session would start "none".
   vidDV = dvRequest;
   cronRequested = 1; cronLoad = 0; cronFrame = 0;
   clock_gettime(CLOCK_MONOTONIC, &t0Request);
@@ -976,11 +979,11 @@ static int playInternal(const char *url, int comDV) {
       dvInLoad = 1;
     }
   }
-  // O windowId REAL, o que o compositor devolveu para a superficie exportada.
-  // E ele que manda o pipeline desenhar no plano deste app. Se estiver vazio, o
-  // load responde returnValue:true, aloca um mediaId e nunca busca o arquivo —
-  // exatamente a falha muda que o "window_id_dummy" contornava no webOS 4.
-  // Por isso a recusa e AQUI, com nome, e nao la adiante sem imagem.
+  // The REAL windowId, the one the compositor handed back for the exported
+  // surface. It is what tells the pipeline to draw on this app's plane. If it is
+  // empty the load answers returnValue:true, allocates a mediaId and never fetches
+  // the file — exactly the silent failure "window_id_dummy" worked around on
+  // webOS 4. Hence the refusal HERE, by name, rather than later with no picture.
   if (!plane_ready()) {
     printf("[video] no window id from the compositor; refusing to load "
            "(it would report success and fetch nothing)\n");
@@ -1064,20 +1067,20 @@ static void seekNow(double seconds) {
 // mesmo resultado do transform do web: a barra preta embutida no quadro sai da
 // area visivel em vez de ser (impossivelmente) recortada por object-fit.
 //
-// O retangulo NAO pode passar da tela. MEDIDO no webOS 4 e mantido aqui porque
-// a razao nao era do ACB: mandar ao plano um retangulo com origem negativa ou
-// maior que o painel (que era como eu tentava ampliar) NAO recorta nada — o
-// plano simplesmente APAGA, e a tela fica preta em todo modo com escala, com
-// imagem so no ORIGINAL, o unico onde a escala e 1. Um plano de hardware nao
-// descarta o excedente como o compositor do navegador faz com
-// transform: scale(). Quem amplia e o video_window_source abaixo, recortando a
-// FONTE.
+// The rectangle MUST NOT run off the screen. MEASURED on webOS 4 and kept here
+// because the reason was never the ACB's: sending the plane a rectangle with a
+// negative origin or larger than the panel (which was how I first tried to zoom)
+// does NOT crop anything — the plane simply GOES BLANK, and the screen is black in
+// every scaled mode, with a picture only in ORIGINAL, the one where the scale is
+// 1. A hardware plane does not discard the overflow the way the browser's
+// compositor does with transform: scale(). What zooms is video_window_source
+// below, by cropping the SOURCE.
 //
-// Manda ao compositor o par fonte/destino corrente. A fonte so e conhecida
-// depois do videoInfo; ate la vidW/vidH valem 1920x1080, que e o palpite certo
-// para quase tudo. E preciso mandar SEMPRE os dois retangulos: nenhum dos dois
-// argumentos do set_exported_window aceita nulo, e mandar nulo nao devolve erro
-// — o compositor desconecta o cliente, ou seja, o app morre inteiro.
+// Sends the compositor the current source/destination pair. The source is only
+// known after videoInfo; until then vidW/vidH are 1920x1080, which is the right
+// guess for almost everything. BOTH rectangles must always be sent: neither
+// argument of set_exported_window accepts null, and sending null does not return
+// an error — the compositor disconnects the client, i.e. the whole app dies.
 static void pushWindow(void) {
   int sx = fontX, sy = fontY, sw = fontW, sh = fontH;
   if (fontX < 0) {
@@ -1097,29 +1100,30 @@ void video_window(int x, int y, int w, int h) {
   if (w < 1 || h < 1) return;
   if (x == windowX && y == windowY && w == windowW && h == windowH) return;  // sem repetir o mesmo rect a cada quadro
   windowX = x; windowY = y; windowW = w; windowH = h;
-  fontX = -1;   // pediram um destino sem recorte: a fonte volta a ser inteira
+  fontX = -1;   // a destination with no crop was asked for: the source is whole again
   if (!on || !media[0]) return;   // sem midia presa, aplicar seria no vazio
   pushWindow();
 }
 
-// ZOOM DE VERDADE: recorta a FONTE e mantem o destino dentro da tela.
+// REAL ZOOM: it crops the SOURCE and keeps the destination inside the screen.
 //
-// O compositor aceita os dois retangulos na mesma chamada — `source_region` em
-// coordenadas do QUADRO DECODIFICADO e `destination_region` em coordenadas de
-// tela. Ampliar entao nao e inflar o destino (que apaga o plano), e sim pedir
-// um pedaco MENOR da fonte para o mesmo destino: e assim que a barra preta
-// embutida no quadro sai da area visivel. E a mesma imagem que o web produz com
-// transform: scale(), so que calculada do lado certo do escalonador.
+// The compositor takes both rectangles in the same call — `source_region` in
+// DECODED-FRAME coordinates and `destination_region` in screen coordinates. So
+// zooming is not inflating the destination (which blanks the plane), it is asking
+// for a SMALLER piece of the source for the same destination: that is how the
+// black bar baked into the frame leaves the visible area. It is the same picture
+// the web produces with transform: scale(), only computed on the right side of
+// the scaler.
 //
-// O caminho do webOS 4 precisava do AcbAPI_setCustomDisplayWindow porque o papel
-// LS2 deste app nao alcanca o com.webos.service.tv.display. Aqui nao ha servico
-// nenhum no meio: o recorte e uma propriedade da superficie exportada, e quem a
-// aplica e o compositor. Nao existe mais recusa a tratar, e por isso o antigo
-// `withoutUms` — a desistencia permanente apos um returnValue:false — sumiu.
+// The webOS 4 path needed AcbAPI_setCustomDisplayWindow because this app's LS2
+// role does not reach com.webos.service.tv.display. Here there is no service in
+// the middle at all: the crop is a property of the exported surface, and the
+// compositor applies it. There is no refusal left to handle, which is why the old
+// `withoutUms` — the permanent give-up after a returnValue:false — is gone.
 void video_window_source(int sx, int sy, int sw, int sh,
                         int dx, int dy, int dw, int dh) {
   if (sw < 2 || sh < 2 || dw < 1 || dh < 1) return;
-  // Destino preso a tela: o mesmo limite de sempre.
+  // Destination pinned to the screen: the same limit as always.
   if (dx < 0) { dw += dx; dx = 0; }
   if (dy < 0) { dh += dy; dy = 0; }
   if (dx + dw > 1920) dw = 1920 - dx;
@@ -1129,7 +1133,7 @@ void video_window_source(int sx, int sy, int sw, int sh,
       dx == dstX && dy == dstY && dw == dstW && dh == dstH) return;
   fontX = sx; fontY = sy; fontW = sw; fontH = sh;
   dstX = dx; dstY = dy; dstW = dw; dstH = dh;
-  windowX = dx; windowY = dy; windowW = dw; windowH = dh;   // o reaplicar usa estes
+  windowX = dx; windowY = dy; windowW = dw; windowH = dh;   // the reapply uses these
   if (!on || !media[0]) return;
   pushWindow();
 }
@@ -1221,7 +1225,7 @@ static void applyStyle(void) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"fontSize\":%d}", media, t);
     call("setSubtitleFontSize", b, soLog); }
   { int c = style.color;
-    if (c < 0 || c >= VIDEO_SUB_NCORES) c = 0;
+    if (c < 0 || c >= VIDEO_SUB_NCOLORS) c = 0;
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charColor\":\"%s\"}",
              media, VIDEO_SUB_COLORS[c]);
     call("setSubtitleCharacterColor", b, soLog); }

@@ -80,7 +80,7 @@ static unsigned char *readAll(const char *path, size_t *size) {
 static TTF_Font *subFontsHeight[TXT_FAMILY_N][TXT_SUB_N];
 static unsigned char subFontTried[TXT_FAMILY_N][TXT_SUB_N];
 static int warningFallback[TXT_FAMILY_N];
-const char *const TXT_FAMILIES_PT[TXT_FAMILY_N] = {
+const char *const TXT_FAMILIES_LABEL[TXT_FAMILY_N] = {
   "Inter", "LG Display", "Droid Sans"
 };
 
@@ -272,7 +272,7 @@ static TTF_Font *subtitleFontOf(TxtStyle style, const char *s,
   if (!subFontsHeight[family][i]) {
     if (!warningFallback[family]) {
       printf("subtitle font %s unavailable; using Inter\n",
-             TXT_FAMILIES_PT[family]);
+             TXT_FAMILIES_LABEL[family]);
       warningFallback[family] = 1;
     }
     return fontOf(style, s);
@@ -315,7 +315,7 @@ int txt_start(const char *dirAssets, float scale) {
     { lg[0], lg[1], lg[2] },
     { droid[0], droid[1], droid[2] },
   };
-  const char *names[3] = { "Inter (embarcada)", "LG Display", "DroidSans" };
+  const char *names[3] = { "Inter (embedded)", "LG Display", "DroidSans" };
 
   // Caminho da reserva CJK. Na TV e a DroidSansFallback; no Mac, a fonte do
   // sistema que cobre CJK — ali isto e so para a previa nao mentir.

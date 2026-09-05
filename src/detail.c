@@ -1259,7 +1259,7 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
       // ASSISTIDO: olho aberto quando ja viu, olho riscado quando nao. Antes o
       // icone era sempre o mesmo e nao dizia estado nenhum — era so um enfeite
       // que o dono nao conseguia ler ("avisar o que foi visto").
-      gfx_icon(ig, progressOf(idx) >= 90 ? "watched" : "naovisto", ic, ic, ic, a);
+      gfx_icon(ig, progressOf(idx) >= 90 ? "watched" : "unwatched", ic, ic, ic, a);
     } else {
       gfx_icon(ig, "sources", ic, ic, ic, a);
     }
@@ -1438,7 +1438,7 @@ static void heroWeb(float a, float offset) {
   // Em serie o web escreve "Roteirista:"/"Criador:"; em filme, "Diretor:".
   char sup[192] = "";
   if (ci && ci->directing[0])
-    snprintf(sup, sizeof sup, "%s: %s", isSeries() ? "Roteirista" : "Director",
+    snprintf(sup, sizeof sup, "%s: %s", isSeries() ? "Writer" : "Director",
              ci->directing);
 
   const char *sin = synopsisOf(idx);
@@ -1726,10 +1726,10 @@ static void heroWeb(float a, float offset) {
     int something = 0;
     const char *status=NULL,*raw=extras_profile_status();
     if(isSeries()) {
-      if(!strcmp(raw,"canceled")||!strcmp(raw,"Canceled"))status="CANCELADA";
-      else if(!strcmp(raw,"ended")||!strcmp(raw,"Ended"))status="FINALIZADA";
+      if(!strcmp(raw,"canceled")||!strcmp(raw,"Canceled"))status="CANCELLED";
+      else if(!strcmp(raw,"ended")||!strcmp(raw,"Ended"))status="ENDED";
       else if(!strcmp(raw,"returning series"))status="NOW SHOWING";
-      else if(!strcmp(raw,"renewed"))status="RENOVADA";
+      else if(!strcmp(raw,"renewed"))status="RENEWED";
     }
     if ((ci && ci->age_rating[0]) || status) {
       x += drawBadgeMeta(x, yMeta2, ci && ci->age_rating[0] ? ci->age_rating : status,
@@ -1767,7 +1767,7 @@ static int seasonIn(int c) {
 }
 static void labelSeason(int c, char *dst, size_t n) {
   int s = seasonIn(c);
-  if (s == 0) snprintf(dst, n, "Especiais");
+  if (s == 0) snprintf(dst, n, "Specials");
   else snprintf(dst, n, "Season %d", s);
 }
 static float widthSeason(int c) {
@@ -2893,7 +2893,7 @@ static void drawPerson(float a) {
 
   { int n = person_n_credits(), i;
     float x0 = PES_COL_X;
-    TxtLine lt = txt_line(TXT_HEADLINE, "Filmografia", 245, 248, 255, 255);
+    TxtLine lt = txt_line(TXT_HEADLINE, "Filmography", 245, 248, 255, 255);
     txt_draw_alpha(lt, x0, 96.0f, a);
     for (i = 0; i < n; i++) {
       int col = i % PES_PER_LINE, lin = i / PES_PER_LINE;

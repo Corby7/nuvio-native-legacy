@@ -161,6 +161,36 @@ The second line is the one to read when video does not appear. `[plane]` covers
 the exported surface and the window id, `[video]` the LS2 pipeline, and the
 order in which they stop tells you which half failed.
 
+### When the home shows the wrong thing
+
+The home is assembled from three sources that arrive at different times, so
+"which one failed" is the first question. Each answers for itself:
+
+```bash
+$SSH 'grep -aE "^\[(addons|disc|col|sync|home)\]" /tmp/nuvio.log'
+```
+
+| Line | Means |
+|---|---|
+| `[addons] N from the account` | the addon list arrived; `(list changed…)` triggers a rebuild |
+| `[addons] '<name>' is id '<id>'` | a manifest was read; this is what collection sources resolve against |
+| `[disc] manifest <host>: N catalogue(s) usable` | per addon — `NO "catalogs" array` means it is streams-only |
+| `[disc] N catalogues declared by the addons` | 0 here and the home falls back to the packaged catalogue |
+| `[disc] account row prefs: N ordered, N disabled, N renamed` | the owner's order arrived |
+| `[col] account collections: N folder(s) added, N skipped` | `nothing usable` keeps whatever was already shown |
+| `[home] N row(s):` + the numbered list | **the final order, catalogues and collections interleaved** |
+
+The last one is the only place the finished order exists — `[disc] row` lines are
+catalogues alone, and the interleave happens later, in `home.c`. It prints only
+when the order actually changes, so a burst of them during startup is the
+catalogue being published row by row, not a loop.
+
+Two failures that used to be silent and now name themselves:
+`[home] order names collection_<id>, which matches no collection` (the order
+mentions a collection that is not loaded) and
+`[seeall] '<title>': addon '<id>' has no address; not fetching` (a collection
+source whose addon is not installed).
+
 ## 1b. Testing playback without anyone on the sofa
 
 Two `/tmp` hooks drive the player directly, so a whole codec matrix runs in ONE

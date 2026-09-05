@@ -203,7 +203,7 @@ static void drawPin(void) {
 
   { char t[128];
     TxtLine l;
-    snprintf(t, sizeof t, "PIN de %s", p ? p->name : "profile");
+    snprintf(t, sizeof t, "PIN for %s", p ? p->name : "profile");
     l = txt_line(TXT_TITLE3, t, 255, 255, 255, 255);
     txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 350.0f); }
 
@@ -217,7 +217,7 @@ static void drawPin(void) {
     TxtLine l = txt_line(TXT_BODY, "No connection. Try again.", 236, 150, 150, 255);
     txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 480.0f);
   } else if (pinWrong) {
-    TxtLine l = txt_line(TXT_BODY, "PIN incorreto", 236, 108, 108, 255);
+    TxtLine l = txt_line(TXT_BODY, "Incorrect PIN", 236, 108, 108, 255);
     txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 480.0f);
   }
   if (verifying) {

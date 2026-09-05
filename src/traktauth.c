@@ -224,7 +224,7 @@ static void *threadPoll(void *u) {
     forgetStream();
     state = TRA_ERROR;
   } else if (st == 418) {
-    snprintf(error, sizeof error, "autorizacao negada no Trakt");
+    snprintf(error, sizeof error, "authorisation denied by Trakt");
     forgetStream();
     state = TRA_ERROR;
   } else if (st) {

@@ -56,7 +56,7 @@ static void colorCollection(float *r,float *g,float *b) {
     {*r=.12f;*g=.27f;*b=.40f;}
 }
 static const char *labelGroup(void) {
-  if (group("Directors")) return "FILMOGRAFIA";
+  if (group("Directors")) return "FILMOGRAPHY";
   if (group("Awards")) return "AWARDS AND CANON";
   if (group("Genres")) return "GENRE";
   if (group("Themes")) return "THEME";
@@ -83,7 +83,19 @@ static void openSource(void) {
   snprintf(catalogId,sizeof catalogId,"%s",s->catId);
   ranked=strstr(s->catId,"top100")||strstr(s->catId,"top250")||strstr(s->catId,"top10");
   focus=0;scrollY=velY=0;orderN=-1;
-  disc_seeall_filter(s->base,s->type,s->catId,s->genre);
+  // col_source_base and not s->base: a collection from the account stores the
+  // addon's ID, and the address comes from the INSTALLED addon with that id.
+  { const char *base=col_source_base(s);
+    if(!base||!*base) {
+      // This source's addon is not installed (or its manifest was never read).
+      // With no address there is nothing to fetch, and an empty grid with no
+      // explanation sends you looking for a fault where there is none.
+      printf("[seeall] '%s': addon '%s' has no address; not fetching\n",
+             s->title[0]?s->title:s->catId, s->addonId);
+      fflush(stdout);
+      return;
+    }
+    disc_seeall_filter(base,s->type,s->catId,s->genre); }
 }
 void seeall_collection(const ColFolder *folder) {
   if(!folder||!folder->nSources)return;
@@ -93,11 +105,21 @@ void seeall_collection(const ColFolder *folder) {
   snprintf(title,sizeof title,"%s",folder->title);openSource();
 }
 
+// The parameter MUST NOT be called `title`: there is a `static char title[96]`
+// at the top of this file, and the parameter shadowed it. The effect was double
+// and silent —
+//
+//   snprintf(title, sizeof title, "%s", title ? title : "");
+//
+// wrote INTO the parameter, a `const char *` pointing at the caller's memory,
+// with `sizeof title` being 8 (the size of a pointer) instead of 96; and the
+// real buffer was never filled, so the "see all" screen showed the previous
+// title.
 void seeall_open(const char *base, const char *kind, const char *catId,
-                   const char *title) {
+                   const char *heading) {
   is_open = 1; focus = 0; scrollY = 0.0f; velY = 0.0f; reqOpen = -1;
   memset(tabAnim, 0, sizeof tabAnim);
-  snprintf(title, sizeof title, "%s", title ? title : "");
+  snprintf(title, sizeof title, "%s", heading ? heading : "");
   collection=col_by_catalog(base,kind,catId);timeline=collection&&!strcmp(collection->group,"Directors");
   source=tabCursor=tabFocus=0;orderN=-1;
   if(collection) {
@@ -332,7 +354,7 @@ static void themeHeader(float a,float x0) {
   char caption[180];int n=nItems();
   if(disc_seeall_error())snprintf(caption,sizeof caption,"Could not load. OK to try again.");
   else if(!n)snprintf(caption,sizeof caption,"%s",disc_seeall_loading()?"Loading titles…":"No titles in this list.");
-  else snprintf(caption,sizeof caption,"%d titles%s  ·  %s",n,disc_seeall_end()?"":" carregados",subtitleGroup());
+  else snprintf(caption,sizeof caption,"%d titles%s  ·  %s",n,disc_seeall_end()?"":" loaded",subtitleGroup());
   TxtLine sub=txt_line_trim(TXT_DET_META2,caption,196,202,213,255,960);txt_draw_alpha(sub,x0,192,a);
   if(collection&&collection->nSources>1) {
     int first=tabCursor>3?tabCursor-3:0;

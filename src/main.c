@@ -183,15 +183,15 @@ static void videoIfRequested(void) {
   consumeOrBlocks("/tmp/nuvio-video", &blocked);
 }
 
-// Mesmo protocolo do /tmp/nuvio-video, para o RECORTE: escreva oito numeros
+// The same protocol as /tmp/nuvio-video, for the CROP: write eight numbers
 //
 //   sx sy sw sh dx dy dw dh
 //
-// e o app manda esse par fonte/destino ao plano. Existe porque o zoom e a unica
-// parte do video que NAO da para conferir pelo log do pipeline: o uMS nao sabe
-// que houve recorte, quem sabe e o compositor, e o plano nao pode ser
-// fotografado. Sem isto, a unica forma de testar os modos de proporcao e pedir
-// para alguem olhar a TV e descrever o que ve.
+// and the app sends that source/destination pair to the plane. It exists because
+// the crop is the one part of video that CANNOT be checked from the pipeline's
+// log: the uMS does not know a crop happened — the compositor does — and the
+// plane cannot be photographed. Without this, the only way to test the aspect
+// modes is to ask someone to look at the TV and describe what they see.
 static void rectIfRequested(void) {
   static time_t blocked;
   char line[256];
@@ -276,10 +276,10 @@ int main(int argc, char **argv) {
   freopen("/tmp/nuvio.log", "a", stderr);
 #endif
   setvbuf(stdout, NULL, _IOLBF, 0);
-  // QUAL BUILD ESTA RODANDO. O md5 do arquivo prova o que esta no DISCO; esta
-  // linha prova o que foi LANCADO, que e outra pergunta — e a que ja custou
-  // 2h30 lendo o log de um processo antigo achando que o deploy tinha entrado.
-  // Guardado por #ifdef porque o mac.sh nao define nada disso.
+  // WHICH BUILD IS RUNNING. The file's md5 proves what is on DISK; this line
+  // proves what was LAUNCHED, which is a different question — and the one that
+  // already cost 2h30 reading the log of an old process while believing the
+  // deploy had landed. Guarded by #ifdef because mac.sh defines none of this.
 #ifdef NV_BUILD
   printf("[main] build %s\n", NV_BUILD);
 #endif
@@ -383,11 +383,12 @@ int main(int argc, char **argv) {
       // Sem commit de proposito: o commit vem do proximo SwapWindow.
       if (marshal && sup) { marshal(sup, 4, NULL); printf("non-opaque surface\n"); }
       else printf("no wayland: video will not appear\n");
-      // Exporta a superficie como objeto de video AGORA, e nao no primeiro
-      // play: o windowId chega por evento, e o load do com.webos.media nao
-      // pode sair sem ele. Descobrir isso dentro do play significaria bloquear
-      // o fio de desenho esperando o compositor, ou mandar um load que falha
-      // em silencio. Aqui ainda somos um fio so, e um roundtrip nao custa nada.
+      // Export the surface as a video object NOW, not on the first play: the
+      // windowId arrives as an event, and com.webos.media's load cannot go out
+      // without it. Discovering that inside the play path would mean either
+      // blocking the drawing thread on the compositor or sending a load that
+      // fails silently. Here we are still single-threaded, and a roundtrip costs
+      // nothing.
       plane_start(fields[0], sup);
     }
   }

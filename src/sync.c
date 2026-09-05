@@ -66,10 +66,10 @@ static char *settingsBlob;
 static int  hasSettingsBlob;
 static int  applySettings = 1;
 
-// As COLECOES do dono, cruas, esperando o fio principal. Pela mesma razao do
-// blob de ajustes e da lista de addons: `folders[]` de collections.c e lido pelo
-// desenho a cada quadro, e reescrever de outro fio corromperia a home no meio de
-// um quadro que ja estava percorrendo a lista.
+// The owner's COLLECTIONS, raw, waiting for the main thread. For the same reason
+// as the settings blob and the addon list: `folders[]` in collections.c is read
+// by the drawing code every frame, and rewriting it from another thread would
+// corrupt the home in the middle of a frame already walking the list.
 static char *collectionsBlob;
 static int  hasCollectionsBlob;
 
@@ -106,11 +106,11 @@ static void pullAddons(void) {
     const char *f = js_end(p);
     char b[16];
     memset(&addonsRemote[k], 0, sizeof addonsRemote[k]);
-    // MESMA ARMADILHA DAS COLECOES, e aqui ela custa um addon inteiro: js_text
-    // recusa em silencio quando o valor nao cabe, e addons que guardam a
-    // configuracao dentro da URL passam facil dos 600 bytes deste campo. Sem
-    // esta linha o addon simplesmente nao existiria para o app, sem uma palavra
-    // no log dizendo por que.
+    // THE SAME TRAP AS THE COLLECTIONS, and here it costs a whole addon: js_text
+    // refuses silently when the value does not fit, and addons that keep their
+    // configuration inside the URL run well past this field's 600 bytes. Without
+    // this line the addon would simply not exist for the app, with not a word in
+    // the log to say why.
     if (!js_text(p, f, "url", addonsRemote[k].url, sizeof addonsRemote[k].url)) {
       char name[64] = "";
       js_text(p, f, "name", name, sizeof name);
@@ -417,11 +417,11 @@ static int pullSettingsProfile(const char *body) {
   return ok;
 }
 
-// As COLECOES do dono. Ate aqui esta RPC tambem so alimentava um numero.
+// The owner's COLLECTIONS. Until now this RPC also only fed a number.
 //
-// Guarda o corpo cru em vez de interpretar aqui: quem interpreta e o
-// collections.c, no fio principal, porque a lista que ele escreve e a que o
-// desenho le a cada quadro.
+// It keeps the body raw instead of parsing here: the parsing belongs to
+// collections.c, on the main thread, because the list it writes is the one the
+// drawing code reads every frame.
 static int pullCollections(const char *body) {
   static const char *FUNC = "sync_pull_collections";
   char *r;
@@ -439,25 +439,25 @@ static int pullCollections(const char *body) {
   }
   for (p = js_root_array(r); p; p = js_next(js_end(p))) k++;
   free(collectionsBlob);
-  collectionsBlob = r;          // a posse passa para a caixa; nao liberar aqui
+  collectionsBlob = r;          // ownership passes to the box; do not free here
   hasCollectionsBlob = 1;
   return k;
 }
 
-// AS PREFERENCIAS DE FILEIRA DA HOME, que ate agora eram baixadas e jogadas
-// fora.
+// THE HOME'S ROW PREFERENCES, which until now were downloaded and thrown away.
 //
-// Esta RPC ja era chamada — por countRpc, que le o corpo inteiro so para contar
-// quantos itens vieram e devolver um numero para o resumo. A ordem que a pessoa
-// escolheu no app web, o que ela escondeu e os nomes que ela deu chegavam ate a
-// TV e morriam ali. Com 151 catalogos declarados e teto de 16 fileiras, o que
-// aparecia na home era o comeco do manifesto do addon, nunca a escolha do dono.
+// This RPC was already being called — by countRpc, which reads the whole body
+// just to count how many items came back and return a number for the summary.
+// The order the person chose in the web app, what they hid and the names they
+// gave all reached the TV and died there. With 151 catalogues declared and a
+// 16-row cap, what appeared on the home was the start of the addon's manifest,
+// never the owner's choice.
 //
-// O formato do item vem do homeCatalogSettingsSyncService do web:
+// The item shape comes from the web's homeCatalogSettingsSyncService:
 //   {"addon_id":..,"type":..,"catalog_id":..,"enabled":bool,"order":n,
 //    "custom_title":"","is_collection":bool,"collection_id":""}
-// e a chave e addon_id + "_" + type + "_" + catalog_id, identica a que o
-// discover monta para cada catalogo declarado.
+// and the key is addon_id + "_" + type + "_" + catalog_id, identical to the one
+// discover builds for every declared catalogue.
 static int pullHomeCatalog(const char *body) {
   static const char *FUNC = "sync_pull_home_catalog_settings";
   char *r;
@@ -487,11 +487,24 @@ static int pullHomeCatalog(const char *body) {
     const char *f = js_end(item);
     char addonId[96] = "", type[16] = "", catId[96] = "", title[96] = "";
     char key[192];
-    if (js_flag(item, f, "is_collection", 0)) { nCollection++; continue; }
+    js_text(item, f, "custom_title", title, sizeof title);
+    // A COLLECTION. It joins the SAME ordered list, under the key the web uses
+    // (`collection_<id>`), so its row lands exactly where the owner placed it
+    // among the catalogues. It used to be counted and discarded, which is why
+    // collections could only ever appear at the end, behind everything else.
+    if (js_flag(item, f, "is_collection", 0)) {
+      char collectionId[96] = "";
+      js_text(item, f, "collection_id", collectionId, sizeof collectionId);
+      if (!collectionId[0]) continue;
+      snprintf(key, sizeof key, "collection_%s", collectionId);
+      disc_prefs_add(key, js_flag(item, f, "enabled", 1), title);
+      nCollection++;
+      n++;
+      continue;
+    }
     js_text(item, f, "addon_id",   addonId, sizeof addonId);
     js_text(item, f, "type",       type,    sizeof type);
     js_text(item, f, "catalog_id", catId,   sizeof catId);
-    js_text(item, f, "custom_title", title, sizeof title);
     if (!addonId[0] || !type[0] || !catId[0]) continue;
     snprintf(key, sizeof key, "%s_%s_%s", addonId, type, catId);
     disc_prefs_add(key, js_flag(item, f, "enabled", 1), title);
@@ -503,8 +516,7 @@ static int pullHomeCatalog(const char *body) {
   // que ignora-las em silencio: e a diferenca entre "nao tenho colecoes" e
   // "tenho e este app ainda nao as mostra".
   if (nCollection)
-    printf("[sync] %d collection(s) in the home order; this app does not build "
-           "collection rows yet\n", nCollection);
+    printf("[sync] %d collection(s) placed in the home order\n", nCollection);
   free(r);
   return n;
 }
@@ -515,8 +527,8 @@ static void pullSoRead(void) {
 
   snprintf(body, sizeof body, "{\"p_profile_id\":%d}", profile);
   cLib   = countRpc("sync_pull_library", body);
-  // COLECOES: baixadas inteiras agora, e nao apenas contadas. O corpo fica
-  // guardado para o fio principal aplicar (ver collectionsBlob).
+  // COLLECTIONS: downloaded in full now, not merely counted. The body is kept
+  // for the main thread to apply (see collectionsBlob).
   cCollections = pullCollections(body);
 
   // MEDIDO: `p_page` comeca em 1. Com 0 o servidor responde 400 "OFFSET must
@@ -536,9 +548,9 @@ static void pullSoRead(void) {
   snprintf(body, sizeof body,
            "{\"p_profile_id\":%d,\"p_platform\":\"home_catalog_shared\"}", profile);
   hasCatHome = pullHomeCatalog(body) > 0;
-  // A home ja foi montada com a ordem do manifesto. Com a ordem do dono em maos,
-  // as fileiras sao remontadas — e agora as 16 que cabem sao as 16 que ela
-  // escolheu, e nao as 16 primeiras que o addon declarou.
+  // The home was already assembled in the manifest's order. With the owner's
+  // order in hand the rows are rebuilt — and now the ones that fit are the ones
+  // they chose, not the first ones the addon happened to declare.
   if (hasCatHome) disc_rebuild();
 }
 
@@ -599,14 +611,14 @@ void sync_step(unsigned nowMs) {
   if (hasAddonsRemote) {
     addons_set_list(addonsRemote, nAddonsRemote);
     hasAddonsRemote = 0;
-    // A home foi montada ANTES desta lista chegar, portanto sem addon nenhum:
-    // zero manifestos lidos, zero catalogos, e a home caindo para o catalogo do
-    // pacote. Agora que ha lista, as fileiras sao remontadas.
+    // The home was assembled BEFORE this list arrived, so with no addons at all:
+    // zero manifests read, zero catalogues, and the home falling back to the
+    // packaged catalogue. Now that there is a list, the rows are rebuilt.
     if (addons_took_change()) disc_rebuild();
   }
   if (hasCollectionsBlob && collectionsBlob) {
-    // Fio principal: aqui e o unico lugar de onde a lista de colecoes pode ser
-    // reescrita sem disputar com o desenho.
+    // Main thread: this is the only place the collection list can be rewritten
+    // without racing the drawing code.
     if (col_load_account(collectionsBlob) > 0) disc_rebuild();
     free(collectionsBlob);
     collectionsBlob = NULL;

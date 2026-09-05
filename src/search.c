@@ -522,7 +522,7 @@ static void drawKeyboard(void) {
       if (f < SEARCH_KB_ROWS - 1) {
         label[0] = KEYS[f * SEARCH_KB_COLS + c]; label[1] = 0;
         s = label;
-      } else s = (c == 0) ? "espa\xc3\xa7o" : (c == 1 ? "delete" : "clear");
+      } else s = (c == 0) ? "space" : (c == 1 ? "delete" : "clear");
       int tom = (int)anim_blend(236.0f, 26.0f, k);
       TxtStyle st = (f < SEARCH_KB_ROWS - 1) ? TXT_TITLE3 : TXT_HEADLINE;
       TxtLine l = txt_line(st, s, tom, tom, tom, 255);

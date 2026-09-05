@@ -14,7 +14,7 @@
 #include <stddef.h>
 #include "catalog.h"
 
-// Dispara a montagem do catalogo num fio proprio. Volta na hora.
+// Kicks off building the catalogue on a thread of its own. Returns immediately.
 void disc_start(void);
 
 // --- HOME ROW PREFERENCES, FROM THE ACCOUNT ---------------------------------
@@ -34,6 +34,17 @@ void disc_start(void);
 void disc_prefs_begin(void);
 void disc_prefs_add(const char *key, int enabled, const char *customTitle);
 void disc_prefs_end(void);
+
+// The owner's order, read back RAW so the home can assemble it.
+//
+// The list interleaves catalogues (`<addonId>_<type>_<catalogId>`) and
+// collections (`collection_<id>`). This module only resolves catalogues, so it
+// cannot apply the order alone — the home is the only place that can turn both
+// kinds into rows, and it needs the whole sequence to do it in the right order.
+int         disc_prefs_n(void);
+const char *disc_prefs_key(int i);
+int         disc_prefs_hidden(const char *key);
+const char *disc_prefs_title(const char *key);   // NULL when not renamed
 
 // Asks for the rows to be built AGAIN, once whatever is running has finished.
 // Call it when the addon list changes — the account's list arrives from the sync

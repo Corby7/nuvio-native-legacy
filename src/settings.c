@@ -79,17 +79,17 @@ typedef enum {
 } OptionId;
 
 static const char *V_QUALITY[] = { "Automatic", "4K", "1080p", "720p" };
-static const char *V_ON[]      = { "On", "Desligado" };
-static const char *V_ANIM[]      = { "Completas", "Reduced" };
+static const char *V_ON[]      = { "On", "Off" };
+static const char *V_ANIM[]      = { "Full", "Reduced" };
 // `collapseSidebar`: recolhida = a rail some e o conteudo comeca em 104.
 static const char *V_RAIL[]      = { "Collapsed", "Fixed" };
 // `continueWatchingCardStyle`, validado em layoutPreferences.js contra
 // exatamente estes tres valores.
-static const char *V_CW[]        = { "Card", "Largo", "P\xc3\xb4ster" };
+static const char *V_CW[]        = { "Card", "Wide", "Poster" };
 // `continueWatchingSortMode`, normalizado em normalizeContinueWatchingSortMode.
 static const char *V_CW_ORDER[]  = { "Default", "Streaming style", "Separate upcoming" };
 // `discoverLocation`, validado contra estes tres.
-static const char *V_DISCOVER[] = { "Show in Search", "In the sidebar", "Desligado" };
+static const char *V_DISCOVER[] = { "Show in Search", "In the sidebar", "Off" };
 // `homeImdbRatingsVisibility` — normalizeHomeImdbRatingsVisibility so aceita
 // SHOW_ALL e HIDE_ALL.
 static const char *V_SCORES[]     = { "Show", "Hide" };
@@ -145,7 +145,7 @@ static const Option OPTIONS[SETTING_N] = {
 
   ESC("Blur unwatched",    V_ON, 2),   // blurUnwatchedEpisodes
   ESC("Trailer button",           V_ON, 2),   // detailPageTrailerButtonEnabled
-  ESC("Priorizar metadados externos", V_ON, 2), // preferExternalMetaAddonDetail
+  ESC("Prefer external metadata", V_ON, 2), // preferExternalMetaAddonDetail
   ESC("Full release date", V_ON, 2),  // showFullReleaseDate
 
   ESC("Expand poster on focus",   V_ON, 2),   // focusedPosterBackdropExpandEnabled
@@ -154,7 +154,7 @@ static const Option OPTIONS[SETTING_N] = {
 
   ESC("Depth effect",     V_ON, 2),   // cardDepthEnabled
   NUM("Edge brightness",            0, 100, 2, "%"), // cardDepthEdgeStrength
-  NUM("Reflexo",                    0, 100, 2, "%"), // cardDepthSheenStrength
+  NUM("Sheen",                      0, 100, 2, "%"), // cardDepthSheenStrength
   NUM("Edge coverage",         0, 100, 2, "%"), // cardDepthEdgeCoverage
   ESC("Depth on posters",  V_ON, 2),
   ESC("Depth on \"Continue\"", V_ON, 2),
@@ -163,7 +163,7 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Depth on trailers",  V_ON, 2),
 
   NUM("Item width",            72, 200, 2, " dp"), // posterCardWidthDp
-  NUM("Arredondamento",             0, 40, 1, " dp"),   // posterCardCornerRadiusDp
+  NUM("Corner radius",              0, 40, 1, " dp"),   // posterCardCornerRadiusDp
 
   ESC("Animations",                  V_ANIM, 2),
 
@@ -936,7 +936,7 @@ void settings_draw(Uint32 now) {
 
   int sec = sectionCurrent();
   char pos[80];
-  snprintf(pos, sizeof pos, "%s  ·  %d de %d", SECTIONS[sec].title,
+  snprintf(pos, sizeof pos, "%s  ·  %d of %d", SECTIONS[sec].title,
            focusOp - SECTIONS[sec].start + 1, SECTIONS[sec].n);
   TxtLine context = txt_line(TXT_CAPTION, pos, 178, 180, 186, 255);
   txt_draw(context, SETTING_LIST_X, NV_MARGIN_Y + title.h + 10.0f);
@@ -945,7 +945,7 @@ void settings_draw(Uint32 now) {
   float hw = NV_SCREEN_W - NV_MARGIN_X - hx;
   if (hw > 240.0f) {
     TxtLine kind = txt_line(TXT_CAPTION, inactive(focusOp) ? "Option unavailable"
-                        : soRead(focusOp) ? "Information" : "Personalizar", 168, 171, 180, 255);
+                        : soRead(focusOp) ? "Information" : "Customise", 168, 171, 180, 255);
     txt_draw(kind, hx, SETTING_TOP + SETTING_SEC_HEADER);
     float hy = SETTING_TOP + SETTING_SEC_HEADER + kind.h + 22.0f;
     hy += txt_block(TXT_HEADLINE, OPTIONS[focusOp].label, 237, 238, 242,

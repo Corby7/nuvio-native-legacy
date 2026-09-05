@@ -19,7 +19,7 @@ char *net_download(const char *url, int seconds) {
     const char *json =
       "{\"results\":["
       "{\"id\":11,\"name\":\"Alex Silva\",\"known_for_department\":\"Acting\",\"profile_path\":\"/wrong.jpg\"},"
-      "{\"id\":22,\"name\":\"Alex Silva\",\"known_for_department\":\"Directing\",\"profile_path\":\"/right.jpg\",\"known_for\":[{\"title\":\"Filme\",\"backdrop_path\":\"/hero.jpg\"}]}]}";
+      "{\"id\":22,\"name\":\"Alex Silva\",\"known_for_department\":\"Directing\",\"profile_path\":\"/right.jpg\",\"known_for\":[{\"title\":\"A Film\",\"backdrop_path\":\"/hero.jpg\"}]}]}";
     return strdup(json);
   }
   if (strstr(url, "/person/22?")) {

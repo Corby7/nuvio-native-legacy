@@ -1,5 +1,6 @@
 #include "collections.h"
 #include "js.h"
+#include "addons.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,13 +12,13 @@ static void locates(char *value,size_t cap,const char *dir) {
   if(!value[0]||strstr(value,"://")||value[0]=='/')return;
   char rel[600];snprintf(rel,sizeof rel,"%s",value);snprintf(value,cap,"%s/%s",dir,rel);
 }
-// Revisao das colecoes. A home decide se precisa remontar as fileiras por um
-// hash das fileiras do CATALOGO; sem este numero entrando na conta, uma colecao
-// que chega da conta fica na memoria e nunca aparece na tela.
+// The collections' revision. The home decides whether to rebuild its rows from a
+// hash of the CATALOGUE rows; without this number in that sum, a collection that
+// arrives from the account sits in memory and never reaches the screen.
 static unsigned revisionCol = 1;
 unsigned col_revision(void) { return revisionCol; }
 
-// Grupos que o dono fixou no topo (`pinToTop`).
+// Groups the owner pinned to the top (`pinToTop`).
 #define COL_PINNED_MAX 24
 static char pinned[COL_PINNED_MAX][64];
 static int nPinned;
@@ -29,19 +30,32 @@ int col_group_pinned(const char *group) {
   return 0;
 }
 
-// Buffer de leitura, fora da pilha: a URL de um addon configurado passa
-// facil de 4 KB e uma variavel local desse tamanho por fonte nao cabe no
-// fio do desenho.
-static char scratch[8192];
+const char *col_source_base(const ColSource *s) {
+  const char *b;
+  if (!s) return "";
+  b = addons_base_for_id(s->addonId);
+  if (b && *b) return b;
+  return s->base;
+}
+
+const char *col_group_by_id(const char *id) {
+  int i;
+  if (!id || !*id) return NULL;
+  for (i = 0; i < count; i++)
+    if (folders[i].groupId[0] && !strcmp(folders[i].groupId, id))
+      return folders[i].group;
+  return NULL;
+}
 
 int col_load_account(const char *body) {
   const char *root, *end, *c;
   const char *list = NULL;
-  int added = 0, skippedNoSource = 0, nTmdb = 0, nTrakt = 0, nTooLong = 0;
+  int added = 0, skippedNoSource = 0, nTmdb = 0, nTrakt = 0;
+  int packaged = count;
   if (!body || !*body) return 0;
   end = body + strlen(body);
-  // O corpo e [{"collections_json":[...]}]. Se o servidor devolver a lista
-  // direto, ou sob outro nome, tenta os dois antes de desistir — e diz qual foi.
+  // The body is [{"collections_json":[...]}]. If the server returns the list
+  // directly, or under another name, try both before giving up — and say which.
   root = js_root_array(body);
   if (root) list = js_array(root, js_end(root), "collections_json");
   if (!list) list = js_array(body, end, "collections");
@@ -50,11 +64,25 @@ int col_load_account(const char *body) {
     fflush(stdout);
     return 0;
   }
+  // THE ACCOUNT REPLACES THE PACKAGE. The collections shipped in the .ipk are
+  // whoever built it curating for themselves; when the owner has their own, those
+  // are the ones that count.
+  //
+  // This is also where the accumulation bug is fixed: this function runs once per
+  // sync cycle and did NOT reset `count`, so the same folders were appended again
+  // on every pass until COL_MAX overflowed.
+  //
+  // The swap only happens if something was really read (see the commit below): an
+  // empty or broken response must not wipe what is already on screen.
+  count = 0;
+  nPinned = 0;
+
   for (; list; list = js_next(js_end(list))) {
     const char *ce = js_end(list);
-    char group[64] = "";
+    char group[64] = "", groupId[96] = "";
     int pin;
     js_text(list, ce, "title", group, sizeof group);
+    js_text(list, ce, "id",    groupId, sizeof groupId);
     if (!group[0]) continue;
     pin = js_flag(list, ce, "pinToTop", 0);
     if (pin && nPinned < COL_PINNED_MAX)
@@ -65,84 +93,87 @@ int col_load_account(const char *body) {
       ColFolder *v = &folders[count];
       const char *s;
       memset(v, 0, sizeof *v);
-      snprintf(v->group, sizeof v->group, "%s", group);
+      snprintf(v->group,   sizeof v->group,   "%s", group);
+      snprintf(v->groupId, sizeof v->groupId, "%s", groupId);
       js_text(c, fe, "id",    v->id,    sizeof v->id);
       js_text(c, fe, "title", v->title, sizeof v->title);
-      // Arte remota: URLs de CDN. `locates` deixa passar o que tem "://", entao
-      // nao ha caminho local sendo inventado por cima delas, e o tex_get sabe
-      // buscar http(s).
+      // Remote art: CDN URLs. `locates` lets anything containing "://" through,
+      // so no local path is invented on top of them, and tex_get knows how to
+      // fetch http(s).
       js_text(c, fe, "coverImageUrl",   v->cover, sizeof v->cover);
       js_text(c, fe, "heroBackdropUrl", v->hero,  sizeof v->hero);
       js_text(c, fe, "titleLogoUrl",    v->logo,  sizeof v->logo);
       v->hideTitle = js_flag(c, fe, "hideTitle", 0);
-      v->frames = 0;          // nao ha pasta de quadros para colecao da conta
+      v->frames = 0;          // no frame folder for an account collection
       v->frameDir[0] = 0;
-      // `catalogSources` e a lista ja filtrada para fontes de ADDON, que sao as
-      // unicas que este app sabe buscar. `sources` cobre o formato antigo.
+      // `catalogSources` is the list already filtered down to ADDON sources, the
+      // only ones this app can fetch. `sources` covers the older shape.
       s = js_array(c, fe, "catalogSources");
       if (!s) s = js_array(c, fe, "sources");
       for (; s && v->nSources < COL_SOURCE_MAX; s = js_next(js_end(s))) {
         const char *se = js_end(s);
         ColSource *a = &v->sources[v->nSources];
         char provider[24] = "";
-        // Uma fonte de colecao pode ser de tres tipos, e so um deles e um
-        // catalogo de addon. Contar por tipo transforma "29 puladas" em uma
-        // frase que diz o que faltaria implementar para cada uma.
+        // A collection source can be one of three kinds, and only one of them is
+        // an addon catalogue. Counting them by kind turns "29 skipped" into a
+        // sentence that says what would have to be built for each.
         js_text(s, se, "provider", provider, sizeof provider);
         if (!strcasecmp(provider, "tmdb"))  { nTmdb++;  continue; }
         if (!strcasecmp(provider, "trakt")) { nTrakt++; continue; }
         memset(a, 0, sizeof *a);
-        // O ENDERECO DO ADDON NAO CABE, e este e o motivo real de nenhuma
-        // colecao aparecer. MEDIDO nesta conta: o `addonBaseUrl` de uma fonte
-        // do AIOMetadata passa de 4096 bytes, porque estes addons carregam a
-        // configuracao inteira dentro da propria URL. O campo aqui tem 600.
+        // THE ID, NOT THE URL. This source's `addonBaseUrl` runs past 4 KB —
+        // these addons carry their whole configuration inside the address — and it
+        // fits in no field here without costing tens of megabytes of static data.
         //
-        // js_text recusa em silencio quando nao cabe (devolve 0 e nao escreve),
-        // entao a fonte era descartada mais abaixo por "falta base" — uma
-        // explicacao errada, que mandava procurar no lugar errado.
-        //
-        // Aumentar o campo nao resolve: sao COL_MAX x COL_SOURCE_MAX fontes, e
-        // 4 KB em cada uma passaria de 30 MB de estatico num aparelho que hoje
-        // usa 78 MB no total.
-        { int tooLong = 0;
-          if (js_text(s, se, "addonBaseUrl", scratch, sizeof scratch)) {
-            if (strlen(scratch) < sizeof a->base)
-              snprintf(a->base, sizeof a->base, "%s", scratch);
-            else tooLong = 1;
-          } else tooLong = 1;      // nem em 8 KB
-          // A contagem e cumulativa; a decisao NAO pode ser. Testar o total aqui
-          // desligaria o campo alternativo para todas as fontes seguintes assim
-          // que a primeira estourasse.
-          if (tooLong) nTooLong++;
-          else if (!a->base[0]) js_text(s, se, "base", a->base, sizeof a->base); }
+        // The real address is the INSTALLED addon with this id, resolved in
+        // col_source_base at fetch time. That is the same rule the web app uses:
+        // match by id before looking at the URL stored in the collection.
+        js_text(s, se, "addonId", a->addonId, sizeof a->addonId);
         js_text(s, se, "type",      a->type,  sizeof a->type);
         js_text(s, se, "catalogId", a->catId, sizeof a->catId);
         if (!a->catId[0]) js_text(s, se, "catId", a->catId, sizeof a->catId);
         js_text(s, se, "title", a->title, sizeof a->title);
         if (!a->title[0]) js_text(s, se, "catalogName", a->title, sizeof a->title);
         js_text(s, se, "genre", a->genre, sizeof a->genre);
-        if (a->base[0] && a->type[0] && a->catId[0]) v->nSources++;
+        if (!a->addonId[0] || !a->type[0] || !a->catId[0]) continue;
+        // DO NOT CHECK HERE WHETHER THE ADDON IS INSTALLED. Addon ids are learned
+        // while reading the manifests, during discovery, and collections arrive
+        // with the sync BEFORE that — checking now would reject every source of an
+        // addon that is perfectly well installed, only because its manifest had
+        // not been read yet this session. That is exactly what happened: 129
+        // sources refused with "addon 'aio-metadata' is not installed", two lines
+        // after "'AIOMetadata' is id 'aio-metadata'".
+        //
+        // col_source_base resolves it at fetch time, when the ids exist. See the
+        // warning in seeall.c for the case where they never do.
+        v->nSources++;
       }
-      // Uma pasta sem fonte de addon nao tem de onde tirar titulo nenhum — e o
-      // caso de uma pasta montada sobre filtros do TMDB, que este app nao busca.
-      // Contar e dizer quantas foram e melhor do que uma fileira vazia.
+      // A folder with no addon source has nowhere to get a single title from —
+      // the case of a folder built on TMDB filters, which this app does not fetch.
+      // Counting them and saying how many is better than an empty row.
       if (v->nSources && v->title[0]) { count++; added++; }
       else if (v->title[0]) skippedNoSource++;
     }
   }
-  if (added) revisionCol++;
-  printf("[col] account collections: %d folder(s) added, %d skipped\n",
-         added, skippedNoSource);
-  // O QUE FALTARIA para as puladas. Sao caminhos de busca inteiros que este app
-  // nao tem: o TMDB aqui so serve elenco e arte, nao descoberta por filtro, e as
-  // listas do Trakt sao buscadas por id, que tambem nao existe.
+  // COMMIT. If nothing was read, the swap is undone: `count` goes back to what
+  // the package had and the home keeps the collections it was already showing.
+  // Blanking the screen over an empty response would trade one fault for a worse
+  // one.
+  if (!added) {
+    count = packaged;
+    printf("[col] account collections: nothing usable; keeping the %d packaged\n",
+           packaged);
+  } else {
+    revisionCol++;
+    printf("[col] account collections: %d folder(s) added, %d skipped "
+           "(replacing %d packaged)\n", added, skippedNoSource, packaged);
+  }
+  // WHAT WOULD BE MISSING for the skipped ones. These are whole fetch paths this
+  // app does not have: TMDB here only serves cast and art, not filtered discovery,
+  // and Trakt lists are fetched by id, which does not exist either.
   if (nTmdb || nTrakt)
     printf("[col] sources this app cannot fetch: %d TMDB, %d Trakt\n",
            nTmdb, nTrakt);
-  if (nTooLong)
-    printf("[col] %d source(s) dropped: the addon URL is longer than %d bytes "
-           "(these addons put their whole configuration in the URL)\n",
-           nTooLong, (int)sizeof(((ColSource *)0)->base));
   fflush(stdout);
   return added;
 }
@@ -152,10 +183,14 @@ const ColFolder *col_folder(int i) { return i>=0&&i<count?&folders[i]:NULL; }
 int col_group(const char *name,int *indices,int max) {
   int n=0;for(int i=0;i<count&&n<max;i++) if(!strcasecmp(name,folders[i].group)) indices[n++]=i;return n;
 }
+// Compares the RESOLVED address: a source from the account stores an addonId and
+// not a URL, so comparing the raw field would never match the base the catalogue
+// carries.
 const ColFolder *col_by_catalog(const char *base,const char *type,const char *id) {
   for(int i=0;i<count;i++) for(int s=0;s<folders[i].nSources;s++) {
     const ColSource *v=&folders[i].sources[s];
-    if(!strcmp(v->base,base)&&!strcmp(v->type,type)&&!strcmp(v->catId,id)) return &folders[i];
+    const char *b=col_source_base(v);
+    if(b&&*b&&!strcmp(b,base)&&!strcmp(v->type,type)&&!strcmp(v->catId,id)) return &folders[i];
   }return NULL;
 }
 int col_load(const char *dir) {

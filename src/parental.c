@@ -13,17 +13,17 @@
 // (parentalGuideRepository.js:86), and therefore the same one they appear in on
 // screen.
 static const struct { const char *key, *label; } CATS[PG_MAX] = {
-  { "SEXUAL_CONTENT",              "Nudez" },
-  { "VIOLENCE",                    "Viol\xc3\xaa" "ncia" },
-  { "PROFANITY",                   "Linguagem Impr\xc3\xb3" "pria" },
-  { "ALCOHOL_DRUGS",               "Drogas/\xc3\x81" "lcool" },
-  { "FRIGHTENING_INTENSE_SCENES",  "Conte\xc3\xba" "do Assustador" },
+  { "SEXUAL_CONTENT",              "Nudity" },
+  { "VIOLENCE",                    "Violence" },
+  { "PROFANITY",                   "Profanity" },
+  { "ALCOHOL_DRUGS",               "Alcohol & Drugs" },
+  { "FRIGHTENING_INTENSE_SCENES",  "Frightening Content" },
 };
 
 static const struct { const char *level, *label; } LEVELS[] = {
   { "mild",     "Mild" },
-  { "moderate", "Moderado" },
-  { "severe",   "Severo" },
+  { "moderate", "Moderate" },
+  { "severe",   "Severe" },
   { NULL, NULL }
 };
 

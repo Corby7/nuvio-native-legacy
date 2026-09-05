@@ -109,25 +109,25 @@ static int nLines(int col) {
 // personalizacoes abaixo usam somente metodos presentes no firmware. A ultima
 // linha restaura o conjunto inteiro sem exigir dezenas de toques no controle.
 static const char *const ST_ROT[FX_N_STYLE] = {
-  "Size", "OpenSubtitles source", "Cor", "Opacity", "Background", "Position", "Border", "Delay",
+  "Size", "OpenSubtitles source", "Colour", "Opacity", "Background", "Position", "Border", "Delay",
   "Restore default"
 };
 static const char *const ST_BACKGROUND[5] = { "None", "Dark 25%", "Dark 50%",
                                           "Dark 75%", "Dark 100%" };
-static const char *const ST_BORDER[3] = { "None", "Contorno", "Shadow" };
+static const char *const ST_BORDER[3] = { "None", "Outline", "Shadow" };
 static const char *const ST_OPACITY[4]  = { "100%", "75%", "50%", "25%" };
 
 static void valueStyle(int line, char *dst, size_t size) {
   const VideoSubtitleStyle *e = player_sub_style();
   switch (line) {
     case 0: snprintf(dst, size, "%d%%", e->size); break;
-    case 1: snprintf(dst, size, "%s", TXT_FAMILIES_PT[e->family >= 0 && e->family < TXT_FAMILY_N ? e->family : 0]); break;
-    case 2: snprintf(dst, size, "%s", VIDEO_SUB_COLORS_PT[e->color % VIDEO_SUB_NCORES]); break;
+    case 1: snprintf(dst, size, "%s", TXT_FAMILIES_LABEL[e->family >= 0 && e->family < TXT_FAMILY_N ? e->family : 0]); break;
+    case 2: snprintf(dst, size, "%s", VIDEO_SUB_COLORS_LABEL[e->color % VIDEO_SUB_NCOLORS]); break;
     case 3: snprintf(dst, size, "%s", ST_OPACITY[e->opacity > 3 ? 3 : e->opacity]); break;
     case 4: snprintf(dst, size, "%s", ST_BACKGROUND[e->background > 4 ? 4 : e->background]); break;
     // O uMS aceita -3..4; a folha mostra 1..8 porque "posicao -3" nao diz nada
     // a quem esta olhando a tela.
-    case 5: snprintf(dst, size, "%d de 8", e->position + 1); break;
+    case 5: snprintf(dst, size, "%d of 8", e->position + 1); break;
     case 6: snprintf(dst, size, "%s", ST_BORDER[e->border > 2 ? 2 : e->border]); break;
     case 7: {
       int a = e->delayMs;
@@ -143,7 +143,7 @@ static void cycleStyle(int line) {
   switch (line) {
     case 0: e->size += 10; if (e->size > 200) e->size = 50; break;
     case 1: e->family = (e->family + 1) % TXT_FAMILY_N; break;
-    case 2: e->color     = (e->color + 1) % VIDEO_SUB_NCORES; break;
+    case 2: e->color     = (e->color + 1) % VIDEO_SUB_NCOLORS; break;
     case 3: e->opacity = (e->opacity + 1) % 4; break;
     case 4: e->background   = (e->background + 1) % 5; break;
     case 5: e->position = (e->position + 1) % 8; break;
@@ -253,7 +253,7 @@ static void column_draw(int col, float x, float width, float y0, float a) {
       rot=f?f->label:""; brand=f?f->language:NULL;
     } else {
       rot=i==0?"None":labelSubtitle(i-1,&brand);
-      if(i && !brand) brand="Incorporada";
+      if(i && !brand) brand="Embedded";
     }
     if(sel) gfx_color((GfxRect){x-20,y-14,width+20,92},.18f,.95f,.95f,.96f,a);
     int c=sel?25:230, sub=sel?70:174;
@@ -266,7 +266,7 @@ static void column_draw(int col, float x, float width, float y0, float a) {
   }
   if(!n) txt_block(TXT_PG_END,"No track available from this source.",178,180,186,x,y0+68,width,28,a,2);
   if(n>visible) {
-    char num[48]; snprintf(num,sizeof num,"%d de %d",focus[col]+1,n);
+    char num[48]; snprintf(num,sizeof num,"%d of %d",focus[col]+1,n);
     txt_draw_alpha(txt_line(TXT_MINI,num,174,176,182,255),x,y0+64+visible*FX_LINE,a);
   }
 }

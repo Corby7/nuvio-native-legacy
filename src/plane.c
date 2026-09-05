@@ -243,25 +243,26 @@ int plane_start(void *dpy, void *surf) {
   return 1;
 }
 
-// Contado em QUADROS e nao em milissegundos de proposito: este arquivo nao
-// conhece o SDL, e o laco de desenho ja e o relogio. ~30 quadros e meio
-// segundo; 12 tentativas cobrem uns 6 s, que e muito mais do que o compositor
-// levou para responder no arranque.
+// Counted in FRAMES rather than milliseconds on purpose: this file does not
+// know about SDL, and the draw loop is already the clock. ~30 frames is half a
+// second; 12 tries cover about 6 s, far longer than the compositor took to
+// answer at startup.
 #define PLANE_TRY_EVERY 30
 #define PLANE_TRY_MAX   12
 
 void plane_pump(void) {
   static int frame, tries;
   if (!exported || assigned) return;
-  // Barato e sem bloquear: se o evento ja chegou na fila (o SDL le a mesma fila
-  // padrao a cada quadro), isto o entrega sem falar com o compositor.
+  // Cheap and non-blocking: if the event is already queued (SDL reads the same
+  // default queue every frame) this delivers it without talking to the
+  // compositor at all.
   if (displayDispatchPending) displayDispatchPending(display);
   if (assigned || tries >= PLANE_TRY_MAX) return;
   if (++frame < PLANE_TRY_EVERY) return;
   frame = 0;
   tries++;
-  // Um roundtrip BLOQUEIA o quadro. E aceitavel exatamente aqui: sem id nao ha
-  // video nenhum a desenhar, e a conexao esta ociosa.
+  // A roundtrip BLOCKS the frame. That is acceptable exactly here: without an
+  // id there is no video to draw anyway, and the connection is idle.
   displayFlush(display);
   displayRoundtrip(display);
   if (!assigned && tries >= PLANE_TRY_MAX) {

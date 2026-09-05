@@ -16,7 +16,12 @@
 // Xperience declara resources catalog/meta/subtitles e NENHUM stream, entao
 // respondia {"streams":[]} para tudo. Consultar quem nao fornece e um
 // round-trip jogado fora em CADA abertura de titulo.
-static struct { char name[64]; char base[600]; int source, catalog, subtitle; } addon[ADD_MAX];
+// `id` is the identifier the addon declares in its OWN manifest, not something
+// the account stores: the account's addon list carries a name and a URL, nothing
+// more. It lives here because the owner's COLLECTIONS reference catalogues by
+// addonId, and only the manifest can match the two (see addons_note_id).
+static struct { char name[64]; char base[600]; char id[96];
+                int source, catalog, subtitle; } addon[ADD_MAX];
 static int nAddon;
 static _Atomic AddState state = ADD_STOPPED;
 static pthread_t thread;
@@ -80,8 +85,8 @@ int addons_load(const char *dirArt) {
   return nAddon;
 }
 
-// Assinatura da lista corrente: soma dos bases. Serve so para responder "mudou
-// ou nao", entao um FNV-1a basta — nao ha nada de seguranca aqui.
+// Signature of the current list: a sum over the bases. It only has to answer
+// "did this change", so FNV-1a is enough — nothing here is security.
 static unsigned listSignature(void) {
   unsigned h = 2166136261u;
   int i;
@@ -158,6 +163,36 @@ int addons_n(void) { return nAddon; }
 
 const char *addons_base(int i) {
   return (i >= 0 && i < nAddon) ? addon[i].base : "";
+}
+
+// Learns an addon's id from the manifest that was just read. The caller is
+// readManifest in discover.c, which already holds both the base and the id — so
+// this costs no extra request.
+void addons_note_id(const char *base, const char *id) {
+  int i;
+  if (!base || !*base || !id || !*id) return;
+  for (i = 0; i < nAddon; i++)
+    if (!strcmp(addon[i].base, base)) {
+      if (strcmp(addon[i].id, id))
+        printf("[addons] '%s' is id '%s'\n", addon[i].name, id);
+      snprintf(addon[i].id, sizeof addon[i].id, "%s", id);
+      return;
+    }
+}
+
+// The base URL of the addon with this id, or "" when it is not installed.
+//
+// THIS is how a collection source becomes a URL. The collection stores a short
+// addonId; the real address is the INSTALLED addon's, which is the same rule the
+// web app follows (findAddonForSource matches on id before looking at the stored
+// URL). The URL the collection itself carries runs past 4 KB in these addons,
+// because they embed their whole configuration in it, and it fits nowhere here.
+const char *addons_base_for_id(const char *id) {
+  int i;
+  if (!id || !*id) return "";
+  for (i = 0; i < nAddon; i++)
+    if (addon[i].id[0] && !strcmp(addon[i].id, id)) return addon[i].base;
+  return "";
 }
 
 // Quarta coluna de addons.txt. Como a de stream, ausente vale 1 — arquivo

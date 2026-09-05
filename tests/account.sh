@@ -11,27 +11,27 @@
 set -e
 cd "$(dirname "$0")/.."
 ENV_D=$(tools/env.sh)
-FONTES=$(ls src/*.c | grep -v 'src/main.c' | tr '\n' ' ')
+SOURCES=$(ls src/*.c | grep -v 'src/main.c' | tr '\n' ' ')
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
-echo "==> logout apaga o user previous"
-eval cc tests/account_logout.c $FONTES -o "$TMP/logout" "$ENV_D" -Isrc \
+echo "==> logout erases the previous user"
+eval cc tests/account_logout.c $SOURCES -o "$TMP/logout" "$ENV_D" -Isrc \
   -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
   -L/opt/homebrew/lib -lSDL2 -lSDL2_image -lSDL2_ttf \
   -framework OpenGL -Wno-deprecated-declarations -Wno-macro-redefined
 NUVIO_DATA="$TMP/data" "$TMP/logout"
 
 echo
-echo "==> ajustes da account chegam com o sentido certo"
-eval cc tests/account_settings.c $FONTES -o "$TMP/ajustes" "$ENV_D" -Isrc \
+echo "==> account settings arrive with the right meaning"
+eval cc tests/account_settings.c $SOURCES -o "$TMP/settings" "$ENV_D" -Isrc \
   -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
   -L/opt/homebrew/lib -lSDL2 -lSDL2_image -lSDL2_ttf \
   -framework OpenGL -Wno-deprecated-declarations -Wno-macro-redefined
-"$TMP/ajustes"
+"$TMP/settings"
 
 echo
-echo "==> QR legivel por leitor de verdade"
+echo "==> QR readable by a real scanner"
 cc tools/qr_dump.c src/qr.c -o "$TMP/qr" -Isrc
 PY=${NUVIO_PY:-/tmp/qrvenv/bin/python}
 if [ -x "$PY" ]; then "$PY" tools/qr_check.py "$TMP/qr"
-else echo "   PULADO: sem venv com opencv (see o cabecalho de tools/qr_check.py)"; fi
+else echo "   SKIPPED: no venv with opencv (see the header of tools/qr_check.py)"; fi

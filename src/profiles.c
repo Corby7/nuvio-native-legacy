@@ -66,7 +66,7 @@ int profiles_pull(void) {
       if (idx <= 0) continue;
       tmp[new].index_ = (int)idx;
       if (!js_text(p, f, "name", tmp[new].name, sizeof tmp[new].name))
-        snprintf(tmp[new].name, sizeof tmp[new].name, "ContaPerfil %d", (int)idx);
+        snprintf(tmp[new].name, sizeof tmp[new].name, "Profile %d", (int)idx);
       js_text(p, f, "avatar_url", tmp[new].avatarUrl, sizeof tmp[new].avatarUrl);
       if (!js_text(p, f, "avatar_color_hex", tmp[new].colorHex, sizeof tmp[new].colorHex))
         snprintf(tmp[new].colorHex, sizeof tmp[new].colorHex, "#1E88E5");

@@ -270,7 +270,7 @@ static void *threadRequest(void *u) {
   jsw_obj_start(&w);
   jsw_cs(&w, "p_device_nonce", nonce);
   jsw_cs(&w, "p_redirect_base_url", cloud_base_login());
-  jsw_cs(&w, "p_device_name", "LG webOS (Nuvio nativo)");
+  jsw_cs(&w, "p_device_name", "LG webOS (Nuvio native)");
   jsw_obj_end(&w);
   resp = cloud_rpc_com("start_tv_login_session", jsw_text_final(&w), access_, &st);
 

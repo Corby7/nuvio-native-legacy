@@ -202,10 +202,18 @@ void cat_set(const CatItem *list, int n);
 //   5. colecoes com `pinToTop` vao na frente e nunca sao cortadas
 //   6. corta o total em `getHomeRowLimit()`
 //
-// O teto para NOS e 16: `HOME_MAX_ROWS_LEGACY_TV` em homeConstants.js, o ramo
-// que `isLegacyTvRuntime()` escolhe — e esta TV e exatamente esse caso. O 40 do
-// `HOME_MAX_ROWS_DEFAULT` e do navegador de mesa.
-#define CAT_FILTER_MAX 16
+// The web uses 16 here (`HOME_MAX_ROWS_LEGACY_TV` in homeConstants.js, the
+// branch `isLegacyTvRuntime()` picks; the 40 of `HOME_MAX_ROWS_DEFAULT` is for
+// the desktop browser). THIS app uses 24, and the difference is deliberate.
+//
+// The 16 came from a 2019 TV. The target now is a C3 (webOS 23), MEASURED with
+// the catalogue full at 60.0 fps / 0 janks and 85 MB of RSS against 832 MB free.
+// And the owner's collections compete for this same budget with the catalogues:
+// at 16, a collection placed mid-list fell off the screen.
+//
+// If jank ever comes back, this is the number to change — and the measurement
+// belongs in TOOLS.md, not in the guess of whoever changes it.
+#define CAT_FILTER_MAX 24
 
 typedef struct {
   char key[192];   // homeCatalogKey: <addonId>_<tipo>_<catalogoId>

@@ -61,7 +61,7 @@ typedef enum {
   TXT_FAMILY_N
 } TxtFamily;
 
-extern const char *const TXT_FAMILIES_PT[TXT_FAMILY_N];
+extern const char *const TXT_FAMILIES_LABEL[TXT_FAMILY_N];
 
 // Instrumentation: how many lines were RASTERISED (rather than coming from the
 // cache) in the frame, and what that cost. Rasterising text is the most

@@ -15,6 +15,7 @@
 #include "settings.h"
 #include "catalog.h"
 #include "collections.h"
+#include "discover.h"
 #include "badges.h"
 #include "extras.h"
 #include "director.h"
@@ -31,10 +32,11 @@ float detail_progress(void);
 #include <ctype.h>
 
 #define MAX_ART   64
-// 16, o teto do web para ESTE runtime: HOME_MAX_ROWS_LEGACY_TV em
-// js/ui/screens/home/homeConstants.js, que e o ramo escolhido por
-// isLegacyTvRuntime(). O HOME_MAX_ROWS_DEFAULT de 40 e do navegador de mesa.
-#define MAX_FILTER    32
+// TWICE the catalogue cap (CAT_FILTER_MAX, currently 24), because the home's rows
+// are not only catalogues: the owner's collections, the packaged groups and the
+// synthetic ones (Continue watching, Among friends) all land here too. This array
+// is the headroom, not the limit — what actually trims the list is CAT_FILTER_MAX.
+#define MAX_FILTER    48
 // 13 e nao 12: sao 12 CARTAZES mais a coluna do card "Ver tudo", que ocupa a
 // posicao seguinte a ultima arte. Com 12 aqui, animFoco[r][12] escrevia fora do
 // vetor — o card nunca acendia ao receber foco e a memoria do vizinho era
@@ -75,8 +77,8 @@ static char pst[MAX_ART][512];   int nPst = 0;   // posters 2:3
 static Row rows[MAX_FILTER] = {
   { "Continue watching", ROW_CONTINUE, 8, 0  },
   { "Popular - Film",      ROW_NORMAL,   8, 8  },
-  { "Popular - S\xc3\xa9rie", ROW_NORMAL, 8, 16 },
-  { "Em alta",              ROW_NORMAL,   8, 24 },
+  { "Popular - Series",  ROW_NORMAL, 8, 16 },
+  { "Trending",         ROW_NORMAL,   8, 24 },
 };
 static int nRows = 4;
 static int resumeIndex = -1;
@@ -574,6 +576,42 @@ static int subscriptionPrefs(void) {
        | (settings_posters_landscape() ? 8 : 0)
        | (settings_labels_poster() ? 16 : 0);
 }
+// THE KNOWN CURATION. It no longer decides the ORDER — the account's list does —
+// and is left with two jobs: supplying the display name and the special kind of
+// certain rows, and acting as a fallback order when the account has no order at
+// all (a fresh account, or a server without the RPC).
+//
+// The "@Name" entries are packaged collection GROUPS, matched by title. The
+// account's own collections do not come through here: they arrive by id, in the
+// position the person gave them.
+static const char *const CURATED_ID[]={"continue_watching","social_activity","now_playing_movies","@Streaming",
+  "trending_movies","trending_series","@Themes","ai_movies_for_you",
+  "ai_series_for_you","snoak_top100_movies","snoak_top100_series",
+  "@Awards","@Directors","@Genres"};
+static const char *const CURATED_NAME[]={"Continue watching","Among friends","Recent Release","Streaming",
+  "Trending Movies","Trending Series","Themes","Picked for You · Movies",
+  "Picked for You · Series","Top 100 · Movies","Top 100 · Series",
+  "Awards","Directors","Genres"};
+#define CURATED_N (sizeof CURATED_ID / sizeof CURATED_ID[0])
+
+// Applies the display name and special kind to a catalogue row, if the curation
+// recognises it. It does not touch the position: that was already decided by the
+// caller.
+static void decorateRow(Row *row) {
+  size_t s;
+  if(!row)return;
+  for(s=0;s<CURATED_N;s++) {
+    if(CURATED_ID[s][0]=='@')continue;
+    if(strcmp(row->catId,CURATED_ID[s])&&strcmp(row->key,CURATED_ID[s]))continue;
+    snprintf(row->title,sizeof row->title,"%s",CURATED_NAME[s]);
+    if(s==1)row->kind=ROW_SOCIAL;
+    else if(s==2)row->kind=ROW_HIGHLIGHT;
+    else if(s==9||s==10)row->kind=ROW_TOP10;
+    else if(s!=0)row->kind=ROW_NORMAL;
+    return;
+  }
+}
+
 static void syncRows(void) {
   int nCat = cat_n_rows(), r, destination = 0;
   int sub = subscriptionPrefs();
@@ -589,9 +627,9 @@ static void syncRows(void) {
     revision = (revision ^ (unsigned)cf->start) * 16777619u;
     revision = (revision ^ (unsigned)cf->n) * 16777619u;
   }
-  // As COLECOES entram na conta. Sem isto, uma colecao que chega da conta depois
-  // do catalogo nao muda a revisao, o retorno logo abaixo corta a remontagem, e
-  // a fileira dela nunca chega a existir.
+  // The COLLECTIONS join the sum. Without this, a collection arriving from the
+  // account after the catalogue does not change the revision, the early return
+  // just below skips the rebuild, and its row never comes to exist.
   revision = (revision ^ col_revision()) * 16777619u;
   // Guardado ANTES do laco abaixo, que sobrescreve fileiras[]: depois dele nao
   // ha mais como saber em que fileira o foco estava.
@@ -600,11 +638,13 @@ static void syncRows(void) {
   keyFocus[0] = 0;
   if (focus.row >= 0 && focus.row < nRows)
     snprintf(keyFocus, sizeof keyFocus, "%s", rows[focus.row].key);
-  if (nCat < 1 || (nCat == filtersApplied && sub == prefsApplied
+  // `nCat < 1` alone hid the COLLECTIONS: with no catalogue rows the function
+  // returned right here, so a home that had only collections came out empty.
+  if ((nCat < 1 && !col_n()) || (nCat == filtersApplied && sub == prefsApplied
       && revision == ultimaRevision && resumeApplied == resumeRev)) return;
   // Guardar o estado por chave: inserir o hub não deve transferir a rolagem
   // horizontal de uma fileira para outra.
-  Row old[MAX_FILTER];
+  static Row old[MAX_FILTER];
   float oldX[MAX_FILTER];
   int nOld = nRows;
   memcpy(old, rows, sizeof old);
@@ -650,11 +690,11 @@ static void syncRows(void) {
     destination++;
   }
   if (col_n()) {
-    Row orig[MAX_FILTER];int total=destination;memcpy(orig,rows,sizeof orig);destination=0;
-    // pinToTop: as colecoes que o dono fixou vao PRIMEIRO e nao sao cortadas.
-    // E o passo 5 do algoritmo do web, que estava descrito em catalogo.h e nao
-    // existia aqui — e sem ele uma colecao caia no fim, atras de 16 fileiras de
-    // catalogo, ou seja: fora da tela, que e o mesmo que nao existir.
+    static Row orig[MAX_FILTER];int total=destination;memcpy(orig,rows,sizeof orig);destination=0;
+    // pinToTop: the collections the owner pinned go FIRST and are never cut. It
+    // is step 5 of the web's algorithm, described in catalog.h and missing here —
+    // and without it a collection fell to the end, behind 16 catalogue rows, i.e.
+    // off the screen, which is the same as not existing.
     for(int i=0;i<col_n() && destination<MAX_FILTER;i++) {
       const ColFolder *folder=col_folder(i);
       char key[192];
@@ -671,30 +711,81 @@ static void syncRows(void) {
         snprintf(v.title,sizeof v.title,"%s",folder->group);
         rows[destination++]=v; }
     }
-    const char *ids[]={"continue_watching","social_activity","now_playing_movies","@Streaming",
-      "trending_movies","trending_series","@Themes","ai_movies_for_you",
-      "ai_series_for_you","snoak_top100_movies","snoak_top100_series",
-      "@Awards","@Directors","@Genres"};
-    const char *names[]={"Continue watching","Among friends","Recent Release","Streaming",
-      "Trending Movies","Trending Series","Themes","Picked for You · Movies",
-      "Picked for You · Series","Top 100 · Movies","Top 100 · Series",
-      "Awards","Directors","Genres"};
-    // A curadoria conhecida ganha prioridade, mas nao e uma lista de corte.
-    // O web mantem chaves novas no fim e a home nativa precisa fazer o mesmo:
-    // catalogos e grupos que nao estavam nesta tabela continuam acessiveis.
-    for(size_t s=0;s<sizeof ids/sizeof ids[0] && destination<MAX_FILTER;s++) {
+    // THE ACCOUNT'S ORDER DECIDES. It is a single list interleaving catalogues
+    // (`<addonId>_<type>_<catalogId>`) and collections (`collection_<id>`) — the
+    // position the person chose in the web app. Collections could previously only
+    // appear at the end, behind every catalogue, because nothing here could read
+    // that list.
+    //
+    // The curation table just below no longer decides the ORDER and only
+    // DECORATES: it supplies the name and special kind of the rows it recognises.
+    // When there is no account order (a fresh account, or a server without the
+    // RPC), this loop places nothing and the table becomes the only criterion
+    // again, exactly as before.
+    for(int i=0;i<disc_prefs_n() && destination<MAX_FILTER;i++) {
+      const char *key=disc_prefs_key(i);
+      const char *custom;
+      int already=0;
+      if(!key[0]||disc_prefs_hidden(key))continue;
+      if(!strncmp(key,"collection_",11)) {
+        // The account identifies a collection by ID; the row is grouped by TITLE.
+        // col_group_by_id is the bridge between the two.
+        const char *group=col_group_by_id(key+11);
+        Row v={0};
+        char rowKey[192];
+        if(!group||!group[0]) {
+          // The order names a collection that is not loaded: deleted on the web,
+          // or still on its way. Saying which one avoids hunting for a fault in
+          // the wrong place when an expected row fails to appear.
+          static int said;
+          if(said<4){printf("[home] order names %s, which matches no collection\n",key);said++;}
+          continue;
+        }
+        snprintf(rowKey,sizeof rowKey,"collection_%s",group);
+        for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,rowKey)){already=1;break;}
+        if(already)continue;             // already placed by the pinToTop pass
+        v.n=col_group(group,v.folders,MAX_CARDS);
+        if(!v.n)continue;
+        v.kind=ROW_CATALOGS;
+        snprintf(v.key,sizeof v.key,"%s",rowKey);
+        snprintf(v.title,sizeof v.title,"%s",group);
+        custom=disc_prefs_title(key);
+        if(custom&&*custom)snprintf(v.title,sizeof v.title,"%s",custom);
+        rows[destination++]=v;
+        continue;
+      }
+      for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,key)){already=1;break;}
+      if(already)continue;
+      for(int k=0;k<total;k++) {
+        if(strcmp(orig[k].key,key))continue;
+        rows[destination]=orig[k];
+        decorateRow(&rows[destination]);
+        destination++;
+        break;
+      }
+    }
+    const char *const *ids=CURATED_ID, *const *names=CURATED_NAME;
+    // The known curation takes priority over whatever the account did NOT order,
+    // but it is not a cut-off list. The web keeps new keys at the end and the
+    // native home has to do the same: catalogues and groups that were not in this
+    // table stay reachable.
+    for(size_t s=0;s<CURATED_N && destination<MAX_FILTER;s++) {
       if(ids[s][0]=='@') {
         Row v={0};int already=0;
         v.n=col_group(ids[s]+1,v.folders,MAX_CARDS);
         if(!v.n)continue;
         v.kind=ROW_CATALOGS;
         snprintf(v.key,sizeof v.key,"collection_%s",ids[s]+1);
-        // Pode ja ter entrado pelo passo do pinToTop acima.
+        // May already have been added by the pinToTop pass above.
         for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,v.key)){already=1;break;}
         if(already)continue;
         snprintf(v.title,sizeof v.title,"%s",names[s]);rows[destination++]=v;
       } else for(int k=0;k<total;k++) {
+        int dup=0;
         if(strcmp(orig[k].catId,ids[s])&&strcmp(orig[k].key,ids[s]))continue;
+        // May already have been placed by the account's order, just above.
+        for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,orig[k].key)){dup=1;break;}
+        if(dup)break;
         rows[destination]=orig[k];
         snprintf(rows[destination].title,sizeof rows[destination].title,"%s",names[s]);
         if(s==1)rows[destination].kind=ROW_SOCIAL;
@@ -764,6 +855,31 @@ static void syncRows(void) {
     destination++;
   }
   nRows = destination;
+  // THE HOME'S FINAL ORDER, once per rebuild.
+  //
+  // The "[disc] row" lines only tell half the story: those are the catalogues, and
+  // the interleaving with collections happens here. Without this list there is no
+  // way to check the order without someone watching the TV — and the order is
+  // precisely what the person configured and expects to recognise.
+  //
+  // Only when it CHANGES. The catalogue is published row by row, so this function
+  // runs ~22 times per launch; printing the whole list each time would drown the
+  // log in exactly the section it exists to make readable.
+  { static unsigned printed;
+    unsigned now = 2166136261u;
+    int i;
+    for (i = 0; i < nRows; i++)
+      for (const unsigned char *s = (const unsigned char *)rows[i].key; *s; s++)
+        now = (now ^ *s) * 16777619u;
+    if (now != printed) {
+      printed = now;
+      printf("[home] %d row(s):\n", nRows);
+      for (i = 0; i < nRows; i++)
+        printf("[home]  %2d %-10s %s\n", i,
+               rows[i].kind == ROW_CATALOGS ? "COLLECTION" : "catalogue",
+               rows[i].title);
+      fflush(stdout);
+    } }
   resumeApplied = resumeRev;
   ultimaRevision = revision;
   filtersApplied = nCat;
@@ -1050,7 +1166,7 @@ static void drawHero(Uint32 now, float output) {
       float brandAspect=logo?tex_aspect(brand):2.66f;
       if(brandAspect<=0)brandAspect=2.66f;
       if(logo)gfx_rect((GfxRect){x,144,44*brandAspect,44},logo,GFX_BRAND,0,0,0,0,.96f,.94f,.95f,a);
-      txt_draw_alpha(txt_line(TXT_HERO_META,"SUA COMUNIDADE",210,191,199,255),x+44*brandAspect+24,154,a);
+      txt_draw_alpha(txt_line(TXT_HERO_META,"YOUR COMMUNITY",210,191,199,255),x+44*brandAspect+24,154,a);
       txt_draw_alpha(txt_line(TXT_TITLE1,"Good stories connect us.",244,243,247,255),x,226,a);
       txt_block(TXT_HERO_SIN,"Discover what your friends are watching.\nA new recommendation can start here.",187,190,202,x,330,740,36,a,2);
     }
@@ -1070,10 +1186,10 @@ static void drawHero(Uint32 now, float output) {
         if(art)gfx_rect(header,art,GFX_TEXT,0,0,0,0,1,1,1,a);
         heroArtRect=header;
         int director=!strcasecmp(folder->group,"Directors");
-        txt_draw_alpha(txt_line(TXT_HERO_META,director?"DIRETORES":"COLLECTIONS",190,193,200,255),x,122,a);
+        txt_draw_alpha(txt_line(TXT_HERO_META,director?"DIRECTORS":"COLLECTIONS",190,193,200,255),x,122,a);
         txt_block(TXT_TITLE1,folder->title,244,243,247,x,183,860,72,a,2);
         char caption[160];
-        snprintf(caption,sizeof caption,"%s  ·  %d %s",director?"Filmografia":"A selection of film and series",folder->nSources,folder->nSources==1?"list":"listas");
+        snprintf(caption,sizeof caption,"%s  ·  %d %s",director?"Filmography":"A selection of film and series",folder->nSources,folder->nSources==1?"list":"lists");
         txt_draw_alpha(txt_line_trim(TXT_HERO_META,caption,190,193,200,255,860),x,358,a);
         txt_draw_alpha(txt_line(TXT_HERO_META,"OK to explore",224,225,230,255),x,406,a);
         return;
@@ -1121,7 +1237,7 @@ static void drawHero(Uint32 now, float output) {
         }
         char caption[96];
         snprintf(caption, sizeof caption, "%d %s · OK to explore",
-                 folder->nSources, folder->nSources == 1 ? "list" : "listas");
+                 folder->nSources, folder->nSources == 1 ? "list" : "lists");
         txt_draw_alpha(txt_line_trim(TXT_HERO_SIN, caption,
                                            205, 210, 221, 255, 780),
                            x, NV_COLLECTION_HERO_CAPTION_Y, a);
@@ -1146,7 +1262,7 @@ static void drawHero(Uint32 now, float output) {
         txt_draw_alpha(name,x,NV_COLLECTION_HERO_LOGO_Y,a);
         endTitle=NV_COLLECTION_HERO_LOGO_Y+name.h;
       }
-      char caption[96];snprintf(caption,sizeof caption,"%d %s · OK to explore",folder->nSources,folder->nSources==1?"list":"listas");
+      char caption[96];snprintf(caption,sizeof caption,"%d %s · OK to explore",folder->nSources,folder->nSources==1?"list":"lists");
       float yCap=NV_COLLECTION_HERO_CAPTION_Y;
       if(isDirector) {
         // Ficha do TMDB abaixo do nome: quem e, quando e onde nasceu, tres
@@ -1432,6 +1548,19 @@ static void drawShortcuts(int r, float y) {
       gfx_tex_aspect_current = tex_aspect(art);
       gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1);
       gfx_tex_aspect_current = 0;
+    } else if (folder->title[0]) {
+      // NO ART YET, so the name stands in for it. The packaged collections' covers
+      // are local files and appear on the first frame; the ACCOUNT's are CDN URLs
+      // and arrive seconds later. Until now the card was a mute grey rectangle —
+      // indistinguishable from a broken one, and saying nothing about what it was.
+      //
+      // The poster rows already solve this with drawArtMissing; here the name is
+      // enough, because an "Art unavailable" caption would be a lie: the art is on
+      // its way, not missing.
+      TxtLine name = txt_line_trim(TXT_CAPTION, folder->title,
+                                   184, 188, 198, 255, card.w - 32.0f);
+      txt_draw_alpha(name, card.x + (card.w - name.w) * 0.5f,
+                     card.y + card.h * 0.5f - name.h * 0.5f, 0.9f);
     }
     // A propria capa e a identidade do catalogo. O nome/logo vinha sendo
     // desenhado novamente por cima dela e criava exatamente a duplicacao que
@@ -1495,7 +1624,7 @@ void home_draw(Uint32 now) {
         const char *last = NULL;
         while (cut) { last = cut; cut = strstr(cut + 3, " - "); }
         if (last && (!strcmp(last + 3, "Film")
-                       || !strcmp(last + 3, "S\xc3\xa9rie"))) {
+                       || !strcmp(last + 3, "Series"))) {
           size_t n = (size_t)(last - rotFilter);
           if (n >= sizeof withoutSuffix) n = sizeof withoutSuffix - 1;
           memcpy(withoutSuffix, rotFilter, n);
@@ -1609,7 +1738,7 @@ void home_draw(Uint32 now) {
               if(tx){gfx_tex_aspect_current=tex_aspect(pa);gfx_rect(pr,tx,GFX_CARD,0,0,0,.055f,1,1,1,1);gfx_tex_aspect_current=0;}
               else drawArtMissing(pr,.055f,it,1);
             }
-            txt_draw(txt_line(TXT_CAPTION,"TOP 100   ·   Explorar primeiros 10",242,235,248,255),px+24,py+h-42);
+            txt_draw(txt_line(TXT_CAPTION,"TOP 100   ·   Explore the first 10",242,235,248,255),px+24,py+h-42);
             if(focus.row==r)hasItemFocus=0;
             continue;
           }

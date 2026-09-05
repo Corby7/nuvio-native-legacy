@@ -167,7 +167,7 @@ void login_draw(Uint32 now) {
     }
 
     case SESS_SWITCHING:
-      lineCentered(TXT_HEADLINE, "Autorizado. Entrando…", 210, 212, 220, y, 1.0f);
+      lineCentered(TXT_HEADLINE, "Authorised. Signing in…", 210, 212, 220, y, 1.0f);
       break;
 
     case SESS_LOGGEDIN:

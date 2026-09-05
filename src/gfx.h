@@ -116,23 +116,26 @@ extern float gfx_opacity_group;
 // trabalho jogado fora.
 void gfx_crop(float x, float y, float w, float h);
 
-// --- ICONES ------------------------------------------------------------------
+// --- ICONS -------------------------------------------------------------------
 //
-// Os glifos da interface vinham DESENHADOS NO SHADER (GFX_OLHO, GFX_FONTES, o
-// "+" feito de dois retangulos). Cada um era uma aproximacao a mao do SVG
-// original, e o resultado o dono resumiu assim: "ta muito feio esses icones,
-// nao invente essas merdas, usa SVG reais".
+// The interface glyphs used to be DRAWN IN THE SHADER (GFX_EYE, GFX_SOURCES,
+// the "+" built from two rectangles). Each was a hand-made approximation of the
+// original SVG, and the owner summed the result up as: those icons look awful,
+// stop inventing them, use the real SVGs.
 //
-// Agora sao os ARQUIVOS DE VERDADE. Os .svg do app web foram rasterizados a
-// 128px para deploy/app/art/icones/ (script /tmp/svg2png.py: injeta
-// width/height, troca currentColor por branco e chama sips). O PNG guarda a
-// forma no ALPHA, entao gfx_icone desenha com GFX_MARCA e a COR vem do
-// chamador — o mesmo arquivo serve preto sobre pilula branca e branco sobre
-// circulo escuro.
+// Now they are THE REAL FILES. The web app's .svg were rasterised at 128px into
+// deploy/app/art/icons/ (script /tmp/svg2png.py: injects width/height, swaps
+// currentColor for white and calls sips). The PNG keeps the shape in the ALPHA,
+// so gfx_icon draws with GFX_BRAND and the COLOUR comes from the caller — the
+// same file serves black on a white pill and white on a dark circle.
 //
-// `nome` e o basename sem extensao: "mais", "visto", "naovisto", "fontes",
-// "play", "pause", "legenda", "audio", "aspecto", "avancar", "episodios",
-// "trailer".
+// `name` is the basename without the extension. It must match a file in
+// deploy/app/art/icons/ EXACTLY: gfx_icon builds "<dir>/<name>.png" with no
+// mapping, and a name with no file loads nothing and draws nothing, with no
+// error. The set is: "more", "watched", "unwatched", "sources", "play",
+// "pause", "subtitles", "audio", "aspect", "forward", "episodes", "trailer",
+// and "menu_home" / "menu_library" / "menu_profile" / "menu_search" /
+// "menu_settings".
 void gfx_icons_dir(const char *dirArt);
 void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca);
 void gfx_no_crop(void);

@@ -49,6 +49,20 @@ int  addons_export(AddonRemote *output, int max);
 void addons_forget(void);
 int  addons_n(void);
 const char *addons_base(int i);   // URL base, sem /manifest.json
+
+// The id an addon declares in its own manifest, learned while the catalogues are
+// read (`readManifest` in discover.c already parses it).
+//
+// It exists for the owner's COLLECTIONS: a collection's source names a catalogue
+// by `addonId`, and the address to fetch it from is the INSTALLED addon's — the
+// same rule the web app follows (`findAddonForSource` matches on id first, and
+// only then falls back to the URL stored inside the collection). That stored URL
+// is over 4 KB in these addons, which embed their whole configuration in it, so
+// it is never worth carrying around.
+void addons_note_id(const char *base, const char *id);
+
+// The base URL of the addon with this id, or "" when it is not installed.
+const char *addons_base_for_id(const char *id);
 int  addons_has_catalog(int i);  // 1 quando o addon fornece catalogo
 
 // Fires the fetch for `imdb`'s sources ("tt1234567", or "tt1234567:1:2" for an
