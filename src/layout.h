@@ -211,6 +211,26 @@
 // altura 318 (o 212 x 1.5 "certinho" que o web nao usa) e gap 24.
 #define NV_CARD_W        212.0f
 #define NV_CARD_H        322.0f
+
+// CARD PADDING. The 212x322 box is not all artwork. The web nests two 2px
+// borders, both transparent at rest: `.home-content-card` (border 2px,
+// radius 24) wraps `.home-poster-frame` (border 2px, radius 22), and the art
+// fills the frame's padding box. With `box-sizing: border-box` — the `*` rule
+// at base.css:119 — that leaves the art 4px inside the card on every side:
+// 204x314 in the portrait card, 314x174.875 in the landscape one. It is also
+// where the 322 comes from: 2 + 318 (the frame) + 2.
+//
+// The port used to paint the art over the WHOLE box, so a legacy poster read
+// 8px wider than the web one and all but touched its neighbour. The 236 step
+// was never wrong — the gutter was missing.
+//
+// This gutter belongs to the POSTER card only. The continue-watching card is
+// built differently in the web: `.home-continue-media` has `border: 0` and the
+// artwork does run edge to edge (components.css:5893).
+#define NV_CARD_BORDER   2.0f   // .home-content-card border-width
+#define NV_FRAME_BORDER  2.0f   // .home-poster-frame border-width
+#define NV_CARD_PAD      (NV_CARD_BORDER + NV_FRAME_BORDER)
+
 // 24, e o 60 que estava aqui era ERRO DE MEDIDA. A conta "520 - 248 = 272 de
 // passo, menos 212 do card = 60" mediu um estado com o card EXPANDIDO pelo
 // foco; o passo em repouso e outro.
@@ -400,6 +420,21 @@
 // numero so. NV_DETW_ANEL ja era 4 e so era aplicado no detalhe.
 #define NV_RING_FOCUS      4.0f
 
+// POSTER CARD FOCUS RING. The poster is the one card that does NOT take the
+// 4px outer ring above, and the reason is structural rather than a taste call:
+// its ring is the 2px border of `.home-poster-frame`, transparent at rest and
+// lit to rgba(255,255,255,0.8) on focus (components.css:5619). Being a border
+// on a border-box element it grows INWARD, so it sits in the 4px gutter that
+// NV_CARD_PAD opens — outer edge 2px in from the card box, inner edge flush
+// against the art, and the card keeps its footprint.
+//
+// The 4px outer ring stays right where the web puts it: on the
+// continue-watching card, whose `::before` carries
+// `0 0 0 4px var(--focus-color)` — a real outset box-shadow (components.css:
+// 5874), with --focus-color #ffffff (base.css:24).
+#define NV_FRAME_RING      2.0f
+#define NV_FRAME_RING_A    0.8f
+
 // Area util explicita da home: a rail pode variar, mas o texto e o foco nunca
 // encostam na safe area direita.
 #define NV_HOME_SAFE_RIGHT    NV_LEGACY_CONTENT_RIGHT
@@ -445,6 +480,24 @@
 #define NV_COLOR_SKELETON_R 0.173f
 #define NV_COLOR_SKELETON_G 0.173f
 #define NV_COLOR_SKELETON_B 0.173f
+
+// POSTER SURFACE WITH NO ART. On the home the web does not use the flat
+// #2C2C2C above: `.content-poster` — the element that IS the image, and the
+// only one visible while the file is in flight — carries
+// `background: linear-gradient(180deg, #1c1c1c, #111)` (components.css:5641).
+// The frame behind it never shows through, so this gradient is the whole
+// loading surface.
+//
+// It is darker than #2C2C2C, and the note above is still the reason that value
+// exists: a card must not vanish into the #0D0D0D page. It does not — #1c1c1c
+// is 28 against 13, and it stays legible all the way down to the #111 (17) at
+// the bottom edge. NV_COLOR_SKELETON keeps its job on the screens that have no
+// such layer (search, library).
+#define NV_POSTER_BG_R      0.110f   // #1c1c1c, top of the gradient
+#define NV_POSTER_BG_G      0.110f
+#define NV_POSTER_BG_B      0.110f
+// Black laid over that top colour to land on #111 at the bottom: 1 - 17/28.
+#define NV_POSTER_BG_FADE   0.393f
 
 // Foco: escala 1.05-1.10x na HIG. Usamos 1.09 no card.
 // Escala do foco DERIVADA das tabelas oficiais de Top Shelf, que publicam

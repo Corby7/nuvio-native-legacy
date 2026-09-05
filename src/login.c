@@ -18,53 +18,9 @@
 #define LG_BLOCK_W      1100.0f
 #define LG_PILL_W        360.0f
 #define LG_PILL_H         76.0f
-// Zona de silencio: 4 modulos claros em volta, exigidos pela norma. Vao DENTRO
-// da textura para que nenhum ajuste de layout possa comer a margem por
-// acidente — sem ela, leitor nenhum acha o simbolo.
-#define LG_QR_MARGIN       4
 
 static float animButton;
 static float pulse;
-
-static GLuint texQr;
-static char   qrOf[512];   // conteudo ja desenhado, para nao refazer por quadro
-
-// Sobe o simbolo como textura em vez de desenhar um retangulo por modulo: a
-// versao 4 tem 33x33 = 1089 modulos, e mil chamadas de desenho por quadro
-// custam mais que a tela inteira.
-static void generateTexQr(const char *text) {
-  Qr q;
-  int n, side, x, y;
-  unsigned char *px;
-  if (!text || !text[0]) return;
-  if (!strcmp(qrOf, text) && texQr) return;
-  if (!qr_generate(&q, text)) { printf("[login] URL does not fit in a QR: %s\n", text); return; }
-
-  side = q.side + 2 * LG_QR_MARGIN;
-  px = (unsigned char *)malloc((size_t)side * side * 3);
-  if (!px) return;
-  memset(px, 255, (size_t)side * side * 3);   // fundo claro, inclusive a margem
-  for (y = 0; y < q.side; y++)
-    for (x = 0; x < q.side; x++)
-      if (qr_modulo(&q, x, y)) {
-        size_t i = ((size_t)(y + LG_QR_MARGIN) * side + (x + LG_QR_MARGIN)) * 3;
-        px[i] = px[i + 1] = px[i + 2] = 0;
-      }
-
-  if (!texQr) glGenTextures(1, &texQr);
-  glBindTexture(GL_TEXTURE_2D, texQr);
-  // NEAREST, nao LINEAR: um modulo borrado com o vizinho e o jeito mais rapido
-  // de tornar o simbolo ilegivel numa camera de celular.
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, side, side, 0, GL_RGB, GL_UNSIGNED_BYTE, px);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  free(px);
-  n = snprintf(qrOf, sizeof qrOf, "%s", text);
-  (void)n;
-}
 
 void login_start(void) {
   animButton = 0.0f;
@@ -130,11 +86,13 @@ void login_draw(Uint32 now) {
 
     case SESS_WAITING: {
       const char *url = session_url_login();
+      // Cached by qr.c and keyed on the text, so calling it every frame with the
+      // same URL uploads nothing.
+      GLuint texQr = qr_texture(url);
       lineCentered(TXT_BODY, "Point your phone camera at the code:",
                     176, 178, 186, y, 1.0f);
       y += 62.0f;
 
-      generateTexQr(url);
       if (texQr) {
         // Moldura clara um pouco maior que o simbolo: sobre o fundo escuro da
         // tela, a zona de silencio da textura sozinha ja bastaria, mas a

@@ -20,6 +20,8 @@
 #ifndef NV_QR_H
 #define NV_QR_H
 
+#include "gl_compat.h"
+
 #define QR_MAX_SIDE 41   // versao 6: 17 + 4*6
 
 typedef struct {
@@ -35,5 +37,18 @@ static inline int qr_modulo(const Qr *q, int x, int y) {
   if (!q || x < 0 || y < 0 || x >= q->side || y >= q->side) return 0;
   return q->m[y * q->side + x];
 }
+
+// The symbol as a texture, ready for gfx_rect with GFX_SNAP. Returns 0 when the
+// text does not fit or the upload failed.
+//
+// It is a texture and not a rectangle per module because version 4 is 33x33 =
+// 1089 modules, and a thousand draw calls a frame cost more than the whole
+// screen does.
+//
+// ONE cache for the whole app, keyed by the text: only ever one QR is on screen
+// at a time (the login screen, or the link overlay in Settings — never both), so
+// a second entry would be a second texture that nothing draws. Calling this every
+// frame with the same text is free.
+GLuint qr_texture(const char *text);
 
 #endif

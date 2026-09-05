@@ -20,6 +20,7 @@
 #include "session.h"
 #include "sync.h"
 #include "profiles.h"
+#include "qr.h"
 #include "traktauth.h"
 #include "simklauth.h"
 #include "js.h"
@@ -863,12 +864,48 @@ static void drawLine(int op, float y, float f) {
   txt_draw_alpha(val, valueDir - val.w, vy, aText);
 }
 
-// Sobreposicao do vinculo (Trakt ou Simkl). O codigo destes dois e CURTO — 8
-// caracteres no Trakt — e o endereco e fixo, entao da para ler da TV e digitar
-// no celular. Nao precisa de QR, ao contrario dos 32 digitos hexadecimais do
-// login da conta.
+// Where the QR should point: the address, with the code IN THE PATH when the
+// service accepts it there. That is the difference between a symbol that saves
+// typing the address and one that finishes the job — scan it and the activation
+// page comes up with the code already in it.
+//
+// Trakt accepts it. VERIFIED against the live site: GET /activate/ABCD1234
+// answers 302 to /signin?callbackURL=%2Factivate%3Fuser_code%3DABCD1234, so the
+// code survives even the sign-in detour. The web app builds the same URL
+// (NuvioWeb settingsScreen.js:959).
+//
+// Simkl does NOT get the same treatment. Its /pin answers 403 to anything that is
+// not a browser, so whether it takes a code in the path could not be checked, and
+// a symbol that leads to the wrong page is worse than one that only carries the
+// address.
+static void qrTargetOf(char *output, size_t n, const char *address,
+                       const char *code, int codeInPath) {
+  size_t len;
+  const char *p;
+  snprintf(output, n, "%s", address && address[0] ? address : "");
+  if (!codeInPath || !code || !code[0] || !output[0]) return;
+  len = strlen(output);
+  while (len && output[len - 1] == '/') output[--len] = 0;
+  // Trakt's user_code is A-Z0-9. Anything else is not something to paste into a
+  // URL unescaped, so the symbol falls back to the address alone.
+  for (p = code; *p; p++)
+    if (!((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+          (*p >= '0' && *p <= '9') || *p == '-' || *p == '_')) return;
+  snprintf(output + len, n - len, "/%s", code);
+}
+
+// The link overlay (Trakt or Simkl).
+//
+// IT DOES GET A QR. The argument against one used to be that these codes are
+// SHORT — 8 characters on Trakt — unlike the 32 hexadecimal digits of the
+// account login, so they can be read off the TV and typed. That was the wrong
+// half of the problem. With the code in the path (see qrTargetOf) scanning is the
+// WHOLE flow: no address to type, no code to transcribe. The code stays on screen
+// in large type for whoever would rather type it. Same treatment as the login
+// screen, one texture, cached by qr.c.
 static void drawLink(const char *service, const char *code,
-                           const char *address, const char *failure, int waiting) {
+                           const char *address, const char *qrTarget,
+                           const char *failure, int waiting) {
   GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   GfxRect card = { (NV_SCREEN_W - 1000.0f) * 0.5f, 250.0f, 1000.0f, 560.0f };
   TxtLine l;
@@ -901,26 +938,50 @@ static void drawLink(const char *service, const char *code,
     return;
   }
 
-  l = txt_line(TXT_BODY, "No celular, abra:", 176, 178, 186, 255);
-  txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
-  y += 52.0f;
-  l = txt_line(TXT_TITLE3, address && address[0] ? address : "-", 255, 255, 255, 255);
-  txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
-  y += 92.0f;
-  l = txt_line(TXT_BODY, "and enter the code:", 176, 178, 186, 255);
-  txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
-  y += 66.0f;
+  // Two columns: the symbol on the left, the steps on the right. Stacking them
+  // would not fit — the card is 560 tall and the QR alone wants 300 of it.
+  { GLuint tex = qr_texture(qrTarget && qrTarget[0] ? qrTarget : "");
+    float qrSide = 300.0f;
+    float qrX = card.x + 72.0f;
+    float qrY = y + 24.0f;
+    float textX = qrX + qrSide + 72.0f;
+    float ty = y;
 
-  // Espacamento entre letras: um codigo curto sem tracking le como palavra, e
-  // a pessoa transcreve errado.
-  { float width = txt_tracking(TXT_TITLE1, code, 255, 255, 255, -1.0f, 0.0f, 1.0f, 16.0f);
-    txt_tracking(TXT_TITLE1, code, 255, 255, 255,
-                 (NV_SCREEN_W - width) * 0.5f, y, 1.0f, 16.0f); }
-  y += 130.0f;
+    if (tex) {
+      // Moldura clara um pouco maior que o simbolo: sobre o fundo escuro do
+      // cartao, a zona de silencio da textura sozinha ja bastaria, mas a
+      // moldura arredondada faz o bloco ler como um cartao.
+      GfxRect frame = { qrX - 16.0f, qrY - 16.0f, qrSide + 32.0f, qrSide + 32.0f };
+      GfxRect r = { qrX, qrY, qrSide, qrSide };
+      gfx_color(frame, 0.06f, 1.0f, 1.0f, 1.0f, 1.0f);
+      gfx_tex_aspect_current = 0.0f;   // 1:1, sem recorte
+      gfx_rect(r, tex, GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+    } else {
+      // No symbol is not an error worth a red line — the address below is still
+      // the whole instruction, and it is short.
+      textX = card.x + 72.0f;
+    }
 
-  if (waiting) {
-    l = txt_line(TXT_CAPTION, "Waiting for authorisation…", 150, 152, 160, 255);
-    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
+    l = txt_line(TXT_BODY, tex ? "Scan with your phone, or open:"
+                                : "On your phone, open:", 176, 178, 186, 255);
+    txt_draw(l, textX, ty);
+    ty += 52.0f;
+    l = txt_line(TXT_TITLE3, address && address[0] ? address : "-", 255, 255, 255, 255);
+    txt_draw(l, textX, ty);
+    ty += 92.0f;
+    l = txt_line(TXT_BODY, "and enter the code:", 176, 178, 186, 255);
+    txt_draw(l, textX, ty);
+    ty += 66.0f;
+
+    // Espacamento entre letras: um codigo curto sem tracking le como palavra, e
+    // a pessoa transcreve errado.
+    txt_tracking(TXT_TITLE1, code, 255, 255, 255, textX, ty, 1.0f, 16.0f);
+    ty += 130.0f;
+
+    if (waiting) {
+      l = txt_line(TXT_CAPTION, "Waiting for authorisation…", 150, 152, 160, 255);
+      txt_draw(l, textX, ty);
+    }
   }
 }
 
@@ -1000,10 +1061,14 @@ void settings_draw(Uint32 now) {
   // da tela.
   { TraState ta = traktauth_state();
     SmkState sa = simklauth_state();
-    if (ta == TRA_REQUESTING || ta == TRA_WAITING || ta == TRA_ERROR)
-      drawLink("o Trakt", traktauth_code(), traktauth_url(),
+    char target[220];
+    if (ta == TRA_REQUESTING || ta == TRA_WAITING || ta == TRA_ERROR) {
+      qrTargetOf(target, sizeof target, traktauth_url(), traktauth_code(), 1);
+      drawLink("Trakt", traktauth_code(), traktauth_url(), target,
                      traktauth_error(), ta == TRA_WAITING);
-    else if (sa == SMK_REQUESTING || sa == SMK_WAITING || sa == SMK_ERROR)
-      drawLink("o Simkl", simklauth_code(), simklauth_url(),
-                     simklauth_error(), sa == SMK_WAITING); }
+    } else if (sa == SMK_REQUESTING || sa == SMK_WAITING || sa == SMK_ERROR) {
+      qrTargetOf(target, sizeof target, simklauth_url(), simklauth_code(), 0);
+      drawLink("Simkl", simklauth_code(), simklauth_url(), target,
+                     simklauth_error(), sa == SMK_WAITING);
+    } }
 }

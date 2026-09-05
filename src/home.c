@@ -289,9 +289,16 @@ static void drawPlaceholderHero(GfxRect r, const CatItem *item, float alpha) {
 // state: the art has a URL and the decode thread is on it. Same skeleton the
 // library grid and see-all already draw while they wait — the home was the only
 // screen captioning that wait as a failure.
+// The surface an image sits on before it lands. It is not flat: the web puts
+// `linear-gradient(180deg, #1c1c1c, #111)` on `.content-poster` itself, so the
+// gradient IS what the eye reads for the whole download. Two draws — the top
+// colour, then black rolled down to the bottom stop — because the shader has no
+// two-colour ramp and adding one for an 11-level range is not worth a mode.
+// See NV_POSTER_BG_*.
 static void drawArtSkeleton(GfxRect r, float radius, float alpha) {
-  gfx_color(r, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
-          NV_COLOR_SKELETON_B, alpha);
+  gfx_color(r, radius, NV_POSTER_BG_R, NV_POSTER_BG_G, NV_POSTER_BG_B, alpha);
+  gfx_rect(r, 0, GFX_VEIL_BOTTOM, 0, 0, 0, radius,
+           0, 0, 0, NV_POSTER_BG_FADE * alpha);
 }
 
 static void drawArtMissing(GfxRect r, float radius, const CatItem *item,
@@ -413,6 +420,42 @@ static float radiusOf(float w, float h) {
   float smaller = w < h ? w : h;
   if (smaller <= 0.0f) return NV_RADIUS_CARD;
   return settings_radius_poster_px() / smaller;
+}
+// Corner radius of a box drawn `dflt` px inside the card outline. Concentric
+// corners share a centre, so the radius loses exactly the inset.
+static float radiusInset(float w, float h, float dflt) {
+  float smaller = w < h ? w : h;
+  if (smaller <= 0.0f) return NV_RADIUS_CARD;
+  float r = settings_radius_poster_px() - dflt;
+  if (r < 0.0f) r = 0.0f;
+  return r / smaller;
+}
+// Radius of everything INSIDE the frame — the art, the scrim, the label veil.
+// The web writes it once, as `calc(var(--home-poster-radius) - 2px)`, and
+// applies that same 22px to the frame and to the image nested in it
+// (components.css:5612 and 5636). Note it is 24 - 2 and not 24 - 4, even though
+// the art is 4px in: that is the reference's own number, not a rounding of it.
+static float radiusArt(float w, float h) {
+  return radiusInset(w, h, NV_FRAME_BORDER);
+}
+
+// Which rows are `.home-poster-card` in the web, and so open the NV_CARD_PAD
+// gutter and wear the ring inside it. Continue watching is the exception and
+// the only one: `.home-continue-media` has `border: 0`, its art runs to the
+// card edge and its focus ring is the 4px outset shadow on the card itself.
+// ROW_RETURN is drawn by the same resume_draw, so it follows that card.
+static int posterFrame(KindRow t) {
+  return t != ROW_CONTINUE && t != ROW_RETURN;
+}
+// The frame's padding box: where the artwork actually lives. `dflt` is the
+// inset, already carrying the focus scale — in the web one transform scales
+// the card and its borders together, so the gutter scales with it.
+static GfxRect frameOf(GfxRect card, float dflt) {
+  GfxRect f = { card.x + dflt, card.y + dflt,
+                card.w - dflt * 2.0f, card.h - dflt * 2.0f };
+  if (f.w < 1.0f) { f.x = card.x; f.w = card.w; }
+  if (f.h < 1.0f) { f.y = card.y; f.h = card.h; }
+  return f;
 }
 
 // --- Profundidade dos cartoes (`cardDepth*`) ---------------------------------
@@ -716,6 +759,22 @@ static void syncRows(void) {
   }
   if (col_n()) {
     static Row orig[MAX_FILTER];int total=destination;memcpy(orig,rows,sizeof orig);destination=0;
+    // CONTINUE WATCHING IS NOT PART OF THIS ORDER, and has to be placed before
+    // anything that is. It is SYNTHETIC — discover.c builds it as row 0 and the
+    // web has no ordering key for it at all, because there it is a separate node
+    // rendered before `.home-modern-catalogs` and so is structurally always the
+    // first row.
+    //
+    // Re-placing every row from `orig` below has nothing to place it BY: the
+    // account's order never names it, so it fell through to the curated pass —
+    // behind the pinned collections, and behind every catalogue the account HAD
+    // ordered. On an account with an order list that is the bottom of the home,
+    // which is the row going missing.
+    for(int k=0;k<total;k++) {
+      if(strcmp(orig[k].key,"continue_watching"))continue;
+      rows[destination++]=orig[k];
+      break;
+    }
     // pinToTop: the collections the owner pinned go FIRST and are never cut. It
     // is step 5 of the web's algorithm, described in catalog.h and missing here —
     // and without it a collection fell to the end, behind 16 catalogue rows, i.e.
@@ -1708,21 +1767,32 @@ void home_draw(Uint32 now) {
         float cy = cardY + artH * 0.5f;
         if (cx > -lw * 1.5f && cx < NV_SCREEN_W + lw) {
           float px = cx - w * 0.5f, py = cy - h * 0.5f;
-          float radius = radiusOf(w, h);
-          GfxRect r0 = { px, py, w, h };
+          // `.home-seeall-card-inner` fills the card's CONTENT box, so it is
+          // inset by the card's own 2px border and no further — the poster's
+          // second border (NV_CARD_PAD) has no counterpart here. Its visible
+          // outline is its own 2px rgba(255,255,255,0.12) border, which lights
+          // up to #f5f5f5 on focus over a rgba(255,255,255,0.06) fill.
+          float in = NV_CARD_BORDER * esc;
+          GfxRect r0 = frameOf((GfxRect){ px, py, w, h }, in);
+          float radius = radiusInset(r0.w, r0.h, in);
           float luma = 0.06f + 0.10f * f;
+          // Fill, then the border stroked on top of it. NOT the fill-under-fill
+          // the poster's focus border uses: there the artwork is opaque and
+          // hides the sheet under it, but here both layers are white washes, so
+          // painting one over the other would ADD — the 0.06 middle would come
+          // out at 0.22 and the card would read as a grey slab.
           gfx_color(r0, radius, 1, 1, 1, luma);
-          gfx_rect(r0, 0, GFX_RING, 0, 2.0f / h, 0, radius,
-                   1, 1, 1, (0.12f + 0.70f * f));
+          gfx_rect(r0, 0, GFX_RING, 0, NV_FRAME_RING * esc / r0.h, 0, radius,
+                   1, 1, 1, 0.12f + 0.84f * f);
           { TxtLine ls = txt_line(TXT_TITLE2, "\xe2\x86\x92",
                                     236, 237, 242, 255);
             TxtLine lr = txt_line(TXT_ROW_TITLE, "See all",
                                     f > 0.5f ? 255 : 190, f > 0.5f ? 255 : 194,
                                     f > 0.5f ? 255 : 203, 255);
             float block = ls.h + 14.0f + lr.h;
-            float by = py + (h - block) * 0.5f;
-            txt_draw_alpha(ls, px + (w - ls.w) * 0.5f, by, 0.95f);
-            txt_draw_alpha(lr, px + (w - lr.w) * 0.5f,
+            float by = r0.y + (r0.h - block) * 0.5f;
+            txt_draw_alpha(ls, r0.x + (r0.w - ls.w) * 0.5f, by, 0.95f);
+            txt_draw_alpha(lr, r0.x + (r0.w - lr.w) * 0.5f,
                                by + ls.h + 14.0f, 1.0f); }
         }
       }
@@ -1863,26 +1933,51 @@ void home_draw(Uint32 now) {
           // Com o teto unico de 640 cada poster custava 2,4 MB e o cache
           // estourava com ~40 texturas, despejando o que ainda estava na tela.
           GLuint t = path ? tex_get_width(path, w) : 0;
-          // ANEL DE FOCO: 4 px de #FFFFFF, POR FORA da arte.
-          //
-          // Era 2 px de #f5f5f5, tirado do `box-shadow` do app WEB. MEDIDO no
-          // aparelho de referencia (TCL, mesmo card, mesma fileira): 4 px
-          // solidos de #FFFFFF, x 102->105 sem rampa. O nosso media 2 px com
-          // antialias (#A1A1A2 -> #C6C6C7 -> #E3E3E4 -> #F3F3F3) e a rampa ja
-          // entrava na arte.
-          //
-          // A 3 m de distancia, 2 px cinza-suave contra 4 px branco solido e a
-          // diferenca entre ver onde se esta e procurar o foco na tela. O mesmo
-          // valor aparece em card de episodio e botao de detalhe na referencia:
-          // e UM numero para o app inteiro (NV_DETW_ANEL ja valia 4 e so era
-          // usado no detalhe).
           float radius = radiusOf(w, h);
-          if (f > 0.01f) {
-            GfxRect border = { px - NV_RING_FOCUS, py - NV_RING_FOCUS,
-                              w + NV_RING_FOCUS * 2, h + NV_RING_FOCUS * 2 };
-            gfx_color(border, radius, 1.0f, 1.0f, 1.0f, f);
-          }
           GfxRect card = { px, py, w, h };
+          // THE CARD BOX IS NOT THE ART BOX.
+          //
+          // The web poster nests two transparent 2px borders (see NV_CARD_PAD),
+          // so the artwork stops 4px short of the card outline on every side and
+          // the focus ring is painted INTO that gutter. Drawing the art over the
+          // whole box, as this did, is what made a legacy poster read wider than
+          // a web one at the same 236 step.
+          //
+          // Continue watching keeps the old geometry, and that is the reference
+          // too: its `.home-continue-media` has `border: 0`, so the art does run
+          // to the edge, and its ring is a real 4px outset shadow on the card.
+          int framed = posterFrame(kind);
+          float pad = framed ? NV_CARD_PAD * esc : 0.0f;
+          GfxRect art = frameOf(card, pad);
+          float radiusA = framed ? radiusArt(art.w, art.h) : radius;
+          if (f > 0.01f) {
+            if (framed) {
+              // The frame's own 2px border, lit to rgba(255,255,255,0.8), and
+              // PAINTED THE WAY CSS PAINTS A BORDER: fill the frame's border
+              // box, then let the artwork land on top of it. What is left
+              // showing is exactly the 2px band.
+              //
+              // The obvious alternative — GFX_RING on the border's centre line —
+              // is what this did first, and it looked wrong on the TV. That ring
+              // is `smoothstep(esp, esp*0.55, abs(d))`, so a 2px stroke carries
+              // about a pixel of ramp on EACH side: two thirds of the border is
+              // then partial white, and instead of a crisp edge you get a grey
+              // smear. Filling shares the artwork's own antialiased outline, so
+              // the border is as clean as the corner it follows.
+              float in = NV_CARD_BORDER * esc;
+              GfxRect frame = frameOf(card, in);
+              gfx_color(frame, radiusInset(frame.w, frame.h, in),
+                        1.0f, 1.0f, 1.0f, NV_FRAME_RING_A * f);
+            } else {
+              // 4 px de #FFFFFF, POR FORA da arte. MEDIDO no aparelho de
+              // referencia (TCL, mesmo card, mesma fileira): 4 px solidos, x
+              // 102->105 sem rampa, e o mesmo numero aparece em card de
+              // episodio e botao de detalhe.
+              GfxRect border = { px - NV_RING_FOCUS, py - NV_RING_FOCUS,
+                                w + NV_RING_FOCUS * 2, h + NV_RING_FOCUS * 2 };
+              gfx_color(border, radius, 1.0f, 1.0f, 1.0f, f);
+            }
+          }
           // CARD SEM ARTE: superficie solida, nao o vazio. Sem isto o card
           // ficava da cor do fundo — MEDIDO: #242429 sobre #252629, diferenca
           // de (1,2,0), contraste 1,0:1. Era literalmente invisivel, e foi a
@@ -1902,8 +1997,8 @@ void home_draw(Uint32 now) {
             // GPU: obrigava a redesenhar a fileira inteira em todo quadro para
             // sempre, e o custo dominante aqui e fill rate.
             gfx_tex_aspect_current = tex_aspect(path);
-            gfx_rect(card, t, GFX_CARD, f, 0.0f, 0.0f,
-                     radius, 0, 0, 0, 1);
+            gfx_rect(art, t, GFX_CARD, f, 0.0f, 0.0f,
+                     radiusA, 0, 0, 0, 1);
             gfx_tex_aspect_current = 0.0f;
           } else {
             // CARD SEM ARTE: superficie SOLIDA e visivel, nao o vazio.
@@ -1917,7 +2012,7 @@ void home_draw(Uint32 now) {
             //
             // A referencia usa #2C2C2C sobre #0D0D0D: luminancia ~22x a do
             // fundo, impossivel nao ver.
-            drawArtAbsent(card, radius, path, cItem, 1.0f);
+            drawArtAbsent(art, radiusA, path, cItem, 1.0f);
           }
           // SELO DE ASSISTIDO: disco branco com um "v" escuro, no canto
           // superior direito do poster. A referencia o tem e nos nao tinhamos
@@ -1929,8 +2024,8 @@ void home_draw(Uint32 now) {
           // minuto (player_encerrar). Marcar so em 100% deixaria de fora
           // justamente o que acabou de ser assistido.
           if (cItem && cItem->progress >= 90 && kind != ROW_CONTINUE) {
-            float d = w * 0.16f;                 // proporcional ao card
-            float mx = px + w - d - 10.0f, my = py + 10.0f;
+            float d = art.w * 0.16f;             // proporcional ao card
+            float mx = art.x + art.w - d - 10.0f, my = art.y + 10.0f;
             GfxRect disk = { mx, my, d, d };
             gfx_color(disk, 0.5f, 1, 1, 1, 0.94f);
             // O "v" desenhado com dois tracos: o glifo da fonte nao serve aqui
@@ -1946,7 +2041,7 @@ void home_draw(Uint32 now) {
 
           // `cardDepthEnabled` mais o interruptor por secao: `cardDepthPosters`
           // nas fileiras de catalogo, `cardDepthContinueWatching` na primeira.
-          drawDepth(card, radius,
+          drawDepth(art, radiusA,
                               kind == ROW_CONTINUE ? settings_depth_cw()
                                                        : settings_depth_posters());
 
@@ -1959,23 +2054,31 @@ void home_draw(Uint32 now) {
             const char *name = cItem->title[0] ? cItem->title : NULL;
             const char *sub  = cItem->genre[0] ? cItem->genre : NULL;
             if (landscape && name) {
-              GfxRect veil = { px, py + h * (1.0f - NV_LAND_VEIL), w, h * NV_LAND_VEIL };
-              gfx_rect(veil, 0, GFX_VEIL, 0, 0, 0, radius, 0, 0, 0, 0.80f);
-              float maxW = w * NV_LAND_COPY_MAXW;
-              float bx = px + NV_LAND_COPY_DFLT;
+              // `.home-poster-landscape-copy` is a child of the frame, so its
+              // 14/12 insets are measured from the ART edge, not the card one.
+              float bottom = art.y + art.h;
+              GfxRect veil = { art.x, bottom - art.h * NV_LAND_VEIL,
+                               art.w, art.h * NV_LAND_VEIL };
+              gfx_rect(veil, 0, GFX_VEIL, 0, 0, 0, radiusA, 0, 0, 0, 0.80f);
+              float maxW = art.w * NV_LAND_COPY_MAXW;
+              float bx = art.x + NV_LAND_COPY_DFLT;
               TxtLine tn = txt_line_trim(TXT_CAPTION, name, 245, 246, 250, 255, maxW);
               if (sub) {
                 TxtLine ts = txt_line_trim(TXT_MINI, sub, 200, 202, 210, 255, maxW);
-                txt_draw_alpha(ts, bx, py + h - NV_LAND_COPY_BASE - ts.h, 0.85f);
+                txt_draw_alpha(ts, bx, bottom - NV_LAND_COPY_BASE - ts.h, 0.85f);
                 txt_draw_alpha(tn, bx,
-                                   py + h - NV_LAND_COPY_BASE - ts.h - 4.0f - tn.h, 0.98f);
+                                   bottom - NV_LAND_COPY_BASE - ts.h - 4.0f - tn.h, 0.98f);
               } else {
-                txt_draw_alpha(tn, bx, py + h - NV_LAND_COPY_BASE - tn.h, 0.98f);
+                txt_draw_alpha(tn, bx, bottom - NV_LAND_COPY_BASE - tn.h, 0.98f);
               }
             } else if (labelFora && name) {
-              float bx = px + NV_POSTER_COPY_PADX;
-              float by = py + h + NV_POSTER_COPY_PADT;
-              float maxW = w - NV_POSTER_COPY_PADX * 2.0f;
+              // `.home-poster-copy` is a SIBLING of the frame, inside the card:
+              // it starts at the card's content box, so its 2px of padding sits
+              // on top of the card's own 2px border, and it begins 8px below the
+              // frame's border box — the art plus the frame border it wears.
+              float bx = card.x + NV_CARD_BORDER * esc + NV_POSTER_COPY_PADX;
+              float by = art.y + art.h + NV_FRAME_BORDER * esc + NV_POSTER_COPY_PADT;
+              float maxW = card.w - (NV_CARD_BORDER * esc + NV_POSTER_COPY_PADX) * 2.0f;
               // 16/500 e 13/400 rgba(255,255,255,.7) — os corpos de
               // .home-poster-title e .home-poster-subtitle.
               TxtLine tn = txt_line_trim(TXT_CAPTION2, name, 245, 246, 250, 255, maxW);
@@ -1991,7 +2094,7 @@ void home_draw(Uint32 now) {
             char rank[8];snprintf(rank,sizeof rank,"%d",c+1);
             TxtLine number=txt_line(TXT_RANK,rank,240,241,245,255);
             TxtLine ink=txt_line(TXT_RANK,rank,16,17,20,255);
-            float nx=px-12,ny=py+h-number.h-8;
+            float nx=art.x-12,ny=art.y+art.h-number.h-8;
             for(int dx=-2;dx<=2;dx+=2)for(int dy=-2;dy<=2;dy+=2)
               txt_draw(number,nx+dx,ny+dy);
             txt_draw(ink,nx,ny);
@@ -2019,8 +2122,8 @@ void home_draw(Uint32 now) {
               float dflt = 34.0f * esc;
               float ap = tex_aspect(cItem->logo);
               float hL, wL, maxW;
-              GfxRect veil = { px, py, w, h };
-              gfx_rect(veil, 0, GFX_VEIL, 0, 0, 0, NV_RADIUS_CARD, 0, 0, 0, 0.72f * openAmt);
+              GfxRect veil = art;
+              gfx_rect(veil, 0, GFX_VEIL, 0, 0, 0, radiusA, 0, 0, 0, 0.72f * openAmt);
               // SEM CHUTE DE ASPECTO. O fallback de 4.0 que estava aqui
               // desenhava um retangulo mais largo que a imagem, e o modo de
               // cartao RECORTA o que sobra — o "REACHER" saia com as duas
@@ -2032,9 +2135,9 @@ void home_draw(Uint32 now) {
               // MEDIDO na TCL no card aberto: logo de 163 px num card de 565
               // (29% da largura) e 66 de altura num card de 320 (21%). O teto de
               // altura existe para logo quadrado nao virar um bloco.
-              maxW = w * 0.30f;
+              maxW = art.w * 0.30f;
               wL = maxW; hL = wL / ap;
-              if (hL > h * 0.22f) { hL = h * 0.22f; wL = hL * ap; }
+              if (hL > art.h * 0.22f) { hL = art.h * 0.22f; wL = hL * ap; }
               // GFX_MARCA/GFX_TEXTO, NAO GFX_CARD. O modo de cartao e para
               // ARTE: ele faz cover com 3% de over-scan de proposito (a margem
               // de parallax) e descarta o alfa da textura. Num logo isso corta
@@ -2044,7 +2147,7 @@ void home_draw(Uint32 now) {
               // O par certo ja existia no projeto, na fileira de destaque:
               // tex_marca_escura decide se a forma vem do alfa (logo claro) ou
               // do desenho (logo escuro). Reusado aqui em vez de reinventado.
-              if (tl) { GfxRect rl = { px + dflt, py + h - dflt - hL, wL, hL };
+              if (tl) { GfxRect rl = { art.x + dflt, art.y + art.h - dflt - hL, wL, hL };
                 GfxMode m = tex_brand_dark(cItem->logo) ? GFX_BRAND : GFX_TEXT;
                 gfx_tex_aspect_current = 0.0f;
                 gfx_rect(rl, tl, m, 0, 0, 0, 0.0f, 1, 1, 1, openAmt); }
@@ -2052,56 +2155,59 @@ void home_draw(Uint32 now) {
           }
 
           if (editorial(kind)) {
-            GfxRect veil = { px, py, w, h };
-            gfx_rect(veil, 0, GFX_VEIL, 0, 0, 0, radius, 0, 0, 0, 0.88f);
+            // The editorial block is painted over the artwork, so it measures
+            // from the frame: `ex`/`ey`/`ew`/`eh` are the art box, which is the
+            // card pulled in by NV_CARD_PAD.
+            float ex = art.x, ey = art.y, ew = art.w, eh = art.h;
+            gfx_rect(art, 0, GFX_VEIL, 0, 0, 0, radiusA, 0, 0, 0, 0.88f);
 
 
             // Logo do titulo, como no aparelho: cada producao tem tipografia
             // propria, e escrever o nome com a fonte da interface apaga isso.
             const CatItem *ci = cItem;
-            GLuint tlogo = (ci && ci->logo[0]) ? tex_get_width(ci->logo, w * .65f) : 0;
+            GLuint tlogo = (ci && ci->logo[0]) ? tex_get_width(ci->logo, ew * .65f) : 0;
             // Sem dado, sem texto — nao a lista de demonstracao que ficava
             // aqui e carimbava nome e genero de outro titulo no card.
             const char *name   = (ci && ci->title[0]) ? ci->title : NULL;
             const char *genre = (ci && ci->genre[0]) ? ci->genre
                                 : ci ? (!strcmp(ci->kind, "series") ? "Series" : "Film") : NULL;
             TxtLine tg = genre
-                        ? txt_line_trim(TXT_HERO_META, genre, 226, 228, 233, 255, w - 64)
+                        ? txt_line_trim(TXT_HERO_META, genre, 226, 228, 233, 255, ew - 64)
                         : (TxtLine){ 0, 0, 0 };
 
             float dflt = kind == ROW_HIGHLIGHT ? 28.0f : 22.0f;
-            float base = py + h - dflt;
+            float base = ey + eh - dflt;
             float yMeta = base - tg.h;
             float hTitle;
             if (tlogo) {
               float ap = tex_aspect(ci->logo);
               if (ap <= 0.0f) ap = 4.0f;
-              hTitle = h * .22f;
-              float wTitle = hTitle * ap, maxW = w * .65f;
+              hTitle = eh * .22f;
+              float wTitle = hTitle * ap, maxW = ew * .65f;
               if (wTitle > maxW) { wTitle = maxW; hTitle = wTitle / ap; }
-              GfxRect rl = { px + dflt, yMeta - hTitle - 10.0f, wTitle, hTitle };
+              GfxRect rl = { ex + dflt, yMeta - hTitle - 10.0f, wTitle, hTitle };
               gfx_tex_aspect_current = 0.0f;
               { GfxMode m = tex_brand_dark(ci->logo) ? GFX_BRAND : GFX_TEXT;
               gfx_rect(rl, tlogo, m, 0, 0, 0, 0.0f, 1, 1, 1, 1.0f); }
             } else if (name) {
-              TxtLine tn = txt_line_trim(TXT_CW_TITLE, name, 245, 246, 249, 255, w - dflt*2);
+              TxtLine tn = txt_line_trim(TXT_CW_TITLE, name, 245, 246, 249, 255, ew - dflt*2);
               hTitle = (float)tn.h;
-              txt_draw(tn, px + dflt, yMeta - hTitle - 10.0f);
+              txt_draw(tn, ex + dflt, yMeta - hTitle - 10.0f);
             } else {
               hTitle = 0.0f;
             }
-            if (genre) txt_draw(tg, px + dflt, yMeta);
+            if (genre) txt_draw(tg, ex + dflt, yMeta);
 
             // Selo etario vermelho, a direita da linha de genero. SO COM VALOR:
             // o "16" de reserva que estava aqui carimbava uma faixa etaria em
             // todo card sem classificacao, e o selo vermelho tem cara de aviso
             // oficial — e o mesmo defeito do "14" cravado em descoberta.c, so
             // que na home.
-            if (ci && ci->age_rating[0] && tg.w + 100 < w - dflt*2) {
+            if (ci && ci->age_rating[0] && tg.w + 100 < ew - dflt*2) {
               char cls[8];
               snprintf(cls, sizeof cls, "%s%s", ci->age_rating[0] == 'A' ? "" : "A", ci->age_rating);
               { TxtLine tb = txt_line(TXT_CAPTION, cls, 255, 255, 255, 255);
-                float bx = px + dflt + tg.w + (genre ? 14.0f : 0.0f);
+                float bx = ex + dflt + tg.w + (genre ? 14.0f : 0.0f);
                 GfxRect badge = { bx, yMeta + 2, tb.w + 16, tg.h - 4 };
                 gfx_color(badge, NV_RADIUS_BADGE, 0.78f, 0.14f, 0.14f, 0.95f);
                 txt_draw(tb, bx + 8, yMeta + 2); }
@@ -2113,9 +2219,9 @@ void home_draw(Uint32 now) {
           // atingido o limiar, ctxmenu ja foi aberto e a soltura e consumida.
           if (okPressing && okHold > 0.0f &&
               focus_can_press_longa() && focus_index(&focus, r, c)) {
-            float bx = px + NV_HOME_TEXT_GUTTER;
-            float bw = w - NV_HOME_TEXT_GUTTER * 2.0f;
-            GfxRect rail = { bx, py + h - 12.0f, bw, 4.0f };
+            float bx = art.x + NV_HOME_TEXT_GUTTER;
+            float bw = art.w - NV_HOME_TEXT_GUTTER * 2.0f;
+            GfxRect rail = { bx, art.y + art.h - 12.0f, bw, 4.0f };
             gfx_color(rail, 0.5f, 0.18f, 0.19f, 0.22f, 0.92f);
             gfx_color((GfxRect){ bx, rail.y, bw * okHold, rail.h },
                     0.5f, 0.92f, 0.93f, 0.96f, 1.0f);
@@ -2123,7 +2229,7 @@ void home_draw(Uint32 now) {
                                       okHold >= 1.0f ? "Release to open options"
                                                      : "Hold for options",
                                       225, 228, 235, 255);
-            txt_draw_alpha(hint, bx, py + h - 38.0f, 0.92f);
+            txt_draw_alpha(hint, bx, art.y + art.h - 38.0f, 0.92f);
           }
         }
       }

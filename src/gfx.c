@@ -91,23 +91,36 @@ static const char *FS_COVER =
   "}\n";
 
 static const char *FS_BODY[GFX_NMODES] = {
-  // GFX_CARD — arte com cantos, over-scan de parallax e especular no foco
+  // GFX_CARD — artwork with rounded corners. `object-fit: cover`, and nothing
+  // else on top of it.
+  //
+  // THREE EFFECTS CAME OFF THIS SHADER, and they were the reason a legacy card
+  // did not look like the same card in the web app:
+  //
+  //  1. A 3% over-scan, `(cover(vUv)-0.5)*(0.94-0.05*uFoco)+0.5`. It was the
+  //     margin the parallax needed so a wobbling card never showed empty edge —
+  //     but the parallax is gone (see the note in home.c) and every one of the
+  //     ~25 call sites in this project passes uPar = 0. What was left was a
+  //     6.4% crop of every card in the app, going to 12.4% on focus: the
+  //     "legacy looks more zoomed in" the owner reported, and the reason the
+  //     framing of a poster did not match the web's.
+  //  2. `color *= 0.80` unfocused, back to 1.0 on focus. Every resting card in
+  //     the app was 20% darker than the same image in the browser, where the
+  //     modern poster carries no filter at all — checked through the whole
+  //     sheet, focused and not.
+  //  3. The focus decoration: a diagonal specular sweep and a white glow along
+  //     the card edge. The web draws neither, and the glow in particular sat
+  //     right inside the 2px focus border, which read as a smeared double edge.
+  //
+  // None of the three cost a focus cue anywhere: EVERY caller that passes a
+  // non-zero focus already draws its own ring (home, library, search, seeall,
+  // the two card rows in detail).
   "void main(){\n"
   "  float d = sdf(vUv, uRaio, uAspect);\n"
   "  float m = smoothstep(0.006,-0.006,d);\n"
   "  if (m <= 0.001) discard;\n"
-  // Over-scan de 3%: a Apple reserva essa margem em todas as bordas para que o
-  // parallax nunca revele borda vazia (diferenca entre "actual size" e "safe
-  // zone" nas tabelas do Top Shelf). Sem ela o clamp estica o pixel da borda.
-  "  vec2 uv = clamp((cover(vUv)-0.5)*(0.94-0.05*uFoco)+0.5+uPar, 0.0, 1.0);\n"
-  "  vec3 color = texture2D(uTex, uv).rgb;\n"
-  "  if (uFoco > 0.004) {\n"
-  "    float e = (dot(vUv-0.5, vec2(0.5029,-0.8644)) + uPar.x*3.0) * 3.0;\n"
-  "    color += exp(-e*e) * 0.16 * uFoco;\n"
-  "    color *= (0.80 + 0.20*uFoco);\n"
-  "    color += smoothstep(0.010,0.0,abs(d)) * uFoco * 0.35;\n"
-  "  } else color *= 0.80;\n"
-  "  gl_FragColor = vec4(color, m * uCor.a);\n"
+  "  vec2 uv = clamp(cover(vUv) + uPar, 0.0, 1.0);\n"
+  "  gl_FragColor = vec4(texture2D(uTex, uv).rgb, m * uCor.a);\n"
   "}\n",
 
   // GFX_SOMBRA — mancha difusa atras do item em foco
@@ -393,11 +406,19 @@ static const char *FS_BODY[GFX_NMODES] = {
   "}\n",
 
   // GFX_VEU_BAIXO — vertical puro, transparente em cima. Ver a nota em gfx.h.
+  //
+  // The rounded mask is what lets this mode shade a CARD and not just a
+  // full-bleed strip: the poster placeholder is a gradient inside a 22px
+  // radius, and without the mask the darkest end of the ramp squared off the
+  // two bottom corners. Callers that pass radius 0 — the player scrim — get a
+  // plain rectangle with an antialiased edge, which is what they already drew.
   "void main(){\n"
+  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRaio, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
   "  float t = clamp(vUv.y, 0.0, 1.0);\n"
   "  float g = t * t * (3.0 - 2.0 * t);\n"
   "  g = g * g;\n"
-  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uCor.a);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uCor.a * m);\n"
   "}\n",
   // GFX_SOCIAL: broad off-centre light, quiet left side for copy.
   "void main(){\n"
@@ -473,7 +494,7 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_OLHO    — SDF proprio, nao o do retangulo */
   {0,0},   /* GFX_FONTES  — idem */
   {0,0},   /* GFX_MARCA   — so o alpha da textura: sem SDF, sem cover */
-  {0,0},   /* GFX_VEU_BAIXO — degrade vertical puro */
+  {1,0},   /* GFX_VEU_BAIXO — degrade vertical, recortado pelo raio */
   {0,0},   /* GFX_SOCIAL */
   {0,1},   /* GFX_AVATAR */
   {0,0},   /* GFX_RETRATO */

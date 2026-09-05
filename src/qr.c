@@ -1,4 +1,6 @@
 #include "qr.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // --------------------------------------------------------------- tabelas
@@ -352,4 +354,49 @@ int qr_generate(Qr *q, const char *text) {
     writeFormat(q, best);
   }
   return 1;
+}
+
+// --------------------------------------------------------------- textura
+
+// Zona de silencio, em modulos. Sem ela a camera nao acha o simbolo: o padrao
+// de busca precisa de fundo claro em volta para ser reconhecido.
+#define QR_TEX_MARGIN 4
+
+GLuint qr_texture(const char *text) {
+  static GLuint tex;
+  static char of[512];
+  Qr q;
+  int side, x, y;
+  unsigned char *px;
+  if (!text || !text[0]) return 0;
+  if (tex && !strcmp(of, text)) return tex;
+  if (!qr_generate(&q, text)) {
+    printf("[qr] does not fit in a symbol: %s\n", text);
+    return 0;
+  }
+
+  side = q.side + 2 * QR_TEX_MARGIN;
+  px = (unsigned char *)malloc((size_t)side * side * 3);
+  if (!px) return 0;
+  memset(px, 255, (size_t)side * side * 3);   // fundo claro, inclusive a margem
+  for (y = 0; y < q.side; y++)
+    for (x = 0; x < q.side; x++)
+      if (qr_modulo(&q, x, y)) {
+        size_t i = ((size_t)(y + QR_TEX_MARGIN) * side + (x + QR_TEX_MARGIN)) * 3;
+        px[i] = px[i + 1] = px[i + 2] = 0;
+      }
+
+  if (!tex) glGenTextures(1, &tex);
+  glBindTexture(GL_TEXTURE_2D, tex);
+  // NEAREST, nao LINEAR: um modulo borrado com o vizinho e o jeito mais rapido
+  // de tornar o simbolo ilegivel numa camera de celular.
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, side, side, 0, GL_RGB, GL_UNSIGNED_BYTE, px);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  free(px);
+  snprintf(of, sizeof of, "%s", text);
+  return tex;
 }

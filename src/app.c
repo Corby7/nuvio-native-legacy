@@ -342,12 +342,21 @@ void app_update(float dt, Uint32 now) {
     return;
   }
 
-  if (screen == SCREEN_CHOICE_PROFILE) {
-    sync_step((unsigned)now);
-  // Os vinculos de Trakt e Simkl tambem avancam aqui: os dois fazem poll e
-  // precisam de um passo por quadro, como o login da conta.
+  // THE TRAKT AND SIMKL LINKS STEP ON EVERY SCREEN, and that is the whole point
+  // of them being here rather than in a screen's own update. Both are device-code
+  // flows: the code goes on the TV and the poll of /oauth/device/token is what
+  // notices the person authorised it on their phone. But the flow is STARTED from
+  // Settings, and these two calls used to sit inside the SCREEN_CHOICE_PROFILE
+  // branch below — which returns — so from Settings nothing ever polled. The
+  // phone said "device approved" and the TV sat on the code forever.
+  //
+  // Applying the token lives in the same step (traktauth.c only touches trakt.c
+  // from the main loop), so a poll that did succeed still would not have landed.
   traktauth_step((unsigned)now);
   simklauth_step((unsigned)now);
+
+  if (screen == SCREEN_CHOICE_PROFILE) {
+    sync_step((unsigned)now);
     profilesel_update(dt, now);
     if (profilesel_requested_retry()) { sync_start(); return; }
     if (profilesel_wants_exit()) {
