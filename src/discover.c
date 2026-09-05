@@ -6,6 +6,7 @@
 #include "net.h"
 #include "js.h"
 #include "trakt.h"
+#include "settings.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1053,7 +1054,10 @@ static void *build(void *u) {
   // O feed social oficial e uma fileira propria, logo depois do retorno ao
   // que estava sendo visto. Ele vem cedo para nao depender dos manifestos dos
   // addons e usa a mesma credencial Trakt ja carregada.
-  nSocial = trakt_social(lote + n, 8);
+  // With the row turned off in Settings there is nobody to show it to, and the
+  // feed is a third Trakt GET on the critical path — so it is not fetched at
+  // all, instead of fetched and dropped later.
+  nSocial = settings_social_row() ? trakt_social(lote + n, 8) : 0;
   n += nSocial;
   mark("trakt friend activity");
   // O historico do Trakt e a PRIMEIRA fileira da home e chega ~1,6 s antes dos

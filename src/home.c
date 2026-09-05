@@ -593,7 +593,8 @@ static int subscriptionPrefs(void) {
   return (settings_cw_on() ? 1 : 0)
        | (settings_cw_style() << 1)
        | (settings_posters_landscape() ? 8 : 0)
-       | (settings_labels_poster() ? 16 : 0);
+       | (settings_labels_poster() ? 16 : 0)
+       | (settings_social_row() ? 32 : 0);
 }
 // THE KNOWN CURATION. It no longer decides the ORDER — the account's list does —
 // and is left with two jobs: supplying the display name and the special kind of
@@ -677,6 +678,11 @@ static void syncRows(void) {
     // esvazia, tira. E o que renderModernHomeLayout faz quando
     // computeContinueWatchingRenderState devolve a fileira desligada.
     if (!strcmp(cf->key, "continue_watching") && !settings_cw_on()) continue;
+    // Same rule for the friends' feed: turning it off REMOVES the row. The
+    // catalogue can still carry it — it was built while the option was on, or
+    // came from the cache — so the cut has to happen here too, not only where
+    // the synthetic row is inserted below.
+    if (!strcmp(cf->key, "social_activity") && !settings_social_row()) continue;
     snprintf(rows[destination].title, sizeof rows[destination].title, "%s", cf->title);
     // "Continuar assistindo" e a unica landscape: e o
     // `continueWatchingCardStyle: "card"` do perfil. Todo o resto e poster 2:3.
@@ -852,7 +858,7 @@ static void syncRows(void) {
   }
   int socialExists=0;
   for(int i=0;i<destination;i++)if(rows[i].kind==ROW_SOCIAL)socialExists=1;
-  if(!socialExists && destination<MAX_FILTER) {
+  if(!socialExists && settings_social_row() && destination<MAX_FILTER) {
     int pos=destination>0?1:0;
     memmove(rows+pos+1,rows+pos,(destination-pos)*sizeof *rows);
     Row *s=&rows[pos];memset(s,0,sizeof *s);

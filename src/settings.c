@@ -57,6 +57,7 @@ typedef enum {
   SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_RAIL_BLUR, SETTING_HERO, SETTING_HERO_CATALOGS,
   SETTING_DISCOVER, SETTING_LABELS, SETTING_NAME_ADDON, SETTING_SUFFIX_KIND,
   SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME, SETTING_GRADIENT_CLASSIC,
+  SETTING_SOCIAL,
   // Continuar assistindo
   SETTING_CW_ON, SETTING_CW_STYLE, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
   SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN, SETTING_CW_ORDER,
@@ -134,6 +135,7 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Hide unreleased",       V_ON, 2),   // hideUnreleasedContent
   ESC("Overall ratings",          V_SCORES, 2),  // homeImdbRatingsVisibility
   ESC("Classic focus gradient", V_ON, 2),   // classicFocusGradientEnabled
+  ESC("Show \"Among friends\"",  V_ON, 2),   // socialRowEnabled
 
   ESC("Show \"Continue watching\"", V_ON, 2), // continueWatchingEnabled
   ESC("\"Continue watching\" style", V_CW, 3), // continueWatchingCardStyle
@@ -189,6 +191,7 @@ static const char *KEY[] = {
   "discoverLocation", "posterLabelsEnabled", "catalogAddonNameEnabled",
   "catalogTypeSuffixEnabled", "hideUnreleasedContent",
   "homeImdbRatingsVisibility", "classicFocusGradientEnabled",
+  "socialRowEnabled",
   "continueWatchingEnabled", "continueWatchingCardStyle",
   "useEpisodeThumbnailsInCw", "blurContinueWatchingNextUp",
   "nextUpFromFurthestEpisode", "showUnairedNextUp", "continueWatchingSortMode",
@@ -222,7 +225,7 @@ typedef char checked_one_key_per_option[
 static const struct { const char *title; int start, n; } SECTIONS[] = {
   { "Playback",                     SETTING_QUALITY,           3 },
   { "Home layout",                    SETTING_LANDSCAPE,           2 },
-  { "Home content",               SETTING_RAIL,               12 },
+  { "Home content",               SETTING_RAIL,               13 },
   { "Continue watching",           SETTING_CW_ON,           7 },
   { "Detail page",             SETTING_DET_BLUR_NOT_WATCHED, 4 },
   { "Poster focus",                 SETTING_EXPAND,            3 },
@@ -260,6 +263,7 @@ static int value[SETTING_N] = {
   1,                /* ocultar nao lancados: desligado */
   0,                /* avaliacoes gerais: mostrar (SHOW_ALL) */
   1,                /* gradiente de foco classico: desligado */
+  0,                /* "Among friends" row: on */
 
   0,                /* continuar assistindo: ligado */
   0,                /* estilo: card */
@@ -318,6 +322,7 @@ int settings_rail_modern_blur(void)   { return on(SETTING_RAIL_BLUR); }
 int settings_hero_on(void)         { return on(SETTING_HERO); }
 int settings_hero_full(void)          { return on(SETTING_HERO_FULL); }
 int settings_posters_landscape(void)   { return on(SETTING_LANDSCAPE); }
+int settings_social_row(void)          { return on(SETTING_SOCIAL); }
 int settings_gradient_focus_classic(void) { return on(SETTING_GRADIENT_CLASSIC); }
 
 int settings_labels_poster(void)      { return on(SETTING_LABELS); }

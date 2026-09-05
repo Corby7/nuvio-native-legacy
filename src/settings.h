@@ -41,6 +41,9 @@ int   settings_hero_on(void);        // heroSectionEnabled
 int   settings_hero_full(void);         // modernHeroFullScreenBackdropEnabled
 int   settings_posters_landscape(void);  // modernLandscapePostersEnabled
 int   settings_gradient_focus_classic(void); // classicFocusGradientEnabled
+// socialRowEnabled: the "Among friends" row on Home. Local to this port — the
+// web app has no equivalent key, so the account blob never touches it.
+int   settings_social_row(void);
 // The x where the content starts. Not a constant: the inset is always 104 and
 // the rail adds its own 144 when it is fixed.
 float settings_content_x(void);
