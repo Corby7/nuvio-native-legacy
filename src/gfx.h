@@ -161,7 +161,15 @@ void gfx_snap_finish(void);  // volta para a tela
 void gfx_snap_draw(void);  // pinta o snapshot ocupando a tela toda
 void gfx_snap_shutdown(void);
 
-void gfx_size_target(int w, int h);   // drawable real, para restaurar viewport
+// The box the 1920x1080 layout is drawn into, in BUFFER pixels: where to put
+// the viewport back after an FBO, and the scale the scissor works in.
+//
+// x/y exist for the letterbox. The TV surface is 16:9 and the box is the whole
+// drawable, so there both are 0; a Mac window is 16:10 (and can be any shape
+// the user drags), and without bars the layout would stretch — every poster
+// subtly the wrong shape on the one screen used to compare against the
+// reference.
+void gfx_size_target(int x, int y, int w, int h);
 int  gfx_start(void);
 void gfx_shutdown(void);
 

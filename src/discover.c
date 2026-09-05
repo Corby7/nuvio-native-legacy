@@ -896,11 +896,20 @@ typedef struct {
   CatItem items[MAX_PER_ROW];
   int  n;
   int  ready;
+  // The assembly rebuilds the catalogue from every ready bucket on each pass,
+  // so a row would otherwise be logged once per pass. This keeps one line per
+  // row, which is what the log is read for.
+  int  logged;
 } TaskCat;
 
 static TaskCat *tasks;
 static int  nTasks, nextTask;
 static pthread_mutex_t catLock = PTHREAD_MUTEX_INITIALIZER;
+// Signalled for every bucket that becomes ready. It replaces the SDL_Delay(10)
+// the assembly used to wait for row k with: that loop slept even when the row
+// had already arrived and — worse — only ever looked at row k, so one slow row
+// held back every row already finished behind it.
+static pthread_cond_t  catCond = PTHREAD_COND_INITIALIZER;
 
 static void *threadCatalog(void *u) {
   (void)u;
@@ -919,8 +928,94 @@ static void *threadCatalog(void *u) {
     pthread_mutex_lock(&catLock);
     tasks[mine].n = got;
     tasks[mine].ready = 1;
+    pthread_cond_signal(&catCond);
     pthread_mutex_unlock(&catLock);
   }
+}
+
+// --- MANIFESTS IN PARALLEL ---------------------------------------------------
+//
+// They were read one at a time, on the assembly thread, before any catalogue:
+// with the owner's addons that is several GETs in series, and NOTHING else
+// happened until the last one answered. They are independent requests against
+// different hosts, and readManifest touches no shared state without a lock:
+// disc_target_search already takes searchLock, and addons_note_id writes the
+// entry matched by `base`, which is unique per addon.
+//
+// THE ADDON ORDER HAS TO BE PRESERVED: it is what defines the default row order
+// before preferences are applied. So each thread fills its OWN bucket and the
+// join walks them in addon order.
+#define MANIFEST_THREADS 4
+
+typedef struct {
+  const char *base;
+  Decl *out;    // DECL_MAX entries; see the note on the size in manifestsStart
+  int n;
+} TaskManifest;
+
+static TaskManifest *manTasks;
+static int nManTasks, nextManTask, nManThreads;
+static pthread_t manThreads[MANIFEST_THREADS];
+static pthread_mutex_t manLock = PTHREAD_MUTEX_INITIALIZER;
+
+static void *threadManifest(void *u) {
+  (void)u;
+  for (;;) {
+    int mine;
+    pthread_mutex_lock(&manLock);
+    if (nextManTask >= nManTasks) { pthread_mutex_unlock(&manLock); return NULL; }
+    mine = nextManTask++;
+    pthread_mutex_unlock(&manLock);
+    if (manTasks[mine].out)
+      manTasks[mine].n = readManifest(manTasks[mine].base, manTasks[mine].out,
+                                      DECL_MAX);
+  }
+}
+
+// Fires the manifest reads off and RETURNS. The caller goes on with other work
+// and calls manifestsJoin afterwards.
+static void manifestsStart(void) {
+  int i, q;
+  nManTasks = 0; nextManTask = 0; nManThreads = 0;
+  manTasks = calloc((size_t)(addons_n() > 0 ? addons_n() : 1), sizeof(TaskManifest));
+  if (!manTasks) return;
+  for (i = 0; i < addons_n(); i++) {
+    if (!addons_has_catalog(i)) continue;
+    // The bucket holds DECL_MAX and not a share of the total because ONE addon
+    // can declare more catalogues than the whole array (Xperience declares
+    // 605), and the cut has to happen at the join, in addon order, exactly as
+    // it did when the reading was serial. That is ~200 KB per addon, alive only
+    // while the manifests are being read.
+    manTasks[nManTasks].base = addons_base(i);
+    manTasks[nManTasks].out  = malloc(sizeof(Decl) * DECL_MAX);
+    nManTasks++;
+  }
+  for (q = 0; q < MANIFEST_THREADS && q < nManTasks; q++)
+    if (pthread_create(&manThreads[nManThreads], NULL, threadManifest, NULL) == 0)
+      nManThreads++;
+}
+
+// Waits for the manifests and joins the buckets IN ADDON ORDER, applying the
+// same ceiling the serial loop applied. Returns how many Decl it wrote.
+static int manifestsJoin(Decl *output, int max) {
+  int n = 0, k, q;
+  if (!manTasks) return 0;
+  // With NO thread at all (pthread_create failed on every one), read serially
+  // on this thread: worse performance, same result.
+  if (!nManThreads && nManTasks > 0) threadManifest(NULL);
+  for (q = 0; q < nManThreads; q++) pthread_join(manThreads[q], NULL);
+  for (k = 0; k < nManTasks; k++) {
+    int got = manTasks[k].n;
+    if (got > max - n) got = max - n;
+    if (got > 0) {
+      memcpy(output + n, manTasks[k].out, sizeof(Decl) * (size_t)got);
+      n += got;
+    }
+    free(manTasks[k].out);
+  }
+  free(manTasks); manTasks = NULL;
+  nManTasks = 0; nManThreads = 0; nextManTask = 0;
+  return n;
 }
 
 static void *build(void *u) {
@@ -928,7 +1023,7 @@ static void *build(void *u) {
   // mesmo teto arbitrario.
   int cap = 128;
   CatItem *lote = malloc(sizeof(CatItem) * (size_t)cap);
-  int n = 0, i;
+  int n = 0;
   int nResume = 0, nSocial = 0;
   (void)u;
   if (!lote) { searching = 0; return NULL; }
@@ -937,6 +1032,21 @@ static void *build(void *u) {
   // posicoes do catalogo nessa fileira, entao a ordem aqui e o que define o
   // que aparece la — e o historico tem de ganhar das recomendacoes.
   mark("build: start");
+  // THE MANIFESTS LEAVE FIRST AND RUN UNDERNEATH THE TRAKT CALLS.
+  //
+  // They depend on nothing from Trakt, and Trakt is expensive: /sync/playback
+  // and /sync/history are two GETs of up to 25 s each, and the social feed is
+  // one more. While that ran, the network sat idle as far as the addons were
+  // concerned. Now the two happen at once and the join below usually waits for
+  // nothing at all.
+  //
+  // The search-target reset comes along because every searchable catalogue
+  // registers itself INSIDE readManifest — clearing it afterwards would erase
+  // what the threads had just written. readPrefs does NOT move: it reads the
+  // owner's preference and the account can arrive between one moment and the
+  // next, so it stays exactly where it was, next to the ordering that uses it.
+  disc_targets_search_reset();
+  manifestsStart();
   nResume = trakt_resume(lote, 8);
   n += nResume;
   mark("trakt continue watching");
@@ -1015,17 +1125,15 @@ static void *build(void *u) {
     }
 
     readPrefs();
-    // Zera ANTES de ler os manifestos: cada catalogo com busca se registra
-    // sozinho la dentro, na hora em que e lido.
-    disc_targets_search_reset();
-    // Sem `nDecl < DECL_MAX` no laco: com o vetor cheio o manifesto do addon
-    // seguinte nem era baixado, e AIOStreams e Akashi TV ficavam invisiveis
-    // para o app inteiro so porque o Xperience, lido antes, declara 605
-    // catalogos. lerManifesto ja para de GRAVAR sozinho quando enche.
-    for (i = 0; i < addons_n(); i++) {
-      if (!addons_has_catalog(i)) continue;
-      nDecl += readManifest(addons_base(i), decls + nDecl, DECL_MAX - nDecl);
-    }
+    // The manifests have been in flight since the top of build(); this only
+    // waits for whatever has not landed yet. Every addon with catalogues is
+    // read, even with the array full: it is the cut at the JOIN that decides
+    // what gets in, not the reading. With the ceiling applied at READ time the
+    // next addon's manifest was not even downloaded, and AIOStreams and Akashi
+    // TV were invisible to the whole app just because Xperience, read earlier,
+    // declares 605 catalogues — including invisible to SEARCH, which registers
+    // during the read and does not depend on this array.
+    nDecl = manifestsJoin(decls, DECL_MAX);
     printf("[disc] %d catalogues declared by the addons\n", nDecl);
 
     // ALVOS DE BUSCA. Independem da ordem/filtro das FILEIRAS da home: um
@@ -1079,61 +1187,109 @@ static void *build(void *u) {
         // proprio fio: pior desempenho, mesmo resultado. Melhor que home vazia.
         if (!created && nTasks > 0) threadCatalog(NULL);
 
-        // ETAPA 3 — montar NA ORDEM, publicando cada fileira assim que o balde
-        // dela fica pronto. Esperar o balde k nao desperdica tempo: os fios
-        // seguem enchendo k+1, k+2 enquanto este e consumido.
-        for (k = 0; k < nTasks && nFilter < CAT_FILTER_MAX; k++) {
-          const Decl *d = tasks[k].d;
-          int got;
+        // ETAPA 3 — PUBLISH AS IT ARRIVES, not in reading order.
+        //
+        // The assembly used to wait for bucket k in order to publish bucket k.
+        // One slow row held back every row already finished behind it: with an
+        // 8 s ceiling per catalogue, a bad addon hid the rest of the home for a
+        // full 8 s.
+        //
+        // Now any bucket that becomes ready wakes the assembly, and it REBUILDS
+        // the catalogue from EVERY ready bucket, walking preference order and
+        // skipping the ones that have not landed. What that does on screen is
+        // something the home already knows how to handle: row 5 shows up before
+        // row 3, and when row 3 arrives it goes in ABOVE row 5. home.c re-finds
+        // the focus and the scroll by the row's KEY on every publish, precisely
+        // because "a new row can enter in the middle".
+        //
+        // Rebuilding rather than appending: the rows are windows (start,n) into
+        // one array, so inserting in the middle means rewriting the array from
+        // there on. It costs a memcpy of ~100 items on the discovery thread,
+        // not on the drawing one.
+        int nBase = n, nFilterBase = nFilter;
+        int done = 0;
+        Uint32 lastPublish = 0;
+        while (done < nTasks) {
+          int anyReady;
+          pthread_mutex_lock(&catLock);
           for (;;) {
-            int pr;
-            pthread_mutex_lock(&catLock);
-            pr = tasks[k].ready;
-            pthread_mutex_unlock(&catLock);
-            if (pr) break;
-            SDL_Delay(10);
+            anyReady = 0;
+            for (k = 0; k < nTasks; k++) if (tasks[k].ready) anyReady++;
+            if (anyReady > done) break;
+            pthread_cond_wait(&catCond, &catLock);
           }
-          got = tasks[k].n;
-          if (!got) continue;   // fileira vazia nao vira titulo pendurado
-          ENSURES(MAX_PER_ROW + 2);
-          if (got > cap - n) got = cap - n;
-          if (got <= 0) continue;
-          memcpy(lote + n, tasks[k].items, sizeof(CatItem) * (size_t)got);
-        {
-          CatRow *f = &filter[nFilter++];
-          memset(f, 0, sizeof *f);
-          snprintf(f->key,  sizeof f->key,  "%s", d->key);
-          snprintf(f->title, sizeof f->title, "%s", d->title);
-          snprintf(f->kind,   sizeof f->kind,   "%s", d->kind);
-          snprintf(f->base,   sizeof f->base,   "%s", d->base ? d->base : "");
-          snprintf(f->catId,  sizeof f->catId,  "%s", d->id);
-          f->start = n; f->n = got;
-        }
-        n += got;
-        printf("[disc] row %d: %s (%d)\n", nFilter - 1, d->title, got);
-        // PUBLICA A CADA FILEIRA, em vez de so no fim.
-        //
-        // Medido no Mac: o catalogo da rede so aparecia aos 12.991 ms, e ate
-        // la a home mostrava apenas o catalogo estatico do pacote. Na TV e
-        // pior. A referencia mostra conteudo em 1,7 s — nao porque a rede dela
-        // seja mais rapida, mas porque ela mostra o que ja tem.
-        //
-        // cat_definir_tudo troca o bloco inteiro de uma vez (catalogo.c), entao
-        // publicar N vezes e seguro para quem esta desenhando; o custo e uma
-        // copia do vetor por fileira, que acontece no fio da descoberta e nao
-        // no de desenho.
-        nRowsBuilt = nFilter;
-        memcpy(filtersBuilt, filter, sizeof(CatRow) * (size_t)nFilter);
-        // So publica em partes se a tela estiver com o catalogo do PACOTE.
-        // Sobre o cache seria um retrocesso visivel: 16 fileiras viram 1.
-        if (!cat_do_cache())
-          cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
-        // Bandeira propria: `nFil == 1` nunca acontece aqui porque a fileira
-        // "Continuar assistindo" ja ocupou a posicao 0 antes do laco.
-        if (!markedFirst) { markedFirst = 1;
-                               mark("first network row on screen"); }
+          pthread_mutex_unlock(&catLock);
+          done = anyReady;
+
+          // REBUILD from scratch, starting after what Trakt already put in the
+          // array.
+          n = nBase; nFilter = nFilterBase;
+          for (k = 0; k < nTasks && nFilter < CAT_FILTER_MAX; k++) {
+            const Decl *d = tasks[k].d;
+            int got, isReady;
+            pthread_mutex_lock(&catLock);
+            isReady = tasks[k].ready;
+            got = tasks[k].n;
+            pthread_mutex_unlock(&catLock);
+            if (!isReady) continue;
+            if (!got) continue;   // fileira vazia nao vira titulo pendurado
+            ENSURES(MAX_PER_ROW + 2);
+            if (got > cap - n) got = cap - n;
+            if (got <= 0) continue;
+            memcpy(lote + n, tasks[k].items, sizeof(CatItem) * (size_t)got);
+            {
+              CatRow *f = &filter[nFilter++];
+              memset(f, 0, sizeof *f);
+              snprintf(f->key,  sizeof f->key,  "%s", d->key);
+              snprintf(f->title, sizeof f->title, "%s", d->title);
+              snprintf(f->kind,   sizeof f->kind,   "%s", d->kind);
+              snprintf(f->base,   sizeof f->base,   "%s", d->base ? d->base : "");
+              snprintf(f->catId,  sizeof f->catId,  "%s", d->id);
+              f->start = n; f->n = got;
+            }
+            n += got;
+            // ARRIVAL, not final position. The index a row lands at changes on
+            // every pass — a later row inserts above it — so printing one here
+            // would be a different number each time for the same row. The
+            // ordered list is printed once, after the loop.
+            if (!tasks[k].logged) {
+              tasks[k].logged = 1;
+              printf("[disc] row ready: %s (%d)\n", d->title, got);
+            }
+          }
+          nRowsBuilt = nFilter;
+          memcpy(filtersBuilt, filter, sizeof(CatRow) * (size_t)nFilter);
+
+          // ONE PUBLISH PER FRAME, at most.
+          //
+          // Two buckets finishing together gave two publishes back to back, and
+          // cat_set_all keeps only ONE garbage block: the second would free a
+          // block the drawing thread may still be walking. It also re-reads
+          // progress.txt on every call. Nothing is lost by skipping one: the
+          // next bucket publishes what this one left, and the final publish
+          // comes after the loop.
+          //
+          // Only publishes in pieces when the screen is showing the PACKAGED
+          // catalogue. Over the cache it would be a visible regression: 16 rows
+          // become 1.
+          { Uint32 now = SDL_GetTicks();
+            if (!cat_do_cache() && (done == nTasks || now - lastPublish >= 16)) {
+              lastPublish = now;
+              cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
+              // A flag of its own: `nFilter == 1` never happens here because
+              // "Continue watching" already took position 0.
+              if (!markedFirst && nFilter > nFilterBase) {
+                markedFirst = 1;
+                mark("first network row on screen");
+              }
+            } }
         }
         for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
+        // THE FINAL ORDER, as one list. This is what gets compared between two
+        // versions to prove the owner's preference order did not change; the
+        // arrival lines above are in NETWORK order, which differs every launch.
+        for (k = nFilterBase; k < nFilter; k++)
+          printf("[disc] row %d: %s (%d)\n", k, filter[k].title, filter[k].n);
       }
       free(tasks); tasks = NULL; nTasks = 0;
       nRowsBuilt = nFilter;

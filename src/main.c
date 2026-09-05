@@ -159,6 +159,7 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
 
 // Tamanho do buffer de onde a captura le. Definido no arranque, junto com o
 // viewport.
+static int capX = 0, capY = 0;
 static int capW = (int)NV_SCREEN_W, capH = (int)NV_SCREEN_H;
 
 // Mesmo protocolo das outras ferramentas: escreva uma URL em /tmp/nuvio-video e
@@ -216,6 +217,38 @@ static void rectIfRequested(void) {
   consumeOrBlocks("/tmp/nuvio-rect", &blocked);
 }
 
+// THE LETTERBOX. The layout is authored at 1920x1080 and the shader maps it
+// onto whatever the viewport is (uTela stays 1920x1080, gfx.c), so any surface
+// size already works — but only a 16:9 one works WITHOUT DISTORTION. The TV is
+// 16:9 and this returns the whole drawable there. A Mac window is not: 16:10
+// built in, and anything at all once it can be dragged.
+//
+// Bars instead of a stretch because this window's job is to stand in for the
+// TV. A 3% vertical stretch is invisible until you are holding a screenshot
+// next to the reference and every measurement is off by 3%.
+static void surfaceBox(SDL_Window *win, int *bx, int *by, int *bw, int *bh) {
+  int dw = 0, dh = 0;
+  SDL_GL_GetDrawableSize(win, &dw, &dh);
+  if (dw < 1) dw = 1;
+  if (dh < 1) dh = 1;
+  int w = dw, h = (int)(dw * (NV_SCREEN_H / NV_SCREEN_W) + 0.5f);
+  if (h > dh) { h = dh; w = (int)(dh * (NV_SCREEN_W / NV_SCREEN_H) + 0.5f); }
+  *bw = w; *bh = h;
+  *bx = (dw - w) / 2;
+  *by = (dh - h) / 2;
+}
+
+// Applied at startup and on every SDL_WINDOWEVENT_SIZE_CHANGED. Without the
+// second call the app keeps drawing into the box it was born with: go
+// fullscreen and the frame stays in a corner at its old size.
+static void applySurface(SDL_Window *win) {
+  int bx, by, bw, bh;
+  surfaceBox(win, &bx, &by, &bw, &bh);
+  glViewport(bx, by, bw, bh);
+  gfx_size_target(bx, by, bw, bh);
+  capX = bx; capY = by; capW = bw; capH = bh;
+}
+
 static void captureIfRequested(void) {
   static time_t blocked;
   if (!requestNew("/tmp/nuvio-shot-req", &blocked)) return;
@@ -227,7 +260,9 @@ static void captureIfRequested(void) {
   size_t n = (size_t)w * h * 4;
   unsigned char *px = malloc(n);
   if (!px) return;
-  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+  // From the box's corner, not the buffer's: on a window that is not 16:9 the
+  // bars would otherwise be baked into every screenshot.
+  glReadPixels(capX, capY, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
 
   // BMP escrito a mao, em UM fwrite. SDL_SaveBMP converte pixel a pixel quando
   // as mascaras nao batem com o formato nativo, e nesta CPU isso leva segundos:
@@ -316,7 +351,8 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-  Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI;
+  Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI |
+                 SDL_WINDOW_RESIZABLE;
 #else
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
@@ -345,9 +381,33 @@ int main(int argc, char **argv) {
   //
   // txt_iniciar continua recebendo a escala do drawable: no aparelho ela e 1 e
   // nao muda nada, no Mac (retina) ela e 2 e a previa deixa de mentir.
+  int winW = (int)NV_SCREEN_W, winH = (int)NV_SCREEN_H;
+#ifdef __APPLE__
+  // 1920x1080 is bigger than the screen it has to fit inside. SDL takes those
+  // numbers as POINTS, and a 14" MacBook Pro reports 1512x982 of them — the
+  // window was 27% too wide before the desk even came into it, so macOS clamped
+  // it and the edges of the layout went off-screen.
+  //
+  // 90% of the usable bounds (which already exclude the menu bar and the Dock),
+  // in 16:9, keeps the whole frame on screen with room to grab the title bar.
+  // F makes it fullscreen when the point is to look at it rather than work.
+  {
+    SDL_Rect usable;
+    if (SDL_GetDisplayUsableBounds(0, &usable) == 0 &&
+        usable.w > 0 && usable.h > 0) {
+      float room = 0.9f;
+      winW = (int)(usable.w * room);
+      winH = (int)(winW * (NV_SCREEN_H / NV_SCREEN_W));
+      if (winH > usable.h * room) {
+        winH = (int)(usable.h * room);
+        winW = (int)(winH * (NV_SCREEN_W / NV_SCREEN_H));
+      }
+    }
+  }
+#endif
   SDL_Window *win = SDL_CreateWindow("Nuvio", SDL_WINDOWPOS_CENTERED,
                                      SDL_WINDOWPOS_CENTERED,
-                                     (int)NV_SCREEN_W, (int)NV_SCREEN_H, flags);
+                                     winW, winH, flags);
   if (!win) { printf("window: %s\n", SDL_GetError()); return 1; }
   // App de TV nao tem ponteiro: o cursor por cima da interface polui a leitura
   // e some sozinho no aparelho, mas nao no Mac.
@@ -426,10 +486,7 @@ int main(int argc, char **argv) {
 
   // Em tela retina o drawable e maior que a janela; sem ajustar o viewport, o
   // desenho ocupa um quarto da tela.
-  SDL_GL_GetDrawableSize(win, &dw, &dh);
-  glViewport(0, 0, dw, dh);
-  gfx_size_target(dw, dh);
-  capW = dw; capH = dh;
+  applySurface(win);
 
   // O relogio dos marcos comeca AQUI e nao no topo do main: o que vem antes e
   // parse de argumento e SDL_Init, que nao dependem de nada nosso.
@@ -443,12 +500,14 @@ int main(int argc, char **argv) {
   snprintf(dirRec, sizeof dirRec, "%s", dirArt);
   char *bar = strrchr(dirRec, '/');
   if (bar) *bar = 0;
-  txt_start(dirRec, (float)dw / NV_SCREEN_W);
+  int sbx, sby, sbw, sbh;
+  surfaceBox(win, &sbx, &sby, &sbw, &sbh);
+  txt_start(dirRec, (float)sbw / NV_SCREEN_W);
   // A MESMA escala vai para o cache de texturas: e ela que decide o teto de
   // decodificacao de cada arte a partir da largura com que o card a desenha.
   // Sem isto todo card decodificava com o teto unico de 640 e o cache batia no
   // orcamento com ~40 texturas.
-  tex_scale((float)dw / NV_SCREEN_W);
+  tex_scale((float)sbw / NV_SCREEN_W);
   mark("fonts+tex ready");
   // 192 slots, nao 96. O teto de slots so faz sentido junto com o tamanho de
   // cada textura: com o teto unico de 640 cada uma custava 2,4 MB e 96 slots ja
@@ -531,7 +590,28 @@ int main(int argc, char **argv) {
     // Enquanto o detalhe existe ele fica com o teclado inteiro: a home
     // continua desenhada por baixo, mas nao deve reagir ao D-pad.
     while (SDL_PollEvent(&e)) {
-      if (e.type == SDL_WINDOWEVENT) continue;
+      if (e.type == SDL_WINDOWEVENT) {
+        // The only one that matters: the surface changed shape, so the
+        // letterbox has to be measured again. Everything else (focus, expose,
+        // moves) is still noise to a TV app.
+        if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) applySurface(win);
+        continue;
+      }
+#ifdef __APPLE__
+      // F toggles fullscreen, Mac only — the TV is already fullscreen and has
+      // no keyboard. Safe as a bare letter because the app never reads typed
+      // text: there is no SDL_TEXTINPUT handler anywhere in it.
+      //
+      // DESKTOP fullscreen, not the real thing: it keeps the display mode and
+      // just fills the screen, so switching costs nothing and the bars do the
+      // aspect work they already do in the window.
+      if (e.type == SDL_KEYDOWN &&
+          (e.key.keysym.sym == SDLK_f || e.key.keysym.sym == SDLK_F11)) {
+        Uint32 now = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
+        SDL_SetWindowFullscreen(win, now ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+        continue;
+      }
+#endif
       // O BACK do webOS chega com scancode proprio (482), nao como AC_BACK, e
       // com KEYDOWN e KEYUP quase juntos — so o KEYDOWN conta. Isto ja tinha
       // sido resolvido uma vez e voltou a quebrar quando limpei os remendos

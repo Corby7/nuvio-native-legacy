@@ -203,6 +203,121 @@ pattern already exists in `searchThread` (discover.c:354-415). The 8 Trakt
 minutes with one addon down. Bring them to 8 s, as was already done for images.
 Verification: point an addon at a dead host and measure ≤ 10 s.
 
+### 2.1b What was left after P1–P5 **[MEASURED on the Mac]**
+
+With P1–P5 in, the remaining cost was not parallelism. Measured with a rig of
+three addons (Cinemeta with 8 catalogues, WatchHub with none, one unreachable),
+cold `catalog-net.bin`, three runs each; ms from `mark_start`:
+
+| mark | before P14–P16 | after |
+|---|---|---|
+| `manifests read` | 420 / 351 / 344 | 206 / 200 / 164 |
+| `first network row on screen` | 717 / 646 / 969 | 495 / 513 / 440 |
+| `network catalog published` | 1404 / 1074 / 1830 | 653 / 704 / 572 |
+
+And with ONE addon pointed at a black hole (a non-routable address, so connect
+hangs rather than failing fast like a bad name):
+
+| mark | before | after |
+|---|---|---|
+| `manifests read` | 20358 | 3022 |
+| `network catalog published` | 21034 | 3515 |
+
+The final row order is byte-identical before and after — compare the
+`[disc] row %d:` lines, which are now printed once as an ordered list after the
+assembly rather than as rows arrive.
+
+**P14 — One curl handle per thread.** Every request did
+`curl_easy_init`/`curl_easy_cleanup`, so the open connection, the DNS cache and
+the TLS session died with it — ~32 requests at startup plus hundreds of images,
+nearly all against the same few hosts, each paying DNS + TCP + handshake again.
+`net.c` now keeps one handle per thread in a `pthread_key_t`, cleared between
+requests with `curl_easy_reset` (which keeps exactly those three things) and
+closed by the key's destructor when the thread dies — which is what the detached
+threads need. Without the `curl_easy_reset` symbol it falls back to a handle per
+request and says so once. Also adds `CURLOPT_CONNECTTIMEOUT` at 3 s: a dead host
+used to spend the whole transfer budget on a connect that would never complete.
+Verification: `network catalog published` drops by roughly a third on the Mac
+(above); expect more on the TV, where the handshake costs more. Force the
+fallback by skipping the `dlsym` and confirm the app still loads — done, 8 rows,
+841 ms.
+
+**P15 — The transfer byte cap was a process global.** `net_cap` was consulted by
+`receive`, which is the write callback for EVERY transfer on every thread. While
+`mkv.c` read a 320 KB MKV header, that ceiling applied to whatever the four
+artwork threads were downloading. Now the cap lives in the `Bucket`.
+Verification: a harness with one thread pulling a 782 KB image in a loop and
+another reading a 320 KB chunk of it — before, 12 of 12 image pulls ABORTED
+(curl error 56) and returned NULL; after, 12 of 12 come back full size. Note the
+`r == 23 && cap > 0` line, which turns a write-abort into success: with a global
+cap that also let a foreign transfer's truncated body be reported as success and
+written to `art/cache`, which has no expiry and no eviction.
+
+**P16 — Manifests in parallel, underneath the Trakt calls.** They were read one
+at a time on the assembly thread, and nothing else ran until the last answered —
+while `trakt_resume` and `trakt_social` had already spent up to three 20–25 s
+GETs ahead of them, with the network idle as far as the addons were concerned.
+`manifestsStart()` now fires them at the top of `build()` and `manifestsJoin()`
+collects them in ADDON ORDER (the default row order) after the Trakt work.
+`readPrefs` deliberately did NOT move: the account can deliver preferences at any
+moment, so it stays next to the ordering that consumes it. Verification:
+`manifests read` roughly halves, and a hung addon costs 3 s instead of 20 s.
+
+**P17 — Publish on arrival instead of in reading order.** The assembly waited for
+bucket k to publish bucket k (`SDL_Delay(10)` spin), so one slow row held back
+every row already finished behind it — 8 s of hidden home for one bad addon. A
+condition variable now wakes the assembly on any ready bucket and it REBUILDS
+from every ready bucket in preference order, skipping what has not landed. Row 5
+can appear before row 3, and row 3 inserts above it when it arrives; `home.c`
+already re-finds focus and scroll by row KEY on every publish, precisely because
+"a new row can enter in the middle". Publishes are capped at one per frame:
+`cat_set_all` keeps only ONE garbage block, so two back-to-back publishes could
+free a block the drawing thread is still walking, and it re-reads `progress.txt`
+every call. Verification: the focus does not move during loading (same check as
+P2), and the final row order matches baseline exactly.
+
+### 2.1c On the TV **[MEASURED]**
+
+OLED55C32LA, webOS 23 (sdk 10.3.1), build `20260905-152123`, verified on disk
+(md5 `ddedaf1e`) AND running (the process reported its own build id).
+
+The account delivers 2 addons — AIOMetadata, which declares **151 catalogues**,
+and AIOStreams, which declares none — and the home builds 24 rows
+(`CAT_FILTER_MAX`). Note the shape of a real launch: the FIRST `build` runs at
+359 ms with zero addons and finishes in 2 ms, and the real one is the REBUILD
+`disc_rebuild` fires when the account list lands at 1308 ms. Times below are from
+that rebuild, which is the one the owner actually sees:
+
+| mark | ms | Δ from `build: start` |
+|---|---|---|
+| `build: start` | 1308 | — |
+| `manifests read` | 1960 | 652 |
+| `first network row on screen` | 2178 | 870 |
+| `network catalog published` | 3480 | 2172 |
+
+24 rows in 2.2 s, and `/tmp/nuvio-fps.txt` reports `FPS=60.0 worst=21.5ms
+janks=0 textures=15 14.9MB evictions=0` — no regression against the baseline
+recorded at `catalog.h`.
+
+P17 is visible in the log: the `[disc] row ready:` lines arrive in NETWORK order
+(Trending-Film first) and the `[disc] row %d:` list ends in PREFERENCE order
+(Popular-Series at 0, Trending-Film at 2). Rows landed out of order and reflowed
+into place, which is exactly the intent.
+
+**No TV baseline was taken.** The before/after table in 2.1b is the Mac's; the
+old build was never put back on the TV to measure it there. So the TV numbers
+above stand on their own — they say the new code is fast, not by how much it
+improved on that hardware.
+
+**Still open here.** `first network row on screen` is still gated by the manifest
+JOIN — catalogues from an addon whose manifest already landed could start before
+the slowest manifest returns. With only 2 manifests and one of them carrying 151
+catalogues, that gate costs 652 ms of the 870 here, so it is the next thing worth
+doing. And `CAT_THREADS` stays at 3: raising it to 5 measured no better on the
+Mac, but that rig had one catalogue host — on the TV nearly all 24 rows come from
+a SINGLE host (aiometa.minitwit.app), so this is now measurable properly and was
+not re-tested.
+
 ### 2.2 Artwork **[ASSUMED]**
 
 `tex_cache.c`: **the download happens INSIDE the decode thread** (`ensureLocal`

@@ -37,10 +37,6 @@ char *net_download_com(const char *url, int seconds, const char *const *headers)
 char *net_download_chunk(const char *url, int seconds, long start, long end,
                          long *size);
 
-// Byte cap for the current transfer (0 = no cap). Internal to the module; it is
-// exposed only because net_download_chunk uses it. Do not touch from outside.
-extern long net_cap;
-
 // Follows the redirects and returns the FINAL address, without downloading the
 // body. It tells you whether a debrid link leads to the file or to a notice
 // video ("downloading.mp4", "slate.mp4") — which PLAYS PERFECTLY WELL and so

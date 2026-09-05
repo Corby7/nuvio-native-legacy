@@ -19,8 +19,18 @@ float gfx_tex_aspect_current = 0.0f;
 float gfx_opacity_group = 1.0f;
 // Tamanho real do alvo da tela (em retina, maior que 1920x1080). Guardado aqui
 // porque toda volta de FBO precisa restaurar o viewport com ele.
+static int screenX = 0, screenY = 0;
 static int screenW = (int)NV_SCREEN_W, screenH = (int)NV_SCREEN_H;
-void gfx_size_target(int w, int h) { screenW = w; screenH = h; }
+void gfx_size_target(int x, int y, int w, int h) {
+  screenX = x; screenY = y; screenW = w; screenH = h;
+}
+// Every return to the default framebuffer goes through here. Writing the
+// viewport by hand was fine while it was always the whole drawable; with the
+// letterbox the origin moves too, and a single missed call puts the frame in
+// the corner of the screen.
+static void viewportTarget(void) {
+  glViewport(screenX, screenY, screenW, screenH);
+}
 
 static GLuint snapFbo = 0, snapTex = 0;
 static int snapW = 0, snapH = 0;
@@ -667,7 +677,7 @@ void gfx_snap_finish(void) {
   if (!snapFbo) return;
   GFX_OUTRO_START();
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  glViewport(0, 0, screenW, screenH);
+  viewportTarget();
   GFX_OUTRO_END();
 }
 
@@ -720,9 +730,11 @@ void gfx_crop(float x, float y, float w, float h) {
   //    cobria um quarto da area pedida — o menu lateral perdia os dois
   //    primeiros itens e os rotulos saiam cortados no meio da palavra.
   float ex = (float)screenW / NV_SCREEN_W, ey = (float)screenH / NV_SCREEN_H;
-  int yy = (int)((NV_SCREEN_H - (y + h)) * ey);
+  // 3. the letterbox moves the origin: the bars are outside the box and the
+  //    crop has to be measured from its corner, not the window's.
+  int yy = (int)((NV_SCREEN_H - (y + h)) * ey) + screenY;
   glEnable(GL_SCISSOR_TEST);
-  glScissor((int)(x * ex), yy, (int)(w * ex), (int)(h * ey));
+  glScissor((int)(x * ex) + screenX, yy, (int)(w * ex), (int)(h * ey));
   GFX_OUTRO_END();
 }
 void gfx_no_crop(void) { glDisable(GL_SCISSOR_TEST); }
@@ -781,7 +793,7 @@ void gfx_blur_generate(int via, unsigned int tex, float texAspect) {
 
   glEnable(GL_BLEND);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
-  glViewport(0, 0, screenW, screenH);
+  viewportTarget();
   GFX_OUTRO_END();
 }
 
