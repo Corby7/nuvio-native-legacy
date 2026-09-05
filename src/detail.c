@@ -1506,15 +1506,27 @@ static void heroWeb(float a, float offset) {
 
   // --- logo -----------------------------------------------------------------
   const char *fileLogo = logoOf(idx);
-  // O logo e desenhado com 261 de largura mas a arte de origem costuma vir bem
-  // maior; o teto de 960 ja bastaria, mas quando a mesma arte tambem serve ao
-  // hero o item e promovido — por isso passa pelo mesmo caminho.
+  // TEX_GET CAPS THE DECODE AT 640 AND THIS LOGO IS DRAWN UP TO 1000.
+  //
+  // The note that used to sit here said "the 960 ceiling would already be
+  // enough" — and it would, except NV_TEX_WIDTH_MAX is 640 (tex_cache.c), so a
+  // wide logo was decoded at 640 and stretched up to NV_DETW_LOGO_MAXW. At an
+  // aspect of 5 that is 1.56x of upscale on the largest piece of type on the
+  // screen, which is exactly where softness is easiest to see.
+  //
+  // The first request stays tex_get because the WIDTH depends on the aspect and
+  // the aspect is only known once something has been decoded. With the aspect
+  // in hand the art is asked for again at the size it is actually drawn;
+  // tex_get_width promotes the item and re-decodes once, which is the same path
+  // the hero already uses when it takes over a card's art.
   GLuint texLogo = fileLogo ? tex_get(fileLogo) : 0;
   if (texLogo) {
     float aspect = tex_aspect(fileLogo);
     if (aspect <= 0.0f) aspect = 2.5f;
     float h = NV_DETW_LOGO_H, w = h * aspect;
     if (w > NV_DETW_LOGO_MAXW) { w = NV_DETW_LOGO_MAXW; h = w / aspect; }
+    { GLuint sharp = tex_get_width(fileLogo, w);
+      if (sharp) texLogo = sharp; }
       // O logo assenta acima do que vier primeiro: a linha de retomada quando ha
     // progresso, senao a propria linha de acoes.
     float baseLogo = (hasResume ? yResume : yActions) - NV_DETW_LOGO_GAP;

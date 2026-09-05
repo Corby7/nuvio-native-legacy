@@ -1428,7 +1428,15 @@ static void drawHero(Uint32 now, float output) {
 
   // Logo do titulo, ou o nome em texto quando nao ha logo
   // (.home-hero-title-text, 56/600 no modern — nao os 76 do TXT_TITULO1).
-  GLuint tlogo = (ci && ci->logo[0]) ? tex_get(ci->logo) : 0;
+  // ASKED FOR AT THE WIDTH IT IS DRAWN, not at tex_get's blanket 640. At
+  // NV_LOGO_HERO_FULL_MAX_W the two numbers happen to be the same 640, and the
+  // art was landing decoded at exactly its drawn size with none of the slack
+  // NV_TEX_SLACK exists to give — the shader samples with filtering, so 1:1 is
+  // the point where a logo starts to look soft rather than the point where it
+  // stops.
+  GLuint tlogo = (ci && ci->logo[0])
+      ? tex_get_width(ci->logo, full ? NV_LOGO_HERO_FULL_MAX_W
+                                     : NV_LOGO_HERO_MAX_W) : 0;
   if (tlogo) {
     float ap = tex_aspect(ci->logo);
     if (ap <= 0.0f) ap = 4.0f;
