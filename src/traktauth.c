@@ -4,6 +4,7 @@
 #include "net.h"
 #include "trakt.h"
 #include "sync.h"
+#include "discover.h"
 #include "js.h"
 #include "jsw.h"
 #include <stdio.h>
@@ -276,6 +277,12 @@ void traktauth_step(unsigned nowMs) {
       jsw_obj_end(&c);
       sync_push_credential("trakt", jsw_text_final(&c));
       jsw_free(&c); }
+    // THE HOME HAS TO BE BUILT AGAIN. "Continue watching" is assembled inside
+    // discover's build(), which calls trakt_resume() — and that returns 0 the
+    // moment the credential is not there yet. Linking on this TV happens LONG
+    // after that build, so without this the row only appeared on the next
+    // launch: the link said it had worked and the home showed nothing.
+    disc_rebuild();
     printf("[trakt] vinculado nesta TV\n");
     fflush(stdout);
   }

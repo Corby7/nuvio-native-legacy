@@ -102,7 +102,7 @@ int   settings_depth_trailers(void);
 // preference is the RADIUS.
 int   settings_width_poster_dp(void);
 int   settings_radius_poster_dp(void);
-float settings_radius_poster_px(void);   // raio em px (dp x 2)
+float settings_radius_poster_px(void);   // radius in px (dp x 2)
 
 // --- SETTINGS THAT COME FROM THE ACCOUNT -------------------------------------
 // Applies the blob from `sync_pull_profile_settings_blob` (the `settings_json`

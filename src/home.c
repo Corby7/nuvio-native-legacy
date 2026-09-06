@@ -190,6 +190,32 @@ static Uint32 heroSwapIn = 0;
 static float heroExits   = 0.0f;
 static float heroEnters = 1.0f;
 
+// THE COLLECTION HERO CROSS-FADE, which is the same idea one row type over.
+//
+// The poster rows keep heroCurrent/heroPrevious and only swap once the new art has
+// DECODED, so a fast walk leaves the picture standing. The collection rows had none of
+// it: drawHero read the focused folder afresh every frame and drew it immediately. Two
+// visible consequences, and the owner reported both as "it looks different" —
+//
+//  - every step along Discover or Streaming was a HARD CUT, never a fade;
+//  - and because these covers are CDN URLs that land seconds later (see the note in
+//    collections.h), stepping onto a folder whose art had not arrived drew NOTHING and
+//    the hero went blank until the download finished.
+//
+// `colHeroFade` is the outgoing art's alpha: 1 at the instant of the swap, 0 once the
+// new art stands alone. It decays in home_update, beside heroExits and at the same
+// NV_HERO_FADE_MS rate, because that is where dt lives.
+static int   colHeroCurrent = -1, colHeroPrevious = -1;
+static float colHeroFade = 0.0f;
+// The hero art of a collection, with the card's cover as the fallback the drawing
+// already used.
+static const char *colHeroArt(const ColFolder *f) {
+  if (!f) return NULL;
+  if (f->hero[0])  return f->hero;
+  if (f->cover[0]) return f->cover;
+  return NULL;
+}
+
 static void loadsDir(const char *dir, char destination[][512], int *n, const char *sub) {
   char path[512];
   if (sub) snprintf(path, sizeof path, "%s/%s", dir, sub);
@@ -1140,6 +1166,10 @@ void home_update(float dt, Uint32 now) {
   } else {
     heroEnters = 1.0f;
   }
+  if (colHeroFade > 0.0f) {
+    colHeroFade -= dt * (1000.0f / NV_HERO_FADE_MS);
+    if (colHeroFade < 0.0f) colHeroFade = 0.0f;
+  }
 
   // The automatic focus walk was only there to see the prototype moving with nobody
   // on the remote. With the app navigable it gets in the way: it steals the focus in
@@ -1285,7 +1315,28 @@ static void drawHero(Uint32 now, float output) {
   }
 
   if(focus.row>=0&&focus.row<nRows&&rows[focus.row].kind==ROW_CATALOGS) {
-    const ColFolder *folder=col_folder(rows[focus.row].folders[focus.column]);
+    // WHICH folder the hero shows is not simply the focused one: it lags behind until
+    // that folder's art has decoded, exactly as the poster hero does, so walking the
+    // row leaves the picture standing instead of blanking it. See colHeroFade.
+    int want = (focus.column >= 0 && focus.column < rows[focus.row].n)
+             ? rows[focus.row].folders[focus.column] : -1;
+    if (want >= 0 && want != colHeroCurrent) {
+      const char *artW = colHeroArt(col_folder(want));
+      // No art is a ready state too — the folder's title block can come in without
+      // first erasing the hero that is up.
+      if (!artW || tex_get_hero(artW)) {
+        colHeroPrevious = colHeroCurrent;
+        colHeroCurrent  = want;
+        // The first collection row of a session has nothing to fade FROM, and ramping
+        // there would raise the art out of an empty rectangle instead of replacing
+        // something. Adopt it whole.
+        colHeroFade = (motionReduced || colHeroPrevious < 0 || !artW) ? 0.0f : 1.0f;
+      }
+    }
+    const ColFolder *folder = col_folder(colHeroCurrent >= 0 ? colHeroCurrent : want);
+    const ColFolder *leaving = colHeroFade > 0.0f ? col_folder(colHeroPrevious) : NULL;
+    float fadeIn = anim_smooth(1.0f - colHeroFade);
+    float fadeOut = anim_smooth(colHeroFade);
     if(folder) {
       if(folder->editorial) {
         /* Art is authored for this rectangle, not cropped as a movie backdrop.
@@ -1293,7 +1344,11 @@ static void drawHero(Uint32 now, float output) {
         float x=settings_content_x(),a=1-output;
         GLuint art=tex_get_hero(folder->hero);
         GfxRect header={0,0,1920,500};
-        if(art)gfx_rect(header,art,GFX_TEXT,0,0,0,0,1,1,1,a);
+        if(leaving&&leaving->hero[0]) {
+          GLuint out=tex_get_hero(leaving->hero);
+          if(out)gfx_rect(header,out,GFX_TEXT,0,0,0,0,1,1,1,fadeOut*a);
+        }
+        if(art)gfx_rect(header,art,GFX_TEXT,0,0,0,0,1,1,1,fadeIn*a);
         heroArtRect=header;
         int director=!strcasecmp(folder->group,"Directors");
         txt_draw_alpha(txt_line(TXT_HERO_META,director?"DIRECTORS":"COLLECTIONS",190,193,200,255),x,122,a);
@@ -1313,7 +1368,16 @@ static void drawHero(Uint32 now, float output) {
       GLuint t=0;
       if (isDirector) director_request(folder->title);
       if (!t && art[0]) t=tex_get_hero(art);
-      if(t){gfx_tex_aspect_current=tex_aspect(art);gfx_rect(r,t,modeHero,0,0,0,0,0,0,0,aArt);gfx_tex_aspect_current=0;}
+      // The art being LEFT stays up underneath while it fades, so the swap never goes
+      // through an empty frame. Only requested while the blend is running: asking every
+      // frame would drag an evicted 1920 texture back through the decoder purely so as
+      // not to draw it, which is the trap the poster path documents.
+      { const char *outArt = colHeroArt(leaving);
+        GLuint outT = outArt ? tex_get_hero(outArt) : 0;
+        if(outT){gfx_tex_aspect_current=tex_aspect(outArt);
+          gfx_rect(r,outT,modeHero,0,0,0,0,0,0,0,fadeOut*aArt);
+          gfx_tex_aspect_current=0;} }
+      if(t){gfx_tex_aspect_current=tex_aspect(art);gfx_rect(r,t,modeHero,0,0,0,0,0,0,0,fadeIn*aArt);gfx_tex_aspect_current=0;}
       heroArtRect=r;
       float x=settings_content_x(),a=1-output;
       TxtLine group=txt_line(TXT_HERO_META,folder->group,201,206,218,255);
@@ -2031,7 +2095,18 @@ void home_draw(Uint32 now) {
               // the same number appears on the episode card and the detail button.
               GfxRect border = { px - NV_RING_FOCUS, py - NV_RING_FOCUS,
                                 w + NV_RING_FOCUS * 2, h + NV_RING_FOCUS * 2 };
-              gfx_color(border, radius, 1.0f, 1.0f, 1.0f, f);
+              // THE RADIUS HAS TO BE RE-NORMALISED FOR THE BIGGER BOX. The
+              // shader reads it as a fraction of the HEIGHT, and this rect is
+              // 2*NV_RING_FOCUS taller than the card, so passing the card's
+              // `radius` straight through asked for radius*(h+8) px instead of
+              // the radius*h + 4 that a concentric outer corner needs. On the
+              // continue watching card (236 tall, 24px corners) that is 24.8px
+              // against 28: the white band survived along the straight edges
+              // and pinched to under a pixel at each corner, which is the
+              // "border doesn't apply" — it was there, just not on the corners.
+              float rPx = radius * h + NV_RING_FOCUS;
+              gfx_color(border, rPx / (h + NV_RING_FOCUS * 2.0f),
+                        1.0f, 1.0f, 1.0f, f);
             }
           }
           // A CARD WITH NO ART: a solid surface, not emptiness. Without this the card

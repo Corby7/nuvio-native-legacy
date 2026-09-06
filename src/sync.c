@@ -628,7 +628,15 @@ void sync_step(unsigned nowMs) {
     collectionsBlob = NULL;
     hasCollectionsBlob = 0;
   }
-  if (hasTraktRemote)  { trakt_set(traktToken, cloud_trakt_client()); hasTraktRemote = 0; }
+  if (hasTraktRemote) {
+    // Only on the TRANSITION to active: the pull repeats on every cycle, and
+    // rebuilding the whole home each time would throw the rows away every few
+    // minutes. Going from "no credential" to "credential" is the one moment
+    // the "continue watching" row can exist and does not.
+    int wasOn = trakt_active();
+    if (trakt_set(traktToken, cloud_trakt_client()) && !wasOn) disc_rebuild();
+    hasTraktRemote = 0;
+  }
   if (hasTmdb)      { disc_tmdb_set(tmdbKey);   hasTmdb = 0; }
   if (hasMdb)       { extras_set_key(mdbKey); hasMdb = 0; }
   if (hasSettingsBlob && settingsBlob) {

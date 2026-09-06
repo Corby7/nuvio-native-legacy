@@ -2,6 +2,7 @@
 #include "layout.h"
 #include "text.h"
 #include "anim.h"
+#include "settings.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -9,15 +10,23 @@ void resume_draw(const CatItem *ci, GfxRect r) {
   if (!ci) return;
   float scale = r.w / NV_HIGHLIGHT_W;
   float pad = NV_CW_PAD * scale, width = r.w - pad * 2;
-  gfx_rect(r, 0, GFX_VEIL, 0, 0, 0, NV_RADIUS_CARD, 0, 0, 0, .85f);
+  // The card's OWN radius, not the NV_RADIUS_CARD constant. The corner comes
+  // from `posterCardCornerRadiusDp` (12dp x 2 = 24px by default) while the
+  // constant is 0.055 of the height — 13px on this card. The veil is 85% black
+  // and it was being drawn with the tighter corner ON TOP of the wider one, so
+  // four dark wedges sat outside the card's outline, right where the focus ring
+  // is. Same expression as home.c's radiusOf: the shader's radius is a fraction
+  // of the height.
+  float radius = r.h > 0.0f ? settings_radius_poster_px() / r.h : NV_RADIUS_CARD;
+  gfx_rect(r, 0, GFX_VEIL, 0, 0, 0, radius, 0, 0, 0, .85f);
 
   // A compact rectangle, not a pill. Never invent a premiere status.
   if (ci->remainingMin > 0) {
     char badge[48];
     int h = ci->remainingMin / 60, m = ci->remainingMin % 60;
-    if (h && m) snprintf(badge, sizeof badge, "%dh %dmin Restantes", h, m);
-    else if (h) snprintf(badge, sizeof badge, "%dh Restantes", h);
-    else snprintf(badge, sizeof badge, "%dmin Restantes", m);
+    if (h && m) snprintf(badge, sizeof badge, "%dh %dm left", h, m);
+    else if (h) snprintf(badge, sizeof badge, "%dh left", h);
+    else snprintf(badge, sizeof badge, "%dm left", m);
     float px = NV_CW_BADGE_PAD_X * scale, py = NV_CW_BADGE_PAD_Y * scale;
     TxtLine l = txt_line_trim(TXT_CW_BADGE, badge, 242, 243, 247, 255, width - 2*px);
     if (l.tex) {
