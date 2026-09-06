@@ -1,5 +1,5 @@
-// Interface de reproducao nativa, seguindo o Nuvio oficial.
-// O video e fornecido por video.c na LG; no Mac ha somente a interface.
+// The native playback interface, following the official Nuvio.
+// The video is supplied by video.c on LG; on the Mac there is only the interface.
 #ifndef NV_PLAYER_H
 #define NV_PLAYER_H
 
@@ -25,8 +25,8 @@ void player_error_source(void);
 
 // 1 when there is real video behind this session. The drawing uses this so it
 // does not paint the key art over the video plane.
-int  player_com_video(void);
-int  player_requested_tracks(void);   // CIMA no player abre audio/legendas
+int  player_has_video(void);
+int  player_requested_tracks(void);   // UP in the player opens audio/subtitles
 
 // 1 while the source is opening. The screen shows the key art and an indicator;
 // without it the user presses Play and stares at a still screen with no idea
@@ -40,11 +40,11 @@ int  player_controls_visible(void);
 // before there is a URL and the video comes in when it arrives.
 void player_set_source(const char *url);
 
-int  player_is_open(void);   // 1 enquanto a tela existe, inclusive durante o fade de saida
+int  player_is_open(void);   // 1 while the screen exists, including during the exit fade
 void player_event(const SDL_Event *e);
 void player_update(float dt, Uint32 now);
 void player_draw(Uint32 now);
-int  player_wants_exit(void);  // 1 assim que o Back foi apertado
+int  player_wants_exit(void);  // 1 as soon as Back was pressed
 void player_shutdown(void);
 
 // --- ASPECT MODES ------------------------------------------------------------
@@ -69,7 +69,7 @@ void player_shutdown(void);
 // RECTANGLE, and the web's "excess that leaves the viewport" becomes a rectangle
 // with negative coordinates and a size larger than the screen.
 typedef enum {
-  PLR_ASPECT_ORIGINAL = 0,   // "Fit (Original)"  contain, sem zoom  — PADRAO
+  PLR_ASPECT_ORIGINAL = 0,   // "Fit (Original)"  contain, no zoom  — DEFAULT
   PLR_ASPECT_CROP,           // "Crop"            cover
   PLR_ASPECT_STRETCH,        // "Stretch"         fill
   PLR_ASPECT_ZOOM_LIGHT,      // "Slight Zoom"     cover x 1.15
@@ -80,7 +80,7 @@ typedef enum {
   PLR_ASPECT_N
 } PlrAspect;
 
-// Fatores de zoom, iguais aos do resolveAspectScale do web.
+// Zoom factors, the same as the web's resolveAspectScale.
 #define PLR_ZOOM_LIGHT    1.15f
 #define PLR_ZOOM_CINEMA  1.34f
 #define PLR_ZOOM_ULTRA   1.55f
@@ -88,10 +88,10 @@ typedef enum {
 // the web's showAspectToast.
 #define PLR_TOAST_MS     1400u
 
-int         player_aspect(void);              // modo atual (PlrAspecto)
-const char *player_aspect_label(int mode);   // "Cinema Zoom", "Encaixar"...
-void        player_aspect_set(int mode);  // aplica e grava
-void        player_aspect_cycle(void);       // proximo modo + aviso na tela
+int         player_aspect(void);              // current mode (PlrAspect)
+const char *player_aspect_label(int mode);   // "Cinema Zoom", "Fit"...
+void        player_aspect_set(int mode);  // applies and saves
+void        player_aspect_cycle(void);       // next mode + on-screen notice
 
 // THE SUBTITLE STYLE, stored in art/player.txt alongside the aspect: it is a
 // DEVICE preference and not a title's. The tracks sheet edits the struct and

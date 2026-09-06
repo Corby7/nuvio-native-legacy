@@ -27,11 +27,11 @@ int stream_sheet_reload(void) { int r = reload; reload = 0; return r; }
 
 static int is_open = 0, focus = 0, choice = -1;
 static float anim = 0.0f, scroll = 0.0f;
-// Linha do realce, em unidades de ITEM (2.4 = entre o terceiro e o quarto). O
-// realce escorrega entre as linhas em vez de saltar: com o salto seco a folha
-// parecia trocar de conteudo a cada tecla, e num D-pad e a continuidade do
-// realce que diz "ainda e a mesma lista, voce so andou".
-
+// The highlight's row, in ITEM units (2.4 = between the third and the fourth).
+// The highlight slides between rows instead of jumping: with a hard jump the
+// sheet looked like it swapped its contents on every keypress, and on a D-pad
+// it is the continuity of the highlight that says "this is still the same list,
+// you only moved".
 
 static const char *containerOf(const Stream *s) {
   if (s->mp4 || strstr(s->url, ".mp4") || strstr(s->label, ".mp4")) return "MP4";
@@ -63,33 +63,33 @@ const Stream *stream_item(int i) {
   return i >= 0 && i < n ? &list[i] : NULL;
 }
 
-// Pontuacao da regra do dono, do mais forte para o mais fraco:
-//   MP4 4K Dolby Vision  >  4K Dolby Vision (qualquer container)
-//   >  4K  >  Dolby Vision  >  resolucao  >  ordem de chegada
+// The owner's scoring rule, from strongest to weakest:
+//   MP4 4K Dolby Vision  >  4K Dolby Vision (any container)
+//   >  4K  >  Dolby Vision  >  resolution  >  arrival order
 //
-// Somar pesos em vez de comparar campo a campo deixa a regra num lugar so e
-// legivel: mudar a preferencia e mexer num numero, nao reescrever um encadeado
-// de ifs onde a ordem das comparacoes vira a regra escondida.
+// Adding weights rather than comparing field by field keeps the rule in one
+// place and readable: changing the preference means touching a number, not
+// rewriting a chain of ifs where the order of comparisons becomes a hidden rule.
 static long points(const Stream *s) {
   long p = 0;
-  // DOLBY VISION SO VALE PONTO EM MP4 — e isto e medida, nao teoria.
+  // DOLBY VISION ONLY SCORES ON MP4 — and this is measurement, not theory.
   //
-  // Marcado no aparelho do dono (LG C9, webOS 4.10) tocando um MKV que o addon
-  // anunciava como DV:
-  //   hdr do pipeline: HDR10 (fonte DV=1)
-  // A TV REBAIXOU para HDR10. E o comportamento ja relatado para Matroska —
-  // webOS aciona DV nativo em MP4 e cai para HDR10 em MKV — agora confirmado
-  // aqui em vez de citado.
+  // Recorded on the owner's set (LG C9, webOS 4.10) playing an MKV the addon
+  // advertised as DV:
+  //   pipeline hdr: HDR10 (source DV=1)
+  // The TV DOWNGRADED to HDR10. It is the behaviour already reported for
+  // Matroska — webOS engages native DV on MP4 and falls back to HDR10 on MKV —
+  // now confirmed here instead of merely cited.
   //
-  // O que isso significa na pratica: num perfil 5 a camada base NAO e
-  // compativel com HDR10 (e IPT-PQ), entao decodifica-la como HDR10 produz
-  // exatamente as cores lavadas que o dono relatou. Preferir a versao DV em
-  // MKV era escolher, de proposito, o arquivo que fica PIOR nesta TV.
+  // What that means in practice: in profile 5 the base layer is NOT compatible
+  // with HDR10 (it is IPT-PQ), so decoding it as HDR10 produces exactly the
+  // washed-out colours the owner reported. Preferring the DV version in MKV
+  // meant deliberately choosing the file that looks WORSE on this TV.
   //
-  // Nao ha como consertar a decodificacao pelo caminho da URI: o Kodi so
-  // resolve descartando a camada de realce e reescrevendo o RPU, o que exige
-  // demuxar e alimentar o pipeline por buffer — outro projeto, ja registrado em
-  // video.c. O que ESTA ao alcance e parar de premiar a fonte que nao serve.
+  // There is no way to fix the decoding through the URI: Kodi only solves it by
+  // discarding the enhancement layer and rewriting the RPU, which requires
+  // demuxing and feeding the pipeline by buffer — another project, already
+  // recorded in video.c. What IS in reach is to stop rewarding a useless source.
   if (s->mp4 && s->height >= 2160 && s->dolbyVision) p += 100000;
   if (s->height >= 2160)                             p +=  20000;
   if (s->mp4 && s->dolbyVision)                      p +=  10000;
@@ -98,11 +98,11 @@ static long points(const Stream *s) {
   return p;
 }
 
-// Endereco de aviso e nao de conteudo. Estes dois foram MEDIDOS no aparelho:
-// o AIOStreams manda para slate.m3u8/slate.mp4 ("This playback link couldn't be
-// verified") quando o link expirou, e o Debridio para downloading.mp4 quando o
-// arquivo ainda nao esta em cache no Real-Debrid. Os dois sao MP4 validos de
-// ~120s que TOCAM NORMALMENTE — nao ha erro para detectar, so o endereco.
+// A notice address and not a content one. These two were MEASURED on the
+// device: AIOStreams redirects to slate.m3u8/slate.mp4 ("This playback link
+// couldn't be verified") when the link has expired, and Debridio to
+// downloading.mp4 when the file is not cached on Real-Debrid yet. Both are
+// valid ~120s MP4s that PLAY NORMALLY — there is no error to detect, only the address.
 static int addressOfWarning(const char *u) {
   return strstr(u, "downloading.mp4") || strstr(u, "/slate") ||
          strstr(u, "slate.mp4") || strstr(u, "slate.m3u8") ? 1 : 0;
@@ -110,15 +110,15 @@ static int addressOfWarning(const char *u) {
 
 // VERIFICACAO DAS CANDIDATAS EM PARALELO.
 //
-// Eram ate 8 rede_url_final EM SERIE, 20 s cada — a segunda metade dos 16,5 s
-// medidos entre abrir o titulo e ter fonte. E desperdicio duplo: a maioria das
-// tentativas RESOLVE, entao esperar a 1a terminar para so entao comecar a 2a so
-// tem valor quando a 1a falha.
+// It used to be up to 8 net_url_final calls IN SERIES, 20 s each — the second
+// half of the 16.5 s measured between opening the title and having a source.
+// It is doubly wasteful: most attempts DO resolve, so waiting for the 1st to
+// finish before starting the 2nd only has value when the 1st fails.
 //
-// A REGRA DE ESCOLHA NAO MUDA: continua sendo "a de maior pontuacao que
-// resolve". Os fios verificam as N melhores de uma vez e o resultado e lido NA
-// ORDEM DE PONTUACAO, entao a fonte escolhida e exatamente a mesma que a versao
-// em serie escolheria — so que sem esperar as anteriores falharem uma a uma.
+// THE CHOICE RULE DOES NOT CHANGE: it is still "the highest-scoring one that
+// resolves". The threads check the best N at once and the result is read IN
+// SCORE ORDER, so the chosen source is exactly the one the serial version would
+// have chosen — only without waiting for the earlier ones to fail one by one.
 #define SEE_THREADS 4
 
 typedef struct { int idx; int ok; } Check;
@@ -137,8 +137,8 @@ static void *threadVerify(void *u) {
     pthread_mutex_unlock(&seeLock);
     i = checks[mine].idx;
     if (!list[i].url[0]) continue;
-    // 10 s e nao 20: em paralelo o timeout deixa de ser somado, mas continua
-    // sendo o tempo que o dono espera pela mais lenta.
+    // 10 s and not 20: in parallel the timeout stops adding up, but it is still
+    // the time the owner waits for the slowest one.
     if (!net_url_final(list[i].url, 10, end, sizeof end)) {
       printf("[source] %d did not resolve\n", i);
       continue;
@@ -161,8 +161,8 @@ int stream_first_good(int attempts) {
   used = calloc((size_t)attempts, sizeof *used);
   if (!used) return -1;
 
-  // Seleciona as `tentativas` melhores, EM ORDEM DE PONTUACAO — a mesma ordem
-  // que o laco em serie percorria.
+  // Selects the best `attempts` ones, IN SCORE ORDER — the same order the
+  // serial loop walked.
   while (nu < attempts) {
     int best = -1, i, j;
     long largerP = 0;
@@ -188,10 +188,10 @@ int stream_first_good(int attempts) {
       int created = 0;
       for (q = 0; q < SEE_THREADS && q < nu; q++)
         if (pthread_create(&threads[created], NULL, threadVerify, NULL) == 0) created++;
-      if (!created) threadVerify(NULL);   // sem fios: em serie, mesmo resultado
+      if (!created) threadVerify(NULL);   // no threads: in series, same result
       for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
     }
-    // Primeira que passou, na ordem de pontuacao.
+    // The first one that passed, in score order.
     for (q = 0; q < nu; q++)
       if (checks[q].ok) { chosen = checks[q].idx; break; }
   }
@@ -207,8 +207,8 @@ int stream_automatic(void) {
   long larger = points(&list[0]);
   for (int i = 1; i < n; i++) {
     long p = points(&list[i]);
-    // `>` e nao `>=`: em empate fica o PRIMEIRO da lista, que e a ordem em que
-    // o addon devolveu — e ele costuma saber algo que a pontuacao nao ve.
+    // `>` and not `>=`: on a tie the FIRST in the list wins, which is the order
+    // the addon returned — and it usually knows something the score cannot see.
     if (p > larger) { larger = p; best = i; }
   }
   return best;
@@ -329,7 +329,7 @@ void stream_sheet_draw(Uint32 now) {
     float lx=x+62,w=SHEET_W-124;
     char name[sizeof s->label],description[sizeof s->description];
     snprintf(name,sizeof name,"%s",s->label);snprintf(description,sizeof description,"%s",s->description);
-    // SDL_ttf nao interpreta quebras de linha; nao renderizar glifos .notdef.
+    // SDL_ttf does not interpret line breaks; do not render .notdef glyphs.
     for(char *p=name;*p;p++)if((unsigned char)*p<32)*p=' ';
     for(char *p=description;*p;p++)if((unsigned char)*p<32)*p=' ';
     txt_draw_alpha(txt_line_trim(TXT_PANEL_ITEM,name,240,241,243,255,w),lx,y+16,anim);

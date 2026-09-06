@@ -16,10 +16,10 @@
 #include <SDL2/SDL.h>
 #include <stdint.h>
 
-// A lista cresce conforme a resposta dos addons; a UI virtualiza as linhas.
+// The list grows as the addons answer; the UI virtualises the rows.
 
 typedef struct {
-  char label[192];     // Nome curto da fonte
+  char label[192];     // Short name of the source
   char provider[96];
   // 1024 and not 512. MEASURED: AIOStreams playback links are 525 to 547
   // characters long (two signed segments), and at 512 they were ALL truncated
@@ -30,21 +30,21 @@ typedef struct {
   int  height;          // 2160, 1080, 720...
   int  dolbyVision;
   int  dolbyAtmos;
-  uint64_t badges;     // classificados uma vez, nunca regex no desenho
-  int  mp4;             // 1 = MP4 progressivo; 0 = HLS ou outro
-  long sizeMB;       // 0 quando desconhecido
+  uint64_t badges;     // classified once, never regex while drawing
+  int  mp4;             // 1 = progressive MP4; 0 = HLS or something else
+  long sizeMB;       // 0 when unknown
   char description[2048];
   char file[512];
 } Stream;
 
-// Parser sem rede: o chamador libera *saida. Retorna -1 se a alocacao falhar.
+// Network-free parser: the caller frees *output. Returns -1 if the allocation fails.
 int stream_parse(const char *json, const char *provider, Stream **output);
 void stream_set_current(int index_);
 int stream_current(void);
 void stream_sheet_context(const char *text);
 int stream_sheet_reload(void);
 
-// Substitui a lista do titulo corrente. Chamar quando os addons responderem.
+// Replaces the current title's list. Call when the addons answer.
 void stream_set_list(const Stream *list, int n);
 int  stream_n(void);
 const Stream *stream_item(int i);
@@ -64,7 +64,7 @@ Uint32 stream_age_ms(void);
 // do. BLOCKS — call from a thread of your own.
 int  stream_first_good(int attempts);
 
-// --- folha de fontes (a lista que sobe por cima do player/detalhe) ---
+// --- source sheet (the list that rises over the player/detail screen) ---
 void stream_sheet_open(void);
 int  stream_sheet_is_open(void);
 void stream_sheet_event(const SDL_Event *e);

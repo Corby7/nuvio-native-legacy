@@ -178,7 +178,7 @@ int main(int argc,char **argv) {
     net_prepare();assert(trakt_load("deploy/app/art"));
     CatItem *social=calloc(8,sizeof *social);assert(social);
     int n=trakt_social(social,8);assert(n>0);
-    for(int i=0;i<n;i++)assert(social[i].imdb[0]&&social[i].pais[0]&&social[i].title[0]);
+    for(int i=0;i<n;i++)assert(social[i].imdb[0]&&social[i].country[0]&&social[i].title[0]);
     printf("PASS: %d real activities, with author and title.\n",n);free(social);return 0;
   }
   if(!strcmp(argv[1],"--live")) {
@@ -210,7 +210,7 @@ int main(int argc,char **argv) {
       extras_request("tt14688458",1,0);
       for(int i=0;i<300 && !extras_progress_ready();i++)SDL_Delay(100);
       int t=0,e=0;
-      printf("LIVE Trakt: history=%s, next=%s",extras_progress_ready()?"recebido":"unavailable",extras_next_episode(&t,&e)?"sim":"not given");
+      printf("LIVE Trakt: history=%s, next=%s",extras_progress_ready()?"received":"unavailable",extras_next_episode(&t,&e)?"yes":"not given");
       if(t&&e)printf(" T%dE%d",t,e);
       puts(" (read-only query)");
       if(t&&e) {
@@ -255,7 +255,7 @@ int main(int argc,char **argv) {
   CatEp ep[5]={0};
   for(int i=0;i<5;i++) {
     ep[i].season=2;ep[i].episode=i+1;snprintf(ep[i].name,sizeof ep[i].name,"%s",names[i]);
-    snprintf(ep[i].date,sizeof ep[i].date,"5 de dezembro de 2024");snprintf(ep[i].duration,sizeof ep[i].duration,"53 min");
+    snprintf(ep[i].date,sizeof ep[i].date,"5 December 2024");snprintf(ep[i].duration,sizeof ep[i].duration,"53 min");
     snprintf(ep[i].synopsis,sizeof ep[i].synopsis,"Juliette sets out on a dangerous quest to retrieve a suit so she can return home.");
   }
   cat_set_episodes(0,ep,5);player_open(0,NULL);player_set_episode(2,4);
@@ -269,7 +269,7 @@ int main(int argc,char **argv) {
   }
   stream_set_list(s,5);stream_sheet_context(player_line_episode());stream_sheet_open();
   capture("/tmp/nuvio-player-sources.bmp",w,2);
-  tracks_open_em(1);capture("/tmp/nuvio-player-subtitles.bmp",w,3);
+  tracks_open_at(1);capture("/tmp/nuvio-player-subtitles.bmp",w,3);
   menu_start();capture("/tmp/nuvio-player-cards.bmp",w,4);
   menu_open();capture("/tmp/nuvio-player-menu.bmp",w,4);
   tex_shutdown();txt_shutdown();gfx_shutdown();SDL_GL_DeleteContext(gl);SDL_DestroyWindow(w);SDL_Quit();

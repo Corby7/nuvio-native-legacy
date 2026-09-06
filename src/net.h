@@ -21,7 +21,7 @@ char *net_download_bin(const char *url, int seconds, long *n);
 // ("Authorization: Bearer x"). It exists because of Trakt, which requires the
 // token and the application key in headers — there is no way to pass them in
 // the URL.
-char *net_download_com(const char *url, int seconds, const char *const *headers);
+char *net_download_headers(const char *url, int seconds, const char *const *headers);
 
 // Downloads ONLY A CHUNK, via the Range header. Returns the size in *size.
 //

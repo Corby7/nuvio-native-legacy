@@ -31,17 +31,17 @@ typedef enum {
   // has the same size but is grey — the colour comes from whoever draws, not
   // from the style.
   TXT_HERO_SIN,
-  // Canto superior do PLAYER, do bloco #playerUiRoot do web:
+  // Top corner of the PLAYER, from the web app's #playerUiRoot block:
   //   .player-clock          26 / 600
   //   .player-ends-at        20 / 400
   //   .player-parental-label 22 / 600
-  //   .player-parental-severity e .player-parental-separator 22 / 400
+  //   .player-parental-severity and .player-parental-separator 22 / 400
   TXT_PG_CLOCK, TXT_PG_END, TXT_PG_LABEL, TXT_PG_SEV,
   TXT_PANEL_TITLE, TXT_PANEL_ITEM,
   TXT_CW_TITLE, TXT_CW_META, TXT_CW_BADGE,
   TXT_RANK,
-  // Legenda externa: 50%..200%, em passos de 10. O firmware da C9 oferece
-  // apenas cinco degraus; estas fontes pertencem ao overlay do proprio app.
+  // External subtitle: 50%..200%, in steps of 10. The C9 firmware offers only
+  // five steps; these fonts belong to the app's own overlay.
   TXT_SUB_50, TXT_SUB_60, TXT_SUB_70, TXT_SUB_80,
   TXT_SUB_90, TXT_SUB_100, TXT_SUB_110, TXT_SUB_120,
   TXT_SUB_130, TXT_SUB_140, TXT_SUB_150, TXT_SUB_160,
@@ -51,9 +51,9 @@ typedef enum {
 
 typedef struct { GLuint tex; int w, h; } TxtLine;
 
-// Familia alternativa usada SOMENTE pelo renderer de legenda externa. A
-// interface continua em Inter; misturar a familia da legenda com menus faria
-// a preferencia de reproducao redesenhar o app inteiro.
+// An alternative family used ONLY by the external subtitle renderer. The
+// interface stays on Inter; mixing the subtitle family into menus would make a
+// playback preference redraw the whole app.
 typedef enum {
   TXT_FAMILY_INTER = 0,
   TXT_FAMILY_LG,
@@ -107,7 +107,7 @@ TxtLine txt_line_trim(TxtStyle style, const char *s, int r, int g, int b,
 TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
                                  int b, int a, float maxW, TxtFamily family);
 
-// Desenha no canto superior esquerdo (x,y).
+// Draws at the top-left corner (x,y).
 void txt_draw(TxtLine l, float x, float y);
 void txt_draw_alpha(TxtLine l, float x, float y, float alpha);
 

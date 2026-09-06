@@ -3,6 +3,6 @@
 #include "catalog.h"
 #include "gfx.h"
 
-// Conteudo sobre a capa; a home continua responsavel por imagem e foco.
+// Content over the cover art; the home stays responsible for the image and focus.
 void resume_draw(const CatItem *item, GfxRect card);
 #endif

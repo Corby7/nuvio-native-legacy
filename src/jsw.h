@@ -14,21 +14,21 @@
 #define NV_JSW_H
 #include <stddef.h>
 
-#define JSW_DEPTH 16   // profundidade maxima de aninhamento
+#define JSW_DEPTH 16   // maximum nesting depth
 
 typedef struct {
   char  *p;
   size_t n, cap;
-  int    error;                 // 1 depois de qualquer falha; o resto vira no-op
+  int    error;                 // 1 after any failure; everything else becomes a no-op
   int    depth;
-  char   first[JSW_DEPTH];   // 1 enquanto o nivel atual nao tem elemento
+  char   first[JSW_DEPTH];   // 1 while the current level has no element
 } Jsw;
 
 void jsw_start(Jsw *w);
 void jsw_free(Jsw *w);
 
-// Texto pronto (0 em falha). O buffer continua sendo do escritor: copie ou use
-// antes de jsw_livre.
+// The finished text (0 on failure). The buffer still belongs to the writer:
+// copy it or use it before jsw_free.
 const char *jsw_text_final(const Jsw *w);
 
 void jsw_obj_start(Jsw *w);
@@ -39,7 +39,7 @@ void jsw_arr_end(Jsw *w);
 // A key inside an object. The next jsw_* writes its value.
 void jsw_key(Jsw *w, const char *name);
 
-void jsw_str(Jsw *w, const char *s);     // string com escape; NULL vira null
+void jsw_str(Jsw *w, const char *s);     // escaped string; NULL becomes null
 void jsw_num(Jsw *w, double v);
 void jsw_int(Jsw *w, long long v);
 void jsw_bool(Jsw *w, int v);

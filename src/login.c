@@ -10,10 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-// O QR e o caminho principal, e nao por gosto. MEDIDO na resposta do servidor:
-// o codigo tem 32 digitos hexadecimais e a URL ~63 caracteres. Ninguem
-// transcreve isso da TV para o celular sem errar — sem QR, esta tela nao
-// funciona.
+// The QR code is the primary path, and not out of taste. MEASURED from the
+// server response: the code is 32 hex digits and the URL ~63 characters. Nobody
+// transcribes that from the TV to their phone without a typo — without the QR
+// code this screen does not work.
 #define LG_QR_SIDE       440.0f
 #define LG_BLOCK_W      1100.0f
 #define LG_PILL_W        360.0f
@@ -25,9 +25,9 @@ static float pulse;
 void login_start(void) {
   animButton = 0.0f;
   pulse = 0.0f;
-  // Pedir o codigo JA, sem esperar o OK: a pessoa que acabou de instalar o app
-  // nao tem nada para decidir nesta tela, e um botao "entrar" antes do codigo
-  // so acrescenta um toque e uns segundos de espera depois dele.
+  // Ask for the code NOW, without waiting for OK: someone who has just installed
+  // the app has nothing to decide on this screen, and a "sign in" button before
+  // the code only adds one keypress and a few seconds of waiting after it.
   if (!session_loggedin()) session_login_begin();
 }
 
@@ -35,9 +35,9 @@ void login_event(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   { SDL_Keycode k = e->key.keysym.sym;
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
-      // OK so faz sentido quando ha o que refazer. Com o codigo na tela ele nao
-      // faz nada de proposito: reiniciar o fluxo aqui trocaria o codigo que a
-      // pessoa acabou de digitar no celular.
+      // OK only makes sense when there is something to redo. With the code on
+      // screen it deliberately does nothing: restarting the flow here would
+      // swap out the code the user just typed on their phone.
       if (session_state() == SESS_ERROR || session_state() == SESS_LOGGEDOUT)
         session_login_begin();
     } }
@@ -68,9 +68,9 @@ void login_draw(Uint32 now) {
   y += 118.0f;
 
   if (!cloud_ready()) {
-    // Este caso e de COMPILACAO, nao do usuario: o pacote saiu sem a
-    // configuracao do servidor. Dizer "erro ao entrar" mandaria a pessoa tentar
-    // de novo para sempre contra algo que nunca vai funcionar.
+    // This case is a BUILD problem, not a user one: the package shipped without
+    // the server configuration. Saying "sign-in error" would send the user
+    // retrying forever against something that will never work.
     lineCentered(TXT_HEADLINE, "This package was built without a server.",
                   236, 108, 108, y, 1.0f);
     lineCentered(TXT_BODY,
@@ -94,15 +94,15 @@ void login_draw(Uint32 now) {
       y += 62.0f;
 
       if (texQr) {
-        // Moldura clara um pouco maior que o simbolo: sobre o fundo escuro da
-        // tela, a zona de silencio da textura sozinha ja bastaria, mas a
-        // moldura arredondada faz o bloco ler como um cartao e nao como um
-        // buraco branco no meio da tela.
+        // A light frame slightly larger than the symbol: against the screen's
+        // dark background the texture's own quiet zone would already be enough,
+        // but the rounded frame makes the block read as a card rather than a
+        // white hole in the middle of the screen.
         GfxRect frame = { (NV_SCREEN_W - LG_QR_SIDE - 32.0f) * 0.5f, y - 16.0f,
                             LG_QR_SIDE + 32.0f, LG_QR_SIDE + 32.0f };
         GfxRect r = { (NV_SCREEN_W - LG_QR_SIDE) * 0.5f, y, LG_QR_SIDE, LG_QR_SIDE };
         gfx_color(frame, 0.06f, 1.0f, 1.0f, 1.0f, 1.0f);
-        gfx_tex_aspect_current = 0.0f;   // 1:1, sem recorte
+        gfx_tex_aspect_current = 0.0f;   // 1:1, no cropping
         gfx_rect(r, texQr, GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
       } else {
         lineCentered(TXT_HEADLINE, "could not draw the code",
@@ -110,14 +110,14 @@ void login_draw(Uint32 now) {
       }
       y += LG_QR_SIDE + 42.0f;
 
-      // O endereco em texto e a saida de emergencia de quem nao tem camera —
-      // nao e o caminho principal, e por isso vem em corpo pequeno.
+      // The address in plain text is the escape hatch for anyone without a
+      // camera — it is not the primary path, hence the small type.
       if (url[0]) lineCentered(TXT_CAPTION, url, 150, 152, 160, y, 1.0f);
       y += 46.0f;
 
-      // Sinal de vida. Sem ele a tela fica parada por minutos e parece travada
-      // — e a pessoa reinicia o app no meio do login. Respiracao lenta (ciclo
-      // de 2s), nao piscada: piscar em texto de espera le como alerta.
+      // A sign of life. Without it the screen sits still for minutes and looks
+      // frozen — and the user restarts the app mid-login. A slow breath (2s
+      // cycle), not a blink: blinking on waiting text reads as an alert.
       { float a = 0.5f + 0.5f * sinf(pulse * 3.14159f);
         lineCentered(TXT_CAPTION, "Waiting for authorisation…",
                       150, 152, 160, y, 0.45f + 0.40f * a); }

@@ -14,21 +14,21 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-// MEDIDAS do web (catalogSeeAllScreen, .seeall-card): cartaz de 248 de largura
-// e raio 12. A 1920 cabem 5 colunas com o gutter da tela dos dois lados.
+// MEASURED from the web app (catalogSeeAllScreen, .seeall-card): a 248-wide
+// poster with radius 12. At 1920, 5 columns fit with the screen gutter on both sides.
 #define SEEALL_COLS      (timeline ? 1 : 5)
 #define SEEALL_CARD_W  248.0f
 #define SEEALL_CARD_H  (timeline ? 236.0f : SEEALL_CARD_W * 1.5f)
 #define SEEALL_GAP_X    16.0f                 // .seeall-grid: gap 20px 16px
-#define SEEALL_GAP_Y    (20.0f + 40.0f)       // gap + a linha de titulo sob o cartaz
+#define SEEALL_GAP_Y    (20.0f + 40.0f)       // gap + the title line under the poster
 #define SEEALL_TOP    (collection ? 332.0f : 244.0f)
 
-// PAINEL DE DETALHE, a direita. Medidas do web (.seeall-detail), que as ancora
-// explicitamente na tela real de 1920x1080: top 170, right 104, largura 336.
+// DETAIL PANEL, on the right. Measurements from the web app (.seeall-detail),
+// anchored explicitly to the real 1920x1080 screen: top 170, right 104, w 336.
 //
-// FIXO e nao rolando junto: o proprio CSS registra que `position: sticky` nao
-// existe no Chromium 53 da TV e que sem `fixed` o painel sumia assim que o dono
-// descia. Aqui nao ha fluxo nenhum — ele so nao recebe scrollY.
+// FIXED and not scrolling along: the CSS itself records that `position: sticky`
+// does not exist in the TV's Chromium 53 and that without `fixed` the panel
+// vanished as soon as the owner scrolled. There is no flow here at all.
 #define SEEALL_PAN_W   336.0f
 #define SEEALL_PAN_X   (NV_SCREEN_W - 104.0f - SEEALL_PAN_W)
 #define SEEALL_PAN_Y   SEEALL_TOP
@@ -48,8 +48,8 @@ static int group(const char *name) {
 }
 static void colorCollection(float *r,float *g,float *b) {
   col_color(collection,r,g,b);
-  // Serviços preservam sua marca. Famílias editoriais sem marca própria usam
-  // cor apenas em seleção/estado, mantendo as superfícies neutras.
+  // Services keep their own brand. Editorial families without a brand of their
+  // own use colour only for selection/state, keeping the surfaces neutral.
   if (group("Genres")) {*r=.075f;*g=.34f;*b=.285f;}
   else if (group("Themes")) {*r=.34f;*g=.13f;*b=.38f;}
   else if (group("Film Collections") || group("TV Collections"))
@@ -158,18 +158,18 @@ void seeall_event(const SDL_Event *e) {
                              else focus = n - 1; }
   else if (k == SDLK_UP) { if (focus >= SEEALL_COLS) focus -= SEEALL_COLS; }
   else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
-    // O item da grade NAO esta no catalogo global — ele veio de uma pagina que
-    // so esta tela leu. Entra por cat_acrescentar para que a tela de titulo
-    // possa abri-lo por indice, que e como todo o app trabalha.
+    // The grid item is NOT in the global catalogue — it came from a page only
+    // this screen read. It goes in through cat_append so the title screen can
+    // open it by index, which is how the whole app works.
     CatItem it;
     if (viewItem(focus, &it)) {
       int idx = it.imdb[0] ? cat_index_by_imdb(it.imdb) : -1;
       if (idx < 0) idx = cat_append(&it);
-      if (idx >= 0) { reqOpen = idx; } // conserva a lista e a posição ao voltar
+      if (idx >= 0) { reqOpen = idx; } // keeps the list and the position on the way back
     }
   }
-  // Chegando perto do fim, pede a proxima pagina. Antes de o dono ver o vazio,
-  // e nao quando ele ja esta olhando para ele.
+  // Nearing the end, ask for the next page. Before the owner sees the empty
+  // space, not once they are already staring at it.
   if (focus >= n - SEEALL_COLS * 2) disc_seeall_more();
 }
 
@@ -191,7 +191,7 @@ void seeall_update(float dt, Uint32 now) {
     orderN=n;if(old>=0)for(int i=0;i<n;i++)if(order[i]==old){focus=i;break;}
   }
   lines = (n + SEEALL_COLS - 1) / SEEALL_COLS;
-  // Mira a linha focada a 30% da altura util, como o resto do app faz.
+  // Aims the focused row at 30% of the usable height, as the rest of the app does.
   target = SEEALL_TOP + (float)(focus / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y)
        - NV_SCREEN_H * 0.30f;
   if(tabFocus)target=0;
@@ -202,20 +202,20 @@ void seeall_update(float dt, Uint32 now) {
   scrollY = anim_spring2(&velY, scrollY, target, dt, NV_SPRING2_SCROLL);
 }
 
-// PAINEL DA DIREITA: o que a grade sozinha nao diz — sinopse, generos, nota.
+// THE RIGHT-HAND PANEL: what the grid alone does not say — synopsis, genres, score.
 //
-// Sem ele o dono ve 50 cartazes e nenhuma informacao; era o que faltava para a
-// tela deixar de ser so uma parede de imagens.
+// Without it the owner sees 50 posters and no information; it was what the
+// screen needed to stop being just a wall of images.
 static void panel(float a) {
   CatItem it;
   float y = SEEALL_PAN_Y;
   if (!viewItem(focus, &it)) return;
 
-  // O contexto lateral usa o cartaz, nunca repete a cena da timeline.
-  // Mantém a geometria 2:3 mesmo sem arte para não deslocar os metadados.
+  // The side context uses the poster, never repeating the timeline's still.
+  // It keeps the 2:3 geometry even without art so the metadata does not shift.
   { GfxRect r = { SEEALL_PAN_X, y, SEEALL_PAN_ART_W, SEEALL_PAN_ART_H };
     const char *art = it.poster[0] ? it.poster : it.backdrop;
-    float radius = 12.0f / SEEALL_PAN_ART_W;
+    float radius = 12.0f / SEEALL_PAN_ART_H;   // fraction of the HEIGHT
     GLuint t = art[0] ? tex_get_width(art, SEEALL_PAN_ART_W) : 0;
     gfx_color(r, radius, 1, 1, 1, 0.05f * a);
     if (t) {
@@ -230,8 +230,8 @@ static void panel(float a) {
   float badgeW=badges_draw(badges_provider(it.providerName),SEEALL_PAN_X,y,SEEALL_PAN_W,28,a);
   if(badgeW>0)y+=40;
 
-  // LOGO no lugar do titulo quando existe (max 264x82 no web); o nome escrito
-  // com a fonte da interface so quando nao ha logo.
+  // THE LOGO in place of the title where there is one (max 264x82 in the web
+  // app); the name set in the interface font only when there is no logo.
   { GLuint tl = it.logo[0] ? tex_get_width(it.logo, 264.0f) : 0;
     float ap = it.logo[0] ? tex_aspect(it.logo) : 0.0f;
     if (tl && ap > 0.0f) {
@@ -255,7 +255,7 @@ static void panel(float a) {
     txt_draw_alpha(t, SEEALL_PAN_X, y, a * 0.72f);
     y += t.h + 6.0f;
   }
-  // Pastilha da nota, no amarelo do IMDb que o web usa (245,197,24).
+  // The score pill, in the IMDb yellow the web app uses (245,197,24).
   if (it.score > 0) {
     char n[16];
     snprintf(n, sizeof n, "%.1f", it.score / 10.0f);
@@ -272,7 +272,7 @@ static void panel(float a) {
     y += t.h + 12.0f;
   }
   if (it.synopsis[0]) {
-    // Ate onde couber sem passar da base util (o web corta em
+    // As far as it fits without passing the usable bottom (the web app cuts at
     // max-height: 100% - 210).
     int lines = (int)((NV_SCREEN_H - 48.0f - y) / 34.0f);
     if (lines > 8) lines = 8;
@@ -291,10 +291,10 @@ static const char *portraitLocal(const ColFolder *folder) {
   return access(path, R_OK) == 0 ? path : "";
 }
 
-// Uma única arte full-width, dissolvendo na mesma cor do corpo. Directors usa
-// o retrato vertical local quando o pacote ja o tem; o hero horizontal dessa
-// colecao e um placeholder neutro e so acrescenta uma camada sem informacao.
-// Usa os shaders e o cache existentes, sem blur ou novas texturas por frame.
+// A single full-width piece of art, dissolving into the body colour. Directors
+// uses the local vertical portrait when the package already has it; that
+// collection's horizontal hero is a neutral placeholder and only adds a layer
+// with no information. It uses the existing shaders and cache, with no blur.
 static void themeBackground(float a) {
   if(collection) {
     if(collection->editorial) {
@@ -311,9 +311,9 @@ static void themeBackground(float a) {
       }
       GLuint tp=photo[0]?tex_get_width(photo,260.0f):0;
       if(tp) {
-        // O painel do item selecionado começa em VT_PAN_Y. O retrato ocupa
-        // apenas o cabeçalho e termina antes dele, sem atravessar pôster ou
-        // sinopse como uma segunda camada.
+        // The selected item's panel starts at VT_PAN_Y. The portrait occupies
+        // only the header and ends before it, without crossing the poster or
+        // the synopsis as a second layer.
         GfxRect rp={1660,18,260,300};
         gfx_tex_aspect_current=tex_aspect(photo);
         gfx_rect(rp,tp,GFX_PORTRAIT,
@@ -338,16 +338,16 @@ static void themeHeader(float a,float x0) {
   TxtLine eyebrow=txt_line(TXT_HERO_META,labelGroup(),197,202,211,255);
   txt_draw_alpha(eyebrow,x0,40,a);
   int isDirector=collection&&!strcasecmp(collection->group,"Directors");
-  // O wordmark de uma coleção de diretores pode conter cabeça ou lettering
-  // composto. No cabeçalho da filmografia, o nome textual e o retrato limpo
-  // deixam a identidade legível sem duplicar a mesma informação visual.
+  // A director collection's wordmark may contain a head or composed lettering.
+  // In the filmography header, the textual name and the clean portrait keep the
+  // identity legible without duplicating the same visual information.
   GLuint logo=!isDirector&&collection&&!collection->editorial&&collection->logo[0]
              ?tex_get_width(collection->logo,560):0;
   float aspect=logo?tex_aspect(collection->logo):0;
   if(logo&&aspect>0) {
-    // Wordmark oficial, grande o bastante para leitura a distancia. O PNG
-    // transparente e importado em ate 800px, portanto 560px nao interpola para
-    // cima nem perde a silhueta original da marca.
+    // The official wordmark, large enough to read at a distance. The
+    // transparent PNG is imported at up to 800px, so 560px neither interpolates
+    // upwards nor loses the brand's original silhouette.
     float w=560.0f,h=w/aspect;if(h>108){h=108;w=h*aspect;}
     gfx_rect((GfxRect){x0,83,w,h},logo,tex_brand_dark(collection->logo)?GFX_BRAND:GFX_TEXT,0,0,0,0,.96f,.97f,.98f,a);
   } else {TxtLine line=txt_line_trim(TXT_TITLE1,title,242,243,247,255,940);txt_draw_alpha(line,x0,80,a);}
@@ -384,7 +384,7 @@ static void themeHeader(float a,float x0) {
 static void timelineCard(int i,float cy,float a,float x0) {
   CatItem it;if(!viewItem(i,&it))return;
   int sel=i==focus&&!tabFocus;float r,g,b;colorCollection(&r,&g,&b);
-  // A linha organiza a cronologia; não é uma borda decorativa de card.
+  // The line organises the chronology; it is not a decorative card border.
   gfx_color((GfxRect){x0+109,cy-30,2,SEEALL_CARD_H+SEEALL_GAP_Y},0,.48f,.47f,.46f,a*.6f);
   gfx_color((GfxRect){x0+102,cy+24,16,16},.5f,sel?.95f:r,sel?.95f:g,sel?.97f:b,a);
   char year[16];int y=yearOf(&it);if(y==9999)snprintf(year,sizeof year,"—");else snprintf(year,sizeof year,"%d",y);
@@ -411,23 +411,27 @@ void seeall_draw(Uint32 now) {
     gfx_color(screen, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, a); }
   themeBackground(a);
 
-  // A GRADE E RECORTADA ABAIXO DO CABECALHO.
+  // THE GRID IS CLIPPED BELOW THE HEADER.
   //
-  // O cabecalho ja era desenhado em posicao fixa, mas os cartazes passavam POR
-  // TRAS dele ao rolar — o titulo ficava sobre imagem em movimento e virava
-  // "fundo". O recorte resolve sem precisar de faixa opaca: o que sobe alem do
-  // topo simplesmente nao e desenhado.
+  // The header was already drawn at a fixed position, but the posters passed
+  // BEHIND it when scrolling — the title sat over moving imagery and turned
+  // into "background". Clipping solves it without needing an opaque band: what
+  // rises above the top simply is not drawn.
   gfx_crop(0.0f, SEEALL_TOP - 12.0f, NV_SCREEN_W, NV_SCREEN_H - SEEALL_TOP + 12.0f);
   for (i = 0; i < n; i++) {
     float cx = x0 + (float)(i % SEEALL_COLS) * (SEEALL_CARD_W + SEEALL_GAP_X);
     float cy = SEEALL_TOP + (float)(i / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y) - scrollY;
     CatItem it;
     GLuint t;
-    // MESMO raio dos cartazes da home: `posterCardCornerRadiusDp` (12dp x 2 =
-    // 24px), fracao do MENOR lado porque o SDF do shader e normalizado. O
-    // NV_RAIO_CARD fixo que estava aqui dava um canto diferente do resto do
-    // app, e a grade lia como outra tela.
-    float radius = settings_radius_poster_px() / SEEALL_CARD_W;
+    // The SAME radius as the home's posters: `posterCardCornerRadiusDp` (12dp x
+    // 2 = 24px), a fraction of the SMALLER side because the shader's SDF is
+    // normalised. The fixed NV_RADIUS_CARD that used to be here gave a corner
+    // different from the rest of the app, and the grid read as another screen.
+    // The SDF's radius is a fraction of the HEIGHT, not of the smaller side:
+    // `p = (uv-0.5)*vec2(asp,1.0)` makes one SDF unit h pixels on both axes.
+    // Dividing by the width rounded this poster half again too much. See the
+    // note on radiusInset in home.c.
+    float radius = settings_radius_poster_px() / SEEALL_CARD_H;
     int sel = (i == focus);
     if (cy > NV_SCREEN_H || cy + SEEALL_CARD_H + 40.0f < SEEALL_TOP - 12.0f) continue;
     if(timeline){timelineCard(i,cy,a,x0);continue;}
@@ -444,7 +448,7 @@ void seeall_draw(Uint32 now) {
         gfx_rect(r, t, GFX_CARD, sel ? 1.0f : 0.0f, 0, 0, radius, 0, 0, 0, a);
         gfx_tex_aspect_current = 0.0f;
       } else {
-        // Esqueleto enquanto a arte nao chega — a mesma cor do resto do app.
+        // A skeleton while the art has not arrived — the same colour as the rest of the app.
         gfx_color(r, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
                 NV_COLOR_SKELETON_B, a);
       } }
@@ -464,7 +468,7 @@ void seeall_draw(Uint32 now) {
     gfx_color((GfxRect){x0+i*264,SEEALL_TOP,248,372},.06f,.12f,.13f,.15f,a);
   gfx_no_crop();
 
-  // CABECALHO por cima do recorte, entao ele nunca compete com a arte.
+  // THE HEADER above the clip, so it never competes with the art.
   themeHeader(a,x0);
 
   if (n > 0) panel(a);

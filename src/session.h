@@ -24,26 +24,26 @@
 
 typedef enum {
   SESS_LOGGEDOUT = 0,
-  SESS_REQUESTING,      // buscando codigo
-  SESS_WAITING,   // codigo na tela, esperando a pessoa autorizar
-  SESS_SWITCHING,     // autorizado, trocando pelo token
+  SESS_REQUESTING,      // fetching the code
+  SESS_WAITING,   // code on screen, waiting for the person to authorise
+  SESS_SWITCHING,     // authorised, exchanging it for the token
   SESS_LOGGEDIN,
   SESS_ERROR
 } SessState;
 
-// Carrega a sessao gravada, se houver. Chamar depois de dados_iniciar e
-// nuvem_configurar.
+// Loads the saved session, if there is one. Call after data_start and
+// cloud_configure.
 void session_start(void);
 
 SessState   session_state(void);
-int         session_loggedin(void);          // 1 so com sessao de USUARIO
-const char *session_code(void);          // codigo a exibir; "" fora do fluxo
-const char *session_url_login(void);       // URL a exibir
-const char *session_error(void);            // ultima falha, para a tela mostrar
-const char *session_user(void);         // `sub` do JWT; "" quando deslogado
+int         session_loggedin(void);          // 1 only with a USER session
+const char *session_code(void);          // the code to show; "" outside the flow
+const char *session_url_login(void);       // the URL to show
+const char *session_error(void);            // the last failure, for the screen to show
+const char *session_user(void);         // the JWT's `sub`; "" when signed out
 
-// Comeca o fluxo de login num fio proprio (as chamadas bloqueiam). Idempotente
-// enquanto um fluxo estiver em andamento.
+// Starts the login flow on a thread of its own (the calls block). Idempotent
+// while a flow is in progress.
 void session_login_begin(void);
 
 // Takes one step of the flow. Call once per frame; does not block. This is where

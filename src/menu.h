@@ -73,7 +73,7 @@ int  menu_requested_swap(void);
 
 void menu_event(const SDL_Event *e);
 void menu_update(float dt, Uint32 now);
-// Desenhe por ULTIMO: o menu escurece e cobre tudo que veio antes.
+// Draw LAST: the menu darkens and covers everything that came before.
 void menu_draw(Uint32 now);
 
 #endif

@@ -1,35 +1,38 @@
-// Biblioteca, alinhada com a tela do app web (MEDIDA rodando, perfil do dono).
+// The Library, aligned with the web app's screen (MEASURED live, on the owner's
+// profile).
 //
 // ------------------------------------------------------------------------
-// O QUE MUDOU, E POR QUE
+// WHAT CHANGED, AND WHY
 //
-// O port tinha tres pilulas CENTRALIZADAS ("Minha Lista" / "Comprados" /
-// "Gêneros") e uma grade de 6 colunas de 212. Medida a tela do web, a estrutura
-// e outra e tem QUATRO faixas, todas alinhadas a esquerda em x=96:
+// The port had three CENTRED pills ("My List" / "Purchased" / "Genres") and a
+// 6-column grid of 212. Measuring the web app's screen, the structure is
+// different and has FOUR bands, all left-aligned at x=96:
 //
-//   .library-page-title    "Biblioteca" 56/600, letter-spacing 1, em (96,48)
-//   .library-page-source   selo "NUVIO" 28/500 rgb(128,128,128) ls 4, a DIREITA
-//   .library-view-mode-row y=136: pilulas 150x56 raio 999, 21/400 — "Salvos" e
-//                          "Nuvem"; escolhida bg #303030 borda 2px #fff, as
-//                          outras bg #222 borda 2px #333
-//   .library-picker-row    y=212: DOIS seletores 840x110 raio 36 — "Tipo" e
-//                          "Ordenar" —, cada um com rotulo 19/500 rgb(128) e
-//                          valor 30/500 branco embaixo, e uma seta a direita
-//   .library-grid          6 colunas de 268 (auto-fill com minimo 252 sobre os
-//                          1728 uteis, gutter 24), poster 2:3 = 268x402 raio 24
-//                          com borda de 4px POR DENTRO, titulo 32/500 a 16 do
-//                          poster; passo de linha 487.8
+//   .library-page-title    "Library" 56/600, letter-spacing 1, at (96,48)
+//   .library-page-source   a "NUVIO" badge 28/500 rgb(128,128,128) ls 4, on the RIGHT
+//   .library-view-mode-row y=136: 150x56 pills, radius 999, 21/400 — "Saved" and
+//                          "Cloud"; the chosen one bg #303030 border 2px #fff,
+//                          the others bg #222 border 2px #333
+//   .library-picker-row    y=212: TWO 840x110 pickers, radius 36 — "Type" and
+//                          "Sort" —, each with a 19/500 rgb(128) label and a
+//                          30/500 white value below it, and an arrow on the right
+//   .library-grid          6 columns of 268 (auto-fill with a minimum of 252 over
+//                          the 1728 usable, gutter 24), 2:3 poster = 268x402
+//                          radius 24 with a 4px border ON THE INSIDE, title
+//                          32/500 at 16 from the poster; row step 487.8
 //
-// As duas dimensoes do web ("Salvos/Nuvem" e o filtro de Tipo) substituem as
-// tres abas inventadas. "Gêneros" nao existe no web e saiu.
+// The web app's two dimensions ("Saved/Cloud" and the Type filter) replace the
+// three invented tabs. "Genres" does not exist in the web app and has gone.
 //
-// Duas decisoes que vieram de erros ja cometidos em outras telas deste app:
+// Two decisions that came out of mistakes already made on other screens of this app:
 //
-//   1. A pilula ESCOLHIDA continua marcada quando o foco desce para a grade. Foi
-//      o mesmo problema das abas de temporada do detalhe: sem o estado de
-//      escolha separado do foco, o usuario perde de vista onde esta.
-//   2. A rolagem move o MINIMO para a linha focada caber. Alinhar a linha focada
-//      ao topo empurra o cabecalho para fora da tela na primeira descida.
+//   1. The CHOSEN pill stays marked when the focus moves down into the grid. It
+//      was the same problem as the detail screen's season tabs: without the
+//      chosen state kept separate from the focus, the user loses sight of where
+//      they are.
+//   2. Scrolling moves the MINIMUM needed for the focused row to fit. Aligning
+//      the focused row to the top pushes the header off screen on the first move
+//      down.
 #include "library.h"
 #include "trakt.h"
 #include "gfx.h"
@@ -44,35 +47,34 @@
 #include <string.h>
 #include <math.h>
 
-// Fileiras de foco: 0 = modos (Salvos/Nuvem), 1 = seletores (Tipo/Ordenar),
-// 2.. = grade.
+// Focus rows: 0 = modes (Saved/Cloud), 1 = pickers (Type/Sort), 2.. = grid.
 #define LIB_FILTER_MODE   0
 #define LIB_FILTER_PICK   1
 #define LIB_FILTER_GRID  2
 #define LIB_MAX_LINES (FOCUS_MAX_ROWS - LIB_FILTER_GRID)
 #define LIB_GRID_BASE (NV_SCREEN_H - NV_MARGIN_Y)
-// Em quantos px um poster desaparece ao subir por baixo do cabecalho. O recorte
-// de tesoura resolveria, mas gfx_recorte assume alvo 1:1 com a tela e o Mac em
-// retina entrega o dobro; o esmaecimento nao depende do drawable.
+// How many px a poster takes to disappear as it rises under the header. A
+// scissor clip would solve it, but gfx_crop assumes a 1:1 target with the screen
+// and a retina Mac delivers double; the fade does not depend on the drawable.
 #define LIB_FADE       90.0f
 
-// "Salvos" e a lista do proprio aparelho; "Nuvem" e o que veio do Trakt.
+// "Saved" is the device's own list; "Cloud" is what came from Trakt.
 enum { MODE_SAVED, MODE_CLOUD, LIB_N_MODES };
 static const char *ROT_MODE[LIB_N_MODES] = { "Saved", "Collection" };
 
 // Seletor "Tipo": os mesmos valores do web.
 enum { KIND_ALL, KIND_MOVIE, KIND_SERIES, LIB_N_KINDS };
 static const char *ROT_KIND[LIB_N_KINDS] = { "All", "Films", "Series" };
-// Seletor "Ordenar".
+// The "Sort" picker.
 enum { ORDER_ADDED, ORDER_TITLE, ORDER_YEAR, LIB_N_ORDER };
 static const char *ROT_ORDER[LIB_N_ORDER] = { "List order", "Title: A to Z", "Year: newest first" };
 
 static int mode = MODE_SAVED;
 static int kind = KIND_ALL;
 static int order = ORDER_ADDED;
-static int pickSel = 0;          // qual dos dois seletores esta em foco
+static int pickSel = 0;          // which of the two pickers has the focus
 
-static int filter[CAT_MAX];      // indices do catalogo visiveis
+static int filter[CAT_MAX];      // visible catalogue indices
 static int nFilter = 0;
 static int totalMode = 0;
 static Focus focus;
@@ -80,12 +82,12 @@ static float animMode[LIB_N_MODES];
 static float animPick[2];
 static float animFocus[LIB_MAX_LINES][NV_LIB_COLUMNS];
 static float scrollY = 0.0f;
-static int sair = 0, request = -1;
+static int wantsExit = 0, request = -1;
 
-// Estado de conta. A lista de verdade e a do Trakt, que marca
-// ci->naLista/naColecao NO ITEM — nao ha mais tabela por indice aqui: o
-// catalogo e reconstruido da rede e um indice guardado aponta para outro titulo
-// na volta seguinte. `comprado` sobrevive porque nao ha fonte para ele ainda.
+// Account state. The real list is Trakt's, which marks ci->inList/inCollection
+// ON THE ITEM — there is no per-index table here any more: the catalogue is
+// rebuilt from the network and a stored index points at a different title on the
+// next round. `bought` survives because there is no source for it yet.
 static char bought[CAT_MAX];
 
 static float heightLine(void) {
@@ -101,9 +103,10 @@ static int isSeries(const CatItem *ci) {
                 || ci->season > 0);
 }
 
-// Refaz a lista visivel e o mapa de foco. Chamada a cada troca de modo, tipo ou
-// ordem porque o numero de colunas da ultima linha muda com o filtro, e um foco
-// apontando para uma coluna que nao existe mais desenha um retangulo vazio.
+// Rebuilds the visible list and the focus map. Called on every change of mode,
+// type or order because the number of columns in the last row changes with the
+// filter, and a focus pointing at a column that no longer exists draws an empty
+// rectangle.
 static void rebuild(void) {
   int n = cat_n();
   if (n > CAT_MAX) n = CAT_MAX;
@@ -112,33 +115,31 @@ static void rebuild(void) {
   for (int i = 0; i < n; i++) {
     const CatItem *ci = cat_item(i);
     if (!ci) continue;
-    // "Salvos" = QUERO VER (watchlist do Trakt). "Nuvem" = TENHO (colecao).
+    // The two modes showed almost the SAME list: both included ci->inList, so
+    // switching pill changed practically nothing and the two had no reason to
+    // exist. The split is now Trakt's own, which separates the watchlist (what
+    // you intend to watch) from the collection (what you own) — they are
+    // different questions and each pill answers one.
     //
-    // Os dois modos mostravam quase a MESMA lista: ambos incluiam ci->naLista,
-    // entao trocar de pilula praticamente nao mudava nada e as duas nao tinham
-    // razao de existir. A divisao agora e a do proprio Trakt, que separa
-    // watchlist (o que se pretende ver) de collection (o que se possui) — sao
-    // perguntas diferentes e cada pilula responde uma.
-    //
-    // E le do ITEM, nao mais do vetor naLista[] indexado por posicao. Aquele
-    // vetor era um erro conhecido e documentado: o catalogo e RECONSTRUIDO da
-    // rede a cada descoberta, entao a posicao 3 de hoje e outro titulo amanha —
-    // a marca "salvo" migrava sozinha para um filme que ninguem salvou. A marca
-    // tem de viver no item, e vive (CatItem.naLista / .naColecao, preenchidos
-    // com a lista de verdade do Trakt).
+    // And it reads from the ITEM, no longer from an inList[] array indexed by
+    // position. That array was a known and documented mistake: the catalogue is
+    // REBUILT from the network on every discovery, so today's position 3 is a
+    // different title tomorrow — the "saved" mark migrated by itself to a film
+    // nobody saved. The mark has to live on the item, and it does
+    // (CatItem.inList / .inCollection, filled from Trakt's real list).
     int enters = (mode == MODE_SAVED) ? ci->inList
                                       : (ci->inCollection || bought[i]);
     if (!enters) continue;
     totalMode++;
     if (kind == KIND_MOVIE && isSeries(ci)) continue;
     if (kind == KIND_SERIES && !isSeries(ci)) continue;
-    // `hideUnreleasedContent`: sem ano em `meta` o titulo ainda nao estreou do
-    // ponto de vista do catalogo, e a preferencia manda escondê-lo.
+    // `hideUnreleasedContent`: with no year in `meta` the title has not been
+    // released as far as the catalogue is concerned, and the preference says to hide it.
     if (settings_hide_unreleased() && !ci->meta[0]) continue;
     filter[nFilter++] = i;
   }
 
-  // Ordenacao por insercao — sao poucas dezenas de itens, uma vez por troca.
+  // Insertion sort — there are a few dozen items, once per change.
   if (order != ORDER_ADDED) {
     for (int i = 1; i < nFilter; i++) {
       int v = filter[i], j = i - 1;
@@ -146,7 +147,7 @@ static void rebuild(void) {
         const CatItem *a = cat_item(filter[j]), *b = cat_item(v);
         int larger;
         if (order == ORDER_TITLE) larger = a && b && strcmp(a->title, b->title) > 0;
-        else /* ORD_ANO, decrescente */
+        else /* ORDER_YEAR, descending */
           larger = a && b && strcmp(a->meta, b->meta) < 0;
         if (!larger) break;
         filter[j + 1] = filter[j]; j--;
@@ -171,7 +172,7 @@ static void rebuild(void) {
 
 static int started;
 int library_start(void) {
-  // Zerado UMA vez por processo, e nao a cada entrada.
+  // Zeroed ONCE per process, and not on every entry.
   if (!started) {
     memset(bought, 0, sizeof bought);
     started = 1;
@@ -180,9 +181,9 @@ int library_start(void) {
   pickSel = 0;
   memset(animMode, 0, sizeof animMode);
   memset(animPick, 0, sizeof animPick);
-  sair = 0; request = -1;
+  wantsExit = 0; request = -1;
   rebuild();
-  // O foco nasce na barra de modos: quem entra ainda esta escolhendo o recorte.
+  // The focus is born on the mode bar: whoever comes in is still choosing the slice.
   focus.row = LIB_FILTER_MODE;
   focus.column = mode;
   return 1;
@@ -191,22 +192,22 @@ int library_start(void) {
 void library_shutdown(void) { }
 
 int library_in_list(int i) {
-  // A verdade e a marca DO ITEM, que a descoberta preenche com a watchlist do
-  // Trakt. O vetor por indice que respondia aqui apontava para outro titulo
-  // assim que o catalogo era reconstruido.
+  // The truth is the mark ON THE ITEM, which discovery fills from Trakt's
+  // watchlist. The per-index array that used to answer here pointed at a
+  // different title as soon as the catalogue was rebuilt.
   const CatItem *c = cat_item(i);
   return c ? c->inList : 0;
 }
 int library_bought(int i) { return (i >= 0 && i < CAT_MAX) ? bought[i] : 0; }
 void library_toggle_list(int i) {
-  // So remonta a lista. Quem vira a marca e cat_definir_na_lista, no mesmo
-  // ponto que fala com o Trakt (app.c) — ter DOIS donos do mesmo estado era o
-  // que deixava a biblioteca discordando do botao "+" do detalhe.
+  // It only rebuilds the list. What flips the mark is cat_set_in_list, at the
+  // same point that talks to Trakt (app.c) — having TWO owners of the same state
+  // was what left the library disagreeing with the detail screen's "+" button.
   (void)i;
   rebuild();
 }
 
-int library_wants_exit(void) { return sair; }
+int library_wants_exit(void) { return wantsExit; }
 
 int library_requested_open(int *indexCatalog) {
   if (request < 0) return 0;
@@ -219,11 +220,11 @@ void library_event(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
-      k == SDLK_DELETE) { sair = 1; return; }
+      k == SDLK_DELETE) { wantsExit = 1; return; }
 
-  // Barra de modos: esquerda/direita TROCA o modo, e trocar refaz o mapa de
-  // foco. Por isso o modo muda AQUI e nao por focus_mover — chamar os dois na
-  // ordem errada devolvia o foco para a coluna 0 a cada movimento.
+  // Mode bar: left/right SWAPS the mode, and swapping rebuilds the focus map.
+  // That is why the mode changes HERE and not through focus_move — calling the
+  // two in the wrong order returned the focus to column 0 on every move.
   if (focus.row == LIB_FILTER_MODE) {
     if (k == SDLK_RIGHT && mode < LIB_N_MODES - 1) {
       mode++; rebuild(); focus.row = LIB_FILTER_MODE; focus.column = mode; return;
@@ -237,14 +238,14 @@ void library_event(const SDL_Event *e) {
     return;
   }
 
-  // Linha de seletores: esquerda/direita anda ENTRE os dois; OK cicla o valor do
-  // que esta em foco. O web abre um menu suspenso; num D-pad, ciclar no proprio
-  // seletor poupa a viagem de ida e volta ate a lista.
+  // Picker row: left/right moves BETWEEN the two; OK cycles the value of the one
+  // in focus. The web app opens a dropdown; on a D-pad, cycling in the picker
+  // itself saves the round trip down to the list and back.
   if (focus.row == LIB_FILTER_PICK) {
     if (k == SDLK_RIGHT && pickSel == 0) { pickSel = 1; focus.column = 1; return; }
     if (k == SDLK_LEFT  && pickSel == 1) { pickSel = 0; focus.column = 0; return; }
     if (k == SDLK_UP)   { focus.row = LIB_FILTER_MODE; focus.column = mode; return; }
-    if (k == SDLK_DOWN) { if (nFilter) focus_mover(&focus, 0, 1); return; }
+    if (k == SDLK_DOWN) { if (nFilter) focus_move(&focus, 0, 1); return; }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
       if (pickSel == 0) kind = (kind + 1) % LIB_N_KINDS;
       else              order = (order + 1) % LIB_N_ORDER;
@@ -259,12 +260,12 @@ void library_event(const SDL_Event *e) {
     if (i >= 0 && i < nFilter) request = filter[i];
     return;
   }
-  if (k == SDLK_RIGHT)     focus_mover(&focus, 1, 0);
-  else if (k == SDLK_LEFT) focus_mover(&focus, -1, 0);
-  else if (k == SDLK_DOWN) focus_mover(&focus, 0, 1);
+  if (k == SDLK_RIGHT)     focus_move(&focus, 1, 0);
+  else if (k == SDLK_LEFT) focus_move(&focus, -1, 0);
+  else if (k == SDLK_DOWN) focus_move(&focus, 0, 1);
   else if (k == SDLK_UP) {
     if (focus.row == LIB_FILTER_GRID) { focus.row = LIB_FILTER_PICK; focus.column = pickSel; }
-    else focus_mover(&focus, 0, -1);
+    else focus_move(&focus, 0, -1);
   }
 }
 
@@ -289,8 +290,9 @@ void library_update(float dt, Uint32 now) {
                                  target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
-  // Rola o MINIMO para a linha focada caber inteira na area util. Com o foco no
-  // cabecalho o alvo e 0 — voltar ao topo faz parte de voltar para a barra.
+  // Scrolls the MINIMUM for the focused row to fit whole in the usable area. With
+  // the focus on the header the target is 0 — going back to the top is part of
+  // going back to the bar.
   float target = scrollY;
   if (focus.row >= LIB_FILTER_GRID) {
     float top = NV_LIB_GRID_Y + (focus.row - LIB_FILTER_GRID) * stepLine();
@@ -304,9 +306,9 @@ void library_update(float dt, Uint32 now) {
   scrollY = anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
 }
 
-// Pilula de modo. Escolhida sem foco fica com fundo #303030 e borda branca; com
-// foco clareia e o texto escurece. As duas leituras tem de continuar distintas —
-// e o erro que as abas de temporada do detalhe ja cometeram.
+// A mode pill. Chosen but unfocused it gets background #303030 and a white
+// border; focused it lightens and the text darkens. The two readings have to
+// stay distinct — that is the mistake the detail screen's season tabs already made.
 static void drawMode(int a, float f) {
   GfxRect r = { NV_LIB_X + a * NV_LIB_MODE_STEP, NV_LIB_MODE_Y,
                 NV_LIB_MODE_W, NV_LIB_MODE_H };
@@ -327,8 +329,8 @@ static void drawMode(int a, float f) {
                      sel ? 1.0f : 0.82f);
 }
 
-// Seletor "Tipo" / "Ordenar": rotulo pequeno em cinza e valor grande em branco,
-// com a seta encostada na direita.
+// The "Type" / "Sort" picker: a small grey label and a large white value, with
+// the arrow up against the right edge.
 static void drawPicker(int p, float f) {
   GfxRect r = { NV_LIB_X + p * NV_LIB_PICK_STEP, NV_LIB_PICK_Y,
                 NV_LIB_PICK_W, NV_LIB_PICK_H };
@@ -340,9 +342,9 @@ static void drawPicker(int p, float f) {
   float luma = anim_blend(0.133f, 0.188f, f);   // #222 -> #303030 no foco
   gfx_color(r, radius, luma, luma, luma, 1.0f);
 
-  const char *rot = (p == 0) ? "Type" : "Ordenar";
+  const char *rot = (p == 0) ? "Type" : "Sort";
   const char *val = (p == 0) ? ROT_KIND[kind] : ROT_ORDER[order];
-  // 19/500 rgb(128,128,128) em cima, 30/500 branco embaixo com 4 de folga.
+  // 19/500 rgb(128,128,128) on top, 30/500 white below with 4 of slack.
   TxtLine tr = txt_line(TXT_MINI, rot, 179, 179, 179, 255);
   TxtLine tv = txt_line(TXT_CALLOUT, val, 255, 255, 255, 255);
   float tx = r.x + NV_LIB_PICK_PADX;
@@ -350,13 +352,13 @@ static void drawPicker(int p, float f) {
   txt_draw_alpha(tr, tx, ty, 0.95f);
   txt_draw_alpha(tv, tx, ty + tr.h + 4.0f, 1.0f);
 
-  TxtLine seta = txt_line(TXT_CAPTION2, "OK: alterar", 196, 197, 202, 255);
+  TxtLine seta = txt_line(TXT_CAPTION2, "OK: change", 196, 197, 202, 255);
   txt_draw_alpha(seta, r.x + r.w - NV_LIB_PICK_PADX - seta.w,
                      r.y + (r.h - seta.h) * 0.5f, 0.85f);
 }
 
-// Estado vazio: 46/500 branco e 28/400 rgb(179,179,179), centrado na largura
-// util. Uma grade em branco parece tela quebrada.
+// Empty state: 46/500 white and 28/400 rgb(179,179,179), centred in the usable
+// width. A blank grid looks like a broken screen.
 static void drawEmpty(void) {
   const char *l1 = totalMode ? "No titles under this filter"
       : mode == MODE_CLOUD ? "Your collection appears here" : "Your next session starts here";
@@ -380,28 +382,30 @@ static void drawEmpty(void) {
 
 void library_draw(Uint32 now) {
   (void)now;
-  // Fundo opaco proprio: a biblioteca cobre a tela inteira e nao pode contar com
-  // quem desenhou antes dela.
+  // An opaque background of its own: the library covers the whole screen and
+  // cannot rely on whoever drew before it.
   GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
-  // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
-  // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill
-  // rate (gfx.c registra que DUAS camadas de tela cheia derrubavam a
-  // Mali-G71 para ~40fps). Nao repor sem antes mudar a cor do clear.
+  // The screen has already been cleared with THIS VERY COLOUR by
+  // glClearColor/glClear in main.c before app_draw. Painting over it was one
+  // full-screen layer thrown away per frame — and the dominant cost on this GPU
+  // is fill rate (gfx.c records that TWO full-screen layers dropped the Mali-G71
+  // to ~40fps). Do not put it back without first changing the clear colour.
   (void)screen;
 
   TxtLine title = txt_line(TXT_TITLE2, "Library", 255, 255, 255, 255);
   txt_draw(title, NV_LIB_X, NV_LIB_Y);
-  // Selo de origem, alinhado a direita da area util. Espacado de proposito: no
-  // web ele tem letter-spacing 4 e le como etiqueta, nao como palavra.
+  // The source badge, aligned to the right of the usable area. Deliberately
+  // tracked out: in the web app it has letter-spacing 4 and reads as a label,
+  // not as a word.
   //
-  // O SELO DIZ A ORIGEM DE VERDADE. Estava cravado em "NUVIO", que e o nome do
-  // app e nao a fonte dos dados — a lista vem do TRAKT, e o log confirma
-  // ("[trakt] credencial carregada", "[trakt] watchlist: 118"). Selo de origem
-  // que nao reflete a origem e da mesma familia da classificacao "14" e do
-  // elenco de demonstracao: informacao inventada com cara de dado.
+  // THE BADGE STATES THE REAL SOURCE. It used to be hard-coded to "NUVIO", which
+  // is the app's name and not where the data comes from — the list comes from
+  // TRAKT, and the log confirms it ("[trakt] credential loaded", "[trakt]
+  // watchlist: 118"). A source badge that does not reflect the source belongs to
+  // the same family as the hard-coded "14" age rating and the demo cast:
+  // invented information wearing the face of data.
   //
-  // Sem credencial do Trakt a biblioteca e local, e o selo diz isso.
+  // Without a Trakt credential the library is local, and the badge says so.
   { const char *source = trakt_active() ? "TRAKT" : "LOCAL";
     float wBadge = txt_tracking(TXT_CALLOUT, source, 128, 128, 128,
                                -1.0f, 0.0f, 0.0f, 4.0f);
@@ -426,14 +430,14 @@ void library_draw(Uint32 now) {
   if (lines > LIB_MAX_LINES) lines = LIB_MAX_LINES;
   float stepC = stepColumn(), stepL = stepLine();
 
-  // Dois passes: o item focado escala 2% e precisa ser desenhado por ULTIMO,
-  // senao o vizinho da direita corta a borda dele.
+  // Two passes: the focused item scales by 2% and has to be drawn LAST,
+  // otherwise its right-hand neighbour clips its border.
   for (int passe = 0; passe < 2; passe++)
     for (int r = 0; r < lines; r++) {
       float top = NV_LIB_GRID_Y + r * stepL - scrollY;
       if (top > NV_SCREEN_H || top + heightLine() < -80.0f) continue;
-      // O que sobe para baixo do cabecalho some antes de cruza-lo: sem o
-      // esmaecimento, poster e seletor se leem um sobre o outro.
+      // Whatever rises under the header fades out before crossing it: without
+      // the fade, poster and picker read one on top of the other.
       float a = anim_clamp((top - (NV_LIB_PICK_Y + NV_LIB_PICK_H * 0.5f)) / LIB_FADE,
                            0.0f, 1.0f);
       if (a <= 0.005f) continue;
@@ -444,14 +448,19 @@ void library_draw(Uint32 now) {
         float f = animFocus[r][c];
         if ((passe == 0) == (f > 0.01f)) continue;
 
-        // `.library-grid-card.focused { transform: scale(1.02) }` com origem no
-        // TOPO — e a unica escala de foco que o web tem, e ela e de 2%, nao dos
-        // 14% que estavam aqui (numero das tabelas de Top Shelf do tvOS).
-        float esc = 1.0f + NV_LIB_FOCUS_SCALE * f;
-        float bw = NV_LIB_CARD_W * esc, bh = NV_LIB_POSTER_H * esc;
+        // `.library-grid-card.focused { transform: scale(1.02) }` with the
+        // origin at the TOP — it is the only focus scale the web app has, and it
+        // is 2%, not the 14% that used to be here (a number from the tvOS Top
+        // Shelf tables).
+        float scale = 1.0f + NV_LIB_FOCUS_SCALE * f;
+        float bw = NV_LIB_CARD_W * scale, bh = NV_LIB_POSTER_H * scale;
         float bx = NV_LIB_X + c * stepC - (bw - NV_LIB_CARD_W) * 0.5f;
         GfxRect card = { bx, top, bw, bh };
-        float radius = 24.0f / NV_LIB_CARD_W;
+        // The SDF's radius is a fraction of the HEIGHT, not of the smaller side:
+        // `p = (uv-0.5)*vec2(asp,1.0)` makes one SDF unit h pixels on both axes.
+        // Dividing by the width rounded this poster half again too much. See the
+        // note on radiusInset in home.c.
+        float radius = 24.0f / NV_LIB_POSTER_H;
 
         const CatItem *ci = cat_item(filter[i]);
         const char *art = (ci && ci->poster[0]) ? ci->poster : NULL;
@@ -461,23 +470,24 @@ void library_draw(Uint32 now) {
           gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, a);
           gfx_tex_aspect_current = 0.0f;
         } else {
-          // Placeholder na cor dos cards: o poster ainda esta decodificando em
-          // outra thread e a grade nao pode piscar buraco.
-          // Esqueleto VISIVEL, o mesmo da home: #2C2C2C. Ver a nota la — placeholder
-            // do tom do fundo le como card quebrado, nao como carregando.
+          // A placeholder in the cards' colour: the poster is still decoding on
+          // another thread and the grid must not flash a hole.
+          // A VISIBLE skeleton, the same as the home's: #2C2C2C. See the note
+          // there — a placeholder in the background's tone reads as a broken
+          // card, not as loading.
             gfx_color(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
                   NV_COLOR_SKELETON_B, a);
         }
-        // A borda de foco do web e de 4px POR DENTRO do poster (o card ja
-        // reserva `border: 4px solid transparent`), e nao um halo por fora —
-        // "Android TV uses the inside focus border, not an outer halo", diz o
-        // proprio comentario da folha.
+        // The web app's focus border is 4px ON THE INSIDE of the poster (the card
+        // already reserves `border: 4px solid transparent`), and not a halo on
+        // the outside — "Android TV uses the inside focus border, not an outer
+        // halo", says the stylesheet's own comment.
         if (f > 0.01f) {
           gfx_rect(card, 0, GFX_RING, 0, NV_LIB_POSTER_BORDER / card.w,
                    0, radius, 0.961f, 0.961f, 0.961f, f * a);
         }
 
-        // Titulo 32/500, uma linha, cortado com reticencias — o web usa
+        // Title 32/500, one line, cut with an ellipsis — the web app uses
         // white-space:nowrap + text-overflow:ellipsis.
         if (ci) {
           TxtLine tl = txt_line_trim(TXT_CALLOUT, ci->title, 255, 255, 255, 255,

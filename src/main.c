@@ -1,4 +1,4 @@
-// Bootstrap: janela, contexto GL, loop e telemetria. Toda a UI vive nos modulos.
+// Bootstrap: window, GL context, loop and telemetry. All the UI lives in the modules.
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include "gl_compat.h"
@@ -35,16 +35,17 @@
 #endif
 #include "layout.h"
 
-// Captura de tela sob demanda. O framebuffer da TV nao pode ser lido nem como
-// root ("Operation not permitted") e o servico de captura da LG responde erro,
-// entao a unica forma de ver o que o app desenha e o proprio app se fotografar.
-// Sem isso, cada ajuste visual depende de alguem apontar um celular para a TV.
+// Screenshots on demand. The TV's framebuffer cannot be read even as root
+// ("Operation not permitted") and LG's capture service answers with an error, so
+// the only way to see what the app draws is for the app to photograph itself.
+// Without this, every visual tweak depends on somebody pointing a phone at the TV.
 //
-// Protocolo: alguem cria /tmp/nuvio-shot-req; no proximo quadro o app grava
-// /tmp/nuvio-shot.png e apaga o pedido.
-// Teclas injetadas por arquivo, para conferir a UI sem alguem no sofa com o
-// controle: escreva "down", "ok", "back"... em /tmp/nuvio-key e o app processa
-// como se viesse do D-pad. Uma tecla por linha, o arquivo e consumido.
+// Protocol: someone creates /tmp/nuvio-shot-req; on the next frame the app writes
+// /tmp/nuvio-shot.png and deletes the request.
+// Keys injected from a file, so the UI can be checked without somebody on the
+// sofa with the remote: write "down", "ok", "back"... into /tmp/nuvio-key and the
+// app handles it as though it came from the D-pad. One key per line; the file is
+// consumed.
 static SDL_Keycode codeOfKey(const char *name) {
   if (!strcmp(name, "up"))    return SDLK_UP;
   if (!strcmp(name, "down"))  return SDLK_DOWN;
@@ -55,45 +56,46 @@ static SDL_Keycode codeOfKey(const char *name) {
   return 0;
 }
 
-// O arquivo e CONSUMIDO truncando, nunca apagando: /tmp tem sticky bit e os
-// arquivos sao criados por root, entao o app (uid 5410) nao consegue remove-los.
-// Enquanto isso nao foi visto, cada pedido era reprocessado a cada quadro —
-// uma unica tecla "down" virava centenas e o foco corria ate o fim da pagina.
+// The file is CONSUMED by truncating, never by deleting: /tmp has the sticky bit
+// and the files are created by root, so the app (uid 5410) cannot remove them.
+// Until that was noticed, every request was reprocessed on every frame — a single
+// "down" key became hundreds and the focus ran to the end of the page.
 static void consume(const char *path) {
   FILE *f = fopen(path, "w");
   if (f) fclose(f);
 }
 
-// O pedido e NOVO? Guarda contra o arquivo que nao da para consumir.
+// Is the request NEW? A guard against the file that cannot be consumed.
 //
-// `consome` esvazia abrindo com "w" em vez de apagar, justamente por causa do
-// sticky bit do /tmp. Mas isso tambem falha quando o arquivo pertence a OUTRO
-// usuario: um pedido criado por ssh como root fica 644, e o app (uid 5152) nao
-// pode nem apagar nem truncar. O pedido entao vale para sempre.
+// `consume` empties it by opening with "w" instead of deleting, precisely because
+// of /tmp's sticky bit. But that also fails when the file belongs to ANOTHER
+// user: a request created over ssh as root ends up 644, and the app (uid 5152)
+// can neither delete nor truncate it. The request then holds forever.
 //
-// MEDIDO na TV do dono, e fui eu que causei: um /tmp/nuvio-shot-req esquecido
-// como root fez o app capturar a tela inteira (glReadPixels de 1920x1080 mais
-// 8 MB gravados) EM TODO QUADRO por horas — `aux` foi de 0,0 para 100,7 ms e o
-// app caiu de 60 para 9 fps. O sintoma que chegou foi "a interface ta lerda".
+// MEASURED on the owner's TV, and I caused it: a /tmp/nuvio-shot-req left behind
+// as root made the app capture the whole screen (a 1920x1080 glReadPixels plus
+// 8 MB written) ON EVERY FRAME for hours — `aux` went from 0.0 to 100.7 ms and
+// the app dropped from 60 to 9 fps. What came back was "the interface is sluggish".
 //
-// Comparar a data de modificacao resolve sem depender de escrita: um pedido que
-// nao mudou desde o ultimo atendimento nao e um pedido novo.
-// A data so e consultada quando o consumo FALHA, e nao sempre: ela tem
-// resolucao de um segundo, e duas rajadas de tecla no mesmo segundo seriam
-// tratadas como a mesma. No caminho normal (arquivo do proprio app) o consumo
-// funciona e nada disto entra em jogo.
+// Comparing the modification time solves it without depending on writing: a
+// request that has not changed since it was last served is not a new request.
+// The time is only consulted when the consumption FAILS, and not always: it has
+// one-second resolution, and two bursts of keys in the same second would be
+// treated as one. On the normal path (a file the app owns) the consumption works
+// and none of this comes into play.
 static int requestNew(const char *path, time_t *blocked) {
   struct stat st;
   if (stat(path, &st) != 0 || st.st_size <= 0) return 0;
-  // Pedido que ja foi atendido e nao pode ser esvaziado: ignora enquanto nao
-  // mudar. Sem isto ele vale para sempre e o trabalho e refeito por quadro.
+  // A request that has already been served and cannot be emptied: ignore it until
+  // it changes. Without this it holds forever and the work is redone per frame.
   if (*blocked && st.st_mtime == *blocked) return 0;
   *blocked = 0;
   return 1;
 }
 
-// Esvazia e confere. Devolve 0 quando NAO conseguiu — dono diferente, sticky
-// bit — e nesse caso marca o pedido para ser ignorado ate a data mudar.
+// Empties it and checks. Returns 0 when it did NOT manage — a different owner,
+// the sticky bit — and in that case marks the request to be ignored until its
+// time changes.
 static int consumeOrBlocks(const char *path, time_t *blocked) {
   struct stat st;
   consume(path);
@@ -106,16 +108,16 @@ static int consumeOrBlocks(const char *path, time_t *blocked) {
   }
   return 1;
 }
-// stat() e nao fopen+fseek: esta sondagem roda para TRES arquivos em TODO
-// quadro, e cada fopen paga alocacao de FILE e dois syscalls a mais so para
-// descobrir o tamanho. O stat responde a mesma pergunta com um syscall.
+// stat() and not fopen+fseek: this probe runs for THREE files on EVERY frame, and
+// each fopen pays a FILE allocation and two extra syscalls just to find the size.
+// stat answers the same question with one syscall.
 static long sizeOf(const char *path) {
   struct stat st;
   if (stat(path, &st) != 0) return -1;
   return (long)st.st_size;
 }
 
-// KEYUP adiado de uma tecla segurada.
+// A deferred KEYUP for a held key.
 static Uint32 releaseIn = 0;
 static SDL_Keycode releaseKey = 0;
 
@@ -134,9 +136,9 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
   while (fgets(line, sizeof line, f)) {
     char *end = line + strlen(line);
     while (end > line && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) *--end = 0;
-    // "ok:hold" simula a pressao longa: o KEYUP dela fica agendado para depois
-    // do limiar, em vez de vir junto. Sem isso nao da para exercitar por aqui
-    // nada que dependa de segurar o botao.
+    // "ok:hold" simulates the long press: its KEYUP is scheduled for after the
+    // threshold, instead of coming along with it. Without this there is no way to
+    // exercise anything here that depends on holding the button.
     int hold = 0;
     char *dp = strchr(line, ':');
     if (dp && !strcmp(dp + 1, "hold")) { *dp = 0; hold = 1; }
@@ -147,9 +149,9 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
     e.type = SDL_KEYDOWN; e.key.keysym.sym = k;
     deliver(&e);
 
-    // O par KEYUP existe porque parte da interface so decide quando a tecla
-    // SOBE — o toque curto contra a pressao longa do OK, por exemplo. Mandar
-    // so o KEYDOWN deixava essas acoes mudas.
+    // The KEYUP pair exists because part of the interface only decides when the
+    // key GOES UP — the short press against the long press of OK, for example.
+    // Sending only the KEYDOWN left those actions mute.
     if (hold) { releaseIn = SDL_GetTicks() + NV_HOLD_MS + 120; releaseKey = k; }
     else { e.type = SDL_KEYUP; deliver(&e); }
   }
@@ -157,14 +159,14 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
   consumeOrBlocks("/tmp/nuvio-key", &blockedKey);
 }
 
-// Tamanho do buffer de onde a captura le. Definido no arranque, junto com o
+// The size of the buffer the capture reads from. Set at startup, alongside the
 // viewport.
 static int capX = 0, capY = 0;
 static int capW = (int)NV_SCREEN_W, capH = (int)NV_SCREEN_H;
 
-// Mesmo protocolo das outras ferramentas: escreva uma URL em /tmp/nuvio-video e
-// o app toca. E o unico jeito de testar reproducao sem alguem no sofa — e o
-// video nao pode ser conferido por captura, porque vive em outro plano.
+// The same protocol as the other tools: write a URL into /tmp/nuvio-video and the
+// app plays it. It is the only way to test playback without somebody on the sofa
+// — and the video cannot be checked by screenshot, because it lives in another plane.
 static void videoIfRequested(void) {
   static time_t blocked;
   char url[1024];
@@ -218,7 +220,7 @@ static void rectIfRequested(void) {
 }
 
 // THE LETTERBOX. The layout is authored at 1920x1080 and the shader maps it
-// onto whatever the viewport is (uTela stays 1920x1080, gfx.c), so any surface
+// onto whatever the viewport is (uScreen stays 1920x1080, gfx.c), so any surface
 // size already works — but only a 16:9 one works WITHOUT DISTORTION. The TV is
 // 16:9 and this returns the whole drawable there. A Mac window is not: 16:10
 // built in, and anything at all once it can be dragged.
@@ -254,8 +256,9 @@ static void captureIfRequested(void) {
   if (!requestNew("/tmp/nuvio-shot-req", &blocked)) return;
   consumeOrBlocks("/tmp/nuvio-shot-req", &blocked);
 
-  // Le o DRAWABLE inteiro, nao 1920x1080 fixo: em tela retina o buffer e maior
-  // que a janela, e ler o tamanho da janela captura so um quarto da imagem.
+  // Reads the WHOLE drawable, not a fixed 1920x1080: on a retina screen the
+  // buffer is larger than the window, and reading the window's size captures only
+  // a quarter of the image.
   int w = capW, h = capH;
   size_t n = (size_t)w * h * 4;
   unsigned char *px = malloc(n);
@@ -264,10 +267,10 @@ static void captureIfRequested(void) {
   // bars would otherwise be baked into every screenshot.
   glReadPixels(capX, capY, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
 
-  // BMP escrito a mao, em UM fwrite. SDL_SaveBMP converte pixel a pixel quando
-  // as mascaras nao batem com o formato nativo, e nesta CPU isso leva segundos:
-  // o arquivo ficava incompleto quando eu ia le-lo. Aqui a unica conversao e a
-  // troca R<->B, feita no proprio buffer.
+  // A BMP written by hand, in ONE fwrite. SDL_SaveBMP converts pixel by pixel
+  // when the masks do not match the native format, and on this CPU that takes
+  // seconds: the file was incomplete by the time I went to read it. Here the only
+  // conversion is the R<->B swap, done in the buffer itself.
   for (size_t i = 0; i < n; i += 4) { unsigned char t2 = px[i]; px[i] = px[i+2]; px[i+2] = t2; }
 
   unsigned int size = 54 + (unsigned int)n;
@@ -276,13 +279,13 @@ static void captureIfRequested(void) {
   header[2] = size & 255; header[3] = (size >> 8) & 255; header[4] = (size >> 16) & 255; header[5] = (size >> 24) & 255;
   header[10] = 54; header[14] = 40;
   header[18] = w & 255; header[19] = (w >> 8) & 255;
-  // altura POSITIVA = linhas de baixo para cima, que e exatamente a ordem em
-  // que o glReadPixels devolve. Assim nao ha inversao a fazer.
+  // a POSITIVE height = rows bottom-to-top, which is exactly the order
+  // glReadPixels returns. So there is no flip to do.
   header[22] = h & 255; header[23] = (h >> 8) & 255;
   header[26] = 1; header[28] = 32;
   header[34] = n & 255; header[35] = (n >> 8) & 255; header[36] = (n >> 16) & 255; header[37] = (n >> 24) & 255;
 
-  // grava num temporario e so entao renomeia: quem le nunca pega arquivo pela metade
+  // write to a temporary and only then rename: a reader never picks up a half file
   FILE *f = fopen("/tmp/.nuvio-shot.tmp", "wb");
   if (f) {
     fwrite(header, 1, 54, f);
@@ -295,17 +298,17 @@ static void captureIfRequested(void) {
 }
 
 int main(int argc, char **argv) {
-  // Sem a identidade do app, o SDL do webOS registra a surface como "(null)" e
-  // o compositor NAO exibe a janela — o app roda a 60fps desenhando para
-  // ninguem. Medido: "Invalid appId specified OR Unsupported Application Type".
+  // Without the app's identity, webOS's SDL registers the surface as "(null)" and
+  // the compositor does NOT show the window — the app runs at 60fps drawing for
+  // nobody. Measured: "Invalid appId specified OR Unsupported Application Type".
 #ifndef __APPLE__
   setenv("APPID", "space.nuvio.native.legacy", 0);
   setenv("LS2_APPID", "space.nuvio.native.legacy", 0);
   setenv("SDL_VIDEODRIVER", "wayland", 0);
 #endif
-  // Lancado pelo SAM, stdout e stderr vao para /dev/null — toda a telemetria
-  // (FPS, texturas, teclas) estava sendo descartada em silencio. Log em arquivo
-  // e a unica forma de ler qualquer coisa de um app nativo em execucao normal.
+  // Launched by SAM, stdout and stderr go to /dev/null — all the telemetry (FPS,
+  // textures, keys) was being discarded silently. A log file is the only way to
+  // read anything out of a native app in normal operation.
 #ifndef __APPLE__
   freopen("/tmp/nuvio.log", "w", stdout);
   freopen("/tmp/nuvio.log", "a", stderr);
@@ -320,8 +323,8 @@ int main(int argc, char **argv) {
 #endif
   if (!getenv("XDG_RUNTIME_DIR")) setenv("XDG_RUNTIME_DIR", "/tmp/xdg", 1);
 
-  // O SAM lanca o app passando o JSON de launch como argv[1], entao so tratamos
-  // argv[1] como caminho quando NAO for JSON.
+  // SAM launches the app passing the launch JSON as argv[1], so we only treat
+  // argv[1] as a path when it is NOT JSON.
   char dirBuf[512];
   const char *dirArt = NULL;
   if (argc > 1 && argv[1][0] != '{') dirArt = argv[1];
@@ -331,15 +334,15 @@ int main(int argc, char **argv) {
     else dirArt = "/tmp/art";
   }
 
-  // O compositor do webOS engole o BACK e abre a barra de apps — a menos que a
-  // surface declare que o app quer a tecla. Quem faz essa declaracao e o
-  // backend Wayland do SDL da LG, atraves deste hint, e ele so e lido na
-  // CRIACAO da janela: setar depois nao adianta.
+  // The webOS compositor swallows BACK and opens the app bar — unless the surface
+  // declares that the app wants the key. What makes that declaration is LG's SDL
+  // Wayland backend, through this hint, and it is only read when the window is
+  // CREATED: setting it afterwards is no use.
   //
-  // Com o hint ligado, o Back chega como um scancode proprio do webOS (482), e
-  // nao como SDLK_AC_BACK nem como o 461 dos apps web. Foi por isso que o
-  // registro de todos os eventos SDL nao mostrava nada: a tecla nunca era
-  // entregue, e o codigo que ela usa tambem nao era o que eu procurava.
+  // With the hint on, Back arrives as a webOS-specific scancode (482), and not as
+  // SDLK_AC_BACK nor as the 461 of web apps. That is why logging every SDL event
+  // showed nothing: the key was never delivered, and the code it uses was not the
+  // one I was looking for either.
   SDL_SetHint("SDL_WEBOS_ACCESS_POLICY_KEYS_BACK", "true");
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) { printf("SDL_Init: %s\n", SDL_GetError()); return 1; }
@@ -363,8 +366,8 @@ int main(int argc, char **argv) {
   IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG | IMG_INIT_WEBP);
 
 #ifdef __APPLE__
-  // Perfil de compatibilidade: e o unico do macOS que ainda aceita GLSL 1.20 e
-  // as funcoes fixas que o GLES2 tem como core.
+  // The compatibility profile: it is the only one on macOS that still accepts
+  // GLSL 1.20 and the fixed functions GLES2 has as core.
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
@@ -373,31 +376,31 @@ int main(int argc, char **argv) {
 #else
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
   SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-  // Canal alpha no framebuffer. Sem ele a superficie nao tem como ficar
-  // transparente, e o plano de video do aparelho — que fica ATRAS da janela e
-  // so aparece pelo alpha — nunca poderia ser revelado.
+  // An alpha channel in the framebuffer. Without it the surface has no way to be
+  // transparent, and the device's video plane — which sits BEHIND the window and
+  // only shows through the alpha — could never be revealed.
   SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
   Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN;
 #endif
-  // 4K NAO E POSSIVEL NESTE APARELHO — MEDIDO, nao presumido.
+  // 4K IS NOT POSSIBLE ON THIS DEVICE — MEASURED, not assumed.
   //
-  // A TV e 4K, e a ideia (do dono) era renderizar em 3840x2160 e desenhar tudo
-  // em dobro: o texto pararia de ser rasterizado a 1080p e ampliado pelo
-  // painel, que e o borrao que aparece ao lado do app web.
+  // The TV is 4K, and the idea (the owner's) was to render at 3840x2160 and draw
+  // everything at double size: the text would stop being rasterised at 1080p and
+  // enlarged by the panel, which is the blur you see next to the web app.
   //
-  // Foram tentados os dois caminhos, na TV, com o contador de quadro do proprio
-  // app gravando em /tmp/nuvio-fps.txt:
-  //   1. SDL_CreateWindow com 3840x2160  -> drawable=1920x1080
+  // Both routes were tried, on the TV, with the app's own frame counter writing to
+  // /tmp/nuvio-fps.txt:
+  //   1. SDL_CreateWindow with 3840x2160  -> drawable=1920x1080
   //   2. appinfo.json "resolution": "3840x2160" -> drawable=1920x1080
-  // O compositor do webOS 4.10 fixa a superficie do app nativo em 1080p e
-  // ignora os dois pedidos, em silencio. Nao ha o que otimizar aqui: a saida
-  // seria o painel receber 1080p e ampliar, que e o que ja acontece.
+  // The webOS 4.10 compositor pins a native app's surface at 1080p and ignores
+  // both requests, silently. There is nothing to optimise here: the outcome would
+  // be the panel receiving 1080p and scaling it, which is what already happens.
   //
-  // Base para comparacao futura, medida nesta tela (home, sem rolar):
-  //   drawable=1920x1080 FPS=50.0 pior=21ms janks=0
+  // A baseline for future comparison, measured on this screen (home, not scrolling):
+  //   drawable=1920x1080 FPS=50.0 worst=21ms janks=0
   //
-  // txt_iniciar continua recebendo a escala do drawable: no aparelho ela e 1 e
-  // nao muda nada, no Mac (retina) ela e 2 e a previa deixa de mentir.
+  // txt_start still receives the drawable's scale: on the device it is 1 and
+  // changes nothing, on the Mac (retina) it is 2 and the preview stops lying.
   int winW = (int)NV_SCREEN_W, winH = (int)NV_SCREEN_H;
 #ifdef __APPLE__
   // 1920x1080 is bigger than the screen it has to fit inside. SDL takes those
@@ -426,29 +429,30 @@ int main(int argc, char **argv) {
                                      SDL_WINDOWPOS_CENTERED,
                                      winW, winH, flags);
   if (!win) { printf("window: %s\n", SDL_GetError()); return 1; }
-  // App de TV nao tem ponteiro: o cursor por cima da interface polui a leitura
-  // e some sozinho no aparelho, mas nao no Mac.
+  // A TV app has no pointer: the cursor over the interface pollutes the reading
+  // and disappears on its own on the device, but not on the Mac.
   SDL_ShowCursor(SDL_DISABLE);
 #ifndef __APPLE__
-  // Declara a superficie NAO-opaca. Por padrao o compositor trata a janela como
-  // opaca e descarta o canal alpha inteiro — o furo do gfx_furo existiria no
-  // framebuffer e mesmo assim nada apareceria atras dele.
+  // Declares the surface NON-opaque. By default the compositor treats the window
+  // as opaque and discards the whole alpha channel — the hole from gfx_hole would
+  // exist in the framebuffer and still nothing would appear behind it.
   //
-  // Duas armadilhas medidas neste aparelho, ambas silenciosas:
-  // 1. o SDL daqui escreve um SDL_SysWMinfo MAIOR que o header declara, entao a
-  //    struct vai num buffer folgado e nao numa variavel do tamanho "certo";
-  // 2. o `version` tem de vir de SDL_GetVersion(); preenchido a mao o SDL
-  //    recusa em silencio e a unica pista e a tela preta.
+  // Two traps measured on this device, both silent:
+  // 1. the SDL here writes an SDL_SysWMinfo LARGER than the header declares, so
+  //    the struct goes into a generous buffer and not into a variable of the
+  //    "right" size;
+  // 2. `version` has to come from SDL_GetVersion(); filled in by hand, SDL refuses
+  //    silently and the only clue is a black screen.
   {
     static char infoBuf[512];
     SDL_SysWMinfo *info = (SDL_SysWMinfo *)infoBuf;
     SDL_GetVersion(&info->version);
     if (SDL_GetWindowWMInfo(win, info)) {
-      // O SDL_config.h do SDK vem com SDL_VIDEO_DRIVER_WAYLAND desligado, entao
-      // o campo info.wl nem existe no header — mas o SDL do aparelho E wayland.
-      // Ler por deslocamento evita depender de um header que descreve outra
-      // compilacao: version ocupa 3 bytes (alinhado a 4), subsystem vem em 4, e
-      // a uniao comeca em 8. Para wayland ela e {display, surface, ...}.
+      // The SDK's SDL_config.h ships with SDL_VIDEO_DRIVER_WAYLAND off, so the
+      // info.wl field does not even exist in the header — but the device's SDL IS
+      // wayland. Reading by offset avoids depending on a header that describes a
+      // different build: version takes 3 bytes (aligned to 4), subsystem comes at
+      // 4, and the union starts at 8. For wayland it is {display, surface, ...}.
       int sub = *(int *)(infoBuf + 4);
       void **fields = (void **)(infoBuf + 8);
       void *sup = fields[1];
@@ -456,8 +460,8 @@ int main(int argc, char **argv) {
       void (*marshal)(void *, unsigned, ...) =
           wl ? (void (*)(void *, unsigned, ...))dlsym(wl, "wl_proxy_marshal") : NULL;
       printf("syswm sub=%d display=%p surface=%p\n", sub, fields[0], sup);
-      // Opcode 4 de wl_surface e set_opaque_region; NULL = "nada e opaco".
-      // Sem commit de proposito: o commit vem do proximo SwapWindow.
+      // wl_surface's opcode 4 is set_opaque_region; NULL = "nothing is opaque".
+      // Deliberately without a commit: the commit comes from the next SwapWindow.
       if (marshal && sup) { marshal(sup, 4, NULL); printf("non-opaque surface\n"); }
       else printf("no wayland: video will not appear\n");
       // Export the surface as a video object NOW, not on the first play: the
@@ -472,27 +476,27 @@ int main(int argc, char **argv) {
 #endif
   SDL_GLContext ctx = SDL_GL_CreateContext(win);
 #ifdef __APPLE__
-  // Sem vsync no Mac. O SDL2 do Homebrew virou uma camada sobre o SDL3
-  // (sdl2-compat), e nela o SwapWindow fica preso esperando um sinal de vsync
-  // que nunca chega quando a janela nao esta em primeiro plano — o app trava no
-  // primeiro quadro. No aparelho o SDL2 e o de verdade e o vsync fica ligado,
-  // que e o que mantem os 60fps estaveis la.
+  // No vsync on the Mac. Homebrew's SDL2 has become a layer over SDL3
+  // (sdl2-compat), and in it SwapWindow blocks waiting for a vsync signal that
+  // never arrives when the window is not in the foreground — the app freezes on
+  // the first frame. On the device SDL2 is the real one and vsync stays on, which
+  // is what keeps 60fps steady there.
   SDL_GL_SetSwapInterval(0);
 #else
   SDL_GL_SetSwapInterval(1);
 #endif
-  // O tamanho REAL do buffer importa mais que o tamanho pedido: esta TV e 4K, e
-  // se o compositor entregar uma superficie 3840x2160 cada camada de tela cheia
-  // custa quatro vezes o que a conta de 1080p diz.
+  // The REAL buffer size matters more than the requested one: this TV is 4K, and
+  // if the compositor hands over a 3840x2160 surface, every full-screen layer
+  // costs four times what the 1080p arithmetic says.
   int dw = 0, dh = 0, jw = 0, jh = 0;
   SDL_GL_GetDrawableSize(win, &dw, &dh);
   SDL_GetWindowSize(win, &jw, &jh);
   printf("GPU: %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
   printf("window=%dx%d drawable=%dx%d\n", jw, jh, dw, dh);
-  // Pedir SDL_GL_ALPHA_SIZE nao garante receber: o EGL escolhe a config mais
-  // proxima e pode entregar 0 bits de alpha em silencio. Com 0 aqui, o furo da
-  // superficie e impossivel e o plano de video NUNCA vai aparecer, por mais
-  // certo que esteja o lado do ACB.
+  // Asking for SDL_GL_ALPHA_SIZE does not guarantee getting it: EGL picks the
+  // closest config and may hand over 0 bits of alpha silently. With 0 here, the
+  // hole in the surface is impossible and the video plane will NEVER appear,
+  // however right the ACB side may be.
   { int a = -1, r = -1, g = -1, b = -1;
     SDL_GL_GetAttribute(SDL_GL_ALPHA_SIZE, &a);
     SDL_GL_GetAttribute(SDL_GL_RED_SIZE, &r);
@@ -501,18 +505,18 @@ int main(int argc, char **argv) {
     printf("framebuffer R%d G%d B%d A%d%s\n", r, g, b, a,
            a > 0 ? "" : "  <<< NO ALPHA: video has no way to show through"); }
 
-  // Em tela retina o drawable e maior que a janela; sem ajustar o viewport, o
-  // desenho ocupa um quarto da tela.
+  // On a retina screen the drawable is larger than the window; without adjusting
+  // the viewport, the drawing occupies a quarter of the screen.
   applySurface(win);
 
-  // O relogio dos marcos comeca AQUI e nao no topo do main: o que vem antes e
-  // parse de argumento e SDL_Init, que nao dependem de nada nosso.
+  // The milestone clock starts HERE and not at the top of main: what comes before
+  // is argument parsing and SDL_Init, which depend on nothing of ours.
   mark_start();
-  // ANTES de tex_iniciar e de app_iniciar, que sao quem cria os fios de rede.
+  // BEFORE tex_start and app_start, which are what create the network threads.
   net_prepare();
   mark("gfx_start");
   if (!gfx_start()) return 1;
-  // fonts/ fica ao lado de art/: derruba o ultimo componente do caminho da arte
+  // fonts/ sits next to art/: drop the last component of the art path
   char dirRec[512];
   snprintf(dirRec, sizeof dirRec, "%s", dirArt);
   char *bar = strrchr(dirRec, '/');
@@ -520,61 +524,63 @@ int main(int argc, char **argv) {
   int sbx, sby, sbw, sbh;
   surfaceBox(win, &sbx, &sby, &sbw, &sbh);
   txt_start(dirRec, (float)sbw / NV_SCREEN_W);
-  // A MESMA escala vai para o cache de texturas: e ela que decide o teto de
-  // decodificacao de cada arte a partir da largura com que o card a desenha.
-  // Sem isto todo card decodificava com o teto unico de 640 e o cache batia no
-  // orcamento com ~40 texturas.
+  // The SAME scale goes to the texture cache: it is what decides each piece of
+  // art's decode ceiling from the width the card draws it at. Without this every
+  // card decoded with the single ceiling of 640 and the cache hit its budget at
+  // ~40 textures.
   tex_scale((float)sbw / NV_SCREEN_W);
   mark("fonts+tex ready");
-  // 192 slots, nao 96. O teto de slots so faz sentido junto com o tamanho de
-  // cada textura: com o teto unico de 640 cada uma custava 2,4 MB e 96 slots ja
-  // estouravam o orcamento de 96 MB (medido: `texturas=40 pend=32 92.3MB` com a
-  // home rolando — o cache despejava o que ainda estava na tela). Com o teto
-  // por uso a mesma arte custa ~500 KB na TV, e 192 slots cabem com folga.
+  // 192 slots, not 96. A slot ceiling only makes sense alongside the size of each
+  // texture: with the single ceiling of 640 each one cost 2.4 MB and 96 slots
+  // already blew the 96 MB budget (measured: `textures=40 pending=32 92.3MB` with
+  // the home scrolling — the cache was evicting things still on screen). With the
+  // per-use ceiling the same art costs ~500 KB on the TV, and 192 slots fit with
+  // room to spare.
   //
-  // Isso tambem dobra o teto de itens EM VOO, que e nMax/3 em slotLivre: a
-  // fileira que entra na tela pede tudo de uma vez em vez de pedir aos poucos.
+  // That also doubles the ceiling of items IN FLIGHT, which is nMax/3 in freeSlot:
+  // the row coming on screen asks for everything at once instead of a bit at a time.
   tex_start(192);
-  // A conta vem ANTES da UI: app_iniciar decide entre abrir na home e abrir no
-  // login, e para decidir ele precisa saber se ha sessao gravada.
+  // The account comes BEFORE the UI: app_start decides between opening on the home
+  // and opening on login, and to decide it needs to know whether there is a stored
+  // session.
   data_start(dirArt);
   cloud_configure(dirArt);
   session_start();
   profiles_load_active();
-  // Vinculos feitos NESTA TV. Vem antes de trakt_carregar (que le o arquivo do
-  // pacote) para o vinculo do usuario ganhar do arquivo de quem montou — e num
-  // pacote distribuivel esse arquivo nem existe.
+  // Links made ON THIS TV. It comes before trakt_load (which reads the package's
+  // file) so the user's link beats the file of whoever built it — and in a
+  // distributable package that file does not even exist.
   traktauth_load();
   simklauth_load();
   if (!app_start(dirArt)) return 1;
-  // Progresso e dado DO USUARIO: sai da pasta do pacote, que e a mesma para
-  // todo mundo que usar o aparelho, e passa para a pasta da instalacao.
+  // Progress is the USER's data: it leaves the package folder, which is the same
+  // for everyone using the device, and moves to the installation folder.
   if (data_dir()[0]) cat_dir_writing(data_dir());
-  // A configuracao de addons mora junto da arte. Ausente, o app segue com a
-  // lista de exemplo — nunca fica sem nada para mostrar.
+  // The addon configuration lives next to the art. Absent, the app carries on with
+  // the sample list — it is never left with nothing to show.
   addons_load(dirArt);
-  // Ajustes tambem sao do USUARIO, nao do pacote.
+  // Settings are the USER's too, not the package's.
   settings_dir(data_dir()[0] ? data_dir() : dirArt);
-  { // As imagens vindas de URL ficam ao lado da arte do pacote. Uma vez
-    // baixadas valem para sempre: arte de filme nao muda.
+  { // The images that came from a URL sit next to the package's art. Once
+    // downloaded they hold forever: a film's art does not change.
     char c[600];
     snprintf(c, sizeof c, "%s/cache", dirArt);
     tex_cache_dir(c); }
   // Os icones da interface saem de art/icones (SVG do app web rasterizados).
   gfx_icons_dir(dirArt);
-  // Catalogo da rede. O do pacote ja esta carregado e continua na tela ate a
-  // resposta chegar — abrir vazio enquanto busca seria pior que mostrar o de
-  // ontem por dois segundos.
+  // The network catalogue. The package's is already loaded and stays on screen
+  // until the answer arrives — opening empty while searching would be worse than
+  // showing yesterday's for two seconds.
   trakt_load(dirArt);
   disc_tmdb(dirArt);
   disc_start();
-  // Metade da resolucao: o snapshot so aparece escurecido e nas bordas.
+  // Half resolution: the snapshot only appears darkened and at the edges.
   int hasSnap = gfx_snap_start((int)NV_SCREEN_W / 2, (int)NV_SCREEN_H / 2);
   int snapValid = 0;
-  // Alvo minusculo de proposito: e ele esticado que vira o desfoque do fundo.
-  // 480x270: com o gaussiano de duas passadas, o que importa nao e o alvo ser
-  // minusculo (isso e que produzia blocos ao esticar) e sim o desfoque ser de
-  // verdade. Esticado 4x, nenhuma borda de texel aparece.
+  // A deliberately tiny target: stretched, it is what becomes the background blur.
+  // 480x270: with the two-pass gaussian, what matters is not the target being tiny
+  // (that is what produced blocks when stretching) but the blur being real.
+  // Stretched 4x, no texel edge shows.
   gfx_blur_start(480, 270);
 
   Uint32 lastReport = SDL_GetTicks();
@@ -582,19 +588,19 @@ int main(int argc, char **argv) {
   int    txtNFrame = 0, worstTxtN = 0;
   int frames = 0, janks = 0; double worst = 0;
 
-  // TELEMETRIA POR FASE. O quadro pior custava 22ms num alvo de 20ms e nao
-  // havia como saber ONDE. Os relogios sao de CPU (SDL_GetPerformanceCounter)
-  // e NAO ha glFinish em lugar nenhum: glFinish esconde o jank, porque
-  // distribui o custo de GPU igualmente por todos os quadros em vez de deixar
-  // o atraso aparecer onde ele nasce. Aqui, `des` e o custo de SUBMETER o
-  // desenho (CPU) e `swap` absorve a espera do vsync MAIS o que a GPU ainda
-  // devia — um quadro pesado de GPU aparece como swap grande, um quadro pesado
-  // de CPU aparece na fase que o causou.
+  // PER-PHASE TELEMETRY. The worst frame cost 22ms against a 20ms target and there
+  // was no way to know WHERE. The clocks are CPU ones (SDL_GetPerformanceCounter)
+  // and there is NO glFinish anywhere: glFinish hides the jank, because it spreads
+  // the GPU cost evenly across every frame instead of letting the delay show up
+  // where it is born. Here, `draw` is the cost of SUBMITTING the drawing (CPU) and
+  // `swap` absorbs the vsync wait PLUS whatever the GPU still owed — a
+  // GPU-heavy frame shows up as a large swap, a CPU-heavy frame shows up in the
+  // phase that caused it.
   double perFreq = (double)SDL_GetPerformanceFrequency();
   Uint64 lastFrame = SDL_GetPerformanceCounter();
   double fEv=0, fPump=0, fUpd=0, fDraw=0, fSwap=0, fAux=0, fColor=0;
   double pEv=0, pPump=0, pUpd=0, pDraw=0, pSwap=0, pAux=0, pColor=0;
-  // Dentro de `des`: quanto e travessia de GL e quanto e busca no cache.
+  // Inside `draw`: how much is GL traversal and how much is cache lookup.
   double fFill=0, pFill=0; int fNFull=0, pNFull=0;
   double fGfxMs=0, fTexMs=0, fOutMs=0; int fNRect=0, fNProgress=0, fNBind=0, fNSearch=0, fNOut=0;
   double pGfxMs=0, pTexMs=0, pOutMs=0; int pNRect=0, pNProgress=0, pNBind=0, pNSearch=0, pNOut=0;
@@ -604,8 +610,8 @@ int main(int argc, char **argv) {
   while (!app_wants_exit()) {
     SDL_Event e;
     Uint64 tEv = NV_T0();
-    // Enquanto o detalhe existe ele fica com o teclado inteiro: a home
-    // continua desenhada por baixo, mas nao deve reagir ao D-pad.
+    // While the detail screen exists it keeps the whole keyboard: the home is
+    // still drawn underneath, but must not react to the D-pad.
     while (SDL_PollEvent(&e)) {
       if (e.type == SDL_WINDOWEVENT) {
         // The only one that matters: the surface changed shape, so the
@@ -629,10 +635,10 @@ int main(int argc, char **argv) {
         continue;
       }
 #endif
-      // O BACK do webOS chega com scancode proprio (482), nao como AC_BACK, e
-      // com KEYDOWN e KEYUP quase juntos — so o KEYDOWN conta. Isto ja tinha
-      // sido resolvido uma vez e voltou a quebrar quando limpei os remendos
-      // antigos: o tratamento saiu junto.
+      // webOS's BACK arrives with its own scancode (482), not as AC_BACK, and with
+      // KEYDOWN and KEYUP almost together — only the KEYDOWN counts. This had
+      // already been solved once and broke again when I cleaned out the old
+      // patches: the handling went with them.
       if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == NV_SCANCODE_BACK) {
         SDL_Event back; SDL_zero(back);
         back.type = SDL_KEYDOWN;
@@ -646,22 +652,22 @@ int main(int argc, char **argv) {
     fEv = NV_DT(tEv);
 
     Uint32 now = SDL_GetTicks();
-    // dt VEM DO RELOGIO DE ALTA RESOLUCAO, nao de SDL_GetTicks.
+    // dt COMES FROM THE HIGH-RESOLUTION CLOCK, not from SDL_GetTicks.
     //
-    // SDL_GetTicks conta em MILISSEGUNDOS INTEIROS. No Mac o app roda sem vsync
-    // a ~1300 fps, entao quase todo quadro dura menos de 1 ms e a subtracao dava
-    // ZERO — e o piso `if (dt <= 0) dt = 1/60` entregava 16,7 ms SINTETICOS para
-    // um quadro de 0,8 ms de relogio real. Toda animacao avancava ~20x mais
-    // rapido que o relogio: medido, um fade de 330 ms terminava em 92 ms.
+    // SDL_GetTicks counts in WHOLE MILLISECONDS. On the Mac the app runs without
+    // vsync at ~1300 fps, so almost every frame lasts less than 1 ms and the
+    // subtraction gave ZERO — and the floor `if (dt <= 0) dt = 1/60` handed over a
+    // SYNTHETIC 16.7 ms for a frame of 0.8 ms of real clock. Every animation ran
+    // ~20x faster than the clock: measured, a 330 ms fade finished in 92 ms.
     //
-    // Na TV o vsync escondia o defeito (dt real, sempre >= 20 ms), mas o efeito
-    // pratico era pior que um bug de Mac: QUALQUER calibracao de animacao feita
-    // na previa perseguia um numero que a TV nunca ia reproduzir, e a medida de
-    // pior quadro no Mac tambem saia distorcida.
+    // On the TV vsync hid the defect (a real dt, always >= 20 ms), but the
+    // practical effect was worse than a Mac bug: ANY animation calibration done in
+    // the preview chased a number the TV would never reproduce, and the worst-frame
+    // measurement on the Mac came out distorted too.
     //
-    // O clamp continua, mas so como TETO: voltar de suspensao entrega um dt de
-    // varios segundos e uma animacao daria um salto. Piso nao existe mais —
-    // quadro curto tem de ser um dt curto.
+    // The clamp stays, but only as a CEILING: coming back from suspend hands over
+    // a dt of several seconds and an animation would jump. There is no floor any
+    // more — a short frame has to be a short dt.
     Uint64 cFrame = SDL_GetPerformanceCounter();
     double dtms = (double)(cFrame - lastFrame) * 1000.0 / perFreq;
     lastFrame = cFrame;
@@ -675,20 +681,20 @@ int main(int argc, char **argv) {
                          pNBind=fNBind; pNSearch=fNSearch; pOutMs=fOutMs; pNOut=fNOut; pFill=fFill; pNFull=fNFull; }
       if (dtms > 33.0) janks++;
     }
-    // zera os contadores do quadro que comeca agora; o que foi medido acima
-    // pertence ao quadro anterior, que e o que acabou de custar dtms
+    // zeroes the counters of the frame that starts now; what was measured above
+    // belongs to the previous frame, which is what has just cost dtms
     txtMsFrame = txt_ms; txtNFrame = txt_rasterized;
     txt_ms = 0.0; txt_rasterized = 0;
 
-    // TRES por quadro. O limite de 1 vinha de quando TODA arte era decodificada
-    // com o teto unico de 640: cada glTexImage2D custava ~2 MB e dois no mesmo
-    // quadro passavam de 20 ms, aparecendo como tranco ao entrar numa fileira.
+    // THREE per frame. The limit of 1 came from when ALL art was decoded with the
+    // single ceiling of 640: each glTexImage2D cost ~2 MB and two in the same frame
+    // went over 20 ms, showing up as a jolt on entering a row.
     //
-    // Esse argumento caiu junto com o teto unico: agora cada arte e decodificada
-    // pela largura com que e desenhada (tex_obter_larg), e na TV um poster sai a
-    // ~500 KB em vez de 2,4 MB. Tres envios pequenos somam menos que o UNICO
-    // envio grande de antes, e a fileira que entra na tela deixa de aparecer aos
-    // pedacos.
+    // That argument fell along with the single ceiling: each piece of art is now
+    // decoded at the width it is drawn at (tex_get_width), and on the TV a poster
+    // comes out at ~500 KB instead of 2.4 MB. Three small uploads add up to less
+    // than the ONE large upload of before, and the row coming on screen stops
+    // appearing in pieces.
     Uint64 t0 = NV_T0();
     tex_pump(3);
     fPump = NV_DT(t0);
@@ -696,12 +702,12 @@ int main(int argc, char **argv) {
     app_update(dt, now);
     fUpd = NV_DT(t0);
 
-    // RECORTE DESLIGADO ANTES DO CLEAR. glClear respeita o scissor test: se
-    // qualquer tela terminar o quadro com um recorte ativo, o clear seguinte
-    // limpa SO aquele retangulo e o resto da tela guarda o quadro anterior.
-    // Hoje todos os chamadores equilibram recorte/sem_recorte, mas isso e uma
-    // invariante que ninguem verifica — e o sintoma seria justamente uma faixa
-    // com conteudo velho, dificil de atribuir a causa. Uma chamada por quadro.
+    // THE CLIP IS TURNED OFF BEFORE THE CLEAR. glClear respects the scissor test:
+    // if any screen ends the frame with a clip active, the next clear wipes ONLY
+    // that rectangle and the rest of the screen keeps the previous frame.
+    // Today every caller balances crop/no-crop, but that is an invariant nobody
+    // checks — and the symptom would be precisely a band with stale content, hard
+    // to trace to its cause. One call per frame.
     t0 = NV_T0();
     gfx_new_frame();
     tex_new_frame();
@@ -726,11 +732,11 @@ int main(int argc, char **argv) {
     t0 = NV_T0();
     SDL_GL_SwapWindow(win);
     fSwap = NV_DT(t0);
-    // PRIMEIRO PIXEL. E o numero que responde "quanto tempo ate a TV mostrar
-    // alguma coisa", que nenhuma metrica de quadro dava.
+    // FIRST PIXEL. It is the number that answers "how long until the TV shows
+    // anything", which no per-frame metric gave.
     //
-    // Bandeira PROPRIA e nao `if (!quadros)`: `quadros` zera a cada relatorio
-    // de 3 s, entao aquilo carimbaria "primeiro quadro" tres vezes por minuto.
+    // A flag of its OWN and not `if (!frames)`: `frames` resets on every 3 s
+    // report, so that would stamp "first frame" three times a minute.
     { static int alreadyStamped;
       if (!alreadyStamped) { alreadyStamped = 1; mark("first frame on screen"); } }
     frames++;
@@ -743,11 +749,11 @@ int main(int argc, char **argv) {
              frames * 1000.0 / (double)(now - lastReport), worst, janks,
              worstTxtMs, worstTxtN, items, pending, bytes / 1048576.0, txt_evictions);
       fflush(stdout);
-      // A MESMA linha vai para um arquivo. No aparelho a saida padrao do app
-      // lancado pelo applicationManager nao chega a lugar nenhum que se possa
-      // ler, e rodar o binario a mao nao funciona (sem a identidade do app o
-      // compositor recusa a superficie e ele morre em silencio). Sem isto nao
-      // ha como MEDIR quadro no aparelho — so olhar e achar.
+      // The SAME line goes to a file. On the device the standard output of an app
+      // launched by applicationManager does not reach anywhere readable, and
+      // running the binary by hand does not work (without the app's identity the
+      // compositor refuses the surface and it dies silently). Without this there
+      // is no way to MEASURE a frame on the device — only to look and guess.
       { FILE *fp = fopen("/tmp/nuvio-fps.txt", "w");
         if (fp) {
           fprintf(fp, "drawable=%dx%d FPS=%.1f worst=%.1fms janks=%d"

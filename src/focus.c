@@ -8,7 +8,7 @@ void focus_start(Focus *f, int nRows, const int *nColumns) {
   for (int i = 0; i < nRows; i++) f->nColumns[i] = nColumns[i];
 }
 
-int focus_mover(Focus *f, int dx, int dy) {
+int focus_move(Focus *f, int dx, int dy) {
   int fBefore = f->row, cBefore = f->column;
 
   if (dx) {

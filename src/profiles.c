@@ -14,7 +14,7 @@ static AccountProfile list[ACCOUNT_PROFILE_MAX];
 static int n;
 static char owner[64];
 static int active = 1;
-static int chosen;      // 1 depois que o usuario decidiu nesta instalacao
+static int chosen;      // 1 once the user has decided on this installation
 
 static void readOwner(void) {
   char *r;
@@ -71,7 +71,7 @@ int profiles_pull(void) {
       if (!js_text(p, f, "avatar_color_hex", tmp[new].colorHex, sizeof tmp[new].colorHex))
         snprintf(tmp[new].colorHex, sizeof tmp[new].colorHex, "#1E88E5");
       { char b[16];
-        // Sem o campo, o perfil 1 e o primario — e a mesma regra do web.
+        // Without the field, profile 1 is the primary one — the same rule as the web app.
         tmp[new].primary = js_raw(p, f, "is_primary", b, sizeof b)
                               ? (strcmp(b, "true") == 0) : ((int)idx == 1); }
       new++;
@@ -150,8 +150,8 @@ int profiles_verify_pin(int index_, const char *pin) {
   jsw_obj_end(&w);
   r = session_rpc("verify_profile_pin", jsw_text_final(&w), &st);
   jsw_free(&w);
-  // A RPC devolve um booleano; aceitar so o HTTP 200 deixaria passar um PIN
-  // errado, que responde 200 com `false`.
+  // The RPC returns a boolean; accepting only the HTTP 200 would let a wrong
+  // PIN through, since that answers 200 with `false`.
   if (r && st >= 200 && st < 300) ok = (strstr(r, "true") != NULL);
   free(r);
   return ok;

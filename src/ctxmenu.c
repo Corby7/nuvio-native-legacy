@@ -11,8 +11,8 @@
 #include <stdio.h>
 #include <string.h>
 
-// Mantem o header publico de Trakt estavel: estas leituras sao o contrato
-// interno entre a modal e as escritas assincronas do proprio port.
+// Keeps Trakt's public header stable: these reads are the internal contract
+// between the modal and the port's own asynchronous writes.
 extern int trakt_operation_state(int kind);
 extern int trakt_watchlist_kind(const char *imdb, const char *kind, int add);
 extern int trakt_watched_kind(const char *imdb, const char *kind, int mark);
@@ -22,12 +22,12 @@ extern void cat_history_set_id(const char *imdb, const char *kind, int watched);
 enum { CTX_OP_NONE, CTX_OP_LIST = 1, CTX_OP_HISTORY = 2 };
 enum { CTX_PENDING = 1, CTX_CONFIRMED = 2, CTX_FAILURE = 3 };
 
-// MEDIDO no bundle 1.0.4: o dialogo tem 37,5vw de largura (720 px em 1920).
+// MEASURED on bundle 1.0.4: the dialog is 37.5vw wide (720 px at 1920).
 #define CTX_W      720.0f
-#define CTX_DFLT     44.0f
-#define CTX_LINE   86.0f     // altura de cada botao
+#define CTX_PAD     44.0f
+#define CTX_LINE   86.0f     // height of each button
 #define CTX_GAP     12.0f
-#define CTX_HEADER    148.0f     // titulo, estados e rotulo do grupo
+#define CTX_HEADER    148.0f     // title, states and group label
 #define CTX_STATUS_H 34.0f
 #define CTX_FOOTER  70.0f
 
@@ -43,10 +43,10 @@ static int keyOk(SDL_Keycode k) {
   return k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE;
 }
 
-// A home e quem conhece o item focado, por isso ela continua decidindo qual
-// indice entregar a ctx_abrir no KEYUP. Este observador fornece o feedback
-// durante a retenção e arma a janela longa; setas/Voltar invalidam o gesto
-// antes que a home possa transformá-lo em ação.
+// The home is what knows the focused item, so it goes on deciding which index
+// to hand to ctx_open on KEYUP. This observer provides the feedback during the
+// hold and arms the long window; arrows/Back invalidate the gesture before the
+// home can turn it into an action.
 static int observeHold(void *u, SDL_Event *e) {
   (void)u;
   if (e->type == SDL_KEYDOWN) {
@@ -70,7 +70,7 @@ static int observeHold(void *u, SDL_Event *e) {
   return 0;
 }
 
-// Ate tres: detalhes, biblioteca e — so em filme/serie — assistido.
+// Up to three: details, library and — only on films/series — watched.
 #define CTX_MAX 3
 static struct { const char *rot; int action; } ops[CTX_MAX];
 static int nOps;
@@ -84,8 +84,8 @@ static int indexCurrent(void) {
   if (n < 1 || idx < 0 || idx >= n) return -1;
   if (operationImdb[0]) {
     found = cat_index_by_imdb(operationImdb);
-    // A resposta pode chegar depois de a descoberta trocar o bloco. Nunca
-    // reutilizar `idx` nesse caso, pois ele pode ser outro titulo.
+    // The answer may arrive after discovery has swapped the block out. Never
+    // reuse `idx` in that case, because it may be a different title.
     return found;
   }
   return idx;
@@ -97,8 +97,9 @@ static void build(void) {
   nOps = 0;
   if (!ci) return;
   ops[nOps].rot = "See details";        ops[nOps].action = OP_DETAILS;  nOps++;
-  // Sem IMDb nao ha endpoint remoto suportado para esta acao. Nao oferecer
-  // um botao que so aparentaria funcionar e inventaria estado local.
+  // Without an IMDb id there is no supported remote endpoint for this action.
+  // Do not offer a button that would only look like it works and would invent
+  // local state.
   if (ci->imdb[0]) {
     if (stateOperation == CTX_PENDING && operation == CTX_OP_LIST)
       ops[nOps].rot = intent ? "Adding to library..."
@@ -108,8 +109,8 @@ static void build(void) {
                                   : "Add to library";
     ops[nOps].action = OP_LIST; nOps++;
   }
-  // O web so oferece "assistido" em filme e serie — nao em canal nem evento,
-  // que sao tipos que os addons do dono tambem declaram.
+  // The web app only offers "watched" on films and series — not on channels or
+  // events, which are types the owner's addons also declare.
   if (ci->imdb[0] && (!strcmp(ci->kind, "movie") || !strcmp(ci->kind, "series"))) {
     if (stateOperation == CTX_PENDING && operation == CTX_OP_HISTORY)
       ops[nOps].rot = intent ? "Marking as watched..."
@@ -129,8 +130,9 @@ void ctx_open(int index_) {
     return;
   }
   if (index_ < 0 || index_ >= cat_n() || !cat_item(index_)) return;
-  // A longa ja consumiu o gesto na home. Limpar a sentinela aqui evita que o
-  // KEYUP seguinte seja reaproveitado como uma selecao dentro da modal.
+  // The long press has already consumed the gesture on the home. Clearing the
+  // sentinel here stops the following KEYUP being reused as a selection inside
+  // the modal.
   holdReady = 0;
   idx = index_; focus = 0; is_open = 1; reqDetails = -1;
   operation = CTX_OP_NONE; intent = 0; stateOperation = 0;
@@ -154,8 +156,8 @@ static void apply(void) {
   switch (action) {
     case OP_DETAILS: reqDetails = idx; break;
     case OP_LIST:
-      // Captura a intencao ANTES de qualquer escrita. O mesmo valor segue para
-      // o POST e so chega ao espelho local depois de uma resposta 2xx.
+      // Capture the intent BEFORE any write. The same value goes on to the
+      // POST and only reaches the local mirror after a 2xx response.
       intent = !ci->inList;
       snprintf(operationImdb, sizeof operationImdb, "%s", ci->imdb);
       operation = CTX_OP_LIST;
@@ -166,8 +168,8 @@ static void apply(void) {
       build();
       break;
     case OP_WATCHED:
-      // Progresso e posicao de retomada, nao historico. So um retrato de
-      // historico confirmado pode inverter a acao para "desmarcar".
+      // Progress and resume position, not history. Only a confirmed history
+      // snapshot may flip the action to "unmark".
       intent = cat_history_state_item(current) == 1 ? 0 : 1;
       snprintf(operationImdb, sizeof operationImdb, "%s", ci->imdb);
       operation = CTX_OP_HISTORY;
@@ -188,8 +190,8 @@ void ctx_event(const SDL_Event *e) {
   k = e->key.keysym.sym;
   if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
       e->key.keysym.scancode == NV_SCANCODE_BACK) { is_open = 0; return; }
-  // Enquanto a requisicao esta no ar, OK nao repete a escrita. O foco continua
-  // sendo o do modal e Voltar sempre pode cancelar a espera visual.
+      // While the request is in flight, OK does not repeat the write. Focus
+      // stays inside the modal and Back can always cancel the visual wait.
   if (operation != CTX_OP_NONE) {
     if (stateOperation == CTX_PENDING) return;
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
@@ -292,27 +294,27 @@ void ctx_draw(Uint32 now) {
   { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, 0, 0, 0, 0.72f * a); }
 
-  height = CTX_DFLT * 2.0f + CTX_HEADER +
+  height = CTX_PAD * 2.0f + CTX_HEADER +
         (float)nOps * (CTX_LINE + CTX_GAP) - CTX_GAP + CTX_FOOTER;
   x = (NV_SCREEN_W - CTX_W) * 0.5f;
   y = (NV_SCREEN_H - height) * 0.5f;
-  // Sobe do fundo enquanto aparece, como as outras folhas do app.
+  // Rises from the bottom as it appears, like the app's other sheets.
   y += (1.0f - a) * 40.0f;
 
   { GfxRect p = { x, y, CTX_W, height };
     gfx_color(p, 0.06f, 0.11f, 0.11f, 0.13f, 0.98f * a); }
 
   { TxtLine t = txt_line(TXT_CAPTION2, "SELECTED TITLE", 174, 178, 188, 255);
-    txt_draw_alpha(t, x + CTX_DFLT, y + CTX_DFLT, a * 0.95f); }
+    txt_draw_alpha(t, x + CTX_PAD, y + CTX_PAD, a * 0.95f); }
   { TxtLine t = txt_line_trim(TXT_HEADLINE, ci->title, 245, 248, 255, 255,
-                                 CTX_W - CTX_DFLT * 2.0f);
-    txt_draw_alpha(t, x + CTX_DFLT, y + CTX_DFLT + 28.0f, a); }
+                                 CTX_W - CTX_PAD * 2.0f);
+    txt_draw_alpha(t, x + CTX_PAD, y + CTX_PAD + 28.0f, a); }
   { const char *subtitle = message ? message : "Title options";
     TxtLine t = txt_line(TXT_DET_META2, subtitle, 150, 154, 163, 255);
-    txt_draw_alpha(t, x + CTX_DFLT, y + CTX_DFLT + 70.0f, a * 0.9f); }
+    txt_draw_alpha(t, x + CTX_PAD, y + CTX_PAD + 70.0f, a * 0.9f); }
 
-  { float sx = x + CTX_DFLT;
-    float sy = y + CTX_DFLT + 104.0f;
+  { float sx = x + CTX_PAD;
+    float sy = y + CTX_PAD + 104.0f;
     for (i = 0; i < nStates; i++) {
       TxtLine t = txt_line(TXT_CAPTION2, states[i], 215, 218, 225, 255);
       float sw = t.w + 24.0f;
@@ -324,11 +326,11 @@ void ctx_draw(Uint32 now) {
     } }
 
   for (i = 0; i < nOps; i++) {
-    float by = y + CTX_DFLT + CTX_HEADER + (float)i * (CTX_LINE + CTX_GAP);
-    GfxRect r = { x + CTX_DFLT, by, CTX_W - CTX_DFLT * 2.0f, CTX_LINE };
+    float by = y + CTX_PAD + CTX_HEADER + (float)i * (CTX_LINE + CTX_GAP);
+    GfxRect r = { x + CTX_PAD, by, CTX_W - CTX_PAD * 2.0f, CTX_LINE };
     float f = focusAnim[i];
-    // Mesma linguagem das pilulas: o focado INVERTE (fundo claro, texto
-    // escuro), em vez de anel branco sobre preenchimento claro.
+    // The same language as the pills: the focused one INVERTS (light
+    // background, dark text), instead of a white ring over a light fill.
     float luma = anim_blend(0.176f, 0.961f, f);
     int color = i == focus ? 17 : 240;
     gfx_color(r, 14.0f / CTX_LINE, luma, luma, luma, a);
@@ -349,6 +351,6 @@ void ctx_draw(Uint32 now) {
                            : "↑ ↓ Navigate   OK Select   Back Close";
     TxtLine t = txt_line(TXT_CAPTION2, footer,
                            155, 159, 169, 255);
-    txt_draw_alpha(t, x + CTX_DFLT,
-                       y + height - CTX_DFLT - t.h, a * 0.86f); }
+    txt_draw_alpha(t, x + CTX_PAD,
+                       y + height - CTX_PAD - t.h, a * 0.86f); }
 }

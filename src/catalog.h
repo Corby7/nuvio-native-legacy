@@ -1,267 +1,269 @@
-// Catalogo de titulos vindo de um arquivo, no lugar das listas fixas no codigo.
+// A catalogue of titles coming from a file, in place of lists hard-coded in the
+// source.
 //
-// Existe porque testar layout com nomes inventados esconde problemas reais: os
-// titulos de verdade tem tamanhos muito diferentes ("CODA" contra "Assassinos
-// da Lua das Flores"), acentos, e sinopses que nao cabem em tres linhas. Cada
-// item tambem carrega o LOGO do titulo, que e o que o app da Apple desenha no
-// lugar do nome em texto.
+// It exists because testing a layout with made-up names hides real problems:
+// real titles have wildly different lengths ("CODA" against "Killers of the
+// Flower Moon"), accents, and synopses that do not fit in three lines. Each item
+// also carries the title's LOGO, which is what the Apple app draws in place of
+// the name in text.
 #ifndef NV_CATALOG_H
 #define NV_CATALOG_H
 
-// 40 titulos hoje (14 do historico do dono + 26 dos catalogos). A folga evita
-// o corte silencioso que ja aconteceu: com 32 os oito ultimos sumiam sem aviso.
-// Nao ha mais teto de catalogo: o vetor cresce conforme a rede entrega. Um
-// numero fixo aqui sempre foi arbitrario — comecou em 32, virou 48, 160, 260,
-// e a watchlist do dono continuava batendo no limite. O que limita de verdade
-// e o cache de TEXTURA, que tem teto proprio e so guarda o que esta na tela;
-// o item em si custa ~3,5 KB de texto.
+// 40 titles today (14 from the owner's history + 26 from the catalogues). The
+// slack avoids the silent truncation that already happened once: with 32 the
+// last eight disappeared without warning.
+// There is no catalogue ceiling any more: the array grows as the network
+// delivers. A fixed number here was always arbitrary — it started at 32, became
+// 48, 160, 260, and the owner's watchlist kept hitting the limit. What really
+// limits things is the TEXTURE cache, which has a ceiling of its own and only
+// keeps what is on screen; the item itself costs ~3.5 KB of text.
 //
-// CAT_MAX sobrevive so como teto de seguranca contra resposta absurda.
+// CAT_MAX survives only as a safety ceiling against an absurd response.
 #define CAT_MAX 2000
 
 typedef struct {
   char backdrop[512];
   char poster[512];
-  char logo[512];      // vazio quando o titulo nao tem logo
+  char logo[512];      // empty when the title has no logo
   char title[160];
-  char genre[160];    // "Programa de TV · Drama · Misterio"
-  char meta[96];       // "2022 · 3 temporadas"
+  char genre[160];    // "TV Show · Drama · Mystery"
+  char meta[96];       // "2022 · 3 seasons"
   char age_rating[8];
   char synopsis[900];
-  // Elenco real: nome, papel e a foto (quando o TMDB tem). Sem isto a secao
-  // "Elenco e equipe" fica com nomes inventados, e nomes inventados nao testam
-  // o layout — os de verdade tem tamanhos que quebram a coluna.
-  // `tmdb` e o id da PESSOA no TMDB, nao do titulo: e a chave para abrir a
-  // filmografia dela (/person/<id>?append_to_response=combined_credits), que e
-  // o que o web faz no `openCastDetail`. Sem ele o unico caminho seria procurar
-  // por nome, que erra em homonimo e em nome com acento.
+  // The real cast: name, role and the photo (when TMDB has one). Without this
+  // the "Cast and crew" section is filled with invented names, and invented
+  // names do not test the layout — real ones have lengths that break the column.
+  // `tmdb` is the PERSON's id on TMDB, not the title's: it is the key to opening
+  // their filmography (/person/<id>?append_to_response=combined_credits), which
+  // is what the web app does in `openCastDetail`. Without it the only route would
+  // be searching by name, which goes wrong on namesakes and on accented names.
   struct { char name[64]; char role[64]; char photo[512]; long tmdb; } cast[6];
   int nCast;
   char directing[128];
-  // Nota da critica em porcentagem e o logo do servico onde o titulo esta. Sao
-  // as duas coisas que a linha tecnica do app da Apple mostra alem do ano e da
-  // duracao — sem elas a linha fica com metade da informacao.
-  int  score;              // 0 = desconhecida
-  // Pais de producao, para a ultima linha de meta do detalhe (o web mostra
-  // 'United States of America' ali). Vem do /meta, nao do catalogo.
-  char pais[64];
+  // The critics' score as a percentage and the logo of the service the title is
+  // on. They are the two things the Apple app's technical line shows beyond the
+  // year and the duration — without them the line carries half the information.
+  int  score;              // 0 = unknown
+  // The production country, for the detail screen's last meta line (the web app
+  // shows 'United States of America' there). It comes from /meta, not from the
+  // catalogue.
+  char country[64];
   char providerLogo[512];
   char providerName[64];
-  // Onde assistir alem da assinatura: aluguel e compra na regiao BR do TMDB.
-  // Vazios = o servico nao oferece o titulo por esse meio aqui. O detalhe
-  // encolhe a secao de acordo — um card sem dado e pior que a ausencia dele.
+  // Where to watch beyond a subscription: rental and purchase in TMDB's BR
+  // region. Empty = the service does not offer the title that way here. The
+  // detail screen shrinks the section accordingly — a card with no data is worse
+  // than its absence.
   char rentLogo[512];
   char rentName[64];
   char compLogo[512];
   char compName[64];
-  // Identificador do titulo no IMDb ("tt11280740") e o tipo que os addons usam
-  // ("movie"/"series"). Vem de art/ids.txt, resolvido pelo Cinemeta — sem ele
-  // nao ha como perguntar fontes a addon nenhum.
-  // Quanto do titulo o dono ja assistiu, 0..100. Vem do app web (chave
-  // watchProgressItems), quarta coluna de extra.txt. 0 = nao comecou.
+  // The title's IMDb identifier ("tt11280740") and the type the addons use
+  // ("movie"/"series"). It comes from art/ids.txt, resolved by Cinemeta —
+  // without it there is no way to ask any addon for sources.
+  // How much of the title the owner has watched, 0..100. It comes from the web
+  // app (the watchProgressItems key), the fourth column of extra.txt. 0 = not started.
   int  progress;
-  // Legenda do card em "Continue Assistindo". Serie mostra "T1, E8 · 16 min";
-  // filme mostra so o tempo que falta. Temporada/episodio ficam em 0 no filme,
-  // e e isso que separa os dois casos no desenho.
+  // The card's caption in "Continue Watching". A series shows "S1, E8 · 16 min";
+  // a film shows only the time remaining. Season/episode stay at 0 on a film,
+  // and that is what separates the two cases while drawing.
   int  season, episode;
   int  remainingMin;
-  char nameEpisode[120]; // titulo do episodio em andamento, nunca nome do arquivo
-  // Temporadas que a serie tem, na ordem. Sai do campo `videos` do Cinemeta,
-  // buscado quando o titulo abre. 0 = ainda nao se sabe (ou e filme), e as
-  // abas caem no padrao de 3 que existia fixo.
+  char nameEpisode[120]; // the title of the episode in progress, never the file name
+  // The seasons the series has, in order. It comes out of Cinemeta's `videos`
+  // field, fetched when the title opens. 0 = not known yet (or it is a film), and
+  // the tabs fall back to the fixed 3 that used to be there.
   int  seasons[12];
   int  nSeasons;
-  // Vem do Trakt: 1 se esta na watchlist do dono, 1 se esta na colecao dele.
-  // Ficam no item e nao numa tabela a parte da biblioteca porque o catalogo e
-  // reconstruido da rede — uma tabela por indice apontaria para outro titulo
-  // depois da primeira atualizacao.
+  // From Trakt: 1 if it is on the owner's watchlist, 1 if it is in their
+  // collection. They live on the item and not in a separate library table
+  // because the catalogue is rebuilt from the network — a per-index table would
+  // point at a different title after the first refresh.
   int  inList, inCollection;
   char imdb[16];
   char kind[8];
-  // Autoria do feed social, separada dos metadados do filme.
+  // Authorship of the social feed, kept separate from the film's metadata.
   char socialName[96], socialSlug[128], socialAvatar[768], socialAction[64];
-  // Id do titulo no TMDB, quando a busca por imdb_id ja o resolveu (ver
-  // fotosDoElenco em descoberta.c). Era descartado; e por ele que se chega a
-  // COLECAO do filme, que o TMDB so expoe por id proprio.
+  // The title's id on TMDB, when the search by imdb_id has already resolved it
+  // (see castPhotos in discover.c). It used to be discarded; it is the route to
+  // the film's COLLECTION, which TMDB only exposes by its own id.
   long tmdb;
 } CatItem;
 
-// Um episodio de serie. Vem de art/episodios.txt, gerado a partir do campo
-// `videos` do Cinemeta (/meta/series/<id>.json) — os mesmos episodios que os
-// addons indexam, entao o que a tela lista e o que da para pedir fonte.
+// One episode of a series. It comes from art/episodes.txt, generated from
+// Cinemeta's `videos` field (/meta/series/<id>.json) — the same episodes the
+// addons index, so what the screen lists is what a source can be asked for.
 typedef struct {
   int  season, episode;
   char name[120];
-  char duration[16];    // "38 min"; vazio quando o Cinemeta nao informa
-  // Data por EXTENSO, como o web: "27 de janeiro de 2023". Ele usa
-  // toLocaleDateString com {month:"long", day:"numeric", year:"numeric"}
-  // (metaDetailsScreen.js:1387) — "27/01/2023" era invencao do port. 16 bytes
-  // nao cabiam: "15 de novembro de 2024" tem 22.
+  char duration[16];    // "38 min"; empty when Cinemeta does not say
+  // The date SPELLED OUT, like the web app: "27 January 2023". It uses
+  // toLocaleDateString with {month:"long", day:"numeric", year:"numeric"}
+  // (metaDetailsScreen.js:1387) — "27/01/2023" was the port's invention. 16 bytes
+  // did not fit: "15 November 2024" and its longer siblings overflow.
   //
-  // Quem desenha encurta para so o ano quando `showFullReleaseDate` esta
-  // desligado (ajustes_data_completa()); o ano sao os 4 ultimos caracteres.
+  // Whoever draws shortens it to the year alone when `showFullReleaseDate` is off
+  // (settings_date_full()); the year is the last 4 characters.
   char date[40];
   char synopsis[420];
-  char thumb[512];     // still do episodio; vazio cai na arte do titulo
+  char thumb[512];     // the episode's still; empty falls back to the title's art
 } CatEp;
 
-// Le <dir>/catalogo.txt. Devolve quantos itens carregou (0 = nenhum, e quem
-// chama deve seguir com o que tiver).
+// Reads <dir>/catalog.txt. Returns how many items it loaded (0 = none, and the
+// caller should carry on with whatever it has).
 int  cat_load(const char *dirArt);
 
-// --- CACHE EM DISCO DO CATALOGO MONTADO PELA REDE ----------------------------
+// --- ON-DISK CACHE OF THE CATALOGUE ASSEMBLED FROM THE NETWORK ---------------
 //
-// Medido na TV: 14,5 s entre abrir o app e o catalogo da rede estar completo, e
-// TODA abertura refazia os ~30 pedidos. O catalogo do PACOTE (catalogo.txt)
-// cobria esse vao com 40 titulos estaticos que nao sao os do dono.
+// Measured on the TV: 14.5 s between opening the app and the network catalogue
+// being complete, and EVERY opening redid the ~30 requests. The PACKAGE's
+// catalogue (catalog.txt) covered that gap with 40 static titles that are not
+// the owner's.
 //
-// Aqui o que a descoberta montou e gravado como esta na memoria e relido na
-// proxima abertura, antes de qualquer rede. A rede continua rodando por cima e
-// substitui quando chega — o cache nao e a verdade, e o que mostrar enquanto a
-// verdade nao chega.
+// Here what discovery assembled is written out as it stands in memory and read
+// back on the next opening, before any network. The network still runs on top
+// and replaces it when it arrives — the cache is not the truth, it is what to
+// show while the truth has not arrived.
 //
-// Formato BINARIO e nao texto: CatItem e POD (so vetores de char e inteiros,
-// nenhum ponteiro), entao gravar em bloco e correto e dispensa um serializador
-// que teria de ser mantido em sincronia com a struct a cada campo novo. O
-// cabecalho guarda `sizeof(CatItem)` e uma versao: se a struct mudar, o arquivo
-// e RECUSADO em vez de lido torto. Ler lixo aqui seria pior que nao ter cache.
+// A BINARY format and not text: CatItem is POD (only char arrays and integers,
+// no pointers), so writing it as a block is correct and saves a serialiser that
+// would have to be kept in sync with the struct on every new field. The header
+// stores `sizeof(CatItem)` and a version: if the struct changes, the file is
+// REFUSED rather than read crooked. Reading rubbish here would be worse than
+// having no cache.
 int  cat_write_cache(const char *dirArt);
-// Devolve 1 se carregou. Chamar DEPOIS de cat_carregar: ele substitui o
-// catalogo do pacote quando o cache existe e e valido.
+// Returns 1 if it loaded. Call it AFTER cat_load: it replaces the package's
+// catalogue when the cache exists and is valid.
 int  cat_read_cache(const char *dirArt);
-// 1 enquanto o que esta na tela veio do CACHE, e nao da rede desta sessao.
+// 1 while what is on screen came from the CACHE, and not from this session's
+// network.
 //
-// A descoberta publica cada fileira assim que ela chega, o que e certo numa
-// tela vazia e ERRADO sobre o cache: a home iria de 16 fileiras para 1 e
-// voltaria a crescer na frente do dono. Com o cache no ar, ela espera o
-// catalogo completo. Sem cache, publica em partes como antes.
+// Discovery publishes each row as soon as it arrives, which is right on an empty
+// screen and WRONG over the cache: the home would go from 16 rows to 1 and grow
+// back again in front of the owner. With the cache up it waits for the complete
+// catalogue. With no cache, it publishes in pieces as before.
 int  cat_do_cache(void);
 void cat_cache_replaced(void);
 int  cat_n(void);
 const CatItem *cat_item(int i);
 
-// Indice do titulo com este IMDb id, ou -1. O id do catalogo pode trazer
-// episodio ("tt123:2:1"); a comparacao para no primeiro ':' dos dois lados.
+// The index of the title with this IMDb id, or -1. The catalogue's id may carry
+// an episode ("tt123:2:1"); the comparison stops at the first ':' on both sides.
 //
-// Existe para abrir um titulo a partir de um id que veio de FORA do catalogo —
-// a filmografia de um ator e a aba "Mais como este" devolvem tt..., e sem esta
-// busca nao haveria como saber se aquele titulo e um dos que ja temos meta.
-// Onde progresso.txt e gravado. Passou a ser necessario com o login: o
-// progresso e dado DO USUARIO e nao pode morar na pasta do pacote, que e a
-// mesma para todo mundo que usar o aparelho. Chamar depois de cat_carregar.
+// It exists to open a title from an id that came from OUTSIDE the catalogue —
+// an actor's filmography and the "More like this" tab return tt..., and without
+// this search there would be no way to know whether that title is one we already
+// have metadata for.
+// Where progress.txt is written. It became necessary with login: progress is the
+// USER's data and cannot live in the package folder, which is the same for
+// everyone using the device. Call it after cat_load.
 void cat_dir_writing(const char *dir);
 
 int cat_index_by_imdb(const char *imdb);
 
-// Acrescenta um titulo ao FIM e devolve o indice, ou -1. Para o titulo que veio
-// de fora do catalogo (filmografia de ator, "Mais como este"). Ver a nota sobre
-// a troca de bloco em catalogo.c.
+// Appends a title at the END and returns the index, or -1. For a title that came
+// from outside the catalogue (an actor's filmography, "More like this"). See the
+// note about the block swap in catalog.c.
 int cat_append(const CatItem *item);
 
-// Acrescenta `qtd` itens numa UNICA troca de bloco e escreve os indices em
-// `saidaIdx` (pode ser NULL). Devolve quantos entraram.
+// Appends `count` items in a SINGLE block swap and writes the indices into
+// `outputIdx` (which may be NULL). Returns how many went in.
 //
-// Use este, e nao cat_acrescentar em laco, sempre que houver mais de um: aquele
-// copia o catalogo inteiro por chamada, e a busca chegava a mover dezenas de MB
-// no fio de desenho a cada tecla.
-int cat_append_lote(const CatItem *v, int count, int *outputIdx);
+// Use this, and not cat_append in a loop, whenever there is more than one: that
+// one copies the whole catalogue per call, and the search was moving tens of MB
+// on the drawing thread on every keypress.
+int cat_append_batch(const CatItem *v, int count, int *outputIdx);
 
-// Atualiza o espelho local de "esta na watchlist". A verdade e o Trakt, mas
-// esperar o proximo ciclo de descoberta para o botao mudar de cara faria o
-// toque parecer sem efeito.
+// Updates the local mirror of "is on the watchlist". The truth is Trakt, but
+// waiting for the next discovery cycle for the button to change would make the
+// press look as though it had no effect.
 void cat_set_in_list(int i, int inList);
 
-// Grava onde o dono parou NESTE app. Ate agora o progresso so era LIDO (do app
-// web); sem isto, assistir pelo app nativo nao mudava nada na tela.
+// Records where the owner stopped IN THIS APP. Until now progress was only READ
+// (from the web app); without this, watching in the native app changed nothing
+// on screen.
 //
-// Vai para <arte>/progresso.txt e nao para o SQLite do app web: aquele arquivo
-// pertence a outro processo, que o mantem aberto e em cache — escrever la de
-// fora corromperia o estado dele. Unir as duas fontes e trabalho a parte; por
-// enquanto o que este app grava ganha do que veio de la, que e o certo, porque
-// e mais recente.
+// It goes to <art>/progress.txt and not to the web app's SQLite: that file
+// belongs to another process, which keeps it open and cached — writing to it
+// from outside would corrupt its state. Merging the two sources is a separate
+// piece of work; for now what this app writes beats what came from there, which
+// is right, because it is more recent.
 void cat_save_progress(int index_, double posSeg, double durationSeg);
 void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int season, int episode);
 
-// Episodios do titulo `indiceItem`. Filme devolve 0 — e o que a tela usa para
-// decidir se mostra a secao de episodios.
-// Substitui o catalogo inteiro pelo que veio da rede. Os caminhos de arte
-// passam a ser URLs — o tex_cache baixa e guarda em disco sozinho.
+// Episodes of title `indexItem`. A film returns 0 — which is what the screen uses
+// to decide whether to show the episodes section.
+// Replaces the whole catalogue with what came from the network. The art paths
+// become URLs — tex_cache downloads and stores them on disk by itself.
 void cat_set(const CatItem *list, int n);
 
-// --- FILEIRAS DA HOME --------------------------------------------------------
-// O app web nao tem fileira fixa. Cada fileira e UM CATALOGO de UM addon, e a
-// lista sai de `homeCatalogPrefs` (por perfil), aplicada em
+// --- HOME ROWS ---------------------------------------------------------------
+// The web app has no fixed row. Each row is ONE CATALOGUE of ONE addon, and the
+// list comes from `homeCatalogPrefs` (per profile), applied in
 // `sortAndFilterRowsInternal` (js/ui/screens/home/homeScreen.js:9856):
 //
-//   1. junta catalogos e colecoes num mapa indexado por `homeCatalogKey`
-//   2. `ensureOrderKeysWithPrefs` devolve a ordem salva com as chaves NOVAS
-//      acrescentadas no FIM — catalogo que apareceu depois entra por ultimo
-//   3. tira as desativadas, conferindo DUAS chaves: `homeCatalogDisableKey`
-//      (<baseUrl>_<tipo>_<catalogoId>_<nome>) e `homeCatalogKey`
-//   4. aplica `customTitles[homeCatalogKey]` sobre o nome do catalogo
-//   5. colecoes com `pinToTop` vao na frente e nunca sao cortadas
-//   6. corta o total em `getHomeRowLimit()`
+//   1. it merges catalogues and collections into a map indexed by `homeCatalogKey`
+//   2. `ensureOrderKeysWithPrefs` returns the saved order with the NEW keys
+//      appended at the END — a catalogue that appeared later goes last
+//   3. it drops the disabled ones, checking TWO keys: `homeCatalogDisableKey`
+//      (<baseUrl>_<type>_<catalogId>_<name>) and `homeCatalogKey`
+//   4. it applies `customTitles[homeCatalogKey]` over the catalogue's name
+//   5. collections with `pinToTop` go first and are never cut
+//   6. it truncates the total at `getHomeRowLimit()`
 //
 // The web uses 16 here (`HOME_MAX_ROWS_LEGACY_TV` in homeConstants.js, the
 // branch `isLegacyTvRuntime()` picks; the 40 of `HOME_MAX_ROWS_DEFAULT` is for
-// the desktop browser). THIS app uses 24, and the difference is deliberate.
-//
-// The 16 came from a 2019 TV. The target now is a C3 (webOS 23), MEASURED with
-// the catalogue full at 60.0 fps / 0 janks and 85 MB of RSS against 832 MB free.
-// And the owner's collections compete for this same budget with the catalogues:
-// at 16, a collection placed mid-list fell off the screen.
-//
-// If jank ever comes back, this is the number to change — and the measurement
-// belongs in TOOLS.md, not in the guess of whoever changes it.
 #define CAT_FILTER_MAX 24
 
 typedef struct {
-  char key[192];   // homeCatalogKey: <addonId>_<tipo>_<catalogoId>
-  char title[96];   // ja formatado, com o sufixo de tipo
+  char key[192];   // homeCatalogKey: <addonId>_<type>_<catalogId>
+  char title[96];   // already formatted, with the type suffix
   char kind[8];      // "movie" | "series"
-  // DE ONDE A FILEIRA VEIO. A chave acima identifica o catalogo mas nao serve
-  // para CHAMAR de novo: ela carrega o id do ADDON, nao o endereco dele.
-  // Sem estes dois nao ha como pedir a continuacao da lista, que e o que a tela
-  // "Ver tudo" faz — ela chama o mesmo catalogo com `skip`.
-  // 600 e nao 300: o Xperience embute um JWT no CAMINHO e a base dele tem 367
-  // caracteres. Com 300 ela era truncada em silencio, a URL montada aqui virava
-  // outra coisa e o catalogo respondia sem `metas` — a tela "Ver tudo" abria
-  // vazia sem nenhum erro. addons.c ja usa 600 pelo mesmo motivo.
+  // WHERE THE ROW CAME FROM. The key above identifies the catalogue but is no use
+  // for CALLING it again: it carries the ADDON's id, not its address.
+  // Without these two there is no way to ask for the continuation of the list,
+  // which is what the "See all" screen does — it calls the same catalogue with `skip`.
+  // 600 and not 300: Xperience embeds a JWT in the PATH and its base is 367
+  // characters long. At 300 it was silently truncated, the URL assembled here
+  // became something else and the catalogue answered with no `metas` — the "See
+  // all" screen opened empty with no error at all. addons.c already uses 600 for
+  // the same reason.
   char base[600];
   char catId[96];
-  // Janela no vetor de itens. As fileiras NAO tem vetor proprio: apontam para
-  // o catalogo unico, que e o que a biblioteca e a busca varrem. Duplicar os
-  // itens por fileira custaria ~3,5 KB por titulo repetido.
+  // A window into the item array. The rows have NO array of their own: they point
+  // into the single catalogue, which is what the library and the search sweep.
+  // Duplicating the items per row would cost ~3.5 KB per repeated title.
   int  start, n;
 } CatRow;
 
 int cat_n_rows(void);
-const CatRow *cat_row(int r);   // NULL fora da faixa
+const CatRow *cat_row(int r);   // NULL outside the range
 
-// Troca itens E fileiras de uma vez. Tem de ser uma chamada so: com duas, o fio
-// do desenho pega um quadro com as fileiras novas apontando para os itens
-// velhos, e a janela (ini,n) cai fora do vetor.
+// Swaps items AND rows at once. It has to be a single call: with two, the
+// drawing thread catches a frame with the new rows pointing at the old items,
+// and the (start,n) window falls outside the array.
 void cat_set_all(const CatItem *list, int count,
                       const CatRow *filters, int nFilters);
 
 
-// Substitui os episodios de UM titulo. Chamado quando o detalhe abre.
+// Replaces the episodes of ONE title. Called when the detail screen opens.
 void cat_set_episodes(int indexItem, const CatEp *list, int n);
 
-// Substitui UM item, preservando o resto. Usado quando o detalhe abre e traz
-// elenco, direcao e temporadas que o catalogo da fileira nao tinha.
+// Replaces ONE item, preserving the rest. Used when the detail screen opens and
+// brings cast, directing and seasons the row's catalogue did not have.
 void cat_update_item(int index_, const CatItem *new);
 
-// Titulos parecidos com o de `indice`: mesmo tipo (filme/serie) e pelo menos um
-// genero em comum, os de nota mais alta primeiro. Devolve quantos escreveu.
+// Titles similar to the one at `index`: the same type (film/series) and at least
+// one genre in common, highest-scoring first. Returns how many it wrote.
 //
-// Nao ha endpoint de "similares" no protocolo dos addons — o Cinemeta nao tem e
-// o Xperience so oferece "More Like X" para os titulos recentes do dono, nao
-// para um qualquer. Cruzar genero dentro do catalogo que ja esta carregado
-// responde na hora, sem rede, e acerta o suficiente para a fileira valer.
+// There is no "similar" endpoint in the addon protocol — Cinemeta has none and
+// Xperience only offers "More Like X" for the owner's recent titles, not for an
+// arbitrary one. Crossing genres inside the catalogue that is already loaded
+// answers instantly, with no network, and is right often enough for the row to
+// be worth having.
 int           cat_similar(int index_, int *output, int max);
 
 int           cat_n_episodes(int indexItem);
-const CatEp  *cat_episode(int indexItem, int i);   // indice circular; NULL se o catalogo esta vazio
+const CatEp  *cat_episode(int indexItem, int i);   // circular index; NULL if the catalogue is empty
 
 #endif

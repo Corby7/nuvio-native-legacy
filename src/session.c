@@ -10,19 +10,19 @@
 #include <pthread.h>
 
 #define FILE_SESSION "session.txt"
-// MEDIDO: a propria resposta do start traz `poll_interval_seconds` (3 no
-// servidor de hoje). Este valor e so o padrao de quando ela nao vier — o
-// intervalo real vem do servidor, que e quem sabe o custo que ele aguenta.
+// MEASURED: the start response itself carries `poll_interval_seconds` (3 on
+// today's server). This value is only the default for when it does not arrive —
+// the real interval comes from the server, which knows the cost it can bear.
 #define POLL_MS      3000
-// Depois disto o codigo do servidor expira de qualquer jeito; continuar
-// perguntando so gasta bateria do aparelho e mostra um codigo morto na tela.
+// After this the server's code expires anyway; carrying on asking only drains
+// the device's battery and shows a dead code on screen.
 #define LOGIN_LIMIT_MS 600000
 
 static char access_[3000];
 static char refresh[3000];
 static char sub[80];
-static int  anon;              // 1 quando o token e da sessao anonima
-static long expiresIn;             // `exp` do JWT, em segundos
+static int  anon;              // 1 when the token belongs to the anonymous session
+static long expiresIn;             // the JWT's `exp`, in seconds
 
 static SessState state = SESS_LOGGEDOUT;
 static char code[64];
@@ -34,15 +34,15 @@ static unsigned pollMs = POLL_MS;
 
 static pthread_t thread;
 static int threadAlive;
-static int stepReady;           // o fio terminou; a proxima etapa pode ir
+static int stepReady;           // the thread finished; the next step may go
 static unsigned nextPoll;
 static unsigned loginBeganMs;
 
 // ---------------------------------------------------------------- JWT
 
-// base64url -> bytes. So o necessario para ler o payload do JWT: nem valida
-// assinatura nem tenta ser geral. Um JWT invalido aqui vira "sem sub e sem
-// exp", que os chamadores ja tratam.
+// base64url -> bytes. Only what is needed to read the JWT payload: it neither
+// validates the signature nor tries to be general. An invalid JWT here becomes
+// "no sub and no exp", which the callers already handle.
 static int b64url(const char *s, size_t n, char *dst, size_t size) {
   static const char *tab =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -64,9 +64,9 @@ static int b64url(const char *s, size_t n, char *dst, size_t size) {
   return 1;
 }
 
-// Le `sub` e `exp` do payload. Sem isto o app nao sabe de quem e a sessao nem
-// quando ela vence, e so descobriria pelo 401 — depois de a operacao ja ter
-// falhado uma vez.
+// Reads `sub` and `exp` from the payload. Without this the app does not know
+// whose session it is nor when it expires, and would only find out through a
+// 401 — after the operation had already failed once.
 static void readJwt(const char *token) {
   const char *p1, *p2;
   char payload[2200];
@@ -83,15 +83,15 @@ static void readJwt(const char *token) {
     expiresIn = (long)js_num(payload, end, "exp", 0); }
 }
 
-// Folga de 30s, igual a do web: um token que vence durante a requisicao volta
-// como 401 e custa a viagem inteira.
+// A 30s margin, the same as the web app's: a token that expires during the
+// request comes back as a 401 and costs the whole round trip.
 static int expired(void) {
   if (!access_[0]) return 1;
-  if (!expiresIn) return 0;   // sem exp legivel, so o servidor pode dizer
+  if (!expiresIn) return 0;   // with no readable exp, only the server can say
   return expiresIn <= (long)time(NULL) + 30;
 }
 
-// ---------------------------------------------------------------- disco
+// ---------------------------------------------------------------- disk
 
 static void writeSession(void) {
   char buf[6400];
@@ -107,10 +107,10 @@ static void clear(void) {
 
 // ---------------------------------------------------------------- respostas
 
-// Guarda os tokens de uma resposta de autenticacao. Serve para os tres
-// formatos que aparecem: /auth/v1/signup, /auth/v1/token e a funcao de troca —
-// todos trazem access_token/refresh_token, uns na raiz, outros dentro de
-// "session".
+// Stores the tokens from an authentication response. It serves the three
+// formats that turn up: /auth/v1/signup, /auth/v1/token and the exchange
+// function — all of them carry access_token/refresh_token, some at the root,
+// others inside "session".
 static int storeTokens(const char *body, int isAnon) {
   const char *end, *sess;
   char a[3000], r[3000];
@@ -140,14 +140,14 @@ static int storeTokens(const char *body, int isAnon) {
 static int sessionAnon(void) {
   char *resp;
   int st = 0;
-  // Mesmo corpo do web: o `data` marca de onde veio a sessao, e o servidor usa
-  // isso nos relatorios dele.
+  // The same body as the web app's: `data` marks where the session came from,
+  // and the server uses that in its reports.
   resp = cloud_post("/auth/v1/signup",
                     "{\"data\":{\"tv_client\":\"webos\"}}", NULL, &st);
   if (resp && st >= 200 && st < 300 && storeTokens(resp, 1)) { free(resp); return 1; }
   free(resp);
-  // O signup anonimo pode estar desligado no projeto; ai o caminho e o grant
-  // dedicado. O web tenta os dois na mesma ordem.
+  // Anonymous signup may be switched off in the project; then the path is the
+  // dedicated grant. The web app tries both in the same order.
   resp = cloud_post("/auth/v1/token?grant_type=anonymous", "{}", NULL, &st);
   if (resp && st >= 200 && st < 300 && storeTokens(resp, 1)) { free(resp); return 1; }
   if (resp) {
@@ -176,8 +176,8 @@ static int refreshToken(void) {
   ok = (resp && st >= 200 && st < 300 && storeTokens(resp, anon));
   free(resp);
   if (!ok) {
-    // Renovacao recusada e o fim da sessao, nao um erro transitorio: insistir
-    // com um refresh token invalido devolve 400 para sempre.
+    // A refused renewal is the end of the session, not a transient error:
+    // insisting with an invalid refresh token returns 400 forever.
     printf("[session] refresh refused (HTTP %d): signing out\n", st);
     clear();
     data_erase(FILE_SESSION);
@@ -238,7 +238,7 @@ char *session_func(const char *name, const char *bodyJson, int *status) {
 
 // ---------------------------------------------------------------- login
 
-// Passo 1+2, no fio: sessao anonima e pedido do codigo.
+// Steps 1+2, on the thread: anonymous session and code request.
 static void *threadRequest(void *u) {
   Jsw w;
   char *resp;
@@ -252,9 +252,9 @@ static void *threadRequest(void *u) {
     if (!sessionAnon()) { state = SESS_ERROR; stepReady = 1; return NULL; }
   }
 
-  // MEDIDO contra o servidor: `p_redirect_base_url` vazia devolve 400 com
-  // "Invalid TV login redirect base URL". Nao ha login sem essa configuracao, e
-  // tentar assim mesmo so produziria um erro que a pessoa nao pode resolver.
+  // MEASURED against the server: an empty `p_redirect_base_url` returns 400
+  // with "Invalid TV login redirect base URL". There is no login without that
+  // configuration, and trying anyway would only produce an unfixable error.
   if (!cloud_base_login()[0]) {
     snprintf(error, sizeof error, "package has no login address configured");
     state = SESS_ERROR;
@@ -262,8 +262,8 @@ static void *threadRequest(void *u) {
     return NULL;
   }
 
-  // MEDIDO: o nonce TEM de ser um UUID. Com um identificador proprio, mesmo
-  // unico, o servidor devolve 400 "Invalid device nonce".
+  // MEASURED: the nonce MUST be a UUID. With an identifier of our own, even a
+  // unique one, the server returns 400 "Invalid device nonce".
   data_uuid(nonce, sizeof nonce);
 
   jsw_start(&w);
@@ -272,10 +272,10 @@ static void *threadRequest(void *u) {
   jsw_cs(&w, "p_redirect_base_url", cloud_base_login());
   jsw_cs(&w, "p_device_name", "LG webOS (Nuvio native)");
   jsw_obj_end(&w);
-  resp = cloud_rpc_com("start_tv_login_session", jsw_text_final(&w), access_, &st);
+  resp = cloud_rpc("start_tv_login_session", jsw_text_final(&w), access_, &st);
 
-  // Servidor antigo recusa o p_device_name; o web repete sem ele. Sem esta
-  // segunda tentativa o login simplesmente nao existe nesses projetos.
+  // An older server refuses p_device_name; the web app repeats without it.
+  // Without this second attempt, login simply does not exist on those projects.
   if (resp && cloud_error_missing(resp)) {
     free(resp);
     jsw_free(&w);
@@ -284,7 +284,7 @@ static void *threadRequest(void *u) {
     jsw_cs(&w, "p_device_nonce", nonce);
     jsw_cs(&w, "p_redirect_base_url", cloud_base_login());
     jsw_obj_end(&w);
-    resp = cloud_rpc_com("start_tv_login_session", jsw_text_final(&w), access_, &st);
+    resp = cloud_rpc("start_tv_login_session", jsw_text_final(&w), access_, &st);
   }
   jsw_free(&w);
 
@@ -292,21 +292,21 @@ static void *threadRequest(void *u) {
     const char *end = resp + strlen(resp);
     double interval;
     js_text(resp, end, "code", code, sizeof code);
-    // MEDIDO: a resposta ja traz a URL COMPLETA, com o codigo na query. Montar
-    // "base + ?code=" a mao daria o mesmo resultado hoje e quebraria no dia em
-    // que o servidor mudar o formato — usar o que ele mandou e de graca.
+    // MEASURED: the response already carries the FULL URL, with the code in the
+    // query. Building "base + ?code=" by hand would give the same result today
+    // and break the day the server changes format — using what it sent is free.
     js_text(resp, end, "web_url", urlLogin, sizeof urlLogin);
     interval = js_num(resp, end, "poll_interval_seconds", 0);
     if (interval >= 1.0 && interval <= 60.0) pollMs = (unsigned)(interval * 1000.0);
   }
   if (!code[0]) {
-    // O corpo do erro do PostgREST tem a mensagem util ("Invalid device nonce",
-    // "Invalid TV login redirect base URL"); jogar fora e ficar so com o numero
-    // do HTTP transformaria um defeito de configuracao em mistério.
+    // The PostgREST error body carries the useful message ("Invalid device
+    // nonce", "Invalid TV login redirect base URL"); throwing it away and
+    // keeping only the HTTP number would turn a configuration fault into a mystery.
     char msg[160];
     msg[0] = 0;
     if (resp) js_text(resp, resp + strlen(resp), "message", msg, sizeof msg);
-    if (msg[0]) snprintf(error, sizeof error, "o servidor recusou: %s", msg);
+    if (msg[0]) snprintf(error, sizeof error, "the server refused: %s", msg);
     else        snprintf(error, sizeof error, "could not request the code (HTTP %d)", st);
     state = SESS_ERROR;
   } else {
@@ -319,7 +319,7 @@ static void *threadRequest(void *u) {
   return NULL;
 }
 
-// Passo 3: pergunta se ja autorizaram; quando sim, troca pelo token.
+// Step 3: ask whether it has been authorised yet; when it has, exchange it for the token.
 static void *threadPoll(void *u) {
   Jsw w;
   char *resp;
@@ -332,7 +332,7 @@ static void *threadPoll(void *u) {
   jsw_cs(&w, "p_code", code);
   jsw_cs(&w, "p_device_nonce", nonce);
   jsw_obj_end(&w);
-  resp = cloud_rpc_com("poll_tv_login_session", jsw_text_final(&w), access_, &st);
+  resp = cloud_rpc("poll_tv_login_session", jsw_text_final(&w), access_, &st);
   jsw_free(&w);
 
   status[0] = 0;
@@ -340,10 +340,10 @@ static void *threadPoll(void *u) {
     js_text(resp, resp + strlen(resp), "status", status, sizeof status);
   free(resp);
 
-  // "approved"/"authorized"/"ready": o servidor nao publica a lista, entao
-  // qualquer coisa que NAO seja pendente/expirado tenta a troca. Uma troca
-  // recusada nao custa nada; um estado desconhecido tratado como pendente
-  // deixaria o usuario preso numa tela que ja podia ter passado.
+  // "approved"/"authorized"/"ready": the server does not publish the list, so
+  // anything that is NOT pending/expired attempts the exchange. A refused
+  // exchange costs nothing; an unknown state treated as pending would leave the
+  // user stuck on a screen that could already have moved on.
   if (status[0] && strcmp(status, "pending") && strcmp(status, "expired") &&
       strcmp(status, "cancelled")) {
     state = SESS_SWITCHING;
@@ -396,9 +396,9 @@ void session_start(void) {
   anon = (l3 && atoi(l3) == 1);
   free(buf);
   readJwt(access_);
-  // Sessao anonima gravada NAO conta como conta: ela existe so como degrau para
-  // pedir o codigo, e tratar isso como "logado" faria o app pular a tela de
-  // login e depois falhar em todo sync com 401 sem explicar nada.
+  // A stored anonymous session does NOT count as an account: it exists only as
+  // a stepping stone to ask for the code, and treating it as "signed in" would
+  // make the app skip login and then fail every sync with a bare 401.
   if (access_[0] && !anon) {
     state = SESS_LOGGEDIN;
     printf("[session] session restored (%s)\n", sub[0] ? sub : "no sub");
@@ -406,10 +406,10 @@ void session_start(void) {
 }
 
 SessState   session_state(void)   { return state; }
-// Ter conta e uma questao de TOKEN, nao do estado da tela: se a pessoa abre a
-// tela de login estando logada e a tentativa falha, o estado vira SES_ERRO mas
-// a sessao anterior continua boa. Amarrar isto ao estado deslogaria alguem por
-// causa de um erro que nao tocou na sessao dela.
+// Having an account is a matter of the TOKEN, not of the screen's state: if the
+// person opens the login screen while signed in and the attempt fails, the
+// state becomes SESS_ERROR but the previous session is still good. Tying this
+// to the state would sign someone out over an error that never touched their session.
 int         session_loggedin(void)   { return access_[0] != 0 && !anon; }
 const char *session_code(void)   { return code; }
 const char *session_url_login(void){ return urlLogin; }

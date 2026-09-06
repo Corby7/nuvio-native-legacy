@@ -1,9 +1,10 @@
-// Tela de detalhe do titulo.
+// The title's detail screen.
 //
-// A transicao e o ponto: no Apple TV o card NAO some para dar lugar a uma tela
-// nova — ele cresce ate virar o hero do detalhe, e o resto entra depois. Por
-// isso detail_abrir recebe o retangulo de origem real do card na tela, e nao
-// apenas o titulo: e esse rect que da continuidade ao movimento.
+// The transition is the point: on the Apple TV the card does NOT disappear to make
+// way for a new screen — it grows until it becomes the detail's hero, and the rest
+// comes in afterwards. That is why detail_open takes the card's real source
+// rectangle on screen, and not just the title: it is that rect that gives the
+// movement continuity.
 #ifndef NV_DETAIL_H
 #define NV_DETAIL_H
 #include <SDL2/SDL.h>
@@ -11,310 +12,317 @@
 
 void detail_open(const HomeItem *item);
 int  detail_is_open(void);
-// 0..1 de quanto o detalhe tomou a tela; a home usa para descer as fileiras.
-float detail_progress(void);        // 1 enquanto a tela existe, inclusive saindo
-// 1 quando o cartao ja cobre a tela inteira e desenhar a home por baixo e
-// trabalho jogado fora. Medido: a home custa o hero em tela cheia mais ~20
-// cards, e sem este corte a pagina de detalhe rodava a 20fps.
+// 0..1 of how much the detail has taken over the screen; the home uses it to push
+// the rows down.
+float detail_progress(void);        // 1 while the screen exists, exiting included
+// 1 when the card already covers the whole screen and drawing the home underneath
+// is work thrown away. Measured: the home costs the full-screen hero plus ~20
+// cards, and without this cut the detail page ran at 20fps.
 int  detail_covers_screen(void);
-// 1 quando o cartao ja parou no lugar e nao esta esticado: nesse estado a home
-// atras so aparece pela moldura.
+// 1 when the card has settled in place and is not stretched: in that state the
+// home behind it only shows through the frame.
 int  detail_settled(void);
 
-// Qual titulo do catalogo esta em cena, e os pedidos que a tela nao resolve
-// sozinha: reproduzir e marcar na lista. O detalhe nao chama o player nem a
-// biblioteca direto — quem conhece as outras telas e o roteador.
+// Which catalogue title is on stage, and the requests the screen does not resolve
+// on its own: play and mark on the list. The detail does not call the player or the
+// library directly — what knows the other screens is the router.
 int  detail_index(void);
-// Temporada e episodio em foco (1 = ha episodio; 0 = titulo sem episodios).
+// The season and episode in focus (1 = there is an episode; 0 = a title with none).
 int  detail_ep_focus(int *season, int *episode);
-int  detail_requested_play(void);   // consome o pedido
+int  detail_requested_play(void);   // consumes the request
 
-// Indice do titulo que a tela pediu para ABRIR no lugar do atual, ou -1.
-// Consome o pedido. Nasce de dois lugares: um credito na filmografia de um ator
-// e um item da aba "Mais como este" — os dois trazem um IMDb id, e quem sabe
-// traduzir isso em indice e o catalogo. Quem TROCA de titulo e o roteador em
-// app.c, nao esta tela: reabrir a si mesma no meio do proprio desenho e o tipo
-// de coisa que quebra em silencio.
+// The index of the title the screen asked to OPEN in place of the current one, or
+// -1. It consumes the request. It comes from two places: a credit in an actor's
+// filmography and an item from the "More like this" tab — both carry an IMDb id,
+// and what knows how to turn that into an index is the catalogue. What SWAPS the
+// title is the router in app.c, not this screen: reopening itself in the middle of
+// its own drawing is the kind of thing that breaks silently.
 int  detail_requested_open(void);
 
-// O botao do olho: marcar o titulo como ASSISTIDO. Nao e o mesmo que
-// detail_pediu_marcar, que e "adicionar a lista" — o olho caia no mesmo `else`
-// do botao de fontes e nunca marcou nada.
+// The eye button: mark the title as WATCHED. It is not the same as
+// detail_requested_mark, which is "add to the list" — the eye fell into the same
+// `else` as the sources button and never marked anything.
 int  detail_requested_watched(void);
-int  detail_requested_mark(void);       // botao "+"
-int  detail_requested_sources(void);       // OK segurado, ou o botao "..."
-// Botao secundario "Reproduzir desde o inicio", que so existe quando ha
-// progresso. Hoje ele tambem marca `detail_pediu_reproduzir`, porque o roteador
-// ainda nao sabe abrir o player ignorando o ponto salvo.
+int  detail_requested_mark(void);       // the "+" button
+int  detail_requested_sources(void);       // OK held, or the "..." button
+// The secondary "Play from the start" button, which only exists when there is
+// progress. Today it also sets `detail_requested_play`, because the router does not
+// yet know how to open the player ignoring the saved point.
 int  detail_requested_do_start(void);
-// --- Pagina do titulo (abaixo da dobra) -------------------------------------
-// TUDO daqui para baixo foi medido no app web LOGADO, em 1920x1080, na serie
-// "Silo" (getBoundingClientRect / getComputedStyle), em 2026-08-31. Os numeros
-// nao vem do CSS: a folha declara `clamp(440px, 29vw, 540px)` para o card de
-// episodio e o que a tela desenha e 640 — ler a folha erra por 100px.
+// --- The title's page (below the fold) --------------------------------------
+// EVERYTHING from here down was measured in the web app SIGNED IN, at 1920x1080,
+// on the series "Silo" (getBoundingClientRect / getComputedStyle), on 2026-08-31.
+// The numbers do not come from the CSS: the stylesheet declares
+// `clamp(440px, 29vw, 540px)` for the episode card and what the screen draws is
+// 640 — reading the stylesheet is 100px out.
 //
-// Vivem aqui e nao em layout.h porque layout.h esta sendo mexido por outros
-// agentes nesta mesma sessao.
+// They live here and not in layout.h because layout.h is being edited by other
+// agents in this same session.
 //
-// O modelo e o do web: UM documento rolavel de 2144px de altura, do qual a tela
-// mostra 1080. O hero ocupa 0..1080 e ROLA junto — nao ha cabecalho fixo, nem
-// logo centralizado no topo (isso era do app da Apple TV). As secoes ficam em
-// coordenadas ABSOLUTAS de documento, e rolar e so subtrair scrollY.
-#define NV_DETP_X             96.0f   // gutter das fileiras (--tv-safe-gutter-wide)
-// Fim do documento rolavel. NAO e onde o elenco termina (2024): e o que o web
-// tem de altura rolavel, porque abaixo do elenco ele ainda monta as secoes de
-// comentarios e de produtoras, que este port nao tem.
+// The model is the web app's: ONE scrollable document 2144px tall, of which the
+// screen shows 1080. The hero occupies 0..1080 and SCROLLS with it — there is no
+// fixed header, and no logo centred at the top (that was the Apple TV app's). The
+// sections sit at ABSOLUTE document coordinates, and scrolling is just subtracting
+// scrollY.
+#define NV_DETP_X             96.0f   // the rows' gutter (--tv-safe-gutter-wide)
+// The end of the scrollable document. It is NOT where the cast ends (2024): it is
+// the scrollable height the web app has, because below the cast it still builds
+// the comments and production-company sections, which this port does not have.
 //
-// O numero sai da medida, nao da conta: com o elenco focado o web para em
-// scrollTop 1393, e para o topo do grupo (1749) cair nos 33% da tela (356) o
-// documento precisa ter pelo menos 1393 + 1080 = 2473. Com os 2144 da conta
-// "elenco + padding" a rolagem batia no teto em 1064 e a fileira de elenco
-// ficava em y=693 em vez de y=364 — meio ecra fora do lugar, e foi assim que
-// apareceu na primeira captura do aparelho.
+// The number comes from the measurement, not from arithmetic: with the cast
+// focused the web app stops at scrollTop 1393, and for the group's top (1749) to
+// land at 33% of the screen (356) the document has to be at least 1393 + 1080 =
+// 2473. With the 2144 of the "cast + padding" arithmetic the scrolling hit its
+// ceiling at 1064 and the cast row sat at y=693 instead of y=364 — half a screen
+// out of place, and that is how it appeared in the first capture from the device.
 #define NV_DETP_END         2473.0f
-// Regra de rolagem do web, achada no fonte e conferida com quatro medidas:
-// o topo do GRUPO focado vai para 33% da altura util (40% nas abas). Constantes
-// DETAIL_ROW_FOCUS_TARGET / DETAIL_TAB_FOCUS_TARGET de metaDetailsScreen.js.
-// Conferido: temporadas -> scrollTop 724, episodios -> 838, abas -> 1248,
-// elenco -> 1393. Os quatro batem na casa do pixel.
+// The web app's scrolling rule, found in the source and checked against four
+// measurements: the top of the focused GROUP goes to 33% of the usable height (40%
+// on the tabs). The DETAIL_ROW_FOCUS_TARGET / DETAIL_TAB_FOCUS_TARGET constants of
+// metaDetailsScreen.js. Checked: seasons -> scrollTop 724, episodes -> 838, tabs ->
+// 1248, cast -> 1393. All four match to the pixel.
 #define NV_DETP_TARGET_ROW  0.33f
 #define NV_DETP_TARGET_TABS     0.40f
-// Vao entre itens de uma linha de meta. O flex declara 24 e o que se mede e 38
-// (borda a borda) nas SEIS ocorrencias: genero->ponto, ponto->ano, ano->IMDb,
-// selo->duracao, duracao->pais, pais->idioma. Mede-se, nao se le.
+// The gap between items on a meta line. The flex declares 24 and what is measured
+// is 38 (edge to edge) on all SIX occurrences: genre->dot, dot->year, year->IMDb,
+// badge->duration, duration->country, country->language. You measure, you do not read.
 #define NV_DETP_SEP           38.0f
 
-// Topo de cada GRUPO focavel, em coordenada de documento.
+// The top of each focusable GROUP, in document coordinates.
 #define NV_DETP_G_TEMP      1080.0f
 #define NV_DETP_G_EP        1194.0f
 #define NV_DETP_G_TABS      1680.0f
 #define NV_DETP_G_CAST    1749.0f
 
-// Abas de temporada: 269x80 em x=96, passo 321 (gap 52), raio 40, fonte 32/500.
-// A largura sai do texto + padding, e nao e constante: "Especiais" mede 219.
+// Season tabs: 269x80 at x=96, step 321 (gap 52), radius 40, font 32/500.
+// The width comes from the text + padding, and is not constant: "Specials" measures 219.
 #define NV_DETP_TEMP_Y      1160.0f
-#define NV_DETP_TEMP_H        83.0f   // MEDIDO na referencia (era 80)
+#define NV_DETP_TEMP_H        83.0f   // MEASURED against the reference (it was 80)
 #define NV_DETP_TEMP_PADX     40.0f
 #define NV_DETP_TEMP_GAP      52.0f
 
-// Episodio: card 640x422 em x=96, passo 726, raio 32. A diferenca estrutural
-// com o port anterior (que era do app da Apple TV) e que o TEXTO FICA DENTRO da
-// miniatura, sobre um degrade vertical, e nao abaixo dela.
+// Episode: a 640x422 card at x=96, step 726, radius 32. The structural difference
+// from the previous port (which was the Apple TV app's) is that the TEXT SITS
+// INSIDE the thumbnail, over a vertical gradient, and not below it.
 #define NV_DETP_EP_Y        1286.0f
-// AS MEDIDAS DO CARD FORAM REFEITAS NO APARELHO (TCL, 1920x1080, serie
-// "Furious", 2026-09-01), porque as do web erravam em quase todas: o passo era
-// 726 contra os 671 medidos (o card ficava com 86px de vao em vez de 31) e o
-// bloco de texto vinha 30px acima do lugar, encostado no meio da miniatura.
+// THE CARD'S MEASUREMENTS WERE REDONE ON THE DEVICE (TCL, 1920x1080, the series
+// "Furious", 2026-09-01), because the web app's were wrong on almost all of them:
+// the step was 726 against the 671 measured (the card ended up with an 86px gap
+// instead of 31) and the text block came 30px above where it should be, up against
+// the middle of the thumbnail.
 //
-// Referencia lida: card focado com anel de 4px em x=94..737 e y=245..662, ou
-// seja caixa 96..735 x 247..660 — 640x414. O card seguinte comeca em x=767.
+// Reference read: a focused card with a 4px ring at x=94..737 and y=245..662, that
+// is a box of 96..735 x 247..660 — 640x414. The next card starts at x=767.
 #define NV_DETP_EP_W         640.0f
-#define NV_DETP_EP_H         414.0f   // a caixa E a miniatura: o texto fica dentro
-#define NV_DETP_EP_STEP     672.0f   // 767 - 96 = 671, arredondado para 640+32
+#define NV_DETP_EP_H         414.0f   // the box IS the thumbnail: the text sits inside
+#define NV_DETP_EP_STEP     672.0f   // 767 - 96 = 671, rounded to 640+32
 #define NV_DETP_EP_THUMB_H   414.0f
 #define NV_DETP_EP_RADIUS       32.0f
-#define NV_DETP_EP_DFLT        32.0f   // margem do texto dentro da miniatura
+#define NV_DETP_EP_PAD        32.0f   // the text's margin inside the thumbnail
 #define NV_DETP_EP_TEXT_W   576.0f
-// Selo "EPISÓDIO n": caixa 152x43 em (32,155) dentro do card, tinta do texto
-// em 147..266 — 19 de folga a esquerda. Medido no card 1 de "Furious".
+// The "EPISODE n" badge: a 152x43 box at (32,155) inside the card, with the text's
+// ink at 147..266 — 19 of slack on the left. Measured on card 1 of "Furious".
 #define NV_DETP_EP_BADGE_Y    124.0f
 #define NV_DETP_EP_BADGE_H     38.0f
 #define NV_DETP_EP_BADGE_PADX  18.0f
-// Os tres offsets abaixo sao o TOPO DA CAIXA da linha, nao o topo da tinta: a
-// tinta medida (caixa alta do titulo em +221, sinopse em +274, rodape em +349)
-// fica alguns pixels abaixo do topo da caixa que o SDL_ttf devolve, e o
-// desconto e a diferenca entre a ascendente e a altura de caixa alta da Inter
-// no corpo de cada linha.
-#define NV_DETP_EP_TITLE_Y     174.0f   // titulo separado do selo
-#define NV_DETP_EP_SIN_Y     224.0f   // tres linhas antes do rodape
+// The three offsets below are the TOP OF THE LINE'S BOX, not the top of the ink:
+// the measured ink (the title's cap height at +221, the synopsis at +274, the
+// footer at +349) sits a few pixels below the top of the box SDL_ttf returns, and
+// the difference is that between Inter's ascender and cap height at each line's
+// body size.
+#define NV_DETP_EP_TITLE_Y     174.0f   // the title, separated from the badge
+#define NV_DETP_EP_SIN_Y     224.0f   // three lines before the footer
 #define NV_DETP_EP_LD_SIN     32.0f
-#define NV_DETP_EP_META_Y    344.0f   // relogio + duracao + data, tinta em +349
+#define NV_DETP_EP_META_Y    344.0f   // clock + duration + date, ink at +349
 #define NV_DETP_EP_ICON      28.0f
 #define NV_DETP_EP_BAR_Y   390.0f   // barra 576x8, raio 999
 #define NV_DETP_EP_BAR_H     8.0f
-#define NV_DETP_EP_STATUS     48.0f   // circulo tracejado de "nao assistido"
-// Anel de foco. O web usa 2px na miniatura do episodio e 4px nos botoes do
-// hero; aqui fica 4 nos dois, porque a folha declara pixels de CSS e a tela
-// desta pagina roda com um fator de escala de ~1.6 sobre os `clamp` — ou seja,
-// o anel de 2px do episodio chega perto de 3px reais, e 4 e o valor inteiro que
-// mais se aproxima sem sumir na TV.
+#define NV_DETP_EP_STATUS     48.0f   // the dashed "unwatched" circle
+// The focus ring. The web app uses 2px on the episode thumbnail and 4px on the
+// hero's buttons; here it is 4 on both, because the stylesheet declares CSS pixels
+// and this page's screen runs with a scale factor of ~1.6 over the `clamp`s — that
+// is, the episode's 2px ring comes close to 3 real px, and 4 is the whole number
+// closest to it without disappearing on the TV.
 #define NV_DETP_RING           4.0f
 
-// Abas "Criador e elenco | Avaliacoes | Mais como este | Trailer": fonte 32/500,
-// selecionada branca, as outras #808080; o divisor "|" e 32/700 #808080, com 20
-// de folga de cada lado.
+// The tabs "Creator and cast | Ratings | More like this | Trailer": font 32/500,
+// the selected one white, the others #808080; the "|" divider is 32/700 #808080,
+// with 20 of slack on each side.
 #define NV_DETP_TAB_Y       1758.0f
 #define NV_DETP_TAB_H         51.0f
 #define NV_DETP_TAB_SEP       20.0f
 
-// Elenco: card de 220 de largura, passo 270; avatar 140x140 ALINHADO A
-// ESQUERDA do card (nao centralizado); nome 26/500 rgb(179,179,179) e papel
-// 21/400 rgb(128,128,128) abaixo.
+// Cast: a card 220 wide, step 270; a 140x140 avatar ALIGNED LEFT in the card (not
+// centred); the name 26/500 rgb(179,179,179) and the role 21/400 rgb(128,128,128)
+// below.
 #define NV_DETP_EL_Y        1817.0f
 #define NV_DETP_EL_W         220.0f
 #define NV_DETP_EL_STEP     270.0f
 #define NV_DETP_EL_AVATAR    140.0f
-#define NV_DETP_EL_NAME_DY    10.0f   // base do avatar -> topo do nome
-#define NV_DETP_EL_ROLE_DY   43.0f   // topo do nome -> topo do papel
-// Altura de uma linha de texto do cartao de elenco (nome ou papel), e o vao
-// MEDIDO entre a base do elenco e o topo do wordmark do Trakt na captura da
-// referencia (~105 px em 1920). Existem para o empilhamento da secao de
-// comentarios na SERIE nao precisar chutar onde o elenco termina — usar
-// NV_DETF_EL_ALT, que e a altura do elenco do FILME, punha a secao POR CIMA
-// dos avatares.
+#define NV_DETP_EL_NAME_DY    10.0f   // the avatar's base -> the name's top
+#define NV_DETP_EL_ROLE_DY   43.0f   // the name's top -> the role's top
+// The height of a line of text on the cast card (name or role), and the gap
+// MEASURED between the cast's base and the top of the Trakt wordmark in the
+// reference capture (~105 px at 1920). They exist so that stacking the comments
+// section on a SERIES need not guess where the cast ends — using NV_DETF_EL_HEIGHT,
+// which is the FILM's cast height, put the section ON TOP of the avatars.
 #define NV_DETP_EL_LINE      34.0f
 #define NV_DETP_EL_GAP_TRAKT 105.0f
 
-// Selos da pilha de meta do HERO, medidos na mesma sessao.
-#define NV_DETW_IMDB_W       109.0f   // logo 60x60 + folga + nota 20.7/400
+// The badges of the HERO's meta stack, measured in the same session.
+#define NV_DETW_IMDB_W       109.0f   // a 60x60 logo + slack + the score 20.7/400
 #define NV_DETW_IMDB_H        60.0f
-#define NV_DETW_BADGE_H        45.0f   // .detail-meta-badge, raio 8, borda 1px
+#define NV_DETW_BADGE_H        45.0f   // .detail-meta-badge, radius 8, 1px border
 #define NV_DETW_BADGE_PADX     10.0f
-// Botao secundario "Reproduzir desde o inicio": 345x96, raio 64, fundo #222,
-// texto branco; focado vira #f5f5f5 com texto #111 e o anel de 4px.
+// The secondary "Play from the start" button: 345x96, radius 64, background #222,
+// white text; focused it becomes #f5f5f5 with #111 text and the 4px ring.
 #define NV_DETW_BTN2_PADX     34.0f
 
-// --- BLOCO DO HERO, MEDIDO NO APARELHO -------------------------------------
+// --- THE HERO BLOCK, MEASURED ON THE DEVICE --------------------------------
 //
-// Tudo com o prefixo NV_DETW2_ foi medido PIXEL A PIXEL em capturas do app de
-// referencia rodando na TCL em 1920x1080 (adb exec-out screencap), numa SERIE
-// ("Lioness") e num FILME ("Ma"), em 2026-09-01. As duas capturas foram lidas
-// por um decodificador de PNG proprio, nao a olho.
+// Everything prefixed NV_DETW2_ was measured PIXEL BY PIXEL on captures of the
+// reference app running on the TCL at 1920x1080 (adb exec-out screencap), on a
+// SERIES ("Lioness") and a FILM ("Ma"), on 2026-09-01. Both captures were read by
+// a PNG decoder of our own, not by eye.
 //
-// POR QUE UM SEGUNDO CONJUNTO, e nao corrigir NV_DETW_*: aqueles vieram do app
-// WEB (getBoundingClientRect sobre .series-detail-shell). O web e a TV sao dois
-// aplicativos diferentes e divergem em quase tudo que esta aqui — a coluna
-// comeca em 96 e nao em 72, o botao primario mede 94 de altura e nao 96, o foco
-// e ESCALA e nao anel, e o selo do IMDb tem 60x30 e nao 109x60. Onde os dois
-// discordam manda o aparelho, que e o que se ve. Os NV_DETW_* continuam vivos
-// porque outras partes da tela ainda os usam.
+// WHY A SECOND SET, rather than correcting NV_DETW_*: those came from the WEB app
+// (getBoundingClientRect over .series-detail-shell). The web and the TV are two
+// different applications and diverge on almost everything here — the column starts
+// at 96 and not 72, the primary button is 94 tall and not 96, the focus is a SCALE
+// and not a ring, and the IMDb badge is 60x30 and not 109x60. Where the two
+// disagree the device wins, because that is what you see. The NV_DETW_* are still
+// alive because other parts of the screen still use them.
 //
-// Vivem em detail.h e nao em layout.h porque layout.h esta sendo mexido por
-// outros agentes nesta mesma sessao.
-#define NV_DETW2_X            96.0f   // coluna do conteudo (era 72, do web)
-// Base da pilha: a borda de baixo do selo de classificacao cai em 1047/1048 nas
-// DUAS capturas, com sinopses de tamanhos diferentes. E o mesmo valor que
-// NV_DETW_BASE ja tinha, e e o que ancora a pilha inteira.
+// They live in detail.h and not in layout.h because layout.h is being edited by
+// other agents in this same session.
+#define NV_DETW2_X            96.0f   // the content column (it was 72, from the web)
+// The stack's base: the bottom edge of the age-rating badge falls at 1047/1048 in
+// BOTH captures, with synopses of different lengths. It is the same value
+// NV_DETW_BASE already had, and it is what anchors the whole stack.
 #define NV_DETW2_BASE       1048.0f
 
-// LINHA DE ACOES. Pilula em repouso 321x94 (x=96..417, y=512..606 na serie),
-// circulos de 96 com 24 de vao entre vizinhos (centros em 488,5 e 608,5, passo
-// 120). A largura da pilula sai do rotulo: 54 + 28 + 21 + texto + 54 = 319 para
-// "Assistir T1:E1", contra os 321 medidos.
+// THE ACTIONS ROW. The pill at rest is 321x94 (x=96..417, y=512..606 on the
+// series), circles of 96 with a 24 gap between neighbours (centres at 488.5 and
+// 608.5, step 120). The pill's width comes from the label: 54 + 28 + 21 + text + 54
+// = 319 for "Watch S1:E1", against the 321 measured.
 #define NV_DETW2_BTN_H        94.0f
 #define NV_DETW2_BTN_PADX     54.0f
-#define NV_DETW2_BTN_ICON_W  28.0f   // triangulo 28x30, centrado na vertical
+#define NV_DETW2_BTN_ICON_W  28.0f   // a 28x30 triangle, vertically centred
 #define NV_DETW2_BTN_ICON_H  30.0f
 #define NV_DETW2_BTN_GAPI     21.0f   // fim do triangulo -> tinta do rotulo
 #define NV_DETW2_CIRC         96.0f
 #define NV_DETW2_BTN_GAP      24.0f
-// Glifo dentro do circular: 32 num circulo de 96 em repouso e 36 num de 110
-// focado — 0,333 do diametro nos dois. Estava 0,45, que vinha de uma captura
-// solta do dono e engordava o "+" ate quase encostar na borda.
+// The glyph inside the circle: 32 in a 96 circle at rest and 36 in a focused 110 —
+// 0.333 of the diameter in both. It was 0.45, which came from a loose capture of
+// the owner's and fattened the "+" until it nearly touched the edge.
 #define NV_DETW2_CIRC_GLYPH    0.333f
-// FOCO: o aparelho NAO desenha anel. O item focado CRESCE, com o centro parado,
-// e o circular escuro ainda troca de cor (#222 -> #f5f5f5, glifo branco -> #111).
-// A pilula branca fica branca nos dois estados: e o tamanho que diz o foco.
+// FOCUS: the device does NOT draw a ring. The focused item GROWS, with its centre
+// still, and the dark circle also changes colour (#222 -> #f5f5f5, white glyph ->
+// #111). The white pill stays white in both states: it is the size that says focus.
 //
-// Os dois fatores sao medidos e NAO sao iguais, o que surpreende mas se repete:
-// a pilula vai de 321x94 para 357,6x107,8 (1,114 em x, 1,147 em y) e o circulo
-// de 96 para 110 (1,146 nos dois eixos). Escrever um so fator faria a pilula
-// crescer 10px a mais do que a referencia; ficam os dois, como medidos.
+// The two factors are measured and are NOT equal, which is surprising but
+// repeatable: the pill goes from 321x94 to 357.6x107.8 (1.114 in x, 1.147 in y) and
+// the circle from 96 to 110 (1.146 on both axes). Writing a single factor would
+// make the pill grow 10px more than the reference; both stay, as measured.
 #define NV_DETW2_FOCUS_SX       1.114f
 #define NV_DETW2_FOCUS_SY       1.147f
 
-// PILHA DE TEXTO. As duas capturas dao as mesmas coordenadas absolutas para o
-// que esta ABAIXO da sinopse (selo do IMDb em y=938, selo de classificacao em
-// y=999) e a sinopse cresce PARA CIMA — 5 linhas na serie, 4 no filme, e a
-// ULTIMA linha cai no mesmo y nas duas. Por isso a pilha e montada de baixo
-// para cima, e nao do logo para baixo.
-#define NV_DETW2_LD_SIN       40.0f   // passo entre linhas da sinopse (medido)
-#define NV_DETW2_SIN_LINES       5   // o maximo visto na referencia
-#define NV_DETW2_TEXT_W    1040.0f   // sinopse e linha de apoio (96..1136)
-// Distancia entre TOPOS DE CAIXA de linhas vizinhas, ja descontada a metrica da
-// fonte: entre a tinta a referencia da 62 do alto do "R" de "Roteirista" ao
-// alto do "C" da sinopse, e as duas linhas usam o mesmo corpo.
+// THE TEXT STACK. Both captures give the same absolute coordinates for what is
+// BELOW the synopsis (the IMDb badge at y=938, the age-rating badge at y=999) and
+// the synopsis grows UPWARDS — 5 lines on the series, 4 on the film, and the LAST
+// line falls at the same y in both. That is why the stack is built from the bottom
+// up, and not from the logo down.
+#define NV_DETW2_LD_SIN       40.0f   // the step between synopsis lines (measured)
+#define NV_DETW2_SIN_LINES       5   // the most seen in the reference
+#define NV_DETW2_TEXT_W    1040.0f   // the synopsis and the support line (96..1136)
+// The distance between the BOX TOPS of neighbouring lines, with the font's metrics
+// already discounted: between the ink the reference gives 62 from the top of the
+// "W" of "Writer" to the top of the "C" of the synopsis, and both lines use the
+// same body size.
 #define NV_DETW2_GAP_SUP      62.0f
-// Fim da caixa da sinopse -> topo do selo do IMDb. A tinta da ultima linha
-// termina em 890 e o selo comeca em 938; o resto e a descida da fonte.
+// The end of the synopsis's box -> the top of the IMDb badge. The last line's ink
+// ends at 890 and the badge starts at 938; the rest is the font's descender.
 #define NV_DETW2_GAP_SIN      33.0f
-// Base da pilula em repouso (606) -> topo da caixa da linha de apoio. A tinta
-// do "R" comeca em 649, e a caixa comeca ~6 acima dela no corpo de 26.
+// The pill's base at rest (606) -> the top of the support line's box. The "W"'s ink
+// starts at 649, and the box starts ~6 above it at a body size of 26.
 #define NV_DETW2_GAP_ACTIONS    37.0f
 
-// META LINHA 1: generos, data e o selo do IMDb, tudo em rgb(179,179,179).
-// A altura da linha e a do selo (30), que e o item mais alto dela.
+// META LINE 1: genres, date and the IMDb badge, all in rgb(179,179,179).
+// The line's height is the badge's (30), which is the tallest item on it.
 #define NV_DETW2_M1_H         30.0f
 #define NV_DETW2_META_GAP     31.0f   // 999 - 968
-// Selo do IMDb: retangulo amarelo #f6c700 de 60x30, raio ~4, com "IMDb" preto
-// dentro; a nota vem 8px depois, no mesmo cinza do resto da linha. NAO e o
-// 109x60 do web — este e menor e a marca ocupa o selo inteiro.
+// The IMDb badge: a 60x30 yellow #f6c700 rectangle, radius ~4, with a black "IMDb"
+// inside; the score comes 8px later, in the same grey as the rest of the line. It
+// is NOT the web app's 109x60 — this one is smaller and the mark fills the whole badge.
 #define NV_DETW2_IMDB_W       60.0f
 #define NV_DETW2_IMDB_H       30.0f
 #define NV_DETW2_IMDB_R        4.0f
 #define NV_DETW2_IMDB_GAP      8.0f
-// Ponto separador. Sao DOIS pontos diferentes e a diferenca e so a cor: entre
-// generos ele e rgb(179,179,179) com 11 de folga de cada lado, e entre GRUPOS
-// (generos | data | nota) e rgb(128,128,128) com 30. Os dois medem 6x7.
+// The separator dot. There are TWO different dots and the difference is only the
+// colour: between genres it is rgb(179,179,179) with 11 of slack on each side, and
+// between GROUPS (genres | date | score) it is rgb(128,128,128) with 30. Both
+// measure 6x7.
 #define NV_DETW2_DOT_D       6.0f
 #define NV_DETW2_SEP          30.0f
 #define NV_DETW2_BULLET_SEP   11.0f
 
-// META LINHA 2: um selo de CONTORNO com classificacao e status juntos, depois
-// duracao (so em filme) e pais. Caixa de 49 de altura em y=999, raio 8, borda
-// de 2px rgb(107,107,107) — contorno de verdade, sem miolo pintado.
+// META LINE 2: an OUTLINE badge with the age rating and the status together, then
+// the duration (film only) and the country. A box 49 tall at y=999, radius 8, with
+// a 2px rgb(107,107,107) border — a real outline, with no painted middle.
 #define NV_DETW2_BADGE_H       49.0f
 #define NV_DETW2_BADGE_R        8.0f
 #define NV_DETW2_BADGE_PADX    16.0f
 #define NV_DETW2_BADGE_BORDER    2.0f
-// Divisoria interna: barra de 2x24 na mesma cor da borda, com 18 de folga de
-// cada lado. E ela que separa "TV-MA" de "RENOVADA" dentro do mesmo selo.
+// The internal divider: a 2x24 bar in the same colour as the border, with 18 of
+// slack on each side. It is what separates "TV-MA" from "RENEWED" inside the same
+// badge.
 #define NV_DETW2_DIV_W         2.0f
 #define NV_DETW2_DIV_H        24.0f
-#define NV_DETW2_DIV_DFLT      18.0f
+#define NV_DETW2_DIV_PAD      18.0f
 
-// --- Pagina do titulo tipo FILME, abaixo da dobra ---------------------------
+// --- The title page for a FILM, below the fold ------------------------------
 //
-// Filme NAO reaproveita as coordenadas absolutas da serie. Aquelas foram
-// medidas numa pagina de serie (temporadas + episodios) e, num filme, deixavam
-// 600px de buraco. Aqui as secoes se EMPILHAM: cada uma sabe a propria altura e
-// a seguinte comeca onde a anterior acabou.
+// A film does NOT reuse the series' absolute coordinates. Those were measured on a
+// series page (seasons + episodes) and, on a film, left a 600px hole. Here the
+// sections STACK: each one knows its own height and the next starts where the
+// previous one ended.
 //
-// ORIGEM DESTAS MEDIDAS, e vale ficar escrito porque sao DUAS fontes:
+// THE ORIGIN OF THESE MEASUREMENTS, and it is worth writing down because there are
+// TWO sources:
 //
-// TAMANHOS (card, avatar, tipografia) — do app WEB, medidos com
-// getBoundingClientRect em 1920x1080. E a referencia de TV, feita para ver de
-// longe, e por isso ela manda aqui.
+// SIZES (card, avatar, typography) — from the WEB app, measured with
+// getBoundingClientRect at 1920x1080. It is the TV reference, made to be seen from
+// a distance, and that is why it wins here.
 //
-// ESTRUTURA (secoes empilhadas, cada uma com cabecalho proprio) — do app
-// NATIVO DE MAC, /Applications/Nuvio.app, com.nuvio.media.desktop 1.1.22, feito
-// em Compose Multiplatform. Foi de la que sairam as capturas de referencia, e
-// as classes confirmam o desenho: DetailCastSectionKt, DetailTrailersSectionKt,
-// DetailAdditionalInfoSectionKt, DetailProductionSectionKt. O app WEB nao tem
-// isso — la e uma fileira de abas que troca o conteudo no lugar.
+// STRUCTURE (stacked sections, each with a header of its own) — from the NATIVE
+// MAC app, /Applications/Nuvio.app, com.nuvio.media.desktop 1.1.22, built in
+// Compose Multiplatform. That is where the reference captures came from, and the
+// classes confirm the design: DetailCastSectionKt, DetailTrailersSectionKt,
+// DetailAdditionalInfoSectionKt, DetailProductionSectionKt. The WEB app does not
+// have this — there it is a row of tabs that swaps the content in place.
 //
-// Os tamanhos daquele app NAO foram copiados: e um app de mesa (breakpoints
-// 600/840/1200dp) e no maior deles o avatar de elenco mede 100dp contra os 140
-// da TV. So a proporcao interna da tabela de detalhes veio de la, por nao haver
-// outra fonte — ver a nota em NV_DETF_DET_*.
+// That app's sizes were NOT copied: it is a desktop app (breakpoints
+// 600/840/1200dp) and at its largest the cast avatar measures 100dp against the
+// TV's 140. Only the internal proportion of the details table came from it, for
+// want of another source — see the note at NV_DETF_DET_*.
 //
-// OS QUATRO VAOS ABAIXO continuam sendo proporcao tirada das capturas, nao
-// medida: o Mac parametriza o espacamento por chamada
-// (DetailSectionContainer(horizontalPadding, contentMaxWidth, bottomPadding)),
-// entao nao ha uma constante unica para ler no bytecode.
-#define NV_DETF_HERO_END     1080.0f   // o hero ocupa 0..1080, igual a serie
-#define NV_DETF_HEADER_H          46.0f   // linha do cabecalho (TXT_HEADLINE, 38)
-#define NV_DETF_HEADER_GAP        20.0f   // cabecalho -> conteudo
-#define NV_DETF_SEC_GAP        64.0f   // fim de uma secao -> cabecalho da proxima
-#define NV_DETF_DFLT_END       130.0f   // padding-bottom do scroller (clamp(116,12vh,168))
+// THE FOUR GAPS BELOW are still a proportion taken from the captures, not a
+// measurement: the Mac parameterises the spacing per call
+// (DetailSectionContainer(horizontalPadding, contentMaxWidth, bottomPadding)), so
+// there is no single constant to read in the bytecode.
+#define NV_DETF_HERO_END     1080.0f   // the hero occupies 0..1080, as on the series
+#define NV_DETF_HEADER_H          46.0f   // the header line (TXT_HEADLINE, 38)
+#define NV_DETF_HEADER_GAP        20.0f   // header -> content
+#define NV_DETF_SEC_GAP        64.0f   // end of one section -> the next section's header
+#define NV_DETF_PAD_END       130.0f   // the scroller's padding-bottom (clamp(116,12vh,168))
 
-// ELENCO. Card 220x193, passo 270, avatar 140 alinhado a ESQUERDA do card.
-// Medido no web (.movie-cast-card / .movie-cast-track).
+// CAST. A 220x193 card, step 270, a 140 avatar aligned LEFT in the card.
+// Measured in the web app (.movie-cast-card / .movie-cast-track).
 #define NV_DETF_EL_HEIGHT        193.0f
-#define NV_DETF_EL_MAX           18    // .slice(0, 18) do web
+#define NV_DETF_EL_MAX           18    // the web app's .slice(0, 18)
 
-// TRAILERS. Card 520 de largura, miniatura 520x292 raio 24, passo 582.
-// O selo de play e um circulo de 96 a rgba(0,0,0,.48) com o triangulo de 44.
+// TRAILERS. A card 520 wide, a 520x292 thumbnail with radius 24, step 582.
+// The play badge is a 96 circle at rgba(0,0,0,.48) with a 44 triangle.
 #define NV_DETF_TR_W          520.0f
 #define NV_DETF_TR_STEP      582.0f
 #define NV_DETF_TR_VIDEO_H    292.0f
@@ -324,34 +332,33 @@ int  detail_requested_do_start(void);
 #define NV_DETF_TR_HEIGHT        377.0f
 #define NV_DETF_TR_PLAY_D      96.0f
 
-// DETALHES DO FILME. Tabela de duas colunas com divisoria por linha.
+// FILM DETAILS. A two-column table with a divider per row.
 //
-// A ESTRUTURA E REAL, e foi conferida: o app nativo de Mac (/Applications/
-// Nuvio.app, com.nuvio.media.desktop 1.1.22, Compose Multiplatform) tem as
-// classes DetailCastSectionKt, DetailTrailersSectionKt e
-// DetailAdditionalInfoSectionKt — ou seja, secoes EMPILHADAS com cabecalho
-// proprio, e nao a fileira de abas do NuvioWeb-0.3.38-beta. Foi desse app que
-// vieram as capturas de referencia.
+// THE STRUCTURE IS REAL, and it was checked: the native Mac app
+// (/Applications/Nuvio.app, com.nuvio.media.desktop 1.1.22, Compose Multiplatform)
+// has the classes DetailCastSectionKt, DetailTrailersSectionKt and
+// DetailAdditionalInfoSectionKt — that is, STACKED sections with headers of their
+// own, and not NuvioWeb-0.3.38-beta's row of tabs. The reference captures came from
+// that app.
 //
-// OS TAMANHOS NAO SAO COPIADOS DE LA, e isso e decisao. Aquele e um app de
-// mesa, com breakpoints em 600/840/1200dp; no maior deles o avatar de elenco
-// mede 100dp, contra os 140 medidos no app web de TV. Copiar o dp do Mac
-// encolheria a tela de quem ve de longe. O que se aproveita e a PROPORCAO
-// interna, que nao tinha fonte nenhuma antes:
+// THE SIZES ARE NOT COPIED FROM IT, and that is a decision. That is a desktop app,
+// with breakpoints at 600/840/1200dp; at its largest the cast avatar measures
+// 100dp, against the 140 measured in the TV web app. Copying the Mac's dp would
+// shrink the screen for someone watching from a distance. What is taken is the
+// internal PROPORTION, which had no source at all before:
 //
-//   Mac DetailInfoRow: coluna do rotulo 176dp num conteudo de 720dp = 24,4%
+//   Mac DetailInfoRow: a 176dp label column in 720dp of content = 24.4%
 //
-// A largura vem da medida de TV (o bloco de texto do hero, 1040), e a coluna do
-// valor comeca nos mesmos 24,4% dela. O passo de linha de 68 bate com a conta
-// do Mac reescalada para o corpo de 25 desta tela (25*1.4 + 2*15,6 = 66).
+// The width comes from the TV measurement (the hero's text block, 1040), and the
+// value column starts at the same 24.4% of it. The row step of 68 matches the Mac's
+// arithmetic rescaled to this screen's body size of 25 (25*1.4 + 2*15.6 = 66).
 //
-// A chave alinha a esquerda em NV_DETP_X; o valor comeca numa coluna FIXA, e
-// nao depois do texto da chave — senao a segunda coluna serrilha de linha em
-// linha.
-#define NV_DETF_DET_LINE      68.0f   // passo vertical de uma linha
-#define NV_DETF_DET_W        1040.0f   // largura da tabela e da divisoria
-#define NV_DETF_DET_KEY_W   254.0f   // 24,4% de NV_DETF_DET_W (proporcao do Mac)
-#define NV_DETF_DET_MAXL          6    // Status, Lancamento, Duracao, Classif., Pais
+// The key aligns left at NV_DETP_X; the value starts in a FIXED column, and not
+// after the key's text — otherwise the second column jags from line to line.
+#define NV_DETF_DET_LINE      68.0f   // the vertical step of one row
+#define NV_DETF_DET_W        1040.0f   // the width of the table and the divider
+#define NV_DETF_DET_KEY_W   254.0f   // 24.4% of NV_DETF_DET_W (the Mac's proportion)
+#define NV_DETF_DET_MAXL          6    // Status, Release, Duration, Rating, Country
 
 void detail_event(const SDL_Event *e);
 void detail_update(float dt, Uint32 now);

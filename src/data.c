@@ -17,7 +17,7 @@ static int serve(const char *candidate) {
   char teste[600];
   FILE *f;
   if (!candidate || !*candidate) return 0;
-  mkdir(candidate, 0755);   // ja existir nao e erro para o que interessa aqui
+  mkdir(candidate, 0755);   // already existing is not an error for what matters here
   snprintf(teste, sizeof teste, "%s/.write-test", candidate);
   f = fopen(teste, "w");
   if (!f) return 0;

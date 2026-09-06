@@ -1,186 +1,186 @@
-// Tokens visuais do port nativo. A referencia e o Nuvio 1.0.1 legacy (webOS):
-// hero moderno, rail fixa e fileiras de posters. O prototipo Apple TV continua
-// em outro build e nao define estes valores.
+// The native port's visual tokens. The reference is Nuvio 1.0.1 legacy (webOS):
+// the modern hero, a fixed rail and rows of posters. The Apple TV prototype lives
+// in another build and does not define these values.
 //
-// Escala de tipografia: FATO da HIG do tvOS. Em 1080p, 1pt = 1px, entao os
-// valores sao literais. Title1 76 / Title2 57 / Title3 48 / Headline 38 /
-// Body 29 / Caption 25. Corpo nunca abaixo de 29.
+// Typography scale: a FACT from the tvOS HIG. At 1080p, 1pt = 1px, so the values
+// are literal. Title1 76 / Title2 57 / Title3 48 / Headline 38 / Body 29 /
+// Caption 25. Body never below 29.
 #ifndef NV_LAYOUT_H
 #define NV_LAYOUT_H
 
 #define NV_SCREEN_W        1920.0f
 #define NV_SCREEN_H        1080.0f
 
-// O shell legacy usa uma rail de 72dp (144px no canvas 1080p) e inicia o
-// conteúdo 104px depois dela, como no CSS .home-main + --home-content-start.
+// The legacy shell uses a 72dp rail (144px on the 1080p canvas) and starts the
+// content 104px after it, as in the CSS .home-main + --home-content-start.
 #define NV_LEGACY_RAIL_W        144.0f
 #define NV_LEGACY_CONTENT_X     248.0f
 #define NV_LEGACY_CONTENT_RIGHT 104.0f
-// A regra de verdade, medida nos dois estados: o conteudo tem SEMPRE 104 de
-// recuo, e a rail acrescenta os 144 dela quando esta aberta. Nao sao dois
-// layouts — e `collapseSidebar` em layoutPreferences.js, que o perfil do dono
-// tem em true. Com ela recolhida a home comeca em 104.
-#define NV_CONTENT_DFLT          104.0f
+// The real rule, measured in both states: the content ALWAYS has a 104 inset, and
+// the rail adds its own 144 when it is open. They are not two layouts — it is
+// `collapseSidebar` in layoutPreferences.js, which the owner's profile has set to
+// true. With it collapsed the home starts at 104.
+#define NV_CONTENT_PAD          104.0f
 
-// Hero em TELA CHEIA (`modernHeroFullScreenBackdropEnabled`, tambem true no
-// perfil do dono). MEDIDO: .home-modern-hero-media 1920x1062 em (0,0), imagem
-// em `object-fit: cover` com `object-position: 100% 0`. O bloco de texto
-// continua com 640 de largura, mas em x = NV_CONTENT_PAD e comecando em y=40.
-// 1080 e nao 1062. Os 1062 vieram da medida do `.home-modern-hero-media` no
-// app WEB, e ali sobravam 18px porque a janela do navegador tinha barra. Nesta
-// TV a tela e 1080 cravados, e os 18px que a arte nao cobria apareciam como uma
-// FAIXA no rodape — foi o "buraco/margem no final do background" que o dono viu.
+// A FULL-SCREEN hero (`modernHeroFullScreenBackdropEnabled`, also true in the
+// owner's profile). MEASURED: .home-modern-hero-media 1920x1062 at (0,0), the image
+// in `object-fit: cover` with `object-position: 100% 0`. The text block is still
+// 640 wide, but at x = NV_CONTENT_PAD and starting at y=40.
+// 1080 and not 1062. The 1062 came from measuring `.home-modern-hero-media` in the
+// WEB app, and there 18px were left over because the browser window had a bar. On
+// this TV the screen is exactly 1080, and the 18px the art did not cover appeared
+// as a BAND at the bottom — it was the "hole/margin at the end of the background"
+// the owner saw.
 //
-// MEDIDO na captura do aparelho: y=1060 dava (13,13,13), y=1064 saltava para
-// (37,38,41) e ficava assim ate o fim da tela, em qualquer coluna.
+// MEASURED on the device's capture: y=1060 gave (13,13,13), y=1064 jumped to
+// (37,38,41) and stayed that way to the end of the screen, in any column.
 //
-// INVESTIGADO ate o fim, e a conclusao importa para quem mexer nisto depois: os
-// ultimos 18px NAO SAO NOSSOS. Provas, nesta ordem:
-//   - com o heroi em 1062 havia faixa; subindo para 1080 a faixa CONTINUOU
-//     igual, no mesmo y — ou seja, nao era o tamanho do heroi;
-//   - trocar a cor do glClear por magenta nao pintou aquela regiao;
-//   - desenhar um retangulo opaco ali tambem nao pintou;
-//   - SDL_GL_GetDrawableSize responde 1920x1080 (esta no /tmp/nuvio-fps.txt).
-// Ou seja: o SDL relata 1080 e a superficie GL de verdade tem 1062. A faixa e o
-// fundo do compositor do webOS aparecendo, e nenhum desenho do app a alcanca.
+// INVESTIGATED to the end, and the conclusion matters to whoever touches this next:
+// the last 18px ARE NOT OURS. The evidence, in order:
+//   - with the hero at 1062 there was a band; raising it to 1080 left the band
+//     UNCHANGED, at the same y — so it was not the hero's size;
+//   - changing the glClear colour to magenta did not paint that region;
+//   - drawing an opaque rectangle there did not paint it either;
+//   - SDL_GL_GetDrawableSize answers 1920x1080 (it is in /tmp/nuvio-fps.txt).
+// That is: SDL reports 1080 and the real GL surface is 1062. The band is the webOS
+// compositor's background showing through, and no drawing by the app reaches it.
 //
-// Fica em 1080 assim mesmo: e o valor CORRETO para a tela, o excedente e
-// descartado sem custo, e se um firmware devolver a superficie inteira a arte
-// passa a cobrir sozinha.
+// It stays at 1080 anyway: it is the CORRECT value for the screen, the excess is
+// discarded at no cost, and if a firmware ever returns the whole surface the art
+// will cover it by itself.
 #define NV_HERO_FULL_H        1080.0f
 #define NV_HERO_FULL_COPY_Y     40.0f
-// Com o hero em TELA CHEIA o bloco de texto sobe: o web poe o logo em y=65 e a
-// linha de meta em 257, contra 135 e 327 do hero de faixa. MEDIDO na sessao
-// logada, que e a que tem `modernHeroFullScreenBackdropEnabled`. O port usava os
-// numeros da faixa nos dois modos, e por isso o texto todo ficava 70px baixo
-// demais — foi o que o dono descreveu como margem errada.
-// A sinopse fica em 411 nos DOIS modos; so o que esta acima dela se desloca.
+// With the hero FULL-SCREEN the text block moves up: the web app puts the logo at
+// y=65 and the meta line at 257, against 135 and 327 for the banded hero. MEASURED
+// in the signed-in session, which is the one with
+// `modernHeroFullScreenBackdropEnabled`. The port used the banded numbers in both
+// modes, and that is why all the text sat 70px too low — it is what the owner
+// described as the wrong margin.
+// The synopsis stays at 411 in BOTH modes; only what is above it moves.
 #define NV_HERO_FULL_LOGO_Y     65.0f
 #define NV_HERO_FULL_META_Y    257.0f
-// Em tela cheia o logo pode ser BEM maior: 640 de largura contra os 440 do hero
-// de faixa. MEDIDO na sessao logada (.home-hero-logo = 640x160 em 104,65). O
-// port limitava a 440 nos dois modos, e era isso que deixava a arte do titulo
-// pequena — um dos pontos que o dono levantou olhando a referencia.
+// Full-screen, the logo can be MUCH larger: 640 wide against the banded hero's 440.
+// MEASURED in the signed-in session (.home-hero-logo = 640x160 at 104,65). The port
+// limited it to 440 in both modes, and that is what left the title's art small —
+// one of the points the owner raised looking at the reference.
 #define NV_LOGO_HERO_FULL_MAX_W 640.0f
-// LINHA SECUNDARIA, que so existe em tela cheia: "2H RESTANTES • 6.3 • EN".
-// y=341, altura 38, fonte 18 peso 600, rgba(255,255,255,0.88). Fica ENTRE a
-// linha de meta (257) e a sinopse (411); sem ela sobrava um vao no meio do
-// bloco, que e parte do que se lia como espacamento errado.
+// THE SECONDARY LINE, which only exists full-screen: "2H REMAINING • 6.3 • EN".
+// y=341, height 38, font 18 weight 600, rgba(255,255,255,0.88). It sits BETWEEN the
+// meta line (257) and the synopsis (411); without it a gap was left in the middle
+// of the block, which is part of what read as wrong spacing.
 #define NV_HERO_FULL_SEC_Y     341.0f
-// Respiro entre a base do bloco de texto do hero e o titulo da primeira
-// fileira, e entre as linhas do proprio bloco. Vem da diferenca medida nas
-// capturas: a sinopse termina ~48px acima do titulo da fileira, e as linhas do
-// bloco se separam por ~52.
-// Bloco de texto do hero, LIDO do CSS do app web e nao estimado das capturas.
-// `.home-modern-hero-copy` (components.css:6723) e um flex column com
-// justify-content:flex-end e gap:16 — ou seja ANCORADO NA BASE, e as linhas se
-// separam por 16, nao pelos 52/84 que eu tinha deduzido de imagem. A base:
+// Breathing room between the base of the hero's text block and the first row's
+// title, and between the lines of the block itself. It comes from the difference
+// measured in the captures: the synopsis ends ~48px above the row's title, and the
+// block's lines are ~52 apart.
+// The hero's text block, READ from the web app's CSS and not estimated from the
+// captures. `.home-modern-hero-copy` (components.css:6723) is a flex column with
+// justify-content:flex-end and gap:16 — that is, ANCHORED TO THE BASE, with the
+// lines 16 apart, not the 52/84 I had deduced from an image. The base:
 //   bottom: var(--modern-rows-viewport-height) + var(--modern-hero-copy-bottom-gap)
-//         = 52% de 1080 + 40 = 601,6  ->  base do bloco em y = 478,4
-// e o topo das fileiras cai nos mesmos 518,4 que NV_SHELF_TOP ja usa.
+//         = 52% of 1080 + 40 = 601.6  ->  the block's base at y = 478.4
+// and the top of the rows falls at the same 518.4 NV_SHELF_TOP already uses.
 #define NV_HERO_COPY_GAP        40.0f   // --modern-hero-copy-bottom-gap
-#define NV_HERO_COPY_LINE      16.0f   // gap do flex column
+#define NV_HERO_COPY_LINE      16.0f   // the flex column's gap
 
-// Scancode do BACK no SDL da LG (SDL_SCANCODE_WEBOS_BACK). Nao esta no
-// SDL_scancode.h padrao, por isso vem como numero.
+// The BACK scancode in LG's SDL (SDL_SCANCODE_WEBOS_BACK). It is not in the
+// standard SDL_scancode.h, so it comes as a number.
 #define NV_SCANCODE_BACK 482
 #define NV_SCANCODE_BLUE 489 // SDL_webOS.h: SDL_WEBOS_SCANCODE_BLUE
-// Quanto tempo o OK precisa ficar pressionado para valer como pressao longa.
-// 500ms e o limiar classico: mais curto dispara sem querer, mais longo parece
-// que o botao nao respondeu.
+// How long OK has to be held to count as a long press. 500ms is the classic
+// threshold: shorter fires by accident, longer feels as though the button did not respond.
 #define NV_HOLD_MS       500
-// fatia da fileira vizinha que fica visivel acima/abaixo da fileira em foco
+// the slice of the neighbouring row that stays visible above/below the focused one
 #define NV_PEEK_NEIGHBOUR 0.10f
 
-// Safe area: HIG pede >=60pt das bordas; overscan classico usa 80-90 nas
-// laterais. Medido nas fotos de referencia: bate com 90.
-// Safe area OFICIAL do tvOS: 80px nas laterais, 60px em cima e embaixo (HIG
-// Layout). O valor 90 que estava aqui era chute meu.
+// Safe area: the HIG asks for >=60pt from the edges; classic overscan uses 80-90 at
+// the sides. Measured on the reference photos: it matches 90.
+// The OFFICIAL tvOS safe area: 80px at the sides, 60px top and bottom (HIG
+// Layout). The 90 that used to be here was a guess of mine.
 #define NV_MARGIN_X      80.0f
 #define NV_MARGIN_Y      60.0f
 
-// No layout moderno legacy a arte ocupa a faixa superior (72% da largura e
-// ~650px de altura); o viewport de fileiras permanece fixo nos 52% inferiores.
+// In the modern legacy layout the art occupies the top band (72% of the width and
+// ~650px tall); the rows' viewport stays fixed in the bottom 52%.
 #define NV_HERO_H       650.0f
-// Medido na foto do aparelho: a linha de botoes do hero termina a ~65% da
-// altura, e a primeira fileira comeca logo abaixo, aparecendo cortada. Com a
-// base em 150 os botoes desciam ate onde o cabecalho da fileira comeca, e os
-// dois se sobrepunham.
-// Medido na foto do aparelho: a linha de botoes do hero termina a ~69% da
-// altura e o cabecalho da fileira vem ~100px depois. Com a base em 380 sobrava
-// margem demais entre o bloco e os cards.
+// Measured on the device photo: the hero's button row ends at ~65% of the height,
+// and the first row starts just below it, appearing cut off. With the base at 150
+// the buttons came down to where the row's header begins, and the two overlapped.
+// Measured on the device photo: the hero's button row ends at ~69% of the height
+// and the row's header comes ~100px later. With the base at 380 there was too much
+// margin left between the block and the cards.
 #define NV_HERO_BASE     570.0f
-// A partir de quanta rolagem o bloco do hero comeca a sumir, e em quantos px
-// ele desaparece por completo.
+// How much scrolling before the hero's block starts to disappear, and over how many
+// px it disappears completely.
 #define NV_HERO_FADE_START 420.0f
 #define NV_HERO_FADE_EXT 260.0f
-#define NV_BACKGROUND_DARK   0.40f   // quanto o fundo da home escurece a arte
-// A partir de quanta rolagem a ARTE do hero comeca a sumir, e em quantos px
-// ela desaparece. Depois disso o que se ve e o fundo desfocado.
+#define NV_BACKGROUND_DARK   0.40f   // how much the home's background darkens the art
+// How much scrolling before the hero's ART starts to disappear, and over how many
+// px. After that what you see is the blurred background.
 #define NV_HERO_ART_START 300.0f
 #define NV_HERO_ART_EXT 520.0f
 #define NV_HERO_BUTTON_H   68.0f
 #define NV_HERO_NBUTTONS      3
-// MEDIDO no app web: .home-modern-hero-media em x=555, y=0, 1421x670, com a
-// arte em object-fit:cover. Os degrades que dissolvem a borda esquerda e a base
-// estao no shader GFX_HERO, com as paradas anotadas la.
+// MEASURED in the web app: .home-modern-hero-media at x=555, y=0, 1421x670, with
+// the art in object-fit:cover. The gradients that dissolve the left edge and the
+// base are in the GFX_HERO shader, with the stops recorded there.
 #define NV_HERO_ART_X   555.0f
 #define NV_HERO_ART_W  1421.0f
 #define NV_HERO_ART_H   670.0f
-// CSS (components.css:6755): .home-hero-logo em modern tem height E max-height
-// --modern-hero-logo-max-height (200px), width min(100%, 440px), object-fit
-// contain com object-position LEFT TOP. Ou seja a caixa mede sempre 440x200 e
-// a arte encosta no TOPO dela — nao cresce a partir da base, que era o que o
-// port fazia. 160 era medida de uma arte concreta, nao da caixa.
+// CSS (components.css:6755): .home-hero-logo in modern has height AND max-height
+// --modern-hero-logo-max-height (200px), width min(100%, 440px), object-fit contain
+// with object-position LEFT TOP. That is, the box always measures 440x200 and the
+// art sits against its TOP — it does not grow from the base, which is what the port
+// did. 160 was the measurement of one particular piece of art, not of the box.
 #define NV_LOGO_HERO_H   200.0f
 
-// Quando um logo e a VARIANTE ESCURA do TMDB e precisa ser tingido de branco.
+// When a logo is TMDB's DARK VARIANT and needs to be tinted white.
 //
-// DUAS condicoes, e a segunda importa tanto quanto a primeira. Os numeros saem
-// de medir os 40 logos de art/logo (media dos pixels opacos, croma =
-// max(RGB)-min(RGB)):
+// TWO conditions, and the second matters as much as the first. The numbers come
+// from measuring the 40 logos in art/logo (the average of the opaque pixels, chroma
+// = max(RGB)-min(RGB)):
 //
-//   arquivo  lum  croma   decisao
-//   08, 19     0      0   TINGE  — preto puro, a variante errada
-//   07        17     19   TINGE  — quase preto
-//   27        74     21   TINGE  — cinza escuro, ilegivel sobre o backdrop
-//   01        63    124   passa  — VERMELHO ESCURO: cor de marca, deliberada
-//   24        76    255   passa  — vermelho puro
-//   38        84     43   passa
-//   20       129      0   passa  — acromatico, mas claro
+//   file     lum  chroma  decision
+//   08, 19     0      0   TINT   — pure black, the wrong variant
+//   07        17     19   TINT   — almost black
+//   27        74     21   TINT   — dark grey, illegible over the backdrop
+//   01        63    124   pass   — DARK RED: a brand colour, deliberate
+//   24        76    255   pass   — pure red
+//   38        84     43   pass
+//   20       129      0   pass   — achromatic, but light
 //
-// So a luminancia nao serve: reprovaria o 01 junto com os pretos, e tingir de
-// branco um logo vermelho-escuro troca um defeito por outro. So o croma
-// tambem nao: reprovaria o 20, que e cinza CLARO e le bem. E a conjuncao que
-// isola exatamente a variante errada — escura E sem cor propria.
+// Luminance alone will not do: it would fail 01 along with the blacks, and tinting
+// a dark-red logo white swaps one defect for another. Chroma alone will not either:
+// it would fail 20, which is LIGHT grey and reads well. It is the conjunction that
+// isolates exactly the wrong variant — dark AND with no colour of its own.
 //
-// O limiar de luminancia e 80 e nao 70 por causa do 27, que mede 74: com 70 ele
-// escapava por quatro pontos e continuava sumindo na tela.
+// The luminance threshold is 80 and not 70 because of 27, which measures 74: at 70
+// it escaped by four points and went on disappearing on screen.
 #define NV_LOGO_LUMA_MIN     80
 #define NV_LOGO_CHROMA_MAX   45
 #define NV_LOGO_HERO_MAX_W 440.0f
-// Posicoes ABSOLUTAS do bloco de texto do hero, medidas no app web com a home
-// no topo. Antes isto era ancorado na BASE (base = 1080 - NV_HERO_BASE) e
-// empilhado para cima, que e como o app da Apple faz — o efeito colateral era o
-// texto descer conforme a sinopse crescia e encostar no titulo da primeira
-// fileira. No web cada linha tem lugar fixo:
+// ABSOLUTE positions of the hero's text block, measured in the web app with the
+// home at the top. This used to be anchored to the BASE (base = 1080 -
+// NV_HERO_BASE) and stacked upwards, which is how the Apple app does it — the side
+// effect was the text coming down as the synopsis grew and touching the first row's
+// title. In the web app each line has a fixed place:
 //   logo      y=135  (h 160)
-//   meta      y=327  (fonte 21, peso 500, rgb(179,179,179))
-//   sinopse   y=411  (largura 640, fonte 22, h 89 em 2 linhas)
-// e a fileira 0 comeca em 518, logo abaixo dos 500 onde a sinopse termina.
+//   meta      y=327  (font 21, weight 500, rgb(179,179,179))
+//   synopsis  y=411  (width 640, font 22, h 89 over 2 lines)
+// and row 0 starts at 518, just below the 500 where the synopsis ends.
 #define NV_HERO_LOGO_Y   135.0f
 #define NV_HERO_META_Y   327.0f
 #define NV_HERO_SIN_Y    411.0f
-// 560 e o valor do tema padrao; a TV cai na regra `.legacy-webos`
-// (components.css:19171), que devolve 640 para meta, secundaria E sinopse — com
-// 560 a linha de meta de um episodio quebrava em duas ou tres linhas.
+// 560 is the default theme's value; the TV falls into the `.legacy-webos` rule
+// (components.css:19171), which returns 640 for the meta, the secondary line AND
+// the synopsis — at 560 an episode's meta line broke over two or three lines.
 #define NV_HERO_SIN_W    640.0f
 
-// HERO EDITORIAL DE COLECOES. A arte de uma colecao ja e uma composicao 16:9
-// pronta (gradiente, luz e area de respiro); o texto nao deve competir com uma
-// segunda capa grande no lado direito. As posicoes seguem a referencia da tela
-// de Awards: grupo no alto, logo real da lista no centro-esquerdo e a acao
-// encostando antes do cabecalho da fileira.
+// THE EDITORIAL HERO FOR COLLECTIONS. A collection's art is already a finished 16:9
+// composition (gradient, light and breathing room); the text must not compete with
+// a second large cover on the right. The positions follow the Awards screen's
+// reference: the group at the top, the list's real logo centre-left and the action
+// coming to rest just before the row's header.
 #define NV_COLLECTION_HERO_GROUP_Y      182.0f
 #define NV_COLLECTION_HERO_LOGO_Y       258.0f
 #define NV_COLLECTION_HERO_LOGO_MAX_W   520.0f
@@ -190,40 +190,28 @@
 #define NV_LD_HERO_SIN   30
 #define NV_LD_HERO_META  26
 #define NV_LD_HERO_SEC   24
-// MEDIDO no app web: o titulo da primeira fileira fica em y=518 e os cards em
-// y=564. A regra dos "2/3 da tela" que estava aqui e do productTemplate do
-// tvOS, e nao e a nossa: no web as fileiras sobem por cima da parte de baixo da
-// arte do hero (que vai ate 670), em vez de comecarem depois dela.
-#define NV_SHELF_TOP     518.0f   // topo do cabecalho da primeira fileira
-#define NV_LEGACY_ROW_HEAD_H 46.0f // titulo + margem ate os cards (564 - 518)
+// MEASURED in the web app: the first row's title sits at y=518 and the cards at
+// y=564. The "2/3 of the screen" rule that used to be here is from tvOS's
+// productTemplate, and is not ours: in the web app the rows rise over the bottom
+// part of the hero's art (which runs to 670), instead of starting after it.
+#define NV_SHELF_TOP     518.0f   // the top of the first row's header
+#define NV_LEGACY_ROW_HEAD_H 46.0f // title + margin down to the cards (564 - 518)
 
-// As quatro secoes visuais que a home do Apple TV usa, cada uma com proporcao
-// propria — OBSERVADO nas fotos de referencia:
-//  1. HERO      arte 16:9 full-bleed que TROCA sozinha (carrossel + dots)
-//  2. CARD      landscape 16:9 comum, a fileira padrao
-//  3. POSTER    retrato 2:3, usado no Top 10 ao lado do numeral
-//  4. DESTAQUE  card grande com bloco de metadados embaixo ("Assista em seguida")
-// Larguras OFICIAIS da tabela de grid do tvOS (somam 1760 = area util):
-//   4 colunas -> 410   |   5 -> 320   |   6 -> 260   |   8 -> 184
-// MEDIDO no app web rodando em 1920x1080 (getBoundingClientRect, nao leitura de
-// CSS): .home-content-card = 212 x 322, primeiro card em x=248, segundo em
-// x=520. Os valores anteriores vinham do grid do tvOS e erravam nos dois:
-// altura 318 (o 212 x 1.5 "certinho" que o web nao usa) e gap 24.
+// The four visual sections the Apple TV home uses, each with its own proportion —
+// OBSERVED in the reference photos:
+//  1. HERO      full-bleed 16:9 art that CHANGES by itself (carousel + dots)
+//  2. CARD      an ordinary 16:9 landscape, the default row
+//  3. POSTER    2:3 portrait, used in the Top 10 beside the numeral
+//  4. HIGHLIGHT a large card with a metadata block below ("Watch next")
+// The OFFICIAL widths from tvOS's grid table (they add up to 1760 = the usable area):
+//   4 columns -> 410   |   5 -> 320   |   6 -> 260   |   8 -> 184
+// MEASURED in the web app running at 1920x1080 (getBoundingClientRect, not reading
+// the CSS): .home-content-card = 212 x 322, the first card at x=248, the second at
+// x=520. The previous values came from tvOS's grid and were wrong on both: a height
+// of 318 (the "neat" 212 x 1.5 the web app does not use) and a gap of 24.
 #define NV_CARD_W        212.0f
 #define NV_CARD_H        322.0f
 
-// CARD PADDING. The 212x322 box is not all artwork. The web nests two 2px
-// borders, both transparent at rest: `.home-content-card` (border 2px,
-// radius 24) wraps `.home-poster-frame` (border 2px, radius 22), and the art
-// fills the frame's padding box. With `box-sizing: border-box` — the `*` rule
-// at base.css:119 — that leaves the art 4px inside the card on every side:
-// 204x314 in the portrait card, 314x174.875 in the landscape one. It is also
-// where the 322 comes from: 2 + 318 (the frame) + 2.
-//
-// The port used to paint the art over the WHOLE box, so a legacy poster read
-// 8px wider than the web one and all but touched its neighbour. The 236 step
-// was never wrong — the gutter was missing.
-//
 // This gutter belongs to the POSTER card only. The continue-watching card is
 // built differently in the web: `.home-continue-media` has `border: 0` and the
 // artwork does run edge to edge (components.css:5893).
@@ -231,182 +219,182 @@
 #define NV_FRAME_BORDER  2.0f   // .home-poster-frame border-width
 #define NV_CARD_PAD      (NV_CARD_BORDER + NV_FRAME_BORDER)
 
-// 24, e o 60 que estava aqui era ERRO DE MEDIDA. A conta "520 - 248 = 272 de
-// passo, menos 212 do card = 60" mediu um estado com o card EXPANDIDO pelo
-// foco; o passo em repouso e outro.
+// 24, and the 60 that used to be here was a MEASUREMENT ERROR. The arithmetic
+// "520 - 248 = 272 of step, minus the card's 212 = 60" measured a state with the
+// card EXPANDED by focus; the step at rest is different.
 //
-// MEDIDO no app de referencia (com.nuvio.tv na TCL, 1920x1080, deteccao de
-// goteira coluna a coluna): card 210, goteira 24,0 px em todas as ocorrencias
-// consecutivas, passo 234. O CSS do web concorda: `--home-track-gap: 24px` em
-// `.home-layout-modern`. Duas fontes independentes contra uma conta feita em
-// cima do estado errado.
+// MEASURED in the reference app (com.nuvio.tv on the TCL, 1920x1080, gutter
+// detection column by column): card 210, gutter 24.0 px on every consecutive
+// occurrence, step 234. The web app's CSS agrees: `--home-track-gap: 24px` in
+// `.home-layout-modern`. Two independent sources against one piece of arithmetic
+// done on the wrong state.
 //
-// Efeito: de ~6,6 para ~7,8 posteres por tela, e a fileira deixa de parecer
-// rala — que era o defeito oposto ao que o comentario antigo dizia consertar.
+// Effect: from ~6.6 to ~7.8 posters per screen, and the row stops looking sparse —
+// which was the opposite of the defect the old comment claimed to fix.
 #define NV_CARD_GAP      24.0f
-// Passo entre fileiras MEDIDO: titulo da fileira 0 em y=518, da fileira 1 em
-// y=934 -> 416. Desses, 46 sao do cabecalho ate os cards (518 -> 564) e 322 do
-// card, sobrando 48 de respiro entre uma fileira e a proxima.
+// The step between rows MEASURED: row 0's title at y=518, row 1's at y=934 -> 416.
+// Of those, 46 are from the header down to the cards (518 -> 564) and 322 the
+// card's, leaving 48 of breathing room between one row and the next.
 #define NV_ROW_GAP  48.0f
 
-// POSTER DEITADO (`modernLandscapePostersEnabled`). MEDIDO no app web com a
-// preferencia ligada: `.home-poster-card.is-landscape` = 318 de largura, moldura
-// 314x178.875 (16:9) com 2px de borda em volta -> caixa 318x182.9.
+// A LANDSCAPE POSTER (`modernLandscapePostersEnabled`). MEASURED in the web app
+// with the preference on: `.home-poster-card.is-landscape` = 318 wide, a
+// 314x178.875 (16:9) frame with a 2px border around it -> a box of 318x182.9.
 //
-// De onde sai o 318: a folha do layout moderno define
-// `--home-landscape-poster-width: calc(var(--home-poster-width) * 1.5)` e
-// `--home-landscape-poster-height: calc(... * 0.5625)` sobre o
-// `--home-poster-width: 212px` do proprio layout moderno (components.css:6462).
-// NAO sai de `posterCardWidthDp`: a variavel inline que
-// `buildModernHomeSizingStyle` escreve (399x225 para 120dp) e sobrescrita, e
-// isso foi CONFERIDO no app rodando — trocar a variavel para 300px nao moveu um
-// pixel do card.
+// Where the 318 comes from: the modern layout's stylesheet defines
+// `--home-landscape-poster-width: calc(var(--home-poster-width) * 1.5)` and
+// `--home-landscape-poster-height: calc(... * 0.5625)` over the modern layout's own
+// `--home-poster-width: 212px` (components.css:6462). It does NOT come from
+// `posterCardWidthDp`: the inline variable `buildModernHomeSizingStyle` writes
+// (399x225 for 120dp) is overridden, and this was CHECKED in the running app —
+// changing the variable to 300px did not move the card by a pixel.
 //
-// A fileira deitada tambem aperta o passo vertical: `--home-row-gap` cai de 32
-// para 24 em `.home-modern-landscape-posters` (components.css:6473).
+// The landscape row also tightens the vertical step: `--home-row-gap` drops from 32
+// to 24 in `.home-modern-landscape-posters` (components.css:6473).
 #define NV_CARD_LAND_W   318.0f
-#define NV_CARD_LAND_H   182.9f   // 178.875 de moldura + 2px de borda em cima e embaixo
+#define NV_CARD_LAND_H   182.9f   // a 178.875 frame + 2px of border top and bottom
 #define NV_CARD_LAND_ART 178.875f
 #define NV_ROW_GAP_LAND 24.0f
-// A legenda do card deitado fica DENTRO da moldura: left/right 14, bottom 12,
-// largura maxima 76% do card, sobre um degrade que cobre 54% da altura.
-#define NV_LAND_COPY_DFLT  14.0f
+// The landscape card's caption sits INSIDE the frame: left/right 14, bottom 12, a
+// maximum width of 76% of the card, over a gradient covering 54% of the height.
+#define NV_LAND_COPY_PAD  14.0f
 #define NV_LAND_COPY_BASE 12.0f
 #define NV_LAND_COPY_MAXW 0.76f
 #define NV_LAND_VEIL       0.54f
 
-// Rotulo abaixo do poster (`posterLabelsEnabled`). `.home-poster-copy`: padding
-// 8px 2px 0, altura fixa `--home-poster-copy-height: 74px`, titulo 16/500 e
-// subtitulo 13/400 rgba(255,255,255,0.7).
+// The label below the poster (`posterLabelsEnabled`). `.home-poster-copy`: padding
+// 8px 2px 0, fixed height `--home-poster-copy-height: 74px`, title 16/500 and
+// subtitle 13/400 rgba(255,255,255,0.7).
 //
-// ATENCAO: no layout MODERNO a folha esconde este bloco —
+// CAREFUL: in the MODERN layout the stylesheet hides this block —
 // `.home-screen-shell.home-layout-modern .home-poster-copy { display: none }`
-// (components.css:7334) — e por isso a tela de Ajustes do web nem mostra a
-// opcao quando o layout e moderno (`!isModernLayout` em settingsScreen.js:4050).
-// O port desenha o bloco quando a preferencia esta ligada; ver a nota em home.c.
+// (components.css:7334) — and that is why the web app's Settings screen does not
+// even show the option when the layout is modern (`!isModernLayout` in
+// settingsScreen.js:4050). The port draws the block when the preference is on; see
+// the note in home.c.
 #define NV_POSTER_COPY_H   74.0f
 #define NV_POSTER_COPY_PADT 8.0f
 #define NV_POSTER_COPY_PADX 2.0f
 
 #define NV_POSTER_W      212.0f
 #define NV_POSTER_H      322.0f
-// O Top 10 reserva espaco abaixo do poster para o rotulo de genero.
+// The Top 10 reserves space below the poster for the genre label.
 #define NV_TOP10_LABEL   38.0f
-#define NV_POSTER_NUM_W  118.0f   // faixa do numeral gigante do Top 10
+#define NV_POSTER_NUM_W  118.0f   // the band for the Top 10's giant numeral
 
-// CORRIGIDO apos foto de referencia: no Apple TV os metadados do card grande
-// ficam DENTRO da arte, sobrepostos na base sobre um veu escuro — nao abaixo
-// dela. O logo do titulo aparece embutido na propria arte-chave.
-// Medido por proporcao nas fotos: o card grande ocupa ~40% da largura da tela
-// (~760px em 1920). E NAO e 16:9 — comparando a altura na foto do Apple TV, a
-// proporcao fica perto de 3:2. Como nossa arte de origem e backdrop 16:9, o
-// shader recorta (cover) em vez de esticar; sem isso a imagem deforma, que foi
-// exatamente o defeito que apareceu na primeira tentativa.
+// CORRECTED after a reference photo: on the Apple TV the large card's metadata sits
+// INSIDE the art, overlaid at the base over a dark veil — not below it. The title's
+// logo appears embedded in the key art itself.
+// Measured by proportion in the photos: the large card takes ~40% of the screen's
+// width (~760px at 1920). And it is NOT 16:9 — comparing the height in the Apple TV
+// photo, the proportion is close to 3:2. Since our source art is a 16:9 backdrop,
+// the shader crops (cover) instead of stretching; without that the image deforms,
+// which was exactly the defect that showed up on the first attempt.
 #define NV_HIGHLIGHT_W    419.0f
-#define NV_CW_DFLT          18.0f
+#define NV_CW_PAD          18.0f
 #define NV_CW_BAR_H         4.0f
 #define NV_CW_BAR_BOTTOM   10.0f
-#define NV_CW_BADGE_DFLT_X  14.0f
-#define NV_CW_BADGE_DFLT_Y   8.0f
+#define NV_CW_BADGE_PAD_X  14.0f
+#define NV_CW_BADGE_PAD_Y   8.0f
 #define NV_CW_BADGE_RADIUS  7.0f
 #define NV_HIGHLIGHT_H    236.0f   // continue watching: 419 x 236
-                                  // (16:9 -> 3:2 -> 4:3 -> +20%: cada passo foi
-                                  //  comparado lado a lado na TV)
-
-// Hero-carrossel: tempo em cada arte e duracao do crossfade.
+                                  //  compared side by side on the TV)
+// The hero carousel: the time on each piece of art and the crossfade's duration.
 #define NV_HERO_INTERVAL_MS  7000
-// APAGAR a arte velha, NAO dissolver uma na outra.
+// ERASE the old art, do NOT dissolve one into the other.
 //
-// MEDIDO na referencia (screenrecord do aparelho, quadros com carimbo de tempo,
-// tres trocas de heroi na home, tecla DIREITA em "Continuar assistindo"):
-//   - a arte fica intacta ate ~90 ms depois da tecla (latencia de entrada);
-//   - a partir dai ela APAGA, e chega a alfa 0 aos ~450 ms depois da tecla,
-//     ou seja ~330 ms de esvanecimento;
-//   - a tela fica REALMENTE VAZIA (so o fundo) por um tempo que depende do
-//     carregamento: medi 120 ms com a arte em cache e 780 ms sem;
-//   - a arte nova entra de CORTE SECO, em UM UNICO QUADRO. Numa das trocas a
-//     luminancia da regiao da arte saltou de 20,5 para 93,1 entre dois quadros
-//     consecutivos (+72,5), e nos 1,8 s seguintes o gravador nao emitiu nem um
-//     quadro — nada se moveu. Nao ha esvanecimento de entrada.
-// Nao ha crossfade em momento nenhum: a arte velha e a nova nunca aparecem
-// juntas. Eram 900 ms de mistura, quase o triplo do tempo e a forma errada.
+// MEASURED against the reference (a screenrecord from the device, frames with
+// timestamps, three hero changes on the home, the RIGHT key on "Continue
+// watching"):
+//   - the art stays intact until ~90 ms after the keypress (input latency);
+//   - from there it FADES OUT, reaching alpha 0 at ~450 ms after the keypress,
+//     that is ~330 ms of fading;
+//   - the screen is REALLY EMPTY (just the background) for a time that depends on
+//     the loading: I measured 120 ms with the art cached and 780 ms without;
+//   - the new art comes in as a HARD CUT, in a SINGLE FRAME. On one of the changes
+//     the luminance of the art's region jumped from 20.5 to 93.1 between two
+//     consecutive frames (+72.5), and over the following 1.8 s the recorder did not
+//     emit a single frame — nothing moved. There is no fade in.
+// There is no crossfade at any point: the old art and the new one never appear
+// together. It used to be 900 ms of blending, almost triple the time and the wrong
+// shape.
 #define NV_HERO_FADE_MS       220.0f
-// REPOUSO ANTES DE TROCAR O HEROI. O fundo so acompanha o foco depois que ele
-// PARA por este tempo.
+// A REST PERIOD BEFORE CHANGING THE HERO. The background only follows the focus
+// once it has STOPPED for this long.
 //
-// Sem isso, atravessar uma fileira de 12 cards trocava o heroi 12 vezes: a arte
-// piscava a cada passo (o dono: "no outro aplicativo, se eu passar rapido pelos
-// posteres, ele mantem a arte que estava ate eu parar no filme") e, pior, cada
-// troca PEDIA UMA TEXTURA DE 1920 — ~8 MB cada. Doze delas em dois segundos
-// estouram o orcamento do cache e despejam justamente os posteres que estao na
-// tela, que e a outra queixa ("continua nao aparecendo todos os posteres"). As
-// duas coisas eram o mesmo defeito.
+// Without it, crossing a row of 12 cards changed the hero 12 times: the art
+// flickered at every step (the owner: "in the other app, if I move quickly through
+// the posters, it keeps the art it had until I stop on a film") and, worse, every
+// change ASKED FOR A 1920 TEXTURE — ~8 MB each. Twelve of those in two seconds blow
+// the cache's budget and evict precisely the posters that are on screen, which is
+// the other complaint ("it still isn't showing all the posters"). The two were the
+// same defect.
 //
-// 220 ms: acima do intervalo de repeticao do D-pad segurado (~130 ms nesta TV),
-// entao atravessar a fileira nao dispara nenhuma troca; e curto o bastante para
-// que parar no card e ver o fundo responder pareca imediato.
+// 220 ms: above the repeat interval of a held D-pad (~130 ms on this TV), so
+// crossing the row fires no change at all; and short enough that stopping on a card
+// and seeing the background respond feels immediate.
 #define NV_HERO_IDLE_MS    220
 #define NV_HERO_DOT           9.0f
 #define NV_HERO_DOT_GAP      14.0f
 
-// Tipografia (px em 1080p)
-// Escala tipografica do tvOS em 1080p (1pt = 1px). Os pesos vem do arquivo:
-// a TV so tem Light e Regular da fonte LG, entao o negrito e sintetico.
+// Typography (px at 1080p)
+// The tvOS type scale at 1080p (1pt = 1px). The weights come from the file: the TV
+// only has Light and Regular of the LG font, so the bold is synthetic.
 #define NV_FT_TITLE1    76
-// 56 e nao os 57 da escala do tvOS: hoje este estilo so serve a
-// `.library-page-title` e aos titulos de estado vazio da busca e da biblioteca,
-// e os tres medem 56 no web. O cabecalho da pagina de titulo do app da Apple,
-// que era o dono do 57, nao existe mais no port.
+// 56 and not the tvOS scale's 57: today this style serves only
+// `.library-page-title` and the empty-state titles of search and library, and all
+// three measure 56 in the web app. The Apple app's title-page header, which owned
+// the 57, no longer exists in the port.
 #define NV_FT_TITLE2    56
 #define NV_FT_TITLE3    48
 #define NV_FT_HEADLINE   38
-// Os corpos pequenos ficam ABAIXO da tabela do tvOS de proposito. A escala
-// oficial pressupoe a SF Pro, e a Inter — que e a substituta possivel aqui — e
-// visivelmente mais larga: no mesmo corpo, a mesma frase ocupou 336px contra
-// 225px na captura do aparelho. Manter os numeros oficiais deixaria a mancha de
-// texto de cada card metade maior que a do original. Os titulos ficam nos
-// valores oficiais, onde a medida bateu (cap 40 contra 41).
+// The small body sizes sit BELOW the tvOS table on purpose. The official scale
+// assumes SF Pro, and Inter — which is the possible substitute here — is visibly
+// wider: at the same size, the same sentence took 336px against 225px in the
+// device's capture. Keeping the official numbers would make each card's block of
+// text half again as large as the original's. The titles stay at the official
+// values, where the measurement matched (cap 40 against 41).
 #define NV_FT_BODY       25
 #define NV_FT_CALLOUT    28
 #define NV_FT_CAPTION    22
 #define NV_FT_CAPTION2   21
-#define NV_FT_MINI       15   // selo de classificacao (icone, nao texto)
-// Corpos do PLAYER. Nao saem da escala do tvOS: saem do app web, que e a
-// referencia desta variante. Os valores estao resolvidos para 1920x1080, que e
-// onde o app roda — no CSS eles sao min(2.92vw,56px) e min(1.67vw,32px), e a
-// TV cai sempre no teto. 56 nao vira TITULO2 (57) nem 32 vira HEADLINE (38)
-// porque a diferenca aparece: o subtitulo em 38 empurra a barra de progresso
-// para fora do lugar que o web reserva para ela.
-// .home-row-title do web: 26px, peso 600. O nativo usava HEADLINE (38), e era
-// isso que fazia o titulo da fileira invadir o card logo abaixo dele.
-// 33 e nao 26. MEDIDO comparando a MESMA string ("Top 100 Today - Filme")
-// presente nas duas capturas: largura da tinta 258 px no nosso contra 329 na
-// referencia, altura 25,2 contra 32,0 — razao 1,27 nos dois eixos. 26 x 1,27 =
-// 33. O 26 vinha do `.home-row-title` do web; o web e a TCL divergem aqui e a
-// TCL manda, por ser o aparelho.
+#define NV_FT_MINI       15   // the age-rating badge (an icon, not text)
+// The PLAYER's sizes. They do not come from the tvOS scale: they come from the web
+// app, which is this variant's reference. The values are resolved for 1920x1080,
+// which is where the app runs — in the CSS they are min(2.92vw,56px) and
+// min(1.67vw,32px), and the TV always hits the ceiling. 56 does not become TITLE2
+// (57) and 32 does not become HEADLINE (38) because the difference shows: the
+// subtitle at 38 pushes the progress bar out of the place the web app reserves for it.
+// The web app's .home-row-title: 26px, weight 600. The native one used HEADLINE
+// (38), and that is what made the row's title invade the card just below it.
+// 33 and not 26. MEASURED by comparing the SAME string ("Top 100 Today - Film")
+// present in both captures: the ink's width 258 px in ours against 329 in the
+// reference, the height 25.2 against 32.0 — a ratio of 1.27 on both axes. 26 x 1.27
+// = 33. The 26 came from the web app's `.home-row-title`; the web and the TCL
+// diverge here and the TCL wins, being the device.
 #define NV_FT_ROW_TITLE 33
-// .home-modern-hero-secondary: 18/600 na sessao logada.
+// .home-modern-hero-secondary: 18/600 in the signed-in session.
 #define NV_FT_HERO_SEC   18   // --modern-hero-secondary-size (212*0.085)
-#define NV_FT_HERO_META  21   // --modern-hero-meta-size (212*0.1), peso 500
-#define NV_FT_HERO_SIN   22   // --modern-hero-description-size, peso 400
-// Tela de DETALHE, medidos no app web rodando (getBoundingClientRect e
-// getComputedStyle sobre .series-detail-shell), nao lidos da folha.
-#define NV_FT_DET_BUTTON  25   // .series-primary-btn (peso 600)
-#define NV_FT_DET_META   25   // .series-detail-support e .detail-meta-row
+#define NV_FT_HERO_META  21   // --modern-hero-meta-size (212*0.1), weight 500
+#define NV_FT_HERO_SIN   22   // --modern-hero-description-size, weight 400
+// The DETAIL screen, measured in the running web app (getBoundingClientRect and
+// getComputedStyle over .series-detail-shell), not read from the stylesheet.
+#define NV_FT_DET_BUTTON  25   // .series-primary-btn (weight 600)
+#define NV_FT_DET_META   25   // .series-detail-support and .detail-meta-row
 #define NV_FT_DET_SIN    26   // .series-detail-description
 #define NV_FT_DET_META2  23   // .detail-meta-row.secondary
 #define NV_FT_PLR_TITLE 56   // .player-title
-#define NV_FT_PLR_BODY  32   // .player-subtitle e .player-time-label
-// Canto superior do player. O relogio e o "Termina as" vem do bloco ATV
-// (components.css:15282), ja convertidos para o canvas de 1920; o guia
-// parental nao e refeito la e fica com os 22 da regra base.
+#define NV_FT_PLR_BODY  32   // .player-subtitle and .player-time-label
+// The player's top corner. The clock and the "Ends at" come from the ATV block
+// (components.css:15282), already converted to the 1920 canvas; the parental guide
+// is not redone there and keeps the base rule's 22.
 #define NV_FT_PG_CLOCK 26   // .player-clock
 #define NV_FT_PG_END     20   // .player-ends-at
 #define NV_FT_PG_LABEL  22   // .player-parental-label
 #define NV_FT_PG_SEV    22   // .player-parental-severity
-// Entrelinha (leading) OFICIAL de cada estilo. Usar a altura que o SDL_ttf
-// devolve nao e a mesma coisa: ela varia com os acentos da linha, entao um
-// paragrafo fica com espacamento irregular linha a linha.
+// The OFFICIAL leading of each style. Using the height SDL_ttf returns is not the
+// same thing: it varies with the line's accents, so a paragraph ends up with
+// irregular spacing line by line.
 #define NV_LD_TITLE1    96
 #define NV_LD_TITLE3    56
 #define NV_LD_HEADLINE   46
@@ -414,10 +402,10 @@
 #define NV_LD_CAPTION    29
 #define NV_LD_CAPTION2   30
 
-// ANEL DE FOCO, em pixels, para o app INTEIRO. MEDIDO na referencia: 4 px
-// solidos de branco puro, sem rampa, por fora da caixa do elemento. Vale para
-// card de home, card de episodio, botao de detalhe e tecla de teclado — um
-// numero so. NV_DETW_ANEL ja era 4 e so era aplicado no detalhe.
+// THE FOCUS RING, in pixels, for the WHOLE app. MEASURED against the reference: 4
+// solid px of pure white, with no ramp, outside the element's box. It holds for the
+// home card, the episode card, the detail button and a keyboard key — one number.
+// NV_DETW_RING was already 4 and was only applied on the detail screen.
 #define NV_RING_FOCUS      4.0f
 
 // POSTER CARD FOCUS RING. The poster is the one card that does NOT take the
@@ -432,7 +420,13 @@
 // continue-watching card, whose `::before` carries
 // `0 0 0 4px var(--focus-color)` — a real outset box-shadow (components.css:
 // 5874), with --focus-color #ffffff (base.css:24).
-#define NV_FRAME_RING      2.0f
+//
+// THICKER THAN THE WEB, and deliberately: the sheet says 2px, the owner asked
+// for more after seeing 2px on the C3. At 4 it fills the whole NV_CARD_PAD
+// gutter, so the lit border runs flush with the card outline and the artwork
+// keeps its 4px inset — the resting card does not move when it takes focus.
+// The alpha is still the web's 0.8, because only the weight was the complaint.
+#define NV_FRAME_RING      4.0f
 #define NV_FRAME_RING_A    0.8f
 
 // Area util explicita da home: a rail pode variar, mas o texto e o foco nunca
@@ -441,42 +435,43 @@
 #define NV_HOME_TEXT_GUTTER   24.0f
 #define NV_HOLD_FEEDBACK_MS   110.0f
 
-// FOCO EM SUPERFICIE (pilula, item de menu, chip): fundo ESCURO com texto
-// branco — nao o contrario.
+// FOCUS ON A SURFACE (pill, menu item, chip): a DARK background with white text —
+// not the other way round.
 //
-// Usavamos #E4E4E9 (claro) com texto escuro, que alem de invertido em relacao a
-// referencia nao e cor de sistema nenhuma: nem #FFFFFF, nem o #F5F5F5 de
-// --secondary-color. Era um off-white azulado inventado. A referencia tem UM
-// token: --focus-bg #303030, confirmado no CSS do web e MEDIDO exato na TCL.
+// We used #E4E4E9 (light) with dark text, which besides being inverted relative to
+// the reference is no system colour at all: neither #FFFFFF nor the #F5F5F5 of
+// --secondary-color. It was an invented bluish off-white. The reference has ONE
+// token: --focus-bg #303030, confirmed in the web app's CSS and MEASURED exactly on
+// the TCL.
 //
-// Excecao legitima: o botao primario do detalhe ("Reproduzir") e branco com
-// texto preto nos DOIS apps. Esse continua como esta.
+// A legitimate exception: the detail screen's primary button ("Play") is white with
+// black text in BOTH apps. That one stays as it is.
 #define NV_COLOR_FOCUS_R     0.188f
 #define NV_COLOR_FOCUS_G     0.188f
 #define NV_COLOR_FOCUS_B     0.188f
 
-// Raios, em fracao do menor lado (o shader usa SDF normalizado)
+// Radii, as a fraction of the smaller side (the shader uses a normalised SDF)
 #define NV_RADIUS_CARD     0.055f
 #define NV_RADIUS_PILL     0.5f
 #define NV_RADIUS_BADGE    0.18f
 
-// Fundo: #0D0D0D. Aqui estava #252629, com a justificativa de que "o
-// quase-preto fazia os cards flutuarem no vazio" — mas a referencia E
-// quase-preta: MEDIDO #0D0D0D na home da TCL e #020202 na home rolada, e
-// `--bg-color: #0D0D0D` no CSS do web. As duas fontes concordam.
+// Background: #0D0D0D. This used to be #252629, with the justification that "the
+// near-black made the cards float in the void" — but the reference IS near-black:
+// MEASURED #0D0D0D on the TCL's home and #020202 on the scrolled home, and
+// `--bg-color: #0D0D0D` in the web app's CSS. The two sources agree.
 //
-// Nao e cosmetico. Com #252629 o placeholder de card sem arte (#242429) ficava
-// a uma distancia de (1,2,0) do fundo — contraste 1,0:1, ou seja, INVISIVEL. Os
-// posteres "que nao apareciam" apareciam: como retangulos da cor exata do
-// fundo. Ver NV_COR_ESQUELETO logo abaixo.
+// It is not cosmetic. With #252629 the placeholder for a card with no art (#242429)
+// sat at a distance of (1,2,0) from the background — a contrast of 1.0:1, that is,
+// INVISIBLE. The posters "that were not appearing" were appearing: as rectangles in
+// exactly the background's colour. See NV_COLOR_SKELETON just below.
 #define NV_COLOR_BACKGROUND_R   0.051f
 #define NV_COLOR_BACKGROUND_G   0.051f
 #define NV_COLOR_BACKGROUND_B   0.051f
 
-// Superficie de CARD SEM ARTE (#2C2C2C). MEDIDO na referencia, que a desenha
-// solida na caixa exata do card enquanto a imagem nao chega — luminancia ~22x
-// a do fundo, impossivel nao ver. E o que faz "carregando" ler como carregando
-// em vez de como quebrado.
+// The surface of a CARD WITH NO ART (#2C2C2C). MEASURED against the reference,
+// which draws it solid in the card's exact box while the image has not arrived —
+// a luminance ~22x the background's, impossible to miss. It is what makes "loading"
+// read as loading instead of as broken.
 #define NV_COLOR_SKELETON_R 0.173f
 #define NV_COLOR_SKELETON_G 0.173f
 #define NV_COLOR_SKELETON_B 0.173f
@@ -499,164 +494,220 @@
 // Black laid over that top colour to land on #111 at the bottom: 1 - 17/28.
 #define NV_POSTER_BG_FADE   0.393f
 
-// Foco: escala 1.05-1.10x na HIG. Usamos 1.09 no card.
-// Escala do foco DERIVADA das tabelas oficiais de Top Shelf, que publicam
-// tamanho focado e nao focado: poster 2:3 e quadrado crescem ~14%, card 16:9
-// cresce ~9%. Eu usava 9% para tudo, o que deixava o poster subdimensionado.
-#define NV_FOCUS_SCALE   0.09f    // cards 16:9
-#define NV_FOCUS_SCALE_P 0.14f    // posters 2:3 e circulos
-// O item em foco tambem SOBE, nao so cresce: no tvOS ele se levanta em direcao
-// ao espectador e a sombra cai por baixo. Sem o deslocamento, escala e sombra
-// juntas leem como "a imagem inchou", nao como "esta item veio para frente".
+// Focus: a scale of 1.05-1.10x in the HIG. We use 1.09 on the card.
+// The focus scale DERIVED from the official Top Shelf tables, which publish focused
+// and unfocused sizes: a 2:3 poster and a square grow ~14%, a 16:9 card grows ~9%.
+// I used 9% for everything, which left the poster undersized.
+#define NV_FOCUS_SCALE   0.09f    // 16:9 cards
+#define NV_FOCUS_SCALE_P 0.14f    // 2:3 posters and circles
+
+// THE HOME'S OWN FOCUS SCALES, which are NOT the two above. Those come from tvOS's
+// Top Shelf tables; these are read off the web app, and they are much smaller — the
+// home card barely grows, and does the work of showing focus with a border and with
+// the dimming of everything else.
+//
+// The two card families really do differ, and this is not an oversight in the sheet:
+//   .home-layout-modern .home-content-card.focused  -> scale(1.02)  (components.css:7747)
+//   .home-continue-card.focused                     -> scale(1.05)  (components.css:5933,
+//                                                                    with !important)
+// Specificity decides the poster: the 1.05 at components.css:5587 is real but dead in
+// the modern layout, where 7747 (0,4,0) outranks it. In classic/grid the 1.05 is what
+// runs, which is presumably where it came from.
+//
+// Both grow from `transform-origin: top` — that is `50% 0%`, so horizontally centred
+// and vertically PINNED. The card only ever grows downward. This matters: the note that
+// used to sit on scaleOf() records a focused card rising 22px into the row title, and
+// that was 9% on a CENTRED origin plus an 8px lift. Anchored at the top it cannot
+// happen again.
+//
+// The see-all card does not scale at all (components.css:5804, transform: none
+// !important), and neither do loading skeletons.
+//
+// NOT APPLICABLE HERE, but worth recording so nobody "fixes" this against the wrong
+// device: components.css:19313 crushes the scale to 1.005 under .legacy-webos /
+// .legacy-tizen. That needs webOS <= 6 (js/app.js:186) and the C3 is webOS 23, so the
+// full 1.02 is what the reference actually shows on the owner's TV.
+#define NV_FOCUS_SCALE_POSTER 0.02f
+#define NV_FOCUS_SCALE_CW     0.05f
+
+// EVERY CARD THAT IS NOT FOCUSED IS DIMMED. This is the strongest focus cue the web
+// has — stronger than the border or the scale — and it is global, not row-scoped:
+// every poster and continue card on screen that is not the focused one is darkened,
+// including the ones in other rows. With focus parked outside the rows, they are all
+// dim.
+//
+//   .home-screen-shell .home-poster-card.focusable:not(.focused)   { filter: brightness(0.8) }
+//   .home-screen-shell .home-continue-card.focusable:not(.focused) { filter: brightness(0.8) }
+//                                                            (components.css:21945, 21951)
+//
+// The `.focusable` in those selectors is what keeps loading skeletons at full
+// brightness (homeScreen.js:2610 omits the class while a card is loading), and the
+// see-all card is neither of those two types, so it is never dimmed either.
+//
+// This value used to live in the GFX_CARD shader as `color *= 0.80` and was taken out
+// as a port invention. It was not — 0.8 is exactly right. What was wrong was the reach:
+// the shader dimmed EVERY card in the app drawn with focus 0, which is detail
+// thumbnails, player key art, episode stills, the search and library grids, screens
+// with no focus at all. Scoped to the home's cards, where the web puts it, it is
+// correct. Do not move it back into the shader.
+//
+// No .performance-constrained or .legacy-* rule disables it: it ships on every device.
+#define NV_DIM_UNFOCUSED      0.8f
+// The focused item also RISES, it does not only grow: on tvOS it lifts towards the
+// viewer and the shadow falls beneath it. Without the offset, the scale and the
+// shadow together read as "the image swelled", not as "this item came forward".
 #define NV_FOCUS_LIFT      8.0f
-// Sombra do item em foco. Numeros de reimplementacoes de terceiros do efeito
-// do tvOS (a Apple nao publica os dela): raio 25px, deslocada 16px para baixo,
-// preto a 30%. O deslocamento vertical importa mais do que parece — sombra
-// centrada le como halo, sombra caida le como objeto levantado.
+// The focused item's shadow. The numbers come from third-party reimplementations of
+// the tvOS effect (Apple does not publish theirs): a 25px radius, offset 16px
+// downwards, black at 30%. The vertical offset matters more than it seems — a
+// centred shadow reads as a halo, a fallen shadow reads as a lifted object.
 #define NV_FOCUS_SHADOW   25.0f
 #define NV_SHADOW_DY     16.0f
 #define NV_SHADOW_ALFA   0.30f
 
-// Molas: rigidez usada em anim_mola(). ~250-350ms de assentamento, sem overshoot.
-// Ganhar foco e mais rapido que perder: assimetria que a Apple declara no HIG
-// ("focusing animations should be prominent, unfocusing subtler"). Com a mesma
-// rigidez nos dois sentidos a navegacao fica com um peso uniforme que nao
-// existe no aparelho.
-// ANEL DE FOCO — MEDIDO na referencia: ele nao esvanece, ele SALTA.
+// Springs: the stiffness used in anim_spring(). ~250-350ms to settle, with no
+// overshoot. Gaining focus is faster than losing it: an asymmetry Apple states in
+// the HIG ("focusing animations should be prominent, unfocusing subtler"). With the
+// same stiffness in both directions the navigation has a uniform weight that does
+// not exist on the device.
+// THE FOCUS RING — MEASURED against the reference: it does not fade, it JUMPS.
 //
-// Rastreei a aresta branca do card focado quadro a quadro. No primeiro quadro
-// desenhado depois da tecla (16-49 ms) o anel ja esta no card novo com o branco
-// cheio, e a folha do app web declara 120 ms `ease` para foco/borda. Os 13,0 /
-// 8,5 que estavam aqui davam 230 ms e 350 ms para 95% — o dobro e o triplo.
-// 25,0 fecha 95% em 120 ms, que e a medida. A assimetria foco/desfoco que havia
-// aqui vinha do HIG do tvOS, nao desta interface: na referencia os dois lados
-// levam o mesmo tempo, e com tempos diferentes existe um instante com DOIS
-// aneis na tela, que a referencia nunca mostra.
-#define NV_SPRING_FOCUS     25.0f    // entrando no foco  (95% em 120ms)
-#define NV_SPRING_BLUR  25.0f    // saindo dele       (mesmo tempo: ver acima)
+// I traced the focused card's white edge frame by frame. On the first frame drawn
+// after the keypress (16-49 ms) the ring is already on the new card at full white,
+// and the web app's stylesheet declares 120 ms `ease` for focus/border. The 13.0 /
+// 8.5 that used to be here gave 230 ms and 350 ms to 95% — double and triple.
+// 25.0 closes 95% in 120 ms, which is the measurement. The focus/blur asymmetry
+// that was here came from the tvOS HIG, not from this interface: in the reference
+// both sides take the same time, and with different times there is an instant with
+// TWO rings on screen, which the reference never shows.
+#define NV_SPRING_FOCUS     25.0f    // coming into focus  (95% in 120ms)
+#define NV_SPRING_BLUR  25.0f    // leaving it         (the same time: see above)
 #define NV_SPRING_SCROLL    8.0f
-// Frequencia (rad/s) da mola de 2a ordem que rola as fileiras da home. Vale o
-// k da CAUDA medida no deslize da referencia (~12,5 /s); 11,5 e o valor que
-// faz a curva inteira bater, porque nessa mola a cauda e so metade do ajuste:
-// p(t)=1-(1+wt)e^-wt cruza a metade em 1,678/w = 146 ms com w=11,5, e o medido
-// foi ~145 ms. Ver anim_mola2() em anim.h para o porque da troca de mola.
+// The frequency (rad/s) of the second-order spring that scrolls the home's rows. It
+// takes the k of the TAIL measured on the reference's glide (~12.5 /s); 11.5 is the
+// value that makes the whole curve match, because in this spring the tail is only
+// half the fit: p(t)=1-(1+wt)e^-wt crosses the halfway point at 1.678/w = 146 ms
+// with w=11.5, and the measurement was ~145 ms. See anim_spring2() in anim.h for why
+// the spring was swapped.
 #define NV_SPRING2_SCROLL  11.5f
 #define NV_SPRING_SCREEN      9.0f
-// Abertura da PAGINA de secoes do detalhe. MEDIDO na folha do app web:
-// `.series-detail-shell.detail-scrolled .series-detail-backdrop` vai a
-// `opacity: 0.15` em 0.8s cubic-bezier(0.4, 0, 0.2, 1). exp(-3.8*0.8) = 0.05,
-// ou seja 95% do caminho em 800ms. Com NV_MOLA_TELA (9.0) a mola assenta em
-// ~330ms e a arte apaga num piscar, que e menos da metade do tempo do web.
+// The opening of the detail's sections PAGE. MEASURED in the web app's stylesheet:
+// `.series-detail-shell.detail-scrolled .series-detail-backdrop` goes to
+// `opacity: 0.15` over 0.8s cubic-bezier(0.4, 0, 0.2, 1). exp(-3.8*0.8) = 0.05,
+// that is 95% of the way in 800ms. With NV_SPRING_SCREEN (9.0) the spring settles in
+// ~330ms and the art fades out in a blink, which is less than half the web app's time.
 #define NV_SPRING_PAGE    3.8f
 
-// Tela de detalhe: um CARTAO da arte cobrindo quase tudo, com a home aparecendo
-// pela moldura. O voo do card usa NV_MOLA_TELA, mais lenta que a do foco de
-// proposito: troca de tela e movimento maior, e na rigidez do foco viraria corte.
-// Medido no video do app da Apple: o cartao central ocupa ~88% da largura e
-// ~94% da altura. A margem LATERAL e grande de proposito — e por ela que os
-// cartoes vizinhos aparecem, ~95px de cada lado. Com margem pequena o cartao
-// vira tela cheia e o deslize deixa de parecer troca de cartao: parece troca de
-// quadro de um filme, que foi exatamente o que o dono viu na primeira versao.
-// MEDIDO por retificacao por homografia de um frame do aparelho (a tela da TV
-// mapeada para 1920x1080 exatos; validacao: o centro do cartao caiu em 957 de
-// 960 esperado). Cartao 1674x?? com margem lateral 120 e superior 38 — e ele
-// NAO tem margem inferior: e cortado pela base da tela.
+// The detail screen: a CARD of the art covering almost everything, with the home
+// showing through the frame. The card's flight uses NV_SPRING_SCREEN, deliberately
+// slower than the focus's: changing screen is a larger movement, and at the focus's
+// stiffness it would become a cut.
+// Measured in the video of the Apple app: the central card takes ~88% of the width
+// and ~94% of the height. The SIDE margin is large on purpose — it is through it
+// that the neighbouring cards show, ~95px on each side. With a small margin the card
+// becomes full screen and the glide stops looking like a change of card: it looks
+// like a change of frame in a film, which is exactly what the owner saw in the first
+// version.
+// MEASURED by homographic rectification of a frame from the device (the TV's screen
+// mapped to exactly 1920x1080; validation: the card's centre landed at 957 of the
+// expected 960). A 1674x?? card with a side margin of 120 and a top one of 38 — and
+// it has NO bottom margin: it is cut off by the bottom of the screen.
 // ---------------------------------------------------------------------------
-// Tela de DETALHE — layout FULL-BLEED do app web.
+// The DETAIL screen — the web app's FULL-BLEED layout.
 //
-// Tudo MEDIDO no app web rodando em 1920x1080, com o titulo "The Whisper Man"
-// aberto (getBoundingClientRect). O que existia aqui antes — cartao com moldura
-// de 120px, carrossel de vizinhos, tres niveis de zoom — e o padrao do app da
-// Apple TV, e nao o desta variante. O web nao tem cartao: tem o backdrop
-// cobrindo 1920x1080 em (0,0), a vinheta horizontal por cima, e UMA coluna de
-// conteudo ancorada na base.
+// Everything MEASURED in the web app running at 1920x1080, with the title "The
+// Whisper Man" open (getBoundingClientRect). What used to be here — a card with a
+// 120px frame, a carousel of neighbours, three zoom levels — is the Apple TV app's
+// pattern, not this variant's. The web app has no card: it has the backdrop
+// covering 1920x1080 at (0,0), the horizontal vignette over it, and ONE content
+// column anchored to the base.
 //
 //   .detail-hero-section   padding 0 96 32 72, justify-content: flex-end
-//   .series-detail-logo    261x104 em (72, 445)   [altura fixa 104, max-w 710]
-//   .series-detail-actions 1752x108 em (72, 589), padding 6, gap 24
-//     .series-primary-btn  298x96  em (78, 595)  raio 64, fonte 25/600
-//                          padding lateral 48, gap icone-texto 16, icone 36
-//     .series-circle-btn   84x84   em (439|586|734, 601)  raio 999, bg #222
-//   .series-detail-support 1040x36  em (72, 727)  fonte 25/400 rgb(179,179,179)
-//   .series-detail-descr.  1040x117 em (72, 787)  fonte 26/400 branco, lh 39
-//   .detail-meta-stack     1752x120 em (72, 928)  gap 16
-//     .detail-meta-row     y=928 h=49, fonte 25/400 rgb(179,179,179);
-//                          generos a esquerda, ANO empurrado a direita (1824)
-//     .detail-meta-row.sec y=1003 h=45, fonte 23/400 BRANCO; duracao e pais
+//   .series-detail-logo    261x104 at (72, 445)   [fixed height 104, max-w 710]
+//   .series-detail-actions 1752x108 at (72, 589), padding 6, gap 24
+//     .series-primary-btn  298x96  at (78, 595)  radius 64, font 25/600
+//                          side padding 48, icon-text gap 16, icon 36
+//     .series-circle-btn   84x84   at (439|586|734, 601)  radius 999, bg #222
+//   .series-detail-support 1040x36  at (72, 727)  font 25/400 rgb(179,179,179)
+//   .series-detail-descr.  1040x117 at (72, 787)  font 26/400 white, lh 39
+//   .detail-meta-stack     1752x120 at (72, 928)  gap 16
+//     .detail-meta-row     y=928 h=49, font 25/400 rgb(179,179,179);
+//                          genres on the left, the YEAR pushed right (1824)
+//     .detail-meta-row.sec y=1003 h=45, font 23/400 WHITE; duration and country
 //
-// Os espacos entre blocos (30, 24, 24) sao margens do CSS e nao sobra de
-// layout: com a sinopse mais curta o web encolhe pela base, porque a coluna e
-// flex-end. Por isso aqui tambem se empilha DE BAIXO PARA CIMA.
-#define NV_DETW_X          72.0f   // coluna de conteudo
-#define NV_DETW_DIR      1824.0f   // borda direita util (1920 - 96)
-#define NV_DETW_BASE     1048.0f   // base do bloco (1080 - 32 de padding)
-// 104x710 era o MEDIDO no app web (.series-detail-logo 261x104 em 72,445), mas
-// aquela medida saiu de uma janela estreita. Na tela de 1920 a arte do titulo
-// ficava ocupando um quarto da largura e o dono apontou lado a lado com a
-// referencia dele, onde ela toma mais de dois tercos. 200x1000 dobra o tamanho
-// sem deixar o logo dominar a coluna de texto que vem abaixo.
+// The gaps between blocks (30, 24, 24) are CSS margins and not layout slack: with a
+// shorter synopsis the web app shrinks from the base, because the column is
+// flex-end. So here too it stacks FROM THE BOTTOM UP.
+#define NV_DETW_X          72.0f   // the content column
+#define NV_DETW_DIR      1824.0f   // the usable right edge (1920 - 96)
+#define NV_DETW_BASE     1048.0f   // the block's base (1080 - 32 of padding)
+// 104x710 was what was MEASURED in the web app (.series-detail-logo 261x104 at
+// 72,445), but that measurement came from a narrow window. On the 1920 screen the
+// title's art took up a quarter of the width and the owner pointed it out side by
+// side with their reference, where it takes over two thirds. 200x1000 doubles the
+// size without letting the logo dominate the text column below it.
 //
-// DIVERGENCIA DELIBERADA da medida do web, e nao descuido.
+// A DELIBERATE DIVERGENCE from the web app's measurement, and not an oversight.
 #define NV_DETW_LOGO_H    200.0f
 #define NV_DETW_LOGO_MAXW 1000.0f
-#define NV_DETW_LOGO_GAP   40.0f   // base do logo ao topo da linha de acoes
-#define NV_DETW_ACTIONS_H   108.0f   // inclui os 6px de padding do anel de foco
+#define NV_DETW_LOGO_GAP   40.0f   // the logo's base to the top of the actions row
+#define NV_DETW_ACTIONS_H   108.0f   // includes the focus ring's 6px of padding
 #define NV_DETW_BTN_H      96.0f
 #define NV_DETW_BTN_PADX   48.0f
-// 34 e nao os 16 que o `gap` do flex declara. MEDIDO nos dois estados: o icone
-// comeca em 126 e o rotulo em 196, e o icone tem 36 de largura — sobra 34. A
-// folha mente aqui, como mentia no corpo do titulo do player.
-#define NV_DETW_BTN_GAPI   34.0f   // icone -> rotulo
+// 34 and not the 16 the flex `gap` declares. MEASURED in both states: the icon
+// starts at 126 and the label at 196, and the icon is 36 wide — 34 left over. The
+// stylesheet lies here, as it lied about the player title's body size.
+#define NV_DETW_BTN_GAPI   34.0f   // icon -> label
 #define NV_DETW_BTN_ICON  36.0f
 #define NV_DETW_CIRC       84.0f
-// Os botoes ficam em FLUXO, com 63px entre um e o outro. As posicoes
-// x=439/586/734 que estavam aqui nao sao constantes: sao o que da a conta
-// quando o rotulo e "Reproduzir" e nao ha botao secundario. Medido em duas
-// telas diferentes (Whisper Man deslogado, Silo logado): em ambas o vao entre
-// botoes vizinhos e 63, e o primario muda de largura com o rotulo — "Retomar
-// T2E3" da 334 no lugar de 298, e tudo a direita anda junto.
+// The buttons sit in FLOW, with 63px between one and the next. The x=439/586/734
+// positions that used to be here are not constants: they are what the arithmetic
+// gives when the label is "Play" and there is no secondary button. Measured on two
+// different screens (Whisper Man signed out, Silo signed in): on both the gap
+// between neighbouring buttons is 63, and the primary changes width with its label
+// — "Resume S2E3" gives 334 instead of 298, and everything to the right moves with it.
 #define NV_DETW_BTN_GAP    63.0f
-#define NV_DETW_RING        4.0f   // box-shadow 0 0 0 4px #fff do item focado
-#define NV_DETW_GAP_ACTIONS  30.0f   // acoes -> "Diretor:"
-#define NV_DETW_GAP_SUP    24.0f   // "Diretor:" -> sinopse
-#define NV_DETW_GAP_SIN    24.0f   // sinopse -> pilha de meta
-#define NV_DETW_TEXT_W  1040.0f   // largura de sinopse e linha de apoio
-#define NV_DETW_LD_SUP     36.0f   // line-height da linha de apoio
-#define NV_DETW_LD_SIN     39.0f   // line-height da sinopse
+#define NV_DETW_RING        4.0f   // the focused item's box-shadow 0 0 0 4px #fff
+#define NV_DETW_GAP_ACTIONS  30.0f   // actions -> "Director:"
+#define NV_DETW_GAP_SUP    24.0f   // "Director:" -> synopsis
+#define NV_DETW_GAP_SIN    24.0f   // synopsis -> the meta stack
+#define NV_DETW_TEXT_W  1040.0f   // the width of the synopsis and the support line
+#define NV_DETW_LD_SUP     36.0f   // the support line's line-height
+#define NV_DETW_LD_SIN     39.0f   // the synopsis's line-height
 #define NV_DETW_SIN_LINES    3    // 117 / 39
-#define NV_DETW_META_GAP   26.0f   // gap 16 + margin-top 10 da segunda linha
-// Linha de retomada, so quando o titulo tem progresso. MEDIDA na sessao logada
-// (Silo, 45%): 1720x37 em (72,633), fonte 22.66/400 rgba(255,255,255,0.82),
-// entre a linha de acoes e a linha de apoio.
+#define NV_DETW_META_GAP   26.0f   // gap 16 + the second line's margin-top 10
+// The resume line, only when the title has progress. MEASURED in the signed-in
+// session (Silo, 45%): 1720x37 at (72,633), font 22.66/400 rgba(255,255,255,0.82),
+// between the actions row and the support line.
 #define NV_DETW_RESUME_H    37.0f
-#define NV_DETW_GAP_RESUME  22.0f   // acoes -> retomada (633 - 611)
+#define NV_DETW_GAP_RESUME  22.0f   // actions -> resume (633 - 611)
 #define NV_DETW_LD_META    35.0f
 #define NV_DETW_LD_META2   31.0f
 #define NV_DETW_META_SEP   24.0f   // gap do flex, dos dois lados do ponto
 
 // ---------------------------------------------------------------------------
-// Tela de BUSCA — MEDIDA no app web rodando (perfil do dono, 1920x1080).
+// The SEARCH screen — MEASURED in the running web app (the owner's profile, 1920x1080).
 //
-// O port tinha um TECLADO EM GRADE 6x7 a esquerda e uma grade de resultados a
-// direita. O web nao tem teclado nenhum: tem um campo de texto largo no topo
-// (o sistema da TV abre o teclado dele) e os resultados vem em FILEIRAS
-// horizontais, uma por catalogo de addon, com titulo e a origem embaixo dele.
+// The port had a 6x7 GRID KEYBOARD on the left and a grid of results on the right.
+// The web app has no keyboard at all: it has a wide text field at the top (the TV's
+// system opens its keyboard) and the results come in horizontal ROWS, one per addon
+// catalogue, with a title and the origin below it.
 //
 //   .search-header        y=22  h=110, padding 0 104
-//     .search-discover-btn 110x110 em (104,22)  bg #222, borda 1px #333, raio 22
-//     .search-voice-btn    110x110 em (262,22)  -> passo 158 (gap 48)
-//     .search-input-field  1396x110 em (420,22) bg #222, raio 22, 34/500,
-//                          padding 0 32; focado: borda #f5f5f5 e
+//     .search-discover-btn 110x110 at (104,22)  bg #222, 1px #333 border, radius 22
+//     .search-voice-btn    110x110 at (262,22)  -> step 158 (gap 48)
+//     .search-input-field  1396x110 at (420,22) bg #222, radius 22, 34/500,
+//                          padding 0 32; focused: border #f5f5f5 and
 //                          box-shadow 0 0 0 2px rgba(245,245,245,.22)
-//   .search-empty-state   y=148 h=400, centrado: icone 136 em y=220.5,
-//                          titulo 56/600 em y=378.5, apoio 24/400 em y=446.7
-//   .search-results-row   titulo 48/600 lh 51.84; subtitulo 20/400 rgb(179)
-//                          com margin-top 4; trilho 88.3 abaixo do titulo
-//     .search-result-card  248 de largura, poster 248x372 raio 22 borda 2px
-//                          nome 28/500 lh 33.6 (margin-top 8)
-//                          data 20/400 rgb(179) (margin-top 4)
-//                          passo horizontal 280 (248 + 32)
-//   passo entre fileiras 562.4
+//   .search-empty-state   y=148 h=400, centred: a 136 icon at y=220.5,
+//                          the title 56/600 at y=378.5, support 24/400 at y=446.7
+//   .search-results-row   title 48/600 lh 51.84; subtitle 20/400 rgb(179)
+//                          with margin-top 4; the track 88.3 below the title
+//     .search-result-card  248 wide, poster 248x372 radius 22 border 2px
+//                          name 28/500 lh 33.6 (margin-top 8)
+//                          date 20/400 rgb(179) (margin-top 4)
+//                          horizontal step 280 (248 + 32)
+//   step between rows 562.4
 #define NV_SEARCH_HEAD_Y     22.0f
 #define NV_SEARCH_HEAD_H    110.0f
 #define NV_SEARCH_BTN       110.0f
@@ -678,30 +729,30 @@
 #define NV_SEARCH_DATE_GAP    4.0f
 
 // ---------------------------------------------------------------------------
-// Tela de BIBLIOTECA — MEDIDA no app web rodando.
+// The LIBRARY screen — MEASURED in the running web app.
 //
-// O port tinha tres abas centralizadas ("Minha Lista", "Comprados", "Generos") e
-// uma grade de 6 colunas de 212. O web tem: titulo a esquerda com um selo de
-// origem a direita, DUAS pilulas de modo ("Salvos" / "Nuvem") e DOIS seletores
-// largos ("Tipo" e "Ordenar"), e so entao a grade.
+// The port had three centred tabs ("My List", "Purchased", "Genres") and a 6-column
+// grid of 212. The web app has: the title on the left with a source badge on the
+// right, TWO mode pills ("Saved" / "Cloud") and TWO wide pickers ("Type" and
+// "Sort"), and only then the grid.
 //
-//   .library-main       padding 48 96 64 -> conteudo em x=96, y=48, largura 1728
-//   .library-page-title 56/600, letter-spacing 1px, em (96,48)
-//   .library-page-source 28/500 rgb(128,128,128) ls 4px, alinhado a direita (1824)
-//   .library-view-mode-row y=136 h=56, gap 16: pilulas 150x56 raio 999,
-//                        14/24 de padding, 21/400; escolhida bg #303030 borda
-//                        2px #fff; as outras bg #222 borda 2px #333
-//   .library-picker-row  y=212 h=110: dois seletores 840x110 em x=96 e x=984,
-//                        raio 36, padding 18/28; focado bg #303030 borda 1px
-//                        #fff, os outros bg #222 borda 1px rgba(255,255,255,.1)
+//   .library-main       padding 48 96 64 -> content at x=96, y=48, width 1728
+//   .library-page-title 56/600, letter-spacing 1px, at (96,48)
+//   .library-page-source 28/500 rgb(128,128,128) ls 4px, right-aligned (1824)
+//   .library-view-mode-row y=136 h=56, gap 16: 150x56 pills radius 999,
+//                        14/24 of padding, 21/400; the chosen one bg #303030 with a
+//                        2px #fff border; the others bg #222 border 2px #333
+//   .library-picker-row  y=212 h=110: two 840x110 pickers at x=96 and x=984,
+//                        radius 36, padding 18/28; focused bg #303030 border 1px
+//                        #fff, the others bg #222 border 1px rgba(255,255,255,.1)
 //     .library-picker-title 19/500 rgb(128,128,128) ls 0.45 lh 24
-//     .library-picker-value 30/500 branco ls 0.3 lh 40, margin-top 4
-//   .library-empty-state y=354, padding-top 38, gap 18: titulo 46/500 lh 49.68,
-//                        apoio 28/400 rgb(179,179,179) lh 35
-//   .library-grid       6 colunas de 268 (auto-fill sobre minimo 252 em 1728,
-//                        com 24 de gutter), poster 2:3 = 268x402 raio 24 com
-//                        borda de 4px POR DENTRO, titulo 32/500 lh 1.18 a 16 do
-//                        poster; passo de linha 487.8 (455.8 + 32)
+//     .library-picker-value 30/500 white ls 0.3 lh 40, margin-top 4
+//   .library-empty-state y=354, padding-top 38, gap 18: title 46/500 lh 49.68,
+//                        support 28/400 rgb(179,179,179) lh 35
+//   .library-grid       6 columns of 268 (auto-fill over a minimum of 252 in 1728,
+//                        with a 24 gutter), 2:3 poster = 268x402 radius 24 with a
+//                        4px border ON THE INSIDE, title 32/500 lh 1.18 at 16 from
+//                        the poster; row step 487.8 (455.8 + 32)
 #define NV_LIB_X            96.0f
 #define NV_LIB_Y            48.0f
 #define NV_LIB_W          1728.0f
@@ -726,75 +777,76 @@
 #define NV_LIB_POSTER_BORDER  4.0f
 #define NV_LIB_TITLE_GAP      16.0f
 #define NV_LIB_LINE_STEP 487.8f
-// `.library-grid-card.focused { transform: scale(1.02) }` com origem no topo —
-// e a UNICA escala de foco que sobrou em qualquer tela deste app, e ela e do
-// web: as outras eram das tabelas de Top Shelf do tvOS e foram removidas.
+// `.library-grid-card.focused { transform: scale(1.02) }` with the origin at the top
+// — it is the ONLY focus scale left on any screen of this app, and it is the web
+// app's: the others came from tvOS's Top Shelf tables and were removed.
 #define NV_LIB_FOCUS_SCALE  0.02f
 
 #define NV_DET_MARGIN_X  120.0f
 #define NV_DET_MARGIN_Y   38.0f
-#define NV_DET_DFLT        44.0f   // medido: texto a 44px da borda do cartao
-#define NV_DET_BUTTON_H    70.0f   // medido: pilula 254x70, raio = h/2
-#define NV_DET_BASE      163.0f   // medido: fim do botao ate a base da tela
-// Altura do logo do titulo. Bate com a altura de tinta medida na referencia
-// (cap 83px), com folga para as letras que descem.
+#define NV_DET_PAD        44.0f   // measured: the text 44px from the card's edge
+#define NV_DET_BUTTON_H    70.0f   // measured: a 254x70 pill, radius = h/2
+#define NV_DET_BASE      163.0f   // measured: the button's end to the bottom of the screen
+// The height of the title's logo. It matches the ink height measured against the
+// reference (a cap of 83px), with slack for the descenders.
 #define NV_LOGO_H        104.0f
 #define NV_LOGO_MAX_W    620.0f
-// No cabecalho da pagina o logo aparece menor que no cartao — ali ele e a
-// etiqueta da tela, nao o protagonista.
+// In the page's header the logo appears smaller than on the card — there it is the
+// screen's label, not the protagonist.
 #define NV_LOGO_HEADER_H     62.0f
 #define NV_LOGO_HEADER_MAX_W 420.0f
-// Logo dentro do card destaque da home, no tamanho do card sem foco. Ele cresce
-// junto com o card, senao o titulo "descola" da arte ao ganhar foco.
+// The logo inside the home's highlight card, at the unfocused card's size. It grows
+// along with the card, otherwise the title "peels away" from the art on focus.
 #define NV_LOGO_CARD_H    54.0f
-// Quanto a arte se ATRASA dentro da moldura durante o deslize, em fracao de
-// textura. 0 = arte colada na moldura (parece um panorama unico passando);
-// 0.12 = a janela corre por cima e a arte quase fica — o efeito do painel de
-// feira em que a pessoa poe o rosto e o quadro troca.
+// How much the art LAGS inside the frame during the glide, as a fraction of the
+// texture. 0 = the art stuck to the frame (it looks like a single panorama going
+// past); 0.12 = the window runs over it and the art almost stays put — the effect
+// of a fairground board where you put your face in and the picture changes.
 #define NV_DET_PARALLAX  0.12f
-// Quanto a arte cresce ao virar fundo da pagina esticada, e quanto escurece.
-// Os dois juntos e que a transformam de foto em campo de cor.
+// How much the art grows on becoming the stretched page's background, and how much
+// it darkens. It is the two together that turn it from a photo into a field of colour.
 #define NV_DET_ZOOM_BACKGROUND  1.35f
 #define NV_DET_DARK_BACKGROUND 0.62f
-// Nivel de mipmap amostrado no fundo da pagina: quanto maior, mais borrado.
-// Medido: no fundo da pagina NENHUMA estrutura menor que ~250px sobrevive — e
-// praticamente um gradiente de manchas. Bias 5.5 preservava detalhe demais.
-#define NV_BLUR_STEP       2.4f   // passo do gaussiano, em texels do alvo
-// Teto de memoria das texturas. A TV tem cota, e a arte de verdade e grande:
-// um backdrop 1920x1080 ocupa 8 MB depois de decodificado.
-// 72 MB foi o teto posto depois de um "double free" — mas aquele estouro veio
-// de o cache NAO TER teto nenhum (passava de 104 MB e crescia), nao de 96 ser
-// demais. Com o catalogo dinamico sao ~48 titulos x 2 imagens, e a 72 o cache
-// vivia encostado no limite (medido: 70,7 MB com 46 texturas), despejando e
-// rebaixando sem parar — 12 a 15 janks por segundo durante a navegacao.
+// The mipmap level sampled for the page's background: the higher, the blurrier.
+// Measured: on the page's background NO structure smaller than ~250px survives — it
+// is practically a gradient of blotches. A bias of 5.5 preserved too much detail.
+#define NV_BLUR_STEP       2.4f   // the gaussian's step, in texels of the target
+// The textures' memory ceiling. The TV has a quota, and real art is large: a
+// 1920x1080 backdrop takes 8 MB once decoded.
+// 72 MB was the ceiling set after a "double free" — but that overflow came from the
+// cache having NO ceiling at all (it passed 104 MB and kept growing), not from 96
+// being too much. With the dynamic catalogue there are ~48 titles x 2 images, and at
+// 72 the cache lived pressed against the limit (measured: 70.7 MB with 46 textures),
+// evicting and re-fetching without pause — 12 to 15 janks per second while navigating.
 #define NV_TEX_BUDGET_MB 96
-// Secoes da pagina do titulo.
-#define NV_TAB_W          236.0f   // medido
-#define NV_TAB_H           63.0f   // medido; capsule (raio = h/2)
-#define NV_TAB_PITCH      277.0f   // medido: texto a texto
-// Medido: miniatura 410x228, texto ABAIXO dela, base da miniatura ao rotulo
-// "EPISODIO n" 18px, e do fim do texto ao proximo cabecalho 143px.
-#define NV_EP_H           512.0f   // miniatura + rotulo + titulo + 5 linhas + data
+// The sections of the title's page.
+#define NV_TAB_W          236.0f   // measured
+#define NV_TAB_H           63.0f   // measured; a capsule (radius = h/2)
+#define NV_TAB_PITCH      277.0f   // measured: text to text
+// Measured: a 410x228 thumbnail, the text BELOW it, 18px from the thumbnail's base
+// to the "EPISODE n" label, and 143px from the end of the text to the next header.
+#define NV_EP_H           512.0f   // thumbnail + label + title + 5 lines + date
 #define NV_EP_THUMB_GAP    18.0f
 #define NV_AVATAR         168.0f
-// Tracking: no tvOS ele e LEVEMENTE POSITIVO nos corpos pequenos (+0.4px) e
-// praticamente zero nos titulos grandes — o oposto do reflexo de apertar
-// titulos que vem do design web. O cabecalho da pagina e a excecao: ele e
-// maiusculo e espacado de proposito, e da para ver isso na foto do aparelho.
-#define NV_TRACKING_HEADER     9.0f   // medido contra a captura do aparelho
-// Espacamentos verticais MEDIDOS na pagina expandida.
-// 64 e nao 84: o valor medido (84) e onde comeca a TINTA das maiusculas, e o
-// desenho do texto parte do topo da caixa da linha, uns 20px acima disso.
+// Tracking: on tvOS it is SLIGHTLY POSITIVE on small body sizes (+0.4px) and
+// practically zero on large titles — the opposite of the reflex to tighten titles
+// that comes from web design. The page's header is the exception: it is uppercase
+// and tracked out on purpose, and you can see that in the device's photo.
+#define NV_TRACKING_HEADER     9.0f   // measured against the device's capture
+// Vertical spacings MEASURED on the expanded page.
+// 64 and not 84: the measured value (84) is where the capitals' INK starts, and the
+// text is drawn from the top of the line's box, some 20px above that.
 #define NV_PG_TOP         64.0f
-#define NV_PG_TITLE_TABS     82.0f   // base do titulo ao topo das abas
-#define NV_PG_SEC_CARDS    22.0f   // cabecalho de secao ao topo dos cards
-#define NV_PG_BETWEEN_SEC   143.0f   // fim de uma secao ao cabecalho da proxima
+#define NV_PG_TITLE_TABS     82.0f   // the title's base to the top of the tabs
+#define NV_PG_SEC_CARDS    22.0f   // the section header to the top of the cards
+#define NV_PG_BETWEEN_SEC   143.0f   // the end of one section to the next one's header
 #define NV_WHERE_W         420.0f
 #define NV_WHERE_H         106.0f
 #define NV_ABOUT_H        150.0f
-#define NV_DET_GAP        35.0f   // medido: gutter entre cartao e vizinho
-// Quanto o cartao passa do tamanho final antes de assentar. Sem esse estouro a
-// abertura parece "aparecer maior"; com ele, parece vir para a frente.
+#define NV_DET_GAP        35.0f   // measured: the gutter between the card and its neighbour
+// How far the card overshoots its final size before settling. Without that
+// overshoot the opening looks like it "appeared larger"; with it, it looks like it
+// came forward.
 #define NV_DET_OVERFLOW   0.035f
 
 #endif

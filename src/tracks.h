@@ -22,7 +22,7 @@ void tracks_open(void);
 // Opens with focus ALREADY on the requested column: 0 = audio, 1 = subtitles.
 // The player has an icon for each, and always opening on audio made the two
 // look like the same button.
-void tracks_open_em(int col);
+void tracks_open_at(int col);
 int  tracks_is_open(void);
 void tracks_event(const SDL_Event *e);
 void tracks_update(float dt, Uint32 now);

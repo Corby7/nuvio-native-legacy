@@ -8,54 +8,54 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// Quantas linhas de texto ficam guardadas ao mesmo tempo.
+// How many lines of text are kept at once.
 //
-// 256 chegou ao limite quando a pagina de titulo passou a ter a secao de
-// comentarios: cada cartao sao ~7 linhas (nome, cinco de texto e o rodape) e
-// eles convivem com episodios, elenco, abas, sinopse e as duas linhas de meta.
-// Passando do teto, o LRU despeja linhas que a PROPRIA TELA ainda vai desenhar
-// no mesmo quadro; elas voltam pela fila de TXT_POR_QUADRO, duas por vez, e
-// sao despejadas de novo. E esse laco que aparece como o texto "piscando".
+// 256 hit its limit when the title page gained the comments section: each card is
+// ~7 lines (the name, five of text and the footer) and they live alongside
+// episodes, cast, tabs, synopsis and the two meta lines. Past the ceiling, the
+// LRU evicts lines THE SAME SCREEN is still going to draw in the same frame; they
+// come back through the TXT_PER_FRAME queue, two at a time, and are evicted
+// again. It is that loop that shows up as text "flickering".
 //
-// 512 nao muda o custo de busca (a sondagem parte do hash e para no primeiro
-// buraco) nem o de rasterizacao. Custa memoria de textura para linhas que nao
-// estao na tela — o preco de nao rerasterizar as que estao.
+// 512 changes neither the lookup cost (the probe starts at the hash and stops at
+// the first hole) nor the rasterisation cost. It costs texture memory for lines
+// that are not on screen — the price of not re-rasterising the ones that are.
 #define MAX_LINES 512
 
 typedef struct {
   char key[288];
-  unsigned long hash;   // FNV-1a da chave, para pular o strcmp
+  unsigned long hash;   // FNV-1a of the key, to skip the strcmp
   TxtLine line;
   unsigned long usage;
   unsigned long frameUsage;
   int busy;
 } Entry;
 
-// Fator entre o pixel do BUFFER e o pixel de layout. As fontes sao abertas em
-// `corpo * escala` e a linha cacheada guarda a medida DIVIDIDA por ele, entao
-// todo o resto do app continua medindo em 1920x1080 enquanto o glifo tem a
-// resolucao real da tela.
+// The factor between a BUFFER pixel and a layout pixel. The fonts are opened at
+// `body * scale` and the cached line stores the measurement DIVIDED by it, so all
+// the rest of the app goes on measuring in 1920x1080 while the glyph has the
+// screen's real resolution.
 //
-// Sem isto o texto era rasterizado a 1080p e ampliado ao dobro na TV 4K — que
-// e exatamente o borrao que o dono viu comparando com o app web, onde o
-// navegador rasteriza no devicePixelRatio.
+// Without this the text was rasterised at 1080p and enlarged twofold on the 4K TV
+// — which is exactly the blur the owner saw comparing it with the web app, where
+// the browser rasterises at the devicePixelRatio.
 static float scaleTxt = 1.0f;
 static TTF_Font *fonts[TXT_NFONTS];
 
-// Os arquivos TTF dos tres pesos, LIDOS UMA VEZ e mantidos vivos enquanto o app
-// vive: as faces do FreeType leem deles sob demanda, entao liberar aqui e
-// leitura de memoria liberada no primeiro glifo novo. Sao ~900 KB no total.
-// `donoPeso` marca quais ponteiros sao proprios: pesos que apontam para o mesmo
-// arquivo compartilham o buffer e so um deles libera.
+// The TTF files of the three weights, READ ONCE and kept alive as long as the app
+// lives: FreeType's faces read from them on demand, so freeing here means reading
+// freed memory on the first new glyph. They are ~900 KB in total.
+// `ownerWeight` marks which pointers are owned: weights pointing at the same file
+// share the buffer and only one of them frees it.
 static unsigned char *bytesWeight[3];
 static size_t         sizeWeight[3];
 static int            ownerWeight[3];
-// O RWops de cada estilo. Guardado porque abrimos com freesrc=0 (o buffer e
-// compartilhado, a fonte nao pode fecha-lo) e alguem tem de fechar em
-// txt_encerrar.
+// The RWops of each style. Kept because we open with freesrc=0 (the buffer is
+// shared, the font must not close it) and somebody has to close it in
+// txt_shutdown.
 static SDL_RWops     *rwSource[TXT_NFONTS];
 
-// Le o arquivo inteiro para um buffer novo. NULL se nao abrir.
+// Reads the whole file into a new buffer. NULL if it will not open.
 static unsigned char *readAll(const char *path, size_t *size) {
   FILE *f = fopen(path, "rb");
   unsigned char *b;
@@ -73,9 +73,9 @@ static unsigned char *readAll(const char *path, size_t *size) {
   *size = (size_t)n;
   return b;
 }
-// As alternativas so sao abertas para os 16 estilos de legenda e sob demanda.
-// Abrir a matriz inteira (todas as familias x todos os estilos do app) gastaria
-// memoria numa TV fraca por uma preferencia que afeta no maximo quatro linhas.
+// The alternatives are only opened for the 16 subtitle styles, and on demand.
+// Opening the whole matrix (every family x every style in the app) would spend
+// memory on a weak TV for a preference that affects at most four lines.
 #define TXT_SUB_N (TXT_SUB_200 - TXT_SUB_50 + 1)
 static TTF_Font *subFontsHeight[TXT_FAMILY_N][TXT_SUB_N];
 static unsigned char subFontTried[TXT_FAMILY_N][TXT_SUB_N];
@@ -86,14 +86,14 @@ const char *const TXT_FAMILIES_LABEL[TXT_FAMILY_N] = {
 
 static Entry cache[MAX_LINES];
 
-// Quantas linhas NOVAS podem ser rasterizadas por quadro.
+// How many NEW lines may be rasterised per frame.
 //
-// Medido no aparelho: entrar na pagina de detalhe rasteriza 12 linhas de uma
-// vez e custa 12 ms — um quadro inteiro, e o tranco aparece exatamente na
-// transicao que se quer suave. Rasterizar em conta-gotas faz o texto assentar
-// um ou dois quadros depois, o que ninguem ve; o tranco, todo mundo ve.
-// 2 e nao 4: com 4 o pior quadro media 6 ms so de texto, e o objetivo aqui e
-// que NENHUMA parte sozinha coma mais que um terco do quadro.
+// Measured on the device: entering the detail page rasterises 12 lines at once and
+// costs 12 ms — a whole frame, and the jolt lands exactly on the transition that
+// is meant to be smooth. Rasterising a drop at a time makes the text settle a
+// frame or two later, which nobody sees; the jolt, everybody sees.
+// 2 and not 4: with 4 the worst frame averaged 6 ms on text alone, and the aim
+// here is that NO single part eats more than a third of the frame.
 #define TXT_PER_FRAME 2
 static int traceThisFrame;
 static unsigned long frameTxt = 1;
@@ -101,67 +101,65 @@ static unsigned long frameTxt = 1;
 void txt_new_frame(void) { traceThisFrame = 0; frameTxt++; }
 static unsigned long lruClock = 1;
 int    txt_rasterized = 0;
-// Quantas linhas foram DESPEJADAS para dar lugar a outras. Zero e o estado
-// saudavel. Se voltar a subir com a tela parada, a tabela encheu de novo e o
-// texto vai piscar — e melhor ler isso num contador do que descobrir pela
-// reclamacao de quem esta olhando a tela.
+// How many lines have been EVICTED to make room for others. Zero is the healthy
+// state. If it starts rising again with the screen still, the table has filled up
+// again and the text will flicker — better to read that off a counter than to
+// find out from the complaint of whoever is looking at the screen.
 int    txt_evictions = 0;
 double txt_ms = 0.0;
 
-// Peso por estilo. Cada peso e um ARQUIVO de verdade da Inter Display
-// (Regular 400, Medium 500, Bold 700) — nao ha passada repetida nem
-// deslocamento sub-pixel para simular peso. O negrito sintetico
-// (TTF_SetFontStyle) so entra nas familias de RESERVA (LG, Droid), que nao tem
-// arquivo Bold proprio; ver o `if (c > 0 && ...)` em txt_iniciar. Isso importa
-// porque negrito sintetico engorda os tracos sem redesenhar nada, e ao lado de
-// um Bold de verdade a diferenca aparece logo nos titulos grandes.
+// The weight per style. Each weight is a real Inter Display FILE (Regular 400,
+// Medium 500, Bold 700) — there is no repeated pass and no sub-pixel offset to
+// fake a weight. Synthetic bold (TTF_SetFontStyle) only comes in on the FALLBACK
+// families (LG, Droid), which have no Bold file of their own; see the
+// `if (c > 0 && ...)` in txt_start. That matters because synthetic bold thickens
+// the strokes without redrawing anything, and next to a real Bold the difference
+// shows immediately in large titles.
 //
-// COMO O PESO 600 DO WEB E RESOLVIDO, e por que nao ha um valor unico.
-// A Inter embarcada nao tem SemiBold, e acrescentar o arquivo esta fora de
-// questao (o ipk ja tem 166 MB). Sobra escolher entre Medium (erra 100 para
-// baixo) e Bold (erra 100 para cima), e a escolha e OPTICA, nao aritmetica:
+// HOW THE WEB'S WEIGHT 600 IS RESOLVED, and why there is no single value.
+// The embedded Inter has no SemiBold, and adding the file is out of the question
+// (the ipk is already 166 MB). That leaves a choice between Medium (100 too
+// light) and Bold (100 too heavy), and the choice is OPTICAL, not arithmetic:
 //
-//   texto CLARO sobre fundo escuro parece mais fino do que e  -> Bold
-//   texto ESCURO sobre pilula clara parece mais grosso do que e -> Medium
+//   LIGHT text on a dark background looks thinner than it is  -> Bold
+//   DARK text on a light pill looks thicker than it is        -> Medium
 //
-// Por isso `.home-row-title` (600, branco no escuro) fica em Bold e
-// `.series-primary-btn` (600, preto na pilula branca de 96px) fica em Medium.
-// Sao dois destinos diferentes para o mesmo 600 de propósito, e nao um
-// descuido — sem a regra escrita aqui, a proxima pessoa "conserta" um dos dois
-// e desalinha a tela.
+// So `.home-row-title` (600, white on dark) goes Bold and `.series-primary-btn`
+// (600, black on a 96px white pill) goes Medium. They are two different
+// destinations for the same 600 on purpose, and not an oversight — without the
+// rule written here, the next person "fixes" one of the two and misaligns the screen.
 enum { WEIGHT_REGULAR, WEIGHT_MEDIUM, WEIGHT_BOLD };
 static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
-  { NV_FT_TITLE1,  WEIGHT_BOLD   },   // titulo do filme na tela de detalhe
-  // ERA PESO_REGULAR, pelo cabecalho espacado da pagina de titulo do app da
-  // Apple. Esse cabecalho NAO EXISTE MAIS: a tela de detalhe do web e um
-  // documento rolavel sem cabecalho fixo, e o do app da Apple saiu do port.
-  // Hoje TXT_TITULO2 e usado so por "Biblioteca" (.library-page-title 56/600) e
-  // pelos titulos de estado vazio da busca e da biblioteca — os TRES em peso
-  // 600 no web. Regular errava 200 para baixo em todos.
-  { NV_FT_TITLE2,  WEIGHT_BOLD    },  // .library-page-title e estados vazios
-  { NV_FT_TITLE3,  WEIGHT_BOLD   },   // nome dentro do card destaque
-  { NV_FT_HEADLINE, WEIGHT_MEDIUM },   // cabecalho de fileira
-  { NV_FT_BODY,     WEIGHT_MEDIUM },   // rotulo de botao, titulo de episodio
-  { NV_FT_CALLOUT,  WEIGHT_MEDIUM },   // linha de genero
-  { NV_FT_CAPTION,  WEIGHT_REGULAR },  // sinopse, texto corrido
-  { NV_FT_CAPTION2, WEIGHT_REGULAR },  // creditos, datas, rotulos
-  // Abaixo do minimo de 23px que o tvOS estabelece para TEXTO — mas isto nao e
-  // texto para ler, e um selo de classificacao indicativa, que no aparelho tem
-  // mesmo o tamanho de um icone.
-  { NV_FT_MINI,     WEIGHT_BOLD    },  // badge de classificacao
-  // Player, do app web: titulo em 700 e o corpo em 400 (.player-title tem
-  // font-weight 700; .player-subtitle e .player-time-label nao declaram peso e
-  // herdam o normal).
+  { NV_FT_TITLE1,  WEIGHT_BOLD   },   // the film's title on the detail screen
+  // It WAS WEIGHT_REGULAR, after the tracked-out header of the Apple app's title
+  // page. That header NO LONGER EXISTS: the web app's detail screen is a
+  // scrollable document with no fixed header, and the Apple app's has left the
+  // port. Today TXT_TITLE2 is used only by "Library" (.library-page-title 56/600)
+  // and by the empty-state titles of search and library — all THREE at weight 600
+  // in the web app. Regular was 200 too light on all of them.
+  { NV_FT_TITLE2,  WEIGHT_BOLD    },  // .library-page-title and empty states
+  { NV_FT_TITLE3,  WEIGHT_BOLD   },   // the name inside the highlight card
+  { NV_FT_HEADLINE, WEIGHT_MEDIUM },   // row header
+  { NV_FT_BODY,     WEIGHT_MEDIUM },   // button label, episode title
+  { NV_FT_CALLOUT,  WEIGHT_MEDIUM },   // genre line
+  { NV_FT_CAPTION,  WEIGHT_REGULAR },  // synopsis, running text
+  { NV_FT_CAPTION2, WEIGHT_REGULAR },  // credits, dates, labels
+  // Below the 23px minimum tvOS sets for TEXT — but this is not text to read, it
+  // is an age-rating badge, which on the device really is the size of an icon.
+  { NV_FT_MINI,     WEIGHT_BOLD    },  // age-rating badge
+  // The player, from the web app: the title at 700 and the body at 400
+  // (.player-title has font-weight 700; .player-subtitle and .player-time-label
+  // declare no weight and inherit normal).
   { NV_FT_PLR_TITLE, WEIGHT_BOLD    },
   { NV_FT_PLR_BODY,  WEIGHT_REGULAR },
   { NV_FT_ROW_TITLE, WEIGHT_BOLD    },  // .home-row-title (600)
-  // Linha secundaria do hero em tela cheia. 600 sobre fundo escuro: Bold,
-  // pela mesma regra optica ja escrita acima.
+  // The full-screen hero's secondary line. 600 on a dark background: Bold, by the
+  // same optical rule written above.
   { NV_FT_HERO_SEC,   WEIGHT_BOLD    },
-  // Tela de detalhe, medidos no app web. O peso 600 do rotulo do botao nao
-  // existe no pacote da Inter embarcada (so Regular, Medium e Bold): fica em
-  // MEDIUM, que erra 100 para baixo, e nao em Bold, que erraria 100 para cima e
-  // engorda visivelmente numa pilula clara de 96px de altura.
+  // The detail screen, measured in the web app. The button label's weight 600 does
+  // not exist in the embedded Inter package (only Regular, Medium and Bold): it
+  // goes MEDIUM, which is 100 too light, and not Bold, which would be 100 too
+  // heavy and visibly thickens on a light pill 96px tall.
   { NV_FT_DET_BUTTON, WEIGHT_MEDIUM  },
   { NV_FT_DET_META,  WEIGHT_REGULAR },
   { NV_FT_DET_SIN,   WEIGHT_REGULAR },
@@ -172,12 +170,12 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_PG_END,     WEIGHT_REGULAR },  // .player-ends-at (20/400)
   { NV_FT_PG_LABEL,  WEIGHT_MEDIUM  },  // .player-parental-label (22/600)
   { NV_FT_PG_SEV,    WEIGHT_REGULAR },  // .player-parental-severity (22/400)
-  { 36, WEIGHT_REGULAR },             // cabecalhos dos paineis do player oficial
-  { 24, WEIGHT_BOLD },                // episodio/fonte dentro da lista
-  { 28, WEIGHT_MEDIUM },              // titulo no card Continuar assistindo
-  { 23, WEIGHT_REGULAR },             // temporada e nome do episodio
-  { 20, WEIGHT_MEDIUM },              // tempo restante no badge do card
-  { 110, WEIGHT_BOLD },               // posição real no ranking
+  { 36, WEIGHT_REGULAR },             // headers of the official player's panels
+  { 24, WEIGHT_BOLD },                // episode/source inside the list
+  { 28, WEIGHT_MEDIUM },              // title on the Continue Watching card
+  { 23, WEIGHT_REGULAR },             // season and episode name
+  { 20, WEIGHT_MEDIUM },              // time remaining in the card's badge
+  { 110, WEIGHT_BOLD },               // the real position in the ranking
   { 20, WEIGHT_REGULAR }, { 24, WEIGHT_REGULAR }, { 28, WEIGHT_REGULAR },
   { 32, WEIGHT_REGULAR }, { 36, WEIGHT_REGULAR }, { 40, WEIGHT_REGULAR },
   { 44, WEIGHT_REGULAR }, { 48, WEIGHT_REGULAR }, { 52, WEIGHT_REGULAR },
@@ -186,30 +184,32 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 80, WEIGHT_REGULAR },
 };
 
-// RESERVA PARA O QUE A INTER NAO TEM.
+// A FALLBACK FOR WHAT INTER DOES NOT HAVE.
 //
-// A Inter cobre latim, e so. Um titulo japones da filmografia de um ator (a
-// tela nova de pessoa mostra varios) saia como fileira de quadradinhos — a
-// fonte nao tem o glifo e o SDL_ttf desenha .notdef sem reclamar. A TV traz
-// /usr/share/fonts/DroidSansFallback.ttf, que cobre CJK; abrimos ela SOB
-// DEMANDA, no mesmo corpo do estilo, e so para as linhas que precisam.
+// Inter covers Latin, and that is all. A Japanese title from an actor's
+// filmography (the new person screen shows several) came out as a row of little
+// squares — the font has no glyph and SDL_ttf draws .notdef without complaining.
+// The TV ships /usr/share/fonts/DroidSansFallback.ttf, which covers CJK; we open
+// it ON DEMAND, at the same body size as the style, and only for the lines that
+// need it.
 //
-// Nao e fallback por glifo (isso exigiria compor a linha caractere a caractere
-// e perder o kerning): a linha INTEIRA vai para a reserva quando o primeiro
-// caractere fora do ASCII nao existir na fonte principal. Titulo misto
-// "Deadpool & ウルヴァリン" sairia todo na reserva, o que e feio mas legivel —
-// e o caso raro; o comum e a linha ser toda de uma escrita so.
-// Uma reserva POR ESCRITA. A primeira versao tinha um arquivo so, escolhido
-// como "o CJK", e o nome de uma atriz iraniana continuava em quadradinhos: a
-// DroidSansFallback nao tem arabe. A TV traz arquivo separado para cada
-// familia de escrita, e e por isso que a escolha e por faixa de codepoint.
-typedef enum { ESC_CJK, ESC_ARABIC, ESC_CYRILLIC_ETC, ESC_N } Write;
-static TTF_Font *fallbacks[ESC_N][TXT_NFONTS];
-static char pathFallback[ESC_N][512];
+// It is not a per-glyph fallback (that would mean composing the line character by
+// character and losing the kerning): the WHOLE line goes to the fallback when the
+// first non-ASCII character does not exist in the main font. A mixed title
+// "Deadpool & ウルヴァリン" would come out entirely in the fallback, which is
+// ugly but legible — and it is the rare case; the common one is a line written
+// entirely in one script.
+// ONE FALLBACK PER SCRIPT. The first version had a single file, chosen as "the
+// CJK one", and an Iranian actress's name was still little squares: the
+// DroidSansFallback has no Arabic. The TV ships a separate file for each script
+// family, and that is why the choice is by codepoint range.
+typedef enum { SCRIPT_CJK, SCRIPT_ARABIC, SCRIPT_CYRILLIC_ETC, SCRIPT_N } Script;
+static TTF_Font *fallbacks[SCRIPT_N][TXT_NFONTS];
+static char pathFallback[SCRIPT_N][512];
 
-// Primeiro codepoint FORA do ASCII, ou 0. Decodifica UTF-8 na mao porque e o
-// unico ponto do app que precisa disso e puxar uma biblioteca por causa de tres
-// linhas nao se paga.
+// The first codepoint OUTSIDE ASCII, or 0. It decodes UTF-8 by hand because it is
+// the only point in the app that needs it and pulling in a library for three lines
+// does not pay.
 static Uint32 firstNotAscii(const char *s) {
   const unsigned char *p = (const unsigned char *)s;
   for (; *p; p++) {
@@ -218,34 +218,34 @@ static Uint32 firstNotAscii(const char *s) {
       return (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F));
     if ((*p & 0xF0) == 0xE0 && p[1] && p[2])
       return (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F));
-    if ((*p & 0xF8) == 0xF0) return 0x10000;   // fora do BMP: nao tratamos
+    if ((*p & 0xF8) == 0xF0) return 0x10000;   // outside the BMP: we do not handle it
     return 0;
   }
   return 0;
 }
 
-// Qual reserva cobre este codepoint. As faixas sao as usuais do Unicode; o que
-// nao for arabe/hebraico nem CJK cai na terceira, que e a DroidSansFallback (ela
-// cobre cirilico, grego, tailandes e mais).
-static Write writeOf(Uint32 cp) {
-  if (cp >= 0x0590 && cp <= 0x07FF) return ESC_ARABIC;       // hebraico + arabe
-  if (cp >= 0xFB50 && cp <= 0xFEFF) return ESC_ARABIC;       // formas de apresentacao
-  if (cp >= 0x2E80 && cp <= 0x9FFF) return ESC_CJK;
-  if (cp >= 0xAC00 && cp <= 0xD7AF) return ESC_CJK;         // hangul
-  if (cp >= 0xF900 && cp <= 0xFAFF) return ESC_CJK;
-  return ESC_CYRILLIC_ETC;
+// Which fallback covers this codepoint. The ranges are the usual Unicode ones;
+// anything that is not Arabic/Hebrew or CJK falls into the third, which is
+// DroidSansFallback (it covers Cyrillic, Greek, Thai and more).
+static Script scriptOf(Uint32 cp) {
+  if (cp >= 0x0590 && cp <= 0x07FF) return SCRIPT_ARABIC;       // Hebrew + Arabic
+  if (cp >= 0xFB50 && cp <= 0xFEFF) return SCRIPT_ARABIC;       // presentation forms
+  if (cp >= 0x2E80 && cp <= 0x9FFF) return SCRIPT_CJK;
+  if (cp >= 0xAC00 && cp <= 0xD7AF) return SCRIPT_CJK;         // hangul
+  if (cp >= 0xF900 && cp <= 0xFAFF) return SCRIPT_CJK;
+  return SCRIPT_CYRILLIC_ETC;
 }
 
-// Fonte com que a linha `s` deve ser desenhada. Devolve a principal quando ela
-// da conta — que e o caso da esmagadora maioria das linhas.
+// The font line `s` should be drawn with. It returns the main one when that
+// copes — which is the case for the overwhelming majority of lines.
 static TTF_Font *fontOf(TxtStyle style, const char *s) {
   Uint32 cp = firstNotAscii(s);
-  Write e;
+  Script e;
   if (!cp || cp >= 0x10000) return fonts[style];
-  // Acentos do portugues e do espanhol estao na Inter; so cai na reserva o que
-  // ela realmente nao tem.
+  // Portuguese and Spanish accents are in Inter; only what it really lacks falls
+  // through to the fallback.
   if (TTF_GlyphIsProvided(fonts[style], (Uint16)cp)) return fonts[style];
-  e = writeOf(cp);
+  e = scriptOf(cp);
   if (!pathFallback[e][0]) return fonts[style];
   if (!fallbacks[e][style])
     fallbacks[e][style] = TTF_OpenFont(pathFallback[e],
@@ -284,12 +284,12 @@ int txt_start(const char *dirAssets, float scale) {
   if (scale < 0.5f) scale = 1.0f;
   scaleTxt = scale;
   if (TTF_Init() != 0) { printf("TTF_Init: %s\n", TTF_GetError()); return 0; }
-  // A fonte da propria LG e a que a interface da TV usa; DroidSans e a reserva.
-  // A Inter vai EMBARCADA no pacote. A TV so tem as fontes da LG e as do app da
-  // Netflix — nada proximo da SF Pro do tvOS. A Inter foi desenhada como
-  // alternativa livre com metricas parecidas, e e o que aproxima o desenho das
-  // letras do original. As fontes da LG ficam de reserva: se o pacote for
-  // instalado sem a pasta fonts/, o app continua legivel em vez de morrer.
+  // LG's own font is the one the TV's interface uses; DroidSans is the fallback.
+  // Inter is EMBEDDED in the package. The TV has only LG's fonts and Netflix's
+  // app's — nothing close to tvOS's SF Pro. Inter was designed as a free
+  // alternative with similar metrics, and it is what brings the letterforms
+  // closest to the original. LG's fonts stay as a fallback: if the package is
+  // installed without the fonts/ folder, the app stays legible instead of dying.
   char base[512] = "";
   if (dirAssets && *dirAssets) {
     snprintf(base, sizeof base, "%s/", dirAssets);
@@ -317,56 +317,55 @@ int txt_start(const char *dirAssets, float scale) {
   };
   const char *names[3] = { "Inter (embedded)", "LG Display", "DroidSans" };
 
-  // Caminho da reserva CJK. Na TV e a DroidSansFallback; no Mac, a fonte do
-  // sistema que cobre CJK — ali isto e so para a previa nao mentir.
-  // Largura 5, nao 4: a linha do arabe tem quatro candidatos mais o NULL, e o
-  // laco abaixo para no NULL. Com [4] o terminador era descartado em silencio e
-  // a busca do arabe seguia lendo a linha do cirilico.
-  { const char *cand[ESC_N][5] = {
-      /* ESC_CJK          */ { "/usr/share/fonts/LG_Display_JP.ttf",
+  // The path of the CJK fallback. On the TV it is DroidSansFallback; on the Mac,
+  // the system font that covers CJK — there this is only so the preview does not lie.
+  // A width of 5, not 4: the Arabic row has four candidates plus the NULL, and the
+  // loop below stops at the NULL. With [4] the terminator was silently discarded
+  // and the Arabic search carried on reading into the Cyrillic row.
+  { const char *cand[SCRIPT_N][5] = {
+      /* SCRIPT_CJK          */ { "/usr/share/fonts/LG_Display_JP.ttf",
                                "/usr/share/fonts/DroidSansFallback.ttf",
                                "/System/Library/Fonts/Hiragino Sans GB.ttc", NULL },
-      /* ESC_ARABE        */ { "/usr/share/fonts/DroidNaskh-Regular.ttf",
+      /* SCRIPT_ARABIC        */ { "/usr/share/fonts/DroidNaskh-Regular.ttf",
                                "/usr/share/fonts/LG_Display_Urdu.ttf",
                                "/System/Library/Fonts/Supplemental/GeezaPro.ttc",
                                "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", NULL },
-      /* ESC_CIRILICO_ETC */ { "/usr/share/fonts/DroidSansFallback.ttf",
+      /* SCRIPT_CYRILLIC_ETC */ { "/usr/share/fonts/DroidSansFallback.ttf",
                                "/usr/share/fonts/DroidSans.ttf",
                                "/System/Library/Fonts/Supplemental/Arial Unicode.ttf", NULL },
     };
-    const char *nameEsc[ESC_N] = { "CJK", "arabic", "rest" };
-    for (int e = 0; e < ESC_N; e++) {
+    const char *nameScript[SCRIPT_N] = { "CJK", "arabic", "rest" };
+    for (int e = 0; e < SCRIPT_N; e++) {
       for (int i = 0; cand[e][i]; i++) {
         FILE *fr = fopen(cand[e][i], "rb");
         if (fr) { fclose(fr);
                   snprintf(pathFallback[e], sizeof pathFallback[e], "%s", cand[e][i]);
                   break; }
       }
-      printf("fallback %s: %s\n", nameEsc[e],
+      printf("fallback %s: %s\n", nameScript[e],
              pathFallback[e][0] ? pathFallback[e] : "none");
     } }
 
   mark("fonts: start");
   for (int c = 0; c < 3; c++) {
     int all = 1;
-    // UM ARQUIVO, UMA LEITURA.
+    // ONE FILE, ONE READ.
     //
-    // MEDIDO: 1035 ms na TV contra 12 ms no Mac para o MESMO txt_iniciar. Nao e
-    // o FreeType que custa — e o armazenamento do aparelho. TTF_OpenFont abre e
-    // LE O ARQUIVO INTEIRO a cada chamada, e sao TXT_NFONTES chamadas sobre
-    // apenas TRES arquivos distintos (Regular, Medium, Bold): a mesma dezena de
-    // leituras da mesma dezena de megabytes, num disco que entrega ~1 MB/s de
-    // arquivo pequeno.
+    // MEASURED: 1035 ms on the TV against 12 ms on the Mac for the SAME txt_start.
+    // It is not FreeType that costs — it is the device's storage. TTF_OpenFont
+    // opens and READS THE WHOLE FILE on every call, and there are TXT_NFONTS calls
+    // over only THREE distinct files (Regular, Medium, Bold): the same dozen reads
+    // of the same dozen megabytes, on a disk that delivers ~1 MB/s of small file.
     //
-    // Aqui os tres arquivos sao lidos UMA vez para a memoria e cada estilo abre
-    // sobre esses bytes com TTF_OpenFontRW. Nao ha fio nenhum de proposito: o
-    // gargalo era I/O REPETIDO, e paralelizar leituras redundantes no mesmo
-    // armazenamento lento nao as torna menos redundantes — nao fazer as
-    // leituras torna. Serial e mais previsivel, e nada disso encosta na
-    // thread-safety duvidosa do FreeType.
+    // Here the three files are read ONCE into memory and each style opens over
+    // those bytes with TTF_OpenFontRW. There is deliberately no thread: the
+    // bottleneck was REPEATED I/O, and parallelising redundant reads on the same
+    // slow storage does not make them less redundant — not doing the reads does.
+    // Serial is more predictable, and none of this goes near FreeType's dubious
+    // thread-safety.
     for (int p = 0; p < 3; p++) {
       int j;
-      // A LG repete Regular em dois pesos e a Droid nos tres: nao ler de novo.
+      // LG repeats Regular across two weights and Droid across all three: do not read again.
       for (j = 0; j < p; j++)
         if (!strcmp(families[c][p], families[c][j])) break;
       if (j < p) { bytesWeight[p] = bytesWeight[j]; sizeWeight[p] = sizeWeight[j]; ownerWeight[p] = 0; continue; }
@@ -377,20 +376,20 @@ int txt_start(const char *dirAssets, float scale) {
     if (all)
       for (int i = 0; i < TXT_NFONTS; i++) {
         int weight = STYLES[i].weight;
-        // Um RWops POR fonte: o FreeType le pelo stream durante toda a vida da
-        // face, entao dois estilos nao podem dividir a mesma posicao de leitura.
-        // Sao bytes em memoria — criar o RWops nao custa I/O.
+        // One RWops PER font: FreeType reads through the stream for the whole life
+        // of the face, so two styles cannot share the same read position. They are
+        // bytes in memory — creating the RWops costs no I/O.
         SDL_RWops *rw = SDL_RWFromConstMem(bytesWeight[weight], (int)sizeWeight[weight]);
-        // freesrc=0: quem libera o RWops e o TTF_CloseFont em txt_encerrar? Nao
-        // — passamos 0 e guardamos o ponteiro, porque o buffer e compartilhado
-        // entre estilos e nao pode ser liberado pela primeira fonte a fechar.
+        // freesrc=0: is it TTF_CloseFont in txt_shutdown that frees the RWops? No
+        // — we pass 0 and keep the pointer, because the buffer is shared between
+        // styles and must not be freed by the first font to close.
         fonts[i] = rw ? TTF_OpenFontRW(rw, 0, (int)(STYLES[i].body * scaleTxt + 0.5f)) : NULL;
         rwSource[i] = rw;
-        // A LG usa SDL 2.0.4: SDL_RWclose so existe nas versoes novas do SDL.
-        // SDL_FreeRW e a ABI disponivel no webOS 4 e libera corretamente o
-        // stream criado por SDL_RWFromConstMem.
+        // LG uses SDL 2.0.4: SDL_RWclose only exists in newer SDL versions.
+        // SDL_FreeRW is the ABI available on webOS 4 and correctly frees the
+        // stream created by SDL_RWFromConstMem.
         if (!fonts[i]) { if (rw) SDL_FreeRW(rw); rwSource[i] = NULL; all = 0; break; }
-        // negrito sintetico so na reserva, que nao tem arquivo Bold proprio
+        // synthetic bold only on the fallback, which has no Bold file of its own
         if (c > 0 && STYLES[i].weight == WEIGHT_BOLD) TTF_SetFontStyle(fonts[i], TTF_STYLE_BOLD);
       }
     if (all) {
@@ -417,14 +416,14 @@ int txt_start(const char *dirAssets, float scale) {
 void txt_shutdown(void) {
   for (int i = 0; i < MAX_LINES; i++)
     if (cache[i].busy && cache[i].line.tex) glDeleteTextures(1, &cache[i].line.tex);
-  // ORDEM: a fonte primeiro, o RWops depois, o buffer por ultimo. A face do
-  // FreeType ainda referencia o stream, e o stream, os bytes.
+  // ORDER: the font first, the RWops after, the buffer last. FreeType's face still
+  // references the stream, and the stream, the bytes.
   for (int i = 0; i < TXT_NFONTS; i++) {
     if (fonts[i]) TTF_CloseFont(fonts[i]);
     fonts[i] = NULL;
     if (rwSource[i]) SDL_FreeRW(rwSource[i]);
     rwSource[i] = NULL;
-    for (int e = 0; e < ESC_N; e++)
+    for (int e = 0; e < SCRIPT_N; e++)
       if (fallbacks[e][i]) TTF_CloseFont(fallbacks[e][i]);
   }
   for (int p = 0; p < 3; p++) {
@@ -449,23 +448,22 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   snprintf(key, sizeof key, "%d:%d|%02x%02x%02x|%.236s", (int)family,
            (int)style, r & 255, g & 255, b & 255, s);
 
-  // Hash da chave para evitar o strcmp em quase todas as entradas: a busca
-  // roda para CADA linha de CADA quadro, e comparar 288 bytes centenas de
-  // vezes por quadro custa mais que o desenho.
+  // A hash of the key to avoid the strcmp on almost every entry: the lookup runs
+  // for EVERY line of EVERY frame, and comparing 288 bytes hundreds of times per
+  // frame costs more than the drawing.
   unsigned long h = 2166136261UL;
   { const char *p = key;
     for (; *p; p++) { h ^= (unsigned char)*p; h *= 16777619UL; } }
 
-  // Sondagem a partir de h % MAX_LINHAS, e nao varredura das 256 entradas.
-  // Esta busca roda para CADA linha de CADA quadro; a varredura completa
-  // custava em media 128 comparacoes por acerto. Sondando do ponto do hash o
-  // acerto sai nas primeiras casas, e a busca PARA no primeiro slot vazio:
-  // quem foi inserido por esta mesma regra nunca esta depois de um buraco.
+  // Probing from h % MAX_LINES, and not a sweep of all 256 entries. This lookup
+  // runs for EVERY line of EVERY frame; the full sweep cost an average of 128
+  // comparisons per hit. Probing from the hash's position the hit comes out in the
+  // first few slots, and the search STOPS at the first empty slot: anything
+  // inserted by this same rule is never after a hole.
   //
-  // O despejo LRU pode abrir um buraco no meio de uma corrente antiga; o
-  // efeito e no maximo uma rerasterizacao daquela linha (que entra de novo
-  // mais perto do hash), nunca resultado errado — a chave e conferida por
-  // strcmp de qualquer forma.
+  // LRU eviction can open a hole in the middle of an old chain; the effect is at
+  // most one re-rasterisation of that line (which goes back in nearer its hash),
+  // never a wrong result — the key is checked by strcmp either way.
   int free_ = -1;
   for (int k = 0; k < MAX_LINES; k++) {
     int i = (int)((h + (unsigned long)k) % MAX_LINES);
@@ -477,14 +475,14 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
     }
   }
 
-  // Orcamento estourado: devolve vazio e tenta de novo no proximo quadro. A
-  // linha aparece com um quadro de atraso em vez de travar o atual.
+  // Budget blown: return empty and try again next frame. The line appears one
+  // frame late instead of freezing the current one.
   if (traceThisFrame >= TXT_PER_FRAME) return empty;
   traceThisFrame++;
   int slot = free_;
   if (slot < 0) {
-    // Tabela cheia: so agora vale a varredura completa atras do LRU. Isso
-    // acontece no maximo TXT_POR_QUADRO vezes por quadro, nao por linha.
+    // The table is full: only now is a full sweep for the LRU worth it. That
+    // happens at most TXT_PER_FRAME times per frame, not per line.
     unsigned long smaller = ~0UL;
     for (int i = 0; i < MAX_LINES; i++)
       if (cache[i].busy && cache[i].frameUsage != frameTxt &&
@@ -496,7 +494,7 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   if (slot < 0) return empty;
   if (cache[slot].busy) txt_evictions++;
   if (cache[slot].busy && cache[slot].line.tex) {
-    // avisa o gfx: o nome pode ser reutilizado pelo glGenTextures logo abaixo
+    // tell gfx: the name may be reused by the glGenTextures just below
     gfx_tex_forget(cache[slot].line.tex);
     glDeleteTextures(1, &cache[slot].line.tex);
   }
@@ -516,12 +514,12 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  gfx_tex_forget(0);  // o bind do upload passou por fora do gfx_rect
+  gfx_tex_forget(0);  // the upload's bind went around gfx_rect
 
   cache[slot].busy = 1;
   cache[slot].hash = h;
   strncpy(cache[slot].key, key, sizeof cache[slot].key - 1);
-  // Medida em unidades de LAYOUT, nao em pixeis do buffer.
+  // Measured in LAYOUT units, not in buffer pixels.
   cache[slot].line.tex = t;
   cache[slot].line.w = (int)(cv->w / scaleTxt + 0.5f);
   cache[slot].line.h = (int)(cv->h / scaleTxt + 0.5f);
@@ -544,26 +542,27 @@ TxtLine txt_line_family(TxtStyle style, const char *s, int r, int g,
 
 void txt_draw(TxtLine l, float x, float y) { txt_draw_alpha(l, x, y, 1.0f); }
 
-// ENCAIXE NO PIXEL DA TELA.
+// SNAPPING TO THE SCREEN'S PIXEL.
 //
-// A textura do glifo tem exatamente a resolucao em que vai ser desenhada, mas
-// o CANTO caia em coordenada fracionaria o tempo todo: centralizacao
-// (`(r.h - l.h) * 0.5f`), pilhas ancoradas na base, molas de rolagem. Com o
-// canto em 478.4 o GL_LINEAR amostra ENTRE dois texels e cada letra sai
-// espalhada por duas colunas de pixel — o texto inteiro fica meio pixel fora
-// de foco, em toda a tela, o tempo todo.
+// The glyph's texture has exactly the resolution it will be drawn at, but the
+// CORNER kept landing on a fractional coordinate: centring (`(r.h - l.h) * 0.5f`),
+// stacks anchored to the bottom, scrolling springs. With the corner at 478.4,
+// GL_LINEAR samples BETWEEN two texels and every letter comes out spread across
+// two pixel columns — the whole text is half a pixel out of focus, all over the
+// screen, all the time.
 //
-// Era isso que restava do "borrao" depois de o 4K se provar impossivel: nao
-// falta resolucao, falta o texto cair em cima do pixel. O web nao tem esse
-// problema porque o navegador ja posiciona glifo na grade do dispositivo.
+// That was what remained of the "blur" after 4K proved impossible: it is not
+// resolution that is missing, it is the text landing on the pixel. The web app
+// does not have this problem because the browser already positions glyphs on the
+// device's grid.
 //
-// O arredondamento e feito na grade do DRAWABLE e nao na de layout: no Mac
-// retina meio pixel de layout e um pixel de tela inteiro, e arredondar na
-// grade errada jogaria o texto fora do lugar em vez de assenta-lo.
+// The rounding is done on the DRAWABLE's grid and not the layout's: on a retina
+// Mac half a layout pixel is a whole screen pixel, and rounding on the wrong grid
+// would throw the text out of place instead of settling it.
 //
-// So o TEXTO encaixa. Encaixar cartao e arte transformaria as molas em degraus
-// visiveis; o glifo nao sofre disso porque a letra em si nao se deforma, ela
-// so anda de um pixel para o outro.
+// Only TEXT snaps. Snapping cards and art would turn the springs into visible
+// steps; the glyph does not suffer from that because the letter itself does not
+// deform, it just moves from one pixel to the next.
 static float fits(float v) {
   float e = scaleTxt;
   return (float)((int)(v * e + (v < 0.0f ? -0.5f : 0.5f))) / e;
@@ -579,8 +578,8 @@ float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
                    float x, float y, float alpha, float tracking) {
   if (!s || !*s) return 0.0f;
   float width = 0.0f;
-  // Percorre por CARACTERE UTF-8, nao por byte: cortar no meio de um acento
-  // produz um glifo invalido, e a fonte da LG devolve um retangulo vazio.
+  // It walks by UTF-8 CHARACTER, not by byte: cutting in the middle of an accent
+  // produces an invalid glyph, and LG's font returns an empty rectangle.
   for (const unsigned char *p = (const unsigned char *)s; *p; ) {
     int n = 1;
     if      ((*p & 0xF8) == 0xF0) n = 4;
@@ -597,10 +596,10 @@ float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
   return width > 0.0f ? width - tracking : 0.0f;
 }
 
-// Declarada em text.h desde o inicio e NUNCA implementada. Ninguem chamava,
-// entao o link passava; a primeira chamada derrubou o build ARM com
-// "undefined reference". No Mac isso NAO aparece: `cc -fsyntax-only` num
-// arquivo solto nao linka nada.
+// Declared in text.h from the start and NEVER implemented. Nobody called it, so
+// the link passed; the first call brought down the ARM build with "undefined
+// reference". On the Mac that does NOT show up: `cc -fsyntax-only` on a loose file
+// links nothing.
 TxtLine txt_line_trim(TxtStyle style, const char *s, int r, int g, int b,
                          int a, float maxW) {
   return txt_line_trim_family(style, s, r, g, b, a, maxW,
@@ -616,14 +615,14 @@ TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
   size_t n = strlen(s);
   if (n >= sizeof buf - 4) n = sizeof buf - 4;
   memcpy(buf, s, n); buf[n] = 0;
-  // Corta por PALAVRA enquanto houver espaco; so quando sobra uma palavra so e
-  // que se corta no meio dela. Cortar sempre por caractere deixa meia palavra
-  // antes das reticencias, e isso se le como texto corrompido, nao como corte.
+  // It cuts by WORD while there is a space; only when a single word is left does
+  // it cut in the middle of it. Always cutting by character leaves half a word
+  // before the ellipsis, and that reads as corrupted text, not as truncation.
   while (n > 0) {
     size_t cut = n;
     while (cut > 0 && buf[cut - 1] != ' ') cut--;
     if (cut > 1) n = cut - 1; else n--;
-    // nunca parar no meio de um caractere UTF-8: meio caractere vira tofu
+    // never stop in the middle of a UTF-8 character: half a character becomes tofu
     while (n > 0 && ((unsigned char)buf[n] & 0xC0) == 0x80) n--;
     buf[n] = 0;
     if (!n) break;
@@ -659,7 +658,7 @@ float txt_block(TxtStyle style, const char *s, int r, int g, int b,
 
     TxtLine m = txt_line(style, attempt, r, g, b, 255);
     if (m.w > width && line[0]) {
-      // nao coube: fecha a linha atual e recomeca com a palavra
+      // it did not fit: close the current line and start again with the word
       TxtLine l = txt_line(style, line, r, g, b, 255);
       txt_draw_alpha(l, x, y + used, alpha);
       used += leading; nLines++;
@@ -677,9 +676,9 @@ float txt_block(TxtStyle style, const char *s, int r, int g, int b,
   return used;
 }
 
-// Quebra igual a txt_bloco, mas posiciona cada linha pela BORDA DIREITA. A
-// duplicacao com txt_bloco e pequena e proposital: unificar as duas exigiria um
-// parametro de alinhamento em todas as chamadas, e so este caso precisa.
+// It wraps like txt_block, but positions each line by the RIGHT EDGE. The
+// duplication with txt_block is small and deliberate: unifying the two would need
+// an alignment parameter on every call, and only this case needs it.
 float txt_block_dir(TxtStyle style, const char *s, int r, int g, int b,
                     float xDir, float y, float width, float leading,
                     float alpha, int maxLines) {

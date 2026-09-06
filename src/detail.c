@@ -1,24 +1,25 @@
-// Tela de detalhe do titulo, no layout do APP WEB (sessao LOGADA).
+// The title's detail screen, in the WEB APP's layout (SIGNED-IN session).
 //
-// O port comecou copiando o app da Apple TV, e cada pedaco dessa heranca foi
-// sendo devolvido a medida que o web era MEDIDO. O que restava dela ate agora
-// era tudo o que fica abaixo da dobra — pilulas de temporada de 236x63, card de
-// episodio com o texto ABAIXO da miniatura, secoes "Trailers", "Como assistir"
-// e "Sobre". Nada disso existe no web. O que existe, medido em 1920x1080 na
-// serie "Silo" com o perfil do dono:
+// The port started out copying the Apple TV app, and every piece of that
+// inheritance has been given back as the web app was MEASURED. What was left of it
+// until now was everything below the fold — 236x63 season pills, an episode card
+// with the text BELOW the thumbnail, "Trailers", "How to watch" and "About"
+// sections. None of that exists in the web app. What does exist, measured at
+// 1920x1080 on the series "Silo" with the owner's profile:
 //
-//   1. A tela e UM documento rolavel de 2144px de altura. O hero ocupa os
-//      primeiros 1080 e ROLA junto: nao ha cabecalho fixo nem logo centralizado
-//      no topo. Descer nao "estica" nada — apenas rola.
-//   2. As secoes sao quatro: abas de temporada (269x80), fileira de episodios
-//      (cards 640x422 com o texto DENTRO da miniatura), abas de informacao
-//      ("Criador e elenco | Avaliacoes | Mais como este | Trailer") e a fileira
-//      de elenco (avatar 140 redondo).
-//   3. Rolar leva o topo do grupo focado a 33% da altura util (40% nas abas de
-//      informacao). Isto esta no fonte do web (DETAIL_ROW_FOCUS_TARGET) e foi
-//      conferido medindo o scrollTop nos quatro grupos.
-//   4. Ao rolar, a arte de fundo NAO desfoca: ela vai a 15% de opacidade em
-//      0.8s. O desfoque gaussiano era do app da Apple TV.
+//   1. The screen is ONE scrollable document 2144px tall. The hero takes the first
+//      1080 and SCROLLS with it: there is no fixed header and no logo centred at
+//      the top. Going down does not "stretch" anything — it just scrolls.
+//   2. There are four sections: season tabs (269x80), the episode row (640x422
+//      cards with the text INSIDE the thumbnail), information tabs
+//      ("Creator and cast | Ratings | More like this | Trailer") and the cast row
+//      (a round 140 avatar).
+//   3. Scrolling takes the top of the focused group to 33% of the usable height
+//      (40% on the information tabs). This is in the web app's source
+//      (DETAIL_ROW_FOCUS_TARGET) and was checked by measuring scrollTop on all four
+//      groups.
+//   4. On scrolling, the background art does NOT blur: it goes to 15% opacity over
+//      0.8s. The gaussian blur was the Apple TV app's.
 #include "detail.h"
 #include "badges.h"
 #include "mark.h"
@@ -40,26 +41,25 @@
 #include <string.h>
 #include <math.h>
 
-// Teto de itens por secao. 24 e nao 8: uma temporada de "Silo" tem 10
-// episodios e o vetor de 8 escondia os dois ultimos — a lista parecia menor do
-// que a serie e.
+// A ceiling of items per section. 24 and not 8: a season of "Silo" has 10 episodes
+// and the array of 8 hid the last two — the list looked smaller than the series is.
 #define N_ITEMS    24
-// SEIS secoes, mas nenhum titulo usa as seis: serie acende as quatro primeiras
-// e filme acende as tres ultimas. As que nao valem para o tipo devolvem 0 em
-// secaoN, e focus_mover PULA fileira vazia — entao a ordem do enum ja entrega a
-// ordem visual certa nos dois casos, sem tabela de tradusao no meio:
-//   serie -> Temporadas, Episodios, Abas, Elenco
-//   filme -> Elenco, Trailers, Detalhes
-// Cartao de "Recomendacoes" e de "Comentarios". Ficavam junto das funcoes que
-// os desenham, la embaixo; subiram porque larguraItem e xItem, no topo,
-// precisam deles para posicionar as SECOES novas.
+// SIX sections, but no title uses all six: a series lights up the first four and a
+// film the last three. The ones that do not apply to the type return 0 in sectionN,
+// and focus_move SKIPS an empty row — so the enum's order already gives the right
+// visual order in both cases, with no translation table in between:
+//   series -> Seasons, Episodes, Tabs, Cast
+//   film   -> Cast, Trailers, Details
+// The "Recommendations" and "Comments" cards. They used to sit next to the functions
+// that draw them, further down; they moved up because widthItem and xItem, at the
+// top, need them to position the new SECTIONS.
 #define REL_CARD_W   212.0f
 #define REL_CARD_H   318.0f
 #define REL_CARD_GAP  32.0f
-// MEDIDO na referencia (TCL, 1920x1080): cartao 722x466, vao 25, canto 20.
+// MEASURED against the reference (TCL, 1920x1080): a 722x466 card, a gap of 25, a corner of 20.
 #define COM_CARD_W   722.0f
 #define COM_CARD_H   466.0f
-#define COM_DFLT       28.0f
+#define COM_PAD       28.0f
 #define COM_CARD_GAP  25.0f   // MEDIDO
 
 #define N_SECTIONS    8
@@ -67,24 +67,24 @@
 
 static HomeItem item;
 static int  is_open = 0, exiting = 0;
-static int  idx = 0;                 // titulo atual dentro do acervo
-static float t = 0.0f;               // 0 = card na home, 1 = tela cheia
-// Dois estados, nao tres: o hero (nivel 0) e a pagina rolada (nivel 1). O
-// nivel intermediario "cartao vira tela cheia" so fazia sentido enquanto havia
-// cartao; no web a tela ja nasce cheia.
+static int  idx = 0;                 // the current title within the collection
+static float t = 0.0f;               // 0 = the card on the home, 1 = full screen
+// Two states, not three: the hero (level 0) and the scrolled page (level 1). The
+// intermediate "the card becomes full screen" only made sense while there was a
+// card; in the web app the screen is born full.
 static int  level = 0;
-// Ficha da pessoa por cima da tela de titulo. Nao e um `nivel` a mais porque
-// nao e um estado da MESMA pagina: e outra tela, que aparece e sai inteira.
+// A person's card over the title screen. It is not one more `level` because it is
+// not a state of the SAME page: it is another screen, which appears and leaves whole.
 static int  personIs_open;
 static int  personFocus;
-// Primeira LINHA visivel da filmografia. A grade tem 6 por linha e cabem duas
-// linhas na tela; sem isto o resto dos creditos era cortado sem aviso.
+// The first visible ROW of the filmography. The grid has 6 per row and two rows fit
+// on screen; without this the rest of the credits was cut off with no warning.
 static int  personLine;
 static int  reqOpen = -1;
-// Foco DENTRO da aba "Mais como este", que e uma lista vertical propria e nao
-// uma das fileiras horizontais do focus.c.
+// The focus INSIDE the "More like this" tab, which is a vertical list of its own and
+// not one of focus.c's horizontal rows.
 static int  relFocus;
-// Temporada escolhida no painel de notas por episodio (indice em extras).
+// The season chosen in the per-episode ratings panel (an index into extras).
 static int  ratTemp;
 #define PES_PHOTO_W   280.0f
 #define PES_PHOTO_H   420.0f
@@ -94,106 +94,101 @@ static int  ratTemp;
 #define PES_CARD_GAP  32.0f
 #define PES_PER_LINE  6
 
-static int  button = 0;      // botao em foco no hero
+static int  button = 0;      // the focused button on the hero
 static int  reqPlay = 0, reqMark = 0, reqSources = 0;
-// Marcar como ASSISTIDO. Separado de pedMarcar, que e "adicionar a lista".
+// Mark as WATCHED. Separate from reqMark, which is "add to the list".
 static int  reqWatched = 0;
-static int  reqOfStart = 0;         // botao "Reproduzir desde o inicio"
-static Uint32 okScrolldownIn = 0;
-static float pg = 0.0f;              // 0..1: hero -> pagina rolada
+static int  reqOfStart = 0;         // the "Play from the start" button
+static Uint32 okPressedAt = 0;
+static float pg = 0.0f;              // 0..1: hero -> scrolled page
 static Focus focus;
 static float animFocus[N_SECTIONS][N_ITEMS];
-static float scrollSec[N_SECTIONS];    // rolagem HORIZONTAL de cada fileira
-static float scrollY = 0.0f;         // rolagem VERTICAL do documento
-static int season = 0;            // temporada ESCOLHIDA (nao a focada)
-// Repouso do foco sobre a fileira de temporadas, para trocar de temporada ao
-// PARAR numa pilula em vez de a cada pilula por que se passa.
+static float scrollSec[N_SECTIONS];    // each row's HORIZONTAL scroll
+static float scrollY = 0.0f;         // the document's VERTICAL scroll
+static int season = 0;            // the CHOSEN season (not the focused one)
+// The focus's rest period over the season row, so the season changes when it STOPS
+// on a pill rather than on every pill it passes through.
 static int    tempPending = 0;
 static Uint32 tempSince = 0;
-// Comentarios: 0 = da SERIE, 1 = do EPISODIO. E o seletor que a referencia poe
-// sob "Avaliações do Trakt". Em filme nao existe e fica cravado em 0.
+// Comments: 0 = the SERIES', 1 = the EPISODE's. It is the selector the reference
+// puts under "Trakt ratings". On a film it does not exist and it stays at 0.
 static int commentEp = 0;
-static int tabInfo = 0;              // aba de informacao escolhida
+static int tabInfo = 0;              // the chosen information tab
 
-// As quatro secoes do web, com o topo do GRUPO em coordenada de documento — e
-// nao uma pilha de alturas somadas, que era o modelo do app da Apple TV. As
-// posicoes sao fixas porque no web tambem sao: o documento tem tamanho
-// conhecido e a rolagem so muda o quanto dele se enxerga.
+// The web app's four sections, with the GROUP's top in document coordinates — and
+// not a stack of summed heights, which was the Apple TV app's model. The positions
+// are fixed because in the web app they are too: the document has a known size and
+// scrolling only changes how much of it you see.
 typedef enum { SEC_SEASONS, SEC_EPISODES, SEC_TABS_INFO, SEC_CAST,
                SEC_TRAILERS, SEC_RELATED, SEC_COMMENTS,
                SEC_DETAILS } KindSection;
-// Definida adiante, junto do resto das consultas ao catalogo; declarada aqui
-// porque recalcularLayout, cabecalhoDe e nAvaliaveis, todas acima dela,
-// precisam separar serie de filme.
+// Defined further down, along with the rest of the catalogue queries; declared here
+// because recalcLayout, headerOf and nRateable, all above it, need to tell a series
+// from a film.
 static int isSeries(void);
 static float heightHeaderComments(void);
 static int seasonIn(int c);
 static float baseOfTabActive(void);
-// A fileira de comentarios e definida junto do desenho dela, la embaixo, mas a
-// contagem de colunas e a largura de item — que ficam aqui em cima — precisam
-// perguntar quantas pilulas e quantos cartoes ela tem.
+// The comments row is defined next to the drawing of it, further down, but the
+// column count and the item width — which live up here — need to ask how many pills
+// and how many cards it has.
 #define COM_PILL_GAP  16.0f
-static const char *COM_ROT[2];
+static const char *COM_LABEL[2];
 static int   nPillsCom(void);
 static int   nCardsCom(void);
-static float widthPilulaCom(const char *rot);
+static float widthPillCom(const char *rot);
 static int  sectionN(int r);
 static float heightSection(int r);
 
-// LAYOUT DO DOCUMENTO, recalculado a cada quadro.
+// A SERIES — ABSOLUTE coordinates measured on the device (NV_DETP_G_*). They do not
+// become flow. The comment in detail.h:70 records what happened when someone tried
+// to deduce them from a sum of heights: the scrolling hit its ceiling too early and
+// the cast row stopped half a screen out of place.
 //
-// Duas leis diferentes, e de proposito:
+// A FILM — STACKED. A film's sections (Cast, Trailers, Details) have a height that
+// depends on the content, and there is no device measurement to copy. Here each
+// one's top is the sum of what came before, which is how the web app actually
+// behaves: a block that does not exist takes up no height.
 //
-// SERIE — coordenadas ABSOLUTAS medidas no aparelho (NV_DETP_G_*). Nao viram
-// fluxo. O comentario em detail.h:70 registra o que aconteceu quando alguem
-// tentou deduzi-las por soma de alturas: a rolagem batia no teto cedo demais e
-// a fileira de elenco parava meio ecra fora do lugar.
-//
-// FILME — EMPILHADO. As secoes de filme (Elenco, Trailers, Detalhes) tem altura
-// que depende do conteudo, e nao ha medida de aparelho para copiar. Aqui o topo
-// de cada uma e a soma do que veio antes, que e como o web se comporta de fato:
-// o bloco que nao existe nao ocupa altura.
-//
-// `topoSec` e o topo do GRUPO (a linha do cabecalho). O conteudo comeca em
-// `conteudoSec`, e e ELE o alvo da rolagem — o web mira o topo do TRILHO, nao
-// o do grupo (focusInList, metaDetailsScreen.js:7936).
+// `topSec` is the GROUP's top (the header's line). The content starts at
+// `contentSec`, and it is THAT which the scrolling targets — the web app aims at the
+// TRACK's top, not the group's (focusInList, metaDetailsScreen.js:7936).
 static float topSec[N_SECTIONS], contentSec[N_SECTIONS], targetSec[N_SECTIONS];
 static float docEnd = NV_DETP_END;
 
-// Cabecalho de secao: so o filme tem. Na serie o rotulo "Temporadas" e desenhado
-// pelo caminho antigo, e "Elenco" ficaria repetindo a aba "Criador e elenco"
-// logo acima (ver detail.c:1611).
+// A section header: only a film has one. On a series the "Seasons" label is drawn by
+// the old path, and "Cast" would be repeating the "Creator and cast" tab just above
+// it (see detail.c:1611).
 static const char *headerOf(int r) {
   if (isSeries()) return NULL;
   switch (r) {
     case SEC_CAST:   return "Cast";
     case SEC_TRAILERS:     return "Trailers";
     case SEC_RELATED: return "Recommendations";
-    // Sem cabecalho de secao: a propria secao ja abre com "trakt Comentários" e
-    // o subtitulo "Avaliações do Trakt". Com os dois saiam DOIS titulos
-    // empilhados dizendo a mesma coisa.
+    // No section header: the section itself already opens with "trakt Comments" and
+    // the subtitle "Trakt ratings". With both, TWO stacked titles came out saying the
+    // same thing.
     case SEC_COMMENTS:  return NULL;
     case SEC_DETAILS:     return "Film Details";
     default:           return NULL;
   }
 }
 
-// A ABA DE TEMPORADA E UM ATALHO DE ROLAGEM, nao um filtro.
+// THE SEASON TAB IS A SCROLL SHORTCUT, not a filter.
 //
-// Proposta do dono, e melhor que o que estava: a lista de episodios passou a
-// ser UNICA (todas as temporadas, ordenadas), e a aba apenas leva o foco ao
-// PRIMEIRO episodio daquela temporada. Nao ha recarga, nao ha rede, nao ha
-// reconstrucao — a demora ao trocar de aba deixa de existir porque a troca
-// deixa de acontecer.
+// The owner's proposal, and better than what was there: the episode list became
+// SINGLE (every season, in order), and the tab merely takes the focus to that
+// season's FIRST episode. There is no reload, no network, no rebuild — the delay on
+// changing tab stops existing because the change stops happening.
 static void goToSeason(int c) {
   int target = seasonIn(c), n = cat_n_episodes(idx), i;
   if (target <= 0 || n < 1) return;
   for (i = 0; i < n; i++) {
     const CatEp *e = cat_episode(idx, i);
     if (e && e->season == target) {
-      // Mover o FOCO e nao so a rolagem: a fileira de episodios ja tem a regra
-      // de encostar o card focado na margem esquerda, e reusa-la deixa a aba e
-      // o D-pad concordando sobre onde o dono esta.
+      // Move the FOCUS and not just the scroll: the episode row already has the rule
+      // that brings the focused card up against the left margin, and reusing it keeps
+      // the tab and the D-pad agreeing about where the owner is.
       if (i < focus.nColumns[SEC_EPISODES]) {
         focus.row = SEC_EPISODES;
         focus.column = i;
@@ -203,8 +198,8 @@ static void goToSeason(int c) {
   }
 }
 
-// Filme sem elenco ainda, com o meta em voo. E o unico caso em que uma secao
-// vazia ocupa altura (ver recalcularLayout) e recebe esqueleto.
+// A film with no cast yet, with the meta in flight. It is the only case where an
+// empty section takes up height (see recalcLayout) and gets a skeleton.
 static int castLoading(void) {
   const CatItem *ci = cat_item(idx);
   return !isSeries() && ci && ci->nCast == 0 && disc_episodes_loading(idx);
@@ -213,9 +208,9 @@ static int castLoading(void) {
 static void recomputeLayout(void) {
   int r;
   if (isSeries()) {
-    // As quatro primeiras vem de MEDIDA ABSOLUTA na referencia; nao sao um
-    // empilhamento. As de baixo (comentarios) sim: elas ficam depois do elenco,
-    // cuja altura e conhecida.
+    // The first four come from an ABSOLUTE MEASUREMENT against the reference; they
+    // are not a stack. The ones below (comments) are: they sit after the cast, whose
+    // height is known.
     static const float G[N_SECTIONS] = {
       NV_DETP_G_TEMP, NV_DETP_G_EP, NV_DETP_G_TABS, NV_DETP_G_CAST, 0, 0
     };
@@ -226,21 +221,21 @@ static void recomputeLayout(void) {
                                         : NV_DETP_TARGET_ROW;
     }
     docEnd = NV_DETP_END;
-    // SECAO DO TRAKT NA SERIE: empilhada abaixo do elenco, como na referencia.
-    // Era o "falta a secao do trakt na de series" — ela existia so em filme.
+    // THE TRAKT SECTION ON A SERIES: stacked below the cast, as in the reference.
+    // It was the "the trakt section is missing on series" — it existed only on films.
     //
-    // A base do ELENCO sai das medidas da SERIE, nao de NV_DETF_EL_ALT (193),
-    // que e a altura da fileira de elenco do FILME — foi o que eu usei antes e
-    // por isso a secao do Trakt caiu POR CIMA dos avatares.
+    // The cast's base comes from the SERIES' measurements, not from NV_DETF_EL_HEIGHT
+    // (193), which is the FILM's cast row height — that is what I used before and why
+    // the Trakt section landed ON TOP of the avatars.
     //
-    // O empilhamento e: topo da fileira (EL_Y) + avatar + o vao ate o nome + o
-    // vao do nome ate o papel + a linha do papel. Mais UMA linha de folga
-    // porque nome comprido quebra em duas ("Geneva Robertson-Dworet" na propria
-    // captura do dono) e empurra o papel para baixo.
+    // The stacking is: the row's top (EL_Y) + the avatar + the gap to the name + the
+    // gap from the name to the role + the role's line. Plus ONE line of slack because
+    // a long name wraps onto two ("Geneva Robertson-Dworet" in the owner's own
+    // capture) and pushes the role down.
     y = baseOfTabActive() + NV_DETP_EL_GAP_TRAKT;
     topSec[SEC_COMMENTS] = contentSec[SEC_COMMENTS] = y;
     if (sectionN(SEC_COMMENTS) > 0) {
-      float end = y + heightSection(SEC_COMMENTS) + NV_DETF_DFLT_END;
+      float end = y + heightSection(SEC_COMMENTS) + NV_DETF_PAD_END;
       if (end > docEnd) docEnd = end;
     }
     return;
@@ -250,9 +245,9 @@ static void recomputeLayout(void) {
       float h;
       topSec[r] = contentSec[r] = y;
       targetSec[r] = NV_DETP_TARGET_ROW;
-      // Secao ausente nao ocupa altura — salvo o ELENCO enquanto o meta do
-      // filme carrega: a fileira reserva o lugar e recebe o esqueleto, para a
-      // pagina nao pular quando os atores chegarem.
+      // A missing section takes up no height — except the CAST while the film's meta
+      // is loading: the row reserves its place and gets the skeleton, so the page does
+      // not jump when the actors arrive.
       if (sectionN(r) <= 0 && !(r == SEC_CAST && castLoading())) continue;
       if (headerOf(r)) {
         contentSec[r] = y + NV_DETF_HEADER_H + NV_DETF_HEADER_GAP;
@@ -261,43 +256,42 @@ static void recomputeLayout(void) {
       h = heightSection(r);
       y += h + NV_DETF_SEC_GAP;
     }
-    // Fim REAL do documento, nao os 2473 da serie: um filme e bem mais curto e
-    // copiar aquele numero deixaria a pagina rolar para muito depois do fim.
-    docEnd = y - NV_DETF_SEC_GAP + NV_DETF_DFLT_END;
+    // The REAL end of the document, not the series' 2473: a film is much shorter and
+    // copying that number would let the page scroll far past its end.
+    docEnd = y - NV_DETF_SEC_GAP + NV_DETF_PAD_END;
     if (docEnd < NV_SCREEN_H) docEnd = NV_SCREEN_H; }
 }
 
-// As abas sao DINAMICAS, como no web: renderSeriesInsightSection
-// (metaDetailsScreen.js:3751) so acrescenta "Mais como este", "Trailer" e
-// "Colecao" quando a lista correspondente tem itens, e esconde a barra inteira
-// quando sobra uma aba so. O port cravava as quatro e as tres ultimas caiam
-// todas em "Sem informacao para esta aba." — que e exatamente o que o web
-// evita nao mostrando a aba.
+// The tabs are DYNAMIC, as in the web app: renderSeriesInsightSection
+// (metaDetailsScreen.js:3751) only adds "More like this", "Trailer" and "Collection"
+// when the corresponding list has items, and hides the whole bar when a single tab is
+// left. The port hard-coded all four and the last three all fell into "No information
+// for this tab." — which is exactly what the web app avoids by not showing the tab.
 //
-// Aqui existem duas: elenco (sempre) e avaliacoes (quando ha nota). Similares
-// e trailer nao tem fonte neste port; quando tiverem, entram nesta tabela.
+// Here there are two: cast (always) and ratings (when there is a score). Similar
+// titles and trailers have no source in this port; when they do, they go into this table.
 typedef enum { TAB_CAST, TAB_RATINGS, TAB_RELATED, TAB_COLLECTION,
                TAB_COMMENTS, TAB_NFIXAS } TabInfoId;
-// OS ROTULOS SAO OS DO APARELHO, e nao os do web. Lido na barra da serie
-// "Furious" na TCL: "Direção e Elenco | Avaliações | Recomendações | Trailer".
-// "Criador e elenco" e "Mais como este" vinham do NuvioWeb e nao existem la.
+// THE LABELS ARE THE DEVICE'S, and not the web app's. Read off the bar of the series
+// "Furious" on the TCL: "Direction and Cast | Ratings | Recommendations | Trailer".
+// "Creator and cast" and "More like this" came from NuvioWeb and do not exist there.
 //
-// "Coleção" e "Comentários" ficam: sao dados que este port TEM e que a barra da
-// referencia nao mostrava naquele titulo (ela some as abas sem conteudo, e a
-// serie medida nao tinha nem colecao nem comentarios). Tirar as duas seria
-// esconder o que o app ja sabe mostrar.
+// "Collection" and "Comments" stay: they are data this port HAS and that the
+// reference's bar did not show on that title (it hides tabs with no content, and the
+// series measured had neither a collection nor comments). Removing the two would be
+// hiding what the app already knows how to show.
 static const char *TAB_LABEL[TAB_NFIXAS] = {
   "Cast and Crew", "Ratings", "Recommendations", "Collection", "Comments"
 };
 
-// Nota do IMDb do titulo aberto, 0 quando nao ha.
+// The open title's IMDb score, 0 when there is none.
 static int scoreOf(int i) {
   const CatItem *ci = cat_item(i);
   return ci ? ci->score : 0;
 }
-// Quantos itens a aba de Avaliacoes tem para focar: as temporadas, em serie; os
-// cartoes de nota, em filme. Serve so a navegacao — o desenho ja sabe o que
-// mostrar em cada caso.
+// How many items the Ratings tab has to focus: the seasons, on a series; the score
+// cards, on a film. It serves navigation only — the drawing already knows what to
+// show in each case.
 static int nRateable(void) {
   int i, n = 0;
   if (isSeries() && extras_n_seasons() > 0) return extras_n_seasons();
@@ -312,19 +306,19 @@ static int nRateable(void) {
 static int tabAvailable(int id) {
   switch (id) {
     case TAB_CAST:       return 1;
-    // Basta UMA das notas para a aba valer a pena; o cartao que faltar mostra
-    // "-", que e o que o web faz.
+    // ONE of the scores is enough for the tab to be worth it; whichever card is
+    // missing shows "-", which is what the web app does.
     case TAB_RATINGS:   return scoreOf(idx) > 0 || extras_score_trakt() > 0;
     case TAB_RELATED: return extras_n_related() > 0;
     case TAB_COLLECTION:      return extras_n_collection() > 1;
-    // Sem aba de comentarios: na referencia eles sao uma SECAO empilhada, e as
-    // abas medidas na TCL sao so Direção e Elenco / Avaliações / Recomendações.
-    // Deixar as duas coisas mostraria o mesmo conteudo em dois lugares.
+    // No comments tab: in the reference they are a stacked SECTION, and the tabs
+    // measured on the TCL are only Direction and Cast / Ratings / Recommendations.
+    // Keeping both would show the same content in two places.
     case TAB_COMMENTS:  return 0;
     default:               return 0;
   }
 }
-// Traduz a posicao visivel `c` para o id da aba.
+// Translates the visible position `c` into the tab's id.
 static int tabIdOf(int c) {
   for (int id = 0, v = 0; id < TAB_NFIXAS; id++)
     if (tabAvailable(id) && v++ == c) return id;
@@ -343,10 +337,10 @@ static int  seasonIn(int c);
 static float widthSeason(int c);
 static float widthTabInfo(int i);
 
-// NULL quando nao se sabe — nao uma lista de reserva. As listas fixas que
-// ficavam aqui existiam para o app rodar so com uma pasta de imagens solta, mas
-// o preco era um titulo REAL sem nome carregado aparecer chamado "Ruptura" ou
-// "Silo", indistinguivel de dado verdadeiro. Quem desenha omite o que vier NULL.
+// NULL when it is not known — not a fallback list. The fixed lists that used to be
+// here existed so the app could run with only a loose folder of images, but the price
+// was a REAL title with no name loaded appearing as "Severance" or "Silo",
+// indistinguishable from real data. Whoever draws omits anything that comes back NULL.
 static const char *titleOf(int i) {
   const CatItem *c = cat_item(i);
   return (c && c->title[0]) ? c->title : NULL;
@@ -355,11 +349,11 @@ static const char *genreOf(int i) {
   const CatItem *c = cat_item(i);
   return (c && c->genre[0]) ? c->genre : NULL;
 }
-// Vazio quando nao se sabe. A lista de reserva que ficava aqui carimbava
-// "2025 · 1 h 54 min" num titulo cujo metadado ainda nao chegou — ano e duracao
-// INVENTADOS, na linha de meta do hero, ao lado de dados verdadeiros.
-// partirMeta ja lida com string vazia e devolve os dois campos vazios; quem
-// desenha omite cada um deles.
+// Empty when it is not known. The fallback list that used to be here stamped
+// "2025 · 1 h 54 min" on a title whose metadata had not arrived — an INVENTED year
+// and duration, on the hero's meta line, beside real data.
+// splitMeta already handles an empty string and returns both fields empty; whoever
+// draws omits each of them.
 static const char *profileOf(int i) {
   const CatItem *c = cat_item(i);
   return (c && c->meta[0]) ? c->meta : "";
@@ -374,12 +368,12 @@ static const char *logoOf(int i) {
 }
 static const char *artOf(int i) {
   const CatItem *c = cat_item(i);
-  // Um detalhe nunca pode herdar a arte de outra posicao do catalogo. Quando
-  // o backdrop do proprio titulo falta, o renderer mostra o estado neutro e
-  // preserva o layout, aguardando eventual enriquecimento do mesmo item.
+  // A detail screen can never inherit the art of another catalogue position. When the
+  // title's own backdrop is missing, the renderer shows the neutral state and
+  // preserves the layout, waiting for the same item to be enriched later.
   if (c && c->backdrop[0]) return c->backdrop;
-  // Poster do próprio título é a reserva segura. O desenho trata-o como arte
-  // contida, não como cover 16:9, para preservar rosto, lettering e proporção.
+  // The title's own poster is the safe fallback. The drawing treats it as contained
+  // art, not as a 16:9 cover, to preserve the face, the lettering and the proportions.
   if (c && c->poster[0]) return c->poster;
   return NULL;
 }
@@ -422,11 +416,11 @@ static float smooth(float x) {
 }
 static float phase2(void) { return smooth((t - 0.45f) / 0.55f); }
 
-// A Inter embarcada so tem Regular, Medium e Bold, e a pagina pede 500, 600 e
-// 800 em corpos (32, 26, 21) que so existem em Regular na tabela de text.c —
-// que e arquivo de outro agente nesta sessao. Engrossar redesenhando a mesma
-// linha com deslocamentos sub-pixel e o que sobra, e e o que os rasterizadores
-// chamam de "faux bold": custa uma textura so, porque a linha vem do cache.
+// The embedded Inter has only Regular, Medium and Bold, and the page asks for 500,
+// 600 and 800 at sizes (32, 26, 21) that only exist in Regular in text.c's table —
+// which is another agent's file in this session. Thickening by redrawing the same
+// line with sub-pixel offsets is what is left, and it is what rasterisers call
+// "faux bold": it costs a single texture, because the line comes from the cache.
 static void txt_weight(TxtLine l, float x, float y, float a, float thickness) {
   txt_draw_alpha(l, x, y, a);
   if (thickness > 0.05f) txt_draw_alpha(l, x + thickness * 0.5f, y, a);
@@ -440,14 +434,14 @@ void detail_open(const HomeItem *it) {
   t = 0.0f; pg = 0.0f; scrollY = 0.0f; tabInfo = 0; personIs_open = 0;
   relFocus = 0; reqOpen = -1; ratTemp = 0;
   idx = it->index_;
-  // Nota do Trakt, comentarios e relacionados. Pedido na ABERTURA e nao no
-  // desenho: as abas so aparecem depois que o dado chega, e pedir no desenho
-  // faria a barra de abas surgir com o titulo ja na tela.
+  // The Trakt score, comments and related titles. Requested on OPENING and not while
+  // drawing: the tabs only appear once the data arrives, and requesting while drawing
+  // would make the tab bar appear with the title already on screen.
   { const CatItem *ci = cat_item(idx);
     if (ci && ci->imdb[0]) extras_request(ci->imdb, isSeries(), ci->tmdb); }
-  // A aba marcada tem de ser a da temporada que os episodios trazem. Comecando
-  // sempre em 0, uma serie cujo primeiro episodio carregado e da 4 abria com
-  // "Temporada 1" aceso — o rotulo desmentia a lista logo abaixo.
+  // The marked tab has to be the season the episodes carry. Always starting at 0, a
+  // series whose first loaded episode is from season 4 opened with "Season 1" lit —
+  // the label contradicted the list just below it.
   season = 0;
   { const CatEp *e0 = cat_episode(idx, 0);
     const CatItem *ci0 = cat_item(idx);
@@ -465,36 +459,35 @@ void detail_open(const HomeItem *it) {
 
 int detail_is_open(void) { return is_open; }
 
-// 0..1 de quanto o detalhe ja tomou a tela. A home le isto para DESCER as
-// fileiras enquanto ele entra: e o movimento que o dono descreve como "so os
-// posters descem". Fica aqui e nao numa variavel compartilhada porque a mola
-// que o produz e a mesma do desenho — dois relogios diferentes descasariam.
+// 0..1 of how much the detail has already taken over the screen. The home reads this
+// to push the rows DOWN as it comes in: it is the movement the owner describes as
+// "only the posters go down". It lives here and not in a shared variable because the
+// spring that produces it is the drawing's own — two different clocks would drift.
 float detail_progress(void) { return is_open ? smooth(t) : 0.0f; }
 
-// Temporada e episodio EM FOCO, para quem for pedir fonte.
+// The season and episode IN FOCUS, for whoever is going to ask for a source.
 //
-// Sem isto o addons_buscar recebia so o imdb da serie e cravava ":1:1" — e por
-// isso as fontes eram sempre as do episodio 1, qualquer que fosse o escolhido.
-// Devolve 0 quando o foco nao esta na fileira de episodios; nesse caso quem
-// chama cai no primeiro episodio da temporada em exibicao, que e o que a tela
-// mostra em cima.
-// ONDE O DONO PAROU, ou onde ele deve comecar.
+// Without this, addons_fetch received only the series' imdb and hard-coded ":1:1" —
+// and that is why the sources were always episode 1's, whichever one was chosen.
+// It returns 0 when the focus is not on the episode row; in that case the caller
+// falls back to the first episode of the season on display, which is what the screen
+// shows at the top.
+// WHERE THE OWNER STOPPED, or where they should start.
 //
-// Tres fontes, nesta ordem:
-//   1. o episodio EM FOCO, quando ele esta na fileira de episodios — ali a
-//      escolha e explicita e ganha de qualquer historico;
-//   2. o episodio em ANDAMENTO (progresso do Trakt no proprio CatItem), que e o
-//      "Retomar";
-//   3. o PRIMEIRO NAO ASSISTIDO, varrendo as temporadas em ordem com o
-//      /shows/<id>/progress/watched que extras.c ja le — o "Proximo".
+// Three sources, in this order:
+//   1. the episode IN FOCUS, when it is on the episode row — there the choice is
+//      explicit and beats any history;
+//   2. the episode IN PROGRESS (Trakt's progress in the CatItem itself), which is
+//      the "Resume";
+//   3. the FIRST UNWATCHED, sweeping the seasons in order with the
+//      /shows/<id>/progress/watched that extras.c already reads — the "Next".
 //
-// O comentario que existia aqui dizia que o catalogo nativo "nao guarda quais
-// episodios ja foram vistos". Nao guarda mesmo, mas extras_ep_visto() sabe
-// desde que o painel de notas por episodio foi feito — a afirmacao ficou velha
-// e o botao seguiu apontando para T1E1 em serie ja comecada, que foi o que o
-// dono relatou.
+// The comment that used to be here said the native catalogue "does not store which
+// episodes have been watched". It does not, but extras_ep_watched() has known since
+// the per-episode ratings panel was built — the claim went stale and the button went
+// on pointing at S1E1 on a series already started, which is what the owner reported.
 //
-// `origem` (opcional) devolve 1 = foco, 2 = retomar, 3 = proximo, 0 = primeiro.
+// `origin` (optional) returns 1 = focus, 2 = resume, 3 = next, 0 = first.
 static int episodeTarget(int *temp, int *eps, int *origin) {
   const CatItem *ci = cat_item(idx);
   const CatEp *ep = NULL;
@@ -507,7 +500,7 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
     if (origin) *origin = 1;
     return 1;
   }
-  // Em andamento: o item do "Continuar assistindo" traz temporada e episodio.
+  // In progress: the "Continue watching" item carries the season and episode.
   if (ci && ci->progress > 0 && ci->progress < 90 && ci->season > 0 && ci->episode > 0 &&
       !extras_ep_watched(ci->season, ci->episode)) {
     if (temp) *temp = ci->season;
@@ -515,8 +508,8 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
     if (origin) *origin = 2;
     return 1;
   }
-  // Primeiro nao assistido. So vale quando o Trakt ja respondeu; sem dado
-  // nenhum extras_n_temporadas() e 0 e cai no primeiro episodio, como antes.
+  // The first unwatched. It only counts once Trakt has answered; with no data at all
+  // extras_n_seasons() is 0 and it falls back to the first episode, as before.
   { int t, e;
     if (extras_next_episode(&t, &e)) {
       if (temp) *temp = t;
@@ -554,9 +547,9 @@ int detail_settled(void) {
   return is_open && !exiting && t > 0.985f && level == 0;
 }
 
-// Retangulo do backdrop NESTE quadro e a opacidade com que ele sai. Uma conta
-// so, usada por detail_cobre_tela e por detail_desenhar — se as duas
-// divergirem, a home some um quadro antes de a arte cobrir e a tela pisca.
+// The backdrop's rectangle THIS FRAME and the opacity it comes in with. One piece of
+// arithmetic, used by detail_covers_screen and by detail_draw — if the two diverged,
+// the home would disappear one frame before the art covers it and the screen would flash.
 static void backdropRect(GfxRect *r, float *opacity) {
   float s = smooth(t);
   GfxRect de;
@@ -565,28 +558,27 @@ static void backdropRect(GfxRect *r, float *opacity) {
   r->y = de.y + (0.0f - de.y) * s;
   r->w = de.w + (NV_SCREEN_W - de.w) * s;
   r->h = de.h + (NV_SCREEN_H - de.h) * s;
-  // Sobe RAPIDO (s*3, nao s): a arte por baixo e a mesma, entao a rampa so
-  // troca a vinheta do hero pela do detalhe.
+  // It comes up FAST (s*3, not s): the art underneath is the same, so the ramp only
+  // swaps the hero's vignette for the detail's.
   *opacity = anim_clamp(s * 3.0f, 0.0f, 1.0f);
 }
 
 int detail_covers_screen(void) {
-  // O backdrop e FULL-BLEED: assim que ele termina de crescer, nao sobra um
-  // pixel da tela anterior. Desenhar a home por baixo custava um quadro inteiro
-  // de preenchimento a toa — medido em 42 ms no pior quadro.
+  // The backdrop is FULL-BLEED: as soon as it has finished growing, not a pixel of
+  // the previous screen is left. Drawing the home underneath cost a whole frame of
+  // fill for nothing — measured at 42 ms on the worst frame.
   //
-  // A CONDICAO ERA `suave(t) > 0.995`, que so e verdade em t > 0,83: a home
-  // continuava sendo desenhada em 83% da abertura, e e nessa janela que estava
-  // o jank medido no aparelho (clr=38,3ms com CPU ociosa — GPU afogada por
-  // preenchimento, home + fundo chapado + backdrop, tres camadas de tela cheia
-  // ou mais).
+  // THE CONDITION WAS `smooth(t) > 0.995`, which is only true at t > 0.83: the home
+  // was still being drawn at 83% of the opening, and that window is where the jank
+  // measured on the device was (clr=38.3ms with the CPU idle — the GPU drowned in
+  // fill, home + flat background + backdrop, three full-screen layers or more).
   //
-  // Agora a pergunta e a certa: o retangulo do backdrop ja alcancou as quatro
-  // bordas E ja esta opaco? Com o hero em tela cheia ele nasce praticamente do
-  // tamanho da tela, entao a resposta chega em t ~ 0,13 — a home sai seis vezes
-  // mais cedo. Quando a origem NAO cobre (hero em faixa, ou o detalhe aberto da
-  // busca), a conta responde `nao` e a home continua desenhada: e por isso que
-  // isto e uma medida de cobertura e nao um limiar novo em `t`.
+  // Now the question is the right one: has the backdrop's rectangle already reached
+  // all four edges AND is it already opaque? With the hero full screen it is born
+  // practically screen-sized, so the answer arrives at t ~ 0.13 — the home leaves six
+  // times sooner. When the origin does NOT cover (a banded hero, or the detail opened
+  // from the search), the arithmetic answers `no` and the home is still drawn: which
+  // is why this is a coverage measurement and not a new threshold on `t`.
   if (!is_open) return 0;
   { GfxRect r; float opacity;
     backdropRect(&r, &opacity);
@@ -596,15 +588,15 @@ int detail_covers_screen(void) {
   }
 }
 
-// --- tabela "Detalhes do Filme" ---------------------------------------------
+// --- the "Film Details" table -----------------------------------------------
 //
-// Uma linha por campo COM VALOR. Campo vazio nao vira linha com traco: some.
-// Essa e a mesma regra que desenhaAvaliacoes ja usa para fonte sem nota, e e o
-// que impede a tabela de virar um formulario meio preenchido quando o TMDB nao
-// tem o dado.
+// One row per field WITH A VALUE. An empty field does not become a row with a dash:
+// it disappears. That is the same rule drawRatings already uses for a source with no
+// score, and it is what stops the table becoming a half-filled form when TMDB does
+// not have the data.
 typedef struct { const char *key; char value[168]; } LineDet;
 
-// "111" -> "1h 51m"; "47" -> "47min". O TMDB manda minutos crus.
+// "111" -> "1h 51m"; "47" -> "47min". TMDB sends raw minutes.
 static void durationText(int min, char *dst, size_t size) {
   if (min <= 0) { dst[0] = 0; return; }
   if (min < 60) { snprintf(dst, size, "%dmin", min); return; }
@@ -629,15 +621,15 @@ static int buildDetails(LineDet *o, int max) {
     DET_PLACE("Release", dt); }
   { char d[32]; durationText(extras_profile_duration(), d, sizeof d);
     DET_PLACE("Runtime", d); }
-  // Classificacao: a da ficha do TMDB e a boa. A do catalogo serve de reserva,
-  // e desde que o "14" cravado saiu de descoberta.c ela so tem valor quando
-  // veio do arquivo de catalogo, que e dado de verdade.
+  // The rating: TMDB's fact sheet is the good one. The catalogue's serves as a
+  // fallback, and since the hard-coded "14" left discover.c it only has any value
+  // when it came from the catalogue file, which is real data.
   v = extras_profile_age_rating();
   if (!v || !v[0]) v = (ci && ci->age_rating[0]) ? ci->age_rating : NULL;
   DET_PLACE("Rating", v);
-  // Pais: a lista completa do TMDB quando ha; senao o unico que o Cinemeta da.
+  // Country: TMDB's full list where there is one; otherwise the single one Cinemeta gives.
   v = extras_profile_countries();
-  if (!v || !v[0]) v = (ci && ci->pais[0]) ? ci->pais : NULL;
+  if (!v || !v[0]) v = (ci && ci->country[0]) ? ci->country : NULL;
   DET_PLACE("Country of Origin", v);
   DET_PLACE("Directing", (ci && ci->directing[0]) ? ci->directing : NULL);
 
@@ -650,9 +642,9 @@ static int nLinesDetail(void) {
   return buildDetails(l, NV_DETF_DET_MAXL);
 }
 
-// Altura do CONTEUDO de uma secao (sem o cabecalho). Serve ao empilhamento do
-// filme e ao culling. Antes cada numero destes vivia cravado no meio do
-// desenho, e uma secao nova herdava a altura do elenco em silencio.
+// The height of a section's CONTENT (without the header). It serves the film's
+// stacking and the culling. Each of these numbers used to live hard-coded in the
+// middle of the drawing, and a new section silently inherited the cast's height.
 static float heightSection(int r) {
   switch (r) {
     case SEC_SEASONS: return NV_DETP_TEMP_H;
@@ -660,9 +652,9 @@ static float heightSection(int r) {
     case SEC_TABS_INFO:  return NV_DETP_TAB_H;
     case SEC_CAST:     return NV_DETF_EL_HEIGHT;
     case SEC_TRAILERS:     return NV_DETF_TR_HEIGHT;
-    case SEC_RELATED: return 318.0f + 46.0f;   // cartaz + titulo/ano
-    // + o cabecalho: sem ele a secao seguinte ("Detalhes do Filme") era
-    // empilhada usando so a altura dos cartoes e saia POR CIMA deles.
+    case SEC_RELATED: return 318.0f + 46.0f;   // poster + title/year
+    // + the header: without it the next section ("Film Details") was stacked using
+    // only the cards' height and came out ON TOP of them.
     case SEC_COMMENTS:  return heightHeaderComments() + COM_CARD_H;
     case SEC_DETAILS:     return nLinesDetail() * NV_DETF_DET_LINE;
   }
@@ -673,9 +665,9 @@ static int sectionN(int r) {
   const CatItem *ci = cat_item(idx);
   switch (r) {
     case SEC_SEASONS:
-      // Filme nao tem temporada: a fileira SOME em vez de mostrar abas que nao
-      // levam a lugar nenhum. E o que o web faz — a `.series-season-row` so
-      // existe no layout de serie.
+      // A film has no seasons: the row DISAPPEARS instead of showing tabs that lead
+      // nowhere. It is what the web app does — `.series-season-row` only exists in
+      // the series layout.
       if (!isSeries()) return 0;
       if (ci && ci->nSeasons > 0)
         return ci->nSeasons < N_ITEMS ? ci->nSeasons : N_ITEMS;
@@ -685,47 +677,47 @@ static int sectionN(int r) {
       if (q <= 0) return 0;
       return q < N_ITEMS ? q : N_ITEMS;
     }
-    // Uma aba so = barra escondida, como o `tabItems.length > 1` do web.
-    // FILME NAO TEM ABAS: a pagina de filme empilha as secoes com cabecalho
-    // proprio, entao a barra de abas nao entra. Sem esta guarda o filme ficava
-    // com as duas coisas ao mesmo tempo — a barra E os cabecalhos.
+    // A single tab = the bar hidden, like the web app's `tabItems.length > 1`.
+    // A FILM HAS NO TABS: the film page stacks the sections with headers of their own,
+    // so the tab bar does not come in. Without this guard a film ended up with both at
+    // once — the bar AND the headers.
     case SEC_TABS_INFO: {
       int n;
       if (!isSeries()) return 0;
       n = nTabsInfo();
       return n > 1 ? n : 0;
     }
-    // A FILEIRA DE BAIXO E A ABA ESCOLHIDA, nao "o elenco". Este slot desenha
-    // elenco, cartazes de "Mais como este", cartoes de nota, a colecao ou os
-    // comentarios — desenhaSecao troca o conteudo no lugar. Se a contagem
-    // continuasse sendo so a do elenco, escolher outra aba deixava a fileira com
-    // o numero errado de colunas, e uma guarda no evento BLOQUEAVA descer para
-    // ela por completo: dava para mexer nas abas e em mais nada.
+    // THE BOTTOM ROW IS THE CHOSEN TAB, not "the cast". This slot draws the cast,
+    // "More like this" posters, score cards, the collection or the comments —
+    // drawSection swaps the content in place. If the count stayed the cast's alone,
+    // choosing another tab left the row with the wrong number of columns, and a guard
+    // in the event handler BLOCKED going down to it entirely: you could move on the
+    // tabs and nothing else.
     //
-    // Sem elenco a secao nao existe — nao ha reserva. O `N_ELENCO` que ficava
-    // aqui como padrao enchia a fileira com seis nomes de demonstracao mesmo num
-    // titulo que o app nao sabe quem estrela.
+    // With no cast the section does not exist — there is no fallback. The `N_CAST`
+    // that used to be here as a default filled the row with six demo names even on a
+    // title the app does not know who stars in.
     case SEC_CAST: {
       int n;
       switch (tabIdOf(tabInfo)) {
         case TAB_RATINGS:   n = nRateable();           break;
         case TAB_RELATED: n = extras_n_related(); break;
         case TAB_COLLECTION:      n = extras_n_collection();      break;
-        // O cartao de comentario nao se escolhe um a um; o que RECEBE foco sao
-        // as duas pilulas do seletor "Série | Episódio". Em filme nao ha
-        // episodio: sobra uma coluna so, para o foco poder pousar na fileira e
-        // a pagina rolar ate os cartoes.
+        // A comment card is not chosen one by one; what TAKES focus is the two pills
+        // of the "Series | Episode" selector. On a film there is no episode: a single
+        // column is left, so the focus can land on the row and the page can scroll to
+        // the cards.
         case TAB_COMMENTS:  n = isSeries() ? 2 : 1; break;
         default:               n = (ci && ci->nCast > 0) ? ci->nCast : 0;
       }
       return n < NV_DETF_EL_MAX ? n : NV_DETF_EL_MAX;
     }
-    // Trailers, Recomendacoes, Comentarios e Detalhes so existem em FILME —
-    // na serie o mesmo conteudo vive atras das ABAS.
+    // Trailers, Recommendations, Comments and Details only exist on a FILM — on a
+    // series the same content lives behind the TABS.
     //
-    // Estas duas ultimas eram justamente o que se perdeu ao tirar as abas do
-    // filme: os dados sempre estiveram la (o log mostra "coment=8 rel=12"),
-    // mas sem aba e sem secao nao havia como chegar neles.
+    // These last two were precisely what was lost when the tabs were taken off the
+    // film: the data was always there (the log shows "comments=8 rel=12"), but with
+    // no tab and no section there was no way to reach it.
     case SEC_TRAILERS:
       if (isSeries()) return 0;
       return extras_n_trailers();
@@ -735,24 +727,24 @@ static int sectionN(int r) {
       n = extras_n_related();
       return n < N_ITEMS ? n : N_ITEMS;
     }
-    // Comentario nao se escolhe um a um: UMA coluna, so para o foco pousar e a
-    // pagina rolar ate os cartoes.
-    // COMENTARIOS EXISTEM NOS DOIS. Na referencia a secao do Trakt fica
-    // EMPILHADA abaixo da fileira de elenco tambem na serie — nao e uma aba.
-    // Aqui ela so existia em filme, e na serie vivia atras de uma aba que a
-    // referencia nao tem; o dono viu isso como "falta a secao do trakt na de
-    // series".
+    // A comment is not chosen one by one: ONE column, just so the focus can land and
+    // the page can scroll to the cards.
+    // COMMENTS EXIST ON BOTH. In the reference the Trakt section sits STACKED below
+    // the cast row on a series too — it is not a tab. Here it existed only on a film,
+    // and on a series it lived behind a tab the reference does not have; the owner saw
+    // that as "the trakt section is missing on series".
     //
-    // Colunas: as duas pilulas do seletor "Série | Episódio" na serie; em filme
-    // nao ha episodio, entao sobra uma coluna so para o foco pousar.
+    // Columns: the two pills of the "Series | Episode" selector on a series; on a film
+    // there is no episode, so a single column is left for the focus to land on.
     case SEC_COMMENTS: {
       int nc = nCardsCom();
       if (nc <= 0 && extras_n_comments() <= 0) return 0;
       return nPillsCom() + nc;
     }
-    // A tabela e UMA coluna focavel, nao uma por linha: o D-pad desce ate ela,
-    // ela rola para a tela e pronto. Zero colunas faria focus_mover PULA-LA
-    // (focus.c:25) e a secao viraria inalcancavel — logo, tambem irrolavel.
+    // The table is ONE focusable column, not one per row: the D-pad goes down to it,
+    // it scrolls into view and that is that. Zero columns would make focus_move SKIP
+    // IT (focus.c:25) and the section would become unreachable — and therefore
+    // unscrollable too.
     case SEC_DETAILS:
       if (isSeries()) return 0;
       return nLinesDetail() > 0 ? 1 : 0;
@@ -760,47 +752,49 @@ static int sectionN(int r) {
   return 0;
 }
 
-// O botao primario e UM SO, e ele TROCA DE ROTULO conforme o estado:
-// "Reproduzir" quando nunca foi aberto, "Retomar TxEy" quando ha progresso.
+// The primary button is a SINGLE one, and it CHANGES ITS LABEL according to the
+// state: "Play" when it has never been opened, "Resume SxEy" when there is progress.
 //
-// Havia um segundo botao ("Reproduzir desde o inicio") que aparecia junto da
-// linha de retomada. Saiu por decisao do dono: "quando ja tiver comecado nao use
-// outro botao para resumir, use o mesmo botao de reproduzir, so troque ele". E o
-// que a referencia mostra tambem — primario + TRES circulares (+, ja assisti,
-// trailer), sem segundo botao de texto.
-// QUANTOS CIRCULARES, e a resposta depende do tipo. MEDIDO nas duas capturas
-// do aparelho: o FILME ("Ma") tem tres — mais, olho de "ja assisti" e trailer —
-// e a SERIE ("Lioness") tem DOIS, sem o olho. Faz sentido e nao e descuido da
-// referencia: "assistido" numa serie e por episodio, e a lista de episodios
-// logo abaixo ja marca isso um a um; um olho no hero teria de significar "a
-// serie inteira", que nao e coisa que o Trakt guarde por titulo.
+// There used to be a second button ("Play from the start") that appeared alongside
+// the resume line. It went by the owner's decision: "when it's already started don't
+// use another button to resume, use the same play button, just change it". It is what
+// the reference shows too — a primary plus THREE circular buttons (+, already
+// watched, trailer), with no second text button.
+// HOW MANY CIRCULAR ONES, and the answer depends on the type. MEASURED on the two
+// captures from the device: the FILM ("Ma") has three — plus, the "already watched"
+// eye and the trailer — and the SERIES ("Lioness") has TWO, without the eye. It makes
+// sense and is not an oversight in the reference: "watched" on a series is per
+// episode, and the episode list just below already marks that one by one; an eye on
+// the hero would have to mean "the whole series", which is not something Trakt stores
+// per title.
 //
-// Este arquivo desenhava TRES nos dois casos.
+// This file drew THREE in both cases.
 static int nButtons(void) { return isSeries() ? 3 : 4; }
 
-// Que ACAO esta na posicao `n` da linha. As acoes tem numeros fixos (0
-// primario, 1 lista, 2 assistido, 3 fontes) porque detail_evento decide por
-// eles; o que muda com o tipo e quais posicoes existem. Sem esta traducao, na
-// serie o segundo circular (que e o de fontes) dispararia "marcar assistido".
+// Which ACTION sits at position `n` in the row. The actions have fixed numbers (0
+// primary, 1 list, 2 watched, 3 sources) because detail_event decides by them; what
+// changes with the type is which positions exist. Without this translation, on a
+// series the second circular button (which is the sources one) would fire "mark as
+// watched".
 enum { ACTION_PRIMARY = 0, ACTION_LIST = 1, ACTION_WATCHED = 2, ACTION_SOURCES = 3 };
 static int actionIn(int n) {
-  if (n >= 2 && isSeries()) return n + 1;   // serie pula o olho
+  if (n >= 2 && isSeries()) return n + 1;   // a series skips the eye
   return n;
 }
 
 void detail_event(const SDL_Event *e) {
   if (exiting) return;
 
-  // A FICHA DA PESSOA come os eventos enquanto esta aberta. Ela e outra tela e
-  // nao uma secao desta: deixar a tela de titulo continuar respondendo por
-  // baixo faria a seta mover duas coisas ao mesmo tempo.
+  // THE PERSON'S CARD eats the events while it is open. It is another screen and not a
+  // section of this one: letting the title screen carry on responding underneath would
+  // make the arrow move two things at once.
   //
-  // O `return` no fim deste bloco e o que faz isso valer. Ele ja existia, mas a
-  // chave que o abria englobava TAMBEM os dois blocos abaixo — as setas em
-  // "Avaliações" e a navegacao/OK de "Mais como este" e "Coleção" estavam
-  // dentro de `if (pessoaAberta)` exigindo `!pessoaAberta`, ou seja, nunca
-  // rodavam. Era por isso que nao dava para andar nem abrir nada nas
-  // recomendacoes: o codigo estava escrito e era inalcancavel.
+  // The `return` at the end of this block is what makes that hold. It already existed,
+  // but the brace that opened it enclosed the two blocks below TOO — the arrows in
+  // "Ratings" and the navigation/OK of "More like this" and "Collection" sat inside
+  // `if (personIs_open)` requiring `!personIs_open`, that is, they never ran. That is
+  // why you could neither move nor open anything in the recommendations: the code was
+  // written and was unreachable.
   if (personIs_open) {
     if (e->type != SDL_KEYDOWN) return;
     { int n = person_n_credits();
@@ -813,27 +807,27 @@ void detail_event(const SDL_Event *e) {
           return;
         case SDLK_DOWN:
           if (personFocus + PES_PER_LINE < n) personFocus += PES_PER_LINE;
-          // A grade ROLA quando o foco passa da segunda linha visivel. Duas
-          // linhas cabem na tela; a terceira em diante entra empurrando.
+          // The grid SCROLLS when the focus passes the second visible row. Two rows fit
+          // on screen; the third onwards comes in pushing.
           if (personFocus / PES_PER_LINE > personLine + 1) personLine++;
           return;
         case SDLK_AC_BACK: personIs_open = 0; return;
         case SDLK_RETURN:
         case SDLK_KP_ENTER: {
-          // Abre o titulo, quando ele for um dos que o catalogo ja tem meta.
-          // Quem troca de fato e o roteador (app.c) — daqui so sai o pedido.
+          // Opens the title, when it is one the catalogue already has meta for.
+          // What actually swaps is the router (app.c) — only the request leaves here.
           //
-          // Um credito que NAO esta no catalogo nao abre nada, de proposito:
-          // sem meta nao ha episodios, elenco nem fonte, e uma tela de detalhe
-          // vazia e pior que o botao nao responder. Buscar meta sob demanda e
-          // trabalho a parte.
+          // A credit that is NOT in the catalogue opens nothing, on purpose: with no
+          // meta there are no episodes, no cast and no source, and an empty detail
+          // screen is worse than the button not responding. Fetching meta on demand is
+          // separate work.
           const char *id = person_credit_imdb(personFocus);
           int target = id[0] ? cat_index_by_imdb(id) : -1;
           if (target >= 0) { reqOpen = target; personIs_open = 0; }
-          // Nao esta no catalogo: busca o meta e abre quando chegar. Quem
-          // termina o trabalho e o roteador, que ja acompanha o resultado.
-          // O credito quase nunca traz imdb_id, entao o caminho normal e pelo
-          // id do TMDB.
+          // Not in the catalogue: it fetches the meta and opens when it arrives. What
+          // finishes the job is the router, which already follows the result.
+          // The credit almost never carries an imdb_id, so the normal route is through
+          // the TMDB id.
           else if (id[0]) { disc_request_title(id); personIs_open = 0; }
           else if (person_credit_tmdb(personFocus) > 0) {
             disc_request_title_tmdb(person_credit_tmdb(personFocus),
@@ -846,10 +840,10 @@ void detail_event(const SDL_Event *e) {
     if (e->key.keysym.scancode == NV_SCANCODE_BACK) personIs_open = 0;
     return;
   }
-    // A aba "Mais como este" e uma LISTA VERTICAL dentro da fileira do elenco.
-  // Enquanto ela estiver aberta, cima/baixo andam nela em vez de trocar de
-  // fileira — e o mesmo que o web faz, onde a lista tem foco proprio.
-  // No painel de notas por episodio, esquerda/direita trocam de TEMPORADA.
+    // The "More like this" tab is a VERTICAL LIST inside the cast row.
+  // While it is open, up/down move within it instead of changing row — it is the same
+  // as the web app does, where the list has focus of its own.
+  // In the per-episode ratings panel, left/right change SEASON.
   if (e->type == SDL_KEYDOWN && focus.row == SEC_CAST && !personIs_open &&
       tabIdOf(tabInfo) == TAB_RATINGS && isSeries() &&
       extras_n_seasons() > 0) {
@@ -858,15 +852,15 @@ void detail_event(const SDL_Event *e) {
     if (e->key.keysym.sym == SDLK_LEFT  && ratTemp > 0)      { ratTemp--; return; }
   }
 
-  // "Mais como este" e "Colecao" sao a MESMA lista vertical, so muda a fonte.
+  // "More like this" and "Collection" are the SAME vertical list, only the source differs.
   if (e->type == SDL_KEYDOWN && focus.row == SEC_CAST && !personIs_open &&
       (tabIdOf(tabInfo) == TAB_RELATED || tabIdOf(tabInfo) == TAB_COLLECTION)) {
     int col = (tabIdOf(tabInfo) == TAB_COLLECTION);
     int n = col ? extras_n_collection() : extras_n_related();
     if (n > 7) n = 7;
     switch (e->key.keysym.sym) {
-      // "Mais como este" e uma fileira de cartazes: anda na HORIZONTAL. A
-      // colecao continua em lista vertical.
+      // "More like this" is a row of posters: it moves HORIZONTALLY. The collection
+      // stays a vertical list.
       case SDLK_RIGHT: if (!col && relFocus + 1 < n) { relFocus++; return; } break;
       case SDLK_LEFT:  if (!col && relFocus > 0)     { relFocus--; return; } break;
       case SDLK_DOWN: if (col && relFocus + 1 < n) { relFocus++; return; } break;
@@ -874,8 +868,8 @@ void detail_event(const SDL_Event *e) {
       case SDLK_RETURN:
       case SDLK_KP_ENTER: {
         if (col) {
-          // A parte da colecao traz so o id do TMDB; o caminho e o mesmo do
-          // credito de um ator.
+          // The collection's part carries only the TMDB id; the route is the same as
+          // an actor's credit.
           long t = extras_collection_tmdb(relFocus);
           if (t > 0) disc_request_title_tmdb(t, "movie");
         } else {
@@ -887,37 +881,37 @@ void detail_event(const SDL_Event *e) {
         return; }
       default: break;
     }
-    // CIMA no primeiro item e BAIXO no ultimo caem no comportamento normal e
-    // saem da lista — senao o foco fica preso nela.
+    // UP on the first item and DOWN on the last fall through to the normal behaviour
+    // and leave the list — otherwise the focus is trapped in it.
   }
 
 
 
   if (e->type == SDL_KEYDOWN && (e->key.keysym.sym == SDLK_RETURN ||
                                  e->key.keysym.sym == SDLK_KP_ENTER)) {
-    if (!okScrolldownIn) okScrolldownIn = SDL_GetTicks();
+    if (!okPressedAt) okPressedAt = SDL_GetTicks();
     return;
   }
   if (e->type == SDL_KEYUP && (e->key.keysym.sym == SDLK_RETURN ||
                                e->key.keysym.sym == SDLK_KP_ENTER)) {
     Uint32 duration;
-    // SOLTAR sem ter PRESSIONADO nao e clique. Sem esta guarda o detalhe
-    // reproduzia sozinho ao ser aberto: o OK apertado na home entrega o KEYDOWN
-    // a home (que abre o detalhe) e o KEYUP JA CHEGA AQUI, com nivel 0 e botao
-    // 0 — que e exatamente "Reproduzir". Da para ver como o dono descreveu:
-    // "clica num titulo e ele ja clica duas vezes e inicia".
+    // RELEASING without having PRESSED is not a click. Without this guard the detail
+    // screen played by itself on being opened: the OK pressed on the home delivers the
+    // KEYDOWN to the home (which opens the detail) and the KEYUP ARRIVES HERE, with
+    // level 0 and button 0 — which is exactly "Play". You can see it as the owner
+    // described: "you click a title and it clicks twice and starts".
     //
-    // Antes isto nao aparecia porque o botao morava no nivel 1 e o KEYUP orfao
-    // caia em nenhum caso. Passar os botoes para o nivel 0 (que e onde o web os
-    // poe) descobriu o defeito que ja existia.
-    if (!okScrolldownIn) return;
-    duration = SDL_GetTicks() - okScrolldownIn;
-    okScrolldownIn = 0;
+    // Before, this did not show because the button lived on level 1 and the orphan
+    // KEYUP fell into no case. Moving the buttons to level 0 (which is where the web
+    // app puts them) uncovered a defect that already existed.
+    if (!okPressedAt) return;
+    duration = SDL_GetTicks() - okPressedAt;
+    okPressedAt = 0;
     if (level == 0) {
-      // Ordem FIXA: primario, adicionar a lista, marcar como visto, fontes.
+      // A FIXED order: primary, add to the list, mark as watched, sources.
       //
-      // O botao do olho caia no `else` e abria a folha de FONTES — ele nunca
-      // marcou nada, apesar do icone. Agora tem pedido proprio.
+      // The eye button fell into the `else` and opened the SOURCES sheet — it never
+      // marked anything, despite the icon. Now it has a request of its own.
       int action = actionIn(button);
       if (action == ACTION_PRIMARY) {
         if (duration >= NV_HOLD_MS) reqSources = 1; else reqPlay = 1;
@@ -929,22 +923,22 @@ void detail_event(const SDL_Event *e) {
         reqSources = 1;
       }
     } else if (focus.row == SEC_RELATED) {
-      // FILME: "Mais como este" e secao propria. Mesmo destino do caminho de
-      // serie — abre do catalogo quando ja temos meta, senao pede e o roteador
-      // termina quando chegar.
+      // A FILM: "More like this" is a section of its own. The same destination as the
+      // series path — it opens from the catalogue when we already have meta, otherwise
+      // it asks and the router finishes when it arrives.
       const char *id = extras_related_imdb(focus.column);
       int target = id[0] ? cat_index_by_imdb(id) : -1;
       if (target >= 0) reqOpen = target;
       else if (id[0]) disc_request_title(id);
     } else if (focus.row == SEC_SEASONS) {
-      // Trocar de aba BUSCA a temporada. Antes so mudava o realce e a lista
-      // continuava a mesma, o que fazia a aba parecer quebrada.
+      // Changing tab FETCHES the season. Before it only moved the highlight and the
+      // list stayed the same, which made the tab look broken.
       season = focus.column;
       tempPending = season; tempSince = 0;
       goToSeason(season);
     } else if (focus.row == SEC_CAST && tabIdOf(tabInfo) == TAB_CAST) {
-      // OK num rosto abre a FILMOGRAFIA da pessoa. E o `openCastDetail` do web
-      // (metaDetailsScreen.js:6165); aqui o OK no elenco nao fazia nada.
+      // OK on a face opens the person's FILMOGRAPHY. It is the web app's
+      // `openCastDetail` (metaDetailsScreen.js:6165); here OK on the cast did nothing.
       const CatItem *ci = cat_item(idx);
       if (ci && focus.column < ci->nCast && ci->cast[focus.column].tmdb > 0) {
         person_request(ci->cast[focus.column].tmdb,
@@ -957,9 +951,9 @@ void detail_event(const SDL_Event *e) {
     } else if (focus.row == SEC_TABS_INFO) {
       tabInfo = focus.column;
     } else if (focus.row == SEC_EPISODES) {
-      // No web e `openEpisodeStreams`. Aqui a folha de fontes ainda e a do
-      // titulo: `stream_folha_abrir()` nao recebe episodio. Melhor abrir a
-      // folha que existe do que nao responder ao OK.
+      // In the web app it is `openEpisodeStreams`. Here the sources sheet is still the
+      // title's: `stream_sheet_open()` takes no episode. Better to open the sheet that
+      // exists than not to respond to OK.
       reqSources = 1;
     }
     return;
@@ -975,10 +969,10 @@ void detail_event(const SDL_Event *e) {
   }
   if (level == 0) {
     if (k == SDLK_DOWN) {
-      // Descer do hero cai na primeira fileira FOCAVEL. Num filme nao ha
-      // temporadas nem episodios, e parar numa fileira vazia deixava o D-pad
-      // sem resposta. Tem de ser secaoColunas e nao secaoN: os trailers sao
-      // DESENHADOS mas nao aceitam foco, e um filme sem elenco pousaria neles.
+      // Going down from the hero lands on the first FOCUSABLE row. On a film there are
+      // no seasons and no episodes, and stopping on an empty row left the D-pad
+      // unresponsive. It has to be sectionColumns and not sectionN: the trailers are
+      // DRAWN but take no focus, and a film with no cast would land on them.
       for (int r = 0; r < N_SECTIONS; r++)
         if (sectionColumns(r) > 0) { focus.row = r; focus.column = 0; level = 1; break; }
     }
@@ -986,23 +980,23 @@ void detail_event(const SDL_Event *e) {
     else if (k == SDLK_LEFT)  { if (button > 0) button--; }
     return;
   }
-  // A guarda que existia aqui bloqueava DESCER das abas sempre que a aba
-  // escolhida nao fosse "Criador e elenco" — e com isso trancava o acesso a
-  // "Mais como este", "Coleção" e "Comentários", cujo codigo de navegacao ja
-  // estava escrito logo acima e nunca era alcancado.
+  // The guard that used to be here blocked GOING DOWN from the tabs whenever the
+  // chosen tab was not "Creator and cast" — and with it locked access to "More like
+  // this", "Collection" and "Comments", whose navigation code was already written just
+  // above and was never reached.
   //
-  // Nao e mais preciso: secaoN devolve a contagem DA ABA ATIVA, entao a fileira
-  // ou tem colunas de verdade (e o foco pousa no que esta desenhado) ou tem
-  // zero, e focus_mover pula sozinho.
-  if (k == SDLK_RIGHT)      focus_mover(&focus, 1, 0);
-  else if (k == SDLK_LEFT)  focus_mover(&focus, -1, 0);
-  else if (k == SDLK_DOWN)  focus_mover(&focus, 0, 1);
-  else if (k == SDLK_UP)    { if (!focus_mover(&focus, 0, -1)) level = 0; }
+  // It is no longer needed: sectionN returns the count OF THE ACTIVE TAB, so the row
+  // either has real columns (and the focus lands on what is drawn) or has zero, and
+  // focus_move skips it by itself.
+  if (k == SDLK_RIGHT)      focus_move(&focus, 1, 0);
+  else if (k == SDLK_LEFT)  focus_move(&focus, -1, 0);
+  else if (k == SDLK_DOWN)  focus_move(&focus, 0, 1);
+  else if (k == SDLK_UP)    { if (!focus_move(&focus, 0, -1)) level = 0; }
 }
 
-// Largura do item e passo horizontal de cada fileira. Temporada e aba de
-// informacao tem largura VARIAVEL (saem do texto), e por isso o passo delas nao
-// e uma constante como a do episodio.
+// The item's width and each row's horizontal step. A season and an information tab
+// have a VARIABLE width (it comes from the text), which is why their step is not a
+// constant like the episode's.
 static float widthItem(int r, int c) {
   switch (r) {
     case SEC_SEASONS:  return widthSeason(c);
@@ -1011,15 +1005,15 @@ static float widthItem(int r, int c) {
     case SEC_TRAILERS:     return NV_DETF_TR_W;
     case SEC_RELATED: return REL_CARD_W;
     case SEC_COMMENTS:
-      return (c < nPillsCom()) ? widthPilulaCom(COM_ROT[c]) : COM_CARD_W;
-    // A tabela e um bloco so, da largura da divisoria. Cair no `default` daria
-    // a ela a largura de um avatar de elenco, e o culling horizontal cortaria
-    // a tabela fora da tela.
+      return (c < nPillsCom()) ? widthPillCom(COM_LABEL[c]) : COM_CARD_W;
+    // The table is one block, the width of the divider. Falling into the `default`
+    // would give it the width of a cast avatar, and the horizontal culling would cut
+    // the table off screen.
     case SEC_DETAILS:    return NV_DETF_DET_W;
     default:              return NV_DETP_EL_W;
   }
 }
-// x do item `c` DENTRO da fileira (antes da rolagem horizontal).
+// The x of item `c` WITHIN the row (before the horizontal scroll).
 static float xItem(int r, int c) {
   float x = NV_DETP_X;
   for (int k = 0; k < c; k++) {
@@ -1028,52 +1022,52 @@ static float xItem(int r, int c) {
     if (r == SEC_TRAILERS)  { x += NV_DETF_TR_STEP;  continue; }
     if (r == SEC_RELATED) { x += REL_CARD_W + REL_CARD_GAP; continue; }
     if (r == SEC_COMMENTS) {
-      // As pilulas somam largura + vao; os CARTOES recomecam em NV_DETP_X
-      // porque ficam numa LINHA de baixo. xItem deixa de ser monotonico nesta
-      // fileira, e nao ha problema: a rolagem horizontal so consulta a coluna
-      // FOCADA, nunca a sequencia inteira.
+      // The pills add width + gap; the CARDS start again at NV_DETP_X because they sit
+      // on a lower LINE. xItem stops being monotonic on this row, and that is fine: the
+      // horizontal scroll only ever consults the FOCUSED column, never the whole
+      // sequence.
       int np = nPillsCom();
-      if (c <= np) x += widthPilulaCom(COM_ROT[k]) + COM_PILL_GAP;
+      if (c <= np) x += widthPillCom(COM_LABEL[k]) + COM_PILL_GAP;
       else if (k >= np) x = NV_DETP_X + (float)(c - np) * (COM_CARD_W + COM_CARD_GAP);
       continue;
     }
-    if (r == SEC_DETAILS)  { continue; }   // coluna unica: sempre em NV_DETP_X
+    if (r == SEC_DETAILS)  { continue; }   // a single column: always at NV_DETP_X
     if (r == SEC_SEASONS) x += widthSeason(k) + NV_DETP_TEMP_GAP;
-    else x += widthTabInfo(k) + NV_DETP_TAB_SEP * 2 + 9.0f;  // 9 = largura do "|"
+    else x += widthTabInfo(k) + NV_DETP_TAB_SEP * 2 + 9.0f;  // 9 = the "|"'s width
   }
   return x;
 }
 
-// Reconta as colunas de cada secao a cada quadro.
+// Recounts each section's columns every frame.
 //
-// O focus_iniciar do detail_abrir congela nColunas com o que EXISTE NA HORA da
-// abertura — e os episodios, as temporadas e o elenco chegam DA REDE, segundos
-// depois. Com a contagem parada em zero o focus_mover recusa qualquer passo
-// lateral (`novo < nColunas[fileira]` nunca passa), que e o defeito relatado:
-// "a lista de episodios nao mexe para os lados".
+// detail_open's focus_start freezes nColumns with what EXISTS AT THE MOMENT of
+// opening — and the episodes, the seasons and the cast come FROM THE NETWORK, seconds
+// later. With the count stuck at zero, focus_move refuses any sideways step
+// (`new < nColumns[row]` never passes), which is the reported defect: "the episode
+// list won't move sideways".
 //
-// Sai cedo quando nada mudou, entao custa N comparacoes de inteiro. Mesmo
-// padrao do sincronizarFileiras() da home, pela mesma razao: quem preenche o
-// catalogo e outro fio.
-// Quantas colunas da secao aceitam FOCO. Nem sempre e o mesmo que secaoN, que
-// diz quantas se DESENHA.
+// It returns early when nothing has changed, so it costs N integer comparisons. The
+// same pattern as the home's syncRows(), for the same reason: what fills the catalogue
+// is another thread.
+// How many of a section's columns accept FOCUS. It is not always the same as sectionN,
+// which says how many are DRAWN.
 //
-// Trailers e o caso: os cards aparecem, mas nao recebem foco. Este port nao tem
-// reprodutor de YouTube, e a regra ja escrita duas vezes neste codigo — o botao
-// de trailer removido do hero, o glifo do YouTube trocado no terceiro circular
-// — e que um controle que promete o que nao cumpre e pior que a ausencia dele.
-// Pular a fileira nao esconde nada: ao descer do Elenco para os Detalhes a
-// rolagem passa por cima dos trailers e eles ficam visiveis no caminho.
+// Trailers are the case: the cards appear, but take no focus. This port has no YouTube
+// player, and the rule already written twice in this code — the trailer button removed
+// from the hero, the YouTube glyph swapped on the third circular button — is that a
+// control which promises what it cannot deliver is worse than its absence.
+// Skipping the row hides nothing: going down from the Cast to the Details, the
+// scrolling passes over the trailers and they are visible on the way.
 static int sectionColumns(int r) {
-  // TRAILERS SAO FOCAVEIS. Eles ficaram fora do foco por um tempo, pelo
-  // argumento de que este port nao toca YouTube e um controle que promete o
-  // que nao cumpre e pior que a ausencia dele — a mesma regra que tirou o botao
-  // de trailer do hero.
+  // TRAILERS ARE FOCUSABLE. They were left out of the focus for a while, on the
+  // argument that this port does not play YouTube and a control that promises what it
+  // cannot deliver is worse than its absence — the same rule that removed the trailer
+  // button from the hero.
   //
-  // O dono pediu o contrario, e tem razao no caso: pular a fileira inteira
-  // impede ate de PERCORRER os trailers para ler os nomes, e "nao consigo
-  // navegar nos trailers" e um defeito maior que um OK sem efeito. O card
-  // continua sem acao ao apertar OK enquanto nao houver reprodutor.
+  // The owner asked for the opposite, and is right in this case: skipping the whole row
+  // stops you even WALKING THROUGH the trailers to read their names, and "I can't
+  // navigate the trailers" is a bigger defect than an OK with no effect. The card still
+  // has no action on OK while there is no player.
   return sectionN(r);
 }
 
@@ -1084,8 +1078,8 @@ static void syncColumns(void) {
     if (focus.nColumns[r] != n) { focus.nColumns[r] = n; changed = 1; }
   }
   if (!changed) return;
-  // A coluna corrente pode ter ficado fora da faixa (a lista encolheu ao trocar
-  // de temporada). Puxar para dentro evita desenhar foco em item inexistente.
+  // The current column may have fallen out of range (the list shrank when the season
+  // changed). Pulling it back in avoids drawing focus on a non-existent item.
   if (focus.column >= focus.nColumns[focus.row])
     focus.column = focus.nColumns[focus.row] > 0
                 ? focus.nColumns[focus.row] - 1 : 0;
@@ -1094,21 +1088,20 @@ static void syncColumns(void) {
 void detail_update(float dt, Uint32 now) {
   if (!is_open) return;
   syncColumns();
-  // Solta o pedido de episodios que ficou guardado por ter chegado com outro
-  // carregamento em voo.
+  // It releases the episode request that was held because it arrived with another load
+  // in flight.
   disc_episodes_pending();
 
-  // TROCA DE TEMPORADA PELO MOVIMENTO DO FOCO, nao pelo OK.
+  // THE SEASON CHANGES ON THE FOCUS MOVING, not on OK.
   //
-  // A fileira de temporadas e um SELETOR na referencia: andar com o direcional
-  // ja troca a lista de episodios. Aqui a troca so acontecia dentro do OK, e o
-  // dono, passando pelas pilulas, via a lista NAO mudar — o que ele descreveu
-  // como "demora para atualizar quando troca de temporada". Nao demorava: nao
-  // acontecia.
+  // The season row is a SELECTOR in the reference: moving with the D-pad already swaps
+  // the episode list. Here the swap only happened inside OK, and the owner, passing
+  // through the pills, saw the list NOT change — which they described as "it takes ages
+  // to update when you change season". It was not taking ages: it was not happening.
   //
-  // Com REPOUSO, pela mesma razao do heroi (NV_HERO_REPOUSO_MS): varrer quatro
-  // temporadas de ponta a ponta dispararia quatro consultas das quais so a
-  // ultima interessa. Espera o foco parar e so entao troca.
+  // With a REST PERIOD, for the same reason as the hero's (NV_HERO_IDLE_MS): sweeping
+  // four seasons end to end would fire four queries of which only the last matters. It
+  // waits for the focus to stop and only then swaps.
   if (level >= 1 && focus.row == SEC_SEASONS) {
     if (focus.column != tempPending) { tempPending = focus.column; tempSince = now; }
     else if (tempPending != season && tempSince &&
@@ -1122,9 +1115,9 @@ void detail_update(float dt, Uint32 now) {
     tempSince = 0;
   }
 
-  // SELETOR DE COMENTARIOS, pela mesma regra: mover o foco ja troca a fonte.
-  // Sem repouso — sao duas pilulas, e a da serie ja esta em memoria; so a do
-  // episodio custa uma viagem, e ela e disparada uma vez por episodio.
+  // THE COMMENTS SELECTOR, by the same rule: moving the focus already swaps the source.
+  // With no rest period — there are two pills, and the series' one is already in
+  // memory; only the episode's costs a round trip, and it is fired once per episode.
   if (level >= 1 && focus.row == SEC_COMMENTS && isSeries()) {
     if (focus.column != commentEp) commentEp = focus.column;
     if (commentEp) {
@@ -1135,14 +1128,14 @@ void detail_update(float dt, Uint32 now) {
     }
   }
 
-  // DEPOIS de sincronizarColunas, nao antes: o empilhamento pergunta a secaoN
-  // quem tem conteudo, e secaoN olha dados que chegam da rede. Recalcular com a
-  // contagem do quadro anterior deixaria o layout um quadro atrasado — visivel
-  // como um tranco quando o elenco ou os trailers chegam.
+  // AFTER syncColumns, not before: the stacking asks sectionN who has content, and
+  // sectionN looks at data that arrives from the network. Recalculating with the
+  // previous frame's count would leave the layout one frame behind — visible as a jolt
+  // when the cast or the trailers arrive.
   recomputeLayout();
   t  = anim_spring(t,  exiting ? 0.0f : 1.0f, dt, NV_SPRING_SCREEN);
-  // Rigidez propria: o web leva 0.8s para apagar o backdrop (cubic-bezier
-  // .4,0,.2,1), e a mola de NV_MOLA_TELA assenta em ~330ms.
+  // A stiffness of its own: the web app takes 0.8s to fade the backdrop out
+  // (cubic-bezier .4,0,.2,1), and the NV_SPRING_SCREEN spring settles in ~330ms.
   pg = anim_spring(pg, level >= 1 ? 1.0f : 0.0f, dt, NV_SPRING_PAGE);
   if (exiting && t < 0.02f) { is_open = 0; exiting = 0; t = 0.0f; return; }
 
@@ -1153,39 +1146,39 @@ void detail_update(float dt, Uint32 now) {
                                  target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
-  // --- rolagem HORIZONTAL da fileira focada ---------------------------------
-  // Duas regras, as duas do fonte do web (`getHorizontalTrackScrollLeft`): a
-  // fileira de episodios ENCOSTA o card focado na margem esquerda; as demais so
-  // rolam o necessario, com 24px de folga nas bordas.
+  // --- the focused row's HORIZONTAL scroll ---------------------------------
+  // Two rules, both from the web app's source (`getHorizontalTrackScrollLeft`): the
+  // episode row BRINGS the focused card up against the left margin; the others scroll
+  // only as far as needed, with 24px of slack at the edges.
   { int r = focus.row;
     if (r >= 0 && r < N_SECTIONS && sectionN(r) > 0) {
       float x = xItem(r, focus.column) - NV_DETP_X;
       float w = widthItem(r, focus.column);
-      float vista = NV_SCREEN_W - NV_DETP_X * 2;
+      float view = NV_SCREEN_W - NV_DETP_X * 2;
       float target = scrollSec[r];
       if (r == SEC_EPISODES) target = x;
       else {
-        // Pilula focada: a fileira volta ao inicio. As pilulas nao rolam junto
-        // com os cartoes (elas ficam numa linha propria, fixa), entao deixar o
-        // scroll de um cartao antigo pendurado esconderia o primeiro cartao
-        // assim que o foco subisse para o seletor.
+        // A focused pill: the row goes back to the start. The pills do not scroll along
+        // with the cards (they sit on a line of their own, fixed), so leaving an old
+        // card's scroll hanging would hide the first card as soon as the focus moved up
+        // to the selector.
         if (r == SEC_COMMENTS && focus.column < nPillsCom()) target = 0.0f;
         else if (focus.column == 0) target = 0.0f;
-        else if (x + w > target + vista - 24.0f) target = x + w - vista + 24.0f;
+        else if (x + w > target + view - 24.0f) target = x + w - view + 24.0f;
         else if (x < target + 24.0f)             target = x - 24.0f;
       }
       if (target < 0.0f) target = 0.0f;
       scrollSec[r] = anim_spring(scrollSec[r], target, dt, NV_SPRING_SCROLL);
     } }
 
-  // --- rolagem VERTICAL -----------------------------------------------------
-  // O topo do grupo focado vai para 33% da altura util (40% nas abas). E a
-  // regra do web, e nao um "rola o necessario": conferida nos quatro grupos.
+  // --- VERTICAL scroll ------------------------------------------------------
+  // The focused group's top goes to 33% of the usable height (40% on the tabs). It is
+  // the web app's rule, and not a "scroll as much as needed": checked on all four groups.
   float targetY = 0.0f;
   if (level >= 1 && focus.row >= 0 && focus.row < N_SECTIONS) {
-    // Mira o topo do CONTEUDO (o trilho), nao o do grupo: o cabecalho da secao
-    // fica acima e entra na tela junto, de graca. E o que focusInList faz no
-    // web — `target.closest(".movie-cast-track, ...")`.
+    // Aim at the top of the CONTENT (the track), not the group's: the section header
+    // sits above and comes on screen with it, for free. It is what focusInList does in
+    // the web app — `target.closest(".movie-cast-track, ...")`.
     float maxY = docEnd - NV_SCREEN_H;
     targetY = contentSec[focus.row] - NV_SCREEN_H * targetSec[focus.row];
     if (targetY > maxY) targetY = maxY;
@@ -1197,29 +1190,29 @@ void detail_update(float dt, Uint32 now) {
 // ---------------------------------------------------------------------------
 // HERO
 // ---------------------------------------------------------------------------
-// Nada aqui e sobreposicao num cartao: a tela e full-bleed, a coluna comeca em
-// x=72 e a pilha e ancorada na BASE (`.detail-hero-section` e um flex column
-// com `justify-content: flex-end`). Empilhar de cima para baixo faz o bloco
-// inteiro subir e descer conforme o tamanho da sinopse; no web ele fica preso
-// na base e so o topo se move.
-// Quanto do titulo ja foi assistido, 0..100. 0 quando nunca comecou.
+// Nothing here is an overlay on a card: the screen is full-bleed, the column starts at
+// x=72 and the stack is anchored to the BASE (`.detail-hero-section` is a flex column
+// with `justify-content: flex-end`). Stacking from the top down makes the whole block
+// rise and fall with the synopsis's length; in the web app it is pinned to the base and
+// only the top moves.
+// How much of the title has been watched, 0..100. 0 when it was never started.
 static int progressOf(int i) {
   const CatItem *c = cat_item(i);
   return c ? c->progress : 0;
 }
 
 static void drawButton(GfxRect r, const char *rot, int icon, int focused, float a) {
-  // FOCO E TAMANHO, NAO ANEL.
+  // FOCUS IS SIZE, NOT A RING.
   //
-  // Aqui havia duas marcas de foco empilhadas e as duas falhavam no botao
-  // primario: primeiro um gfx_cor 8px maior — que PREENCHE, nao contorna — e
-  // logo depois o GFX_ANEL. Num botao que ja e branco a pilula preenchida se
-  // funde com ele e o resultado e um botao branco 8px maior, que nao le como
-  // "selecionado" e sim como "o botao mudou de forma". Era o defeito relatado.
+  // There used to be two focus marks stacked here and both failed on the primary
+  // button: first a gfx_color 8px larger — which FILLS, it does not outline — and right
+  // after it the GFX_RING. On a button that is already white the filled pill merges
+  // with it and the result is a white button 8px larger, which does not read as
+  // "selected" but as "the button changed shape". That was the reported defect.
   //
-  // O aparelho resolve por escala: o item focado cresce com o centro parado, os
-  // fatores estao em NV_DETW2_FOCO_*, e nao ha anel nenhum em captura alguma.
-  // No circular a escala vem acompanhada da inversao de cor, que ja existia.
+  // The device solves it by scale: the focused item grows with its centre still, the
+  // factors are in NV_DETW2_FOCUS_*, and there is no ring in any capture.
+  // On the circular one the scale comes with the colour inversion, which already existed.
   int circular = (rot == NULL);
   if (focused) {
     float sx = circular ? NV_DETW2_FOCUS_SY : NV_DETW2_FOCUS_SX;
@@ -1231,65 +1224,64 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
   if (circular) {
     float luma = focused ? 0.961f : 0.133f;   // #f5f5f5 / #222
     gfx_color(r, NV_RADIUS_PILL, luma, luma, luma, a);
-    // Os tres glifos do web: biblioteca (+), assistido (olho) e trailer
-    // (placa do YouTube). Sao SVG la e nao existem na familia embarcada, entao
-    // vem do shader — ver GFX_OLHO e GFX_FONTES. Antes eram "+" e dois "...",
-    // que nao diziam o que os botoes faziam.
-    float ic = focused ? 0.067f : 1.0f;      // #111 com foco, branco sem
+    // The web app's three glyphs: library (+), watched (eye) and trailer (the YouTube
+    // plate). They are SVG there and do not exist in the embedded family, so they come
+    // from the shader — see GFX_EYE and GFX_SOURCES. They used to be a "+" and two
+    // "...", which said nothing about what the buttons did.
+    float ic = focused ? 0.067f : 1.0f;      // #111 with focus, white without
     float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-    // ICONES DE VERDADE, do art/icones (SVG do app web rasterizados). Antes
-    // cada glifo era desenhado a mao no shader — um "+" de dois retangulos, um
-    // olho de dois discos, tres barras — e cada um era uma aproximacao do
-    // original. Agora e o arquivo, e a cor vem daqui pelo GFX_MARCA.
+    // REAL ICONS, from art/icons (the web app's SVGs rasterised). Each glyph used to be
+    // drawn by hand in the shader — a "+" of two rectangles, an eye of two discs, three
+    // bars — and each was an approximation of the original. Now it is the file, and the
+    // colour comes from here through GFX_BRAND.
     //
-    // Proporcao glifo/circulo MEDIDA no aparelho: o "+" mede 32 dentro do
-    // circulo de 96 em repouso e 36 dentro do de 110 focado — 0,333 nos dois.
-    // Estava 0,45, de uma captura solta, e o glifo quase encostava na borda.
-    // Sai de `r` (ja escalado) para que o icone cresca junto com o botao.
+    // The glyph/circle proportion MEASURED on the device: the "+" is 32 inside the 96
+    // circle at rest and 36 inside the focused 110 — 0.333 in both. It was 0.45, from a
+    // loose capture, and the glyph nearly touched the edge.
+    // It comes from `r` (already scaled) so the icon grows along with the button.
     float g = r.w * NV_DETW2_CIRC_GLYPH;
     GfxRect ig = { cx - g * 0.5f, cy - g * 0.5f, g, g };
     if (icon == 1) {
-      // O botao MOSTRA O ESTADO: com o titulo ja na watchlist o "+" some e
-      // entra o olho aberto — nao adianta convidar a adicionar o que ja esta la.
-      // O estado vem de ci->naLista, que a descoberta preenche com a lista de
-      // verdade do Trakt.
+      // The button SHOWS THE STATE: with the title already on the watchlist the "+"
+      // disappears and the open eye comes in — there is no point inviting you to add
+      // what is already there. The state comes from ci->inList, which discovery fills
+      // from Trakt's real list.
       const CatItem *ci = cat_item(idx);
       gfx_icon(ig, (ci && ci->inList) ? "watched" : "more", ic, ic, ic, a);
     } else if (icon == 2) {
-      // ASSISTIDO: olho aberto quando ja viu, olho riscado quando nao. Antes o
-      // icone era sempre o mesmo e nao dizia estado nenhum — era so um enfeite
-      // que o dono nao conseguia ler ("avisar o que foi visto").
+      // WATCHED: an open eye once seen, a struck-through eye when not. The icon used to
+      // be always the same and said no state at all — it was just decoration the owner
+      // could not read ("tell me what's been watched").
       gfx_icon(ig, progressOf(idx) >= 90 ? "watched" : "unwatched", ic, ic, ic, a);
     } else {
       gfx_icon(ig, "sources", ic, ic, ic, a);
     }
     return;
   }
-  // Primario: branco com texto preto nos DOIS estados. Conferido nas duas
-  // capturas do aparelho — o miolo mede (255,255,255) focado e em repouso, e o
-  // que muda entre eles e so o tamanho (321x94 -> 357,6x107,8), ja aplicado em
-  // `r` la em cima.
-  // PILULA BRANCA LIMPA. Aqui o botao INTEIRO era a barra de progresso: a parte
-  // que faltava assistir recebia um veu preto a 30%, recortado no ponto do
-  // progresso. A intencao era boa e o recorte estava certo, mas o resultado
-  // lia como BOTAO DESABILITADO — uma pilula branca com dois tercos apagados
-  // parece controle inativo, nao "16% assistido". Foi o que o dono viu: "esse
-  // retomar ta muito feio, nem parece o mesmo app".
+  // Primary: white with black text in BOTH states. Checked against the two captures
+  // from the device — the middle measures (255,255,255) focused and at rest, and what
+  // changes between them is only the size (321x94 -> 357.6x107.8), already applied to
+  // `r` above.
+  // A CLEAN WHITE PILL. Here the WHOLE button was the progress bar: the part still to
+  // be watched got a 30% black veil, clipped at the progress point. The intention was
+  // good and the clip was right, but the result read as a DISABLED BUTTON — a white pill
+  // with two thirds dimmed looks like an inactive control, not "16% watched". It is what
+  // the owner saw: "that resume looks awful, it doesn't even look like the same app".
   //
-  // A referencia nao faz isso: o botao e branco limpo e o progresso vive na
-  // LINHA DE TEXTO logo acima, que este arquivo ja desenha ("Retomada
-  // disponivel  16%  Episodio T2E1"). O veu era redundante alem de feio —
-  // dizia com tinta o que a linha ja diz com palavra.
+  // The reference does not do this: the button is clean white and the progress lives on
+  // the TEXT LINE just above, which this file already draws ("Resume available  16%
+  // Episode S2E1"). The veil was redundant as well as ugly — it said with ink what the
+  // line already says in words.
   gfx_color(r, NV_RADIUS_PILL, 1, 1, 1, a);
 
-  // Triangulo 28x30 e vao de 21 ate a tinta do rotulo, medidos no aparelho
-  // (x=150..177 e rotulo em 200, dentro da pilula 96..417).
+  // A 28x30 triangle and a gap of 21 to the label's ink, measured on the device
+  // (x=150..177 with the label at 200, inside the pill 96..417).
   //
-  // O grupo icone+rotulo e CENTRADO na pilula em vez de ancorado no padding
-  // esquerdo: focada, a pilula cresce e o rotulo nao — SDL_ttf rasteriza num
-  // corpo fixo e nao ha estilo de 28pt na tabela de text.c, que e arquivo de
-  // outro agente. Ancorado a esquerda, o texto ficaria visivelmente fora de
-  // centro no estado focado; centrado, a folga sobra igual dos dois lados.
+  // The icon+label group is CENTRED in the pill rather than anchored to the left
+  // padding: focused, the pill grows and the label does not — SDL_ttf rasterises at a
+  // fixed size and there is no 28pt style in text.c's table, which is another agent's
+  // file. Anchored left, the text would be visibly off centre in the focused state;
+  // centred, the slack is the same on both sides.
   { float s = r.h / NV_DETW2_BTN_H;
     float iw = NV_DETW2_BTN_ICON_W * s, ih = NV_DETW2_BTN_ICON_H * s;
     TxtLine l = txt_line(TXT_DET_BUTTON, rot, 0, 0, 0, 255);
@@ -1301,10 +1293,10 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
                        r.y + (r.h - l.h) * 0.5f, a); }
 }
 
-// Botao secundario: 345x96, raio 64, fundo #222 e texto branco; focado, fundo
-// #f5f5f5 e texto #111, com o mesmo anel de 4px. Nao tem icone — no web e so o
-// rotulo, e por isso a largura sai de `texto + 2 x 34` e nao da conta do
-// primario.
+// The secondary button: 345x96, radius 64, background #222 and white text; focused,
+// background #f5f5f5 and text #111, with the same 4px ring. It has no icon — in the web
+// app it is only the label, which is why its width comes from `text + 2 x 34` and not
+// from the primary's arithmetic.
 static void drawSecondary(GfxRect r, const char *rot, int focused, float a) {
   if (focused) {
     GfxRect ring = { r.x - NV_DETW_RING, r.y - NV_DETW_RING,
@@ -1318,10 +1310,10 @@ static void drawSecondary(GfxRect r, const char *rot, int focused, float a) {
   txt_draw_alpha(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a);
 }
 
-// Largura do botao primario: padding 54 + icone 28 + vao 21 + texto. A conta e
-// a mesma do aparelho e fecha na medida: com "Assistir T1:E1" (tinta 162) da
-// 319 contra os 321 lidos na captura. Um rotulo maior cresce a pilula em vez de
-// estourar por baixo do texto.
+// The primary button's width: padding 54 + icon 28 + gap 21 + text. The arithmetic is
+// the device's and matches the measurement: with "Watch S1:E1" (ink 162) it gives 319
+// against the 321 read from the capture. A longer label grows the pill instead of
+// spilling out from under the text.
 static float widthPrimary(const char *rot) {
   TxtLine l = txt_line(TXT_DET_BUTTON, rot, 0, 0, 0, 255);
   return NV_DETW2_BTN_PADX * 2 + NV_DETW2_BTN_ICON_W + NV_DETW2_BTN_GAPI + l.w;
@@ -1331,7 +1323,7 @@ static float widthSecondary(const char *rot) {
   return NV_DETW_BTN2_PADX * 2 + l.w;
 }
 
-// Ano solto do campo `meta` ("2025 · 1 h 54 min" -> "2025" e "1 h 54 min").
+// The year taken out of the `meta` field ("2025 · 1 h 54 min" -> "2025" and "1 h 54 min").
 static void fromMeta(const char *meta, char *year, size_t na, char *rest, size_t nr) {
   year[0] = 0; rest[0] = 0;
   if (!meta || !meta[0]) return;
@@ -1346,25 +1338,22 @@ static void fromMeta(const char *meta, char *year, size_t na, char *rest, size_t
   snprintf(rest, nr, "%s", r);
 }
 
-// Selo do IMDb: 60x30, raio 4, amarelo #f6c700 com "IMDb" preto dentro; a nota
-// vem 8px depois, em rgb(179,179,179) — a MESMA cor do resto da linha, e nao
-// branca. Medido nas duas capturas do aparelho (selo em x=628..687 na serie e
-// 714..773 no filme, sempre y=938..967).
+// The IMDb badge: 60x30, radius 4, yellow #f6c700 with a black "IMDb" inside; the score
+// comes 8px later, in rgb(179,179,179) — the SAME colour as the rest of the line, and
+// not white. Measured on the two captures from the device (the badge at x=628..687 on
+// the series and 714..773 on the film, always y=938..967).
 //
-// NAO e o 109x60 que este arquivo trazia do web: la o logo tem 60 de ALTURA e
-// aqui o selo inteiro tem 30. Com o valor do web o selo ficava do dobro do
-// tamanho da linha em que vive.
+// It is NOT the 109x60 this file carried over from the web app: there the logo is 60
+// TALL and here the whole badge is 30. With the web app's value the badge was twice the
+// height of the line it lives on.
 //
-// A marca continua DESENHADA (retangulo + texto) e nao rasterizada do SVG: o
-// app nao empacota SVG e o arquivo nao entra sem reinstalar o ipk. E o unico
-// ponto do selo que nao e 1:1.
-//
-// A nota sai com VIRGULA decimal ("7,8"), como na referencia — o "%.1f" do C
-// escreve ponto e a linha inteira e em portugues.
+// The mark is still DRAWN (a rectangle + text) and not rasterised from the SVG: the app
+// does not package SVG and the file cannot go in without reinstalling the ipk. It is
+// the only part of the badge that is not 1:1.
 static float drawBadgeImdb(float x, float yCenter, int score, float a) {
   if (score <= 0) return 0.0f;
   char txt[8];
-  snprintf(txt, sizeof txt, "%d,%d", score / 10, score % 10);
+  snprintf(txt, sizeof txt, "%d.%d", score / 10, score % 10);
   TxtLine l = txt_line(TXT_DET_SIN, txt, 179, 179, 179, 255);
   GfxRect brand = { x, yCenter - NV_DETW2_IMDB_H * 0.5f,
                     NV_DETW2_IMDB_W, NV_DETW2_IMDB_H };
@@ -1378,20 +1367,20 @@ static float drawBadgeImdb(float x, float yCenter, int score, float a) {
   return NV_DETW2_IMDB_W + NV_DETW2_IMDB_GAP + l.w;
 }
 
-// Selo de CONTORNO da segunda linha de meta. Ele carrega DUAS coisas dentro da
-// mesma caixa — classificacao indicativa e status da producao —, separadas por
-// uma barra vertical: "TV-MA | RENOVADA" na serie, "R | LANÇADO" no filme. A
-// classificacao sai em rgb(179,179,179) e o status em BRANCO, o que faz o olho
-// ler primeiro o que interessa.
+// The OUTLINE badge of the second meta line. It carries TWO things inside the same box
+// — the age rating and the production's status —, separated by a vertical bar: "TV-MA |
+// RENEWED" on a series, "R | RELEASED" on a film. The rating comes out in
+// rgb(179,179,179) and the status in WHITE, which makes the eye read the important part
+// first.
 //
-// Antes eram duas coisas soltas na linha e o contorno era falsificado com um
-// retangulo cheio 1px maior por baixo — que so funciona sobre fundo chapado.
-// Aqui e GFX_ANEL, que desenha contorno de verdade e deixa a arte aparecer no
-// miolo, como no aparelho.
+// They used to be two loose things on the line, and the outline was faked with a filled
+// rectangle 1px larger underneath — which only works over a flat background. Here it is
+// GFX_RING, which draws a real outline and lets the art show through the middle, as on
+// the device.
 //
-// `dir` pode ser NULL: sem status o selo tem so a classificacao e NENHUMA
-// divisoria. Nao ha valor de reserva — o CatItem nao tem campo de status, e
-// carimbar "LANÇADO" em tudo seria dado inventado, que ja custou caro aqui.
+// `dir` may be NULL: with no status the badge carries only the rating and NO divider.
+// There is no fallback value — CatItem has no status field, and stamping "RELEASED" on
+// everything would be invented data, which has already cost dearly here.
 static float drawBadgeMeta(float x, float y, const char *left, const char *dir,
                              float a) {
   TxtLine le = txt_line(TXT_DET_META2, left, 179, 179, 179, 255);
@@ -1399,7 +1388,7 @@ static float drawBadgeMeta(float x, float y, const char *left, const char *dir,
   float w = NV_DETW2_BADGE_PADX * 2 + le.w;
   if (dir && dir[0]) {
     ld = txt_line(TXT_DET_META2, dir, 255, 255, 255, 255);
-    w += NV_DETW2_DIV_DFLT * 2 + NV_DETW2_DIV_W + ld.w;
+    w += NV_DETW2_DIV_PAD * 2 + NV_DETW2_DIV_W + ld.w;
   }
   GfxRect box = { x, y, w, NV_DETW2_BADGE_H };
   gfx_rect(box, 0, GFX_RING, 0, NV_DETW2_BADGE_BORDER / NV_DETW2_BADGE_H, 0,
@@ -1409,19 +1398,19 @@ static float drawBadgeMeta(float x, float y, const char *left, const char *dir,
   txt_draw_alpha(le, cx, cy - le.h * 0.5f, a);
   cx += le.w;
   if (dir && dir[0]) {
-    GfxRect bar = { cx + NV_DETW2_DIV_DFLT, cy - NV_DETW2_DIV_H * 0.5f,
+    GfxRect bar = { cx + NV_DETW2_DIV_PAD, cy - NV_DETW2_DIV_H * 0.5f,
                     NV_DETW2_DIV_W, NV_DETW2_DIV_H };
     gfx_color(bar, 0.0f, 0.42f, 0.42f, 0.42f, a);
-    cx += NV_DETW2_DIV_DFLT * 2 + NV_DETW2_DIV_W;
+    cx += NV_DETW2_DIV_PAD * 2 + NV_DETW2_DIV_W;
     txt_draw_alpha(ld, cx, cy - ld.h * 0.5f, a);
   }
   return w;
 }
 
-// Ponto separador: disco de 6, e nao a barrinha de 1x14 do web. Sao dois usos
-// com a MESMA forma e cores diferentes, e a diferenca de cor e o que agrupa a
-// linha: entre generos ele e rgb(179,179,179) (a cor do proprio texto, porque
-// ali ele e um "•" da frase) e entre GRUPOS e rgb(128,128,128), mais apagado.
+// The separator dot: a 6 disc, and not the web app's 1x14 bar. There are two uses with
+// the SAME shape and different colours, and the difference in colour is what groups the
+// line: between genres it is rgb(179,179,179) (the text's own colour, because there it
+// is a "•" of the sentence) and between GROUPS it is rgb(128,128,128), more muted.
 static void drawDot(float x, float yCenter, float luma, float a) {
   GfxRect pt = { x, yCenter - NV_DETW2_DOT_D * 0.5f,
                  NV_DETW2_DOT_D, NV_DETW2_DOT_D };
@@ -1435,7 +1424,7 @@ static void heroWeb(float a, float offset) {
   char year[32], duration[64];
   fromMeta(profileOf(idx), year, sizeof year, duration, sizeof duration);
 
-  // Em serie o web escreve "Roteirista:"/"Criador:"; em filme, "Diretor:".
+  // On a series the web app writes "Writer:"/"Creator:"; on a film, "Director:".
   char sup[192] = "";
   if (ci && ci->directing[0])
     snprintf(sup, sizeof sup, "%s: %s", isSeries() ? "Writer" : "Director",
@@ -1443,48 +1432,48 @@ static void heroWeb(float a, float offset) {
 
   const char *sin = synopsisOf(idx);
 
-  // --- ORDEM DA COLUNA, como a referencia do dono -----------------------------
+  // --- THE COLUMN'S ORDER, as in the owner's reference ------------------------
   //
-  // De cima para baixo: logo, linha de meta (ano, temporadas, classificacao),
-  // generos, quem dirigiu, sinopse, linha de retomada e por fim os BOTOES.
+  // From top to bottom: the logo, the meta line (year, seasons, rating), genres, who
+  // directed it, the synopsis, the resume line and finally the BUTTONS.
   //
-  // Antes os botoes vinham logo abaixo do logo e generos/classificacao caiam no
-  // rodape, o que separava a informacao do titulo em dois blocos com a acao no
-  // meio. Na referencia tudo que DESCREVE o titulo vem junto e a acao fecha o
-  // bloco — foi isso que o dono pediu ao comparar as duas telas.
+  // The buttons used to come just below the logo and the genres/rating fell into the
+  // footer, which split the title's information into two blocks with the action in
+  // between. In the reference everything that DESCRIBES the title comes together and the
+  // action closes the block — that is what the owner asked for on comparing the two screens.
   //
-  // Continua ancorado na BASE: a sinopse muda de altura conforme o texto, e
-  // ancorar no topo faria o botao dancar de titulo para titulo.
-  // A ACAO VEM LOGO ABAIXO DO LOGO, e todo o texto que DESCREVE o titulo vem
-  // junto, embaixo dela.
+  // It is still anchored to the BASE: the synopsis changes height with the text, and
+  // anchoring at the top would make the button dance from title to title.
+  // THE ACTION COMES JUST BELOW THE LOGO, and all the text that DESCRIBES the title
+  // comes together, underneath it.
   //
-  // Estava ao contrario: as acoes fechavam o bloco, com ~500 px de texto acima
-  // delas — o unico alvo interativo da tela era o mais distante do topo. MEDIDO
-  // na referencia (TCL, 1920x1080): logo 311..473, ACOES 509..608, apoio
-  // 640..685, sinopse 700..900, meta 938..970, classificacao/pais 1003..1045.
+  // It was the other way round: the actions closed the block, with ~500 px of text above
+  // them — the screen's only interactive target was the furthest from the top. MEASURED
+  // against the reference (TCL, 1920x1080): logo 311..473, ACTIONS 509..608, support
+  // 640..685, synopsis 700..900, meta 938..970, rating/country 1003..1045.
   //
-  // Isto NAO reintroduz o defeito que motivou a ordem antiga. Aquele era a
-  // informacao PARTIDA EM DOIS — parte acima da acao, parte no rodape. Aqui a
-  // acao sobe e o texto desce INTEIRO, num bloco so. As proprias constantes
-  // deste arquivo ja descreviam esta ordem (NV_DETW_GAP_ACOES e literalmente
-  // "acoes -> Diretor:"); o codigo e que tinha derivado do token sheet.
+  // This does NOT reintroduce the defect that motivated the old order. That one was
+  // information SPLIT IN TWO — part above the action, part in the footer. Here the
+  // action rises and the text drops WHOLE, in a single block. This file's own constants
+  // already described this order (NV_DETW_GAP_ACTIONS is literally "actions ->
+  // Director:"); it was the code that had drifted from the token sheet.
   //
-  // Continua empilhando DE BAIXO PARA CIMA e ancorado na base: a sinopse muda
-  // de altura com o texto, e ancorar no topo faria o bloco inteiro dancar de
-  // titulo para titulo. Isso ficou CONFIRMADO no aparelho: entre a serie (5
-  // linhas de sinopse) e o filme (4) as duas linhas de meta caem exatamente nos
-  // mesmos y (938 e 999) e a ULTIMA linha de sinopse tambem — o que cresce para
-  // cima e o resto da pilha.
+  // It still stacks FROM THE BOTTOM UP and is anchored to the base: the synopsis changes
+  // height with the text, and anchoring at the top would make the whole block dance from
+  // title to title. That was CONFIRMED on the device: between the series (5 lines of
+  // synopsis) and the film (4) the two meta lines fall at exactly the same y (938 and
+  // 999) and so does the LAST line of the synopsis — what grows upwards is the rest of
+  // the stack.
   //
-  // A GRADE NOVA, medida na TCL: acoes 512..606, apoio 649..675, sinopse em
-  // passo de 40 terminando com a tinta em 890, meta 1 (generos/data/IMDb)
-  // 938..968 e meta 2 (selo de contorno + pais) 999..1048.
+  // THE NEW GRID, measured on the TCL: actions 512..606, support 649..675, the synopsis
+  // in steps of 40 ending with its ink at 890, meta 1 (genres/date/IMDb) 938..968 and
+  // meta 2 (the outline badge + country) 999..1048.
   //
-  // A LINHA DE GENEROS SOLTA DEIXOU DE EXISTIR: no aparelho os generos abrem a
-  // primeira linha de meta, e ano e nota vem depois deles, separados por ponto.
-  // Aqui eram duas linhas — uma so com generos, outra com ano e duracao — e o
-  // selo do IMDb ficava sozinho encostado na borda direita da tela, a meio
-  // metro do bloco de texto a que pertence.
+  // THE LOOSE GENRE LINE HAS GONE: on the device the genres open the first meta line,
+  // and the year and score come after them, separated by a dot. Here there were two
+  // lines — one with genres alone, another with the year and duration — and the IMDb
+  // badge sat by itself against the screen's right edge, half a metre from the text
+  // block it belongs to.
   float hasResume = (ci && ci->progress > 0) ? 1.0f : 0.0f;
   float hSin = 0.0f;
   if (sin) hSin = txt_block(TXT_DET_SIN, sin, 255, 255, 255, -1.0f, 0.0f,
@@ -1495,11 +1484,11 @@ static void heroWeb(float a, float offset) {
   float ySin   = yMeta1 - NV_DETW2_GAP_SIN - hSin;
   float ySup   = sup[0] ? ySin - NV_DETW2_GAP_SUP : ySin;
   float yActions = ySup - NV_DETW2_GAP_ACTIONS - NV_DETW2_BTN_H;
-  // A linha de retomada explica o BOTAO, entao fica colada nele — logo acima.
+  // The resume line explains the BUTTON, so it sits right against it — just above.
   float yResume = yActions - NV_DETW_GAP_RESUME - NV_DETW_RESUME_H;
 
-  // Sobe alguns pixels enquanto entra: continua o movimento da arte em vez de
-  // aparecer pronto no lugar. `desloc` e a rolagem do documento.
+  // It rises a few pixels as it comes in: it continues the art's movement instead of
+  // appearing ready in place. `offset` is the document's scroll.
   float rises = (1.0f - a) * 26.0f + offset;
   yMeta2 += rises; yMeta1 += rises; ySin += rises; ySup += rises;
   yResume += rises; yActions += rises;
@@ -1527,37 +1516,37 @@ static void heroWeb(float a, float offset) {
     if (w > NV_DETW_LOGO_MAXW) { w = NV_DETW_LOGO_MAXW; h = w / aspect; }
     { GLuint sharp = tex_get_width(fileLogo, w);
       if (sharp) texLogo = sharp; }
-      // O logo assenta acima do que vier primeiro: a linha de retomada quando ha
-    // progresso, senao a propria linha de acoes.
+      // The logo settles above whichever comes first: the resume line when there is
+    // progress, otherwise the actions row itself.
     float baseLogo = (hasResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
     GfxRect r = { NV_DETW2_X, baseLogo - h, w, h };
-    gfx_tex_aspect_current = 0.0f;   // o logo ja vem na proporcao certa
-    // LOGO PRETO VIRA BRANCO. O TMDB serve a mesma marca em versao clara e
-    // escura e NAO diz qual e qual — nao ha campo para isso, e o ranking do
-    // proprio app web ordena so por idioma e nota. Quando cai a escura, ela
-    // aparece preta sobre um backdrop escuro e o titulo some da tela: foi o que
-    // aconteceu com "The Invite".
+    gfx_tex_aspect_current = 0.0f;   // the logo already comes at the right aspect ratio
+    // A BLACK LOGO BECOMES WHITE. TMDB serves the same mark in a light and a dark
+    // version and does NOT say which is which — there is no field for it, and the web
+    // app's own ranking orders only by language and score. When the dark one comes up,
+    // it appears black over a dark backdrop and the title disappears from the screen:
+    // that is what happened with "The Invite".
     //
-    // A decisao e por MEDIDA, nao por regra fixa: tex_luminancia devolve a
-    // media dos pixels opacos, calculada uma vez na thread de decode. So a arte
-    // realmente escura e tingida; logo claro ou COLORIDO (o dourado, o
-    // vermelho) passa intacto pelo GFX_TEXTO, porque chapa-lo de branco seria
-    // trocar um defeito por outro.
+    // The decision is by MEASUREMENT, not by a fixed rule: tex_luminance returns the
+    // average of the opaque pixels, computed once on the decode thread. Only genuinely
+    // dark art is tinted; a light or COLOURFUL logo (the gold one, the red one) passes
+    // through GFX_TEXT untouched, because flattening it to white would swap one defect
+    // for another.
     //
-    // -1 = ainda carregando: trata como clara e nao tinge. Errar para o lado de
-    // nao mexer na arte e o certo enquanto nao se sabe.
+    // -1 = still loading: treat it as light and do not tint. Erring on the side of not
+    // touching the art is right while it is not known.
     { GfxMode m = tex_brand_dark(fileLogo) ? GFX_BRAND : GFX_TEXT;
       gfx_rect(r, texLogo, m, 0, 0, 0, 0.0f, 1, 1, 1, a); }
   } else {
-    // Sem logo, o NOME. A altura da caixa continua sendo a do logo, para que a
-    // linha de botoes nao pule entre um titulo com logo e outro sem.
+    // With no logo, the NAME. The box's height is still the logo's, so the button row
+    // does not jump between a title with a logo and one without.
     const char *name = titleOf(idx);
     if (name) {
       TxtLine t2 = txt_line_trim(TXT_TITLE1, name, 255, 255, 255, 255,
                                     NV_DETW_LOGO_MAXW);
-      // Mesma ancora do logo: acima da retomada quando ha, senao das acoes. A
-      // altura da CAIXA continua sendo a do logo, para que a linha de acoes nao
-      // pule entre um titulo com logo e outro sem.
+      // The same anchor as the logo: above the resume line when there is one, otherwise
+      // above the actions. The BOX's height is still the logo's, so the actions row
+      // does not jump between a title with a logo and one without.
       float baseLogo = (hasResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
       txt_draw_alpha(t2, NV_DETW2_X,
                          baseLogo - NV_DETW_LOGO_H
@@ -1565,34 +1554,34 @@ static void heroWeb(float a, float offset) {
     }
   }
 
-  // --- botoes ---------------------------------------------------------------
-  // Em FLUXO, com 24px entre vizinhos — nao os 63 que vinham do web. MEDIDO no
-  // aparelho: pilula 96..417, circulos com centro em 488,5 e 608,5 (passo 120,
-  // diametro 96), o que da 23,5 e 24 de vao. Os circulos sao 96 e nao 84, e
-  // ficam 1px mais altos que a pilula (511..606 contra 512..606), o que na
-  // pratica e o mesmo centro vertical — e assim que ficam alinhados aqui.
+  // --- buttons --------------------------------------------------------------
+  // In FLOW, with 24px between neighbours — not the 63 that came from the web app.
+  // MEASURED on the device: the pill 96..417, the circles centred at 488.5 and 608.5
+  // (step 120, diameter 96), which gives 23.5 and 24 of gap. The circles are 96 and not
+  // 84, and sit 1px taller than the pill (511..606 against 512..606), which in practice
+  // is the same vertical centre — and that is how they are aligned here.
   //
-  // Dois estados do rotulo, medidos: "Retomar T2E3" quando ha progresso,
-  // "Reproduzir" quando nao ha. (O web tem um terceiro, "Proximo T2E4", que sai
-  // do proximo episodio nao assistido — o catalogo nativo nao guarda quais
-  // episodios ja foram vistos, entao esse estado nao tem de onde vir.)
-  // TRES estados, como o web: "Retomar TxEy" (em andamento), "Próximo TxEy"
-  // (primeiro nao assistido) e "Reproduzir" (nunca aberto). O terceiro estado
-  // era dado como impossivel aqui; e possivel desde que extras_ep_visto existe.
+  // Two label states, measured: "Resume S2E3" when there is progress, "Play" when there
+  // is not. (The web app has a third, "Next S2E4", which comes from the next unwatched
+  // episode — the native catalogue does not store which episodes have been watched, so
+  // that state has nowhere to come from.)
+  // THREE states, like the web app: "Resume SxEy" (in progress), "Next SxEy" (the first
+  // unwatched) and "Play" (never opened). The third state was taken to be impossible
+  // here; it has been possible ever since extras_ep_watched existed.
   char rot[48];
   { int t = 0, e = 0, de = 0;
     if (isSeries() && episodeTarget(&t, &e, &de) && t > 0 && e > 0 && de >= 2)
-      snprintf(rot, sizeof rot, "%s T%dE%d",
+      snprintf(rot, sizeof rot, "%s S%dE%d",
                de == 2 ? "Resume" : "Next", t, e);
     else if (ci && ci->progress > 0) snprintf(rot, sizeof rot, "Resume");
     else snprintf(rot, sizeof rot, "Play"); }
 
   { float cyBtn = yActions + NV_DETW2_BTN_H * 0.5f;
     int nb = 0, n = nButtons();
-    // Trocar de titulo com o foco no ultimo circular de um FILME e cair numa
-    // serie deixaria `botao` = 3 numa linha de 3 botoes: nenhum apareceria
-    // focado e o OK nao acharia acao. Fixa aqui, no desenho, que e por onde
-    // todo quadro passa.
+    // Changing title with the focus on the last circular button of a FILM and landing
+    // on a series would leave `button` = 3 in a row of 3 buttons: none would appear
+    // focused and OK would find no action. It is fixed here, in the drawing, which is
+    // what every frame goes through.
     if (button >= n) button = n - 1;
     float bx = NV_DETW2_X;
     GfxRect rp = { bx, yActions, widthPrimary(rot), NV_DETW2_BTN_H };
@@ -1605,7 +1594,7 @@ static void heroWeb(float a, float offset) {
       bx += NV_DETW2_CIRC + NV_DETW2_BTN_GAP;
     } }
 
-  // --- linha de retomada ----------------------------------------------------
+  // --- the resume line ------------------------------------------------------
   if (ci && ci->progress > 0) {
     char ln[160];
     if (ci->season > 0)
@@ -1618,11 +1607,11 @@ static void heroWeb(float a, float offset) {
                        a * 0.82f);
   }
 
-  // --- "Roteirista: ..." / "Diretor: ..." ------------------------------------
-  // Mesmo CORPO da sinopse, e nao um menor: na referencia o "R" de "Roteirista"
-  // e o "C" da sinopse medem os mesmos 20 de altura de caixa alta. Estava em
-  // TXT_DET_META (25) contra TXT_DET_SIN (26) por uma medida do web, onde as
-  // duas linhas de fato divergem.
+  // --- "Writer: ..." / "Director: ..." ---------------------------------------
+  // The same BODY SIZE as the synopsis, and not a smaller one: in the reference the "W"
+  // of "Writer" and the "C" of the synopsis measure the same 20 of cap height. It was
+  // on TXT_DET_META (25) against TXT_DET_SIN (26) because of a web app measurement,
+  // where the two lines really do differ.
   if (sup[0]) {
     TxtLine l = txt_line_trim(TXT_DET_SIN, sup, 179, 179, 179, 255,
                                  NV_DETW2_TEXT_W);
@@ -1633,24 +1622,23 @@ static void heroWeb(float a, float offset) {
   if (sin) txt_block(TXT_DET_SIN, sin, 255, 255, 255, NV_DETW2_X, ySin,
                      NV_DETW2_TEXT_W, NV_DETW2_LD_SIN, a, NV_DETW2_SIN_LINES);
 
-  // --- meta linha 1: generos • generos  ·  ano  ·  [IMDb] nota ---------------
+  // --- meta line 1: genres • genres  ·  year  ·  [IMDb] score ---------------
   //
-  // Uma linha so, na ordem do aparelho. O selo do IMDb entra AQUI, no fim dos
-  // grupos, e nao encostado na borda direita da tela: ele estava orfao, a mais
-  // de 1000px do texto de que faz parte, porque o valor herdado era
-  // NV_DETW_DIR.
+  // A single line, in the device's order. The IMDb badge goes HERE, at the end of the
+  // groups, and not up against the screen's right edge: it was orphaned, more than
+  // 1000px from the text it belongs to, because the inherited value was NV_DETW_DIR.
   //
-  // Dois pontos separadores diferentes, e a diferenca de cor e o que agrupa a
-  // linha — ver desenhaPonto.
+  // Two different separator dots, and the difference in colour is what groups the line
+  // — see drawDot.
   {
     float x = NV_DETW2_X, yc = yMeta1 + NV_DETW2_M1_H * 0.5f;
     const CatItem *badgeItem=cat_item(idx);
     if(badgeItem)x+=badges_draw(badges_provider(badgeItem->providerName),x,yc-14,150,28,a);
     int something = 0;
-    // GENEROS sem o primeiro campo. `genero` vem do catalogo como
-    // "Programa de TV · Ação · Aventura" e o primeiro trecho e sempre o TIPO
-    // (ver catalogo.c:539) — a referencia nao o mostra na linha de meta, so os
-    // generos. Cada um vira um trecho proprio com o "•" entre eles.
+    // GENRES without the first field. `genre` comes from the catalogue as
+    // "TV Show · Action · Adventure" and the first piece is always the TYPE
+    // (see catalog.c:539) — the reference does not show it on the meta line, only the
+    // genres. Each one becomes a piece of its own with a "•" between them.
     const char *g = genreOf(idx);
     if (g) {
       const char *p = strstr(g, "\xc2\xb7");
@@ -1673,10 +1661,10 @@ static void heroWeb(float a, float offset) {
         p = end;
       }
     }
-    // ANO. Em serie a referencia escreve "2023-" e em filme a data cheia; o
-    // catalogo so guarda o ano nos dois casos (descoberta.c corta o travessao
-    // da serie de proposito), entao sai o ano. Vazio quando o metadado ainda
-    // nao chegou — e ai o grupo inteiro some, sem valor de reserva.
+    // THE YEAR. On a series the reference writes "2023-" and on a film the full date;
+    // the catalogue stores only the year in both cases (discover.c cuts the series' en
+    // dash on purpose), so the year is what comes out. Empty when the metadata has not
+    // arrived — and then the whole group disappears, with no fallback value.
     if (year[0]) {
       if (something) { drawDot(x + NV_DETW2_SEP, yc, 0.502f, a);    // 128
                   x += NV_DETW2_SEP * 2 + NV_DETW2_DOT_D; }
@@ -1693,9 +1681,9 @@ static void heroWeb(float a, float offset) {
     for(int i=0;i<2;i++) {
       int n=extras_score(sources[i]);
       if(n<=0) continue;
-      // Rotten Tomatoes: tomate FRESCO de 60% para cima, o RESPINGO verde
-      // abaixo — e a convencao do proprio site, e o icone e que diz o
-      // veredito antes do numero. Trakt: o WORDMARK (nome), nao o icone.
+      // Rotten Tomatoes: a FRESH tomato from 60% up, the green SPLAT below — it is the
+      // site's own convention, and it is the icon that gives the verdict before the
+      // number. Trakt: the WORDMARK (the name), not the icon.
       const char *brand;
       if(sources[i]==EX_TOMATOES) brand=extras_path_brand_name(n>=600?"tomatoes_fresh":"tomatoes_rotten");
       else brand=extras_path_brand_name("trakt_wordmark");
@@ -1706,9 +1694,9 @@ static void heroWeb(float a, float offset) {
       if(logo){float ap=tex_aspect(brand);if(ap>0)mw=mh*ap;if(mw>110)mw=110;}
       if(x+24+mw+10+lv.w>NV_DETW2_X+NV_HERO_SIN_W)break;
       x+=24;
-      // GFX_TEXTO e nao GFX_SNAP: o SNAP ignora o alfa da textura e o tomate saia
-      // com um quadrado escuro em volta. O TEXTO preserva o RGB e usa o alfa.
-      // O wordmark do Trakt e escuro: vai por GFX_MARCA, que tinge o alfa.
+      // GFX_TEXT and not GFX_SNAP: SNAP ignores the texture's alpha and the tomato came
+      // out with a dark square around it. TEXT preserves the RGB and uses the alpha.
+      // The Trakt wordmark is dark: it goes through GFX_BRAND, which tints the alpha.
       if(logo){GfxMode m=sources[i]==EX_TRAKT&&tex_brand_dark(brand)?GFX_BRAND:GFX_TEXT;
         gfx_rect((GfxRect){x,yc-mh*.5f,mw,mh},logo,m,0,0,0,0,.93f,.94f,.96f,a);}
       else {TxtLine label=txt_line(TXT_MINI,extras_source_brand(sources[i]),200,200,205,255);
@@ -1717,22 +1705,21 @@ static void heroWeb(float a, float offset) {
     }
   }
 
-  // --- meta linha 2: [classificacao | status]  ·  duracao  ·  pais -----------
+  // --- meta line 2: [rating | status]  ·  duration  ·  country -----------
   //
-  // A classificacao indicativa e o status da producao vivem DENTRO do mesmo
-  // selo de contorno, com uma divisoria entre eles ("TV-MA | RENOVADA",
-  // "R | LANÇADO"). Aqui a classificacao era um selo solto na linha de cima.
+  // The age rating and the production's status live INSIDE the same outline badge, with
+  // a divider between them ("TV-MA | RENEWED", "R | RELEASED"). Here the rating used to
+  // be a loose badge on the line above.
   //
-  // STATUS: o CatItem nao tem o campo. Fica NULL, e o selo sai so com a
-  // classificacao — sem divisoria e sem texto de reserva. Carimbar "LANÇADO"
-  // em tudo seria repetir o erro que ja tirou a classificacao "14" fixa e o
-  // elenco de demonstracao daqui.
+  // STATUS: CatItem does not have the field. It stays NULL, and the badge comes out
+  // with the rating alone — no divider and no fallback text. Stamping "RELEASED" on
+  // everything would repeat the mistake that already removed the fixed "14" rating and
+  // the demo cast from here.
   //
-  // DURACAO so em FILME. Em serie o segundo campo de `meta` e a contagem de
-  // temporadas ("3 temporadas"), e a referencia nao a mostra no hero — quem
-  // conta temporadas sao as abas logo abaixo da dobra, que esta tela ja
-  // desenha. Repetir a informacao aqui seria acrescentar o que o aparelho
-  // tirou.
+  // DURATION on a FILM only. On a series `meta`'s second field is the season count
+  // ("3 seasons"), and the reference does not show it in the hero — what counts the
+  // seasons are the tabs just below the fold, which this screen already draws.
+  // Repeating the information here would be adding back what the device took away.
   {
     float x = NV_DETW2_X, yc = yMeta2 + NV_DETW2_BADGE_H * 0.5f;
     int something = 0;
@@ -1755,22 +1742,22 @@ static void heroWeb(float a, float offset) {
       txt_draw_alpha(ld, x, yc - ld.h * 0.5f, a);
       x += ld.w; something = 1;
     }
-    if (ci && ci->pais[0]) {
+    if (ci && ci->country[0]) {
       if (something) { drawDot(x + NV_DETW2_SEP, yc, 0.502f, a);
                   x += NV_DETW2_SEP * 2 + NV_DETW2_DOT_D; }
-      TxtLine lp = txt_line(TXT_DET_META2, ci->pais, 255, 255, 255, 255);
+      TxtLine lp = txt_line(TXT_DET_META2, ci->country, 255, 255, 255, 255);
       txt_draw_alpha(lp, x, yc - lp.h * 0.5f, a);
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// PAGINA: temporadas, episodios, abas de informacao, elenco
+// THE PAGE: seasons, episodes, information tabs, cast
 // ---------------------------------------------------------------------------
 
-// Numero REAL da temporada na posicao `c`. Serie que comeca na 2 (o que
-// acontece quando o Cinemeta nao tem a 1) mostrava "Temporada 1" apontando para
-// a 2, e a lista abaixo nao batia com o rotulo.
+// The REAL season number at position `c`. A series that starts at 2 (which happens when
+// Cinemeta does not have season 1) showed "Season 1" pointing at 2, and the list below
+// did not match the label.
 static int seasonIn(int c) {
   const CatItem *ci = cat_item(idx);
   if (ci && ci->nSeasons > 0)
@@ -1792,57 +1779,56 @@ static float widthTabInfo(int i) {
   return l.w;
 }
 
-// Aba de temporada: 80 de altura, raio 40 (pilula), borda de 1px
-// rgba(255,255,255,0.16). Tres estados MEDIDOS, e nao dois:
-//   normal      #222     texto rgb(179,179,179)
-//   escolhida   #2d2d2d  texto branco
-//   com foco    #f5f5f5  texto #111, sem borda
-// Sem o estado do meio, o usuario perde de vista em que temporada esta assim
-// que o foco desce para a lista.
+// A season tab: 80 tall, radius 40 (a pill), a 1px rgba(255,255,255,0.16) border.
+// Three states MEASURED, and not two:
+//   normal    #222     text rgb(179,179,179)
+//   chosen    #2d2d2d  white text
+//   focused   #f5f5f5  text #111, no border
+// Without the middle state, the user loses sight of which season they are on as soon as
+// the focus moves down to the list.
 static void drawSeason(GfxRect r, int c, float f, float a) {
   char rot[32]; labelSeason(c, rot, sizeof rot);
   int sel = (c == season);
   float radius = NV_RADIUS_PILL;
-  // TODA temporada e um CHIP, escolhida ou nao. Antes so a escolhida tinha
-  // container e as outras eram texto solto sobre o fundo — nao liam como um
-  // grupo de botoes, e nao havia como adivinhar que eram clicaveis.
+  // EVERY season is a CHIP, chosen or not. Before, only the chosen one had a container
+  // and the others were loose text on the background — they did not read as a group of
+  // buttons, and there was no way to guess they were clickable.
   //
-  // MEDIDO na referencia: chips #2D2D2D de 285x83; a ESCOLHIDA se distingue
-  // pelo TEXTO branco (o fundo continua #2D2D2D), e a FOCADA INVERTE — fundo
-  // quase branco, texto escuro, SEM anel.
+  // MEASURED against the reference: #2D2D2D chips of 285x83; the CHOSEN one is
+  // distinguished by its white TEXT (the background stays #2D2D2D), and the FOCUSED one
+  // INVERTS — a near-white background, dark text, NO ring.
   //
-  // O que estava aqui punha um anel branco em volta e deixava o miolo em
-  // #2D2D2D com texto cinza 170: o item focado virava o MAIS APAGADO da
-  // fileira, lido na TV como "desabilitado". A inversao e a mesma linguagem de
-  // foco dos botoes circulares do heroi, medida na mesma referencia — foco e
-  // "escolhido" deixam de colidir sem precisar de dois tons de cinza que a
-  // 3 metros ninguem separa.
+  // What was here put a white ring around it and left the middle at #2D2D2D with grey
+  // 170 text: the focused item became the MOST MUTED of the row, read on a TV as
+  // "disabled". The inversion is the same focus language as the hero's circular
+  // buttons, measured against the same reference — focus and "chosen" stop colliding
+  // without needing two shades of grey that nobody can tell apart at 3 metres.
   { float base = sel ? 0.21f : 0.133f;
-    float luma  = base + (0.961f - base) * f;   // -> #F5F5F5 no foco
+    float luma  = base + (0.961f - base) * f;   // -> #F5F5F5 on focus
     gfx_color(r, radius, luma, luma, luma, a); }
   if (sel && f < 0.99f)
     gfx_rect(r, 0, GFX_RING, 0, 1.5f / r.h, 0, radius,
              0.76f, 0.77f, 0.79f, 0.5f * (1 - f) * a);
-  // Texto: cinza quando so existe, branco quando escolhido, ESCURO quando
-  // focado. Interpolado por `f` para acompanhar a mola em vez de estalar.
-  { float claro = sel ? 255.0f : 179.0f;
-    float v = claro + (17.0f - claro) * f;     // -> #111 no foco
+  // Text: grey when it merely exists, white when chosen, DARK when focused.
+  // Interpolated by `f` to follow the spring instead of snapping.
+  { float light = sel ? 255.0f : 179.0f;
+    float v = light + (17.0f - light) * f;     // -> #111 on focus
     int color = (int)(v + 0.5f);
     TxtLine l = txt_line(TXT_PLR_BODY, rot, color, color, color, 255);
-    // 500 de peso na Inter Regular: uma segunda passada meio pixel a direita.
+    // A weight of 500 on Inter Regular: a second pass half a pixel to the right.
     txt_weight(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a, 0.5f); }
 }
 
-// O degrade do `.series-episode-overlay`: linear vertical de rgba(0,0,0,0.06)
-// a 0.95, com paradas em 22% (0.18), 52% (0.62) e 82% (0.86). O shader nao tem
-// modo para ele — gfx.c e arquivo de outro agente — e o GFX_VEU que existe
-// escurece TAMBEM a esquerda, o que aqui apagaria a metade do card.
+// The `.series-episode-overlay` gradient: a vertical linear from rgba(0,0,0,0.06) to
+// 0.95, with stops at 22% (0.18), 52% (0.62) and 82% (0.86). The shader has no mode for
+// it — gfx.c is another agent's file — and the GFX_VEIL that exists darkens the LEFT
+// too, which here would wipe out half the card.
 //
-// Sai em faixas ancoradas na BASE: cada faixa e um retangulo arredondado que
-// vai de uma altura ate o fim da miniatura, com o mesmo raio absoluto. Assim os
-// cantos de baixo acompanham a miniatura (uma faixa de cantos retos poria dois
-// dentes escuros fora do arredondamento) e o empilhamento reproduz a rampa,
-// porque compor N camadas de alfa `d` da 1-(1-d)^n.
+// It comes out as bands anchored to the BASE: each band is a rounded rectangle running
+// from a given height to the bottom of the thumbnail, with the same absolute radius.
+// That way the bottom corners follow the thumbnail (a band with square corners would
+// put two dark teeth outside the rounding) and the stacking reproduces the ramp,
+// because compositing N layers of alpha `d` gives 1-(1-d)^n.
 static void veilEpisode(GfxRect th, float a) {
   static const float STOPPED[5] = { 0.00f, 0.22f, 0.52f, 0.82f, 1.00f };
   static const float ALFA[5]   = { 0.06f, 0.18f, 0.62f, 0.86f, 0.95f };
@@ -1850,7 +1836,7 @@ static void veilEpisode(GfxRect th, float a) {
   float accum = 0.0f;
   for (int i = 0; i <= STEPS; i++) {
     float u = (float)i / STEPS;
-    // Alvo interpolado linearmente por partes, como o `linear-gradient`.
+    // The target interpolated piecewise linearly, like the `linear-gradient`.
     float target = ALFA[4];
     for (int k = 0; k < 4; k++)
       if (u <= STOPPED[k + 1]) {
@@ -1858,30 +1844,30 @@ static void veilEpisode(GfxRect th, float a) {
         target = ALFA[k] + (ALFA[k + 1] - ALFA[k]) * (d > 0 ? (u - STOPPED[k]) / d : 0);
         break;
       }
-    // Quanto ESTA faixa precisa acrescentar para que o acumulado bata no alvo.
+    // How much THIS band has to add for the accumulated value to hit the target.
     float d = (target - accum) / (1.0f - accum);
     if (d <= 0.001f) continue;
     accum = target;
     float top = th.y + th.h * u;
     GfxRect track = { th.x, top, th.w, th.y + th.h - top };
     if (track.h < 2.0f) continue;
-    float radius = NV_DETP_EP_RADIUS / (track.w < track.h ? track.w : track.h);
+    float radius = NV_DETP_EP_RADIUS / track.h;
     if (radius > 0.5f) radius = 0.5f;
     gfx_color(track, radius, 0, 0, 0, d * a);
   }
 }
 
-// Card de episodio: 640x422, com a miniatura de 640x414 e TODO o texto dentro
-// dela, sobre o degrade. E a diferenca estrutural com o que estava aqui antes
-// (miniatura em cima, texto embaixo, que e o app da Apple TV).
+// The episode card: 640x422, with the 640x414 thumbnail and ALL the text inside it,
+// over the gradient. It is the structural difference from what was here before (the
+// thumbnail on top, the text below, which is the Apple TV app's).
 static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
   (void)now;
   const CatEp *ep = cat_episode(idx, c);
   GfxRect th = { r.x, r.y, r.w, NV_DETP_EP_THUMB_H };
   float radiusTh = NV_DETP_EP_RADIUS / NV_DETP_EP_THUMB_H;
 
-  // Anel de foco: no web e um box-shadow na MINIATURA, nao no card, e nao ha
-  // escala nenhuma (`transform: none`).
+  // The focus ring: in the web app it is a box-shadow on the THUMBNAIL, not on the
+  // card, and there is no scaling at all (`transform: none`).
   if (f > 0.01f) {
     GfxRect ring = { th.x - NV_DETP_RING, th.y - NV_DETP_RING,
                      th.w + NV_DETP_RING * 2, th.h + NV_DETP_RING * 2 };
@@ -1899,20 +1885,20 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
   } else gfx_color(th, radiusTh, 0.133f, 0.133f, 0.133f, a);
   veilEpisode(th, a);
 
-  // EPISODIO JA ASSISTIDO, segundo o Trakt: mascara escura sobre a miniatura e
-  // um check no canto. Pedido do dono, e resolve uma pergunta que a lista nao
-  // respondia — onde ele parou.
+  // AN EPISODE ALREADY WATCHED, according to Trakt: a dark mask over the thumbnail and
+  // a tick in the corner. The owner's request, and it answers a question the list did
+  // not — where they stopped.
   //
-  // A mascara vem DEPOIS do veu de texto de proposito: ela precisa cobrir a
-  // miniatura inteira, inclusive a parte ja escurecida, senao o card visto e o
-  // nao visto ficam parecidos justo em cima do texto.
+  // The mask comes AFTER the text veil on purpose: it has to cover the whole thumbnail,
+  // including the part already darkened, otherwise the watched and unwatched cards look
+  // alike precisely over the text.
   if (ep && extras_ep_watched(ep->season, ep->episode)) {
     float d = 36.0f;
     GfxRect badge = { th.x + th.w - d - 16.0f, th.y + 16.0f, d, d };
     gfx_color(th, radiusTh, 0.0f, 0.0f, 0.0f, 0.22f * a);
     gfx_color(badge, 0.5f, 1, 1, 1, 0.92f * a);
-    // O check e feito de dois tracos; sem rotacao no gfx, dois retangulos finos
-    // em degraus dao a mesma leitura no tamanho de um selo.
+    // The tick is made of two strokes; with no rotation in gfx, two thin rectangles in
+    // steps read the same at a badge's size.
     { float cx2 = badge.x + d * 0.5f, cy2 = badge.y + d * 0.5f;
       int k;
       for (k = 0; k < 4; k++)
@@ -1923,30 +1909,29 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
                 0.4f, 0.05f, 0.05f, 0.05f, a); }
   }
 
-  // NADA DE RESERVA INVENTADA. Aqui as quatro linhas caiam numa tabela de
-  // demonstracao (nome, duracao, data e sinopse de "Shrinking"), entao um
-  // episodio sem dado nao aparecia vazio: aparecia com o TEXTO DE OUTRA SERIE,
-  // indistinguivel de informacao real. Campo ausente agora fica ausente, e o
-  // desenho abaixo ja omite cada pedaco que vier vazio.
+  // NO INVENTED FALLBACK. Here the four lines fell back to a demo table (the name,
+  // duration, date and synopsis of "Shrinking"), so an episode with no data did not
+  // appear empty: it appeared with ANOTHER SERIES' TEXT, indistinguishable from real
+  // information. A missing field now stays missing, and the drawing below already omits
+  // each piece that comes back empty.
   const char *epName = (ep && ep->name[0])    ? ep->name    : NULL;
   const char *epDuration  = (ep && ep->duration[0]) ? ep->duration : NULL;
   const char *epDate = (ep && ep->date[0])    ? ep->date    : NULL;
   const char *epSin  = (ep && ep->synopsis[0]) ? ep->synopsis : NULL;
   int epNum = ep ? ep->episode : c + 1;
 
-  float tx = r.x + NV_DETP_EP_DFLT;
+  float tx = r.x + NV_DETP_EP_PAD;
 
-  // Ausencia de check nao afirma que o historico ja chegou. Evita um selo
-  // "nao assistido" inventado enquanto o Trakt ainda esta consultando.
+  // The absence of a tick does not assert that the history has arrived. It avoids an
+  // invented "unwatched" badge while Trakt is still being queried.
 
-  // Selo "EPISÓDIO n": caixa de 43 de altura, raio 12, fundo escuro
-  // translucido, texto em caixa alta.
+  // The "EPISODE n" badge: a box 43 tall, radius 12, translucent dark background,
+  // text in capitals.
   //
-  // Voltou a ser "EPISÓDIO n" e nao "T2E4". A forma curta entrou por uma
-  // captura antiga do dono, mas a referencia no aparelho escreve "EPISÓDIO 1"
-  // por extenso — e o argumento de que a forma curta "diz de que temporada e"
-  // nao se sustenta: o card so aparece dentro da aba da temporada escolhida,
-  // que esta desenhada logo acima dele.
+  // It went back to "EPISODE n" and not "S2E4". The short form came in from an old
+  // capture of the owner's, but the reference on the device writes "EPISODE 1" in full —
+  // and the argument that the short form "says which season it is" does not hold: the
+  // card only appears inside the chosen season's tab, which is drawn just above it.
   { char header[24];
     snprintf(header, sizeof header, "EPISODE %d", epNum);
     TxtLine l = txt_line(TXT_CAPTION2, header, 255, 255, 255, 255);
@@ -1956,10 +1941,10 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
     txt_weight(l, s.x + NV_DETP_EP_BADGE_PADX,
              s.y + (NV_DETP_EP_BADGE_H - l.h) * 0.5f, a, 1.0f); }
 
-  // Titulo: 32/800. O 800 nao existe na familia embarcada e o 32 so existe em
-  // Regular na tabela de estilos, entao vem de tres passadas.
-  // Sem nome do episodio, "Episodio N" — que e um rotulo VERDADEIRO, deduzido
-  // do numero, e nao o titulo de outra serie.
+  // The title: 32/800. The 800 does not exist in the embedded family and the 32 only
+  // exists in Regular in the style table, so it comes from three passes.
+  // With no episode name, "Episode N" — which is a TRUE label, deduced from the number,
+  // and not another series' title.
   { char fallback[32];
     const char *name = epName;
     if (!name) { snprintf(fallback, sizeof fallback, "Episode %d", epNum);
@@ -1968,25 +1953,25 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
                                  NV_DETP_EP_TEXT_W);
     txt_weight(l, tx, r.y + NV_DETP_EP_TITLE_Y, a, 1.4f); }
 
-  // Sinopse: tres linhas, como a referencia, com truncamento do bloco.
-  // Sem sinopse o espaco
-  // fica vazio: melhor um card com menos texto que um card com texto errado.
+  // The synopsis: three lines, like the reference, with the block truncated.
+  // With no synopsis the space stays empty: better a card with less text than a card
+  // with the wrong text.
   if (epSin)
     txt_block(TXT_DET_SIN, epSin, 255, 255, 255, tx, r.y + NV_DETP_EP_SIN_Y,
               NV_DETP_EP_TEXT_W, NV_DETP_EP_LD_SIN, a * 0.9f, 3);
 
-  // Meta: relogio + duracao + data, 20/400 rgb(179,179,179), com 38 de folga
-  // entre os dois blocos.
+  // Meta: a clock + duration + date, 20/400 rgb(179,179,179), with 38 of slack between
+  // the two blocks.
   { float x = tx, y = r.y + NV_DETP_EP_META_Y;
-    // Relogio de 28x28. O glifo do web e um disco CHEIO em rgb(179,179,179) com
-    // os ponteiros VAZADOS — o `path` do SVG recorta o L do ponteiro do disco.
-    // Aqui o vazado sai pintando os ponteiros de preto por cima: naquele ponto
-    // da miniatura o veu ja esta em 0.95, entao o que estaria atras do recorte e
-    // praticamente preto. Desenhar os ponteiros na MESMA cor do disco, como
-    // estava, some com eles e deixa so uma bolinha cinza.
-    // O relogio so entra COM a duracao ao lado. Sozinho ele nao e um icone, e
-    // um rotulo sem valor: um disco cinza solto no canto do card, que le como
-    // defeito de desenho.
+    // A 28x28 clock. The web app's glyph is a FILLED disc in rgb(179,179,179) with the
+    // hands KNOCKED OUT — the SVG's `path` cuts the hand's L out of the disc. Here the
+    // knockout comes out by painting the hands black over it: at that point of the
+    // thumbnail the veil is already at 0.95, so what would be behind the cut-out is
+    // practically black. Drawing the hands in the SAME colour as the disc, as it used
+    // to, makes them disappear and leaves only a grey blob.
+    // The clock only comes in WITH the duration beside it. On its own it is not an
+    // icon, it is a label with no value: a loose grey disc in the card's corner, which
+    // reads as a drawing fault.
     if (epDuration) {
       float cx = x + NV_DETP_EP_ICON * 0.5f, cy = y + NV_DETP_EP_ICON * 0.5f;
       GfxRect aro = { x, y, NV_DETP_EP_ICON, NV_DETP_EP_ICON };
@@ -2000,8 +1985,8 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
       { TxtLine ld = txt_line(TXT_CAPTION2, epDuration, 179, 179, 179, 255);
         txt_draw_alpha(ld, x, y, a); x += ld.w + 16; }
     }
-    // Extras fornece avaliacao Trakt por episodio, nao IMDb. Nunca usar
-    // a nota da serie ou o selo de outro provedor neste rodape.
+    // Extras supplies a Trakt rating per episode, not IMDb. Never use the series' score
+    // or another provider's badge in this footer.
     int score = 0;
     if (ep) for (int st = 0; st < extras_n_seasons(); st++) {
       if (extras_season_number(st) != ep->season) continue;
@@ -2019,23 +2004,23 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
       txt_draw_alpha(ln, x + 8, y, a);
       x += badge.w + 16;
     }
-    // A DATA vai para a direita do card, como na referencia: a esquerda fica so
-    // a duracao, e as duas deixam de disputar a mesma linha corrida.
+    // THE DATE goes to the right of the card, as in the reference: the left keeps only
+    // the duration, and the two stop competing for the same running line.
     if (epDate) {
       const char *date = epDate;
       size_t nDate = strlen(epDate);
       if (!settings_date_full() && nDate >= 4) date = epDate + nDate - 4;
-      float available = r.x + r.w - NV_DETP_EP_DFLT - x;
+      float available = r.x + r.w - NV_DETP_EP_PAD - x;
       if (available > 48) {
         TxtLine lf = txt_line_trim(TXT_CAPTION2, date, 179, 179, 179, 255, available);
-        txt_draw_alpha(lf, r.x + r.w - NV_DETP_EP_DFLT - lf.w, y, a);
+        txt_draw_alpha(lf, r.x + r.w - NV_DETP_EP_PAD - lf.w, y, a);
       }
     } }
 
-  // Barra de progresso: 576x8 a 16px da base da miniatura, trilho
-  // rgba(0,0,0,0.45) e preenchimento rgb(158,158,158). So aparece entre 2% e
-  // 98% — e o mesmo intervalo do web, e e o que faz um episodio recem-comecado
-  // nao ganhar uma barra de largura zero.
+  // The progress bar: 576x8 at 16px from the thumbnail's base, track rgba(0,0,0,0.45)
+  // and fill rgb(158,158,158). It only appears between 2% and 98% — the same range as
+  // the web app's, and it is what stops a just-started episode getting a bar of zero
+  // width.
   { int progress = 0;
     const CatItem *ci = cat_item(idx);
     if (ci && ci->progress > 0 && ep && ci->season == ep->season &&
@@ -2049,9 +2034,9 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
     } }
 }
 
-// Abas de informacao: texto puro, sem pilula. Escolhida (ou focada) em branco,
-// as outras em #808080; o divisor "|" e 32/700 #808080. O foco no web e
-// `transform: scale(1.03)` — o unico lugar desta tela que escala.
+// Information tabs: plain text, with no pill. The chosen one (or the focused one) in
+// white, the others in #808080; the "|" divider is 32/700 #808080. Focus in the web app
+// is `transform: scale(1.03)` — the only place on this screen that scales.
 static void drawTabInfo(float x, float y, int i, float f, float a) {
   int sel = (i == tabInfo);
   int base = sel ? 255 : 128;
@@ -2060,24 +2045,24 @@ static void drawTabInfo(float x, float y, int i, float f, float a) {
   txt_weight(l, x, y + (NV_DETP_TAB_H - l.h) * 0.5f, a, 0.5f + f * 0.6f);
 }
 
-// Elenco: avatar redondo de 140 ALINHADO A ESQUERDA do card de 220 (nao
-// centralizado, que era o desenho anterior), nome 26/500 rgb(179,179,179) e
-// papel 21/400 rgb(128,128,128) abaixo dele.
-// --- card de TRAILER ---------------------------------------------------------
+// Cast: a round 140 avatar ALIGNED LEFT in the 220 card (not centred, which was the
+// previous design), the name 26/500 rgb(179,179,179) and the role 21/400
+// rgb(128,128,128) below it.
+// --- the TRAILER card --------------------------------------------------------
 //
-// Miniatura 520x292 raio 24, selo de play ao centro, nome embaixo e o tipo em
-// cinza. A miniatura vem de img.youtube.com por URL previsivel, e tex_obter
-// baixa e cacheia sozinho — nao ha codigo de rede aqui.
+// A 520x292 thumbnail with radius 24, a play badge in the centre, the name below and
+// the type in grey. The thumbnail comes from img.youtube.com by a predictable URL, and
+// tex_get downloads and caches it by itself — there is no network code here.
 //
-// NAO E FOCAVEL, e isso e decisao, nao pendencia: este app nao tem reprodutor
-// de YouTube. A mesma regra ja tirou o botao de trailer do hero (detail.c) e o
-// glifo do YouTube do terceiro circular (gfx.c) — um controle que promete o que
-// nao cumpre e pior que a ausencia dele. O card entra na composicao para a
-// pagina nao mentir sobre o que o filme tem; abrir, nao abre.
+// IT IS NOT FOCUSABLE, and that is a decision, not an omission: this app has no YouTube
+// player. The same rule already removed the trailer button from the hero (detail.c) and
+// the YouTube glyph from the third circular button (gfx.c) — a control that promises
+// what it cannot deliver is worse than its absence. The card takes part in the
+// composition so the page does not lie about what the film has; open, it does not.
 static void drawTrailer(float x, float y, int c, float a) {
   const char *mini = extras_trailer_thumb(c);
   GfxRect v = { x, y, NV_DETF_TR_W, NV_DETF_TR_VIDEO_H };
-  float radius = NV_DETF_TR_RADIUS / NV_DETF_TR_VIDEO_H;   // fracao do MENOR lado
+  float radius = NV_DETF_TR_RADIUS / NV_DETF_TR_VIDEO_H;   // a fraction of the SMALLER side
   GLuint tex = (mini && mini[0]) ? tex_get_width(mini, NV_DETF_TR_W) : 0;
 
   if (tex) {
@@ -2088,7 +2073,7 @@ static void drawTrailer(float x, float y, int c, float a) {
     gfx_color(v, radius, 0.13f, 0.13f, 0.13f, a);
   }
 
-  // Selo de play: disco escuro e o triangulo por cima, centrados na miniatura.
+  // The play badge: a dark disc with the triangle over it, centred on the thumbnail.
   { float d = NV_DETF_TR_PLAY_D;
     GfxRect disk = { x + (NV_DETF_TR_W - d) * 0.5f,
                       y + (NV_DETF_TR_VIDEO_H - d) * 0.5f, d, d };
@@ -2104,16 +2089,16 @@ static void drawTrailer(float x, float y, int c, float a) {
     txt_draw_alpha(lt, x, y + NV_DETF_TR_KIND_DY, a * 0.9f); }
 }
 
-// --- tabela "Detalhes do Filme" ---------------------------------------------
+// --- the "Film Details" table -----------------------------------------------
 //
-// Duas colunas: chave em cinza a esquerda, valor em branco numa coluna FIXA.
-// A coluna do valor nao segue a largura da chave — se seguisse, cada linha
-// comecaria num x diferente e a tabela serrilharia. Divisoria de 1px sob cada
-// linha menos a ultima, como na referencia.
+// Two columns: the key in grey on the left, the value in white in a FIXED column.
+// The value's column does not follow the key's width — if it did, every row would start
+// at a different x and the table would jag. A 1px divider under every row but the last,
+// as in the reference.
 //
-// Recebe `f` so para saber se a secao esta focada: a tabela nao tem item a
-// item, entao o foco nela e a propria secao, e o realce e sutil de proposito —
-// nao ha o que escolher aqui, so o que ler.
+// It takes `f` only to know whether the section is focused: the table has no per-item
+// focus, so the focus on it is the section itself, and the highlight is deliberately
+// subtle —
 static void drawDetails(float x, float y, float f, float a) {
   LineDet l[NV_DETF_DET_MAXL];
   int n = buildDetails(l, NV_DETF_DET_MAXL), i;
@@ -2141,14 +2126,14 @@ static void drawCast(float x, float y, int c, float f, float a) {
     if (ci->cast[c].photo[0]) photo = ci->cast[c].photo;
   }
   if (ci && ci->nCast > 0 && c >= ci->nCast) return;
-  // SEM ELENCO NAO SE INVENTA ELENCO. Aqui havia uma reserva cravada
-  // (`ELENCO[c % N_ELENCO]`) que preenchia a fileira com o elenco de
-  // "Shrinking" — e o resultado era o Homem-Aranha creditando Jason Segel e
-  // Harrison Ford, com cara de dado real. Mesmo defeito do "14" que estava
-  // cravado em descoberta.c: valor de demonstracao exibido como informacao.
+  // WITH NO CAST, DO NOT INVENT A CAST. There used to be a hard-coded fallback here
+  // (`CAST[c % N_CAST]`) that filled the row with the cast of "Shrinking" — and the
+  // result was Spider-Man crediting Jason Segel and Harrison Ford, looking like real
+  // data. The same defect as the "14" hard-coded in discover.c: a demo value shown as
+  // information.
   //
-  // A fileira nem chega aqui sem dado, porque secaoN devolve 0 (e focus_mover
-  // pula fileira vazia). Este `return` e a segunda tranca.
+  // The row does not even reach here with no data, because sectionN returns 0 (and
+  // focus_move skips an empty row). This `return` is the second lock.
   if (!name || !name[0]) return;
 
   GfxRect av = { x, y, NV_DETP_EL_AVATAR, NV_DETP_EL_AVATAR };
@@ -2163,8 +2148,8 @@ static void drawCast(float x, float y, int c, float f, float a) {
     gfx_rect(av, t2, GFX_CARD, 0, 0, 0, 0.5f, 0, 0, 0, a);
     gfx_tex_aspect_current = 0.0f;
   } else {
-    // Sem foto, a inicial sobre #222 (#303030 com foco) — e o que o web faz
-    // com `.movie-cast-avatar-fallback`.
+    // With no photo, the initial over #222 (#303030 with focus) — which is what the
+    // web app does with `.movie-cast-avatar-fallback`.
     float luma = 0.133f + 0.055f * f;
     gfx_color(av, 0.5f, luma, luma, luma, a);
     char start[5] = {0};
@@ -2186,58 +2171,56 @@ static void drawCast(float x, float y, int c, float f, float a) {
   }
 }
 
-// Aba "Avaliacoes". No web (metaDetailsScreen.js:3699) sao dois cartoes lado a
-// lado, IMDb e TMDB: .movie-rating-card de 160x120, raio 14, fundo
-// rgba(18,23,31,.9) com borda de 1px a 16%, logo de 56x28 em cima e o valor em
-// 34/800 embaixo; quando o dado falta o cartao mostra "-".
+// The "Ratings" tab. In the web app (metaDetailsScreen.js:3699) these are two cards
+// side by side, IMDb and TMDB: a .movie-rating-card of 160x120, radius 14, background
+// rgba(18,23,31,.9) with a 1px border at 16%, a 56x28 logo on top and the value in
+// 34/800 below; when the data is missing the card shows "-".
 //
-// DIVERGENCIA ANOTADA: em SERIE o web troca isto por um painel de avaliacoes
-// POR EPISODIO (renderSeriesRatingsPanel), com seletor de temporada. Este port
-// nao tem nota por episodio em fonte nenhuma — o Cinemeta nao devolve — entao
-// serie mostra os mesmos dois cartoes do filme. Nao e a tela do web; e o que o
-// dado permite, e mostrar dois cartoes certos e melhor que uma grade vazia.
+// DIVERGENCE NOTED: on a SERIES the web app swaps this for a PER-EPISODE ratings panel
+// (renderSeriesRatingsPanel), with a season selector. This port has no per-episode
+// score from any source — Cinemeta does not return one — so a series shows the same
+// two cards as a film. It is not the web app's screen; it is what the data allows, and
+// showing two correct cards is better than an empty grid.
 #define RATING_CARD_W  160.0f
 #define RATING_CARD_H  120.0f
 #define RATING_CARD_GAP 16.0f
-// Contorno de 1px a 16%, em quatro faixas: nao ha helper de borda no gfx e
-// este mesmo desenho serve o cartao de nota e o de comentario.
-// `raio` em PIXEIS; a conversao para a fracao do menor lado que o gfx espera e
-// feita aqui. Passar 14 direto (o raio do CSS) fazia o SDF saturar e o cartao
-// saia de canto reto — o valor do gfx e fracao, nao pixel.
-// RAIO DE CARTAZ, em fracao do menor lado — o SDF do shader e normalizado.
+// A 1px outline at 16%, in four bands: there is no border helper in gfx and this same
+// drawing serves the score card and the comment card.
+// `radius` in PIXELS; the conversion to the fraction of the smaller side that gfx
+// expects is done here. Passing 14 directly (the CSS radius) made the SDF saturate and
+// the card came out with square corners — gfx's value is a fraction, not a pixel.
+// A POSTER RADIUS, as a fraction of the smaller side — the shader's SDF is normalised.
 //
-// Existe porque cinco pontos deste arquivo faziam `NV_RAIO_CARD / largura`, e
-// NV_RAIO_CARD JA E UMA FRACAO (0,055). Dividir de novo pela largura dava
-// ~0,0003, ou seja canto reto: era por isso que os cartazes de "Recomendações"
-// e as fotos da filmografia saiam quadrados enquanto os da home eram
-// arredondados. O valor vem do mesmo `posterCardCornerRadiusDp` da home, para
-// as duas telas terem o mesmo canto.
+// It exists because five points in this file did `NV_RADIUS_CARD / width`, and
+// NV_RADIUS_CARD IS ALREADY A FRACTION (0.055). Dividing again by the width gave
+// ~0.0003, that is a square corner: it was why the "Recommendations" posters and the
+// filmography photos came out square while the home's were rounded. The value comes
+// from the home's own `posterCardCornerRadiusDp`, so the two screens have the same corner.
 static float radiusPoster(float w, float h) {
-  float smaller = w < h ? w : h;
-  if (smaller <= 0.0f) return NV_RADIUS_CARD;
-  return settings_radius_poster_px() / smaller;
+  (void)w;
+  if (h <= 0.0f) return NV_RADIUS_CARD;
+  return settings_radius_poster_px() / h;
 }
 
 static void frame(GfxRect r, float radius, float a) {
-  float smaller = r.w < r.h ? r.w : r.h;
-  radius = smaller > 0.0f ? radius / smaller : 0.0f;
-  // CINZA NEUTRO, o mesmo #2D2D2D das pilulas de temporada e do resto dos
-  // componentes. O azul-escuro que estava aqui (#12171F) era o unico tom da
-  // familia nesta tela: o cartao de comentario lia como peca de outro app.
+  radius = r.h > 0.0f ? radius / r.h : 0.0f;
+  // A NEUTRAL GREY, the same #2D2D2D as the season pills and the rest of the
+  // components. The dark blue that was here (#12171F) was the only tone of its family
+  // on this screen: the comment card read as a piece from another app.
   gfx_color(r, radius, 0.176f, 0.176f, 0.176f, 0.94f * a);
-  // A BORDA SEGUE O CANTO. Eram QUATRO RETANGULOS RETOS de 1 px, um por lado —
-  // eles cruzavam por fora do arredondamento e desenhavam bico nos quatro
-  // cantos, que e o que o dono viu como "borda nao arredondada". GFX_ANEL usa o
-  // mesmo SDF do preenchimento, entao o traco acompanha o raio.
-  gfx_rect(r, 0, GFX_RING, 0, 1.0f / (smaller > 0.0f ? smaller : 1.0f), 0, radius,
+  // THE BORDER FOLLOWS THE CORNER. They used to be FOUR STRAIGHT 1 px RECTANGLES, one
+  // per side — they crossed outside the rounding and drew a spike at all four corners,
+  // which is what the owner saw as "the border isn't rounded". GFX_RING uses the same
+  // SDF as the fill, so the stroke follows the radius.
+  gfx_rect(r, 0, GFX_RING, 0, r.h > 0.0f ? 1.0f / r.h : 0.0f, 0, radius,
            1, 1, 1, 0.14f * a);
 }
 
-// Cartao de nota: a MARCA em cima e o valor embaixo, como o .movie-rating-card
-// do web (logo 56x28, valor 34/800). As marcas sao os proprios arquivos do app
-// web convertidos para PNG em art/marcas — desenhar um retangulo colorido com
-// as iniciais, que era o que estava aqui, fica com cara de esboco ao lado de
-// componentes que usam arte de verdade.
+// The score card: the BRAND on top and the value below, like the web app's
+// .movie-rating-card (a 56x28 logo, the value 34/800). The brands are the web app's own
+// files converted to PNG in art/brands — drawing a coloured rectangle with the
+// initials, which is what used to be here, looks like a sketch beside components that
+// use real art.
 static void cardScore(float x, float y, const char *brand, const char *value,
                        float a) {
   GfxRect card = { x, y, RATING_CARD_W, RATING_CARD_H };
@@ -2255,9 +2238,9 @@ static void cardScore(float x, float y, const char *brand, const char *value,
       w = hLogo * ap;
       if (w > 96.0f) { w = 96.0f; hLogo = w / ap; }
       { GfxRect rl = { x + (RATING_CARD_W - w) * 0.5f, yb, w, hLogo };
-        // GFX_CARD e nao GFX_TEXTO: o modo de texto pinta a forma com a COR
-        // dada e joga fora o RGB da textura — o logo do IMDb sairia como uma
-        // silhueta branca. Aqui a marca tem de manter a cor dela.
+        // GFX_CARD and not GFX_TEXT: the text mode paints the shape in the GIVEN
+        // COLOUR and throws away the texture's RGB — the IMDb logo would come out as a
+        // white silhouette. Here the mark has to keep its own colour.
         gfx_tex_aspect_current = 0.0f;
         gfx_rect(rl, t, GFX_CARD, 0, 0, 0, 0.0f, 0, 0, 0, a); }
     }
@@ -2265,14 +2248,14 @@ static void cardScore(float x, float y, const char *brand, const char *value,
   }
 }
 
-// A FILEIRA de notas, na ordem do web: trakt, imdb, tmdb, tomatoes, audience,
-// metacritic, letterboxd. So entra a fonte que TEM nota — o web faz o mesmo
-// (`.filter(([,,value]) => value != null)`), e uma fileira de "-" nao informa
-// nada. IMDb vem do catalogo quando o mdbList nao respondeu por ele.
-// PASTILHA DE NOTA DE EPISODIO. As cores e as faixas sao as do web
-// (ratingToneClass, metaDetailsScreen.js:912, e as regras
-// .series-episode-rating-chip.*): >=9 excelente, >=8 otimo, >=7.5 bom,
-// >=7 misto, >=6 ruim, >0 pessimo. O numero e a nota do Trakt, nao do IMDb.
+// THE ROW of scores, in the web app's order: trakt, imdb, tmdb, tomatoes, audience,
+// metacritic, letterboxd. Only a source that HAS a score goes in — the web app does the
+// same (`.filter(([,,value]) => value != null)`), and a row of "-" says nothing. IMDb
+// comes from the catalogue when mdbList did not answer for it.
+// AN EPISODE'S SCORE CHIP. The colours and the bands are the web app's
+// (ratingToneClass, metaDetailsScreen.js:912, and the .series-episode-rating-chip.*
+// rules): >=9 excellent, >=8 great, >=7.5 good, >=7 mixed, >=6 poor, >0 awful. The
+// number is the Trakt score, not the IMDb one.
 static void colorOfScore(int scoreDec, float *r, float *g, float *b, float *tx) {
   float rr, gg, bb, t;
   if      (scoreDec >= 90) { rr=0.078f; gg=0.643f; bb=0.302f; t=0.97f; }  /* #14a44d */
@@ -2291,9 +2274,9 @@ static void colorOfScore(int scoreDec, float *r, float *g, float *b, float *tx) 
 #define RAT_TEMP_H   38.0f
 #define RAT_TEMP_GAP 10.0f
 
-// Painel de SERIE: fileira de temporadas e a grade de pastilhas por episodio.
-// E o renderSeriesRatingsPanel do web, que ate agora nao tinha fonte aqui — a
-// aba de serie caia nos mesmos cartoes do filme.
+// A SERIES' panel: the season row and the grid of per-episode chips.
+// It is the web app's renderSeriesRatingsPanel, which until now had no source here —
+// the series tab fell back to the same cards as the film.
 static void drawScoresEpisode(float x, float y, float a) {
   int nt = extras_n_seasons(), t, i, ne;
   if (ratTemp >= nt) ratTemp = 0;
@@ -2302,7 +2285,7 @@ static void drawScoresEpisode(float x, float y, float a) {
     float bx = x + t * (58.0f + RAT_TEMP_GAP);
     GfxRect r = { bx, y, 58.0f, RAT_TEMP_H };
     int sel = (t == ratTemp);
-    snprintf(rot, sizeof rot, "T%d", extras_season_number(t));
+    snprintf(rot, sizeof rot, "S%d", extras_season_number(t));
     gfx_color(r, 0.5f, 1, 1, 1, (sel ? 0.28f : 0.14f) * a);
     { TxtLine l = txt_line(TXT_DET_META2, rot, 241, 247, 254, 255);
       txt_draw_alpha(l, bx + (58.0f - l.w) * 0.5f,
@@ -2322,9 +2305,9 @@ static void drawScoresEpisode(float x, float y, float a) {
       snprintf(ep, sizeof ep, "E%d", extras_ep_number(ratTemp, i));
       if (nd > 0) snprintf(nv, sizeof nv, "%.1f", nd / 10.0f);
       else        snprintf(nv, sizeof nv, "-");
-      // 14/700 no rotulo e 28/800 no valor, do web
-      // (.series-episode-rating-ep e .series-episode-rating-val). TXT_TITULO3 e
-      // 48 e estourava a pastilha de 62 — o "E1" era empurrado para fora dela.
+      // 14/700 on the label and 28/800 on the value, from the web app
+      // (.series-episode-rating-ep and .series-episode-rating-val). TXT_TITLE3 is 48
+      // and overflowed the 62 chip — the "E1" was pushed out of it.
       { int c = (int)(tx * 255.0f);
         TxtLine le = txt_line(TXT_MINI, ep, c, c, c, 255);
         TxtLine lv = txt_line(TXT_ROW_TITLE, nv, c, c, c, 255);
@@ -2340,8 +2323,8 @@ static void drawRatings(float x, float y, float a) {
   for (i = 0; i < EX_NSOURCES; i++) {
     int v = extras_score(i);
     char txt[8];
-    // Sem mdbList o IMDb ainda vem do catalogo, que guarda 0..100; no vetor a
-    // escala e "cru x 10", e para o imdb o cru e 0..10.
+    // Without mdbList the IMDb score still comes from the catalogue, which stores
+    // 0..100; in the array the scale is "raw x 10", and for imdb the raw is 0..10.
     if (i == EX_IMDB && !v) v = scoreOf(idx);
     if (!v) continue;
     if (extras_source_percentual(i))
@@ -2354,23 +2337,24 @@ static void drawRatings(float x, float y, float a) {
   }
 }
 
-// Aba "Mais como este": /related do Trakt. Uma coluna de titulos com o ano, e
-// nao os posteres do web — o related do Trakt devolve identificador e nome, e
-// buscar poster para doze titulos so para pintar esta aba custaria doze
-// pedidos de rede a cada abertura. O que a aba precisa responder e "o que mais
-// se parece com isto", e o nome responde.
-// "Mais como este" em CARTAZES, e nao em lista de texto: e assim que o web
-// mostra (renderPreviewRail) e e o que o dono pediu ao ver a lista crua. O
-// poster vem do proprio Trakt, com `extended=images` no /related — buscar arte
-// noutro servico seria um pedido por titulo so para pintar esta aba.
-// "Mais como este" aparece por DOIS caminhos e eles nao sao o mesmo estado:
-//   SERIE  -> e uma ABA, desenhada no slot de SEC_ELENCO, com foco proprio
-//             (`relFoco`), porque a fileira do elenco tem outra contagem.
-//   FILME  -> e uma SECAO propria, SEC_RELACIONADOS, e quem manda e `foco.coluna`.
+// The "More like this" tab: Trakt's /related. A column of titles with the year, and not
+// the web app's posters — Trakt's related returns an identifier and a name, and
+// fetching a poster for twelve titles just to paint this tab would cost twelve network
+// requests on every opening. What the tab has to answer is "what else is like this",
+// and the name answers it.
+// "More like this" in POSTERS, and not as a text list: it is how the web app shows it
+// (renderPreviewRail) and it is what the owner asked for on seeing the raw list. The
+// poster comes from Trakt itself, with `extended=images` on /related — fetching art
+// from another service would be one request per title just to paint this tab.
+// "More like this" appears by TWO routes and they are not the same state:
+//   SERIES -> it is a TAB, drawn in the SEC_CAST slot, with its own focus
+//             (`relFocus`), because the cast row has a different count.
+//   FILM   -> it is a SECTION of its own, SEC_RELATED, and what rules is `focus.column`.
 //
-// So o primeiro caso estava tratado. No filme a fileira RECEBIA foco (secaoN
-// devolve a contagem certa) mas nada acendia e o OK nao respondia — parecia que
-// a secao inteira nao existia para o D-pad. Este par resolve os dois de uma vez.
+// Only the first case was handled. On a film the row DID take focus (sectionN returns
+// the right count) but nothing lit up and OK did not respond — it looked as though the
+// whole section did not exist as far as the D-pad was concerned. This pair solves both
+// at once.
 static int relInList(void) {
   return focus.row == SEC_CAST || focus.row == SEC_RELATED;
 }
@@ -2414,9 +2398,9 @@ static void drawRelated(float x, float y, float a) {
   }
 }
 
-// Aba da COLECAO: as partes da franquia, na ordem que o TMDB devolve. Mesma
-// lista vertical de "Mais como este" — o que muda e a fonte e o cabecalho com
-// o nome da colecao.
+// The COLLECTION tab: the franchise's parts, in the order TMDB returns them. The same
+// vertical list as "More like this" — what changes is the source and the header with
+// the collection's name.
 static void drawCollection(float x, float y, float a) {
   int n = extras_n_collection(), i;
   float y0 = y;
@@ -2445,46 +2429,46 @@ static void drawCollection(float x, float y, float a) {
   }
 }
 
-// Aba "Comentarios": /comments/likes do Trakt, os mais curtidos primeiro. Uma
-// linha com o usuario e as curtidas, e o texto quebrado embaixo.
-// Comentarios em CARTOES lado a lado, com a mesma moldura dos cartoes de nota,
-// para nao ficarem como texto solto no meio de uma tela feita de componentes.
-// Cartao de comentario NO FORMATO DA REFERENCIA. MEDIDO na TCL: 722x466, vao
-// de 25, canto ~20. O que havia aqui era 560x240 com o nome e as curtidas na
-// MESMA linha — o cartao cabia tres linhas de texto e cortava o resto, e a nota
-// de quem comentou nao aparecia.
+// The "Comments" tab: Trakt's /comments/likes, the most-liked first. One line with the
+// user and the likes, and the text wrapped below.
+// Comments in CARDS side by side, with the same frame as the score cards, so they do
+// not sit as loose text in the middle of a screen made of components.
+// The comment card IN THE REFERENCE'S FORMAT. MEASURED on the TCL: 722x466, a gap of
+// 25, a corner of ~20. What was here was 560x240 with the name and the likes on the
+// SAME line — the card fitted three lines of text and cut the rest, and the
+// commenter's score did not appear.
 //
-// A referencia separa em tres blocos, e a ordem importa: NOME sozinho no topo,
-// TEXTO no meio ocupando o que sobra, e um rodape "10/10  17 curtidas" colado
-// na base. Ler o nome, decidir se interessa e so entao ler — nessa ordem.
-// Cabecalho da secao, como na referencia: o WORDMARK do trakt, "Comentários" ao
-// lado, "Avaliações do Trakt" abaixo, e o seletor "Série | Episódio".
+// The reference splits it into three blocks, and the order matters: the NAME alone at
+// the top, the TEXT in the middle taking what is left, and a footer "10/10  17 likes"
+// against the base. Read the name, decide whether it interests you and only then read
+// — in that order.
+// The section's header, as in the reference: the trakt WORDMARK, "Comments" beside it,
+// "Trakt ratings" below, and the "Series | Episode" selector.
 //
-// Nada disto existia — os cartoes apareciam soltos, sem dizer de onde vinham
-// nem que havia dois conjuntos. O seletor nao e enfeite: comentario de EPISODIO
-// e outra consulta no Trakt, e sem ele metade do conteudo era inalcancavel.
+// None of this existed — the cards appeared loose, saying neither where they came from
+// nor that there were two sets. The selector is not decoration: an EPISODE's comments
+// are a different Trakt query, and without it half the content was unreachable.
 #define COM_PILL_H    64.0f
-#define COM_PILL_DFLT  34.0f
-// Altura do cabecalho, medida do mesmo jeito que cabecalhoComentarios a
-// percorre: 46 do titulo + 44 do subtitulo + as pilulas (so em serie) + 28 de
-// respiro. Vem de uma funcao e nao de uma constante justamente porque a de
-// filme e menor — cravar um numero so faria uma das duas ficar errada.
-// BASE DA ABA ATIVA na serie: o y ABSOLUTO onde o conteudo do slot de
-// SEC_ELENCO termina.
+#define COM_PILL_PAD  34.0f
+// The header's height, measured the same way headerComments walks it: 46 for the
+// title + 44 for the subtitle + the pills (on a series only) + 28 of breathing room. It
+// comes from a function and not from a constant precisely because the film's is smaller
+// — hard-coding a single number would make one of the two wrong.
+// THE ACTIVE TAB'S BASE on a series: the ABSOLUTE y where the SEC_CAST slot's content ends.
 //
-// Existe porque esse slot desenha coisas de alturas MUITO diferentes conforme a
-// aba: o elenco tem ~230, mas "Mais como este" tem cartaz de 318 mais o rotulo.
-// A secao do Trakt era empilhada a partir da altura do ELENCO sempre, entao ao
-// escolher "Recomendações" os cartazes desciam por cima dela. Nao da para usar
-// uma altura so: usar a maior afastaria o Trakt do elenco sem motivo, e usar a
-// menor e o defeito que o dono viu.
+// It exists because that slot draws things of VERY different heights depending on the
+// tab: the cast is ~230, but "More like this" has a 318 poster plus the label. The
+// Trakt section was always stacked from the CAST's height, so choosing
+// "Recommendations" sent the posters down on top of it. A single height will not do:
+// using the largest would push Trakt away from the cast for no reason, and using the
+// smallest is the defect the owner saw.
 static float baseOfTabActive(void) {
-  // Elenco e desenhado no proprio NV_DETP_EL_Y; as outras abas em EL_Y + 40
-  // (o `yAba` de desenhaSecao). Sao dois pontos de partida diferentes.
+  // The cast is drawn at NV_DETP_EL_Y itself; the other tabs at EL_Y + 40 (drawSection's
+  // `yTab`). They are two different starting points.
   switch (tabIdOf(tabInfo)) {
     case TAB_RELATED:
       return NV_DETP_EL_Y + 40.0f + REL_CARD_H + 12.0f
-           + NV_DETP_EL_LINE * 2.0f;          // titulo + ano sob o cartaz
+           + NV_DETP_EL_LINE * 2.0f;          // title + year under the poster
     case TAB_RATINGS:
       if (isSeries() && extras_n_seasons() > 0)
         return NV_DETP_EL_Y + 40.0f + RAT_TEMP_H + 18.0f + RAT_PIL_H;
@@ -2504,16 +2488,16 @@ static float heightHeaderComments(void) {
   return 46.0f + 44.0f + (isSeries() ? COM_PILL_H : 0.0f) + 28.0f;
 }
 
-// Rotulos do seletor, em escopo de arquivo: a contagem de colunas e a largura
-// de item precisam deles fora do desenho.
-static const char *COM_ROT[2] = { "Series", "Episode" };
+// The selector's labels, at file scope: the column count and the item width need them
+// outside the drawing.
+static const char *COM_LABEL[2] = { "Series", "Episode" };
 
-// A fileira de comentarios tem DUAS naturezas em sequencia: as pilulas do
-// seletor (so em serie) e, depois delas, os CARTOES.
+// The comments row has TWO natures in sequence: the selector's pills (on a series only)
+// and, after them, the CARDS.
 //
-// Os cartoes precisavam virar colunas: eles eram desenhados tres e ponto, sem
-// foco, entao os outros cinco que o Trakt manda (EX_COMENT_MAX = 8) eram
-// inalcancaveis — foi o "nao tava dando pra navegar nos comentarios".
+// The cards had to become columns: they were drawn three and that was that, with no
+// focus, so the other five Trakt sends (EX_COMMENT_MAX = 8) were unreachable — it was
+// the "I couldn't navigate the comments".
 static int nPillsCom(void) { return isSeries() ? 2 : 0; }
 static int nCardsCom(void) {
   int n = (isSeries() && commentEp) ? extras_n_comments_ep()
@@ -2521,40 +2505,40 @@ static int nCardsCom(void) {
   return n > EX_COMMENT_MAX ? EX_COMMENT_MAX : n;
 }
 
-static float widthPilulaCom(const char *rot) {
+static float widthPillCom(const char *rot) {
   TxtLine l = txt_line(TXT_PLR_BODY, rot, 255, 255, 255, 255);
-  return l.w + COM_PILL_DFLT * 2;
+  return l.w + COM_PILL_PAD * 2;
 }
 
-// Desenha o cabecalho e devolve o Y onde os CARTOES comecam.
+// Draws the header and returns the Y where the CARDS start.
 static float headerComments(float x, float y, float a) {
   float yy = y;
-  // Wordmark. A marca ja esta em art/marcas/trakt.png, a mesma que a fileira de
-  // notas usa — nao ha texto "trakt" desenhado com fonte, porque o logotipo tem
-  // desenho proprio e escrever a palavra sairia diferente da referencia.
+  // The wordmark. The mark is already in art/brands/trakt.png, the same one the scores
+  // row uses — there is no "trakt" text drawn with a font, because the logotype has a
+  // design of its own and writing the word would come out different from the reference.
   //
-  // GFX_CARD e nao GFX_MARCA/GFX_TEXTO, pelo mesmo motivo do cartao de nota: os
-  // modos de forma pintam com a cor dada e descartam o RGB da textura, e o
-  // wordmark viraria uma silhueta. gfx_icone tambem nao serve — ele monta o
-  // caminho a partir de art/icones/, e a marca mora em art/marcas/.
+  // GFX_CARD and not GFX_BRAND/GFX_TEXT, for the same reason as the score card: the
+  // shape modes paint with the given colour and discard the texture's RGB, and the
+  // wordmark would become a silhouette. gfx_icon will not do either — it builds the
+  // path from art/icons/, and the mark lives in art/brands/.
   //
-  // art/marcas/trakt_wordmark.png (282x106, com alfa) — o wordmark de verdade,
-  // fornecido pelo dono. Antes eu desenhava aqui o LOGOMARK circular
-  // (trakt.png, 96x96) esticado ate a largura de um wordmark, e saia um selo
-  // vermelho deformado que nao era nem uma coisa nem outra.
+  // art/brands/trakt_wordmark.png (282x106, with alpha) — the real wordmark, supplied
+  // by the owner. Before, I drew the circular LOGOMARK here (trakt.png, 96x96)
+  // stretched to a wordmark's width, and out came a deformed red badge that was neither
+  // one thing nor the other.
   //
-  // GFX_MARCA, e nao GFX_CARD: o modo de cartao IGNORA O ALFA da textura e
-  // pinta o retangulo inteiro, entao saia uma CAIXA atras das letras — com o
-  // arquivo antigo (captura de tela, fundo chapado) e com o vetorial tambem,
-  // porque ali o fundo e transparente e o RGB por baixo e preto.
+  // GFX_BRAND, and not GFX_CARD: the card mode IGNORES THE TEXTURE'S ALPHA and paints
+  // the whole rectangle, so a BOX came out behind the letters — with the old file (a
+  // screenshot, flat background) and with the vector one too, because there the
+  // background is transparent and the RGB underneath is black.
   //
-  // GFX_MARCA existe exatamente para isto: a forma vem do ALFA e a cor vem de
-  // uCor. Serve porque o wordmark e de UMA COR SO. Nao serviria para o selo do
-  // IMDb, que e amarelo e preto e precisa do RGB do arquivo — e por isso o
-  // cartao de nota continua em GFX_CARD.
+  // GFX_BRAND exists for exactly this: the shape comes from the ALPHA and the colour
+  // from uColor. It works because the wordmark is a SINGLE COLOUR. It would not work for
+  // the IMDb badge, which is yellow and black and needs the file's RGB — which is why
+  // the score card stays on GFX_CARD.
   //
-  // A altura manda e a largura sai do aspecto REAL do arquivo — cravar a
-  // largura deformaria o desenho se a arte for trocada.
+  // The height rules and the width comes from the file's REAL aspect ratio — hard-coding
+  // the width would deform the drawing if the art were swapped.
   float widthBrand = 0.0f;
   { const char *cam = extras_path_brand_name("trakt_wordmark");
     GLuint t = tex_get_width(cam, 160.0f);
@@ -2568,43 +2552,41 @@ static float headerComments(float x, float y, float a) {
         gfx_rect(m, t, GFX_BRAND, 0, 0, 0, 0.0f, 1, 1, 1, a); }
       widthBrand += 14.0f;
     } }
-  // Sem a palavra "Comentários" ao lado do wordmark: o logo do trakt ja diz de
-  // quem sao, e o subtitulo logo abaixo ja diz o que sao. Eram tres rotulos
-  // para uma coisa so.
+  // No "Comments" word beside the wordmark: the trakt logo already says whose they are,
+  // and the subtitle just below already says what they are. It was three labels for one
+  // thing.
   (void)widthBrand;
   yy += 46.0f;
   { TxtLine ls = txt_line(TXT_DET_META2, "Trakt ratings", 179, 179, 179, 255);
     txt_draw_alpha(ls, x, yy, a * 0.95f); }
   yy += 44.0f;
 
-  // As duas pilulas. Em FILME so existe a da serie — nao ha episodio —, entao a
-  // fileira inteira some em vez de mostrar um controle morto.
+  // The two pills. On a FILM only the series' one exists — there is no episode — so the
+  // whole row disappears instead of showing a dead control.
   if (isSeries()) {
     float px = x;
     int k;
     int row = SEC_COMMENTS;
     for (k = 0; k < 2; k++) {
-      float w = widthPilulaCom(COM_ROT[k]);
+      float w = widthPillCom(COM_LABEL[k]);
       GfxRect r = { px, yy, w, COM_PILL_H };
-      // MEDIDO na referencia: a pilula ESCOLHIDA e BRANCA com texto escuro, e a
-      // outra e #2D2D2D com texto branco. E o oposto das pilulas de temporada,
-      // onde a escolhida continua escura e so o texto embranquece — sao dois
-      // componentes com regras proprias, e eu tinha aplicado a regra errada
-      // aqui.
+      // MEASURED against the reference: the CHOSEN pill is WHITE with dark text, and the
+      // other is #2D2D2D with white text. It is the opposite of the season pills, where
+      // the chosen one stays dark and only the text whitens — they are two components
+      // with rules of their own, and I had applied the wrong rule here.
       //
-      // Por isso o FOCO nao pode ser a inversao: a inversao ja e o estado
-      // "escolhida". Fica o anel branco, que e a outra linguagem de foco do app
-      // e nao colide com nada.
+      // That is why FOCUS cannot be the inversion: the inversion is already the "chosen"
+      // state. It gets the white ring, which is the app's other focus language and
+      // collides with nothing.
       float f = (level >= 1 && focus.row == row && focus.column == k)
                 ? animFocus[row][k] : 0.0f;
       int sel = (commentEp == k);
-      // FOCO: anel branco na pilula ESCURA, CRESCIMENTO na pilula branca.
+      // FOCUS: a white ring on the DARK pill, GROWTH on the white one.
       //
-      // Anel branco em volta de preenchimento branco deixa uma folga escura
-      // entre os dois, e essa folga e o "halo estranho" — dois brancos
-      // separados por uma linha preta, que nao le como foco nem como selecao.
-      // Na pilula ja invertida o foco se marca pelo TAMANHO, que e a mesma
-      // linguagem medida nos botoes circulares do heroi.
+      // A white ring around a white fill leaves a dark gap between the two, and that gap
+      // is the "odd halo" — two whites separated by a black line, which reads neither as
+      // focus nor as selection. On the already-inverted pill the focus is marked by
+      // SIZE, which is the same language measured on the hero's circular buttons.
       { float grows = sel ? (1.0f + 0.07f * f) : 1.0f;
         float dw = r.w * (grows - 1.0f), dh = r.h * (grows - 1.0f);
         GfxRect rc = { r.x - dw * 0.5f, r.y - dh * 0.5f, r.w + dw, r.h + dh };
@@ -2618,7 +2600,7 @@ static float headerComments(float x, float y, float a) {
                  1, 1, 1, f * a);
       }
       { int color = sel ? 17 : 255;
-        TxtLine l = txt_line(TXT_PLR_BODY, COM_ROT[k], color, color, color, 255);
+        TxtLine l = txt_line(TXT_PLR_BODY, COM_LABEL[k], color, color, color, 255);
         txt_weight(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a, 0.5f); }
       px += w + COM_PILL_GAP;
     }
@@ -2632,8 +2614,8 @@ static void drawComments(float x, float y, float a) {
   int n = ofSeries ? extras_n_comments() : extras_n_comments_ep();
   int i;
   y = headerComments(x, y, a);
-  // Carregando e "nao ha" sao a MESMA lista vazia; sem separar os dois o
-  // episodio parecia nunca ter comentario nenhum.
+  // Loading and "there are none" are the SAME empty list; without separating the two
+  // the episode looked as though it never had a single comment.
   if (n == 0) {
     const char *msg = (!ofSeries && extras_comments_ep_loading())
                     ? "Loading comments…"
@@ -2642,27 +2624,27 @@ static void drawComments(float x, float y, float a) {
     txt_draw_alpha(l, x, y, a * 0.9f);
     return;
   }
-  // TODOS os cartoes, nao tres: os outros que o Trakt manda ficavam
-  // inalcancaveis. Quem limita o que aparece e o recorte lateral abaixo, e quem
-  // traz os de fora da tela e a rolagem horizontal da fileira.
+  // ALL the cards, not three: the others Trakt sends were unreachable. What limits
+  // what appears is the horizontal clip below, and what brings in the off-screen ones
+  // is the row's horizontal scroll.
   for (i = 0; i < n; i++) {
     float cx = x + i * (COM_CARD_W + COM_CARD_GAP) - scrollSec[SEC_COMMENTS];
     GfxRect card = { cx, y, COM_CARD_W, COM_CARD_H };
     int foc = (level >= 1 && focus.row == SEC_COMMENTS &&
                focus.column - nPillsCom() == i);
     float px, width;
-    // Fora da tela dos dois lados: nem desenha. Sao ate 8 cartoes de 722 px, e
-    // pintar os que ninguem ve custa preenchimento num aparelho onde ele e o
-    // recurso escasso.
+    // Off screen on either side: do not even draw it. There are up to 8 cards of 722
+    // px, and painting the ones nobody sees costs fill on a device where fill is the
+    // scarce resource.
     if (cx > NV_SCREEN_W || cx + COM_CARD_W < 0.0f) continue;
     char footer[64];
-    px = cx + COM_DFLT; width = COM_CARD_W - COM_DFLT * 2;
+    px = cx + COM_PAD; width = COM_CARD_W - COM_PAD * 2;
     frame(card, 20.0f, a);
     if (foc) {
       GfxRect ring = { card.x - NV_RING_FOCUS, card.y - NV_RING_FOCUS,
                        card.w + NV_RING_FOCUS * 2, card.h + NV_RING_FOCUS * 2 };
-      // Raio EXTERNO = raio do cartao + espessura do anel, senao o canto do
-      // anel fica mais quadrado que o do cartao e as duas curvas descasam.
+      // The OUTER radius = the card's radius + the ring's thickness, otherwise the
+      // ring's corner is squarer than the card's and the two curves come apart.
       gfx_rect(ring, 0, GFX_RING, 0, NV_RING_FOCUS / ring.h, 0,
                (20.0f + NV_RING_FOCUS) / ring.h, 1, 1, 1, a);
     }
@@ -2671,15 +2653,14 @@ static void drawComments(float x, float y, float a) {
                                     ofSeries ? extras_comment_user(i)
                                             : extras_comment_ep_user(i),
                                     245, 248, 255, 255, width);
-      txt_draw_alpha(lu, px, y + COM_DFLT, a); }
+      txt_draw_alpha(lu, px, y + COM_PAD, a); }
 
-    // O texto para ANTES do rodape: sem o teto de linhas ele passava por cima
-    // das curtidas. 5 linhas e o que cabe entre o nome e o rodape com o leading
-    // de 34.
+    // The text stops BEFORE the footer: without the line ceiling it ran over the
+    // likes. 5 lines is what fits between the name and the footer at a leading of 34.
     txt_block(TXT_DET_META2, ofSeries ? extras_comment_text(i)
                                      : extras_comment_ep_text(i),
               200, 205, 214,
-              px, y + COM_DFLT + 46.0f, width, 34.0f, a * 0.95f, 5);
+              px, y + COM_PAD + 46.0f, width, 34.0f, a * 0.95f, 5);
 
     { int score = ofSeries ? extras_comment_score(i)
                          : extras_comment_ep_score(i);
@@ -2690,24 +2671,24 @@ static void drawComments(float x, float y, float a) {
       else
         snprintf(footer, sizeof footer, "%d likes", cur);
       { TxtLine lr = txt_line(TXT_CAPTION2, footer, 150, 154, 163, 255);
-        txt_draw_alpha(lr, px, y + COM_CARD_H - COM_DFLT - lr.h, a * 0.9f); } }
+        txt_draw_alpha(lr, px, y + COM_CARD_H - COM_PAD - lr.h, a * 0.9f); } }
   }
 }
 
 static void drawSection(int r, float a, Uint32 now) {
   int n = sectionN(r);
-  // Aba de informacao que nao seja "Criador e elenco": o web TROCA o conteudo
-  // da secao (avaliacoes por episodio, fileira de similares, trailer). Nenhum
-  // desses dados existe no catalogo nativo, e o web mostra exatamente esta
-  // linha quando o dado falta (`.series-insight-empty`).
+  // An information tab other than "Creator and cast": the web app SWAPS the section's
+  // content (per-episode ratings, a row of similar titles, a trailer). None of that
+  // data exists in the native catalogue, and the web app shows exactly this line when
+  // the data is missing (`.series-insight-empty`).
   //
-  // Trocar, e nao sobrepor: na primeira captura do aparelho a mensagem saia POR
-  // CIMA dos avatares do elenco, e as duas coisas ficavam ilegiveis.
+  // Swap, do not overlay: in the first capture from the device the message came out ON
+  // TOP of the cast's avatars, and both were illegible.
   { int tab = tabIdOf(tabInfo);
     float yTab = NV_DETP_EL_Y - scrollY + 40.0f;
     if (r == SEC_CAST && tab == TAB_RATINGS) {
-      // Serie com notas por episodio mostra o painel do web; o resto (filme, ou
-      // serie sem essa fonte) cai nos cartoes de nota.
+      // A series with per-episode scores shows the web app's panel; everything else (a
+      // film, or a series without that source) falls back to the score cards.
       if (isSeries() && extras_n_seasons() > 0)
         drawScoresEpisode(NV_DETP_X, yTab, a);
       else
@@ -2724,46 +2705,45 @@ static void drawSection(int r, float a, Uint32 now) {
       drawComments(NV_DETP_X, yTab, a); return;
     } }
   if (n <= 0) return;
-  // FILME le o layout empilhado; SERIE mantem as coordenadas medidas. Note que
-  // na serie o topo do GRUPO e o y de DESENHO sao numeros diferentes (o grupo
-  // de temporadas comeca em 1080 e a pilula e desenhada em 1160), por isso as
-  // duas constantes coexistem em vez de uma sair da outra.
+  // A FILM reads the stacked layout; a SERIES keeps the measured coordinates. Note that
+  // on a series the GROUP's top and the DRAWING y are different numbers (the seasons
+  // group starts at 1080 and the pill is drawn at 1160), which is why the two constants
+  // coexist rather than one deriving from the other.
   float y;
   if (!isSeries()) y = contentSec[r];
   else switch (r) {
     case SEC_SEASONS: y = NV_DETP_TEMP_Y; break;
     case SEC_EPISODES:  y = NV_DETP_EP_Y;   break;
     case SEC_TABS_INFO:  y = NV_DETP_TAB_Y;  break;
-    // A SECAO DO TRAKT E EMPILHADA, nao medida: ela vem DEPOIS do elenco e a
-    // altura do elenco varia (nome comprido quebra em duas linhas). O `default`
-    // abaixo mandava ela para NV_DETP_EL_Y, que e o y do PROPRIO elenco — por
-    // isso ela era desenhada por cima dos avatares.
+    // THE TRAKT SECTION IS STACKED, not measured: it comes AFTER the cast and the
+    // cast's height varies (a long name wraps onto two lines). The `default` below sent
+    // it to NV_DETP_EL_Y, which is the CAST's own y — which is why it was drawn on top
+    // of the avatars.
     //
-    // Consertar o recalcularLayout nao bastou: aquilo governa foco e rolagem, e
-    // este switch e quem escolhe onde DESENHAR. Eram dois numeros para o mesmo
-    // lugar, e so um deles tinha sido corrigido.
+    // Fixing recalcLayout was not enough: that governs focus and scrolling, and this
+    // switch is what chooses where to DRAW. They were two numbers for the same place,
+    // and only one of them had been corrected.
     case SEC_COMMENTS: y = contentSec[r]; break;
     default:             y = NV_DETP_EL_Y;   break;
   }
   y -= scrollY;
 
-  // TITULO DA SECAO ("Temporadas", "Elenco"), como a referencia. O port nao
-  // tinha cabecalho nenhum e as fileiras apareciam soltas, sem dizer o que
-  // eram. Fica ACIMA da fileira e some junto com ela na rolagem.
-  // So "Temporadas". A fileira de elenco ja e rotulada pela ABA acima dela
-  // ("Criador e elenco"), e um cabecalho "Elenco" logo abaixo dela dizia a
-  // mesma coisa duas vezes — na primeira tentativa os dois ainda se
-  // sobrepunham.
-  // Na SERIE so "Temporadas": a fileira de elenco ja e rotulada pela aba
-  // "Criador e elenco" logo acima, e um cabecalho "Elenco" abaixo dela dizia a
-  // mesma coisa duas vezes. No FILME nao ha abas, entao cada secao carrega o
-  // proprio nome — que e o que torna a pagina legivel sem a barra.
+  // THE SECTION TITLE ("Seasons", "Cast"), as in the reference. The port had no header
+  // at all and the rows appeared loose, without saying what they were. It sits ABOVE
+  // the row and disappears with it on scrolling.
+  // Only "Seasons". The cast row is already labelled by the TAB above it ("Creator and
+  // cast"), and a "Cast" header just below it said the same thing twice — on the first
+  // attempt the two even overlapped.
+  // On a SERIES only "Seasons": the cast row is already labelled by the "Creator and
+  // cast" tab just above, and a "Cast" header below it said the same thing twice. On a
+  // FILM there are no tabs, so each section carries its own name — which is what makes
+  // the page readable without the bar.
   //
-  // Na SERIE nao ha cabecalho NENHUM. Havia "Temporadas" acima da fileira de
-  // pilulas; a referencia no aparelho nao tem: a pilula "Temporada 1" ja diz o
-  // que a fileira e, e o rotulo acima dela repetia a palavra duas vezes em
-  // linhas seguidas. No FILME cada secao continua carregando o proprio nome,
-  // porque la nao existe a barra de abas para dizer o que e o que.
+  // On a SERIES there is NO header at all. There used to be "Seasons" above the row of
+  // pills; the reference on the device does not have it: the "Season 1" pill already
+  // says what the row is, and the label above it repeated the word twice on
+  // consecutive lines. On a FILM each section still carries its own name, because there
+  // is no tab bar there to say what is what.
   { const char *header = isSeries() ? NULL : headerOf(r);
     if (header) {
       TxtLine lc = txt_line(TXT_HEADLINE, header, 245, 248, 255, 255);
@@ -2796,8 +2776,8 @@ static void drawSection(int r, float a, Uint32 now) {
         break;
       }
       case SEC_TRAILERS: drawTrailer(x, y, c, a); break;
-      // Reaproveitam o desenho que ja servia as ABAS da serie: e o mesmo
-      // conteudo, so que agora numa secao propria em vez de atras de uma aba.
+      // They reuse the drawing that already served the series' TABS: it is the same
+      // content, only now in a section of its own instead of behind a tab.
       case SEC_RELATED: if (c == 0) drawRelated(NV_DETP_X, y, a); break;
       case SEC_COMMENTS:  drawComments(NV_DETP_X, y, a); break;
       case SEC_DETAILS: drawDetails(x, y, f, a); break;
@@ -2807,10 +2787,10 @@ static void drawSection(int r, float a, Uint32 now) {
 
 }
 
-// A estrutura da pagina aparece enquanto o Cinemeta responde. Nao entra em
-// secaoN(): esqueleto nao recebe foco nem inventa itens. Ele ocupa exatamente
-// as coordenadas finais de temporadas/episodios, de modo que a resposta apenas
-// preenche os blocos e nao desloca a pagina sob o controle remoto.
+// The page's structure appears while Cinemeta answers. It does not go into sectionN():
+// a skeleton takes no focus and invents no items. It occupies exactly the final
+// coordinates of the seasons/episodes, so the answer merely fills the blocks in and
+// does not shift the page under the remote control.
 static void drawSkeletonEpisodes(float a) {
   int c;
   float yt, ye;
@@ -2830,11 +2810,11 @@ static void drawSkeletonEpisodes(float a) {
     for (c = 0; c < 3; c++) {
       float x = NV_DETP_X + c * NV_DETP_EP_STEP;
       GfxRect card = { x, ye, NV_DETP_EP_W, NV_DETP_EP_H };
-      GfxRect badge = { x + NV_DETP_EP_DFLT, ye + NV_DETP_EP_BADGE_Y,
+      GfxRect badge = { x + NV_DETP_EP_PAD, ye + NV_DETP_EP_BADGE_Y,
                        108.0f, NV_DETP_EP_BADGE_H };
-      GfxRect title = { x + NV_DETP_EP_DFLT, ye + NV_DETP_EP_TITLE_Y,
+      GfxRect title = { x + NV_DETP_EP_PAD, ye + NV_DETP_EP_TITLE_Y,
                          292.0f, 25.0f };
-      GfxRect sin1 = { x + NV_DETP_EP_DFLT, ye + NV_DETP_EP_SIN_Y,
+      GfxRect sin1 = { x + NV_DETP_EP_PAD, ye + NV_DETP_EP_SIN_Y,
                        NV_DETP_EP_TEXT_W, 18.0f };
       GfxRect sin2 = { sin1.x, sin1.y + NV_DETP_EP_LD_SIN, 420.0f, 18.0f };
       gfx_color(card, NV_DETP_EP_RADIUS / NV_DETP_EP_H,
@@ -2847,8 +2827,8 @@ static void drawSkeletonEpisodes(float a) {
   }
 }
 
-// Mesma ideia para o ELENCO do filme: seis avatares e as duas linhas de texto
-// nas coordenadas finais, com o cabecalho "Elenco" no lugar dele.
+// The same idea for a film's CAST: six avatars and the two lines of text at the final
+// coordinates, with the "Cast" header in its place.
 static void drawSkeletonCast(float a) {
   if (!castLoading()) return;
   float y = contentSec[SEC_CAST] - scrollY;
@@ -2867,12 +2847,12 @@ static void drawSkeletonCast(float a) {
   }
 }
 
-// FICHA DA PESSOA — a tela que o web chama de castDetailScreen. Ocupa a tela
-// inteira sobre um fundo opaco, com a foto e a bio a esquerda e a filmografia
-// em cartoes de poster a direita. Nao ha layout medido do web para copiar aqui
-// (a tela do web e uma pagina rolavel de largura fluida), entao as medidas
-// seguem as que esta tela ja usa: gutter de 96, poster de 212x318, cartao com
-// o mesmo raio dos outros.
+// THE PERSON'S CARD — the screen the web app calls castDetailScreen. It fills the whole
+// screen over an opaque background, with the photo and the biography on the left and
+// the filmography in poster cards on the right. There is no measured web layout to copy
+// here (the web app's screen is a scrollable page of fluid width), so the measurements
+// follow the ones this screen already uses: a gutter of 96, a 212x318 poster, and a
+// card with the same radius as the others.
 
 static void drawPerson(float a) {
   GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
@@ -2945,9 +2925,9 @@ static void drawPerson(float a) {
     } }
 }
 
-// O retrato do diretor pertence ao detalhe, não ao hero da home. A foto do
-// TMDB entra sobre o backdrop com o mesmo tratamento editorial do renderer e
-// recua quando o documento rola; a arte horizontal continua sendo a base.
+// The director's portrait belongs to the detail screen, not to the home's hero. The
+// TMDB photo comes in over the backdrop with the same editorial treatment as the
+// renderer and recedes when the document scrolls; the horizontal art is still the base.
 static void drawDirectorDetail(const CatItem *ci, float a, float pg) {
   const char *photo;
   GLuint tex;
@@ -2956,15 +2936,15 @@ static void drawDirectorDetail(const CatItem *ci, float a, float pg) {
   director_request(ci->directing);
   photo = director_photo(ci->directing);
   if (!photo[0]) return;
-  // O retrato ocupa menos que um hero full-bleed, mas e exibido grande na TV.
-  // Pedir pelo tamanho da coluna evita ampliar um w500 borrado sem reservar
-  // os ~2K de uma capa horizontal.
+  // The portrait takes up less than a full-bleed hero, but it is shown large on the TV.
+  // Asking by the column's size avoids enlarging a blurred w500 without reserving the
+  // ~2K of a horizontal cover.
   tex = tex_get_width(photo, 960.0f);
   if (!tex) return;
-  // Caixa vertical real: a proporcao da foto fica sob responsabilidade do
-  // shader GFX_RETRATO, que ancora a imagem na direita e dissolve as bordas.
-  // A caixa mais alta deixa o rosto respirar e evita a aparencia de retrato
-  // comprimido dentro de um banner largo.
+  // A real vertical box: the photo's aspect ratio is the GFX_PORTRAIT shader's
+  // responsibility, and it anchors the image to the right and dissolves the edges.
+  // The taller box lets the face breathe and avoids the look of a portrait squashed
+  // inside a wide banner.
   r = (GfxRect){ 1080.0f, 0.0f, 840.0f, 930.0f };
   gfx_tex_aspect_current = tex_aspect(photo);
   gfx_rect(r, tex, GFX_PORTRAIT, 0, 0, 0, 0, 0, 0, 0,
@@ -2978,68 +2958,70 @@ void detail_draw(Uint32 now) {
 
   if (!detail_covers_screen()) {
     GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-    gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, s);   // #0d0d0d, o fundo do web
+    gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, s);   // #0d0d0d, the web app's background
   }
   gfx_no_crop();
 
-  // --- backdrop full-bleed --------------------------------------------------
-  // A tela de detalhe e uma imagem de 1920x1080 em (0,0) com a vinheta por cima;
-  // nao ha cartao, nem moldura, nem titulos vizinhos.
+  // --- full-bleed backdrop --------------------------------------------------
+  // The detail screen is a 1920x1080 image at (0,0) with the vignette over it; there is
+  // no card, no frame and no neighbouring titles.
   //
-  // O BACKDROP NAO CRESCE A PARTIR DO CARD. Era o ultimo resto do voo do app da
-  // Apple: o retangulo saia de item.rect e se abria ate a tela. O dono descreveu
-  // o comportamento certo — "so os posters descem e mantem o background, e o
-  // background e a arte do filme selecionado" — e voar o retangulo e o oposto
-  // disso: a arte entra pequena e cresce, em vez de ja estar la.
+  // THE BACKDROP DOES NOT GROW OUT OF THE CARD. It was the last remnant of the Apple
+  // app's flight: the rectangle started from item.rect and opened out to the screen.
+  // The owner described the right behaviour — "only the posters go down and the
+  // background stays, and the background is the selected film's art" — and flying the
+  // rectangle is the opposite of that: the art comes in small and grows, instead of
+  // already being there.
   //
-  // Agora a arte ocupa a tela desde o primeiro quadro e so ganha opacidade. Quem
-  // se move sao as fileiras da home, que descem (ver home_desenhar, que le o
-  // detail_progresso).
-  // O FUNDO NAO TROCA: ele CONTINUA. O hero da home ja mostrava a arte deste
-  // mesmo titulo, entao o backdrop do detalhe nasce no rect exato em que ela
-  // estava e cresce dali ate a tela cheia, sem piscar e sem crossfade — com o
-  // hero em tela cheia os dois rects sao praticamente o mesmo e o olho nao ve
-  // movimento nenhum, so o texto se rearranjando. Antes a arte entrava do zero
-  // ganhando opacidade sobre a arte identica que ja estava la, o que dava um
-  // clarao no meio da transicao.
+  // Now the art fills the screen from the first frame and only gains opacity. What
+  // moves are the home's rows, which go down (see home_draw, which reads
+  // detail_progress).
+  // THE BACKGROUND DOES NOT SWAP: it CONTINUES. The home's hero was already showing
+  // this same title's art, so the detail's backdrop is born at the exact rect it was in
+  // and grows from there to full screen, with no flash and no crossfade — with the hero
+  // full screen the two rects are practically the same and the eye sees no movement at
+  // all, only the text rearranging. Before, the art came in from zero gaining opacity
+  // over the identical art that was already there, which gave a flare in the middle of
+  // the transition.
   GfxRect target; float aEntry;
   backdropRect(&target, &aEntry);
   const char *art = artOf(idx);
   int artPoster = artDetailIsPoster(idx);
-  // Backdrop em tela cheia: pede o teto de 1920. Com o teto comum de 960 a arte
-  // era decodificada com metade da resolucao e ampliada ao dobro na tela.
+  // A full-screen backdrop: it asks for the 1920 ceiling. With the common ceiling of
+  // 960 the art was decoded at half the resolution and enlarged twofold on screen.
   GLuint tex = art ? tex_get_hero(art) : 0;
-  // Ao rolar, o web NAO desfoca a arte: ele a APAGA. Medido em
-  // `.series-detail-shell.detail-scrolled` — o backdrop vai a `opacity: 0.15` e
-  // a vinheta a 0, ambos em 0.8s cubic-bezier(.4,0,.2,1).
+  // On scrolling, the web app does NOT blur the art: it FADES it. Measured in
+  // `.series-detail-shell.detail-scrolled` — the backdrop goes to `opacity: 0.15` and
+  // the vignette to 0, both over 0.8s cubic-bezier(.4,0,.2,1).
   //
-  // O VEU E DE TELA CHEIA e custava caro numa GPU que ja estava afogada em
-  // preenchimento (medido: clr=38,3ms com a CPU ociosa). Mas ele pinta
-  // #0d0d0d — que e EXATAMENTE a cor com que main.c limpa o quadro
-  // (NV_COR_FUNDO_*). Com a tela ja coberta pelo detalhe, embaixo dele nao ha
-  // home nem outra tela: ha o glClear. Pintar #0d0d0d sobre #0d0d0d nao muda
-  // um pixel, e a camada inteira sai.
+  // THE VEIL IS FULL SCREEN and cost dearly on a GPU already drowning in fill
+  // (measured: clr=38.3ms with the CPU idle). But it paints #0d0d0d — which is EXACTLY
+  // the colour main.c clears the frame with (NV_COLOR_BACKGROUND_*). With the screen
+  // already covered by the detail, underneath it there is no home and no other screen:
+  // there is the glClear. Painting #0d0d0d over #0d0d0d changes not a pixel, and the
+  // whole layer goes.
   //
-  // Fica quando a tela NAO esta coberta: ai embaixo ha a home, e o veu e o que
-  // a apaga.
+  // It stays when the screen is NOT covered: then the home is underneath, and the veil
+  // is what fades it out.
   if (pg > 0.01f && !detail_covers_screen()) {
     GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, pg);
   }
-  // 4o parametro = forca da VINHETA, nao "foco". Vai a 0 junto com a rolagem,
-  // que e o par que faltava: o web apaga a arte para 15% E some com a vinheta
-  // ao mesmo tempo. Poster reserva usa composição contida, sem crop de capa.
+  // The 4th parameter = the VIGNETTE's strength, not "focus". It goes to 0 along with
+  // the scrolling, which is the pairing that was missing: the web app fades the art to
+  // 15% AND removes the vignette at the same time. A fallback poster uses a contained
+  // composition, with no cover crop.
   drawArtDetail(target, tex, art, artPoster,
                      tex ? aEntry * (1.0f - 0.85f * pg) : 1.0f, pg);
 
   drawDirectorDetail(cat_item(idx), aEntry, pg);
 
-  // O hero ROLA com o documento: ele nao some nem e substituido por um
-  // cabecalho fixo. Era isso que fazia a pagina do port parecer outra tela em
-  // vez da mesma tela rolada.
-  // O conteudo SOBE para o lugar enquanto aparece, no lugar de so surgir: e a
-  // contraparte do texto da home, que desce e apaga. Junto, le como um bloco
-  // trocando de arranjo, que e o que o dono pediu.
+  // The hero SCROLLS with the document: it does not disappear and is not replaced by a
+  // fixed header. That was what made the port's page look like another screen instead
+  // of the same screen scrolled.
+  // The content RISES into place as it appears, instead of merely turning up: it is the
+  // counterpart of the home's text, which drops and fades. Together, it reads as one
+  // block changing arrangement, which is what the owner asked for.
   heroWeb(a2, -scrollY + (1.0f - a2) * NV_SCREEN_H * 0.05f);
 
 
@@ -3050,7 +3032,7 @@ void detail_draw(Uint32 now) {
   drawSkeletonEpisodes(pg);
   drawSkeletonCast(pg);
   for (int r = 0; r < N_SECTIONS; r++) drawSection(r, pg, now);
-  // POR CIMA de tudo: a ficha e outra tela, nao uma secao desta.
+  // ABOVE everything: the card is another screen, not a section of this one.
   if (personIs_open) drawPerson(s);
 }
 
@@ -3060,7 +3042,7 @@ int detail_requested_open(void) { int v = reqOpen; reqOpen = -1; return v; }
 int detail_requested_watched(void) { int v = reqWatched; reqWatched = 0; return v; }
 int detail_requested_mark(void)     { int v = reqMark;     reqMark = 0;     return v; }
 int detail_requested_sources(void)     { int v = reqSources;     reqSources = 0;     return v; }
-// "Reproduzir desde o inicio" ainda cai no mesmo caminho do primario: o
-// roteador so sabe abrir o player no ponto salvo. Consumir o pedido aqui evita
-// que ele fique pendurado.
+// "Play from the start" still falls into the same path as the primary: the router only
+// knows how to open the player at the saved point. Consuming the request here stops it
+// being left hanging.
 int detail_requested_do_start(void)  { int v = reqOfStart;   reqOfStart = 0;   return v; }

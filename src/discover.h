@@ -99,7 +99,7 @@ void disc_fetch(const char *term);
 // to an earlier query — so the screen never shows another word's results.
 int  disc_search_n(const char *term);
 
-// Copia o resultado `i`. 1 se copiou.
+// Copies result `i`. 1 if it copied.
 int  disc_search_item(int i, CatItem *dst);
 
 // --- searching ACROSS SEVERAL catalogues -------------------------------------
@@ -113,7 +113,7 @@ int  disc_search_item(int i, CatItem *dst);
 // first catalogue to answer appears straight away, instead of the screen waiting
 // on the slowest of ten.
 int  disc_search_n_targets(void);
-const char *disc_search_target_title(int target);   // "Filmes", "Séries"
+const char *disc_search_target_title(int target);   // "Movies", "Series"
 const char *disc_search_target_addon(int target);    // "Cinemeta", "Xperience"
 int  disc_search_target_n(int target, const char *term);
 int  disc_search_target_item(int target, int i, CatItem *dst);
@@ -151,8 +151,8 @@ int  disc_searching(void);
 void disc_seeall_open(const char *base, const char *kind, const char *catId);
 void disc_seeall_filter(const char *base, const char *kind, const char *catId, const char *genre);
 int disc_seeall_error(void);
-// Pede a proxima pagina, se houver. Nada acontece se a ultima veio curta — sinal
-// de fim de lista no protocolo.
+// Asks for the next page, if there is one. Nothing happens if the last one came
+// back short — the protocol's end-of-list signal.
 void disc_seeall_more(void);
 int  disc_seeall_n(void);
 int  disc_seeall_item(int i, CatItem *dst);

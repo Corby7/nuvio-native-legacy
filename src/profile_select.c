@@ -21,13 +21,13 @@
 #define PS_KEY_GAP     18.0f
 
 static int focus;
-static int done, sair, retry;
+static int done, wantsExit, retry;
 static float animFocus[ACCOUNT_PROFILE_MAX];
 
-// Estado do PIN: -1 = nenhum perfil pedindo PIN.
+// PIN state: -1 = no profile is asking for a PIN.
 static int pinOf = -1;
 static char pin[PS_PIN_MAX + 1];
-static int pinFocus;              // 0..9 digitos, 10 = apagar, 11 = confirmar
+static int pinFocus;              // 0..9 digits, 10 = delete, 11 = confirm
 static int pinWrong, pinNet;
 static pthread_t threadPin;
 static int verifying;
@@ -48,7 +48,7 @@ static int colorOf(const char *hex, float *r, float *g, float *b) {
 void profilesel_start(void) {
   int i;
   focus = 0;
-  done = sair = retry = 0;
+  done = wantsExit = retry = 0;
   pinOf = -1;
   pin[0] = 0;
   pinFocus = 0;
@@ -58,8 +58,9 @@ void profilesel_start(void) {
   atomic_fetch_add(&pinGeneration, 1);
   atomic_store(&resultPin, 0);
   for (i = 0; i < ACCOUNT_PROFILE_MAX; i++) animFocus[i] = 0.0f;
-  // Se o perfil ativo ja e conhecido, comeca o foco nele: reabrir a tela e
-  // encontrar o cursor no primeiro perfil sugere que a escolha se perdeu.
+  // If the active profile is already known, start the focus on it: reopening
+  // the screen and finding the cursor on the first profile suggests the choice
+  // was lost.
   for (i = 0; i < profiles_n(); i++)
     if (profiles_item(i)->index_ == profiles_active()) { focus = i; break; }
 }
@@ -115,8 +116,8 @@ static void eventPin(SDL_Keycode k) {
     verifying = 1;
     pinWrong = pinNet = 0;
     atomic_store(&resultPin, 0);
-    // Verificar BLOQUEIA (uma viagem ao servidor). Num fio, para a tela nao
-    // congelar por um segundo a cada tentativa.
+    // Verifying BLOCKS (a round trip to the server). On a thread, so the screen
+    // does not freeze for a second on every attempt.
     if (pthread_create(&threadPin, NULL, threadVerify, t) == 0) pthread_detach(threadPin);
     else { free(t); verifying = 0; pinNet = 1; }
     return;
@@ -131,7 +132,7 @@ void profilesel_event(const SDL_Event *e) {
   k = e->key.keysym.sym;
   if (pinOf >= 0) { eventPin(k); return; }
 
-  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE) { sair = 1; return; }
+  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE) { wantsExit = 1; return; }
   if (sync_state() == SYNC_FAILED && (k == SDLK_RETURN || k == SDLK_KP_ENTER)) { retry = 1; return; }
   if (k == SDLK_RIGHT) { if (focus < profiles_n() - 1 && focus%PS_COLS < PS_COLS-1) focus++; }
   else if (k == SDLK_LEFT) { if (focus > 0 && focus%PS_COLS > 0) focus--; }
@@ -168,24 +169,24 @@ void profilesel_update(float dt, Uint32 now) {
     }
   }
   }
-  // NAO concluir enquanto o ciclo que BUSCA os perfis ainda esta rodando.
+  // Do NOT finish while the cycle that FETCHES the profiles is still running.
   //
-  // O defeito que isto conserta: app.c troca para esta tela logo depois de
-  // chamar sync_iniciar(), que e assincrono. No primeiro quadro perfis_n() e 0
-  // porque a resposta nao chegou — e "0 perfis" e indistinguivel de "conta de
-  // uma pessoa so". A tela se dispensava sozinha ANTES de existir, e uma conta
-  // de duas pessoas caia no perfil 1 em silencio: o app sincronizava e
-  // ESCREVIA progresso no perfil errado, sem nunca perguntar.
+  // The defect this fixes: app.c switches to this screen right after calling
+  // sync_start(), which is asynchronous. On the first frame profiles_n() is 0
+  // because the answer has not arrived — and "0 profiles" is indistinguishable
+  // from "a single-person account". The screen dismissed itself BEFORE it
+  // existed, and a two-person account silently fell into profile 1: the app
+  // synced and WROTE progress to the wrong profile, without ever asking.
   if (sync_state() == SYNC_RUNNING) return;
 
-  // Terminado o ciclo, "nenhum ou um" e resposta de verdade: seguir direto.
-  // Um erro de rede nunca equivale a "uma conta sem perfis". So concluir
-  // automaticamente quando o ciclo terminou com sucesso; assim a proxima
-  // pessoa nao cai silenciosamente no perfil implicito 1.
+  // Once the cycle is done, "none or one" is a real answer: go straight
+  // through. A network error is never the same as "an account with no
+  // profiles". Only finish automatically when the cycle succeeded; that way the
+  // next person does not silently fall into the implicit profile 1.
   if (sync_state() == SYNC_READY && profiles_n() <= 1) done = 1;
 }
 
-int profilesel_wants_exit(void) { int v=sair; sair=0; return v; }
+int profilesel_wants_exit(void) { int v=wantsExit; wantsExit=0; return v; }
 int profilesel_requested_retry(void) { int v=retry; retry=0; return v; }
 
 static void drawPin(void) {
@@ -195,7 +196,7 @@ static void drawPin(void) {
   float x0 = (NV_SCREEN_W - widthGrid) * 0.5f;
   float y0 = 520.0f;
   int i;
-  char mascara[PS_PIN_MAX + 1];
+  char mask[PS_PIN_MAX + 1];
   size_t n = strlen(pin), k;
 
   { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
@@ -207,10 +208,10 @@ static void drawPin(void) {
     l = txt_line(TXT_TITLE3, t, 255, 255, 255, 255);
     txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 350.0f); }
 
-  // Pontos, nunca os digitos: alguem passando na sala nao precisa ler o PIN.
-  for (k = 0; k < n && k < PS_PIN_MAX; k++) mascara[k] = '*';
-  mascara[k] = 0;
-  { TxtLine l = txt_line(TXT_TITLE1, n ? mascara : "—", 255, 255, 255, 255);
+  // Dots, never the digits: someone walking through the room need not read the PIN.
+  for (k = 0; k < n && k < PS_PIN_MAX; k++) mask[k] = '*';
+  mask[k] = 0;
+  { TxtLine l = txt_line(TXT_TITLE1, n ? mask : "—", 255, 255, 255, 255);
     txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, 420.0f); }
 
   if (pinNet) {
@@ -248,8 +249,8 @@ void profilesel_draw(Uint32 now) {
   { TxtLine t = txt_line(TXT_TITLE1, "Who is watching?", 255, 255, 255, 255);
     txt_draw(t, (NV_SCREEN_W - t.w) * 0.5f, 200.0f); }
 
-  // Enquanto a lista nao chega, dizer isso. Uma tela com titulo e nada abaixo
-  // le como travamento.
+  // While the list has not arrived, say so. A screen with a title and nothing
+  // below it reads as a hang.
   if (n == 0) {
     const char *msg=sync_state()==SYNC_FAILED?
       "Could not load the profiles. OK: try again":
@@ -274,10 +275,11 @@ void profilesel_draw(Uint32 now) {
                   PS_AVATAR + grows, PS_AVATAR + grows };
     TxtLine name;
     colorOf(p->colorHex, &cr, &cg, &cb);
-    // Circulo: raio = metade do lado no SDF normalizado.
+    // Circle: radius = half the side in the normalised SDF.
     gfx_color(a, 0.5f, cr, cg, cb, 1.0f);
-    // A inicial no lugar do avatar: a arte do avatar mora no Storage do
-    // Supabase e baixa-la exige uma viagem por perfil antes de a tela existir.
+    // The initial in place of the avatar: the avatar art lives in Supabase
+    // Storage and fetching it would cost a round trip per profile before the
+    // screen even exists.
     { char start[8] = { p->name[0] ? p->name[0] : '?', 0 };
       TxtLine l;
       if ((unsigned char)start[0] >= 0xC0 && p->name[1]) { start[1] = p->name[1]; start[2] = 0; }
@@ -295,10 +297,10 @@ void profilesel_draw(Uint32 now) {
     txt_draw(name, px + (PS_AVATAR - name.w) * 0.5f, y + PS_AVATAR + 20.0f);
 
     if (p->hasPin) {
-      // A PALAVRA, nao um cadeado. O emoji U+1F512 nao existe na fonte
-      // embarcada e sai como retangulo vazio — a mesma armadilha que gfx.h ja
-      // registra sobre o U+25B6 ("depender do glifo da fonte e loteria"), e na
-      // qual eu cai de novo. Texto que a fonte tem sempre desenha.
+      // THE WORD, not a padlock. The emoji U+1F512 does not exist in the
+      // embedded font and comes out as an empty rectangle — the same trap
+      // gfx.h already records about U+25B6 ("depending on the font's glyph is a
+      // lottery"), and one I fell into again. Text the font has always draws.
       TxtLine cad = txt_line(TXT_CAPTION, "PIN", 150, 152, 160, 255);
       txt_draw(cad, px + (PS_AVATAR - cad.w) * 0.5f, y + PS_AVATAR + 54.0f);
     }

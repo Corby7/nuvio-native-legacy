@@ -15,11 +15,11 @@
 #define CINEMETA "https://v3-cinemeta.strem.io"
 #define TMDB     "https://api.themoviedb.org/3"
 
-// "2026-07-29" -> "29 de julho de 2026". Formato do web, que usa
+// "2026-07-29" -> "29 July 2026". The web app's format, which uses
 // `toLocaleDateString(undefined, {month:"long", day:"numeric", year:"numeric"})`
-// (metaDetailsScreen.js:1387); o formato numerico que estava aqui antes era
-// invencao do port. Entrada que nao casa o padrao ISO sai como veio, e nao
-// vazia: melhor mostrar a data crua que engolir o dado.
+// (metaDetailsScreen.js:1387); the numeric format that used to be here was the
+// port's invention. Input that does not match the ISO pattern comes out as it
+// arrived, and not empty: better to show the raw date than to swallow the data.
 void disc_date_long(const char *iso, char *dst, size_t size) {
   static const char *MONTH[12] = {
     "January", "February", "March", "April", "May", "June",
@@ -41,8 +41,8 @@ void disc_date_long(const char *iso, char *dst, size_t size) {
 }
 
 
-// Chave do TMDB, em art/tmdb.txt. SEGREDO do dono (saiu do dist/nuvio.env.js do
-// app web) — nao versionar. Sem ela o elenco continua so com nomes.
+// The TMDB key, in art/tmdb.txt. The owner's SECRET (it came out of the web app's
+// dist/nuvio.env.js) — do not commit it. Without it the cast has names only.
 static char tmdbKey[64];
 static char dirArtDisc[512];
 
@@ -70,9 +70,9 @@ void disc_tmdb(const char *dirArt) {
 
 const char *disc_key_tmdb(void) { return tmdbKey; }
 
-// strstr que NAO passa de `fim`. O objeto da regiao BR termina antes das
-// outras regioes na resposta do TMDB; procurar rent/buy no corpo inteiro
-// pegaria o provedor de outra regiao quando a BR nao tivesse.
+// A strstr that does NOT go past `end`. The BR region's object ends before the
+// other regions in TMDB's response; looking for rent/buy in the whole body would
+// pick another region's provider when BR did not have one.
 // Canonical genre label. Cinemeta and the addons return genres in English, but
 // not consistently: the same genre arrives as "Sci-Fi" from one source and
 // "Science Fiction" from another, and the hyphenated forms ("Film-Noir",
@@ -81,7 +81,6 @@ const char *disc_key_tmdb(void) { return tmdbKey; }
 //
 // A table and not a lookup: the Stremio genre set is closed and small, and a
 // network round trip per title to tidy two words would be absurd. A genre
-// outside the table goes out as it came in.
 const char *disc_genre_label(const char *g) {
   static const struct { const char *from, *to; } T[] = {
     { "Sci-Fi",     "Science Fiction" }, { "Film-Noir", "Film Noir" },
@@ -102,9 +101,9 @@ static const char *ate(const char *start, const char *end, const char *needle) {
   return NULL;
 }
 
-// Primeiro provedor do array `chave` dentro de [ini,fim): nome e logo no
-// formato w92 do TMDB. flatrate/rent/buy sao arrays de provedores; o primeiro
-// e o principal na pratica (o TMDB ordena por relevancia local).
+// The first provider of the `key` array within [start,end): the name and the logo
+// in TMDB's w92 format. flatrate/rent/buy are arrays of providers; the first is
+// the main one in practice (TMDB orders by local relevance).
 static int providerBetween(const char *start, const char *end, const char *key,
                          char *name, size_t nName, char *logo, size_t nLogo) {
   const char *k = ate(start, end, key);
@@ -119,9 +118,9 @@ static int providerBetween(const char *start, const char *end, const char *key,
   return 1;
 }
 
-// Preenche foto e personagem do elenco. O Cinemeta da so o NOME; o personagem
-// e o retrato vem do TMDB, que precisa de duas viagens: achar o id dele pelo
-// id do IMDb e so entao pedir os creditos.
+// Fills in the cast's photo and character. Cinemeta gives only the NAME; the
+// character and the portrait come from TMDB, which needs two round trips: finding
+// its id from the IMDb id and only then asking for the credits.
 static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
   char url[400], *body;
   long idTmdb = 0;
@@ -153,17 +152,17 @@ static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
           pathPhoto[0] == '/')
         snprintf(d->cast[k].photo, sizeof d->cast[k].photo,
                  "https://image.tmdb.org/t/p/w185%s", pathPhoto);
-      // O TMDB devolve o elenco na mesma ordem de importancia que o Cinemeta,
-      // entao casar por posicao acerta na pratica; casar por nome falharia nos
-      // acentos e nos nomes escritos de forma diferente entre as duas bases.
+      // TMDB returns the cast in the same order of importance as Cinemeta, so
+      // matching by position is right in practice; matching by name would fail on
+      // accents and on names spelled differently between the two databases.
       k++;
       p = js_next(f);
     } }
   free(body);
 
-  // Onde assistir. Os campos provLogo/provNome existiam no CatItem e NUNCA
-  // eram preenchidos no caminho dinamico — o selo do streaming ficava vazio em
-  // todo titulo. O TMDB responde por regiao; BR e a do dono.
+  // Where to watch. The providerLogo/providerName fields existed in CatItem and
+  // were NEVER filled in on the dynamic path — the streaming badge was empty on
+  // every title. TMDB answers by region; BR is the owner's.
   snprintf(url, sizeof url, "%s/%s/%ld/watch/providers?api_key=%s",
            TMDB, series ? "tv" : "movie", idTmdb, tmdbKey);
   body = net_download(url, 20);
@@ -173,9 +172,9 @@ static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
       const char *brObj = strchr(br, '{');
       const char *brEnd = brObj ? js_end(brObj) : NULL;
       if (brObj && brEnd && brEnd > brObj) {
-        // flatrate = incluido na assinatura; rent = aluguel; buy = compra.
-        // Se o titulo nao esta em streaming aqui, o selo fica vazio DE
-        // PROPOSITO, em vez de anunciar aluguel como se fosse catalogo.
+        // flatrate = included in the subscription; rent = rental; buy = purchase.
+        // If the title is not on streaming here, the badge stays empty ON PURPOSE,
+        // instead of advertising a rental as though it were catalogue.
         providerBetween(brObj, brEnd, "\"flatrate\"",
                       d->providerName, sizeof d->providerName,
                       d->providerLogo, sizeof d->providerLogo);
@@ -191,32 +190,32 @@ static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
   }
 }
 
-// Definida adiante, junto do resto do parse de meta do Stremio; declarada aqui
-// porque a busca, logo abaixo, monta CatItem a partir da mesma resposta.
+// Defined further down, along with the rest of the Stremio meta parse; declared
+// here because the search, just below, builds a CatItem from the same response.
 static int ofMeta(const char *start, const char *end, const char *kind, CatItem *d);
 
-// --- BUSCA POR TITULO --------------------------------------------------------
+// --- SEARCH BY TITLE ---------------------------------------------------------
 //
-// A tela de busca so filtrava o que ja estava em memoria (um strstr sobre as
-// fileiras da home), entao procurar por algo fora das ~12 primeiras linhas de
-// cada catalogo nao achava nada — e o dono viu isso como "nao ta procurando em
-// tudo". Era verdade: nao havia consulta de rede nenhuma.
+// The search screen only filtered what was already in memory (a strstr over the
+// home's rows), so looking for anything outside the first ~12 lines of each
+// catalogue found nothing — and the owner saw that as "it isn't searching
+// everything". It was true: there was no network query at all.
 //
-// O protocolo Stremio expoe busca no mesmo endpoint de catalogo, com o filtro
-// no caminho: <base>/catalog/<tipo>/<id>/search=<termo>.json. O Cinemeta, que e
-// o catalogo oficial e nao depende dos addons do dono, responde nos dois tipos
-// — e por isso e a fonte usada aqui: uma busca que so funcionasse com os addons
-// instalados falharia de formas diferentes em cada maquina.
+// The Stremio protocol exposes search on the same catalogue endpoint, with the
+// filter in the path: <base>/catalog/<type>/<id>/search=<term>.json. Cinemeta,
+// which is the official catalogue and does not depend on the owner's addons,
+// answers on both types — and that is why it is the source used here: a search
+// that only worked with the installed addons would fail differently on every machine.
 //
-// Roda em FIO PROPRIO porque bloqueia (duas viagens), e a tela de busca nao
-// pode congelar entre uma tecla e outra.
-static char     searchTerm[96];     // termo JA CONSULTADO
-static char     searchRequest[96];    // termo que os fios devem consultar
+// It runs on a THREAD OF ITS OWN because it blocks (two round trips), and the
+// search screen cannot freeze between one keypress and the next.
+static char     searchTerm[96];     // the term ALREADY QUERIED
+static char     searchRequest[96];    // the term the threads should query
 static pthread_mutex_t searchLock = PTHREAD_MUTEX_INITIALIZER;
 
-// Escapa o termo para caber num caminho de URL. Sem isto um espaco ou acento
-// quebra o pedido, e "the invite" — duas palavras, o caso normal — nunca
-// chegaria ao servidor.
+// Escapes the term to fit in a URL path. Without this a space or an accent breaks
+// the request, and "the invite" — two words, the normal case — would never reach
+// the server.
 static void urlEscape(const char *s, char *dst, size_t size) {
   static const char *HEX = "0123456789ABCDEF";
   size_t o = 0;
@@ -253,18 +252,18 @@ static int readSearch(const char *kind, const char *term, CatItem *output,
   return n;
 }
 
-// --- ALVOS DE BUSCA ---------------------------------------------------------
+// --- SEARCH TARGETS ----------------------------------------------------------
 //
-// Um "alvo" e um catalogo que aceita busca. Sao os 2 do Cinemeta (que existem
-// sempre, independem dos addons do dono) mais os que os manifestos declararem.
-// Nos addons do dono sao 8: Xperience (filme/serie), AIOStreams TMDB e TVDB
-// (filme/serie cada) e Akashi TV (filme/serie).
+// A "target" is a catalogue that accepts search. There are Cinemeta's 2 (which
+// always exist, independent of the owner's addons) plus whatever the manifests
+// declare. On the owner's addons that is 8: Xperience (film/series), AIOStreams
+// TMDB and TVDB (film/series each) and Akashi TV (film/series).
 //
-// Antes so o Cinemeta era consultado, e era isso que o dono via como "nao ta
-// procurando em todos os catalogos" — porque de fato nao estava.
+// Before, only Cinemeta was queried, and that is what the owner saw as "it isn't
+// searching all the catalogues" — because it genuinely was not.
 #define SEARCH_TARGETS  16
-#define SEARCH_PER_TARGET 12          // uma fileira por alvo, 12 cabem na tela
-#define SEARCH_THREADS    3            // quantos alvos em voo ao mesmo tempo
+#define SEARCH_PER_TARGET 12          // one row per target, 12 fit on screen
+#define SEARCH_THREADS    3            // how many targets in flight at once
 
 typedef struct {
   char base[300];
@@ -277,23 +276,24 @@ typedef struct {
 static TargetSearch targets[SEARCH_TARGETS];
 static int       nTargets;
 
-// Resultado POR ALVO, com a geracao em que foi obtido. Guardar por alvo (e nao
-// numa lista unica) e o que permite uma fileira por catalogo, com a origem, e o
-// que deixa a tela mostrar o primeiro que responder sem esperar o mais lento.
+// The result PER TARGET, with the generation it was obtained in. Storing it per
+// target (and not in a single list) is what allows one row per catalogue, with the
+// origin, and what lets the screen show the first one to answer without waiting
+// for the slowest.
 static struct {
   CatItem items[SEARCH_PER_TARGET];
   int     n;
   int     generation;
 } resTarget[SEARCH_TARGETS];
 
-static int  generation;            // sobe a cada termo novo
-static int  nextTarget;        // fila de trabalho: proximo indice a consultar
+static int  generation;            // goes up with every new term
+static int  nextTarget;        // the work queue: the next index to query
 static int  threadsAlive;
 
 void disc_targets_search_reset(void) {
   pthread_mutex_lock(&searchLock);
-  // O Cinemeta entra SEMPRE e primeiro: e a unica fonte que nao depende de
-  // addon nenhum, entao a busca continua funcionando numa instalacao limpa.
+  // Cinemeta goes in ALWAYS and first: it is the only source that depends on no
+  // addon, so the search goes on working on a clean installation.
   nTargets = 0;
   { int t; const char *tt[2] = { "movie", "series" };
     const char *rot[2] = { "Films", "Series" };
@@ -323,7 +323,7 @@ void disc_target_search(const char *base, const char *kind, const char *id,
   pthread_mutex_unlock(&searchLock);
 }
 
-// Consulta UM alvo. Devolve quantos itens leu.
+// Queries ONE target. Returns how many items it read.
 static int queryTarget(const TargetSearch *a, const char *term,
                          CatItem *output, int max) {
   char url[600], esc[300];
@@ -333,9 +333,9 @@ static int queryTarget(const TargetSearch *a, const char *term,
   urlEscape(term, esc, sizeof esc);
   snprintf(url, sizeof url, "%s/catalog/%s/%s/search=%s.json",
            a->base, a->kind, a->id, esc);
-  // 6 s por alvo, como o web (SEARCH_CATALOG_TIMEOUT 6500). Addon lento nao
-  // trava a tela: a fileira dele so aparece quando chegar, e as outras ja
-  // estao la.
+  // 6 s per target, like the web app (SEARCH_CATALOG_TIMEOUT 6500). A slow addon
+  // does not freeze the screen: its row only appears when it arrives, and the
+  // others are already there.
   body = net_download(url, 6);
   if (!body) return 0;
   p = js_array(body, NULL, "metas");
@@ -372,8 +372,9 @@ static void *threadSearch(void *arg) {
     n = queryTarget(&a, term, found, SEARCH_PER_TARGET);
 
     pthread_mutex_lock(&searchLock);
-    // Geracao velha = o dono digitou outra coisa enquanto isto voltava. O
-    // resultado nasceu obsoleto; descartar e mais barato que mostrar e trocar.
+    // An old generation = the owner typed something else while this was coming
+    // back. The result was born stale; discarding is cheaper than showing and
+    // swapping.
     if (g == generation) {
       memcpy(resTarget[mine].items, found, sizeof(CatItem) * (size_t)n);
       resTarget[mine].n = n;
@@ -392,14 +393,14 @@ void disc_fetch(const char *term) {
   snprintf(searchRequest, sizeof searchRequest, "%s", term);
   generation++;
   nextTarget = 0;
-  // Zera a contagem, nao os itens: a tela pode estar desenhando o quadro
-  // corrente e ler item pela metade seria pior que uma fileira a menos.
+  // It zeroes the count, not the items: the screen may be drawing the current
+  // frame, and reading half an item would be worse than one row fewer.
   for (k = 0; k < SEARCH_TARGETS; k++) resTarget[k].n = 0;
   missing = SEARCH_THREADS - threadsAlive;
   pthread_mutex_unlock(&searchLock);
 
-  // Fios sob demanda: os que ja estao vivos pegam os alvos novos sozinhos,
-  // porque leem `proximoAlvo` sob a trava a cada volta.
+  // Threads on demand: the ones already alive pick up the new targets themselves,
+  // because they read `nextTarget` under the lock on every round.
   for (k = 0; k < missing; k++) {
     pthread_t t;
     pthread_mutex_lock(&searchLock); threadsAlive++; pthread_mutex_unlock(&searchLock);
@@ -449,7 +450,7 @@ int disc_search_target_item(int target, int i, CatItem *dst) {
   return ok;
 }
 
-// Compatibilidade com quem ainda pergunta "quantos no total".
+// Compatibility for anyone still asking "how many in total".
 int disc_search_n(const char *term) {
   int k, t = 0;
   for (k = 0; k < nTargets; k++) t += disc_search_target_n(k, term);
@@ -469,26 +470,26 @@ int disc_searching(void) {
   return v;
 }
 
-// Um item do catalogo montado a partir de um meta do Stremio. Devolve 1 se
-// deu para aproveitar (precisa de nome e de alguma arte).
+// A catalogue item built from a Stremio meta. Returns 1 if it was usable (it needs
+// a name and some art).
 static int ofMeta(const char *start, const char *end, const char *kind, CatItem *d) {
   char v[900];
   memset(d, 0, sizeof *d);
   if (!js_text(start, end, "name", d->title, sizeof d->title)) return 0;
-  // O poster e o unico obrigatorio: sem ele o card fica um retangulo cinza.
+  // The poster is the only mandatory one: without it the card is a grey rectangle.
   if (!js_text(start, end, "poster", d->poster, sizeof d->poster)) return 0;
   js_text(start, end, "background", d->backdrop, sizeof d->backdrop);
   js_text(start, end, "logo", d->logo, sizeof d->logo);
-  // O TMDB serve o backdrop em /original/, que e 3840x2160. O download nem e o
-  // problema (268 KB contra 201 KB do w1280) — o problema e o DECODIFICADO:
-  // 8,3 MP viram 33 MB em RAM, mais outros 33 MB na conversao de formato, antes
-  // de o SDL_BlitScaled reduzir para o teto de 1920. Num nucleo fraco isso e
-  // ~0,5 s por arte, e a cada troca de heroi. Em w1280 sao 3,7 MB e ~9x menos
-  // trabalho; o heroi e desenhado a 1920, entao amplia 1,5x — com o degrade e o
-  // texto por cima, a diferenca nao aparece, e o tranco aparecia.
+  // TMDB serves the backdrop at /original/, which is 3840x2160. The download is not
+  // even the problem (268 KB against the w1280's 201 KB) — the problem is the
+  // DECODED size: 8.3 MP become 33 MB in RAM, plus another 33 MB in the format
+  // conversion, before SDL_BlitScaled reduces it to the 1920 ceiling. On a weak
+  // core that is ~0.5 s per piece of art, on every hero change. At w1280 it is
+  // 3.7 MB and ~9x less work; the hero is drawn at 1920, so it enlarges 1.5x — with
+  // the gradient and the text on top, the difference does not show, and the jolt did.
   //
-  // Feito por reescrita de URL e nao pedindo outro campo porque o Cinemeta so
-  // devolve este; a escada do TMDB e w300/w780/w1280/original.
+  // Done by rewriting the URL and not by asking for another field because Cinemeta
+  // only returns this one; TMDB's ladder is w300/w780/w1280/original.
   { char *o = strstr(d->backdrop, "/t/p/original/");
     if (o) {
       char new[sizeof d->backdrop];
@@ -502,13 +503,13 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
     js_text(start, end, "id", d->imdb, sizeof d->imdb);
   snprintf(d->kind, sizeof d->kind, "%s", kind);
 
-  { // genero: "Filme · Acao · Drama"
+  { // genre: "Film · Action · Drama"
     const char *g = js_array(start, end, "genres");
     char g1[48] = "", g2[48] = "";
     if (g) {
       const char *f1 = js_end(g);
       (void)f1;
-      // elementos de texto: copiar direto do array
+      // text elements: copy straight out of the array
       { const char *p = g; int k = 0;
         while (p && k < 2) {
           char tmp[48]; size_t n = 0;
@@ -516,9 +517,9 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
           p++;
           while (*p && *p != '"' && n + 1 < sizeof tmp) tmp[n++] = *p++;
           tmp[n] = 0;
-          // Traduz AQUI, na entrada: o campo `genero` do CatItem e usado por
-          // varias telas e todas mostrariam o ingles se a traducao ficasse no
-          // desenho.
+          // Normalise HERE, on the way in: CatItem's `genre` field is used by
+          // several screens and all of them would show the raw spelling if the
+          // normalisation lived in the drawing.
           if (k == 0) snprintf(g1, sizeof g1, "%s", disc_genre_label(tmp));
           else        snprintf(g2, sizeof g2, "%s", disc_genre_label(tmp));
           k++;
@@ -538,20 +539,20 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
   js_text(start, end, "releaseInfo", v, sizeof v);
   { char duration[24] = "";
     js_text(start, end, "runtime", duration, sizeof duration);
-    // "2024–" vira "2024": o travessao de serie em andamento polui a linha.
+    // "2024–" becomes "2024": the en dash of an ongoing series clutters the line.
     { char *tr = strstr(v, "\xe2\x80\x93"); if (tr) *tr = 0; }
     snprintf(d->meta, sizeof d->meta, "%.20s%s%.20s", v,
              (v[0] && duration[0]) ? "  \xc2\xb7  " : "", duration); }
   js_text(start, end, "description", d->synopsis, sizeof d->synopsis);
-  // NAO INVENTAR CLASSIFICACAO. Aqui havia um `"14"` cravado, e o efeito era
-  // que TODO titulo vindo da rede exibia o selo "14" — o Cinemeta nao manda
-  // classificacao etaria, e o valor de reserva virou uma constante disfarcada
-  // de dado, desenhada com a mesma confianca de um campo real.
+  // DO NOT INVENT AN AGE RATING. There used to be a hard-coded `"14"` here, and the
+  // effect was that EVERY title coming from the network showed a "14" badge —
+  // Cinemeta does not send an age rating, and the fallback value became a constant
+  // disguised as data, drawn with the same confidence as a real field.
   //
-  // Vazio e a resposta honesta: desenhaSeloMeta ja e guardado por
-  // `classificacao[0]` no chamador (detail.c), entao o selo simplesmente nao
-  // aparece enquanto nao houver valor. Quem preenche de verdade e a ficha do
-  // TMDB em extras.c (release_dates -> certification), que chega depois.
+  // Empty is the honest answer: drawMetaBadge is already guarded by
+  // `age_rating[0]` in the caller (detail.c), so the badge simply does not appear
+  // while there is no value. What really fills it is TMDB's fact sheet in extras.c
+  // (release_dates -> certification), which arrives later.
   d->age_rating[0] = 0;
   { double score = js_num(start, end, "imdbRating", 0.0);
     d->score = (int)(score * 10.0 + 0.5) / 1; }
@@ -559,7 +560,7 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
   return 1;
 }
 
-// Le um catalogo (movie|series) de um addon e acrescenta ao vetor.
+// Reads a catalogue (movie|series) from an addon and appends to the array.
 static int readCatalog(const char *base, const char *kind, const char *id,
                        CatItem *output, int max, int count) {
   char url[900];
@@ -567,11 +568,11 @@ static int readCatalog(const char *base, const char *kind, const char *id,
   const char *p;
   int n = 0;
   snprintf(url, sizeof url, "%s/catalog/%s/%s.json", base, kind, id);
-  // 8 s e nao 25: um addon fora do ar segurava um dos tres fios por 25 s, e a
-  // fileira dele atrasa TODAS as seguintes porque a montagem caminha em ordem.
-  // E a mesma licao ja registrada no cache de texturas — la o timeout caiu de
-  // 25 para 8 pelo mesmo motivo, com duas URLs mortas travando os dois fios de
-  // decode. Um catalogo que nao responde em 8 s nao vai responder.
+  // 8 s and not 25: an addon that is down held one of the three threads for 25 s,
+  // and its row delays ALL the following ones because the assembly walks in order.
+  // It is the same lesson already recorded in the texture cache — there the timeout
+  // dropped from 25 to 8 for the same reason, with two dead URLs blocking both
+  // decode threads. A catalogue that does not answer in 8 s is not going to answer.
   body = net_download(url, 8);
   if (!body) return 0;
   p = js_array(body, NULL, "metas");
@@ -584,23 +585,23 @@ static int readCatalog(const char *base, const char *kind, const char *id,
   return n;
 }
 
-// --- fileiras da home: catalogos declarados pelos addons ---------------------
-// Isto substitui a lista PREF fixa de quatro catalogos. O app web nao tem
-// fileira fixa: cada fileira e um catalogo declarado no manifesto de um addon,
-// e a ordem/visibilidade/nome saem de `homeCatalogPrefs`. Ver o comentario
-// grande em catalogo.h, que traz o algoritmo de sortAndFilterRowsInternal.
+// --- home rows: catalogues declared by the addons ----------------------------
+// This replaces the fixed PREF list of four catalogues. The web app has no fixed
+// row: each row is a catalogue declared in an addon's manifest, and the
+// order/visibility/name come from `homeCatalogPrefs`. See the long comment in
+// catalog.h, which carries the sortAndFilterRowsInternal algorithm.
 
-// Teto de catalogos declarados somando TODOS os addons.
+// A ceiling on the catalogues declared across ALL the addons.
 //
-// Era 64, e o Xperience sozinho declara 64 — o `nDecl < DECL_MAX` do laco
-// parava ali, e AIOStreams e Akashi TV nunca tinham o manifesto sequer lido.
-// Nem as fileiras deles apareciam na home, nem os catalogos de busca deles
-// existiam: o app se comportava como se o dono tivesse instalado um addon so.
-// O sintoma que chegou primeiro foi a busca ("nao procura em todos os
-// catalogos"), mas o teto cortava tudo.
+// It was 64, and Xperience alone declares 64 — the loop's `nDecl < DECL_MAX`
+// stopped there, and AIOStreams and Akashi TV never even had their manifests read.
+// Neither their rows appeared on the home nor did their search catalogues exist:
+// the app behaved as though the owner had installed a single addon. The symptom
+// that arrived first was the search ("it doesn't search all the catalogues"), but
+// the ceiling was cutting everything.
 #define DECL_MAX 256
-// Quantos itens cada fileira mostra. A home desenha no maximo MAX_CARDS (12) e
-// buscar mais e trafego que ninguem ve.
+// How many items each row shows. The home draws at most MAX_CARDS (12) and
+// fetching more is traffic nobody sees.
 #define MAX_PER_ROW 12
 
 static CatRow filtersBuilt[CAT_FILTER_MAX];
@@ -613,21 +614,21 @@ typedef struct {
   char kind[8];
   char id[96];
   const char *base;
-  // 1 quando o catalogo aceita BUSCA. O manifesto declara isso em
-  // `extra: [{name:"search"}]` (formato novo) ou `extraSupported: ["search"]`
-  // (antigo) — os addons do dono usam os dois.
+  // 1 when the catalogue accepts SEARCH. The manifest declares that in
+  // `extra: [{name:"search"}]` (the new format) or `extraSupported: ["search"]`
+  // (the old one) — the owner's addons use both.
   int searchable;
-  char nameAddon[64];   // "Xperience", para a linha "de <addon>" no resultado
+  char nameAddon[64];   // "Xperience", for the "from <addon>" line in the result
 } Decl;
 
-// Preferencias do dono, o equivalente local de `homeCatalogPrefs`. Arquivo de
-// texto porque o do app web e um localStorage de outro processo — a mesma razao
-// que ja valia para o progresso: aquele arquivo pertence a quem o mantem aberto,
-// e escrever nele de fora corromperia o estado.
+// The owner's preferences, the local equivalent of `homeCatalogPrefs`. A text file
+// because the web app's is another process's localStorage — the same reason that
+// already held for progress: that file belongs to whoever keeps it open, and
+// writing to it from outside would corrupt its state.
 //
-//   ordem     <chave>
-//   desligada <chave-ou-chave-de-desativar>
-//   titulo    <chave><TAB><titulo>
+//   order    <key>
+//   off      <key-or-disable-key>
+//   title    <key><TAB><title>
 // 64 was not enough: an account with AIOMetadata alone declares 151 catalogues,
 // and the saved order covers ALL of them. Cut at 64, the owner's order applied
 // only to the start of the list and the rest fell back to the manifest's order —
@@ -735,9 +736,9 @@ static void readPrefs(void) {
          nPrefOrder, nPrefOff, nPrefTitle);
 }
 
-// A conferencia e contra DUAS chaves, como no web: quem desliga pela tela de
-// ajustes grava a chave de desativar (que carrega a URL base e o nome), e quem
-// desliga pela ordenacao grava a chave curta.
+// The check is against TWO keys, as in the web app: whoever turns it off from the
+// settings screen writes the disable key (which carries the base URL and the
+// name), and whoever turns it off from the ordering writes the short key.
 static int off(const Decl *d) {
   int i;
   for (i = 0; i < nPrefOff; i++)
@@ -745,9 +746,9 @@ static int off(const Decl *d) {
   return 0;
 }
 
-// formatCatalogRowTitle (js/ui/screens/home/homeUtils.js:62): primeira letra
-// maiuscula e, se o nome ja NAO termina com o rotulo do tipo, " - <tipo>".
-// E por isso que a home mostra "For You - Filme" e nao "for you".
+// formatCatalogRowTitle (js/ui/screens/home/homeUtils.js:62): a capital first
+// letter and, if the name does NOT already end with the type's label, " - <type>".
+// That is why the home shows "For You - Film" and not "for you".
 static void formatTitle(const char *name, const char *kind, char *dst, size_t size) {
   const char *label = strcmp(kind, "series") ? "Film" : "Series";
   const char *raw    = strcmp(kind, "series") ? "Movie" : "Series";
@@ -803,30 +804,31 @@ static int readManifest(const char *base, Decl *output, int max) {
   // reference catalogues by addonId — find the address to fetch from.
   addons_note_id(base, addonId);
   p = js_array(body, end, "catalogs");
-  // Sem `n < max` na condicao: o vetor de fileiras pode encher, mas a varredura
-  // continua ate o fim do manifesto porque os catalogos de BUSCA costumam estar
-  // no fim dele (o Xperience poe os dele em 603/604 de 605). Quem para de
-  // gravar e o `if (n < max)` la dentro.
+  // No `n < max` in the condition: the row array may fill up, but the sweep carries
+  // on to the end of the manifest because the SEARCH catalogues tend to be at the
+  // end of it (Xperience puts its at 603/604 of 605). What stops recording is the
+  // `if (n < max)` inside.
   while (p) {
     const char *f = js_end(p);
     kind[0] = id[0] = name[0] = 0;
     js_text(p, f, "type", kind, sizeof kind);
     js_text(p, f, "id",   id,   sizeof id);
     js_text(p, f, "name", name, sizeof name);
-    // Sem tipo ou sem id nao da para montar a URL do catalogo; e um catalogo
-    // que nao responde e pior que uma fileira a menos.
+    // With no type or no id there is no way to build the catalogue's URL; and a
+    // catalogue that does not answer is worse than one row fewer.
     if (kind[0] && id[0]) {
       Decl local, *d;
-      // Vetor cheio: usa um Decl de rascunho so para decidir/registrar a busca.
+      // The array is full: use a scratch Decl only to decide/register the search.
       d = (n < max) ? &output[n] : &local;
       memset(d, 0, sizeof *d);
       d->base = base;
-      // BUSCA: procura "search" dentro do bloco `extra`/`extraSupported` DESTE
-      // catalogo (a faixa [p,f) e o objeto dele, entao nao vaza para o vizinho).
+      // SEARCH: it looks for "search" inside THIS catalogue's `extra`/
+      // `extraSupported` block (the range [p,f) is its own object, so it does not
+      // leak into its neighbour).
       //
-      // So filme e serie. O Akashi declara busca em `event` e `channel`
-      // tambem, e o AIOStreams em `collections` — tipos que este app nao tem
-      // tela para mostrar. Consultar seria trafego que nao vira nada.
+      // Films and series only. Akashi declares search on `event` and `channel` too,
+      // and AIOStreams on `collections` — types this app has no screen for. Querying
+      // them would be traffic that turns into nothing.
       { const char *ex = strstr(p, "\"extra\"");
         if (!ex || ex >= f) ex = strstr(p, "\"extraSupported\"");
         if (ex && ex < f) {
@@ -834,13 +836,13 @@ static int readManifest(const char *base, Decl *output, int max) {
           if (sc && sc < f) d->searchable = 1;
         }
         if (strcmp(kind, "movie") && strcmp(kind, "series")) d->searchable = 0;
-        // Registra AQUI, e nao depois varrendo o vetor de Decl.
+        // Register HERE, and not afterwards by sweeping the Decl array.
         //
-        // O Xperience declara 605 catalogos e poe os dois de BUSCA nas duas
-        // ULTIMAS posicoes (603 e 604). Qualquer teto no vetor de fileiras da
-        // home — 64, 256, o numero que for — corta exatamente os catalogos que
-        // interessam a busca. Os dois assuntos nao tem por que compartilhar
-        // limite: sao 16 alvos de busca contra centenas de fileiras.
+        // Xperience declares 605 catalogues and puts its two SEARCH ones in the
+        // LAST two positions (603 and 604). Any ceiling on the home's row array —
+        // 64, 256, whatever number — cuts exactly the catalogues the search cares
+        // about. The two subjects have no reason to share a limit: it is 16 search
+        // targets against hundreds of rows.
         if (d->searchable) {
           char label[96], nameAddon[96] = "";
           js_text(body, end, "name", nameAddon, sizeof nameAddon);
@@ -855,8 +857,8 @@ static int readManifest(const char *base, Decl *output, int max) {
                addonId[0] ? addonId : base, kind, id);
       snprintf(d->disable, sizeof d->disable, "%s_%s_%s_%s", base, kind, id, name);
       formatTitle(name, kind, d->title, sizeof d->title);
-      // Nome legivel do addon, para a linha "de <addon>" sob o titulo da
-      // fileira de resultados. O manifesto tem `name`; sem ele fica o id.
+      // A readable addon name, for the "from <addon>" line under the results row's
+      // title. The manifest has `name`; without it the id stands in.
       { char an[96] = "";
         js_text(body, end, "name", an, sizeof an);
         snprintf(d->nameAddon, sizeof d->nameAddon, "%s",
@@ -878,18 +880,18 @@ static int readManifest(const char *base, Decl *output, int max) {
   return n;
 }
 
-// --- LEITURA DOS CATALOGOS EM PARALELO ---------------------------------------
+// --- READING THE CATALOGUES IN PARALLEL --------------------------------------
 //
-// Eram ate 16 GET em SERIE, 25 s de timeout cada. Medido no Mac: 8,7 s entre a
-// primeira fileira aparecer (4,0 s) e o catalogo ficar completo (12,8 s), e na
-// TV e pior. Sao pedidos INDEPENDENTES — nada em lerCatalogo/deMeta toca estado
-// compartilhado (a tabela de generos e const), e rede_baixar ja roda em tres
-// fios na busca.
+// It used to be up to 16 GETs IN SERIES, with a 25 s timeout each. Measured on the
+// Mac: 8.7 s between the first row appearing (4.0 s) and the catalogue being
+// complete (12.8 s), and on the TV it is worse. They are INDEPENDENT requests —
+// nothing in readCatalog/ofMeta touches shared state (the genre table is const),
+// and net_download already runs on three threads in the search.
 //
-// A ORDEM DAS FILEIRAS TEM DE SER PRESERVADA: ela sai de art/fileiras.txt e e
-// preferencia do dono. Por isso os fios escrevem cada um no SEU balde e quem
-// monta caminha na ordem, esperando o balde k ficar pronto. O resultado e a
-// mesma ordem de antes, com o tempo do MAIOR pedido em vez da SOMA.
+// THE ROW ORDER HAS TO BE PRESERVED: it comes from art/rows.txt and is the owner's
+// preference. So the threads each write into THEIR OWN bucket and whoever
+// assembles walks in order, waiting for bucket k to be ready. The result is the
+// same order as before, with the time of the LARGEST request instead of the SUM.
 #define CAT_THREADS 3
 
 typedef struct {
@@ -934,8 +936,6 @@ static void *threadCatalog(void *u) {
   }
 }
 
-// --- MANIFESTS IN PARALLEL ---------------------------------------------------
-//
 // They were read one at a time, on the assembly thread, before any catalogue:
 // with the owner's addons that is several GETs in series, and NOTHING else
 // happened until the last one answered. They are independent requests against
@@ -945,7 +945,6 @@ static void *threadCatalog(void *u) {
 //
 // THE ADDON ORDER HAS TO BE PRESERVED: it is what defines the default row order
 // before preferences are applied. So each thread fills its OWN bucket and the
-// join walks them in addon order.
 #define MANIFEST_THREADS 4
 
 typedef struct {
@@ -1020,8 +1019,8 @@ static int manifestsJoin(Decl *output, int max) {
 }
 
 static void *build(void *u) {
-  // O lote tambem cresce: era dimensionado por CAT_MAX e por isso herdava o
-  // mesmo teto arbitrario.
+  // The batch grows too: it used to be sized by CAT_MAX and so inherited the same
+  // arbitrary ceiling.
   int cap = 128;
   CatItem *lote = malloc(sizeof(CatItem) * (size_t)cap);
   int n = 0;
@@ -1029,9 +1028,9 @@ static void *build(void *u) {
   (void)u;
   if (!lote) { searching = 0; return NULL; }
 
-  // O "continue assistindo" vem PRIMEIRO e do Trakt. A home usa as primeiras
-  // posicoes do catalogo nessa fileira, entao a ordem aqui e o que define o
-  // que aparece la — e o historico tem de ganhar das recomendacoes.
+  // "Continue watching" comes FIRST and from Trakt. The home uses the catalogue's
+  // first positions in that row, so the order here is what decides what appears
+  // there — and the history has to beat the recommendations.
   mark("build: start");
   // THE MANIFESTS LEAVE FIRST AND RUN UNDERNEATH THE TRAKT CALLS.
   //
@@ -1051,20 +1050,20 @@ static void *build(void *u) {
   nResume = trakt_resume(lote, 8);
   n += nResume;
   mark("trakt continue watching");
-  // O feed social oficial e uma fileira propria, logo depois do retorno ao
-  // que estava sendo visto. Ele vem cedo para nao depender dos manifestos dos
-  // addons e usa a mesma credencial Trakt ja carregada.
+  // The official social feed is a row of its own, right after the return to what
+  // was being watched. It comes early so as not to depend on the addons' manifests,
+  // and it uses the same Trakt credential already loaded.
   // With the row turned off in Settings there is nobody to show it to, and the
   // feed is a third Trakt GET on the critical path — so it is not fetched at
   // all, instead of fetched and dropped later.
   nSocial = settings_social_row() ? trakt_social(lote + n, 8) : 0;
   n += nSocial;
   mark("trakt friend activity");
-  // O historico do Trakt e a PRIMEIRA fileira da home e chega ~1,6 s antes dos
-  // manifestos. Publicar aqui poe conteudo na tela nesse instante em vez de
-  // segurar tudo ate o fim.
-  // Monta direto em filsMontadas: o vetor local `fil` so existe mais abaixo, e
-  // criar um aqui so para copiar seria trabalho a toa.
+  // Trakt's history is the home's FIRST row and arrives ~1.6 s before the
+  // manifests. Publishing here puts content on screen at that moment instead of
+  // holding everything back to the end.
+  // It builds straight into filtersBuilt: the local `filter` array only exists
+  // further down, and creating one here just to copy from would be wasted work.
   if (n > 0 && !cat_do_cache()) {
     int nf = 0;
     if (nResume > 0) {
@@ -1096,21 +1095,21 @@ static void *build(void *u) {
       if (larger) { lote = larger; cap = newCap; } \
     } } while (0)
 
-  // As fileiras vem dos CATALOGOS declarados nos manifestos dos addons, e nao
-  // de uma lista fixa. A ordem, o que fica de fora e os nomes seguem o
-  // algoritmo do web (sortAndFilterRowsInternal), com as preferencias lidas de
-  // art/fileiras.txt.
+  // The rows come from the CATALOGUES declared in the addons' manifests, and not
+  // from a fixed list. The order, what is left out and the names follow the web
+  // app's algorithm (sortAndFilterRowsInternal), with the preferences read from
+  // art/rows.txt.
   {
-    // static: 256 entradas passam de 200 KB, e isso nao cabe com folga na
-    // pilha de um fio. montar() roda uma vez e num fio so, entao nao ha
-    // reentrada que isto quebre.
+    // static: 256 entries pass 200 KB, and that does not fit comfortably on a
+    // thread's stack. build() runs once and on a single thread, so there is no
+    // reentrancy for this to break.
     static Decl decls[DECL_MAX];
     int nDecl = 0, k;
     CatRow filter[CAT_FILTER_MAX];
     int nFilter = 0;
-    // A fileira 0 e "Continuar assistindo", que ja foi montada acima. Ela e
-    // SINTETICA: nao esta na ordem do web e nao pode ser desligada por chave —
-    // no app ela existe sempre que ha progresso.
+    // Row 0 is "Continue watching", which was assembled above. It is SYNTHETIC: it
+    // is not in the web app's order and cannot be switched off by key — in the app
+    // it exists whenever there is progress.
     if (nResume > 0) {
       CatRow *f0 = &filter[nFilter++];
       memset(f0, 0, sizeof *f0);
@@ -1140,15 +1139,15 @@ static void *build(void *u) {
     nDecl = manifestsJoin(decls, DECL_MAX);
     printf("[disc] %d catalogues declared by the addons\n", nDecl);
 
-    // ALVOS DE BUSCA. Independem da ordem/filtro das FILEIRAS da home: um
-    // catalogo pode estar desativado na home e ainda assim ser bom para
-    // procurar (o Akashi so tem busca, nao tem fileira que valha a pena).
+    // SEARCH TARGETS. They are independent of the order/filtering of the home's
+    // ROWS: a catalogue may be disabled on the home and still be good to search
+    // (Akashi only has search, no row worth having).
     printf("[disc] %d search targets\n", disc_search_n_targets());
     mark("manifests read");
 
-    // ensureOrderKeysWithPrefs: a ordem salva primeiro, e as chaves NOVAS
-    // acrescentadas no fim. Catalogo que o addon passou a declarar hoje entra
-    // por ultimo, nao no meio — e o que evita a home se reorganizar sozinha.
+    // ensureOrderKeysWithPrefs: the saved order first, and the NEW keys appended at
+    // the end. A catalogue the addon has started declaring today goes last, not in
+    // the middle — which is what stops the home reorganising itself.
     {
       int order[DECL_MAX];
       int nOrder = 0, j;
@@ -1162,9 +1161,9 @@ static void *build(void *u) {
       for (j = 0; j < nDecl; j++) if (!watched[j]) order[nOrder++] = j;
 
       int markedFirst = 0;
-      // ETAPA 1 — escolher e ORDENAR as fileiras que serao lidas. Os filtros
-      // (desligada, titulo personalizado) sao locais e baratos; fazer isto
-      // antes deixa os fios so com a parte cara, que e a rede.
+      // STAGE 1 — choose and ORDER the rows that will be read. The filters (off,
+      // custom title) are local and cheap; doing this first leaves the threads with
+      // only the expensive part, which is the network.
       nTasks = 0; nextTask = 0;
       tasks = calloc(CAT_FILTER_MAX, sizeof(TaskCat));
       for (k = 0; k < nOrder && nTasks < CAT_FILTER_MAX; k++) {
@@ -1180,15 +1179,17 @@ static void *build(void *u) {
         if (tasks) tasks[nTasks++].d = d;
       }
 
-      // ETAPA 2 — CAT_FIOS trabalhando na fila. Se o calloc falhar ou nao
-      // houver o que ler, nTarefas fica 0 e o laco de montagem abaixo nao roda:
-      // a home segue com o que ja foi publicado, sem caminho de erro proprio.
+      // STAGE 2 — CAT_THREADS working the queue. If the calloc fails or there is
+      // nothing to read, nTasks stays 0 and the assembly loop below does not run:
+      // the home carries on with what has already been published, with no error
+      // path of its own.
       { pthread_t threads[CAT_THREADS];
         int created = 0, q;
         for (q = 0; q < CAT_THREADS && nTasks > 0; q++)
           if (pthread_create(&threads[created], NULL, threadCatalog, NULL) == 0) created++;
-        // Sem NENHUM fio (pthread_create falhou em todos), le em serie no
-        // proprio fio: pior desempenho, mesmo resultado. Melhor que home vazia.
+        // With NO threads at all (pthread_create failed on all of them), read in
+        // series on this very thread: worse performance, same result. Better than an
+        // empty home.
         if (!created && nTasks > 0) threadCatalog(NULL);
 
         // ETAPA 3 — PUBLISH AS IT ARRIVES, not in reading order.
@@ -1236,7 +1237,7 @@ static void *build(void *u) {
             got = tasks[k].n;
             pthread_mutex_unlock(&catLock);
             if (!isReady) continue;
-            if (!got) continue;   // fileira vazia nao vira titulo pendurado
+            if (!got) continue;   // an empty row does not become a dangling title
             ENSURES(MAX_PER_ROW + 2);
             if (got > cap - n) got = cap - n;
             if (got <= 0) continue;
@@ -1301,12 +1302,11 @@ static void *build(void *u) {
     }
   }
 
-  // Watchlist e colecao entram DEPOIS das recomendacoes, e nao antes.
-  // A home usa as PRIMEIRAS posicoes do catalogo nas suas fileiras; com as
-  // listas do Trakt na frente (e elas passam de 60 itens cada) as fileiras
-  // viravam a watchlist inteira e as recomendacoes nunca apareciam. A
-  // biblioteca varre o catalogo todo procurando as marcas, entao para ela
-  // tanto faz onde estao.
+  // The watchlist and the collection go in AFTER the recommendations, not before.
+  // The home uses the catalogue's FIRST positions in its rows; with Trakt's lists
+  // in front (and they run to over 60 items each) the rows became the whole
+  // watchlist and the recommendations never appeared. The library sweeps the whole
+  // catalogue looking for the marks, so for it their position makes no difference.
   ENSURES(400);
   n += trakt_list("watchlist",  lote + n, cap - n);
   ENSURES(400);
@@ -1318,10 +1318,9 @@ static void *build(void *u) {
     cat_cache_replaced();
     mark("network catalog published");
     printf("[disc] catalog built with %d titles\n", n);
-    // Grava so o resultado COMPLETO, nao as publicacoes parciais: um cache
-    // com tres fileiras faria a proxima abertura nascer pela metade e so
-    // completar quando a rede respondesse — exatamente o que o cache existe
-    // para evitar.
+    // It only writes the COMPLETE result, not the partial publications: a cache
+    // with three rows would make the next opening start half-built and only
+    // complete when the network answered — exactly what the cache exists to avoid.
     cat_write_cache(dirArtDisc);
   } else {
     printf("[disc] nothing came from the network; using the packaged catalog\n");
@@ -1363,19 +1362,19 @@ void disc_step(void) {
   disc_start();
 }
 
-// --- episodios sob demanda ---------------------------------------------------
+// --- episodes on demand ------------------------------------------------------
 
-// CACHE LRU DO /meta DAS SERIES.
+// AN LRU CACHE OF THE SERIES' /meta.
 //
-// UMA resposta do Cinemeta traz TODAS as temporadas: o `videos` vem inteiro e o
-// filtro por temporada acontece aqui embaixo, de graca. Mesmo assim cada troca
-// de temporada rebaixava o corpo todo — numa serie longa sao centenas de
-// kilobytes de JSON por pilula apertada, e era isso que o dono sentia como
-// "demora para atualizar quando troca de temporada".
+// ONE Cinemeta response carries ALL the seasons: `videos` comes whole and the
+// per-season filtering happens down here, for free. Even so, every season change
+// re-downloaded the whole body — on a long series that is hundreds of kilobytes of
+// JSON per pill pressed, and that is what the owner felt as "it takes ages to
+// update when you change season".
 //
-// Guardar apenas a ultima serie fazia voltar ao titulo anterior repetir a
-// transferencia inteira. Quatro respostas cobrem a navegacao normal de ida e
-// volta sem deixar o uso de memoria crescer sem limite.
+// Keeping only the last series meant going back to the previous title repeated the
+// whole transfer. Four responses cover normal back-and-forth navigation without
+// letting memory use grow without limit.
 #define META_CACHE_N 4
 static struct { char id[24]; char *body; unsigned usage; } metaCache[META_CACHE_N];
 static unsigned metaClock;
@@ -1387,7 +1386,7 @@ static char *metaCacheGet(const char *id) {
   for (int i = 0; i < META_CACHE_N; i++)
     if (metaCache[i].body && !strcmp(metaCache[i].id, id)) {
       metaCache[i].usage = ++metaClock;
-      r = strdup(metaCache[i].body); /* o fio trabalha em copia estavel */
+      r = strdup(metaCache[i].body); /* the thread works on a stable copy */
       break;
     }
   pthread_mutex_unlock(&metaLock);
@@ -1410,9 +1409,9 @@ static void metaCacheStore(const char *id, const char *body) {
   pthread_mutex_unlock(&metaLock);
 }
 
-// Publica a parte critica antes de qualquer enriquecimento opcional. Assim a
-// fileira de episodios aparece depois da primeira resposta, sem esperar pelas
-// duas viagens ao TMDB usadas para foto e personagem do elenco.
+// It publishes the critical part before any optional enrichment. That way the
+// episodes row appears after the first response, without waiting for the two TMDB
+// round trips used for the cast's photo and character.
 static int publishEpisodes(const char *body, int targetItem, const char *title) {
 #define VIDEOS_MAX 600
   CatEp *eps = malloc(sizeof(CatEp) * VIDEOS_MAX);
@@ -1463,10 +1462,10 @@ static void *fetchEps(void *u) {
   char series[24];
   (void)u;
   if (!orig || !orig->imdb[0]) { threadEpAlive = 0; return NULL; }
-  // FILME TAMBEM PASSA AQUI. O /meta/movie traz elenco, direcao, generos e
-  // nota — antes so os titulos enriquecidos no catalogo tinham elenco, e a
-  // pagina do filme abria sem a fileira. O que e so de serie (episodios,
-  // temporadas) e pulado abaixo.
+  // A FILM COMES THROUGH HERE TOO. /meta/movie carries cast, directing, genres and
+  // score — before, only the titles enriched in the catalogue had a cast, and the
+  // film's page opened without the row. What is series-only (episodes, seasons) is
+  // skipped below.
   int isMovie = strcmp(orig->kind, "series") != 0;
   base = *orig;
   it = &base;
@@ -1486,8 +1485,8 @@ static void *fetchEps(void *u) {
     metaCacheStore(series, body);
   }
   if (!isMovie) publishEpisodes(body, targetItem, it->title);
-  // A MESMA resposta traz elenco, direcao e a lista de temporadas. Buscar de
-  // novo para cada uma seria tres viagens ao mesmo lugar.
+  // The SAME response carries the cast, the directing and the season list. Fetching
+  // again for each would be three round trips to the same place.
   {
     CatItem edit = *it;
     const char *c = js_array(body, NULL, "cast");
@@ -1500,7 +1499,7 @@ static void *fetchEps(void *u) {
       while (*p2 && *p2 != '"' && n2 + 1 < sizeof edit.cast[k].name)
         edit.cast[k].name[n2++] = *p2++;
       edit.cast[k].name[n2] = 0;
-      edit.cast[k].role[0] = 0;   // o Cinemeta nao diz o personagem
+      edit.cast[k].role[0] = 0;   // Cinemeta does not give the character
       edit.cast[k].photo[0] = 0;
       k++;
       p2++;
@@ -1517,11 +1516,11 @@ static void *fetchEps(void *u) {
           edit.directing[n2++] = *dr++;
         edit.directing[n2] = 0;
       } }
-    // GENEROS, NOTA E PAIS. Vinham so do CATALOGO, e o catalogo do Cinemeta nao
-    // traz nenhum dos tres: a linha de meta ficava com o TIPO ("Programa de TV")
-    // no lugar dos generos, sem selo do IMDb e sem pais. O /meta traz os tres, e
-    // esta funcao ja tem a resposta na mao — deixar de ler era desperdicio de uma
-    // viagem que ja foi paga.
+    // GENRES, SCORE AND COUNTRY. They used to come only from the CATALOGUE, and
+    // Cinemeta's catalogue carries none of the three: the meta line ended up with
+    // the TYPE ("TV Show") in place of the genres, with no IMDb badge and no
+    // country. /meta carries all three, and this function already has the response
+    // in hand — not reading it was wasting a round trip already paid for.
     { const char *g = js_array(body, NULL, "genres");
       char list[160]; size_t n3 = 0;
       list[0] = 0;
@@ -1540,15 +1539,16 @@ static void *fetchEps(void *u) {
       }
       if (list[0]) snprintf(edit.genre, sizeof edit.genre, "%s", list); }
     { double score = js_num(body, NULL, "imdbRating", 0.0);
-      // O campo vem como "8.1" (string ou numero); guardamos por 10 para caber
-      // em int sem perder a casa decimal, como o resto do catalogo ja faz.
+      // The field arrives as "8.1" (a string or a number); we store it times 10 so
+      // it fits in an int without losing the decimal place, as the rest of the
+      // catalogue already does.
       if (score > 0.0) {
         int n10 = (int)(score * 10.0 + 0.5);
-        if (n10 > 99) n10 /= 10;      // ja veio multiplicado
+        if (n10 > 99) n10 /= 10;      // it already came multiplied
         edit.score = n10;
       } }
-    js_text(body, NULL, "country", edit.pais, sizeof edit.pais);
-    // Temporadas presentes, sem repetir e em ordem.
+    js_text(body, NULL, "country", edit.country, sizeof edit.country);
+    // The seasons present, without repeats and in order.
     { const char *v = js_array(body, NULL, "videos");
       edit.nSeasons = 0;
       while (v) {
@@ -1570,7 +1570,7 @@ static void *fetchEps(void *u) {
               edit.seasons[i2] = edit.seasons[j2];
               edit.seasons[j2] = tmp;
             } } }
-    // Publica texto, generos e temporadas antes do enriquecimento de imagens.
+    // It publishes text, genres and seasons before the image enrichment.
     cat_update_item(targetItem, &edit);
     mark("detail: basic meta on screen");
     { char idBase[24];
@@ -1590,25 +1590,25 @@ static void *fetchEps(void *u) {
   return NULL;
 }
 
-// Pedido AINDA NAO ATENDIDO, quando um chega com um fio em voo. Antes isto era
-// `if (fioEpVivo) return;` — o pedido era largado no chao, e trocar de
-// temporada enquanto a anterior carregava deixava a lista na temporada ERRADA
-// para sempre, sem nova tentativa. Guardar o ultimo (nao enfileirar todos) e o
-// certo: o dono quer a temporada onde ele PAROU, nao as que ele atravessou.
+// A request NOT YET SERVED, when one arrives with a thread in flight. This used to
+// be `if (threadEpAlive) return;` — the request was dropped on the floor, and
+// changing season while the previous one loaded left the list on the WRONG season
+// forever, with no retry. Keeping the last one (rather than queueing them all) is
+// right: the owner wants the season they STOPPED on, not the ones they passed through.
 static int pendingItem = -1, pendingTemp;
 
-// --- VER TUDO ----------------------------------------------------------------
+// --- SEE ALL -----------------------------------------------------------------
 //
-// Uma lista SEPARADA do catalogo da home, de proposito: a home guarda 12 por
-// fileira e e ela que a biblioteca e a busca varrem. Despejar 200 itens de um
-// catalogo ali dentro mudaria o que essas duas telas veem por causa de uma
-// navegacao que o dono pode fechar no segundo seguinte.
-#define SEEALL_STEP 100        // `skipStep` padrao do web quando o addon nao diz
+// A list SEPARATE from the home's catalogue, on purpose: the home keeps 12 per row
+// and it is the home that the library and the search sweep. Dumping 200 items of a
+// catalogue in there would change what those two screens see because of a piece of
+// navigation the owner may close a second later.
+#define SEEALL_STEP 100        // the web app's default `skipStep` when the addon does not say
 
 static CatItem  seeallItems[SEEALL_MAX];
 static int      seeallN;
 static char     seeallBase[600], seeallKind[8], seeallCat[96], seeallGenre[96];
-static int      seeallPagina, seeallEnd, seeallThreadAlive, seeallError;
+static int      seeallPage, seeallEnd, seeallThreadAlive, seeallError;
 static unsigned seeallGeneration;
 static pthread_mutex_t seeallLock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1618,7 +1618,7 @@ static void *threadSeeAll(void *u) {
   char url[1600], base[600], type[8], id[96], genre[96], encoded[290], *body;
   int raw=0, skip, cap;unsigned generation;
   pthread_mutex_lock(&seeallLock);
-  skip=seeallPagina;generation=seeallGeneration;
+  skip=seeallPage;generation=seeallGeneration;
   snprintf(base,sizeof base,"%s",seeallBase);snprintf(type,sizeof type,"%s",seeallKind);
   snprintf(id,sizeof id,"%s",seeallCat);snprintf(genre,sizeof genre,"%s",seeallGenre);
   pthread_mutex_unlock(&seeallLock);
@@ -1653,9 +1653,9 @@ static void *threadSeeAll(void *u) {
   pthread_mutex_lock(&seeallLock);
   if(generation!=seeallGeneration){pthread_mutex_unlock(&seeallLock);continue;}
   seeallError=!valid;
-  // Skip usa quantidade recebida, não 100 presumidos. Muitos addons entregam
-  // 20/50 por página. Repetição sem novos ids também termina a paginação.
-  if(valid){seeallPagina+=raw;if(!raw||!added||seeallN>=cap)seeallEnd=1;}
+  // The skip uses the quantity received, not a presumed 100. Many addons deliver
+  // 20/50 per page. A repetition with no new ids also ends the pagination.
+  if(valid){seeallPage+=raw;if(!raw||!added||seeallN>=cap)seeallEnd=1;}
   seeallThreadAlive=0;
   pthread_mutex_unlock(&seeallLock);
   return NULL;
@@ -1679,8 +1679,8 @@ void disc_seeall_open(const char *base, const char *kind, const char *catId) {
 void disc_seeall_filter(const char *base, const char *kind, const char *catId,const char *genre) {
   if (!base || !kind || !catId) return;
   pthread_mutex_lock(&seeallLock);
-  // Mesmo catalogo que ja esta aberto: mantem o que ja foi lido em vez de
-  // recomecar do zero (o dono pode ter voltado e entrado de novo).
+  // The same catalogue that is already open: it keeps what has been read instead of
+  // starting from scratch (the owner may have gone back and come in again).
   if (!strcmp(seeallBase, base) && !strcmp(seeallKind, kind) && !strcmp(seeallCat, catId)
       && !strcmp(seeallGenre,genre?genre:"") && seeallN > 0) {
     pthread_mutex_unlock(&seeallLock);
@@ -1690,7 +1690,7 @@ void disc_seeall_filter(const char *base, const char *kind, const char *catId,co
   snprintf(seeallKind, sizeof seeallKind, "%s", kind);
   snprintf(seeallCat,  sizeof seeallCat,  "%s", catId);
   snprintf(seeallGenre,sizeof seeallGenre,"%s",genre?genre:"");
-  seeallN = 0; seeallPagina = 0; seeallEnd = 0;seeallError=0;seeallGeneration++;
+  seeallN = 0; seeallPage = 0; seeallEnd = 0;seeallError=0;seeallGeneration++;
   pthread_mutex_unlock(&seeallLock);
   seeallFire();
 }
@@ -1700,7 +1700,7 @@ int  disc_seeall_n(void) { pthread_mutex_lock(&seeallLock);int n=seeallN;pthread
 int  disc_seeall_loading(void) { pthread_mutex_lock(&seeallLock);int n=seeallThreadAlive;pthread_mutex_unlock(&seeallLock);return n; }
 int  disc_seeall_end(void) { pthread_mutex_lock(&seeallLock);int n=seeallEnd;pthread_mutex_unlock(&seeallLock);return n; }
 int  disc_seeall_error(void) { pthread_mutex_lock(&seeallLock);int n=seeallError;pthread_mutex_unlock(&seeallLock);return n; }
-void disc_seeall_close(void) { /* guarda o que leu; ver desc_vertudo_abrir */ }
+void disc_seeall_close(void) { /* it keeps what it read; see disc_seeall_open */ }
 
 int disc_seeall_item(int i, CatItem *dst) {
   int ok = 0;
@@ -1712,8 +1712,8 @@ int disc_seeall_item(int i, CatItem *dst) {
 
 void disc_episodes(int indexItem, int season) {
   if (threadEpAlive) { pendingItem = indexItem; pendingTemp = season; return; }
-  // A lista agora e UNICA e cobre todas as temporadas, entao ter qualquer
-  // episodio deste titulo ja basta — trocar de aba nao pede nada.
+  // The list is now SINGLE and covers every season, so having any episode of this
+  // title is already enough — changing tab asks for nothing.
   (void)season;
   if (cat_n_episodes(indexItem) > 0) return;
   epItem = indexItem; epTemp = season;
@@ -1726,8 +1726,8 @@ int disc_episodes_loading(int indexItem) {
   return (threadEpAlive && epItem == indexItem) || pendingItem == indexItem;
 }
 
-// Chamada por quadro por quem desenha, para o pedido guardado sair assim que o
-// fio anterior desocupar.
+// Called every frame by whoever draws, so the stored request can go out as soon as
+// the previous thread frees up.
 void disc_episodes_pending(void) {
   int i, t;
   if (threadEpAlive || pendingItem < 0) return;
@@ -1736,20 +1736,19 @@ void disc_episodes_pending(void) {
   disc_episodes(i, t);
 }
 
-// --- TITULO SOB DEMANDA -------------------------------------------------------
+// Opening a credit from an actor's filmography, or a "More like this" item, needs
+// the meta of a title the owner's catalogue does NOT have. Before, those items were
+// greyed out and would not open, which left the filmography decorative.
 //
-// Abrir um credito da filmografia de um ator, ou um item de "Mais como este",
-// exige meta de um titulo que o catalogo do dono NAO tem. Antes esses itens
-// ficavam apagados e nao abriam, o que deixava a filmografia decorativa.
-//
-// O meta vem do Cinemeta, a mesma fonte do resto do catalogo, e o item entra no
-// FIM do vetor (cat_acrescentar). O tipo nao e conhecido de antemao — o TMDB
-// diz "movie"/"tv" no credito, mas o relacionado do Trakt nao —, entao tenta-se
-// filme e, se nao houver, serie. Duas chamadas no pior caso, uma no comum.
+// The meta comes from Cinemeta, the same source as the rest of the catalogue, and
+// the item goes in at the END of the array (cat_append). The type is not known in
+// advance — TMDB says "movie"/"tv" in the credit, but Trakt's related item does not
+// — so it tries film and, failing that, series. Two calls in the worst case, one in
+// the common one.
 static char sobId[24];
-static long sobTmdb;          // quando > 0, o id do IMDb ainda precisa ser resolvido
+static long sobTmdb;          // when > 0, the IMDb id still has to be resolved
 static char sobKind[8];
-static int  sobIndex = -1;   // resultado, consumido por desc_titulo_pronto
+static int  sobIndex = -1;   // the result, consumed by disc_title_ready
 static int  sobThreadAlive;
 static pthread_t sobThread;
 
@@ -1759,9 +1758,9 @@ static void *fetchTitle(void *arg) {
   (void)arg;
   snprintf(id, sizeof id, "%s", sobId);
 
-  // O credito de um ator chega com o id do TMDB, nao com o do IMDb — o
-  // combined_credits nao traz imdb_id. `external_ids` faz a traducao, e e uma
-  // chamada so, feita apenas quando o dono abre o credito.
+  // An actor's credit arrives with the TMDB id, not the IMDb one — combined_credits
+  // does not carry imdb_id. `external_ids` does the translation, and it is a single
+  // call, made only when the owner opens the credit.
   if (sobTmdb > 0) {
     const char *key = disc_key_tmdb();
     id[0] = 0;
@@ -1775,7 +1774,7 @@ static void *fetchTitle(void *arg) {
       printf("[disc] on demand tmdb %ld -> no imdb\n", sobTmdb); fflush(stdout);
       sobIndex = -1; sobThreadAlive = 0; return NULL;
     }
-    // Ja temos? Entao e so abrir.
+    // Already have it? Then just open it.
     { int j = cat_index_by_imdb(id);
       if (j >= 0) { sobIndex = j; sobThreadAlive = 0; return NULL; } }
   }
@@ -1788,9 +1787,9 @@ static void *fetchTitle(void *arg) {
     { const char *m = strstr(body, "\"meta\"");
       CatItem it;
       if (m && ofMeta(m, NULL, kind, &it)) {
-        // O id do proprio pedido manda: o Cinemeta as vezes devolve o campo
-        // vazio, e sem ele o titulo entraria no catalogo sem chave e nao
-        // poderia ser reaberto nem casar com progresso.
+        // The request's own id wins: Cinemeta sometimes returns the field empty,
+        // and without it the title would go into the catalogue with no key and
+        // could neither be reopened nor matched with progress.
         if (!it.imdb[0]) snprintf(it.imdb, sizeof it.imdb, "%s", id);
         found = cat_append(&it);
       } }
@@ -1817,7 +1816,7 @@ void disc_request_title(const char *imdb) {
   char id[24];
   const char *dp;
   if (!imdb || imdb[0] != 't' || sobThreadAlive) return;
-  // Corta o sufixo de episodio, se vier: o meta e do TITULO.
+  // Cuts the episode suffix, if it comes: the meta belongs to the TITLE.
   dp = strchr(imdb, ':');
   if (dp) { size_t k = (size_t)(dp - imdb);
             if (k >= sizeof id) k = sizeof id - 1;

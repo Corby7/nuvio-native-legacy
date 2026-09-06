@@ -25,12 +25,12 @@
 typedef enum {
   TRA_STOPPED = 0,
   TRA_REQUESTING,     // buscando o codigo
-  TRA_WAITING,  // codigo na tela, esperando a pessoa autorizar
+  TRA_WAITING,  // code on screen, waiting for the person to authorise
   TRA_ON,      // token obtido
   TRA_ERROR
 } TraState;
 
-// Comeca o fluxo num fio proprio. Idempotente enquanto um estiver em andamento.
+// Starts the flow on a thread of its own. Idempotent while one is in progress.
 void traktauth_begin(void);
 
 // One step. Call once per frame; does not block. This is where the poll is
@@ -49,7 +49,7 @@ void traktauth_cancel(void);
 // startup, after data_start. 1 when there was a token.
 int  traktauth_load(void);
 
-// Esquece o vinculo (chamado ao sair da conta).
+// Forgets the link (called on signing out of the account).
 void traktauth_forget(void);
 
 #endif

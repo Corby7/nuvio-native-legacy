@@ -69,7 +69,7 @@ int main(void) {
   checks("session ended",              !session_loggedin(), "");
   checks("session.txt erased",            !exists("session.txt"), "");
   checks("addon list empty",         addons_n() == 0, "");
-  checks("Trakt desligado",               !trakt_active(), "");
+  checks("Trakt disabled",               !trakt_active(), "");
   checks("no profile in memory",      profiles_n() == 0, "");
   checks("active profile back to 1",    profiles_active() == 1, "");
   checks("profile.txt erased",            !exists("profile.txt"), "");

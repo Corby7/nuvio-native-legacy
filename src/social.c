@@ -33,7 +33,7 @@ typedef struct { unsigned generation; CatItem person; } SocialTask;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static SocialData data, ready;
 static unsigned generation;
-static int hasReady, sair, selected, chosen = -1;
+static int hasReady, wantsExit, selected, chosen = -1;
 
 static int slugValid(const char *s) {
   return s && s[0] && strspn(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == strlen(s);
@@ -83,7 +83,7 @@ static int parseActivities(const char *body, SocialData *d, const char *actionDf
     {const char *fo=js_end(obj);js_text(obj,fo,"title",a->title,sizeof a->title);js_text(obj,fo,"imdb",imdb,sizeof imdb);}
     ep=strstr(p,"\"episode\"");
     if(ep&&ep<f){const char *eo=strchr(ep,'{'),*ef=eo?js_end(eo):NULL;int t=eo?(int)js_num(eo,ef,"season",0):0,e=eo?(int)js_num(eo,ef,"number",0):0;char name[100]="";
-      if(eo&&ef)js_text(eo,ef,"title",name,sizeof name);snprintf(a->detail,sizeof a->detail,"T%dE%d%s%s",t,e,name[0]?" · ":"",name);
+      if(eo&&ef)js_text(eo,ef,"title",name,sizeof name);snprintf(a->detail,sizeof a->detail,"S%dE%d%s%s",t,e,name[0]?" · ":"",name);
     } else snprintf(a->detail,sizeof a->detail,"Film");
     if(!imdb[0]){p=js_next(f);continue;} snprintf(a->imdb,sizeof a->imdb,"%s",imdb);
     snprintf(a->poster,sizeof a->poster,"https://images.metahub.space/poster/medium/%s/img",imdb); n++; p=js_next(f);
@@ -95,13 +95,13 @@ static void *load(void *arg) {
   if(!d){free(t);return NULL;} d->generation=t->generation;d->person=t->person;d->state=SOCIAL_UNAVAILABLE;
   if(!slugValid(d->person.socialSlug)||!trakt_headers(header,auth,sizeof auth,key,sizeof key))d->state=!trakt_active()?SOCIAL_DISCONNECTED:SOCIAL_UNAVAILABLE;
   else {
-    snprintf(url,sizeof url,"https://api.trakt.tv/users/%s?extended=full",d->person.socialSlug); body=net_download_com(url,10,header);
+    snprintf(url,sizeof url,"https://api.trakt.tv/users/%s?extended=full",d->person.socialSlug); body=net_download_headers(url,10,header);
     if(!body)d->state=SOCIAL_UNAVAILABLE;
     else {js_text(body,NULL,"name",d->person.socialName,sizeof d->person.socialName);js_text(body,NULL,"about",d->bio,sizeof d->bio);js_text(body,NULL,"location",d->local,sizeof d->local);
       {const char *av=strstr(body,"\"avatar\"");if(av)js_text(av,NULL,"full",d->person.socialAvatar,sizeof d->person.socialAvatar);}free(body);
-      snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/activities?limit=20&extended=full",d->person.socialSlug);body=net_download_com(url,12,header);
+      snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/activities?limit=20&extended=full",d->person.socialSlug);body=net_download_headers(url,12,header);
       if(body&&strchr(body,'[')){d->n=parseActivities(body,d,"watch");d->state=d->n?SOCIAL_READY:SOCIAL_NO_ACTIVITY;free(body);}
-      else {free(body);snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/history?limit=20&extended=full",d->person.socialSlug);body=net_download_com(url,12,header);
+      else {free(body);snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/history?limit=20&extended=full",d->person.socialSlug);body=net_download_headers(url,12,header);
         if(body&&strchr(body,'[')){d->n=parseActivities(body,d,"watch");d->state=d->n?SOCIAL_READY:SOCIAL_NO_ACTIVITY;}else d->state=SOCIAL_PRIVATE;free(body);}
     }
   }
@@ -113,14 +113,14 @@ static void openInternal(const CatItem *person, int preserve) {
   pthread_mutex_lock(&lock);generation++;hasReady=0;
   if(preserve)data=previous;else data=(SocialData){0};
   data.generation=generation;data.person=copy;data.state=preserve?SOCIAL_UPDATING:SOCIAL_LOADING;pthread_mutex_unlock(&lock);
-  sair=0;selected=0;chosen=-1;t=malloc(sizeof *t);if(!t){data.state=SOCIAL_UNAVAILABLE;return;}t->generation=generation;t->person=copy;
+  wantsExit=0;selected=0;chosen=-1;t=malloc(sizeof *t);if(!t){data.state=SOCIAL_UNAVAILABLE;return;}t->generation=generation;t->person=copy;
   if(pthread_create(&thread,NULL,load,t)==0)pthread_detach(thread);else{free(t);data.state=SOCIAL_UNAVAILABLE;}
 }
 void social_open(const CatItem *person) { openInternal(person,0); }
-int social_wants_exit(void){int v=sair;sair=0;return v;}
+int social_wants_exit(void){int v=wantsExit;wantsExit=0;return v;}
 SocialState social_state(void){return data.state;}
 void social_event(const SDL_Event *e){SDL_Keycode k;if(!e||e->type!=SDL_KEYDOWN)return;k=e->key.keysym.sym;
-  if(k==SDLK_ESCAPE||k==SDLK_AC_BACK||k==SDLK_BACKSPACE||k==SDLK_LEFT){sair=1;return;}if(k==SDLK_UP&&selected>0)selected--;if(k==SDLK_DOWN&&selected+1<data.n)selected++;
+  if(k==SDLK_ESCAPE||k==SDLK_AC_BACK||k==SDLK_BACKSPACE||k==SDLK_LEFT){wantsExit=1;return;}if(k==SDLK_UP&&selected>0)selected--;if(k==SDLK_DOWN&&selected+1<data.n)selected++;
   if(k==SDLK_r && data.state!=SOCIAL_LOADING && data.state!=SOCIAL_UPDATING){openInternal(&data.person,1);return;}
   if(k==SDLK_RETURN||k==SDLK_KP_ENTER){if(data.state==SOCIAL_PRIVATE||data.state==SOCIAL_UNAVAILABLE||data.state==SOCIAL_DISCONNECTED||data.state==SOCIAL_STALE){openInternal(&data.person,1);return;}if((data.state==SOCIAL_READY||data.state==SOCIAL_UPDATING)&&selected>=0&&selected<data.n&&data.activities[selected].imdb[0])chosen=selected;}
 }

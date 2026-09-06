@@ -12,16 +12,16 @@
 static char token[128], client[80];
 static int  on;
 
-// Estado da ultima escrita iniciada pelo menu. O corpo de um POST nao e prova
-// de sucesso: o Trakt tambem devolve corpo em 4xx. O consumidor usa este
-// estado para so espelhar a intencao local depois de um HTTP 2xx.
+// The state of the last write started from the menu. A POST's body is no proof
+// of success: Trakt returns a body on 4xx too. The consumer uses this state so
+// it only mirrors the local intent after an HTTP 2xx.
 enum { TK_OP_NONE, TK_OP_PENDING, TK_OP_CONFIRMED, TK_OP_FAILURE };
 enum { TK_OP_LIST = 1, TK_OP_HISTORY = 2 };
 static volatile int listState, historyState;
 
-// Mantem o contrato antigo (so IMDb) sem perder o tipo quando o item ja esta
-// no catalogo. O sufixo de episodio continua sendo um fallback para chamadas
-// antigas feitas antes de o catalogo estar montado.
+// Keeps the old contract (IMDb only) without losing the type when the item is
+// already in the catalogue. The episode suffix stays as a fallback for older
+// calls made before the catalogue was assembled.
 extern const char *cat_kind_by_imdb(const char *imdb);
 extern void cat_history_set_id(const char *imdb, const char *kind, int watched);
 
@@ -41,8 +41,9 @@ static int stateRead(const volatile int *state) {
   return __atomic_load_n(state, __ATOMIC_ACQUIRE);
 }
 
-// API pequena e interna ao port: a declaracao fica no consumidor porque o
-// contrato publico historico de trakt_watchlist/trakt_assistido continua void.
+// A small API, internal to the port: the declaration lives in the consumer
+// because the historical public contract of trakt_watchlist/trakt_watched is
+// still void.
 int trakt_operation_state(int kind) {
   if (kind == TK_OP_LIST) return stateRead(&listState);
   if (kind == TK_OP_HISTORY) return stateRead(&historyState);
@@ -101,9 +102,9 @@ int trakt_load(const char *dirArt) {
   return on;
 }
 
-// Arte e sinopse por id do IMDb. O Trakt devolve so identificadores e
-// progresso; quem tem imagem e o Cinemeta, que e o mesmo indice que os addons
-// usam — entao o que aparece na tela e o que da para pedir fonte.
+// Art and synopsis by IMDb id. Trakt returns only identifiers and progress; the
+// one with images is Cinemeta, which is the same index the addons use — so what
+// appears on screen is what a source can be requested for.
 static int decorate(CatItem *d, const char *kind) {
   char url[300], *body;
   char series[24];
@@ -113,9 +114,9 @@ static int decorate(CatItem *d, const char *kind) {
   dp = strchr(series, ':');
   if (dp) *(char *)dp = 0;
   snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA, kind, series);
-  // 8 s e nao 20: sao ate OITO destes em serie (um por item do historico) antes
-  // de a primeira fileira da home existir. Medido no Mac: 2,1 s no caso bom;
-  // com um item lento eram 20 s de tela sem conteudo nenhum.
+  // 8 s and not 20: there are up to EIGHT of these in series (one per history
+  // item) before the home's first row exists. Measured on the Mac: 2.1 s in the
+  // good case; with one slow item it was 20 s of screen with no content at all.
   body = net_download(url, 8);
   if (!body) return 0;
   ok = js_text(body, NULL, "poster", d->poster, sizeof d->poster);
@@ -130,9 +131,9 @@ static int decorate(CatItem *d, const char *kind) {
     { char *tr = strstr(year, "\xe2\x80\x93"); if (tr) *tr = 0; }
     snprintf(d->meta, sizeof d->meta, "%.20s%s%.20s", year,
              (year[0] && r[0]) ? "  \xc2\xb7  " : "", r);
-    // Minutos que faltam, para a legenda do card. O Trakt da a porcentagem e o
-    // Cinemeta a duracao; o cruzamento das duas e o unico jeito de ter isto
-    // sem baixar o arquivo.
+    // Minutes remaining, for the card's caption. Trakt gives the percentage and
+    // Cinemeta the duration; crossing the two is the only way to have this
+    // without downloading the file.
     if (d->progress > 0 && d->progress < 100) {
       int total = atoi(r);
       if (total > 0) d->remainingMin = total - (total * d->progress) / 100;
@@ -146,15 +147,14 @@ static int decorate(CatItem *d, const char *kind) {
   return ok;
 }
 
-// ENFEITAR EM PARALELO.
+// There are up to 8 GETs to Cinemeta, one per history item, and they used to be
+// done IN SERIES inside the reading loop. Measured on the Mac: 2.1 s before the
+// home had any network content — and this is the FIRST row, the one the owner
+// sees first.
 //
-// Sao ate 8 GET ao Cinemeta, um por item do historico, e eram feitos EM SERIE
-// dentro do laco de leitura. Medido no Mac: 2,1 s antes de a home ter qualquer
-// conteudo de rede — e essa e a PRIMEIRA fileira, a que o dono ve primeiro.
-//
-// Cada `enfeitar` so escreve no seu proprio CatItem e nao toca estado
-// compartilhado, entao a paralelizacao e direta. A ordem do historico e
-// preservada porque cada fio escreve na posicao que ja era dele.
+// Each `decorate` only writes into its own CatItem and touches no shared state,
+// so parallelising is straightforward. The history's order is preserved because
+// each thread writes into the slot that was already its own.
 #define TK_THREADS 3
 
 typedef struct { CatItem *d; char kind[8]; int ok; } TaskDecorate;
@@ -174,13 +174,13 @@ static void *threadDecorate(void *u) {
   }
 }
 
-// A barra de retomada vem de /sync/playback e nao informa se o titulo foi
-// marcado como assistido. Consultamos o historico real uma vez no mesmo ciclo
-// de descoberta para que a modal nao trate progresso alto como prova de visto.
-// Para series, registros com `episode` sao deliberadamente ignorados: ter
-// visto um episodio nao significa ter marcado a serie inteira como assistida.
+// The resume bar comes from /sync/playback and does not say whether the title
+// was marked as watched. We query the real history once in the same discovery
+// cycle so the modal does not treat high progress as proof of having watched.
+// For series, records with `episode` are deliberately ignored: having seen one
+// episode does not mean the whole series was marked as watched.
 static void loadHistoryReal(const char *const *header) {
-  char *body = net_download_com("https://api.trakt.tv/sync/history?limit=100&extended=full", 25, header);
+  char *body = net_download_headers("https://api.trakt.tv/sync/history?limit=100&extended=full", 25, header);
   const char *p;
   if (!body) return;
   p = strchr(body, '[');
@@ -225,9 +225,9 @@ int trakt_resume(CatItem *output, int max) {
   header[1] = "trakt-api-version: 2";
   header[2] = key;
   header[3] = NULL;
-  body = net_download_com("https://api.trakt.tv/sync/playback?extended=full", 25, header);
+  body = net_download_headers("https://api.trakt.tv/sync/playback?extended=full", 25, header);
   if (!body) { printf("[trakt] no response\n"); return 0; }
-  // O corpo e um array na raiz; js_array procura por chave, entao anda-se a mao.
+  // The body is an array at the root; js_array searches by key, so we walk by hand.
   p = strchr(body, '[');
   p = p ? p + 1 : NULL;
   while (p && *p && n < max) {
@@ -242,9 +242,10 @@ int trakt_resume(CatItem *output, int max) {
       char imdb[24] = "";
       memset(d, 0, sizeof *d);
       d->progress = (int)js_num(p, f, "progress", 0.0);
-      // O bloco "movie"/"show" tem o titulo e os ids; o "episode" traz
-      // temporada e numero. Procurar "imdb" na faixa inteira pegaria o do
-      // episodio, que os addons tambem aceitam mas nao identifica a obra.
+      // The "movie"/"show" block holds the title and the ids; the "episode" one
+      // carries the season and number. Looking for "imdb" across the whole range
+      // would pick the episode's, which the addons also accept but which does
+      // not identify the work.
       { const char *block = strstr(p, series ? "\"show\"" : "\"movie\"");
         if (block && block < f) {
           const char *fb = js_end(strchr(block, '{'));
@@ -264,8 +265,9 @@ int trakt_resume(CatItem *output, int max) {
         snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
         snprintf(d->kind, sizeof d->kind, "movie");
       }
-      // Enfeitar fica para DEPOIS do laco, em paralelo. Aqui o item ja esta
-      // montado: so falta a arte e a sinopse, que vem da rede.
+      // Decorating is left for AFTER the loop, in parallel. Here the item is
+      // already assembled: only the art and the synopsis are missing, and those
+      // come from the network.
       n++;
     }
     p = js_next(f);
@@ -273,10 +275,11 @@ int trakt_resume(CatItem *output, int max) {
   free(body);
   loadHistoryReal(header);
 
-  // ENFEITAR os n itens em TK_FIOS fios, e so entao compactar: `enfeitar` falha
-  // para item que o Cinemeta nao conhece, e antes o `if (enfeitar(...)) n++`
-  // simplesmente nao contava — agora o item ja esta na posicao, entao os que
-  // falharam saem por compactacao, preservando a ordem do historico.
+  // DECORATE the n items across TK_THREADS threads, and only then compact:
+  // `decorate` fails for an item Cinemeta does not know, and before, the
+  // `if (decorate(...)) n++` simply did not count it — now the item is already
+  // in place, so the failures are removed by compaction, preserving the
+  // history's order.
   if (n > 0) {
     decorateTasks = calloc((size_t)n, sizeof(TaskDecorate));
     if (decorateTasks) {
@@ -289,7 +292,7 @@ int trakt_resume(CatItem *output, int max) {
       decorateN = n; decorateNext = 0;
       for (q = 0; q < TK_THREADS; q++)
         if (pthread_create(&threads[created], NULL, threadDecorate, NULL) == 0) created++;
-      if (!created) threadDecorate(NULL);      // sem fios: em serie, mesmo resultado
+      if (!created) threadDecorate(NULL);      // no threads: in series, same result
       for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
 
       for (r = 0, w = 0; r < n; r++)
@@ -297,7 +300,7 @@ int trakt_resume(CatItem *output, int max) {
       n = w;
       free(decorateTasks); decorateTasks = NULL; decorateN = 0;
     } else {
-      // Sem memoria para a fila: em serie, no proprio fio.
+      // No memory for the queue: in series, on this very thread.
       int r, w;
       for (r = 0, w = 0; r < n; r++)
         if (decorate(&output[r], output[r].kind)) { if (w != r) output[w] = output[r]; w++; }
@@ -305,15 +308,15 @@ int trakt_resume(CatItem *output, int max) {
     }
   }
 
-  printf("[trakt] %d em andamento\n", n);
+  printf("[trakt] %d in progress\n", n);
   fflush(stdout);
   return n;
 }
 
-// Alguns clientes recebem 401 apenas no feed agregado. O grafo e o
-// historico publico dos perfis continuam acessiveis com a mesma credencial.
+// Some clients get a 401 only on the aggregated feed. The graph and the
+// profiles' public history stay reachable with the same credential.
 static char *socialByFollowed(const char *const *header, int max) {
-  char *list=net_download_com("https://api.trakt.tv/users/me/following?extended=full",10,header);
+  char *list=net_download_headers("https://api.trakt.tv/users/me/following?extended=full",10,header);
   if(!list)return NULL;
   char *out=calloc(1,262144);size_t used=1;int n=0,queried=0;
   if(!out){free(list);return NULL;}out[0]='[';
@@ -328,8 +331,8 @@ static char *socialByFollowed(const char *const *header, int max) {
     if(!id[0] || strspn(id,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")!=strlen(id)){p=js_next(f);continue;}
     queried++;
     snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/watching?extended=full",id);
-    char *body=net_download_com(url,8,header);int now=body&&strchr(body,'{');
-    if(!now){free(body);snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/history?limit=1&extended=full",id);body=net_download_com(url,8,header);}
+    char *body=net_download_headers(url,8,header);int now=body&&strchr(body,'{');
+    if(!now){free(body);snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/history?limit=1&extended=full",id);body=net_download_headers(url,8,header);}
     const char *b=body?strchr(body,'{'):NULL,*bf=b?js_end(b):NULL;
     if(b&&bf&&bf>b+1) {
       size_t un=(size_t)(uf-u),bn=(size_t)(bf-b-2);
@@ -353,13 +356,13 @@ int trakt_social(CatItem *output, int max) {
   int n = 0;
   if (!on || max < 1) return 0;
   if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) return 0;
-  body = net_download_com(
+  body = net_download_headers(
     "https://api.trakt.tv/users/me/friends/activities?extended=full&page=1&limit=12",
     20, header);
-  // Contas sem o escopo social novo podem receber 401 no grafo `friends`,
-  // embora o token continue valido para historico. `following` e o fallback
-  // honesto: ainda sao pessoas escolhidas pelo dono, nunca atividade global.
-  if (!body) body = net_download_com(
+  // Accounts without the new social scope may get a 401 on the `friends` graph,
+  // even though the token is still valid for history. `following` is the honest
+  // fallback: they are still people the owner chose, never global activity.
+  if (!body) body = net_download_headers(
     "https://api.trakt.tv/users/me/following/activities?extended=full&page=1&limit=12",
     20, header);
   if (!body) body=socialByFollowed(header,max);
@@ -388,7 +391,7 @@ int trakt_social(CatItem *output, int max) {
     if (avatar && avatar < fb) js_text(avatar, fb, "full", d->socialAvatar, sizeof d->socialAvatar);
     snprintf(d->socialName, sizeof d->socialName, "%s", person[0] ? person : "Friend");
     js_text(p, f, "action", action, sizeof action);
-    snprintf(d->pais, sizeof d->pais, "%s", person[0] ? person : "Friend");
+    snprintf(d->country, sizeof d->country, "%s", person[0] ? person : "Friend");
     snprintf(d->providerName, sizeof d->providerName, "%s",
              !strcmp(action,"watching") ? "watching now" :
              !strcmp(action, "watch") || !strcmp(action, "scrobble") ? "watched" :
@@ -405,7 +408,7 @@ int trakt_social(CatItem *output, int max) {
         d->season = (int)js_num(be, fe, "season", 0);
         d->episode = (int)js_num(be, fe, "number", 0);
         js_text(be, fe, "title", d->nameEpisode, sizeof d->nameEpisode);
-        snprintf(d->directing, sizeof d->directing, "T%dE%d%s%s", d->season,
+        snprintf(d->directing, sizeof d->directing, "S%dE%d%s%s", d->season,
                  d->episode, d->nameEpisode[0] ? "  \xc2\xb7  " : "",
                  d->nameEpisode);
       }
@@ -422,8 +425,8 @@ int trakt_social(CatItem *output, int max) {
     p = js_next(f);
   }
   free(body);
-  // O feed ja vem ordenado do mais recente. A arte e resolvida em paralelo,
-  // com o mesmo limite de tres conexoes usado pelo Continue Assistindo.
+  // The feed already arrives ordered most-recent-first. The art is resolved in
+  // parallel, with the same limit of three connections Continue Watching uses.
   if (n > 0) {
     TaskDecorate *tasksSoc = calloc((size_t)n, sizeof *tasksSoc);
     if (tasksSoc) {
@@ -437,7 +440,7 @@ int trakt_social(CatItem *output, int max) {
         if (pthread_create(&threads[created], NULL, threadDecorate, NULL) == 0) created++;
       if (!created) threadDecorate(NULL);
       for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
-      // Arte indisponivel nao pode apagar uma pessoa real do feed.
+      // Unavailable art must not erase a real person from the feed.
       free(tasksSoc); decorateTasks = NULL; decorateN = 0;
     }
   }
@@ -493,15 +496,15 @@ int trakt_profile(ProfileData *d) {
   time_t limit=mktime(&first);struct tm utc;
   gmtime_r(&limit,&utc);
   strftime(start,sizeof start,"%Y-%m-%dT%H%%3A%M%%3A%SZ",&utc);
-  // Perfil e avatar. O avatar pode ser WebP no Trakt novo; o renderer so o
-  // pede se o firmware aceitar, e a tela continua completa sem ele.
-  body=net_download_com("https://api.trakt.tv/users/settings?extended=full",15,header);
+  // Profile and avatar. The avatar may be WebP on newer Trakt; the renderer only
+  // asks for it if the firmware accepts it, and the screen is still complete without it.
+  body=net_download_headers("https://api.trakt.tv/users/settings?extended=full",15,header);
   if(body){ const char *u=strstr(body,"\"user\""); const char *fu=u?js_end(strchr(u,'{')):NULL;
     if(u&&fu){js_text(u,fu,"name",d->name,sizeof d->name);js_text(u,fu,"username",d->user,sizeof d->user);
       js_text(u,fu,"full",d->avatar,sizeof d->avatar);} free(body); }
   snprintf(url,sizeof url,
     "https://api.trakt.tv/users/me/history?start_at=%s&extended=full&page=1&limit=100",start);
-  body=net_download_com(url,25,header);
+  body=net_download_headers(url,25,header);
   if (!body || !strchr(body, '[')) { free(body); return 0; }
   ranking = calloc(100, sizeof *ranking);
   if (!ranking) { free(body); return 0; }
@@ -534,7 +537,7 @@ int trakt_profile(ProfileData *d) {
       for(int i=0;i<nRanking;i++)if(imdb[0]&&!strcmp(ranking[i].id,imdb)){hi=i;break;}
       if(hi<0&&imdb[0]&&nRanking<100){hi=nRanking++;ProfileHighlight *h=&ranking[hi];
         snprintf(h->id,sizeof h->id,"%s",imdb);snprintf(h->title,sizeof h->title,"%s",title);
-        if(t>0&&e>0)snprintf(h->detail,sizeof h->detail,"T%dE%d",t,e);else snprintf(h->detail,sizeof h->detail,"Film");
+        if(t>0&&e>0)snprintf(h->detail,sizeof h->detail,"S%dE%d",t,e);else snprintf(h->detail,sizeof h->detail,"Film");
         if(imdb[0]){snprintf(h->poster,sizeof h->poster,"https://images.metahub.space/poster/medium/%s/img",imdb);
           snprintf(h->backdrop,sizeof h->backdrop,"https://images.metahub.space/background/medium/%s/img",imdb);}}
       if(hi>=0){ranking[hi].plays++;if(runtime>0)ranking[hi].minutes+=runtime;}
@@ -552,10 +555,10 @@ int trakt_profile(ProfileData *d) {
   d->nDays=daysInMonth;
   {struct tm first=tmv;first.tm_mday=1;mktime(&first);d->firstDayWeek=first.tm_wday;}
   for(int i=0;i<d->nDays;i++)if(d->activity[i])d->daysActiveMonth++;
-  // Um recorte mensal nao comprova a atividade anual.
+  // A monthly slice does not prove annual activity.
   d->daysActiveYear=0;
   for(int i=tmv.tm_mday-1;i>=0&&i<d->nDays;i--){if(!d->activity[i])break;d->streakCurrent++;}
-  // Ordena destaques e generos por volume para a leitura visual ser honesta.
+  // Sorts highlights and genres by volume so the visual reading is honest.
   for(int i=0;i<d->nHighlights;i++)for(int j=i+1;j<d->nHighlights;j++)if(d->highlights[j].plays>d->highlights[i].plays){ProfileHighlight x=d->highlights[i];d->highlights[i]=d->highlights[j];d->highlights[j]=x;}
   for(int i=0;i<d->nGenres;i++)for(int j=i+1;j<d->nGenres;j++)if(d->genres[j].count>d->genres[i].count){ProfileGenre x=d->genres[i];d->genres[i]=d->genres[j];d->genres[j]=x;}
   printf("[trakt] profile: %d plays, %d min, %d highlights\n",d->plays,d->minutes,d->nHighlights);fflush(stdout);
@@ -572,12 +575,12 @@ int trakt_list(const char *which, CatItem *output, int max) {
   snprintf(key, sizeof key, "trakt-api-key: %s", client);
   header[0] = auth; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
 
-  // Filmes e series vem em endpoints separados; misturar as duas listas na
-  // mesma fileira e o que o dono ve como "Minha Lista".
+  // Films and series come from separate endpoints; mixing the two lists into the
+  // same row is what the owner sees as "My List".
   for (step = 0; step < 2 && n < max; step++) {
     const char *kind = step ? "shows" : "movies";
     snprintf(url, sizeof url, "https://api.trakt.tv/sync/%s/%s", which, kind);
-    body = net_download_com(url, 25, header);
+    body = net_download_headers(url, 25, header);
     if (!body) continue;
     p = strchr(body, '[');
     p = p ? p + 1 : NULL;
@@ -601,27 +604,27 @@ int trakt_list(const char *which, CatItem *output, int max) {
           snprintf(d->kind, sizeof d->kind, "%s", step ? "series" : "movie");
           if (!strcmp(which, "watchlist")) d->inList = 1;
           else                            d->inCollection = 1;
-          // Arte SEM consultar: as URLs do metahub sao deterministicas pelo id
-          // do IMDb (verificado, 200 em todos os testados). Uma consulta por
-          // item custava ~0,3 s e limitava a lista a dez; assim ela pode ter o
-          // tamanho que o dono tem, e a imagem so e baixada quando aparece na
-          // tela — o tex_cache ja faz isso.
+          // Art WITHOUT a query: the metahub URLs are deterministic from the
+          // IMDb id (verified, 200 on everything tested). One query per item cost
+          // ~0.3 s and limited the list to ten; this way it can be as long as the
+          // owner's list, and the image is only downloaded when it appears on
+          // screen — tex_cache already does that.
           snprintf(d->poster, sizeof d->poster,
-                   // "medium" e nao "small", e a diferenca NAO e tamanho: o
-                   // metahub serve poster/small como image/WEBP e poster/medium
-                   // como image/jpeg. O libSDL2_image DESTA TV carrega libjpeg,
-                   // libpng16 e libtiff por dlopen e NAO carrega libwebp — a
-                   // unica string de erro de formato dentro dele e "WEBP images
-                   // are not supported". (A libwebp.so.7 existe no sistema; o
-                   // SDL2_image e que nao foi compilado com ela.)
+                   // "medium" and not "small", and the difference is NOT size:
+                   // metahub serves poster/small as image/WEBP and poster/medium
+                   // as image/jpeg. THIS TV's libSDL2_image loads libjpeg,
+                   // libpng16 and libtiff through dlopen and does NOT load
+                   // libwebp — the only format error string inside it is "WEBP
+                   // images are not supported". (libwebp.so.7 does exist on the
+                   // system; it is SDL2_image that was not built against it.)
                    //
-                   // Efeito do small: TODO card vindo do Trakt (watchlist,
-                   // colecao, a Biblioteca inteira) nunca decodificava — e pior,
-                   // o cache nao guarda falha, entao cada quadro tentava de novo
-                   // e queimava uma vaga de decode. Era a maior causa de "nao
-                   // aparecem todos os posteres".
+                   // The effect of small: EVERY card coming from Trakt
+                   // (watchlist, collection, the whole Library) never decoded —
+                   // and worse, the cache does not store failure, so every frame
+                   // tried again and burned a decode slot. It was the biggest
+                   // cause of "not all the posters show up".
                    //
-                   // Custo: 105 KB contra 31 KB. Barato pela arte existir.
+                   // Cost: 105 KB against 31 KB. Cheap, for the art to exist.
                    "https://images.metahub.space/poster/medium/%s/img", imdb);
           snprintf(d->backdrop, sizeof d->backdrop,
                    "https://images.metahub.space/background/medium/%s/img", imdb);
@@ -668,8 +671,8 @@ static void *sendBrand(void *u) {
   snprintf(key, sizeof key, "trakt-api-key: %s", client);
   header[0] = auth; header[1] = "trakt-api-version: 2"; header[2] = key; header[3] = NULL;
 
-  // Pause preserva o ponto; stop registra a conclusao. Mantemos o limiar
-  // conservador de 90% deste cliente. Pause sozinho nunca conclui o episodio.
+  // Pause preserves the point; stop records completion. We keep this client's
+  // conservative 90% threshold. Pause on its own never completes the episode.
   if (t > 0 && e > 0)
     snprintf(body, sizeof body,
              "{\"show\":{\"ids\":{\"imdb\":\"%s\"}},"
@@ -698,16 +701,16 @@ void trakt_mark(const char *imdb, double posSeg, double durationSeg) {
   else pthread_detach(threadBrand);
 }
 
-// --- WATCHLIST: escrever e ler ------------------------------------------------
+// --- WATCHLIST: writing and reading -------------------------------------------
 //
-// O botao "+" da tela de titulo so mexia num vetor local (biblioteca.c), entao
-// a lista do dono nos outros aparelhos nunca soube. Agora ele fala com o Trakt,
-// que ja e a fonte de verdade do resto do app.
+// The title screen's "+" button only touched a local array (library.c), so the
+// owner's list on their other devices never knew. Now it talks to Trakt, which
+// is already the source of truth for the rest of the app.
 //
-// O ESTADO tambem importa: sem ler de volta, o botao mostrava "+" mesmo para um
-// titulo que ja estava na lista, e um segundo toque adicionaria de novo.
-// ci->naLista ja e preenchido por trakt_lista na descoberta; o que faltava era
-// manter esse campo em dia depois de uma escrita nossa.
+// The STATE matters too: without reading back, the button showed "+" even for a
+// title that was already on the list, and a second press would add it again.
+// ci->inList is already filled in by trakt_list during discovery; what was
+// missing was keeping that field up to date after a write of our own.
 static char targetList[24];
 static char targetListKind[8];
 static int  targetAdd, threadListAlive;
@@ -730,8 +733,8 @@ static void *sendList(void *u) {
     pthread_mutex_lock(&lockList); threadListAlive = 0; pthread_mutex_unlock(&lockList);
     return NULL;
   }
-  // O tipo faz parte da intencao: mandar filme e serie juntos deixa a API
-  // resolver o IMDb no escopo errado e torna a confirmacao ambigua.
+  // The type is part of the intent: sending film and series together lets the API
+  // resolve the IMDb id in the wrong scope and makes the confirmation ambiguous.
   if (!strcmp(kindItemBuf, "series"))
     snprintf(body, sizeof body, "{\"shows\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id);
   else
@@ -750,16 +753,15 @@ static void *sendList(void *u) {
   return NULL;
 }
 
-// --- marcar/desmarcar como ASSISTIDO -----------------------------------------
+// A DIFFERENT endpoint from trakt_mark: that one is /scrobble/pause ("I stopped
+// here"), which the player uses on the way out. This one is /sync/history ("I
+// watched it"), which is what the eye button means.
 //
-// Endpoint DIFERENTE do trakt_marcar: aquele e /scrobble/pause ("parei aqui"),
-// que o player usa ao sair. Este e /sync/history ("assisti"), que e o que o
-// botao do olho quer dizer.
-//
-// Nao dava para reaproveitar trakt_marcar: ele guarda `durSeg <= 1.0 -> return`
-// para nao mandar scrobble com duracao invalida, e o chamador do olho passava
-// exatamente dur=1.0 — a funcao voltava na primeira linha e NADA era enviado. O
-// botao parecia funcionar (o espelho local mudava) e o Trakt nunca sabia.
+// trakt_mark could not be reused: it keeps `durationSeg <= 1.0 -> return` so as
+// not to send a scrobble with an invalid duration, and the eye's caller passed
+// exactly dur=1.0 — the function returned on its first line and NOTHING was
+// sent. The button looked like it worked (the local mirror changed) and Trakt
+// never knew.
 static pthread_t threadHistory;
 static int       threadHistoryAlive, historyAdd;
 static char      targetHistory[24];
@@ -782,8 +784,8 @@ static void *sendHistory(void *u) {
     pthread_mutex_lock(&lockHistory); threadHistoryAlive = 0; pthread_mutex_unlock(&lockHistory);
     return NULL;
   }
-  // O escopo do comando e explicito. Para serie, o alvo e o show, nao um
-  // episodio derivado de progresso e nem um segundo vetor de tipo oposto.
+  // The command's scope is explicit. For a series the target is the show, not an
+  // episode derived from progress, and not a second array of the opposite type.
   if (!strcmp(kindItemBuf, "series"))
     snprintf(body, sizeof body, "{\"shows\":[{\"ids\":{\"imdb\":\"%s\"}}]}", id);
   else
@@ -814,7 +816,7 @@ int trakt_watched_kind(const char *imdb, const char *kind, int mark) {
     pthread_mutex_unlock(&lockHistory);
     return 0;
   }
-  // "tt123:2:5" (episodio) vira "tt123": o historico e do TITULO.
+  // "tt123:2:5" (an episode) becomes "tt123": the history belongs to the TITLE.
   dp = strchr(imdb, ':');
   { size_t k = dp ? (size_t)(dp - imdb) : strlen(imdb);
     if (k >= sizeof targetHistory) k = sizeof targetHistory - 1;

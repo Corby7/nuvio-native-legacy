@@ -39,13 +39,13 @@ int main(void) {
     int found = 0;
     for (int r = 0; r < nRows; r++)
       if (!strcmp(rows[r].key, filters[i].key)) found++;
-    assert(found == 1); // nenhum catálogo removido ou duplicado
+    assert(found == 1); // no catalogue removed or duplicated
   }
   focus.row = 0; focus.column = 0;
-  for (int i = 0; i < 16; i++) assert(focus_mover(&focus, 0, 1));
+  for (int i = 0; i < 16; i++) assert(focus_move(&focus, 0, 1));
   assert(focus.row == 16);
-  assert(!focus_mover(&focus, 0, 1));
-  // Mesma contagem, ordem diferente: manter chave, coluna e scroll.
+  assert(!focus_move(&focus, 0, 1));
+  // Same count, different order: keep key, column and scroll.
   focus.row = 5; focus.column = 2; scrollX[5] = 123;
   char key[192]; snprintf(key, sizeof key, "%s", rows[5].key);
   CatRow swap = filters[4]; filters[4] = filters[8]; filters[8] = swap;
@@ -92,7 +92,7 @@ int main(void) {
   for(int i=0;i<nRows;i++)if(rows[i].kind==ROW_SOCIAL){
     social++;assert(rows[i].start==45 && rows[i].n==3);
   }
-  assert(social==1); // dados reais substituem vazio, nunca duplicam a fileira
+  assert(social==1); // real data replaces empty, never duplicates the row
   assert(rows[9].stackN==0 && rows[9].n==3 && rows[9].seeAll);
 
   // Another title's art is never a silent fallback, even when the index is

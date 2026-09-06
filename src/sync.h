@@ -45,7 +45,7 @@ typedef enum {
 void sync_start(void);
 
 SyncState  sync_state(void);
-const char *sync_summary(void);   // uma linha para a tela de ajustes
+const char *sync_summary(void);   // one line for the settings screen
 
 // Marks a surface dirty: the next cycle pushes it. Call when the user changes
 // something locally.

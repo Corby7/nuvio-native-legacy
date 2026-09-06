@@ -19,7 +19,7 @@ void settings_dir(const char *dir);
 void settings_event(const SDL_Event *e);
 void settings_update(float dt, Uint32 now);
 void settings_draw(Uint32 now);
-int  settings_wants_exit(void);   // 1 quando o Back deve fechar a tela
+int  settings_wants_exit(void);   // 1 when Back should close the screen
 void settings_shutdown(void);
 
 // Read by the rest of the app. "Reduced animations" matters most: with it on,
@@ -33,7 +33,7 @@ int settings_dolby_atmos(void);
 // the video source shows exactly what the user chose.
 const char *settings_quality(void);
 
-// --- LAYOUT: estrutura da home ----------------------------------------------
+// --- LAYOUT: home structure -------------------------------------------------
 int   settings_rail_collapsed(void);     // collapseSidebar
 int   settings_rail_modern(void);       // modernSidebar
 int   settings_rail_modern_blur(void);  // modernSidebarBlur
@@ -48,7 +48,7 @@ int   settings_social_row(void);
 // the rail adds its own 144 when it is fixed.
 float settings_content_x(void);
 
-// --- LAYOUT: rotulos e metadados --------------------------------------------
+// --- LAYOUT: labels and metadata --------------------------------------------
 int   settings_labels_poster(void);     // posterLabelsEnabled
 int   settings_name_addon(void);         // catalogAddonNameEnabled
 int   settings_suffix_kind(void);        // catalogTypeSuffixEnabled
@@ -58,11 +58,11 @@ int   settings_date_full(void);      // showFullReleaseDate
 int   settings_scores_home(void);
 // discoverLocation: 0 in_search, 1 in_sidebar, 2 off
 int   settings_local_discover(void);
-int   settings_discover_na_search(void); // searchDiscoverEnabled (derivado)
+int   settings_discover_na_search(void); // searchDiscoverEnabled (derived)
 
-// --- LAYOUT: continuar assistindo -------------------------------------------
+// --- LAYOUT: continue watching ----------------------------------------------
 int   settings_cw_on(void);          // continueWatchingEnabled
-int   settings_cw_style(void);          // 0 card, 1 largo (wide), 2 poster
+int   settings_cw_style(void);          // 0 card, 1 wide, 2 poster
 int   settings_cw_thumb_episode(void);  // useEpisodeThumbnailsInCw
 int   settings_cw_blur_next(void);// blurContinueWatchingNextUp
 int   settings_cw_do_episode_more_alto(void); // nextUpFromFurthestEpisode
@@ -70,14 +70,14 @@ int   settings_cw_show_unaired(void);  // showUnairedNextUp
 // continueWatchingSortMode: 0 default, 1 streaming_style, 2 split_upcoming
 int   settings_cw_order(void);
 
-// --- LAYOUT: pagina de detalhe (efeito vive em detail.c) ---------------------
+// --- LAYOUT: detail page (the effect lives in detail.c) ----------------------
 int   settings_blur_unwatched(void); // blurUnwatchedEpisodes
 int   settings_button_trailer(void);           // detailPageTrailerButtonEnabled
 int   settings_meta_external(void);            // preferExternalMetaAddonDetail
 
-// --- LAYOUT: foco no poster --------------------------------------------------
+// --- LAYOUT: poster focus ----------------------------------------------------
 int   settings_expand_poster(void);         // focusedPosterBackdropExpandEnabled
-float settings_expand_poster_delay(void);  // em segundos
+float settings_expand_poster_delay(void);  // in seconds
 int   settings_navigation_horizontal_fast(void); // fastHorizontalNavigationEnabled
 
 // --- LAYOUT: card depth ------------------------------------------------------

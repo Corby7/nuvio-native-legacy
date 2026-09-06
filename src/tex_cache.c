@@ -18,40 +18,40 @@
 #define NV_TEX_STALE_MS 200
 #define NV_TEX_UPLOAD_BUDGET_MS 4.0
 
-// FALHOU e um estado de verdade, nao a ausencia de um. Sem ele, um caminho que
-// nao decodifica volta a VAZIO, o desenho pede de novo no quadro seguinte e o
-// ciclo nao termina nunca: o item ocupa uma vaga em voo e um turno na fila a
-// frente das imagens boas, para falhar de novo. Com recuo, a segunda tentativa
-// so acontece daqui a 2 s, a terceira a 10 s, e depois desiste na sessao.
+// FAILED is a real state, not the absence of one. Without it, a path that does
+// not decode goes back to EMPTY, the drawing asks again on the next frame and the
+// cycle never ends: the item takes an in-flight slot and a turn in the queue ahead
+// of the good images, only to fail again. With backoff, the second attempt only
+// happens 2 s later, the third at 10 s, and after that it gives up for the session.
 typedef enum { EMPTY=0, PENDING, DECODED, READY, FAILED } State;
 
 typedef struct {
   char path[512];
-  unsigned long hash;  // FNV-1a do caminho, para pular o strcmp na busca
+  unsigned long hash;  // FNV-1a of the path, to skip the strcmp in the lookup
   State state;
-  SDL_Surface *sup;   // preenchida pela thread; consumida no bombear
+  SDL_Surface *sup;   // filled by the thread; consumed in the pump
   GLuint tex;
   int w, h;
-  // Teto de largura PEDIDO para este item. O hero em tela cheia precisa de 1920;
-  // um poster de 212 nao. Um teto unico para todos servia mal aos dois: a 960 o
-  // hero era decodificado com metade da resolucao e esticado para 1920 na tela,
-  // que e o borrao que o dono viu.
+  // The width ceiling REQUESTED for this item. The full-screen hero needs 1920; a
+  // 212 poster does not. A single ceiling for all served both badly: at 960 the
+  // hero was decoded at half the resolution and stretched to 1920 on screen, which
+  // is the blur the owner saw.
   int limit;
-  unsigned long usage;  // contador LRU
-  // Luminancia media dos pixels OPACOS, 0..255; -1 enquanto nao se sabe.
-  // Medida uma vez, na thread de decode. Serve ao logo do titulo: o TMDB nao
-  // marca claro/escuro em lugar nenhum (o ranking do proprio app web e so
-  // idioma + vote_average), entao a unica forma de saber se um logo e preto e
-  // OLHAR os pixels.
+  unsigned long usage;  // LRU counter
+  // The average luminance of the OPAQUE pixels, 0..255; -1 while it is not known.
+  // Measured once, on the decode thread. It serves the title's logo: TMDB marks
+  // light/dark nowhere (the web app's own ranking is only language +
+  // vote_average), so the only way to know whether a logo is black is to LOOK at
+  // the pixels.
   int luma;
-  // Quando tentar de novo (ticks) e quantas vezes ja falhou. Ver o enum Estado.
+  // When to try again (ticks) and how many times it has already failed. See the State enum.
   Uint32 tryIn;
   int    failures;
   unsigned long lastFrame;
   Uint32 lastRequest;
-  // Croma medio: max(R,G,B) - min(R,G,B) dos mesmos pixels opacos. Separa logo
-  // PRETO (acromatico, variante errada do TMDB) de logo de MARCA escuro mas
-  // colorido (vermelho, vinho), que deve passar intacto.
+  // The average chroma: max(R,G,B) - min(R,G,B) of the same opaque pixels. It
+  // separates a BLACK logo (achromatic, the wrong TMDB variant) from a dark but
+  // colourful BRAND logo (red, wine), which must pass through untouched.
   int chroma;
 } Item;
 
@@ -68,16 +68,16 @@ static SDL_cond  *cond;
 static SDL_Thread *thr;
 static int running = 0;
 
-// Quanto de memoria as texturas PRONTAS ocupam. Sem esta conta o cache so
-// despejava quando FALTAVA SLOT — e com 96 slots de arte 1920x1080 isso da 800
-// MB. Com arte de verdade o app chegou a 104 MB e morreu com "double free or
-// corruption" dentro do SDL: era falta de memoria, nao bug de ponteiro.
+// How much memory the READY textures take. Without this arithmetic the cache only
+// evicted when a SLOT WAS MISSING — and with 96 slots of 1920x1080 art that comes
+// to 800 MB. With real art the app reached 104 MB and died with "double free or
+// corruption" inside SDL: it was running out of memory, not a pointer bug.
 static long bytesUsed = 0;
 static long budget = 0;
 static unsigned long frameCurrent = 1;
 
-// O driver tambem aloca a piramide de mipmaps. Contar apenas o nivel base
-// deixava o cache ultrapassar o teto real em cerca de 33% nas artes de card.
+// The driver also allocates the mipmap pyramid. Counting only the base level let
+// the cache exceed the real ceiling by around 33% on card art.
 static long bytesTexture(int w, int h) {
   long total = (long)w * h * 4;
   int mw = w, mh = h;
@@ -90,37 +90,35 @@ static long bytesTexture(int w, int h) {
   return total;
 }
 
-// DUAS FILAS, e a separacao e o conserto.
+// `queue` was the only one, and the download happened INSIDE the decode thread
+// (ensureLocal, called from threadDecode). With two decode threads at low
+// priority, each one sat BLOCKED ON THE NETWORK for up to 8 s instead of decoding
+// — with a cold cache the art came in a drop at a time even with plenty of network
+// to spare, which was exactly the report: "the internet is fast and the artwork
+// takes ages".
 //
-// `fila` era a unica, e o download acontecia DENTRO do fio de decodificacao
-// (garantirLocal, chamado de threadDecode). Com dois fios de decode em
-// prioridade baixa, cada um ficava BLOQUEADO NA REDE por ate 8 s em vez de
-// decodificar — com cache frio a arte entrava a conta-gotas mesmo com a rede
-// sobrando, que foi exatamente o relato: "a internet ta rapida e as artes
-// demoram".
-//
-// Agora `fila` e a fila de REDE (baixar para o cache de disco) e `filaDec` a de
-// DECODIFICACAO. Rede e espera de I/O, nao trabalho de CPU: da para ter varios
-// fios sem roubar quadro do desenho. Decodificar continua com dois, em
-// prioridade baixa, pelo motivo ja medido.
+// Now `queue` is the NETWORK queue (downloading into the disk cache) and `queueDec`
+// the DECODE one. Network is I/O waiting, not CPU work: it can have several
+// threads without stealing a frame from the drawing. Decoding stays at two, at low
+// priority, for the reason already measured.
 static int queue[MAX_QUEUE];
 static int queueStart = 0, queueEnd = 0;
 static int queueDec[MAX_QUEUE];
 static int decStart = 0, decEnd = 0;
 static SDL_cond *condDec;
 
-// Sinalizado pelos fios de decode quando LIBERAM um lugar na fila.
+// Signalled by the decode threads when they FREE a place in the queue.
 static SDL_cond *condFree;
 
-// Enfileira para DECODIFICAR. Chamado com o mutex tomado, e ESPERA quando a
-// fila esta cheia.
+// Enqueues for DECODING. Called with the mutex held, and it WAITS when the queue
+// is full.
 //
-// Descartar em silencio, que era o que estava aqui, deixava o item PENDENTE
-// para sempre: ninguem o decodificava e nada o reenfileirava. MEDIDO com cache
-// frio: as texturas subiam ate 24 e PARAVAM — quatro fios de rede enchem a fila
-// mais rapido do que dois de decode a esvaziam, entao o descarte virava a regra
-// e nao a excecao. Esperar aqui e o que faz a rede andar no passo do decode em
-// vez de atropela-lo.
+// Discarding silently, which is what used to be here, left the item PENDING
+// forever: nobody decoded it and nothing re-enqueued it. MEASURED with a cold
+// cache: the textures rose to 24 and STOPPED — four network threads fill the queue
+// faster than two decode threads empty it, so discarding became the rule and not
+// the exception. Waiting here is what makes the network move at the decode's pace
+// instead of running it over.
 static void forDecode(int idx) {
   for (;;) {
     int next = (decEnd + 1) % MAX_QUEUE;
@@ -134,9 +132,9 @@ static void forDecode(int idx) {
   }
 }
 
-// FNV-1a do caminho. A busca abaixo roda para cada card visivel em cada
-// quadro, contra ate 96 slots; comparar um inteiro primeiro reduz o strcmp a
-// so os candidatos com o mesmo hash (na pratica, o proprio item).
+// FNV-1a of the path. The lookup below runs for every visible card on every frame,
+// against up to 96 slots; comparing an integer first reduces the strcmp to only
+// the candidates with the same hash (in practice, the item itself).
 static unsigned long hashPath(const char *s) {
   unsigned long h = 2166136261UL;
   for (; *s; s++) { h ^= (unsigned char)*s; h *= 16777619UL; }
@@ -161,10 +159,9 @@ void tex_new_frame(void) {
   if (!mtx) return;
   SDL_LockMutex(mtx);
   frameCurrent++;
-  // Um decode concluido mas nunca mais desenhado nao deve ocupar memoria nem
-  // bloquear a arte que entrou na tela. Pedidos PENDENTES sao cancelados pelo
-  // consumidor da fila, para que o indice do slot nao seja reutilizado antes
-  // de a fila o retirar.
+  // A decode that finished but was never drawn again must take neither memory nor
+  // block art that has come on screen. PENDING requests are cancelled by the
+  // queue's consumer, so the slot index is not reused before the queue removes it.
   for (int i = 0; i < nMax; i++) {
     if (items[i].state == DECODED && requestStale(&items[i])) {
       SDL_FreeSurface(items[i].sup);
@@ -176,23 +173,23 @@ void tex_new_frame(void) {
   SDL_UnlockMutex(mtx);
 }
 
-// Envolve TRAVA + busca com relogio de CPU. So os chamadores da THREAD DE
-// DESENHO passam por aqui; a thread de decode usa acharIndice cru, senao os
-// dois fios somariam no mesmo contador e o numero deixaria de descrever o
-// quadro.
+// Wraps LOCK + lookup with a CPU clock. Only the callers on the DRAWING THREAD
+// come through here; the decode thread uses the raw findIndex, otherwise the two
+// threads would add up in the same counter and the number would stop describing
+// the frame.
 //
-// A TRAVA ENTRA NA CONTA, e nao so a busca. Os fios de decode rodam em
-// prioridade BAIXA e pegam este mesmo mutex: um fio de decode preemptado
-// SEGURANDO o mutex faz o fio de desenho esperar por ele — inversao de
-// prioridade classica. Medir so o acharIndice esconderia exatamente esse custo,
-// que e o unico caminho pelo qual o decode pode roubar o quadro.
+// THE LOCK COUNTS, and not only the lookup. The decode threads run at LOW priority
+// and take this same mutex: a decode thread preempted while HOLDING the mutex
+// makes the drawing thread wait for it — classic priority inversion. Measuring
+// only findIndex would hide exactly that cost, which is the only path by which the
+// decode can steal the frame.
 //
-// RESULTADO, para nao refazer a conta: com 192 slots e ~70 buscas por quadro na
-// home, trava + busca linear somaram 0,04 a 0,12 ms POR QUADRO — menos de 1% de
-// um quadro de 20ms. A busca linear e a inversao de prioridade estavam na lista
-// de suspeitos do quadro de 22ms e as duas foram DESCARTADAS POR MEDIDA; nao
-// vale trocar isto por tabela de hash. O relogio fica atras de NV_PERF_FINO
-// porque custava duas leituras por consulta.
+// THE RESULT, so as not to redo the arithmetic: with 192 slots and ~70 lookups per
+// frame on the home, lock + linear search added up to 0.04 to 0.12 ms PER FRAME —
+// less than 1% of a 20ms frame. The linear search and the priority inversion were
+// on the suspect list for the 22ms frame and both were RULED OUT BY MEASUREMENT;
+// it is not worth swapping this for a hash table. The clock sits behind
+// NV_PERF_FINO because it cost two reads per lookup.
 #ifdef NV_PERF_FINE
 #define SEARCH_MEASURE(idx, cam, h) do { \
   if (texFreqMs == 0.0) texFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency(); \
@@ -217,21 +214,22 @@ static int findIndex(const char *path, unsigned long h) {
   return -1;
 }
 
-// Escolhe vitima LRU entre os PRONTOS. Nunca descarta o que esta em voo, senao
-// a thread escreveria em cima de um slot reaproveitado.
-// Quantos pedidos podem estar EM VOO ao mesmo tempo.
+// Picks an LRU victim among the READY ones. It never discards what is in flight,
+// otherwise the thread would write over a reused slot.
+// How many requests may be IN FLIGHT at once.
 //
-// Sem teto, uma tela cheia de arte nova pede ~90 imagens de uma vez, os slots
-// enchem de PENDENTE e o slotLivre passa a descartar textura PRONTA para dar
-// lugar a mais pendente — a tela FICA EM BRANCO e nao volta, porque o que
-// termina e jogado fora antes de aparecer.
+// With no ceiling, a screen full of new art asks for ~90 images at once, the slots
+// fill with PENDING and freeSlot starts discarding READY textures to make room for
+// more pending ones — the screen GOES BLANK and does not come back, because what
+// finishes is thrown away before it appears.
 //
-// So aparece com o cache de disco FRIO (primeira execucao, ou logo depois de
-// reinstalar o app, que apaga art/cache junto). Foi assim que apareceu aqui: eu
-// tinha acabado de apagar o cache a mao e o dono viu a home sem poster nenhum.
+// It only shows up with a COLD disk cache (the first run, or right after
+// reinstalling the app, which deletes art/cache along with it). That is how it
+// turned up here: I had just deleted the cache by hand and the owner saw the home
+// with no posters at all.
 //
-// Um terco dos slots mantem o fio de decodificacao ocupado e ainda deixa dois
-// tercos para o que ja esta na tela.
+// A third of the slots keeps the decode thread busy and still leaves two thirds
+// for what is already on screen.
 static int inFlight(void) {
   int n = 0;
   for (int i = 0; i < nMax; i++)
@@ -240,10 +238,10 @@ static int inFlight(void) {
 }
 
 static int slotFree(void) {
-  if (inFlight() >= nMax / 3) return -1;   // pede de novo no proximo quadro
+  if (inFlight() >= nMax / 3) return -1;   // ask again on the next frame
   for (int i = 0; i < nMax; i++) if (items[i].state == EMPTY) return i;
-  // Slot que ja desistiu vale mais como vaga que um PRONTO em uso: reaproveita
-  // antes de despejar arte que esta na tela.
+  // A slot that has already given up is worth more as a vacancy than a READY one
+  // in use: reuse it before evicting art that is on screen.
   for (int i = 0; i < nMax; i++)
     if (items[i].state == FAILED && items[i].failures >= 3) {
       memset(&items[i], 0, sizeof(Item));
@@ -265,7 +263,7 @@ static int slotFree(void) {
   return best;
 }
 
-// Despeja os menos usados ate caber no orcamento. Chamada com o mutex travado.
+// Evicts the least used until it fits the budget. Called with the mutex locked.
 static void prune(void) {
   while (bytesUsed > budget) {
     int best = -1; unsigned long smaller = ~0UL;
@@ -273,7 +271,7 @@ static void prune(void) {
       if (items[i].state != READY) continue;
       if (items[i].usage < smaller) { smaller = items[i].usage; best = i; }
     }
-    if (best < 0) break;          // so restou o que esta em voo
+    if (best < 0) break;          // only what is in flight is left
     if (items[best].tex) { gfx_tex_forget(items[best].tex); glDeleteTextures(1, &items[best].tex); }
     bytesUsed -= bytesTexture(items[best].w, items[best].h);
     if (bytesUsed < 0) bytesUsed = 0;
@@ -282,54 +280,54 @@ static void prune(void) {
   }
 }
 
-// Diretorio onde as imagens baixadas ficam. Uma vez baixada, a imagem vale
-// para sempre: arte de filme nao muda. Sem isto cada volta a home refaria
-// dezenas de downloads.
-// Teto de largura da textura.
+// The directory the downloaded images live in. Once downloaded, an image holds
+// forever: a film's art does not change. Without this, every return to the home
+// would redo dozens of downloads.
+// The texture's width ceiling.
 //
-// 960 e nao 1280. As contas: o card de arte mede 410px e o cartao grande do
-// detalhe 684; so o hero e a arte em tela cheia passam disso, e nesses dois a
-// imagem ja aparece desfocada ou coberta de texto. A 1280 o cache vivia
-// ENCOSTADO no teto de 72 MB (medido: 71,4 MB com 29 texturas), despejando e
-// rebaixando sem parar — o que aparece como 30fps com jank em todo quadro
-// depois de alguns minutos de uso. A 960 a mesma cena cabe com folga.
-// Teto de decodificacao das artes de CARD.
+// 960 and not 1280. The arithmetic: the art card measures 410px and the detail's
+// large card 684; only the hero and full-screen art go beyond that, and in both
+// the image already appears blurred or covered in text. At 1280 the cache lived
+// PRESSED against the 72 MB ceiling (measured: 71.4 MB with 29 textures), evicting
+// and re-fetching without pause — which shows up as 30fps with jank on every frame
+// after a few minutes of use. At 960 the same scene fits with room to spare.
+// The decode ceiling for CARD art.
 //
-// Era 960 para tudo, e a maior arte de card que a tela desenha e a miniatura de
-// episodio, com 640 (NV_DETP_EP_W). Um poster de 212 de largura era decodificado
-// a 960x1440 e custava 5 MB de textura — vinte deles ja passam do orcamento
-// inteiro de 96 MB.
+// It was 960 for everything, and the largest card art the screen draws is the
+// episode thumbnail, at 640 (NV_DETP_EP_W). A poster 212 wide was decoded at
+// 960x1440 and cost 5 MB of texture — twenty of them already pass the whole 96 MB
+// budget.
 //
-// Foi o que o dono viu: mexendo nas fileiras, e principalmente ao ABRIR UM
-// FILME (que pede backdrop de 1920 mais miniaturas, posteres de relacionados e
-// fotos de elenco de uma vez), o total estourava e o podar despejava tudo que
-// estava na tela — ficava cinza e nao voltava.
+// That is what the owner saw: moving through the rows, and above all when OPENING
+// A FILM (which asks for a 1920 backdrop plus thumbnails, related posters and cast
+// photos all at once), the total blew and prune() evicted everything on screen —
+// it went grey and did not come back.
 //
-// 640 cobre a maior arte de card sem sobra e divide o custo por 2,25: o mesmo
-// poster passa a custar 2,2 MB. O hero continua com teto proprio de 1920, pela
-// promocao.
+// 640 covers the largest card art with nothing to spare and divides the cost by
+// 2.25: the same poster now costs 2.2 MB. The hero keeps its own ceiling of 1920,
+// through promotion.
 #define NV_TEX_WIDTH_MAX 640
 #define NV_TEX_HERO_WIDTH_MAX 1920
 
-// TETO POR USO — o 640 acima e o padrao, e ele e GRANDE DEMAIS para a maioria
-// das artes. Ele foi dimensionado pela MAIOR arte de card (a miniatura de
-// episodio, 640), mas se aplica a todas: um poster desenhado com 212 de largura
-// era decodificado a 640x960 e custava 2,4 MB. Com o orcamento de 96 MB isso da
-// ~40 texturas — MEDIDO no aparelho: com a home rolando o log mostrava
-// `texturas=40 pend=32 92.3MB`, ou seja, a fila entupida e o cache ja
-// despejando o que ainda estava na tela para caber o que entrava.
+// A PER-USE CEILING — the 640 above is the default, and it is FAR TOO LARGE for
+// most art. It was sized by the LARGEST card art (the episode thumbnail, 640), but
+// it applies to all of them: a poster drawn 212 wide was decoded at 640x960 and
+// cost 2.4 MB. With a 96 MB budget that gives ~40 textures — MEASURED on the
+// device: with the home scrolling the log showed `textures=40 pending=32 92.3MB`,
+// that is, the queue clogged and the cache already evicting what was still on
+// screen to fit what was coming in.
 //
-// Esse e o "carrega as coisas enquanto passa": nao e rede nem decode lento, e o
-// cache batendo no teto e re-decodificando o que acabou de despejar.
+// That is the "it loads things as you go past": it is not the network nor a slow
+// decode, it is the cache hitting its ceiling and re-decoding what it has just evicted.
 //
-// Aqui cada chamador pede pela LARGURA COM QUE DESENHA, e a conta vira
-// largura * escala do buffer * folga. Na TV a escala e 1 (drawable=1920x1080,
-// medido) e um poster passa a custar ~420 KB em vez de 2,4 MB — quase seis
-// vezes mais arte no mesmo orcamento. No Mac retina a escala e 2 e a previa
-// continua nitida.
+// Here each caller asks by the WIDTH IT DRAWS AT, and the arithmetic becomes
+// width * buffer scale * slack. On the TV the scale is 1 (drawable=1920x1080,
+// measured) and a poster now costs ~420 KB instead of 2.4 MB — almost six times as
+// much art in the same budget. On a retina Mac the scale is 2 and the preview stays
+// sharp.
 //
-// A FOLGA de 1,25 cobre o card que cresce ao receber foco (escala ~1,08) e
-// evita reamostrar no limite exato, que serrilha.
+// The SLACK of 1.25 covers the card growing when it takes focus (a scale of ~1.08)
+// and avoids resampling at the exact limit, which aliases.
 #define NV_TEX_SLACK 1.25f
 static float scaleBuf = 1.0f;
 
@@ -343,20 +341,20 @@ void tex_cache_dir(const char *dir) {
   if (!dir || !*dir) return;
   snprintf(dirCache, sizeof dirCache, "%s", dir);
   mkdir(dirCache, 0777);
-  // A PASTA PODE EXISTIR E NAO SER GRAVAVEL, e isso ja aconteceu: o tools/arm.sh
-  // manda art/ num tar feito no Mac, e o tar extraido como root na TV carimba
-  // o dono com o uid do Mac (13888160) e modo 755. O app roda como uid 5152,
-  // entao depois de CADA deploy a pasta ficava so-leitura.
+  // THE FOLDER MAY EXIST AND NOT BE WRITABLE, and that has already happened:
+  // tools/arm.sh sends art/ in a tar made on the Mac, and the tar extracted as root
+  // on the TV stamps the owner with the Mac's uid (13888160) and mode 755. The app
+  // runs as uid 5152, so after EVERY deploy the folder was read-only.
   //
-  // O efeito era invisivel: garantirLocal baixava a imagem, o fopen do
-  // temporario falhava, ela devolvia 0 sem dizer nada, e o unico sintoma era
-  // "card sem arte". Medido: 91 "decode falhou" numa navegacao, com ZERO erro
-  // de rede — as imagens chegavam e eram jogadas fora. Cada uma volta a ser
-  // pedida ate o terceiro recuo, entao os dois fios de decode ficam ocupados
-  // baixando o que nunca vai poder ser guardado.
+  // The effect was invisible: ensureLocal downloaded the image, the temporary
+  // file's fopen failed, it returned 0 without saying anything, and the only
+  // symptom was "a card with no art". Measured: 91 "decode failed" in one pass,
+  // with ZERO network errors — the images arrived and were thrown away. Each one
+  // is asked for again until the third backoff, so the two decode threads sit busy
+  // downloading what can never be stored.
   //
-  // O app nao consegue consertar (chmod de quem nao e dono falha), mas TEM de
-  // dizer. Sem esta linha o defeito nao tem como ser atribuido a causa.
+  // The app cannot fix it (a chmod by a non-owner fails), but it HAS to say so.
+  // Without this line the defect cannot be traced to its cause.
   if (access(dirCache, W_OK) != 0)
     printf("[tex] CACHE FOLDER NOT WRITABLE: %s — every downloaded image will be"
            " discarded (check the owner; the deploy stamps the Mac uid)\n",
@@ -364,9 +362,9 @@ void tex_cache_dir(const char *dir) {
   fflush(stdout);
 }
 
-// Nome de arquivo estavel a partir da URL. Hash simples (FNV-1a) e nao o nome
-// da URL porque elas trazem barra, query e caracteres que nao cabem em nome de
-// arquivo — e porque duas URLs diferentes precisam de arquivos diferentes.
+// A stable file name from the URL. A simple hash (FNV-1a) and not the URL's name
+// because URLs carry slashes, queries and characters that do not fit in a file
+// name — and because two different URLs need different files.
 static void nameOfCache(const char *url, char *dst, size_t size) {
   unsigned long h = 2166136261UL;
   const char *p = url, *dot = strrchr(url, '.');
@@ -377,9 +375,9 @@ static void nameOfCache(const char *url, char *dst, size_t size) {
   snprintf(dst, size, "%s/%08lx%s", dirCache, h, ext);
 }
 
-// Baixa a URL para o cache, se ainda nao estiver la. Devolve 1 se ha arquivo
-// utilizavel no fim. Roda no fio de decodificacao, entao bloquear aqui nao
-// custa quadro nenhum.
+// Downloads the URL into the cache, if it is not already there. Returns 1 if there
+// is a usable file at the end. It runs on the decode thread, so blocking here costs
+// no frames.
 static int ensureLocal(const char *url, char *dst, size_t size) {
   FILE *f;
   char *body;
@@ -392,25 +390,25 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
   nameOfCache(url, dst, size);
   f = fopen(dst, "rb");
   if (f) { fseek(f, 0, SEEK_END); n = ftell(f); fclose(f); if (n > 512) return 1; }
-  // 8 s e nao 25: isto e uma IMAGEM. Com 25 s, duas URLs mortas seguravam os
-  // dois fios de decode por quase um minuto e a tela inteira parava de receber
-  // arte — repetidamente, porque nada guarda a falha.
+  // 8 s and not 25: this is an IMAGE. At 25 s, two dead URLs held both decode
+  // threads for almost a minute and the whole screen stopped receiving art —
+  // repeatedly, because nothing stores the failure.
   body = net_download_bin(url, 8, &n);
-  // ESTE RAMO ERA MUDO. Medido numa navegacao da home: 93 "decode falhou" com
-  // ZERO "[rede] falha" no log — todas as falhas passavam por aqui, com o curl
-  // dizendo sucesso e um corpo curto demais para ser imagem. Sem a linha nao
-  // havia como distinguir "servidor recusou" de "cache sem permissao de
-  // escrita" de "resposta vazia". Nao repete o caso do HTTP >= 400, que agora
-  // o rede.c nomeia sozinho.
+  // THIS BRANCH WAS MUTE. Measured on one pass through the home: 93 "decode
+  // failed" with ZERO "[net] failure" in the log — every failure came through here,
+  // with curl reporting success and a body too short to be an image. Without the
+  // line there was no way to tell "the server refused" from "the cache has no write
+  // permission" from "an empty response". It does not repeat the HTTP >= 400 case,
+  // which net.c now names by itself.
   if (!body || n <= 512) {
     if (body) { printf("[tex] body too short (%ld B): %.70s\n", n, url); fflush(stdout); }
     free(body);
     return 0;
   }
-  // ASSINATURA DE IMAGEM. rede.c nao confere status HTTP, entao um 404 com
-  // pagina de erro de mais de 512 bytes era gravado como "imagem" e ficava no
-  // cache de disco PARA SEMPRE — o item nunca mais teria arte, nem depois de o
-  // servidor voltar. Aceita JPEG (FF D8), PNG (89 50 4E 47), GIF e RIFF/WEBP.
+  // AN IMAGE SIGNATURE. net.c does not check the HTTP status, so a 404 with an
+  // error page over 512 bytes was written as an "image" and stayed in the disk
+  // cache FOREVER — the item would never have art again, not even after the server
+  // came back. It accepts JPEG (FF D8), PNG (89 50 4E 47), GIF and RIFF/WEBP.
   { const unsigned char *b0 = (const unsigned char *)body;
     int ok = (n > 4) && (
        (b0[0] == 0xFF && b0[1] == 0xD8) ||
@@ -424,13 +422,14 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
       return 0;
     } }
   { char tmp[600];
-    // Grava em temporario e renomeia: outro fio pode estar lendo o mesmo
-    // arquivo, e um arquivo pela metade decodifica como imagem quebrada e fica
-    // em cache assim para sempre.
+    // Writes to a temporary and renames: another thread may be reading the same
+    // file, and a half file decodes as a broken image and stays cached that way
+    // forever.
     snprintf(tmp, sizeof tmp, "%s.partial", dst);
     f = fopen(tmp, "wb");
-    // Falhava em SILENCIO. Ver a nota em tex_cache_dir: pasta sem permissao de
-    // escrita joga fora toda imagem baixada e o unico sintoma era card cinza.
+    // It failed SILENTLY. See the note in tex_cache_dir: a folder without write
+    // permission throws away every downloaded image and the only symptom was a
+    // grey card.
     if (!f) { printf("[tex] could not write %.80s\n", tmp); fflush(stdout);
               free(body); return 0; }
     fwrite(body, 1, (size_t)n, f);
@@ -441,9 +440,9 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
   return 1;
 }
 
-// FIO DE REDE: tira da fila, garante o arquivo no cache de disco e passa para a
-// decodificacao. Nao toca em pixel nenhum, entao pode rodar em prioridade
-// normal e em varios — o que ele faz e ESPERAR.
+// NETWORK THREAD: it takes from the queue, makes sure the file is in the disk cache
+// and passes it on to the decoding. It touches no pixels, so it can run at normal
+// priority and in numbers — what it does is WAIT.
 static int threadNet(void *arg) {
   (void)arg;
   for (;;) {
@@ -465,7 +464,7 @@ static int threadNet(void *arg) {
     path[sizeof path - 1] = 0;
     SDL_UnlockMutex(mtx);
 
-    // Caminho local devolve na hora; so URL sai para a rede.
+    // A local path answers at once; only a URL goes out to the network.
     SDL_LockMutex(mtx);
     if (items[idx].state != PENDING || requestStale(&items[idx])) {
       if (items[idx].state == PENDING) {
@@ -478,8 +477,9 @@ static int threadNet(void *arg) {
     SDL_UnlockMutex(mtx);
 
     if (!ensureLocal(path, local, sizeof local)) {
-      // Falhou o download. Marca como falha AQUI para o recuo valer — antes o
-      // decode e que marcava, e ate la o item ficava PENDENTE ocupando slot.
+      // The download failed. It marks the failure HERE so the backoff counts —
+      // before, it was the decode that marked it, and until then the item stayed
+      // PENDING taking up a slot.
       SDL_LockMutex(mtx);
       if (items[idx].state != PENDING || requestStale(&items[idx])) {
         if (items[idx].state == PENDING) {
@@ -512,20 +512,20 @@ static int threadNet(void *arg) {
 
 static int threadDecode(void *arg) {
   (void)arg;
-  // PRIORIDADE BAIXA, e isto nao e detalhe.
+  // LOW PRIORITY, and this is no detail.
   //
-  // Medido: durante a navegacao o pior quadro cravava em 42 ms e os janks
-  // batiam EXATAMENTE com `pend>0` — ou seja, com este fio trabalhando. Ele
-  // decodifica JPEG e reduz a imagem com SDL_BlitScaled, tudo em CPU, e nesta
-  // TV sao quatro nucleos fracos: com prioridade igual, ele rouba o quadro do
-  // desenho. Arte que aparece um instante depois ninguem nota; o tranco, sim.
+  // Measured: while navigating, the worst frame sat at 42 ms and the janks matched
+  // EXACTLY with `pending>0` — that is, with this thread working. It decodes JPEG
+  // and shrinks the image with SDL_BlitScaled, all on the CPU, and this TV has four
+  // weak cores: at equal priority it steals the frame from the drawing. Art that
+  // appears a moment later nobody notices; the jolt, they do.
   SDL_SetThreadPriority(SDL_THREAD_PRIORITY_LOW);
   for (;;) {
     SDL_LockMutex(mtx);
     while (running && decStart == decEnd) SDL_CondWait(condDec, mtx);
     if (!running) { SDL_UnlockMutex(mtx); return 0; }
     int idx = queueDec[decStart]; decStart = (decStart + 1) % MAX_QUEUE;
-    SDL_CondSignal(condFree);   // abriu lugar: solta um fio de rede que espera
+    SDL_CondSignal(condFree);   // a place opened: release a waiting network thread
     if (items[idx].state != PENDING || requestStale(&items[idx])) {
       if (items[idx].state == PENDING) {
         items[idx].state = EMPTY;
@@ -538,8 +538,8 @@ static int threadDecode(void *arg) {
     int limit;
     strncpy(path, items[idx].path, sizeof path - 1);
     path[sizeof path - 1] = 0;
-    // Copiado SOB O MUTEX: o item pode ser promovido a hero enquanto este fio
-    // decodifica, e ler o campo depois daria uma leitura sem trava.
+    // Copied UNDER THE MUTEX: the item may be promoted to hero while this thread
+    // decodes, and reading the field afterwards would be a lock-free read.
     limit = items[idx].limit > 0 ? items[idx].limit : NV_TEX_WIDTH_MAX;
     SDL_UnlockMutex(mtx);
 
@@ -552,8 +552,8 @@ static int threadDecode(void *arg) {
     strncpy(origin, path, sizeof origin - 1);
     origin[sizeof origin - 1] = 0;
 
-    // O download JA ACONTECEU no fio de rede; aqui garantirLocal so traduz a
-    // URL para o caminho do cache, sem tocar a rede.
+    // The download has ALREADY HAPPENED on the network thread; here ensureLocal
+    // only translates the URL into the cache's path, without touching the network.
     { char local[600];
       if (ensureLocal(path, local, sizeof local))
         snprintf(path, sizeof path, "%s", local);
@@ -579,11 +579,11 @@ static int threadDecode(void *arg) {
       // produces, so there is nothing left to convert.
       conv = webp_load(path);
     }
-    // TETO DE LARGURA. Antes a arte vinha do pacote ja reduzida; agora vem da
-    // rede no tamanho que o servidor tiver, e um backdrop de 1920 custa 8 MB
-    // DECODIFICADO — meia duzia deles estoura o orcamento e o cache passa a
-    // despejar e rebaixar em circulo, o que aparece como queda de fps e quadros
-    // de 100 ms. Reduzir aqui vale para qualquer fonte, presente ou futura.
+    // A WIDTH CEILING. The art used to come from the package already reduced; now
+    // it comes from the network at whatever size the server has, and a 1920
+    // backdrop costs 8 MB DECODED — half a dozen of them blow the budget and the
+    // cache starts evicting and re-fetching in a circle, which shows up as an fps
+    // drop and 100 ms frames. Reducing here holds for any source, present or future.
     if (conv && conv->w > limit) {
       // BOX FILTER, NOT SDL_BlitScaled.
       //
@@ -655,10 +655,10 @@ static int threadDecode(void *arg) {
       }
     }
 
-    // MEDIDA DE LUMINANCIA, aqui e nao no desenho: esta thread ja tem os pixels
-    // na mao e roda em prioridade baixa. Amostra de 4 em 4 nos dois eixos —
-    // 1/16 dos pixels bastam para dizer se uma arte e escura, e a conta inteira
-    // num logo de 700x271 seria trabalho sem retorno.
+    // A LUMINANCE MEASUREMENT, here and not while drawing: this thread already has
+    // the pixels in hand and runs at low priority. It samples every 4th pixel on
+    // both axes — 1/16 of the pixels is enough to say whether a piece of art is
+    // dark, and doing the whole sum on a 700x271 logo would be work with no return.
     int lumaMedia = -1, chromaMedia = 0;
     if (conv && conv->format->BytesPerPixel == 4) {
       const unsigned char *px = (const unsigned char *)conv->pixels;
@@ -668,7 +668,7 @@ static int threadDecode(void *arg) {
         const unsigned char *ln = px + (size_t)yy * conv->pitch;
         for (xx = 0; xx < conv->w; xx += 4) {
           const unsigned char *q = ln + (size_t)xx * 4;   // ABGR8888: R,G,B,A
-          if (q[3] < 200) continue;                       // so o que e opaco
+          if (q[3] < 200) continue;                       // only what is opaque
           sum += (q[0] * 299 + q[1] * 587 + q[2] * 114) / 1000;
           { int mx = q[0] > q[1] ? q[0] : q[1]; if (q[2] > mx) mx = q[2];
             int mn = q[0] < q[1] ? q[0] : q[1]; if (q[2] < mn) mn = q[2];
@@ -679,15 +679,15 @@ static int threadDecode(void *arg) {
       if (n > 0) { lumaMedia = (int)(sum / n); chromaMedia = (int)(sumC / n); }
     }
 
-    // A FALHA PRECISA APARECER. Sem log, uma imagem que nunca decodifica vira
-    // um laco silencioso: o desenho pede todo quadro, o fio tenta todo quadro,
-    // e o unico sintoma e "esse card nao tem arte". Foi assim que o WEBP do
-    // metahub passou despercebido.
+    // THE FAILURE HAS TO SHOW. Without a log, an image that never decodes becomes a
+    // silent loop: the drawing asks every frame, the thread tries every frame, and
+    // the only symptom is "that card has no art". That is how metahub's WEBP went
+    // unnoticed.
     int failed = 0;
     SDL_LockMutex(mtx);
     if (items[idx].state == PENDING && requestStale(&items[idx])) {
-      // A imagem terminou depois de o card sair da tela. Nao a publique e nao
-      // a transforme em falha: outro card pode reutilizar o slot frio.
+      // The image finished after the card left the screen. Do not publish it and do
+      // not turn it into a failure: another card may reuse the cold slot.
       items[idx].state = EMPTY;
       items[idx].path[0] = 0;
       if (conv) { SDL_FreeSurface(conv); conv = NULL; }
@@ -699,9 +699,9 @@ static int threadDecode(void *arg) {
         items[idx].state = DECODED;
         items[idx].failures = 0;
       } else {
-        // MANTEM o caminho: e ele que identifica o slot na proxima consulta e
-        // permite responder "ainda nao, tente depois" em vez de reenfileirar.
-        // Zerar o caminho, como estava, apagava a memoria da falha junto.
+        // It KEEPS the path: it is what identifies the slot on the next lookup and
+        // lets it answer "not yet, try later" instead of re-enqueuing. Zeroing the
+        // path, as it used to, erased the memory of the failure along with it.
         static const Uint32 INSET[3] = { 2000, 10000, 60000 };
         int k = items[idx].failures;
         items[idx].state = FAILED;
@@ -710,7 +710,7 @@ static int threadDecode(void *arg) {
         failed = 1;
       }
     } else if (conv) {
-      SDL_FreeSurface(conv);  // slot foi reaproveitado no meio do caminho
+      SDL_FreeSurface(conv);  // the slot was reused along the way
     }
     SDL_UnlockMutex(mtx);
 
@@ -743,9 +743,9 @@ static int threadDecode(void *arg) {
       }
       printf("[tex]   from: %.180s\n", origin);
       fflush(stdout);
-      // Arquivo LOCAL que nao decodifica esta envenenado: garantirLocal o
-      // aceita para sempre por ter mais de 512 bytes, entao sem apagar aqui o
-      // item nunca mais teria arte. Só apaga o que esta no NOSSO cache.
+      // A LOCAL file that does not decode is poisoned: ensureLocal accepts it
+      // forever because it is over 512 bytes, so without deleting it here the item
+      // would never have art again. It only deletes what is in OUR cache.
       if (dirCache[0] && !strncmp(path, dirCache, strlen(dirCache)))
         remove(path);
     }
@@ -754,14 +754,14 @@ static int threadDecode(void *arg) {
 
 int tex_start(int max_items) {
   nMax = max_items > 0 && max_items <= MAX_ITEMS_ABS ? max_items : 64;
-  // ORCAMENTO ESCALA COM O BUFFER. Os 96 MB sao a conta da TV, onde a escala e
-  // 1. No Mac retina a escala e 2, e a MESMA cena precisa de 4x os pixels — com
-  // o teto fixo a previa vivia encostada no limite, despejando arte visivel e
-  // mostrando um defeito que o aparelho nao tem. Uma previa que mente e pior
-  // que nao ter previa.
+  // THE BUDGET SCALES WITH THE BUFFER. The 96 MB is the TV's arithmetic, where the
+  // scale is 1. On a retina Mac the scale is 2, and the SAME scene needs 4x the
+  // pixels — with a fixed ceiling the preview lived pressed against the limit,
+  // evicting visible art and showing a defect the device does not have. A preview
+  // that lies is worse than no preview.
   //
-  // Na TV o fator e 1 e nada muda; e exatamente por isso que a conta pode ser
-  // esta e nao um numero maior cravado.
+  // On the TV the factor is 1 and nothing changes; that is exactly why the
+  // arithmetic can be this and not a larger hard-coded number.
   { float e = scaleBuf > 0.1f ? scaleBuf : 1.0f;
     budget = (long)(NV_TEX_BUDGET_MB * e * e) * 1024L * 1024L; }
   bytesUsed = 0;
@@ -769,25 +769,24 @@ int tex_start(int max_items) {
   mtx = SDL_CreateMutex(); cond = SDL_CreateCond();
   condDec = SDL_CreateCond(); condFree = SDL_CreateCond();
   running = 1;
-  // DOIS fios de decode, nao um. A fila e retirada sob o mutex e cada fio leva
-  // um indice proprio, entao mais consumidores e seguro sem outra mudanca.
+  // TWO decode threads, not one. The queue is taken under the mutex and each thread
+  // carries an index of its own, so more consumers is safe with no other change.
   //
-  // Um fio so era o limite real do "carrega enquanto passa": com 32 itens em
-  // voo (o teto de slotLivre) e ~30 ms por imagem nesta TV, a fila levava um
-  // segundo para escoar. Dois fios cortam isso pela metade.
+  // One thread was the real limit of "it loads as you go past": with 32 items in
+  // flight (freeSlot's ceiling) and ~30 ms per image on this TV, the queue took a
+  // second to drain. Two threads halve that.
   //
-  // Nao mais que dois: sao quatro nucleos fracos, e os dois rodam em prioridade
-  // BAIXA justamente para nao roubar o quadro do desenho — a nota acima, no
-  // threadDecode, registra que com prioridade igual o tranco batia exatamente
-  // com `pend>0`. Quatro fios competiriam com o desenho mesmo em prioridade
-  // baixa.
+  // No more than two: there are four weak cores, and the two run at LOW priority
+  // precisely so as not to steal the frame from the drawing — the note above, in
+  // threadDecode, records that at equal priority the jolt matched exactly with
+  // `pending>0`. Four threads would compete with the drawing even at low priority.
   { int k;
     for (k = 0; k < NV_TEX_THREADS; k++)
       thrs[k] = SDL_CreateThread(threadDecode, "nv-decode", NULL);
-    // QUATRO fios de REDE, e eles NAO sao como os de decode: nao tocam pixel,
-    // so esperam I/O. Podem rodar em prioridade normal e em maior numero sem
-    // competir com o desenho — o custo de um fio parado num socket e zero de
-    // CPU. Quatro cobre os quatro cartazes que entram na tela de uma vez.
+    // FOUR NETWORK threads, and they are NOT like the decode ones: they touch no
+    // pixels, they only wait on I/O. They can run at normal priority and in greater
+    // numbers without competing with the drawing — the cost of a thread parked on a
+    // socket is zero CPU. Four covers the four posters that come on screen at once.
     for (k = 0; k < NV_TEX_THREADS_NET; k++)
       thrsNet[k] = SDL_CreateThread(threadNet, "nv-net", NULL);
     thr = thrs[0]; }
@@ -799,8 +798,8 @@ void tex_shutdown(void) {
   SDL_CondBroadcast(cond); SDL_CondBroadcast(condDec);
   SDL_CondBroadcast(condFree);
   SDL_UnlockMutex(mtx);
-  // Espera os DOIS fios. Esperar so o primeiro deixava o outro decodificando
-  // para dentro de itens[] enquanto o laco abaixo ja liberava as superficies.
+  // Wait for BOTH threads. Waiting only for the first left the other decoding into
+  // items[] while the loop below was already freeing the surfaces.
   { int k;
     for (k = 0; k < NV_TEX_THREADS; k++)
       if (thrs[k]) { SDL_WaitThread(thrs[k], NULL); thrs[k] = NULL; }
@@ -822,8 +821,9 @@ static GLuint tex_get_limit(const char *path, int limit) {
   if (i >= 0 && items[i].state == FAILED) {
     items[i].lastFrame = frameCurrent;
     items[i].lastRequest = SDL_GetTicks();
-    // Ja falhou: so volta para a fila quando o recuo vencer, e nunca depois da
-    // terceira tentativa. Sem isto o pedido voltava a cada quadro.
+    // It has already failed: it only goes back into the queue when the backoff
+    // expires, and never after the third attempt. Without this the request came
+    // back on every frame.
     if (items[i].failures < 3 && SDL_GetTicks() >= items[i].tryIn) {
       int next = (queueEnd + 1) % MAX_QUEUE;
       if (next != queueStart) {
@@ -839,17 +839,18 @@ static GLuint tex_get_limit(const char *path, int limit) {
     items[i].lastFrame = frameCurrent;
     items[i].lastRequest = SDL_GetTicks();
     items[i].usage = ++lruClock;
-    // PROMOCAO: a mesma arte pode ser pedida como poster (960) e depois como
-    // hero (1920). Se o teto novo e maior e a textura pronta ficou menor que
-    // ele, refaz — senao o hero herda para sempre a versao pequena que o card
-    // pediu primeiro, e o borrao volta sem explicacao aparente.
+    // PROMOTION: the same art may be asked for as a poster (960) and later as a
+    // hero (1920). If the new ceiling is larger and the ready texture came out
+    // smaller than it, redo it — otherwise the hero inherits forever the small
+    // version the card asked for first, and the blur comes back with no apparent
+    // explanation.
     if (limit > items[i].limit) {
       int smallerFont = (items[i].state == READY && items[i].w < items[i].limit);
       items[i].limit = limit;
-      // `w < limite` NAO basta: um poster da Cinemeta tem 250px de origem, e
-      // pedi-lo a 320 refaz o decode para devolver os mesmos 250 — trabalho
-      // puro, mais o cinza enquanto refaz. Se a textura pronta ja e MENOR que o
-      // teto que ela mesma tinha, a fonte acabou; nao ha o que ganhar.
+      // `w < limit` is NOT enough: a Cinemeta poster has a 250px source, and asking
+      // for it at 320 redoes the decode to return the same 250 — pure work, plus
+      // the grey while it redoes it. If the ready texture is already SMALLER than
+      // the ceiling it itself had, the source has run out; there is nothing to gain.
       if (items[i].state == READY && items[i].w < limit && !smallerFont) {
         int next = (queueEnd + 1) % MAX_QUEUE;
         if (next != queueStart) {
@@ -871,7 +872,7 @@ static GLuint tex_get_limit(const char *path, int limit) {
       items[new].lastRequest = SDL_GetTicks();
       int next = (queueEnd + 1) % MAX_QUEUE;
       if (next != queueStart) { queue[queueEnd] = new; queueEnd = next; SDL_CondSignal(cond); }
-      else { items[new].state = EMPTY; items[new].path[0] = 0; } // fila cheia
+      else { items[new].state = EMPTY; items[new].path[0] = 0; } // queue full
     }
   }
   SDL_UnlockMutex(mtx);
@@ -882,16 +883,16 @@ GLuint tex_get(const char *path) {
   return tex_get_limit(path, NV_TEX_WIDTH_MAX);
 }
 
-// Arte que ocupa a tela inteira: hero da home, backdrop do detalhe e a arte do
-// player. 1920 e a largura do painel — pedir mais so gastaria memoria, pedir
-// menos e ampliar depois.
+// Art that fills the whole screen: the home's hero, the detail's backdrop and the
+// player's art. 1920 is the panel's width — asking for more would only spend
+// memory, asking for less means enlarging afterwards.
 GLuint tex_get_width(const char *path, float widthLayout) {
   int cap;
   if (widthLayout <= 1.0f) return tex_get(path);
   cap = (int)(widthLayout * scaleBuf * NV_TEX_SLACK + 0.5f);
-  // Arredonda para multiplo de 32: sem isso cada largura de desenho vira um
-  // teto proprio, e a mesma arte pedida por dois lugares com poucos pixels de
-  // diferenca era promovida e RE-DECODIFICADA sem ganho visivel.
+  // Rounds up to a multiple of 32: without this every drawing width becomes a
+  // ceiling of its own, and the same art asked for from two places a few pixels
+  // apart was promoted and RE-DECODED with no visible gain.
   cap = ((cap + 31) / 32) * 32;
   if (cap < 128) cap = 128;
   if (cap > NV_TEX_HERO_WIDTH_MAX) cap = NV_TEX_HERO_WIDTH_MAX;
@@ -934,8 +935,8 @@ int tex_brand_dark(const char *path) {
   if (!path || !*path) return 0;
   h = hashPath(path);
   SEARCH_MEASURE(i, path, h);
-  // lum < 0 e "ainda nao medi": responde NAO, para nao tingir arte que ainda
-  // vai chegar. Errar para o lado de nao mexer.
+  // luma < 0 means "not measured yet": answer NO, so as not to tint art that is
+  // still to arrive. Err on the side of not touching it.
   if (i >= 0 && items[i].state == READY && items[i].luma >= 0)
     r = (items[i].luma < NV_LOGO_LUMA_MIN && items[i].chroma < NV_LOGO_CHROMA_MAX);
   SDL_UnlockMutex(mtx);
@@ -963,44 +964,45 @@ int tex_pump(int max_per_frame) {
 
     GLuint t; glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sup->w, sup->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, sup->pixels);
-    // Mipmaps servem a duas coisas: reduzir o serrilhado quando a arte aparece
-  // menor que o original, e — a razao de terem entrado agora — permitir o fundo
-  // desfocado da pagina de detalhe. Em GLES2 nao ha blur barato; amostrar um
-  // nivel pequeno da piramide com bias e o blur.
-  // MIPMAP SO NO QUE ENCOLHE NA TELA. A piramide custa +33% de memoria de GPU
-  // sobre a textura, e `bytesUsados` NAO a conta — com o orcamento em 96 MB, o
-  // uso real chegava perto de 128 MB e o driver e que decidia o que despejar.
+    // Mipmaps serve two things: reducing aliasing when the art appears smaller than
+  // the original, and — the reason they came in now — enabling the detail page's
+  // blurred background. In GLES2 there is no cheap blur; sampling a small level of
+  // the pyramid with a bias is the blur.
+  // A MIPMAP ONLY ON WHAT SHRINKS ON SCREEN. The pyramid costs +33% of GPU memory
+  // over the texture, and `bytesUsed` does NOT count it — with the budget at 96 MB,
+  // the real usage came close to 128 MB and it was the driver that decided what to
+  // evict.
   //
-  // Arte de tela cheia (heroi, backdrop) e desenhada 1:1 ou AMPLIADA: nivel
-  // menor da piramide nunca e amostrado, entao ali a piramide e custo puro. Os
-  // cards, sim, aparecem menores que o decodificado e precisam dela.
+  // Full-screen art (hero, backdrop) is drawn 1:1 or ENLARGED: a smaller level of
+  // the pyramid is never sampled, so there the pyramid is pure cost. The cards, on
+  // the other hand, do appear smaller than the decoded size and need it.
   //
-  // Sem mipmap o filtro TEM de ser GL_LINEAR: com MIPMAP_NEAREST numa textura
-  // sem piramide a amostragem e indefinida e a textura sai PRETA.
+  // Without a mipmap the filter MUST be GL_LINEAR: with MIPMAP_NEAREST on a texture
+  // with no pyramid the sampling is undefined and the texture comes out BLACK.
   int comMip = (sup->w < 1024);
   if (comMip) glGenerateMipmap(GL_TEXTURE_2D);
-  // MIPMAP_NEAREST e nao _LINEAR: o trilinear le DOIS niveis da piramide por
-  // amostra, e nesta GPU isso e o dobro do custo de textura em cada pixel de
-  // cada card. A diferenca visual e um degrau na transicao entre niveis, que
-  // so apareceria numa animacao de zoom continuo — que o app nao faz.
+  // MIPMAP_NEAREST and not _LINEAR: trilinear reads TWO levels of the pyramid per
+  // sample, and on this GPU that is double the texture cost on every pixel of every
+  // card. The visual difference is a step at the transition between levels, which
+  // would only show in a continuous zoom animation — which the app does not do.
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                   comMip ? GL_LINEAR_MIPMAP_NEAREST : GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    gfx_tex_forget(0);  // o bind do upload passou por fora do gfx_rect
+    gfx_tex_forget(0);  // the upload's bind went around gfx_rect
 
     SDL_LockMutex(mtx);
-    // PROMOCAO VAZAVA. Quando a mesma arte e pedida com um teto maior (poster a
-    // 288 e depois heroi a 1920), o item volta a PENDENTE e passa por aqui de
-    // novo — e esta linha sobrescrevia `tex` sem apagar a textura antiga e
-    // SOMAVA os bytes novos sem subtrair os velhos.
+    // PROMOTION LEAKED. When the same art is asked for with a larger ceiling (a
+    // poster at 288 and later a hero at 1920), the item goes back to PENDING and
+    // comes through here again — and this line overwrote `tex` without deleting the
+    // old texture and ADDED the new bytes without subtracting the old ones.
     //
-    // Duas consequencias, as duas silenciosas: uma textura orfa ficava na GPU a
-    // cada promocao, e `bytesUsados` so crescia com bytes-fantasma. Com o
-    // orcamento inflado, podar() passava a despejar cada vez mais cedo — ate
-    // despejar arte que estava na tela, um quadro depois de ela subir. Era mais
-    // uma fonte de "poster que some".
+    // Two consequences, both silent: an orphan texture stayed on the GPU with every
+    // promotion, and `bytesUsed` only grew, with phantom bytes. With the budget
+    // inflated, prune() started evicting earlier and earlier — until it evicted art
+    // that was on screen, one frame after it came up. It was one more source of
+    // "the poster that disappears".
     if (items[target].tex) {
       gfx_tex_forget(items[target].tex);
       glDeleteTextures(1, &items[target].tex);

@@ -1,6 +1,6 @@
-// Home nativa compatível com a interface moderna do Nuvio 1.0.1 legacy:
-// hero no topo, rail fixa à esquerda e fileiras horizontais de posters. A
-// infraestrutura nativa cuida de cache assíncrono, foco e transições.
+// The native home, matching the modern interface of Nuvio 1.0.1 legacy: a hero at
+// the top, a fixed rail on the left and horizontal rows of posters. The native
+// infrastructure handles the asynchronous cache, focus and transitions.
 #include "home.h"
 #include "resume.h"
 #include "seeall.h"
@@ -20,9 +20,9 @@
 #include "extras.h"
 #include "director.h"
 #include <strings.h>
-// Declarado a mao em vez de incluir detail.h: aquele header inclui ESTE (por
-// causa do HomeItem), e o ciclo so nao explode por causa das guardas. Uma
-// funcao de uma linha nao vale amarrar os dois arquivos.
+// Declared by hand rather than including detail.h: that header includes THIS one
+// (because of HomeItem), and the cycle only fails to explode thanks to the guards.
+// A one-line function is not worth tying the two files together.
 float detail_progress(void);
 #include <stdio.h>
 #include <string.h>
@@ -37,32 +37,33 @@ float detail_progress(void);
 // synthetic ones (Continue watching, Among friends) all land here too. This array
 // is the headroom, not the limit — what actually trims the list is CAT_FILTER_MAX.
 #define MAX_FILTER    48
-// 13 e nao 12: sao 12 CARTAZES mais a coluna do card "Ver tudo", que ocupa a
-// posicao seguinte a ultima arte. Com 12 aqui, animFoco[r][12] escrevia fora do
-// vetor — o card nunca acendia ao receber foco e a memoria do vizinho era
-// corrompida em silencio.
+// 13 and not 12: there are 12 POSTERS plus the "See all" card's column, which takes
+// the position after the last piece of art. With 12 here, animFocus[r][12] wrote
+// outside the array — the card never lit up on focus and the neighbour's memory was
+// silently corrupted.
 #define MAX_CARDS 33
 
 typedef struct {
   char title[96];
   KindRow kind;
   int n;
-  // Primeiro item DESTA fileira no catalogo. Antes o desenho fazia `r * 8 + c`,
-  // ou seja, cada fileira era uma janela fixa de 8 no vetor plano — o que so
-  // funcionava porque as fileiras eram quatro e cravadas. Com as fileiras
-  // vindo dos catalogos dos addons cada uma tem tamanho proprio.
+  // The first item of THIS row in the catalogue. The drawing used to do `r * 8 + c`,
+  // that is, each row was a fixed window of 8 in the flat array — which only worked
+  // because the rows were four and hard-coded. With the rows coming from the addons'
+  // catalogues, each has a size of its own.
   int start;
-  // O card "Ver tudo" ocupa a coluna `n` (a seguinte a ultima arte). Guardado
-  // por fileira porque so as que vieram de catalogo de addon o tem.
+  // The "See all" card takes column `n` (the one after the last piece of art). Kept
+  // per row because only the ones that came from an addon catalogue have it.
   int seeAll;
   char base[600], catId[96];
-  // "movie" | "series" do CATALOGO. O `tipo` acima e a forma do card
-  // (retrato/deitado), que e outra coisa — nao da para deduzir um do outro.
+  // The CATALOGUE's "movie" | "series". The `kind` above is the card's shape
+  // (portrait/landscape), which is a different thing — you cannot deduce one from
+  // the other.
   char catKind[8];
-  // Chave do catalogo desta fileira. Existe para o foco sobreviver a uma
-  // republicacao: a descoberta agora publica a cada fileira que chega da rede,
-  // e reencontrar por INDICE nao serve — uma fileira nova pode entrar no meio,
-  // porque a ordem sai de art/fileiras.txt.
+  // This row's catalogue key. It exists so the focus survives a republication:
+  // discovery now publishes on every row that arrives from the network, and finding
+  // it again by INDEX will not do — a new row may come in the middle, because the
+  // order comes from art/rows.txt.
   char key[192];
   int folders[MAX_CARDS];
   int stackN;
@@ -71,9 +72,9 @@ typedef struct {
 static char bd[MAX_ART][512];    int nBd = 0;    // backdrops 16:9
 static char pst[MAX_ART][512];   int nPst = 0;   // posters 2:3
 
-// RESERVA, e so isso: e o que a home mostra enquanto a rede nao respondeu, ou
-// quando nao respondeu nenhuma. As fileiras de verdade vem de cat_fileira(),
-// montadas em descoberta.c a partir dos catalogos que os addons declaram.
+// A FALLBACK, and that is all: it is what the home shows while the network has not
+// answered, or when none has answered. The real rows come from cat_row(), assembled
+// in discover.c from the catalogues the addons declare.
 static Row rows[MAX_FILTER] = {
   { "Continue watching", ROW_CONTINUE, 8, 0  },
   { "Popular - Film",      ROW_NORMAL,   8, 8  },
@@ -93,8 +94,8 @@ int home_requested_person_social(CatItem *output) {
 }
 int home_requested_social(void) { int v=requestSocial;requestSocial=0;return v; }
 
-// Classifica somente os nomes públicos do catálogo. Nunca inspeciona a URL
-// (que pode conter tokens) nem inventa premiações ou disponibilidade.
+// It classifies only the catalogue's public names. It never inspects the URL (which
+// may contain tokens) and never invents awards or availability.
 static int containsName(const char *name, const char *term) {
   size_t n = strlen(term);
   for (; name && *name; name++) {
@@ -121,16 +122,16 @@ static int editorial(KindRow t) {
 
 
 static Focus focus;
-static HomeItem itemFocus;      // preenchido durante o desenho, lido pela transicao
+static HomeItem itemFocus;      // filled in while drawing, read by the transition
 static int  hasItemFocus = 0;
 static float animFocus[MAX_FILTER][MAX_CARDS];
 static float scrollX[MAX_FILTER];
 static float scrollY = 0.0f;
-// Velocidades das molas de 2a ordem do deslize. Ficam ao lado da posicao
-// porque anim_mola2() precisa das duas. Ver anim.h.
+// The speeds of the glide's second-order springs. They sit next to the position
+// because anim_spring2() needs both. See anim.h.
 static float velX[MAX_FILTER];
 static float velY = 0.0f;
-static int sair = 0, requestOpen = 0, requestMenu = 0;
+static int wantsExit = 0, requestOpen = 0, requestMenu = 0;
 static Uint32 okSince = 0;
 static int okPressing = 0;
 static int okLongFired = 0;
@@ -139,52 +140,54 @@ static float okHold = 0.0f;
 
 // --- hero-carrossel ---
 static int heroCurrent = 0, heroPrevious = 0;
-// Candidato a heroi e desde quando ele e o candidato. Ver NV_HERO_REPOUSO_MS.
+// The hero candidate and how long it has been the candidate. See NV_HERO_IDLE_MS.
 static int    heroPending = 0;
 static Uint32 heroPendingIn = 0;
-// ARTE JA ESCOLHIDA MAS AINDA NAO NO AR.
+// ART ALREADY CHOSEN BUT NOT YET ON SCREEN.
 //
-// O repouso de NV_HERO_REPOUSO_MS decide QUANDO trocar; isto decide SE ja da
-// para trocar. Antes, no instante do repouso a arte velha comecava a apagar e a
-// nova so aparecia quando a textura ficasse pronta — no meio ficava VAZIO, e
-// andando depressa pela fileira o dono via o fundo piscar entre uma arte e
-// outra. Agora a velha fica NO LUGAR ate a nova estar decodificada; so entao a
-// troca comeca. Andar rapido deixa de mexer no fundo.
+// NV_HERO_IDLE_MS's rest period decides WHEN to swap; this decides WHETHER it can
+// swap yet. Before, at the moment the rest period expired the old art started fading
+// out and the new one only appeared once the texture was ready — in between it was
+// EMPTY, and moving quickly along the row the owner saw the background flicker
+// between one piece of art and the next. Now the old one stays IN PLACE until the
+// new one is decoded; only then does the swap begin. Moving fast stops touching the
+// background.
 static int    heroWanted = -1;
 
-// --- EXPANSAO DO CARTAZ FOCADO EM REPOUSO ------------------------------------
+// --- EXPANDING THE FOCUSED POSTER AT REST ------------------------------------
 //
-// `focusedPosterBackdropExpandEnabled` e `...DelaySeconds` ja existiam em
-// art/ajustes.txt e em ajustes.c, mas NADA no desenho os lia — o ajuste estava
-// na tela de Ajustes sem efeito nenhum. E o comportamento que o dono chama de
-// "o card crescer quando ta parado": o foco pousa num cartaz, e depois de
-// alguns segundos ele se abre na arte DEITADA, empurrando os vizinhos.
+// `focusedPosterBackdropExpandEnabled` and `...DelaySeconds` already existed in
+// art/settings.txt and in settings.c, but NOTHING in the drawing read them — the
+// setting sat on the Settings screen with no effect at all. It is the behaviour the
+// owner calls "the card growing when it's still": the focus lands on a poster, and
+// after a few seconds it opens out into the LANDSCAPE art, pushing its neighbours aside.
 //
-// Guardado por fileira/coluna e nao so o alvo, porque mover o foco tem de
-// FECHAR o que estava aberto no mesmo quadro em que abre o relogio do novo.
+// Stored per row/column and not just the target, because moving the focus has to
+// CLOSE what was open in the same frame that starts the new one's clock.
 static int    expRow = -1, expColumn = -1;
 static Uint32 expSince = 0;
-static float  expOpen = 0.0f;   // 0 fechado, 1 aberto
+static float  expOpen = 0.0f;   // 0 closed, 1 open
 
-// MEDIDO na TCL (1920x1080, com.nuvio.tv), capturando 0,8 s e 7,8 s apos a
-// tecla: o card focado vai de 214x320 para 565x320. A ALTURA NAO MUDA e a
-// borda ESQUERDA fica parada em x=102 — ele cresce so para a direita e empurra
-// os vizinhos. 565/320 = 1,77, ou seja 16:9 na mesma altura.
+// MEASURED on the TCL (1920x1080, com.nuvio.tv), capturing 0.8 s and 7.8 s after the
+// keypress: the focused card goes from 214x320 to 565x320. THE HEIGHT DOES NOT
+// CHANGE and the LEFT edge stays put at x=102 — it grows only to the right and
+// pushes its neighbours. 565/320 = 1.77, that is 16:9 at the same height.
 #define NV_EXP_ASPECT (16.0f / 9.0f)
 
-// Fileira que pode expandir: so a de cartaz EM PE. A de continuar assistindo e
-// a de posteres deitados ja mostram a arte larga — nao ha para o que abrir.
+// A row that can expand: only the UPRIGHT poster one. Continue watching and the
+// landscape poster row already show the wide art — there is nothing to open out into.
 static int canExpand(int r) {
   if (r < 0 || r >= nRows) return 0;
   if (rows[r].kind != ROW_NORMAL) return 0;
   return !settings_posters_landscape();
 }
 static Uint32 heroSwapIn = 0;
-// APAGAR -> VAZIO -> CORTE SECO. Ver a medida em NV_HERO_FADE_MS.
-// `heroSai`   alfa da arte que esta SAINDO: 1 no instante da troca, 0 no fim.
-// `heroEntra` 0 enquanto a arte nova esta escondida; vira 1 de uma vez, no
-//             quadro em que a textura fica pronta E o esvanecimento acabou.
-static float heroSai   = 0.0f;
+// FADE OUT -> EMPTY -> HARD CUT. See the measurement at NV_HERO_FADE_MS.
+// `heroExits`    the alpha of the art that is LEAVING: 1 at the moment of the swap,
+//              0 at the end.
+// `heroEnters` 0 while the new art is hidden; it becomes 1 all at once, on the frame
+//              where the texture is ready AND the fade has finished.
+static float heroExits   = 0.0f;
 static float heroEnters = 1.0f;
 
 static void loadsDir(const char *dir, char destination[][512], int *n, const char *sub) {
@@ -202,13 +205,13 @@ static void loadsDir(const char *dir, char destination[][512], int *n, const cha
   closedir(d);
 }
 
-// A forma do card sai de DUAS preferencias, e nao do tipo da fileira:
+// The card's shape comes from TWO preferences, and not from the row's kind:
 //
-//   `modernLandscapePostersEnabled` troca o poster 2:3 (212x322) pelo card
-//   deitado 16:9 (318x182.9). MEDIDO no app web com a preferencia ligada.
+//   `modernLandscapePostersEnabled` swaps the 2:3 poster (212x322) for the 16:9
+//   landscape card (318x182.9). MEASURED in the web app with the preference on.
 //
-//   `continueWatchingCardStyle` decide a fileira de "Continuar assistindo":
-//   "card" e "largo" desenham deitado, "poster" usa o mesmo 2:3 das outras.
+//   `continueWatchingCardStyle` decides the "Continue watching" row: "card" and
+//   "wide" draw landscape, "poster" uses the same 2:3 as the others.
 static float widthOf(KindRow t) {
   switch (t) {
     case ROW_CONTINUE: return NV_HIGHLIGHT_W;
@@ -223,14 +226,14 @@ static float widthOf(KindRow t) {
                                                               : NV_CARD_W;
   }
 }
-// Quantos titulos o hero percorre. Vem do catalogo quando existe.
+// How many titles the hero cycles through. It comes from the catalogue when there is one.
 static int nArchiveHero(void) { int n = cat_n(); if (n) return n; return nBd ? nBd : 1; }
 
-// Arte de um titulo nunca pode ser preenchida por uma posição equivalente de
-// outro vetor. O catalogo chega em lotes, e a ordem dos backdrops do pacote não
-// tem relação estável com a ordem dos itens da rede. Retornar somente arte que
-// pertence ao próprio item deixa o estado sem arte explícito, em vez de trocar
-// identidade silenciosamente.
+// A title's art can never be filled in from an equivalent position in another array.
+// The catalogue arrives in batches, and the order of the package's backdrops has no
+// stable relation to the order of the network's items. Returning only art that
+// belongs to the item itself leaves the no-art state explicit, instead of silently
+// swapping identity.
 static const char *artOfItem(const CatItem *item, int *isPoster) {
   if (isPoster) *isPoster = 0;
   if (!item) return NULL;
@@ -242,10 +245,10 @@ static const char *artOfItem(const CatItem *item, int *isPoster) {
   return NULL;
 }
 
-// Um poster é uma boa reserva editorial, mas não deve ser cover-stretched num
-// hero 16:9, pois isso corta justamente o rosto e o título. Ele fica contido no
-// lado direito, com a mesma vinheta do hero, e o restante da composição segue
-// disponível para a cópia do título.
+// A poster is a good editorial fallback, but it must not be cover-stretched into a
+// 16:9 hero, because that crops precisely the face and the title. It stays contained
+// on the right-hand side, with the hero's own vignette, and the rest of the
+// composition remains available for the title's copy.
 static int drawArtHero(GfxRect r, GfxMode mode, const CatItem *item,
                            const char *path, float alpha) {
   int isPoster = 0;
@@ -329,8 +332,8 @@ static void drawArtAbsent(GfxRect r, float radius, const char *art,
   else                         drawArtSkeleton(r, radius, alpha);
 }
 
-// Escolha de formato para cards. O helper arteDoItem acima informa se precisou
-// usar poster como fallback; aqui a ordem visual do card continua explicita.
+// The format choice for cards. The artOfItem helper above says whether it had to use
+// a poster as a fallback; here the card's visual order stays explicit.
 static const char *art_by_format(const CatItem *item, int landscape) {
   if (!item) return NULL;
   if (landscape) return item->backdrop[0] ? item->backdrop
@@ -339,17 +342,16 @@ static const char *art_by_format(const CatItem *item, int landscape) {
                          : (item->backdrop[0] ? item->backdrop : NULL);
 }
 
-// `cat_item()` faz wrap para telas que percorrem listas circulares. A home nao
-// pode usar esse contrato para resolver arte: indice stale vira ausencia, nunca
-// outro titulo.
+// `cat_item()` wraps around for screens that walk circular lists. The home cannot use
+// that contract to resolve art: a stale index becomes an absence, never another title.
 static const CatItem *cat_item_exact(int i) {
   int n = cat_n();
   if (i < 0 || i >= n) return NULL;
   return cat_item(i);
 }
 
-// A pasta art/ e acervo de reserva apenas no modo sem catalogo. Quando a rede
-// publicou itens, nenhum arquivo generico pode ocupar o lugar de outro titulo.
+// The art/ folder is a fallback collection only in the no-catalogue mode. Once the
+// network has published items, no generic file may take another title's place.
 static const char *art_by_identity(int index_, int landscape) {
   const CatItem *item = cat_item_exact(index_);
   const char *art = art_by_format(item, landscape);
@@ -361,7 +363,7 @@ static const char *art_by_identity(int index_, int landscape) {
   return NULL;
 }
 
-static int focus_can_press_longa(void) {
+static int focus_can_press_long(void) {
   if (focus.row < 0 || focus.row >= nRows) return 0;
   const Row *s = &rows[focus.row];
   if (s->kind == ROW_CATALOGS || s->kind == ROW_SOCIAL ||
@@ -385,50 +387,65 @@ static float heightOf(KindRow t) {
                                                               : NV_CARD_H;
   }
 }
-// Altura TOTAL que a fileira ocupa: a arte mais o bloco de rotulo, quando ele
-// existe. Sem somar o rotulo aqui, a fileira seguinte sobe por cima do texto —
-// foi o mesmo defeito que o titulo de fileira ja tinha tido sobre os cards.
+// The TOTAL height the row occupies: the art plus the label block, when there is one.
+// Without adding the label here, the next row rises over the text — it was the same
+// defect the row title already had over the cards.
 static int hasLabel(KindRow t) {
-  // O rotulo abaixo do poster so existe no poster EM PE. No card deitado o web
-  // poe a legenda DENTRO da moldura (.home-poster-landscape-copy) e esconde o
-  // bloco de fora (.home-poster-card.is-landscape .home-poster-copy{display:none}).
+  // The label below the poster only exists on the UPRIGHT poster. On the landscape
+  // card the web app puts the caption INSIDE the frame
+  // (.home-poster-landscape-copy) and hides the outer block
+  // (.home-poster-card.is-landscape .home-poster-copy{display:none}).
   return t == ROW_NORMAL && settings_labels_poster()
       && !settings_posters_landscape();
 }
 static float heightTotalOf(KindRow t) {
   return heightOf(t) + (hasLabel(t) ? NV_POSTER_COPY_H : 0.0f);
 }
-// O gap do tvOS e fixo em 40px e ja foi dimensionado para caber o crescimento
-// do foco: um card de 410 crescendo 9% invade 18px de cada lado. O card
-// destaque e maior que qualquer coisa que a Apple usa, entao para ele o gap
-// segue proporcional — senao a invasao (31px) come quase todo o respiro.
+// tvOS's gap is fixed at 40px and was already sized to accommodate the focus's
+// growth: a 410 card growing 9% invades 18px on each side. The highlight card is
+// larger than anything Apple uses, so for it the gap stays proportional — otherwise
+// the invasion (31px) eats almost all the breathing room.
 static float gapOf(KindRow t) {
   (void)t;
   return NV_CARD_GAP;
 }
-// Passo vertical entre fileiras. `.home-modern-landscape-posters` aperta o
-// `--home-row-gap` de 32 para 24 (components.css:6473) — a fileira deitada e
-// mais baixa e o respiro do poster em pe sobraria nela.
+// The vertical step between rows. `.home-modern-landscape-posters` tightens
+// `--home-row-gap` from 32 to 24 (components.css:6473) — the landscape row is shorter
+// and the upright poster's breathing room would be too much for it.
 static float rowGap(void) {
   return settings_posters_landscape() ? NV_ROW_GAP_LAND : NV_ROW_GAP;
 }
-// Raio do card, em fracao do menor lado (o SDF do shader e normalizado). Este e
-// o UNICO numero do card moderno que sai mesmo de `posterCardCornerRadiusDp`:
-// 12dp x 2 = 24px, conferido no app rodando. A largura NAO sai de la (ver a
-// nota em ajustes.h).
+// The card's radius, as a fraction of the smaller side (the shader's SDF is
+// normalised). This is the ONLY number of the modern card that really does come from
+// `posterCardCornerRadiusDp`: 12dp x 2 = 24px, checked in the running app. The width
+// does NOT come from there (see the note in settings.h).
 static float radiusOf(float w, float h) {
-  float smaller = w < h ? w : h;
-  if (smaller <= 0.0f) return NV_RADIUS_CARD;
-  return settings_radius_poster_px() / smaller;
+  (void)w;
+  if (h <= 0.0f) return NV_RADIUS_CARD;
+  return settings_radius_poster_px() / h;
 }
-// Corner radius of a box drawn `dflt` px inside the card outline. Concentric
+// THE SHADER'S RADIUS IS A FRACTION OF THE HEIGHT, not of the smaller side.
+// Every comment in this project said "smaller side" and the SDF disagrees:
+//
+//   vec2 p = (uv - 0.5) * vec2(asp, 1.0);   // asp = w/h
+//
+// p.y spans the full height, so one unit of the SDF is h pixels on BOTH axes —
+// p.x is (w/h) units wide, measured in that same height unit. Dividing by the
+// smaller side therefore only happened to be right when the smaller side WAS
+// the height, which is every landscape card in the app. On the 212x322 portrait
+// poster it asked for 24/212 = 0.1132, and the shader drew 0.1132 * 322 = 36.5px
+// — half again the 24 the web uses, which is the "too much" the owner saw. The
+// landscape poster measured correct in the same screenshot, which is exactly why
+// this survived so long.
+//
+// Corner radius of a box drawn `pad` px inside the card outline. Concentric
 // corners share a centre, so the radius loses exactly the inset.
-static float radiusInset(float w, float h, float dflt) {
-  float smaller = w < h ? w : h;
-  if (smaller <= 0.0f) return NV_RADIUS_CARD;
-  float r = settings_radius_poster_px() - dflt;
+static float radiusInset(float w, float h, float pad) {
+  (void)w;
+  if (h <= 0.0f) return NV_RADIUS_CARD;
+  float r = settings_radius_poster_px() - pad;
   if (r < 0.0f) r = 0.0f;
-  return r / smaller;
+  return r / h;
 }
 // Radius of everything INSIDE the frame — the art, the scrim, the label veil.
 // The web writes it once, as `calc(var(--home-poster-radius) - 2px)`, and
@@ -447,23 +464,23 @@ static float radiusArt(float w, float h) {
 static int posterFrame(KindRow t) {
   return t != ROW_CONTINUE && t != ROW_RETURN;
 }
-// The frame's padding box: where the artwork actually lives. `dflt` is the
+// The frame's padding box: where the artwork actually lives. `pad` is the
 // inset, already carrying the focus scale — in the web one transform scales
 // the card and its borders together, so the gutter scales with it.
-static GfxRect frameOf(GfxRect card, float dflt) {
-  GfxRect f = { card.x + dflt, card.y + dflt,
-                card.w - dflt * 2.0f, card.h - dflt * 2.0f };
+static GfxRect frameOf(GfxRect card, float pad) {
+  GfxRect f = { card.x + pad, card.y + pad,
+                card.w - pad * 2.0f, card.h - pad * 2.0f };
   if (f.w < 1.0f) { f.x = card.x; f.w = card.w; }
   if (f.h < 1.0f) { f.y = card.y; f.h = card.h; }
   return f;
 }
 
-// --- Profundidade dos cartoes (`cardDepth*`) ---------------------------------
-// O web faz isto com dois pseudo-elementos sobre a arte: um brilho na borda de
-// CIMA com opacidade `--card-depth-edge` e uma faixa clara e discreta —
-// `--card-depth-sheen` — atravessando a parte alta do cartao. `--card-depth-
-// coverage` engorda a banda da borda: `12 + round(18 * coverage)` px
-// (layoutPreferences.js:181). Sao os mesmos tres numeros da tela de Ajustes.
+// --- Card depth (`cardDepth*`) -----------------------------------------------
+// The web app does this with two pseudo-elements over the art: a glow on the TOP edge
+// with opacity `--card-depth-edge` and a discreet light band —
+// `--card-depth-sheen` — crossing the upper part of the card. `--card-depth-coverage`
+// thickens the edge band: `12 + round(18 * coverage)` px
+// (layoutPreferences.js:181). They are the same three numbers as on the Settings screen.
 static void drawDepth(GfxRect card, float radius, int onHere) {
   if (!settings_depth() || !onHere) return;
   float border = settings_depth_border();
@@ -472,8 +489,8 @@ static void drawDepth(GfxRect card, float radius, int onHere) {
   if (border > 0.001f) {
     float h = 12.0f + 18.0f * coverage;
     GfxRect track = { card.x, card.y, card.w, h };
-    // Raio proporcional: a faixa e muito mais baixa que o card, entao repetir a
-    // fracao do card arredondaria demais e a borda descolaria do canto.
+    // A proportional radius: the band is much shorter than the card, so repeating the
+    // card's fraction would round it too much and the edge would peel away from the corner.
     gfx_color(track, radius * (card.h / (h > 0.0f ? h : 1.0f)) * 0.5f,
             1.0f, 1.0f, 1.0f, border * 0.55f);
   }
@@ -482,18 +499,32 @@ static void drawDepth(GfxRect card, float radius, int onHere) {
     gfx_color(refl, radius, 1.0f, 1.0f, 1.0f, brightness * 0.18f);
   }
 }
-// ZERO. MEDIDO no app web (sessao logada, perfil do dono): o card em foco tem
-// `transform: none`, `scale: none` e o mesmo getBoundingClientRect do card ao
-// lado — 212x322 nos dois, mesma linha, mesmo topo. A escala de 9% e o
-// levantamento de 8px vinham das tabelas de Top Shelf do tvOS, e nao desta
-// interface. Eram eles que faziam o card focado subir 22px e encostar no titulo
-// da fileira, que fica 15px acima dos cards (titulo 518..549, cards em 564).
+// The focused card DOES grow, by a little, and by a different little per card family:
+// see NV_FOCUS_SCALE_POSTER and NV_FOCUS_SCALE_CW for the two values and the CSS they
+// are read from.
 //
-// O foco no web se marca por um ANEL de 2px `#f5f5f5` desenhado por dentro e
-// por fora da arte (box-shadow inset + outset), com o card mantendo a caixa.
+// This returned ZERO behind a note saying the web had been MEASURED with
+// `transform: none` and the same getBoundingClientRect as the card beside it. The
+// stylesheet says otherwise, so that measurement caught a state which suppresses the
+// transform — almost certainly a `.performance-constrained` session, which every webOS
+// and Tizen device runs (js/app.js:184) and which sets `transition: none` on these
+// cards.
+//
+// The failure the old note describes is real and worth remembering: a focused card
+// rising 22px into the row title, which sits 15px above the cards (title 518..549,
+// cards at 564). But that was 9% on a CENTRED origin plus an 8px lift. These grow from
+// `transform-origin: top` and do not move upward at all.
+//
+// A DELIBERATE DIVERGENCE lives here too: the web SNAPS this scale, and the dimming
+// with it. Not by design — `.performance-constrained` strips the transition off poster
+// cards (components.css:19362) and leaves `filter` out of its transition allowlist
+// (19190), both to dodge style-recalc cost in a browser. This renderer has no such
+// problem: it redraws unconditionally every frame (main.c, no dirty-rect gating), so
+// the ramp is free and rides animFocus, the spring that already exists per card and
+// already honours reduce-motion.
 static float scaleOf(KindRow t) {
-  (void)t;
-  return 0.0f;
+  if (t == ROW_CONTINUE || t == ROW_RETURN) return NV_FOCUS_SCALE_CW;
+  return NV_FOCUS_SCALE_POSTER;
 }
 static float stepOf(KindRow t) {
   return widthOf(t) + gapOf(t);
@@ -504,17 +535,17 @@ int home_start(const char *dirArt) {
   col_load(dirArt);
   badges_load(dirArt);
   cat_load(dirArt);
-  // O cache da ULTIMA sessao entra por cima do catalogo do pacote, antes de
-  // qualquer rede. Se nao existir (primeira execucao) ou for de outra build,
-  // segue-se com o do pacote, como sempre foi.
+  // The LAST session's cache goes in over the package's catalogue, before any
+  // network. If it does not exist (a first run) or is from another build, it carries
+  // on with the package's, as it always did.
   if (cat_read_cache(dirArt)) mark("cached catalog on screen");
   loadsDir(dirArt, bd, &nBd, NULL);
   loadsDir(dirArt, pst, &nPst, "poster");
   if (!nBd) { printf("home: no backdrop in %s\n", dirArt); return 0; }
   if (!nPst) { printf("home: no portrait posters, Top 10 will use the backdrop\n"); }
 
-  // No layout moderno legacy o hero é informativo; a navegação começa na
-  // primeira fileira de conteúdo (como buildModernNavigationRows()).
+  // In the modern legacy layout the hero is informational; the navigation starts on
+  // the first content row (as in buildModernNavigationRows()).
   int cols[MAX_FILTER];
   for (int i = 0; i < nRows; i++)
     cols[i] = rows[i].n + (rows[i].seeAll ? 1 : 0);
@@ -525,14 +556,14 @@ int home_start(const char *dirArt) {
 }
 
 void home_event(const SDL_Event *e) {
-  if (e->type == SDL_QUIT) { sair = 1; return; }
+  if (e->type == SDL_QUIT) { wantsExit = 1; return; }
 
-  // SEGURAR O OK ABRE O MENU DO CARTAZ.
+  // HOLDING OK OPENS THE POSTER'S MENU.
   //
-  // O tempo so e conhecido quando a tecla SOBE, entao o KEYUP tem de ser visto
-  // — e ele era descartado logo abaixo, junto com todo evento que nao fosse
-  // KEYDOWN. A tela de titulo ja usa esta mesma medida (NV_HOLD_MS) para
-  // separar "Reproduzir" de "escolher fonte".
+  // The duration is only known when the key GOES UP, so the KEYUP has to be seen —
+  // and it was discarded just below, along with every event that was not a KEYDOWN.
+  // The title screen already uses this same measure (NV_HOLD_MS) to separate "Play"
+  // from "choose source".
   { SDL_Keycode kk = e->key.keysym.sym;
     int isOk = (kk == SDLK_RETURN || kk == SDLK_KP_ENTER || kk == SDLK_SPACE);
     if (e->type == SDL_KEYDOWN && isOk) {
@@ -593,44 +624,44 @@ void home_event(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
 #ifdef __APPLE__
-  // Rodando no Mac, o Back na home NAO fecha: fechar a janela no meio de um
-  // teste custa recompilar e reabrir. No aparelho ele sai do app, como deve.
+  // Running on the Mac, Back on the home does NOT close: closing the window in the
+  // middle of a test costs a recompile and a reopen. On the device it exits the app,
+  // as it should.
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE) return;
-  if (k == SDLK_q) { sair = 1; return; }
+  if (k == SDLK_q) { wantsExit = 1; return; }
 #else
-  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK) { sair = 1; return; }
+  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK) { wantsExit = 1; return; }
 #endif
-  // O OK NAO AGE MAIS NO KEYDOWN. Abrir o titulo ali tornava o "segurar"
-  // impossivel: quando a tecla subia, o detalhe ja estava aberto ha meio
-  // segundo. Toda a decisao — abrir, "Ver tudo" ou menu do cartaz — mora no
-  // KEYUP acima, que e o unico ponto que conhece a DURACAO.
+  // OK NO LONGER ACTS ON THE KEYDOWN. Opening the title there made "holding"
+  // impossible: by the time the key went up, the detail had been open for half a
+  // second. The whole decision — open, "See all" or the poster's menu — lives in the
+  // KEYUP above, which is the only point that knows the DURATION.
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) return;
   if (k == SDLK_RIGHT) {
-    // O `&&` aqui era um curto-circuito com efeito colateral: escrito como
-    // `if (fileira == 0 && !focus_mover(...))`, o focus_mover so era chamado
-    // NO HERO — em qualquer outra fileira a seta direita nao movia nada. Mover
-    // primeiro, decidir depois.
-    (void)focus_mover(&focus, 1, 0);
+    // The `&&` here was a short-circuit with a side effect: written as
+    // `if (row == 0 && !focus_move(...))`, focus_move was only called ON THE HERO —
+    // on any other row the right arrow moved nothing. Move first, decide afterwards.
+    (void)focus_move(&focus, 1, 0);
   } else if (k == SDLK_LEFT) {
-  // Esquerda na primeira coluna chama o menu lateral, em QUALQUER fileira —
-    // inclusive no hero. Antes o hero era excecao e usava a esquerda para
-    // voltar um titulo no carrossel: quem chegava ali (voltando de outra tela,
-    // por exemplo) nao tinha como abrir o menu sem antes descer. O carrossel
-    // continua acessivel pela direita e pela troca automatica.
+  // Left in the first column calls up the side menu, on ANY row — the hero included.
+    // Before, the hero was an exception and used left to go back a title in the
+    // carousel: anyone arriving there (coming back from another screen, say) had no
+    // way to open the menu without first going down. The carousel is still reachable
+    // by the right arrow and by the automatic change.
     if (focus.column == 0) { requestMenu = 1; return; }
-    focus_mover(&focus, -1, 0);
+    focus_move(&focus, -1, 0);
   }
-  else if (k == SDLK_DOWN)  focus_mover(&focus, 0, 1);
-  else if (k == SDLK_UP)    focus_mover(&focus, 0, -1);
+  else if (k == SDLK_DOWN)  focus_move(&focus, 0, 1);
+  else if (k == SDLK_UP)    focus_move(&focus, 0, -1);
 }
 
-// Reconstroi a lista a partir do catalogo. Chamada a cada quadro porque a
-// descoberta roda noutro fio e pode trocar o catalogo a qualquer momento; sai
-// cedo quando nada mudou, entao custa uma comparacao de inteiro.
+// Rebuilds the list from the catalogue. Called every frame because discovery runs on
+// another thread and may swap the catalogue at any moment; it returns early when
+// nothing has changed, so it costs one integer comparison.
 static int filtersApplied = -1;
-// Assinatura das preferencias que MUDAM a lista de fileiras. Sem isto, desligar
-// "Continuar assistindo" em Ajustes so valia depois que a rede trocasse o
-// catalogo — a comparacao de `nCat` saia cedo e a fileira continuava na tela.
+// A signature of the preferences that CHANGE the row list. Without this, turning
+// "Continue watching" off in Settings only took effect once the network swapped the
+// catalogue — the `nCat` comparison returned early and the row stayed on screen.
 static int prefsApplied = -1;
 static int subscriptionPrefs(void) {
   return (settings_cw_on() ? 1 : 0)
@@ -694,8 +725,8 @@ static void syncRows(void) {
   // account after the catalogue does not change the revision, the early return
   // just below skips the rebuild, and its row never comes to exist.
   revision = (revision ^ col_revision()) * 16777619u;
-  // Guardado ANTES do laco abaixo, que sobrescreve fileiras[]: depois dele nao
-  // ha mais como saber em que fileira o foco estava.
+  // Stored BEFORE the loop below, which overwrites rows[]: after it there is no
+  // longer any way to know which row the focus was on.
   char keyFocus[192];
   int colFocus = focus.column;
   keyFocus[0] = 0;
@@ -705,8 +736,8 @@ static void syncRows(void) {
   // returned right here, so a home that had only collections came out empty.
   if ((nCat < 1 && !col_n()) || (nCat == filtersApplied && sub == prefsApplied
       && revision == ultimaRevision && resumeApplied == resumeRev)) return;
-  // Guardar o estado por chave: inserir o hub não deve transferir a rolagem
-  // horizontal de uma fileira para outra.
+  // Store the state by key: inserting the hub must not transfer one row's horizontal
+  // scroll to another.
   static Row old[MAX_FILTER];
   float oldX[MAX_FILTER];
   int nOld = nRows;
@@ -717,21 +748,19 @@ static void syncRows(void) {
     const CatRow *cf = cat_row(r);
     if (!cf) break;
     if (cf->n < 1) continue;
-    // `continueWatchingEnabled: false` tira a fileira da home inteira — nao a
-    // esvazia, tira. E o que renderModernHomeLayout faz quando
-    // computeContinueWatchingRenderState devolve a fileira desligada.
+    // `continueWatchingEnabled: false` takes the row out of the home entirely — it
+    // does not empty it, it removes it. It is what renderModernHomeLayout does when
+    // computeContinueWatchingRenderState returns the row switched off.
     if (!strcmp(cf->key, "continue_watching") && !settings_cw_on()) continue;
     // Same rule for the friends' feed: turning it off REMOVES the row. The
     // catalogue can still carry it — it was built while the option was on, or
-    // came from the cache — so the cut has to happen here too, not only where
-    // the synthetic row is inserted below.
     if (!strcmp(cf->key, "social_activity") && !settings_social_row()) continue;
     snprintf(rows[destination].title, sizeof rows[destination].title, "%s", cf->title);
-    // "Continuar assistindo" e a unica landscape: e o
-    // `continueWatchingCardStyle: "card"` do perfil. Todo o resto e poster 2:3.
-    // `continueWatchingCardStyle`: "card" e "largo" desenham landscape, "poster"
-    // usa o mesmo 2:3 das outras fileiras. E a preferencia, nao o tipo da
-    // fileira, que decide a forma.
+    // "Continue watching" is the only landscape one: it is the profile's
+    // `continueWatchingCardStyle: "card"`. Everything else is a 2:3 poster.
+    // `continueWatchingCardStyle`: "card" and "wide" draw landscape, "poster" uses
+    // the same 2:3 as the other rows. It is the preference, not the row's kind, that
+    // decides the shape.
     rows[destination].kind = (!strcmp(cf->key, "continue_watching")
                               && settings_cw_style() != 2)
                            ? ROW_CONTINUE : profileCatalog(cf->title);
@@ -741,12 +770,12 @@ static void syncRows(void) {
       rows[destination].kind = ROW_HIGHLIGHT;
       hasHighlight = 1;
     }
-    // MAX_CARDS - 1: a ultima coluna e do card "Ver tudo". Sem reservar, uma
-    // fileira cheia empurraria o card para fora do vetor de animacao.
+    // MAX_CARDS - 1: the last column belongs to the "See all" card. Without
+    // reserving it, a full row would push the card outside the animation array.
     rows[destination].n   = cf->n > 12 ? 12 : cf->n;
-    // UMA COLUNA A MAIS: o card "Ver tudo" no fim. So em fileira que veio de um
-    // CATALOGO de addon — "Continuar assistindo" e as listas do Trakt nao tem
-    // continuacao para pedir (o base fica vazio nelas).
+    // ONE EXTRA COLUMN: the "See all" card at the end. Only on a row that came from
+    // an addon CATALOGUE — "Continue watching" and the Trakt lists have no
+    // continuation to ask for (their base is empty).
     rows[destination].seeAll = (cf->base[0] && cf->catId[0]) ? 1 : 0;
     snprintf(rows[destination].base,  sizeof rows[destination].base,  "%s", cf->base);
     snprintf(rows[destination].catId, sizeof rows[destination].catId, "%s", cf->catId);
@@ -879,17 +908,16 @@ static void syncRows(void) {
         destination++;break;
       }
     }
-    // Tudo que nao casou com a curadoria acima permanece na ordem declarada
-    // pelo addon/preferencia. A comparacao por chave evita duplicar uma linha
-    // especial que ja foi promovida.
+    // Everything that did not match the curation above stays in the order the
+    // addon/preference declared. Comparing by key avoids duplicating a special row
+    // that has already been promoted.
     for(int k=0;k<total && destination<MAX_FILTER;k++) {
       int watched=0;
       for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,orig[k].key)){watched=1;break;}
       if(!watched) rows[destination++]=orig[k];
     }
-    // Grupos adicionais tambem sao configuracao do usuario. Nao dependem de
-    // nomes que conheciamos quando a tabela foi escrita, e cada grupo aparece
-    // uma vez com todos os seus folders.
+    // Extra groups are the user's configuration too. They do not depend on names we
+    // knew when the table was written, and each group appears once with all its folders.
     for(int i=0;i<col_n() && destination<MAX_FILTER;i++) {
       const ColFolder *folder=col_folder(i);
       int groupWatched=0;
@@ -925,9 +953,9 @@ static void syncRows(void) {
     snprintf(s->title,sizeof s->title,"Among friends");
     snprintf(s->key,sizeof s->key,"social_activity");destination++;
   }
-  // Um retorno do player e contexto, nao catalogo: entra acima das fileiras e
-  // desaparece quando nao existe sessao incompleta. Nao duplica dados nem faz
-  // rede; aponta para o item que o player acabou de atualizar em memoria.
+  // A return from the player is context, not catalogue: it goes above the rows and
+  // disappears when there is no incomplete session. It duplicates no data and makes
+  // no network calls; it points at the item the player has just updated in memory.
   if (resumeId[0]) resumeIndex = cat_index_by_imdb(resumeId);
   if (resumeIndex >= 0 && destination < MAX_FILTER) {
     memmove(rows + 1, rows, sizeof(Row) * (size_t)destination);
@@ -985,15 +1013,15 @@ static void syncRows(void) {
   if (nRows < 1) return;
   {
     int cols[MAX_FILTER], k;
-    // PRESERVAR O FOCO. focus_iniciar faz memset e zera fileira e coluna, e a
-    // descoberta agora publica o catalogo A CADA FILEIRA que chega da rede —
-    // sao ~16 publicacoes nos primeiros segundos. Com o reset, o foco do dono
-    // saltaria para o primeiro card umas dezesseis vezes enquanto ele tenta
-    // navegar. Antes isso nao aparecia porque a publicacao era unica.
+    // PRESERVE THE FOCUS. focus_start does a memset and zeroes the row and column,
+    // and discovery now publishes the catalogue ON EVERY ROW that arrives from the
+    // network — that is ~16 publications in the first few seconds. With the reset,
+    // the owner's focus would jump to the first card some sixteen times while they
+    // try to navigate. Before, this did not show because there was a single publication.
     //
-    // A fileira e reencontrada pela CHAVE do catalogo, nao pelo indice: uma
-    // fileira nova pode entrar no meio (a ordem vem de art/fileiras.txt), e o
-    // indice antigo passaria a apontar para outra coisa.
+    // The row is found again by the catalogue's KEY, not by index: a new row may come
+    // in the middle (the order comes from art/rows.txt), and the old index would then
+    // point at something else.
     int found = -1;
     for (k = 0; k < nRows; k++)
       cols[k] = rows[k].n + (rows[k].seeAll ? 1 : 0);
@@ -1003,7 +1031,7 @@ static void syncRows(void) {
         if (!strcmp(rows[k].key, keyFocus)) { found = k; break; }
     if (found >= 0) {
       focus.row = found;
-      // A fileira pode ter encolhido entre uma publicacao e outra.
+      // The row may have shrunk between one publication and the next.
       focus.column = colFocus < focus.nColumns[found] ? colFocus
                   : (focus.nColumns[found] > 0 ? focus.nColumns[found] - 1 : 0);
     }
@@ -1015,7 +1043,7 @@ void home_update(float dt, Uint32 now) {
   syncRows();
 
   const int motionReduced = settings_animations_reduced();
-  if (okPressing && focus_can_press_longa())
+  if (okPressing && focus_can_press_long())
     okHold = anim_clamp((now - okSince) / NV_HOLD_FEEDBACK_MS, 0.0f, 1.0f);
   else if (!okPressing)
     okHold = 0.0f;
@@ -1024,28 +1052,28 @@ void home_update(float dt, Uint32 now) {
     okConsumeRelease = 1;
     okPressing = 0;
     okSince = 0;
-    // O menu contextual continua sendo o dono das acoes e da UI. A home so
-    // dispara uma vez no limiar e consome o KEYUP seguinte.
+    // The context menu is still the owner of the actions and the UI. The home only
+    // fires once at the threshold and consumes the following KEYUP.
     ctx_open(rows[focus.row].start + focus.column);
   }
 
-  // O catalogo pode encolher entre duas respostas. Normalizar os indices do
-  // carrossel evita que um estado stale caia no wrap de cat_item().
+  // The catalogue may shrink between two responses. Normalising the carousel's
+  // indices stops a stale state falling into cat_item()'s wrap-around.
   { int total = nArchiveHero();
     if (heroCurrent < 0 || heroCurrent >= total) heroCurrent = 0;
     if (heroPrevious < 0 || heroPrevious >= total) heroPrevious = heroCurrent;
     if (heroPending < 0 || heroPending >= total) heroPending = heroCurrent;
   }
 
-  // O HERO SEGUE O FOCO. Pedido do dono, e e uma DIVERGENCIA DELIBERADA do app
-  // web: medi duas vezes com o foco andando de verdade (o card mudou de "54
-  // minutos restantes" para "1h 12m restantes") e a arte do
-  // `.home-hero-backdrop` continuou a mesma — no web ela nao acompanha a
-  // selecao. Fica registrado para ninguem "corrigir" isto de volta achando que
-  // e desvio: e melhoria escolhida, nao erro.
+  // THE HERO FOLLOWS THE FOCUS. The owner's request, and a DELIBERATE DIVERGENCE
+  // from the web app: I measured twice with the focus really moving (the card changed
+  // from "54 minutes left" to "1h 12m left") and the `.home-hero-backdrop`'s art
+  // stayed the same — in the web app it does not follow the selection. It is recorded
+  // so nobody "corrects" this back thinking it is a deviation: it is a chosen
+  // improvement, not a mistake.
   //
-  // Enquanto ha foco num card, o carrossel automatico nao roda: duas fontes
-  // mexendo na mesma arte dariam trocas em cima da escolha do usuario.
+  // While there is focus on a card, the automatic carousel does not run: two sources
+  // touching the same art would give changes on top of the user's choice.
   {
     int target = -1;
     if (focus.row >= 0 && focus.row < nRows) {
@@ -1055,29 +1083,29 @@ void home_update(float dt, Uint32 now) {
       else if (focus.column >= rows[focus.row].n) i = -1;
       if (i >= 0 && i < cat_n()) target = i;
     }
-    // TROCA SO COM O FOCO EM REPOUSO. `heroPendente` e o candidato; enquanto o
-    // dono anda pela fileira ele muda a cada passo e o relogio reinicia, entao
-    // nenhuma troca chega a acontecer. Quando o foco para por
-    // NV_HERO_REPOUSO_MS, o candidato vira o heroi.
+    // IT ONLY SWAPS WITH THE FOCUS AT REST. `heroPending` is the candidate; while the
+    // owner moves along the row it changes at every step and the clock restarts, so
+    // no swap ever happens. When the focus stops for NV_HERO_IDLE_MS, the candidate
+    // becomes the hero.
     //
-    // Isto nao e so estetica: cada troca pede uma textura de 1920 (~8 MB), e
-    // atravessar uma fileira pedia uma dezena delas em dois segundos — o cache
-    // estourava e despejava os posteres visiveis. Ver a nota em layout.h.
+    // This is not only aesthetic: each swap asks for a 1920 texture (~8 MB), and
+    // crossing a row asked for a dozen of them in two seconds — the cache overflowed
+    // and evicted the visible posters. See the note in layout.h.
     if (target >= 0 && target != heroPending) {
       heroPending = target;
       heroPendingIn = now;
-      // Voltou para a arte que ja esta no ar: cancela a troca que ainda nao
-      // aconteceu, senao ela dispararia depois sem ninguem ter pedido.
+      // Back to the art that is already on screen: it cancels the swap that has not
+      // happened yet, otherwise it would fire later with nobody having asked for it.
       if (heroPending == heroCurrent) heroWanted = -1;
     }
     if (target >= 0 && heroPending != heroCurrent &&
         now - heroPendingIn >= NV_HERO_IDLE_MS) {
-      // So ANUNCIA o desejo. Quem efetiva a troca e o desenho, quando a textura
-      // da arte nova estiver pronta — ver heroDesejado.
+      // It only ANNOUNCES the wish. What carries out the swap is the drawing, once
+      // the new art's texture is ready — see heroWanted.
       heroWanted = heroPending;
     } else if (target < 0 && now >= heroSwapIn) {
-      // Sem card em foco, agenda o proximo item e deixa o desenho efetivar a
-      // troca somente quando a textura ou o placeholder ja estiver pronto.
+      // With no card in focus, it schedules the next item and lets the drawing carry
+      // out the swap only once the texture or the placeholder is ready.
       int total = nArchiveHero();
       int next = total > 0 ? (heroCurrent + 1) % total : 0;
       heroPending = next;
@@ -1086,17 +1114,18 @@ void home_update(float dt, Uint32 now) {
       heroSwapIn = now + NV_HERO_INTERVAL_MS;
     }
   }
-  // Relogio da expansao. Zera a cada movimento; conta so com o foco parado.
+  // The expansion's clock. It resets on every movement; it counts only with the focus
+  // still.
   if (settings_expand_poster()) {
     if (focus.row != expRow || focus.column != expColumn) {
       expRow = focus.row; expColumn = focus.column;
       expSince = now;
-      expOpen = 0.0f;            // fecha na hora; abrir e que e gradual
+      expOpen = 0.0f;            // it closes at once; it is opening that is gradual
     }
     { float delay = settings_expand_poster_delay();
       int ready = expSince && (now - expSince) >= (Uint32)(delay * 1000.0f);
-      // Fileira DEITADA (e a de continuar assistindo) ja mostra a arte larga:
-      // nao ha para o que expandir.
+      // A LANDSCAPE row (and the continue-watching one) already shows the wide art:
+      // there is nothing to expand into.
       if (ready && canExpand(focus.row))
         expOpen = motionReduced ? 1.0f
                    : anim_spring(expOpen, 1.0f, dt, NV_SPRING_SCREEN); }
@@ -1104,17 +1133,17 @@ void home_update(float dt, Uint32 now) {
     expOpen = 0.0f; expRow = expColumn = -1;
   }
 
-  if (heroSai > 0.0f) {
-    heroSai -= dt * (1000.0f / NV_HERO_FADE_MS);
-    if (heroSai < 0.0f) heroSai = 0.0f;
-    heroEnters = motionReduced ? 1.0f : 1.0f - heroSai;
+  if (heroExits > 0.0f) {
+    heroExits -= dt * (1000.0f / NV_HERO_FADE_MS);
+    if (heroExits < 0.0f) heroExits = 0.0f;
+    heroEnters = motionReduced ? 1.0f : 1.0f - heroExits;
   } else {
     heroEnters = 1.0f;
   }
 
-  // O passeio automatico do foco era so para ver o protótipo se mexendo sem
-  // ninguem no controle. Com o app navegavel ele atrapalha: rouba o foco no
-  // meio de qualquer teste.
+  // The automatic focus walk was only there to see the prototype moving with nobody
+  // on the remote. With the app navigable it gets in the way: it steals the focus in
+  // the middle of any test.
 
   for (int r = 0; r < nRows; r++) {
     int nAnim = rows[r].n + (rows[r].seeAll ? 1 : 0);
@@ -1127,18 +1156,18 @@ void home_update(float dt, Uint32 now) {
                                  target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
     if (r == focus.row) {
-      // Roda so o necessario para o item focado caber na area util. Deslocar
-      // proporcional a coluna, como estava, jogava o primeiro card para fora da
-      // tela assim que o foco ia para o segundo — some conteudo a esquerda sem
-      // que o usuario tenha andado ate la.
+      // It scrolls only as far as needed for the focused item to fit in the usable
+      // area. Shifting in proportion to the column, as it used to, threw the first
+      // card off screen as soon as the focus moved to the second — content disappears
+      // on the left without the user having gone over there.
       float lw = rows[r].stackN ? 680.0f : widthOf(rows[r].kind);
       float step = lw + gapOf(rows[r].kind);
       float left = (float)focus.column * step;
       float dir = left + lw;
       float util = NV_SCREEN_W - settings_content_x() - NV_HOME_SAFE_RIGHT;
       float target = scrollX[r];
-      // a folga cobre o crescimento do foco: o card cresce para os dois lados,
-      // e sem reservar essa metade ele encosta na borda ao ficar em foco
+      // the slack covers the focus's growth: the card grows on both sides, and
+      // without reserving that half it touches the edge when it takes focus
       float slack = lw * scaleOf(rows[r].kind) * 0.5f;
       if (dir + slack - target > util)  target = dir + slack - util;
       if (left - target < 0.0f)  target = left;
@@ -1148,21 +1177,20 @@ void home_update(float dt, Uint32 now) {
     }
   }
 
-  // A FILEIRA EM FOCO FICA SEMPRE NO MESMO Y, e as de cima SOMEM.
+  // THE FOCUSED ROW ALWAYS STAYS AT THE SAME Y, and the ones above DISAPPEAR.
   //
-  // Observado nas duas capturas de referencia do dono: com o foco em "Continuar
-  // assistindo" esse titulo aparece na mesma altura em que, ao descer uma
-  // fileira, aparece "For You - Filme". A fileira anterior nao sobe — ela deixa
-  // de ser desenhada. Palavras dele: "quando desce uma linha as coisas somem e
-  // nao sobem".
+  // Observed in the owner's two reference captures: with the focus on "Continue
+  // watching" that title appears at the same height at which, on going down one row,
+  // "For You - Film" appears. The previous row does not rise — it stops being drawn.
+  // In their words: "when you go down a line the things disappear, they don't rise".
   //
-  // O que estava aqui era uma CAMERA: mantinha a fileira em foco dentro de um
-  // viewport e rolava o minimo necessario. Isso desliza tudo para cima, e foi o
-  // que fez o texto do hero passar por cima do titulo da fileira.
+  // What was here was a CAMERA: it kept the focused row inside a viewport and scrolled
+  // the minimum needed. That slides everything upwards, and it was what made the
+  // hero's text pass over the row's title.
   //
-  // O deslocamento e a soma das fileiras ANTES da que tem foco, entao o topo da
-  // focada cai exatamente em NV_SHELF_TOP. Continua com mola: o salto seco
-  // entre fileiras de alturas diferentes le como corte, nao como navegacao.
+  // The offset is the sum of the rows BEFORE the focused one, so the focused one's
+  // top falls exactly on NV_SHELF_TOP. It still has a spring: a hard jump between rows
+  // of different heights reads as a cut, not as navigation.
   float targetY = 0.0f;
   { int r = focus.row;
     for (int i = 0; i < r && i < nRows; i++)
@@ -1172,36 +1200,34 @@ void home_update(float dt, Uint32 now) {
                                 NV_SPRING2_SCROLL, motionReduced);
 }
 
-// ---------- Hero do layout moderno legacy ----------------------------------
-//
-// A mídia ocupa a direita dos 650px superiores; o texto fica no bloco esquerdo
-// e as fileiras rolam em um viewport independente abaixo. O hero não captura
-// foco: a navegação espacial começa no primeiro card, como no DOM legacy.
-// Rect da ARTE do hero no ultimo quadro. A tela de detalhe le isto para
-// comecar o backdrop dela EXATAMENTE onde a arte ja estava, em vez de aparecer
-// do nada: o fundo e o mesmo do titulo, entao ele nao deve piscar nem crescer.
+// The media occupies the right of the top 650px; the text sits in the left block and
+// the rows scroll in an independent viewport below. The hero takes no focus: spatial
+// navigation starts on the first card, as in the legacy DOM.
+// The rect of the hero's ART on the last frame. The detail screen reads this to start
+// its backdrop EXACTLY where the art already was, instead of appearing from nowhere:
+// the background is the title's own, so it should neither flash nor grow.
 static GfxRect heroArtRect = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
 void home_hero_rect(float *x, float *y, float *w, float *h) {
   *x = heroArtRect.x; *y = heroArtRect.y;
   *w = heroArtRect.w; *h = heroArtRect.h;
 }
 
-// `saida` = 0..1 de quanto o detalhe ja tomou a tela. So o TEXTO do hero sai
-// (desce e apaga); a arte fica parada, porque e a mesma arte que o detalhe vai
-// usar. Era isso que faltava para a abertura ler como rearranjo de layout e
-// nao como troca de tela.
+// `output` = 0..1 of how much the detail has already taken over the screen. Only the
+// hero's TEXT leaves (it drops and fades); the art stays put, because it is the same
+// art the detail will use. That was what was missing for the opening to read as a
+// rearrangement of the layout and not as a change of screen.
 static void drawHero(Uint32 now, float output) {
   (void)now;
   const int motionReduced = settings_animations_reduced();
   float aArt = 1.0f;
-  // MEDIDO no app web: .home-modern-hero-media fica em x=555, y=0, 1421x670.
-  // A conta que estava aqui (0.28*W - 56 = 481,6 de largura 1438) vinha de
-  // proporcao estimada e punha a arte 73px a esquerda do lugar.
-  // Faixa ou tela cheia, conforme `modernHeroFullScreenBackdropEnabled`. Sao os
-  // dois estados da MESMA tela, nao dois layouts — e cada um tem a sua rampa de
-  // degrade, medida separadamente (ver GFX_HERO e GFX_HERO_CHEIO em gfx.c).
+  // MEASURED in the web app: .home-modern-hero-media sits at x=555, y=0, 1421x670.
+  // The arithmetic that used to be here (0.28*W - 56 = 481.6 of a width of 1438) came
+  // from an estimated proportion and put the art 73px to the left of where it belongs.
+  // A band or full screen, according to `modernHeroFullScreenBackdropEnabled`. They
+  // are the two states of the SAME screen, not two layouts — and each has its own
+  // gradient ramp, measured separately (see GFX_HERO and GFX_HERO_FULL in gfx.c).
   int full = settings_hero_full();
-  // Em tela cheia o bloco sobe 70px (ver layout.h).
+  // Full screen, the block moves up 70px (see layout.h).
   GfxMode modeHero = full ? GFX_HERO_FULL : GFX_HERO;
   GfxRect r = full ? (GfxRect){ 0, 0, NV_SCREEN_W, NV_HERO_FULL_H }
                     : (GfxRect){ NV_HERO_ART_X, 0, NV_HERO_ART_W, NV_HERO_ART_H };
@@ -1215,9 +1241,9 @@ static void drawHero(Uint32 now, float output) {
     if(p) {
       const char *art=art_by_format(p, 1);
       GLuint ta=art?tex_get_hero(art):0;
-      // A atividade continua com um ambiente discreto, mas quando o Trakt
-      // trouxe arte real ela vira o assunto do hero. A pessoa fica apenas na
-      // ficha social, onde o avatar tem contexto e não compete com o titulo.
+      // The activity carries on with a discreet ambience, but once Trakt has brought
+      // real art it becomes the hero's subject. The person stays only on the social
+      // card, where the avatar has context and does not compete with the title.
       if(ta){gfx_tex_aspect_current=tex_aspect(art);
         gfx_rect(r,ta,modeHero,0,0,0,0,0,0,0,aArt);gfx_tex_aspect_current=0;}
       else if (!art) drawArtMissing(r, 0.0f, p, aArt);
@@ -1279,10 +1305,10 @@ static void drawHero(Uint32 now, float output) {
         return;
       }
       int isDirector=!strcasecmp(folder->group,"Directors");
-      // A colecao ja traz o banner certo: e um fundo neutro, sem lettering,
-      // feito para receber o conteudo por cima. O retrato do diretor entra como
-      // uma segunda camada dissolvida no lado direito — nunca como um card e
-      // nunca como o backdrop de um filme conhecido.
+      // The collection already carries the right banner: it is a neutral background,
+      // with no lettering, made to receive the content on top. The director's portrait
+      // comes in as a second layer dissolved on the right-hand side — never as a card
+      // and never as a known film's backdrop.
       const char *art=folder->hero[0]?folder->hero:folder->cover;
       GLuint t=0;
       if (isDirector) director_request(folder->title);
@@ -1297,9 +1323,9 @@ static void drawHero(Uint32 now, float output) {
         GLuint portrait=photo[0]
           ?tex_get_width(photo,full?1280.0f:1100.0f):0;
         if (portrait) {
-          // O shader conserva a proporcao vertical e dissolve as quatro bordas.
-          // A largura e intencionalmente generosa para a cabeca ter a mesma
-          // presenca visual do exemplo aprovado, sem parecer uma foto espremida.
+          // The shader preserves the vertical proportion and dissolves all four edges.
+          // The width is deliberately generous so the head has the same visual
+          // presence as the approved example, without looking like a squashed photo.
           GfxRect pr=full ? (GfxRect){840.0f,-20.0f,1080.0f,1120.0f}
                            : (GfxRect){980.0f,-15.0f,940.0f,700.0f};
           gfx_tex_aspect_current=tex_aspect(photo);
@@ -1327,9 +1353,9 @@ static void drawHero(Uint32 now, float output) {
                            x, NV_COLLECTION_HERO_CAPTION_Y, a);
         return;
       }
-      // As logos de colecao sao arte, nao texto rasterizado. O limite de
-      // decode fica acima do tamanho desenhado para preservar nitidez quando
-      // a proporcao da logo pede a altura maxima.
+      // Collection logos are art, not rasterised text. The decode ceiling sits above
+      // the drawn size to preserve sharpness when the logo's aspect ratio calls for
+      // the maximum height.
       GLuint logo=(!isDirector && folder->logo[0])
         ?tex_get_width(folder->logo,NV_COLLECTION_HERO_LOGO_MAX_W+40.0f):0;
       float ap=logo?tex_aspect(folder->logo):0;
@@ -1349,17 +1375,17 @@ static void drawHero(Uint32 now, float output) {
       char caption[96];snprintf(caption,sizeof caption,"%d %s · OK to explore",folder->nSources,folder->nSources==1?"list":"lists");
       float yCap=NV_COLLECTION_HERO_CAPTION_Y;
       if(isDirector) {
-        // Ficha do TMDB abaixo do nome: quem e, quando e onde nasceu, tres
-        // linhas de bio e os titulos por que e conhecido. Chega em segundo
-        // plano; ate chegar a legenda fica onde sempre ficou.
+        // The TMDB record below the name: who they are, when and where they were born,
+        // three lines of biography and the titles they are known for. It arrives in the
+        // background; until it does, the caption stays where it always was.
         director_request(folder->title);
         if(director_ready(folder->title)) {
-          // O bloco comeca logo abaixo do nome e TERMINA antes do cabecalho da
-          // fileira (NV_SHELF_TOP): o numero de linhas da bio e o que cede.
-          // Largura 780: fica aquem do cartao da capa (que comeca em 1096).
+          // The block starts just below the name and ENDS before the row's header
+          // (NV_SHELF_TOP): the number of biography lines is what gives way.
+          // Width 780: it stops short of the cover card (which starts at 1096).
           float yy=endTitle+30,cap=NV_SHELF_TOP-30,width=780;
           const char *meta=director_meta(folder->title),*bio=director_bio(folder->title),*con=director_known(folder->title);
-          float fixed=(meta[0]?38:0)+(con[0]?38:0)+34;   // meta + conhecido + legenda
+        float fixed=(meta[0]?38:0)+(con[0]?38:0)+34;   // meta + known for + caption
           int lines=(int)((cap-yy-fixed-12)/31);if(lines>3)lines=3;
           if(meta[0]){txt_draw_alpha(txt_line_trim(TXT_HERO_META,meta,201,206,218,255,width),x,yy,a);yy+=38;}
           if(bio[0]&&lines>0){yy+=txt_block(TXT_HERO_SIN,bio,222,225,232,x,yy,width,31,a,lines)+12;}
@@ -1373,22 +1399,23 @@ static void drawHero(Uint32 now, float output) {
     }
   }
 
-  // TROCA SO COM A ARTE NOVA JA DECODIFICADA.
+  // IT ONLY SWAPS WITH THE NEW ART ALREADY DECODED.
   //
-  // O pedido e feito aqui, no desenho, porque e aqui que se sabe qual arquivo a
-  // arte e (o caminho sai do catalogo, com a pasta como reserva). Enquanto o
-  // cache nao devolve textura, heroAtual nao muda e a tela segue com a arte que
-  // ja estava — que e exatamente o que o dono pediu ao andar depressa.
+  // The request is made here, in the drawing, because this is where we know which file
+  // the art is (the path comes from the catalogue, with the folder as a fallback).
+  // While the cache does not return a texture, heroCurrent does not change and the
+  // screen carries on with the art it already had — which is exactly what the owner
+  // asked for when moving quickly.
   if (heroWanted >= 0 && heroWanted != heroCurrent) {
     const char *artD = art_by_identity(heroWanted, 1);
-    // Ausencia de arte tambem e um estado pronto: o placeholder pertence ao
-    // item e pode entrar sem apagar o hero anterior primeiro.
+    // An absence of art is a ready state too: the placeholder belongs to the item and
+    // can come in without first erasing the previous hero.
     int artReady = !artD || tex_get_hero(artD);
     if (artReady) {
       heroPrevious = heroCurrent;
       heroCurrent = heroWanted;
       heroWanted = -1;
-      heroSai = (motionReduced || !artD) ? 0.0f : 1.0f;
+      heroExits = (motionReduced || !artD) ? 0.0f : 1.0f;
       heroEnters = (motionReduced || !artD) ? 1.0f : 0.0f;
       heroSwapIn = SDL_GetTicks() + NV_HERO_INTERVAL_MS;
     }
@@ -1399,23 +1426,24 @@ static void drawHero(Uint32 now, float output) {
   const CatItem *cAnt = cat_item_exact(heroPrevious);
   const char *artB = art_by_identity(heroPrevious, 1);
 
-  // Teto de 1920: o hero ocupa a tela e a 960 saia esticado ao dobro.
-  // O ANTERIOR so e pedido ENQUANTO a mistura acontece. Estava sendo pedido em
-  // TODO quadro, mesmo com a troca ja terminada, quando ele nao e desenhado: se o
-  // cache ja o tinha despejado, o pedido o trazia de volta — uma textura de
-  // 1920 (~8 MB) re-decodificada para NAO ser desenhada, empurrando os posteres
-  // visiveis para fora do orcamento.
-  GLuint tAnt = (heroSai > 0.0f && artB) ? tex_get_hero(artB) : 0;
-  // Pedir a nova JA, durante o esvanecimento: e este pedido que enfileira o
-  // decode, e e por isso que o vazio dura o tempo do carregamento e nao mais.
+  // A ceiling of 1920: the hero fills the screen and at 960 it came out stretched to
+  // double.
+  // The PREVIOUS one is only requested WHILE the blend is happening. It was being
+  // requested on EVERY frame, even with the swap already finished, when it is not
+  // drawn: if the cache had already evicted it, the request brought it back — a 1920
+  // texture (~8 MB) re-decoded so as NOT to be drawn, pushing the visible posters out
+  // of the budget.
+  GLuint tAnt = (heroExits > 0.0f && artB) ? tex_get_hero(artB) : 0;
+  // Ask for the new one NOW, during the fade: it is this request that queues the
+  // decode, and it is why the emptiness lasts the loading time and no longer.
   GLuint tCurrent = artA ? tex_get_hero(artA) : 0;
   if (tAnt) {
-    // Esvanecimento com aceleracao e desaceleracao: o medido fica ~25% do
-    // percurso quase parado no comeco, entao rampa reta le como corte na saida.
+    // A fade with acceleration and deceleration: the measurement leaves ~25% of the
+    // travel almost still at the start, so a straight ramp reads as a cut on the way out.
     (void)drawArtHero(r, modeHero, cAnt, artB,
-                          anim_smooth(heroSai) * aArt);
-  } else if (heroSai > 0.0f && (!artB || tex_failed(artB))) {
-    drawPlaceholderHero(r, cAnt, anim_smooth(heroSai) * aArt);
+                          anim_smooth(heroExits) * aArt);
+  } else if (heroExits > 0.0f && (!artB || tex_failed(artB))) {
+    drawPlaceholderHero(r, cAnt, anim_smooth(heroExits) * aArt);
   }
   if (tCurrent && heroEnters > 0.0f) {
     (void)drawArtHero(r, modeHero, ci, artA,
@@ -1428,25 +1456,25 @@ static void drawHero(Uint32 now, float output) {
   heroArtRect = r;
 
   float aText = 1.0f - output;
-  float scrolldownCopy = output * NV_SCREEN_H * 0.06f;
+  float slideDownCopy = output * NV_SCREEN_H * 0.06f;
   if (aText <= 0.004f) return;
 
-  // BLOCO DE TEXTO DO HERO — transcrito do CSS do app web, nao deduzido de
-  // captura. `.home-modern-hero-copy` e um flex column com justify-content
-  // flex-end e gap 16, ancorado numa base fixa; os filhos, na ordem:
-  //   .home-hero-brand         caixa do logo, 440x200, arte no topo-esquerda
-  //   .home-modern-hero-meta-line   21/500 #b3b3b3, tokens separados por •
-  //   .home-modern-hero-secondary   18/600 branco 88%, com selos e o IMDb
-  //   .home-hero-description        22/400 branco, largura 560, leading 30
-  // Cada bloco vazio some (`.is-empty { display: none }`), e e por isso que a
-  // altura do conjunto muda de titulo para titulo — nao por posicao absoluta.
+  // THE HERO'S TEXT BLOCK — transcribed from the web app's CSS, not deduced from a
+  // capture. `.home-modern-hero-copy` is a flex column with justify-content flex-end
+  // and gap 16, anchored to a fixed base; the children, in order:
+  //   .home-hero-brand         the logo's box, 440x200, art at the top left
+  //   .home-modern-hero-meta-line   21/500 #b3b3b3, tokens separated by •
+  //   .home-modern-hero-secondary   18/600 white 88%, with the badges and the IMDb
+  //   .home-hero-description        22/400 white, width 560, leading 30
+  // Each empty block disappears (`.is-empty { display: none }`), and that is why the
+  // set's height changes from title to title — not by absolute position.
   //
-  // O conteudo de cada linha vem de buildModernHeroPresentation
-  // (homeScreen.js:2497), que separa o caso "continuar assistindo" do resto.
+  // Each line's content comes from buildModernHeroPresentation
+  // (homeScreen.js:2497), which separates the "continue watching" case from the rest.
   int contHero = (ci && ci->progress > 0 && ci->remainingMin > 0);
 
-  // Linha de meta. No web sao tokens juntados por "•"; ci->genero ja chega
-  // como "Filme · Terror", que e o par (tipo, primeiro genero) do web.
+  // The meta line. In the web app these are tokens joined by "•"; ci->genre already
+  // arrives as "Film · Horror", which is the web app's (type, first genre) pair.
   char metaLine[288];
   metaLine[0] = 0;
   if (contHero && ci->season > 0) {
@@ -1463,9 +1491,9 @@ static void drawHero(Uint32 now, float output) {
              n ? "   \xe2\x80\xa2   " : "", ci->meta);
   }
 
-  // Linha secundaria: destaque de progresso, selos e a nota do IMDb. O web so
-  // mostra o IMDb aqui quando ja existe destaque ou selo (showImdbSecondary);
-  // no outro caso ele vai para o fim da linha de meta.
+  // The secondary line: the progress highlight, the badges and the IMDb score. The web
+  // app only shows the IMDb here when there is already a highlight or a badge
+  // (showImdbSecondary); otherwise it goes at the end of the meta line.
   char highlight[64];
   highlight[0] = 0;
   if (contHero) snprintf(highlight, sizeof highlight, "%d MINUTES LEFT",
@@ -1478,8 +1506,8 @@ static void drawHero(Uint32 now, float output) {
 
   const char *synopsis = (ci && ci->synopsis[0]) ? ci->synopsis : "";
 
-  // --- empilhamento de baixo para cima, como o flex-end do CSS ---
-  float base = NV_SHELF_TOP - NV_HERO_COPY_GAP + scrolldownCopy;
+  // --- stacking from the bottom up, like the CSS's flex-end ---
+  float base = NV_SHELF_TOP - NV_HERO_COPY_GAP + slideDownCopy;
   float hSin = synopsis[0] ? txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, -1, 0,
                                       NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, 3)
                           : 0.0f;
@@ -1491,8 +1519,8 @@ static void drawHero(Uint32 now, float output) {
   float logoY = yMeta - NV_HERO_COPY_LINE - NV_LOGO_HERO_H;
   float x = settings_content_x();
 
-  // Logo do titulo, ou o nome em texto quando nao ha logo
-  // (.home-hero-title-text, 56/600 no modern — nao os 76 do TXT_TITULO1).
+  // The title's logo, or the name in text when there is no logo
+  // (.home-hero-title-text, 56/600 in modern — not TXT_TITLE1's 76).
   // ASKED FOR AT THE WIDTH IT IS DRAWN, not at tex_get's blanket 640. At
   // NV_LOGO_HERO_FULL_MAX_W the two numbers happen to be the same 640, and the
   // art was landing decoded at exactly its drawn size with none of the slack
@@ -1511,23 +1539,24 @@ static void drawHero(Uint32 now, float output) {
     // object-position: left top — a arte encosta no TOPO da caixa.
     GfxRect rl = { x, logoY, wTitle, hTitle };
     gfx_tex_aspect_current = 0.0f;
-    // Logo escuro vira branco. Mesma regra da tela de detalhe: o TMDB nao marca
-    // claro/escuro, entao a decisao sai da luminancia MEDIDA (tex_luminancia).
-    // Logo claro ou colorido passa intacto; -1 (ainda carregando) nao tinge.
+    // A dark logo becomes white. The same rule as the detail screen's: TMDB does not
+    // mark light/dark, so the decision comes from the MEASURED luminance
+    // (tex_luminance). A light or colourful logo passes through untouched; -1 (still
+    // loading) does not tint.
     { GfxMode m = tex_brand_dark(ci->logo) ? GFX_BRAND : GFX_TEXT;
-      // O LOGO DO TITULO acompanha a ARTE, nao o texto. MEDIDO: 205 ms depois
-      // da tecla a arte antiga ainda estava a 85% e o logo JA tinha sumido por
-      // inteiro; ele so reaparece no mesmo quadro em que a arte nova entra.
+      // THE TITLE'S LOGO follows the ART, not the text. MEASURED: 205 ms after the
+      // keypress the old art was still at 85% and the logo had ALREADY disappeared
+      // completely; it only reappears on the same frame the new art comes in.
       gfx_rect(rl, tlogo, m, 0, 0, 0, 0.0f, 1, 1, 1, aText * heroEnters); }
   } else {
-    // .legacy-webos .home-hero-title-text: 76px (components.css:19164), nao os
-    // 56 do tema padrao.
-    // Sem titulo NAO se inventa titulo. Aqui havia uma lista de demonstracao
-    // ("Ruptura", "Silo", "Shrinking"...) que preenchia o hero com o nome de
-    // outra serie quando o item ainda nao tinha nome — indistinguivel de dado
-    // real para quem olha a tela. Mesma familia do elenco e da classificacao
-    // que ja sairam do detalhe. Sem nome, o hero fica so com a arte, que ja
-    // basta, e o texto aparece quando o dado chegar.
+    // .legacy-webos .home-hero-title-text: 76px (components.css:19164), not the
+    // default theme's 56.
+    // With no title, do NOT invent a title. There used to be a demo list here
+    // ("Severance", "Silo", "Shrinking"...) that filled the hero with another
+    // series' name when the item did not have one yet — indistinguishable from real
+    // data to whoever is looking at the screen. The same family as the cast and the
+    // age rating that have already left the detail screen. With no name, the hero
+    // keeps just the art, which is enough, and the text appears when the data arrives.
     if (ci && ci->title[0]) {
       TxtLine title = txt_line(TXT_TITLE1, ci->title, 255, 255, 255, 255);
       txt_draw_alpha(title, x, logoY + NV_LOGO_HERO_H - (float)title.h,
@@ -1539,12 +1568,11 @@ static void drawHero(Uint32 now, float output) {
     float badgeW=ci?badges_draw(badges_provider(ci->providerName),x,yMeta,150,24,aText):0;
     TxtLine lm = txt_line_trim(TXT_HERO_META, metaLine, 179, 179, 179, 255,
                                   NV_HERO_SIN_W-badgeW);
-    // META E SINOPSE TROCAM NA HORA, sem esvanecer com a arte. MEDIDO: no
-    // quadro a 205 ms, com a arte antiga ainda a 85%, a linha de meta e a
-    // sinopse ja eram as do titulo NOVO, com o texto opaco. Multiplicar por um
-    // alfa de troca aqui era invencao nossa — e, com o rasterizador fazendo 2
-    // linhas por quadro (text.c:40), esvanecer texto que ainda esta assentando
-    // e o pior caso possivel.
+    // THE META AND THE SYNOPSIS SWAP AT ONCE, without fading with the art. MEASURED:
+    // on the frame at 205 ms, with the old art still at 85%, the meta line and the
+    // synopsis were already the NEW title's, with the text opaque. Multiplying by a
+    // swap alpha here was our invention — and, with the rasteriser doing 2 lines per
+    // frame (text.c:40), fading text that is still settling is the worst possible case.
     txt_draw_alpha(lm, x+badgeW, yMeta, aText);
   }
 
@@ -1552,7 +1580,7 @@ static void drawHero(Uint32 now, float output) {
     float cx = x;
     float a = aText;
     if (highlight[0]) {
-      // .home-modern-hero-highlight: branco cheio, peso 600, tracking 0.04em.
+      // .home-modern-hero-highlight: full white, weight 600, tracking 0.04em.
       cx += txt_tracking(TXT_HERO_SEC, highlight, 255, 255, 255, cx, ySec, a,
                          NV_FT_HERO_SEC * 0.04f);
       cx += 14.0f;
@@ -1568,9 +1596,9 @@ static void drawHero(Uint32 now, float output) {
       cx += bw + 14.0f;
     }
     if (score[0]) {
-      // .home-hero-imdb: o selo amarelo de 40px e a nota logo depois, com 10
-      // de respiro. O SVG do IMDb nao esta empacotado aqui; o retangulo
-      // amarelo com as letras pretas e a mesma leitura a esta escala.
+      // .home-hero-imdb: the 40px yellow badge and the score just after it, with 10
+      // of breathing room. The IMDb SVG is not packaged here; the yellow rectangle
+      // with black letters reads the same at this scale.
       TxtLine ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
       float sw = 40.0f, sh = ls.h + 6.0f;
       gfx_color((GfxRect){ cx, ySec + (NV_LD_HERO_SEC - sh) * 0.5f, sw, sh },
@@ -1588,28 +1616,44 @@ static void drawHero(Uint32 now, float output) {
               NV_LD_HERO_SIN, aText, 3);
 }
 
-// Fundo CINZA, e so. Eu tinha posto aqui a arte do titulo em destaque
-// desfocada, achando que era isso o "cinza do Apple TV" — mas o efeito era o
-// oposto do pedido: a arte do hero subia e saia normalmente, e a copia
-// desfocada dela continuava no fundo, dando a impressao de que a imagem nunca
-// tinha subido. Fundo neutro nao compete com nada.
+// A GREY background, and nothing else. I had put the highlighted title's art here,
+// blurred, thinking that was the "Apple TV grey" — but the effect was the opposite of
+// what was asked for: the hero's art rose and left normally, and its blurred copy
+// stayed in the background, giving the impression the image had never risen. A
+// neutral background competes with nothing.
 static void drawBackground(void) {
   GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  // A tela ja foi limpa com ESTA MESMA COR por glClearColor/glClear em
-  // main.c antes de app_desenhar. Pintar por cima era uma camada de tela
-  // cheia jogada fora por quadro — e o custo dominante nesta GPU e fill
-  // rate (gfx.c registra que DUAS camadas de tela cheia derrubavam a
-  // Mali-G71 para ~40fps). Nao repor sem antes mudar a cor do clear.
+  // The screen has already been cleared with THIS VERY COLOUR by
+  // glClearColor/glClear in main.c before app_draw. Painting over it was one
+  // full-screen layer thrown away per frame — and the dominant cost on this GPU is
+  // fill rate (gfx.c records that TWO full-screen layers dropped the Mali-G71 to
+  // ~40fps). Do not put it back without first changing the clear colour.
   (void)screen;
 }
 
+// COLLECTION ROWS — Discover, Streaming, and whatever else the account pinned. They
+// are ROW_CATALOGS and are drawn here rather than in the card loop, which is why they
+// used to miss the focus scale and the sibling dimming the poster rows have. In the
+// web they are not a special case at all: a collection card is
+// `home-content-card home-poster-card home-collection-card` (homeScreen.js:2547), so
+// it takes the poster card's 1.02 and the same brightness(0.8) as everything else.
+//
+// Still a divergence, and a deliberate one for now: the frame. A collection card in
+// the web carries a `.home-poster-frame`, so it should have the NV_CARD_PAD gutter and
+// the border inside it, where this still paints the 4px ring OUTSIDE the box.
 static void drawShortcuts(int r, float y) {
-  float w = widthOf(ROW_CATALOGS), h = heightOf(ROW_CATALOGS);
+  float lw = widthOf(ROW_CATALOGS), lh = heightOf(ROW_CATALOGS);
   static int last=-1;static Uint32 since;
   for (int c = 0; c < rows[r].n; c++) {
-    float x = settings_content_x() + c * stepOf(ROW_CATALOGS) - scrollX[r];
+    float f = animFocus[r][c];
+    // Same growth as a poster, and from the same corner: centred across, pinned along
+    // the top, so the card only ever gets taller downward.
+    float scale = 1.0f + scaleOf(ROW_CATALOGS) * f;
+    float w = lw * scale, h = lh * scale;
+    float x = settings_content_x() + c * stepOf(ROW_CATALOGS) - scrollX[r]
+            - (w - lw) * 0.5f;
     if (x + w < 0 || x > NV_SCREEN_W) continue;
-    float f = animFocus[r][c], radius = radiusOf(w, h);
+    float radius = radiusOf(w, h);
     GfxRect card = {x, y, w, h};
     if (f > .01f) {
       float smaller = w < h ? w : h;
@@ -1618,47 +1662,56 @@ static void drawShortcuts(int r, float y) {
         (radius * smaller + NV_RING_FOCUS) / (smaller + 2*NV_RING_FOCUS), .96f, .97f, .98f, f);
     }
     gfx_color(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G, NV_COLOR_SKELETON_B, 1);
-    const ColFolder *folder=col_folder(rows[r].folders[c]);if(!folder)continue;
-    const char *art = folder->cover;
-    GLuint tex = art && art[0] ? tex_get_width(art, w) : 0;
-    if(focus.row==r&&focus.column==c&&folder->frames>0 &&
-       !settings_animations_reduced()) {
-      int id=rows[r].folders[c];Uint32 now=SDL_GetTicks();
-      if(last!=id){last=id;since=now;}
-      if(now-since>350) {
-        char frame[700];int index=(int)((now-since-350)/67)%folder->frames+1;
-        snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,index);
-        GLuint motion=tex_get_width(frame,480);
-        if(motion)tex=motion;
-        snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,index%folder->frames+1);
-        tex_get_width(frame,480);
-        snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,(index+1)%folder->frames+1);
-        tex_get_width(frame,480);
+    const ColFolder *folder=col_folder(rows[r].folders[c]);
+    if (folder) {
+      const char *art = folder->cover;
+      GLuint tex = art && art[0] ? tex_get_width(art, w) : 0;
+      if(focus.row==r&&focus.column==c&&folder->frames>0 &&
+         !settings_animations_reduced()) {
+        int id=rows[r].folders[c];Uint32 now=SDL_GetTicks();
+        if(last!=id){last=id;since=now;}
+        if(now-since>350) {
+          char frame[700];int index=(int)((now-since-350)/67)%folder->frames+1;
+          snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,index);
+          GLuint motion=tex_get_width(frame,480);
+          if(motion)tex=motion;
+          snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,index%folder->frames+1);
+          tex_get_width(frame,480);
+          snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,(index+1)%folder->frames+1);
+          tex_get_width(frame,480);
+        }
       }
+      if (tex) {
+        gfx_tex_aspect_current = tex_aspect(art);
+        gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1);
+        gfx_tex_aspect_current = 0;
+      } else if (folder->title[0]) {
+        // NO ART YET, so the name stands in for it. The packaged collections' covers
+        // are local files and appear on the first frame; the ACCOUNT's are CDN URLs
+        // and arrive seconds later. Until now the card was a mute grey rectangle —
+        // indistinguishable from a broken one, and saying nothing about what it was.
+        //
+        // The poster rows already solve this with drawArtMissing; here the name is
+        // enough, because an "Art unavailable" caption would be a lie: the art is on
+        // its way, not missing.
+        TxtLine name = txt_line_trim(TXT_CAPTION, folder->title,
+                                     184, 188, 198, 255, card.w - 32.0f);
+        txt_draw_alpha(name, card.x + (card.w - name.w) * 0.5f,
+                       card.y + card.h * 0.5f - name.h * 0.5f, 0.9f);
+      }
+      // The cover itself is the catalogue's identity. The name/logo was being drawn
+      // again over it and created exactly the duplication the user pointed out on
+      // Netflix, Prime Video, Disney+ and the IMDb lists. The row's title stays in the
+      // header; inside the card there is only the art, with no veil, badge or auxiliary
+      // logo.
     }
-    if (tex) {
-      gfx_tex_aspect_current = tex_aspect(art);
-      gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1);
-      gfx_tex_aspect_current = 0;
-    } else if (folder->title[0]) {
-      // NO ART YET, so the name stands in for it. The packaged collections' covers
-      // are local files and appear on the first frame; the ACCOUNT's are CDN URLs
-      // and arrive seconds later. Until now the card was a mute grey rectangle —
-      // indistinguishable from a broken one, and saying nothing about what it was.
-      //
-      // The poster rows already solve this with drawArtMissing; here the name is
-      // enough, because an "Art unavailable" caption would be a lie: the art is on
-      // its way, not missing.
-      TxtLine name = txt_line_trim(TXT_CAPTION, folder->title,
-                                   184, 188, 198, 255, card.w - 32.0f);
-      txt_draw_alpha(name, card.x + (card.w - name.w) * 0.5f,
-                     card.y + card.h * 0.5f - name.h * 0.5f, 0.9f);
+    // Dimmed like every other unfocused card. Outside the `if (folder)` so that a
+    // collection whose cover has not arrived dims with its neighbours instead of
+    // sitting there at full brightness — that card is still focusable, and in the web
+    // it is `.focusable:not(.focused)` like any other.
+    if (f < 0.999f) {
+      gfx_color(card, radius, 0, 0, 0, (1.0f - NV_DIM_UNFOCUSED) * (1.0f - f));
     }
-    // A propria capa e a identidade do catalogo. O nome/logo vinha sendo
-    // desenhado novamente por cima dela e criava exatamente a duplicacao que
-    // o usuario apontou em Netflix, Prime Video, Disney+ e nas listas IMDb.
-    // Titulo de fileira continua no cabecalho; dentro do card fica somente a
-    // arte, sem veu, badge ou logo auxiliar.
   }
 }
 
@@ -1667,28 +1720,28 @@ void home_draw(Uint32 now) {
   float pd = detail_progress();
   if (settings_hero_on()) drawHero(now, pd);
 
-  // ABERTURA DO DETALHE: as fileiras DESCEM e apagam; a arte de fundo fica.
+  // THE DETAIL OPENING: the rows GO DOWN and fade; the background art stays.
   //
-  // E o movimento que o dono descreveu — "so os posters descem e mantem o
-  // background". O detalhe ja nao voa mais a partir do card: a arte dele entra
-  // em tela cheia ganhando opacidade, entao o que o olho segue e a saida das
-  // fileiras. Descer 8% da altura da tela e o bastante para ler como saida sem
-  // que a ultima fileira suma antes da hora.
+  // It is the movement the owner described — "only the posters go down and the
+  // background stays". The detail no longer flies out of the card: its art comes in
+  // full screen gaining opacity, so what the eye follows is the rows leaving. Going
+  // down 8% of the screen's height is enough to read as an exit without the last row
+  // disappearing too early.
   //
-  // O `pd` vem da MESMA mola que o detalhe usa para desenhar (detail_progresso),
-  // e nao de um relogio proprio: dois relogios descasariam e a home sairia
-  // adiantada ou atrasada em relacao a arte que entra.
-  float scrolldown = pd * NV_SCREEN_H * 0.08f;
-  if (pd >= 0.996f) return;   // detalhe assentado: nada da home aparece
+  // `pd` comes from the SAME spring the detail uses to draw (detail_progress), and not
+  // from a clock of its own: two clocks would drift and the home would leave early or
+  // late relative to the art coming in.
+  float slideDown = pd * NV_SCREEN_H * 0.08f;
+  if (pd >= 0.996f) return;   // the detail has settled: nothing of the home shows
 
-  // VIEWPORT DAS FILEIRAS. `.home-modern-rows-viewport` (components.css:6929) e
-  // um bloco absoluto com bottom:0, height 52% e overflow-y:auto — ou seja as
-  // fileiras rolam DENTRO dos 52% de baixo e o que sobe alem disso e CLIPADO.
-  // O port desenhava as fileiras soltas sobre a tela inteira, e por isso a
-  // fileira que saia por cima aparecia atravessada no bloco do hero em vez de
-  // sumir. O hero nao rola: so o conteudo dele muda com o foco.
+  // THE ROWS' VIEWPORT. `.home-modern-rows-viewport` (components.css:6929) is an
+  // absolute block with bottom:0, height 52% and overflow-y:auto — that is, the rows
+  // scroll INSIDE the bottom 52% and whatever rises beyond that is CLIPPED. The port
+  // drew the rows loose over the whole screen, and that is why the row leaving at the
+  // top appeared across the hero's block instead of disappearing. The hero does not
+  // scroll: only its contents change with the focus.
   gfx_crop(0, NV_SHELF_TOP-96, NV_SCREEN_W, NV_SCREEN_H - NV_SHELF_TOP+96);
-  float y = NV_SHELF_TOP - scrollY + scrolldown;
+  float y = NV_SHELF_TOP - scrollY + slideDown;
   for (int r = 0; r < nRows; r++) {
     KindRow kind = rows[r].kind;
     float fade=anim_clamp((y-(NV_SHELF_TOP-80))/80,0,1);
@@ -1696,19 +1749,19 @@ void home_draw(Uint32 now) {
     float lw = rows[r].stackN ? 680.0f : widthOf(kind);
     float lh = heightOf(kind), step = lw + gapOf(kind);
     float artH = lh;
-    // `y` é o topo do cabeçalho da fileira; os cards começam depois do título.
-    // Separar os dois evita que o título da fileira seguinte seja desenhado
-    // sobre a arte da anterior quando a fileira tem cards altos.
+    // `y` is the top of the row's header; the cards start after the title.
+    // Separating the two stops the next row's title being drawn over the previous
+    // one's art when the row has tall cards.
     float cardY = y + NV_LEGACY_ROW_HEAD_H;
 
     int landscape = editorial(kind) || ((kind != ROW_CONTINUE) && settings_posters_landscape());
     int labelFora = hasLabel(kind);
     if (y < NV_SCREEN_H + 200 && y + NV_LEGACY_ROW_HEAD_H + lh > -200) {
-      // `catalogTypeSuffixEnabled`. formatCatalogRowTitle (homeUtils.js:62) faz
-      // `if (!showTypeSuffix) return base;` — devolve o nome capitalizado e
-      // pronto. Aqui o sufixo e tirado no DESENHO e nao na descoberta, senao a
-      // preferencia so valeria depois que a rede trouxesse os catalogos de
-      // novo — ou seja, so no proximo arranque.
+      // `catalogTypeSuffixEnabled`. formatCatalogRowTitle (homeUtils.js:62) does
+      // `if (!showTypeSuffix) return base;` — it returns the capitalised name and
+      // that is that. Here the suffix is removed while DRAWING and not in discovery,
+      // otherwise the preference would only take effect once the network brought the
+      // catalogues again — that is, only on the next start.
       const char *rotFilter = rows[r].title;
       char withoutSuffix[96];
       if (!settings_suffix_kind() && rotFilter) {
@@ -1752,17 +1805,20 @@ void home_draw(Uint32 now) {
         continue;
       }
 
-      // CARD "VER TUDO" no fim da fileira. Desenhado antes do laco dos cartazes
-      // para nao herdar as variaveis dele; ele nao e um titulo e nao usa arte.
+      // THE "SEE ALL" CARD at the end of the row. Drawn before the posters' loop so
+      // as not to inherit its variables; it is not a title and uses no art.
       //
-      // MEDIDO no web (.home-seeall-card-inner): moldura de 2 px em
-      // rgba(255,255,255,0.12) sobre rgba(255,255,255,0.06), seta e rotulo
-      // empilhados e centrados. Focado, a moldura acende.
+      // MEASURED in the web app (.home-seeall-card-inner): a 2 px frame in
+      // rgba(255,255,255,0.12) over rgba(255,255,255,0.06), with the arrow and label
+      // stacked and centred. Focused, the frame lights up.
       if (rows[r].seeAll) {
         int c = rows[r].n;
         float f = animFocus[r][c];
-        float esc = 1.0f + scaleOf(kind) * f;
-        float w = lw * esc, h = artH * esc;
+        // The see-all card does NOT take the row's focus scale — components.css:5804
+        // is `transform: none !important` on it. It is not a poster card either, so the
+        // sibling dimming further down never touches it.
+        float scale = 1.0f;
+        float w = lw * scale, h = artH * scale;
         float cx = settings_content_x() + c * step - scrollX[r] + lw * 0.5f;
         float cy = cardY + artH * 0.5f;
         if (cx > -lw * 1.5f && cx < NV_SCREEN_W + lw) {
@@ -1772,7 +1828,7 @@ void home_draw(Uint32 now) {
           // second border (NV_CARD_PAD) has no counterpart here. Its visible
           // outline is its own 2px rgba(255,255,255,0.12) border, which lights
           // up to #f5f5f5 on focus over a rgba(255,255,255,0.06) fill.
-          float in = NV_CARD_BORDER * esc;
+          float in = NV_CARD_BORDER * scale;
           GfxRect r0 = frameOf((GfxRect){ px, py, w, h }, in);
           float radius = radiusInset(r0.w, r0.h, in);
           float luma = 0.06f + 0.10f * f;
@@ -1782,7 +1838,7 @@ void home_draw(Uint32 now) {
           // painting one over the other would ADD — the 0.06 middle would come
           // out at 0.22 and the card would read as a grey slab.
           gfx_color(r0, radius, 1, 1, 1, luma);
-          gfx_rect(r0, 0, GFX_RING, 0, NV_FRAME_RING * esc / r0.h, 0, radius,
+          gfx_rect(r0, 0, GFX_RING, 0, NV_FRAME_RING * scale / r0.h, 0, radius,
                    1, 1, 1, 0.12f + 0.84f * f);
           { TxtLine ls = txt_line(TXT_TITLE2, "\xe2\x86\x92",
                                     236, 237, 242, 255);
@@ -1801,37 +1857,40 @@ void home_draw(Uint32 now) {
         for (int c = 0; c < rows[r].n; c++) {
           float f = animFocus[r][c];
           if (passe == 0 && f < 0.01f) continue;
-          float esc = 1.0f + scaleOf(kind) * f;
-          float w = lw * esc, h = artH * esc;
-          // EXPANSAO EM REPOUSO. `abre` so e diferente de zero no card focado
-          // desta fileira; os DEPOIS dele sao empurrados pela mesma medida.
+          float scale = 1.0f + scaleOf(kind) * f;
+          float w = lw * scale, h = artH * scale;
+          // EXPANSION AT REST. `openAmt` is only non-zero on this row's focused card;
+          // the ones AFTER it are pushed along by the same amount.
           //
-          // A altura nao entra na conta: na referencia ela nao muda, e o card
-          // cresce so para a direita a partir de uma borda esquerda parada.
+          // The height does not come into it: in the reference it does not change, and
+          // the card grows only to the right from a stationary left edge.
           float openAmt = (r == expRow && c == expColumn) ? expOpen : 0.0f;
-          float widthIs_open = artH * esc * NV_EXP_ASPECT;
+          float widthIs_open = artH * scale * NV_EXP_ASPECT;
           float pushes = 0.0f;
           if (r == expRow && expOpen > 0.0f && c > expColumn)
             pushes = (artH * NV_EXP_ASPECT - lw) * expOpen;
-          if (openAmt > 0.0f) w = lw * esc + (widthIs_open - lw * esc) * openAmt;
+          if (openAmt > 0.0f) w = lw * scale + (widthIs_open - lw * scale) * openAmt;
           float cx = settings_content_x() + c * step - scrollX[r] + lw * 0.5f
-                   + pushes + (w - lw * esc) * 0.5f;
-          // Sem levantamento: no web o card focado nao sai do lugar.
-          float cy = cardY + artH * 0.5f;
+                   + pushes + (w - lw * scale) * 0.5f;
           if (cx < -lw * 1.5f || cx > NV_SCREEN_W + lw) continue;
-          float px = cx - w * 0.5f, py = cy - h * 0.5f;
+          // `transform-origin: top` is `50% 0%`: centred across, PINNED along the top.
+          // x grows both ways from the centre, y does not move at all — the card only
+          // ever gets taller downward. Centring y as well, which is what this did while
+          // the scale was zero, would lift it by artH*(scale-1)/2 and walk it back
+          // towards the row title.
+          float px = cx - w * 0.5f, py = cardY;
 
           if (passe == 0) {
-            // Sem sombra. Ela existia para separar o card do fundo, mas sobre
-            // arte colorida vira um halo escuro em volta do item focado — e o
-            // aparelho nao tem isso: la o foco se marca por escala e brilho.
+            // No shadow. It existed to separate the card from the background, but over
+            // colourful art it becomes a dark halo around the focused item — and the
+            // device does not have that: there the focus is marked by scale and glow.
             (void)f;
             continue;
           }
 
           const int idxCat = rows[r].start + c;
           if(kind==ROW_TOP10 && rows[r].stackN) {
-            // Sem placa de fundo: os cartazes empilhados ja formam o card.
+            // No backing plate: the stacked posters already form the card.
             int count=rows[r].stackN<6?rows[r].stackN:6;
             for(int k=0;k<count;k++) {
               const CatItem *it=cat_item_exact(idxCat+k);if(!it)continue;
@@ -1859,10 +1918,10 @@ void home_draw(Uint32 now) {
           const CatItem *cItem = cat_item_exact(idxCat);
           if(kind==ROW_SOCIAL && cItem) {
             if(focus.row==r)hasItemFocus=0;
-            // A atividade social precisa de contexto, nao de um segundo hero.
-            // Sem painel e sem contorno: o palco neutro da home faz o trabalho
-            // de fundo. A imagem tem um papel editorial menor, thumbnail da
-            // obra, enquanto autoria e acao respiram diretamente na tela.
+            // Social activity needs context, not a second hero. No panel and no
+            // outline: the home's neutral stage does the background work. The image
+            // has a lesser editorial role, a thumbnail of the work, while the
+            // authorship and the action breathe directly on the screen.
             const float contentTop=py+24.0f;
             const float contentBase=py+h-24.0f;
             const float artW=134.0f;
@@ -1875,26 +1934,26 @@ void home_draw(Uint32 now) {
                 gfx_rect(tr,thumb,GFX_CARD,0,0,0,.055f,0,0,0,1);gfx_tex_aspect_current=0;
               }
             }
-            // Avatar maior e centralizado na mesma faixa vertical da arte.
-            // O eixo comum deixa a composicao com cara de ficha editorial,
-            // em vez de avatar solto no topo e thumbnail separado embaixo.
+            // A larger avatar, centred on the same vertical band as the art.
+            // The shared axis gives the composition the look of an editorial card,
+            // rather than an avatar floating at the top with a separate thumbnail below.
             float d=120.0f, ax=px+24.0f, ay=py+(h-d)*.5f;
             GfxRect avatar={ax,ay,d,d};
             GLuint photo=cItem->socialAvatar[0]?tex_get_width(cItem->socialAvatar,220):0;
-            // O foco e um disco atras da imagem, nunca um stroke por cima.
-            // Assim as duas circunferencias compartilham o mesmo centro e o
-            // aro permanece uniforme inclusive no limite superior da fileira.
-            float dflt=5.0f*f;
+            // The focus is a disc behind the image, never a stroke over it.
+            // That way the two circles share the same centre and the rim stays even,
+            // including at the row's upper limit.
+            float pad=5.0f*f;
             if(f>.01f)gfx_rect(avatar,0,GFX_DISK,0,0,0,0,.96f,.96f,.98f,f);
-            GfxRect core={ax+dflt,ay+dflt,d-dflt*2,d-dflt*2};
+            GfxRect core={ax+pad,ay+pad,d-pad*2,d-pad*2};
             gfx_rect(core,0,GFX_DISK,0,0,0,0,.15f,.16f,.18f,1);
             if(photo){gfx_tex_aspect_current=tex_aspect(cItem->socialAvatar);
               gfx_rect(core,photo,GFX_AVATAR,0,0,0,0,1,1,1,1);gfx_tex_aspect_current=0;}
-            else {char initial[8]="?";const char *name=cItem->socialName[0]?cItem->socialName:cItem->pais;
+            else {char initial[8]="?";const char *name=cItem->socialName[0]?cItem->socialName:cItem->country;
               if(name[0]){size_t z=1;while(z<4 && (name[z]&0xc0)==0x80)z++;memcpy(initial,name,z);initial[z]=0;}
               TxtLine l=txt_line(TXT_TITLE2,initial,235,236,240,255);txt_draw(l,ax+(d-l.w)*.5f,ay+(d-l.h)*.5f);}
             float tx=ax+d+24.0f,tw=thumbPath?artX-tx-24.0f:w-192.0f;
-            TxtLine name=txt_line_trim(TXT_CW_TITLE,cItem->socialName[0]?cItem->socialName:cItem->pais,245,245,247,255,tw);
+            TxtLine name=txt_line_trim(TXT_CW_TITLE,cItem->socialName[0]?cItem->socialName:cItem->country,245,245,247,255,tw);
             txt_draw(name,tx,contentTop);
             TxtLine action=txt_line_trim(TXT_MINI,cItem->socialAction[0]?cItem->socialAction:cItem->providerName,181,185,196,255,tw);
             txt_draw(action,tx,contentTop+38.0f);
@@ -1908,13 +1967,13 @@ void home_draw(Uint32 now) {
             continue;
           }
           const char *path = NULL;
-          // Card DEITADO pede arte deitada. No web o poster do card landscape sai
-          // de `landscapePoster` -> `background` -> `backdrop` -> `poster`
-          // (homeScreen.js:3155), nao do poster 2:3 — usar o retrato aqui faria o
-          // shader recortar a cabeca de todo mundo para caber em 16:9.
-          // Aberto, o card mostra a arte DEITADA: e para isso que ele abre.
-          // A troca acontece na metade do caminho, quando a moldura ja tem
-          // largura de 16:9 e o retrato comecaria a ser recortado feio.
+          // A LANDSCAPE card calls for landscape art. In the web app the landscape
+          // card's poster comes from `landscapePoster` -> `background` -> `backdrop`
+          // -> `poster` (homeScreen.js:3155), not from the 2:3 poster — using the
+          // portrait here would make the shader crop everyone's head off to fit 16:9.
+          // Open, the card shows the LANDSCAPE art: that is what it opens for.
+          // The swap happens halfway, once the frame is 16:9 wide and the portrait
+          // would start being cropped badly.
           path = art_by_identity(idxCat, openAmt > 0.5f ||
                                         kind == ROW_CONTINUE ||
                                         kind == ROW_RETURN || landscape);
@@ -1929,25 +1988,17 @@ void home_draw(Uint32 now) {
             itemFocus.meta   = cItem ? cItem->meta : NULL;
             hasItemFocus = 1;
           }
-          // Pede pela largura REAL do card: e esta fileira que multiplica.
-          // Com o teto unico de 640 cada poster custava 2,4 MB e o cache
-          // estourava com ~40 texturas, despejando o que ainda estava na tela.
+          // Ask by the card's REAL width: it is this row that multiplies.
+          // With the blanket ceiling of 640 each poster cost 2.4 MB and the cache
+          // overflowed at ~40 textures, evicting what was still on screen.
           GLuint t = path ? tex_get_width(path, w) : 0;
           float radius = radiusOf(w, h);
           GfxRect card = { px, py, w, h };
-          // THE CARD BOX IS NOT THE ART BOX.
-          //
-          // The web poster nests two transparent 2px borders (see NV_CARD_PAD),
-          // so the artwork stops 4px short of the card outline on every side and
-          // the focus ring is painted INTO that gutter. Drawing the art over the
-          // whole box, as this did, is what made a legacy poster read wider than
-          // a web one at the same 236 step.
-          //
           // Continue watching keeps the old geometry, and that is the reference
           // too: its `.home-continue-media` has `border: 0`, so the art does run
           // to the edge, and its ring is a real 4px outset shadow on the card.
           int framed = posterFrame(kind);
-          float pad = framed ? NV_CARD_PAD * esc : 0.0f;
+          float pad = framed ? NV_CARD_PAD * scale : 0.0f;
           GfxRect art = frameOf(card, pad);
           float radiusA = framed ? radiusArt(art.w, art.h) : radius;
           if (f > 0.01f) {
@@ -1964,92 +2015,98 @@ void home_draw(Uint32 now) {
               // then partial white, and instead of a crisp edge you get a grey
               // smear. Filling shares the artwork's own antialiased outline, so
               // the border is as clean as the corner it follows.
-              float in = NV_CARD_BORDER * esc;
+              // The border eats the gutter from the INSIDE OUT: its inner edge
+              // is always flush with the artwork, so widening it walks the outer
+              // edge towards the card outline instead of growing a halo past it.
+              // At NV_FRAME_RING == NV_CARD_PAD the two coincide.
+              float in = NV_CARD_PAD - NV_FRAME_RING;
+              if (in < 0.0f) in = 0.0f;
+              in *= scale;
               GfxRect frame = frameOf(card, in);
               gfx_color(frame, radiusInset(frame.w, frame.h, in),
                         1.0f, 1.0f, 1.0f, NV_FRAME_RING_A * f);
             } else {
-              // 4 px de #FFFFFF, POR FORA da arte. MEDIDO no aparelho de
-              // referencia (TCL, mesmo card, mesma fileira): 4 px solidos, x
-              // 102->105 sem rampa, e o mesmo numero aparece em card de
-              // episodio e botao de detalhe.
+              // 4 px of #FFFFFF, OUTSIDE the art. MEASURED on the reference device
+              // (TCL, same card, same row): 4 solid px, x 102->105 with no ramp, and
+              // the same number appears on the episode card and the detail button.
               GfxRect border = { px - NV_RING_FOCUS, py - NV_RING_FOCUS,
                                 w + NV_RING_FOCUS * 2, h + NV_RING_FOCUS * 2 };
               gfx_color(border, radius, 1.0f, 1.0f, 1.0f, f);
             }
           }
-          // CARD SEM ARTE: superficie solida, nao o vazio. Sem isto o card
-          // ficava da cor do fundo — MEDIDO: #242429 sobre #252629, diferenca
-          // de (1,2,0), contraste 1,0:1. Era literalmente invisivel, e foi a
-          // origem da queixa "nao aparecem todos os posteres": eles apareciam,
-          // do tom exato do fundo. A referencia desenha #2C2C2C na caixa exata.
+          // A CARD WITH NO ART: a solid surface, not emptiness. Without this the card
+          // took the background's colour — MEASURED: #242429 over #252629, a
+          // difference of (1,2,0), a contrast of 1.0:1. It was literally invisible, and
+          // it was the origin of the complaint "not all the posters show up": they did
+          // show up, in exactly the background's tone. The reference draws #2C2C2C in
+          // the exact box.
           if (t) {
-            // SEM PARALAXE OSCILANTE no card focado.
+            // NO OSCILLATING PARALLAX on the focused card.
             //
-            // Havia aqui um sen/cos do relogio deslocando a arte do card em
-            // foco para sempre — um "respirar" estilo tvOS. A referencia NAO
-            // tem isso, e a prova e direta: o screenrecord do aparelho so
-            // escreve quadro quando algo muda na tela, e depois de a navegacao
-            // assentar ele ficou 1,8 s e 2,4 s SEM EMITIR UM UNICO QUADRO, em
-            // duas gravacoes diferentes. Tela parada de verdade, nao "quase".
+            // There used to be a sin/cos of the clock here shifting the focused card's
+            // art forever — a tvOS-style "breathing". The reference does NOT have it,
+            // and the proof is direct: the device's screenrecord only writes a frame
+            // when something changes on screen, and after the navigation settled it
+            // went 1.8 s and 2.4 s WITHOUT EMITTING A SINGLE FRAME, in two different
+            // recordings. A genuinely still screen, not "almost".
             //
-            // Alem de nao existir la, era o pior tipo de animacao para esta
-            // GPU: obrigava a redesenhar a fileira inteira em todo quadro para
-            // sempre, e o custo dominante aqui e fill rate.
+            // Besides not existing there, it was the worst kind of animation for this
+            // GPU: it forced the whole row to be redrawn on every frame forever, and
+            // the dominant cost here is fill rate.
             gfx_tex_aspect_current = tex_aspect(path);
             gfx_rect(art, t, GFX_CARD, f, 0.0f, 0.0f,
                      radiusA, 0, 0, 0, 1);
             gfx_tex_aspect_current = 0.0f;
           } else {
-            // CARD SEM ARTE: superficie SOLIDA e visivel, nao o vazio.
+            // A CARD WITH NO ART: a SOLID, visible surface, not emptiness.
             //
-            // Aqui era #242429 (0.14,0.14,0.16) — MEDIDO contra o fundo que
-            // havia entao, #252629: diferenca de (1,2,0), contraste 1,0:1. O
-            // card existia e era literalmente invisivel, e essa foi a origem da
-            // queixa "nao aparecem todos os posteres". Eles apareciam, do tom
-            // exato do fundo, e o unico sinal era o anel de foco em volta de um
-            // retangulo vazio — que le como QUEBRADO, nao como carregando.
+            // This used to be #242429 (0.14,0.14,0.16) — MEASURED against the
+            // background of the time, #252629: a difference of (1,2,0), a contrast of
+            // 1.0:1. The card existed and was literally invisible, and that was the
+            // origin of the complaint "not all the posters show up". They did show up,
+            // in exactly the background's tone, and the only sign was the focus ring
+            // around an empty rectangle — which reads as BROKEN, not as loading.
             //
-            // A referencia usa #2C2C2C sobre #0D0D0D: luminancia ~22x a do
-            // fundo, impossivel nao ver.
+            // The reference uses #2C2C2C over #0D0D0D: a luminance ~22x the
+            // background's, impossible to miss.
             drawArtAbsent(art, radiusA, path, cItem, 1.0f);
           }
-          // SELO DE ASSISTIDO: disco branco com um "v" escuro, no canto
-          // superior direito do poster. A referencia o tem e nos nao tinhamos
-          // indicador nenhum na home — sem ele nao da para varrer uma fileira e
-          // ver o que ja foi visto, que e o principal uso da tela.
+          // THE WATCHED BADGE: a white disc with a dark tick, in the poster's top
+          // right corner. The reference has it and we had no indicator at all on the
+          // home — without it there is no way to scan a row and see what has already
+          // been watched, which is the screen's main use.
           //
-          // >= 90% e "visto", nao 100%: quase ninguem assiste os creditos, e o
-          // proprio player ja arredonda para o fim quando falta menos de um
-          // minuto (player_encerrar). Marcar so em 100% deixaria de fora
-          // justamente o que acabou de ser assistido.
+          // >= 90% is "watched", not 100%: almost nobody watches the credits, and the
+          // player itself already rounds to the end when less than a minute is left
+          // (player_close). Marking only at 100% would leave out precisely what has
+          // just been watched.
           if (cItem && cItem->progress >= 90 && kind != ROW_CONTINUE) {
-            float d = art.w * 0.16f;             // proporcional ao card
+            float d = art.w * 0.16f;             // proportional to the card
             float mx = art.x + art.w - d - 10.0f, my = art.y + 10.0f;
             GfxRect disk = { mx, my, d, d };
             gfx_color(disk, 0.5f, 1, 1, 1, 0.94f);
-            // O "v" desenhado com dois tracos: o glifo da fonte nao serve aqui
-            // porque precisaria de uma linha de texto so para isto, e o cache
-            // de linhas tem 256 entradas disputadas pelos titulos.
+            // The tick drawn with two strokes: the font's glyph will not do here
+            // because it would need a whole line of text just for this, and the line
+            // cache has 256 entries already fought over by the titles.
             { float cx = mx + d * 0.5f, cy = my + d * 0.5f;
-              float e = d * 0.085f;              // espessura
+              float e = d * 0.085f;              // thickness
               GfxRect a1 = { cx - d * 0.20f, cy - e * 0.5f, d * 0.20f, e };
               GfxRect a2 = { cx - d * 0.02f, cy - e * 0.5f, d * 0.34f, e };
               gfx_rect(a1, 0, GFX_COLOR, 0, 0, 0, 0.5f, 0.07f, 0.07f, 0.07f, 0.94f);
               gfx_rect(a2, 0, GFX_COLOR, 0, 0, 0, 0.5f, 0.07f, 0.07f, 0.07f, 0.94f); }
           }
 
-          // `cardDepthEnabled` mais o interruptor por secao: `cardDepthPosters`
-          // nas fileiras de catalogo, `cardDepthContinueWatching` na primeira.
+          // `cardDepthEnabled` plus the per-section switch: `cardDepthPosters` on the
+          // catalogue rows, `cardDepthContinueWatching` on the first one.
           drawDepth(art, radiusA,
                               kind == ROW_CONTINUE ? settings_depth_cw()
                                                        : settings_depth_posters());
 
           // --- posterLabelsEnabled ---------------------------------------
-          // Card DEITADO: a legenda vai DENTRO da moldura, sobre um degrade que
-          // cobre 54% da altura, com 14 de recuo lateral e 12 da base
-          // (.home-poster-landscape-copy). Card EM PE: vai ABAIXO do poster, num
-          // bloco de 74 de altura com 8 de padding no topo (.home-poster-copy).
+          // A LANDSCAPE card: the caption goes INSIDE the frame, over a gradient
+          // covering 54% of the height, with 14 of side inset and 12 from the base
+          // (.home-poster-landscape-copy). An UPRIGHT card: it goes BELOW the poster,
+          // in a block 74 tall with 8 of padding at the top (.home-poster-copy).
           if (kind != ROW_CONTINUE && kind != ROW_RETURN && !editorial(kind) && settings_labels_poster() && cItem) {
             const char *name = cItem->title[0] ? cItem->title : NULL;
             const char *sub  = cItem->genre[0] ? cItem->genre : NULL;
@@ -2061,7 +2118,7 @@ void home_draw(Uint32 now) {
                                art.w, art.h * NV_LAND_VEIL };
               gfx_rect(veil, 0, GFX_VEIL, 0, 0, 0, radiusA, 0, 0, 0, 0.80f);
               float maxW = art.w * NV_LAND_COPY_MAXW;
-              float bx = art.x + NV_LAND_COPY_DFLT;
+              float bx = art.x + NV_LAND_COPY_PAD;
               TxtLine tn = txt_line_trim(TXT_CAPTION, name, 245, 246, 250, 255, maxW);
               if (sub) {
                 TxtLine ts = txt_line_trim(TXT_MINI, sub, 200, 202, 210, 255, maxW);
@@ -2076,16 +2133,21 @@ void home_draw(Uint32 now) {
               // it starts at the card's content box, so its 2px of padding sits
               // on top of the card's own 2px border, and it begins 8px below the
               // frame's border box — the art plus the frame border it wears.
-              float bx = card.x + NV_CARD_BORDER * esc + NV_POSTER_COPY_PADX;
-              float by = art.y + art.h + NV_FRAME_BORDER * esc + NV_POSTER_COPY_PADT;
-              float maxW = card.w - (NV_CARD_BORDER * esc + NV_POSTER_COPY_PADX) * 2.0f;
+              float bx = card.x + NV_CARD_BORDER * scale + NV_POSTER_COPY_PADX;
+              float by = art.y + art.h + NV_FRAME_BORDER * scale + NV_POSTER_COPY_PADT;
+              float maxW = card.w - (NV_CARD_BORDER * scale + NV_POSTER_COPY_PADX) * 2.0f;
               // 16/500 e 13/400 rgba(255,255,255,.7) — os corpos de
               // .home-poster-title e .home-poster-subtitle.
+              // `.home-poster-copy` is a sibling of the frame, so it sits outside the
+              // art rect the dim above covers — but the CSS filter is on the article
+              // and takes the copy with it. Dim it at the text instead. Alpha is not
+              // brightness, but over a #0D0D0D page the two land in the same place.
+              float lit = NV_DIM_UNFOCUSED + (1.0f - NV_DIM_UNFOCUSED) * f;
               TxtLine tn = txt_line_trim(TXT_CAPTION2, name, 245, 246, 250, 255, maxW);
-              txt_draw_alpha(tn, bx, by, 0.98f);
+              txt_draw_alpha(tn, bx, by, 0.98f * lit);
               if (sub) {
                 TxtLine ts = txt_line_trim(TXT_MINI, sub, 255, 255, 255, 255, maxW);
-                txt_draw_alpha(ts, bx, by + tn.h + 2.0f, 0.70f);
+                txt_draw_alpha(ts, bx, by + tn.h + 2.0f, 0.70f * lit);
               }
             }
           }
@@ -2105,49 +2167,49 @@ void home_draw(Uint32 now) {
           if (kind == ROW_RETURN)
             resume_draw(cItem, (GfxRect){px, py, w, h});
 
-          // 4. DESTAQUE: titulo e metadados DENTRO da arte, sobre um veu
-          // escuro na base — como o Apple TV faz. O titulo faz o papel do logo
-          // embutido na arte-chave, que nos nao temos (o TMDB nem sempre tem
-          // logo; quando tiver, entra aqui no lugar do texto).
-          // CARD ABERTO: veu na base e o LOGO do titulo, como na TCL.
+          // 4. HIGHLIGHT: title and metadata INSIDE the art, over a dark veil at the
+          // base — as the Apple TV does. The title plays the part of the logo embedded
+          // in the key art, which we do not have (TMDB does not always have a logo;
+          // when it does, it goes here in the text's place).
+          // AN OPEN CARD: a veil at the base and the title's LOGO, as on the TCL.
           //
-          // O logo e nao o nome escrito com a fonte da interface: cada producao
-          // tem tipografia propria, e escrever "The Pitt" em Inter apaga
-          // justamente o que faz o titulo ser reconhecido de longe. Sem logo no
-          // catalogo o card fica so com a arte — melhor que um nome generico
-          // por cima dela.
+          // The logo and not the name set in the interface font: every production has
+          // typography of its own, and writing "The Pitt" in Inter erases precisely
+          // what makes a title recognisable from a distance. With no logo in the
+          // catalogue the card keeps just the art — better than a generic name over it.
           if (openAmt > 0.01f && cItem && cItem->logo[0]) {
             GLuint tl = tex_get(cItem->logo);
             if (tl) {
-              float dflt = 34.0f * esc;
+              float pad = 34.0f * scale;
               float ap = tex_aspect(cItem->logo);
               float hL, wL, maxW;
               GfxRect veil = art;
               gfx_rect(veil, 0, GFX_VEIL, 0, 0, 0, radiusA, 0, 0, 0, 0.72f * openAmt);
-              // SEM CHUTE DE ASPECTO. O fallback de 4.0 que estava aqui
-              // desenhava um retangulo mais largo que a imagem, e o modo de
-              // cartao RECORTA o que sobra — o "REACHER" saia com as duas
-              // pontas cortadas. Sem medida do arquivo, nao desenha.
+              // NO GUESSING THE ASPECT RATIO. The fallback of 4.0 that used to be here
+              // drew a rectangle wider than the image, and the card mode CROPS what is
+              // left over — "REACHER" came out with both ends cut off. With no
+              // measurement from the file, it does not draw.
               if (ap <= 0.0f) { tl = 0; }
-              // Largura MANDA, altura sai dela: assim o retangulo tem sempre o
-              // aspecto da imagem e o recorte nunca acontece.
+              // The WIDTH rules and the height follows from it: that way the rectangle
+              // always has the image's aspect ratio and the crop never happens.
               //
-              // MEDIDO na TCL no card aberto: logo de 163 px num card de 565
-              // (29% da largura) e 66 de altura num card de 320 (21%). O teto de
-              // altura existe para logo quadrado nao virar um bloco.
+              // MEASURED on the TCL with the card open: a 163 px logo in a 565 card
+              // (29% of the width) and 66 tall in a card of 320 (21%). The height
+              // ceiling exists so a square logo does not become a block.
               maxW = art.w * 0.30f;
               wL = maxW; hL = wL / ap;
               if (hL > art.h * 0.22f) { hL = art.h * 0.22f; wL = hL * ap; }
-              // GFX_MARCA/GFX_TEXTO, NAO GFX_CARD. O modo de cartao e para
-              // ARTE: ele faz cover com 3% de over-scan de proposito (a margem
-              // de parallax) e descarta o alfa da textura. Num logo isso corta
-              // as duas pontas — o "REACHER" saia como "EACHE" — e ainda pinta
-              // de preto onde deveria ser transparente.
+              // GFX_BRAND/GFX_TEXT, NOT GFX_CARD. The card mode is for ART: it does
+              // cover with 3% of over-scan on purpose (the parallax margin) and
+              // discards the texture's alpha. On a logo that cuts both ends off —
+              // "REACHER" came out as "EACHE" — and it also paints black where it
+              // should be transparent.
               //
-              // O par certo ja existia no projeto, na fileira de destaque:
-              // tex_marca_escura decide se a forma vem do alfa (logo claro) ou
-              // do desenho (logo escuro). Reusado aqui em vez de reinventado.
-              if (tl) { GfxRect rl = { art.x + dflt, art.y + art.h - dflt - hL, wL, hL };
+              // The right pair already existed in the project, in the highlight row:
+              // tex_brand_dark decides whether the shape comes from the alpha (a light
+              // logo) or from the drawing (a dark logo). Reused here instead of
+              // reinvented.
+              if (tl) { GfxRect rl = { art.x + pad, art.y + art.h - pad - hL, wL, hL };
                 GfxMode m = tex_brand_dark(cItem->logo) ? GFX_BRAND : GFX_TEXT;
                 gfx_tex_aspect_current = 0.0f;
                 gfx_rect(rl, tl, m, 0, 0, 0, 0.0f, 1, 1, 1, openAmt); }
@@ -2162,12 +2224,12 @@ void home_draw(Uint32 now) {
             gfx_rect(art, 0, GFX_VEIL, 0, 0, 0, radiusA, 0, 0, 0, 0.88f);
 
 
-            // Logo do titulo, como no aparelho: cada producao tem tipografia
-            // propria, e escrever o nome com a fonte da interface apaga isso.
+            // The title's logo, as on the device: every production has typography of
+            // its own, and writing the name in the interface font erases that.
             const CatItem *ci = cItem;
             GLuint tlogo = (ci && ci->logo[0]) ? tex_get_width(ci->logo, ew * .65f) : 0;
-            // Sem dado, sem texto — nao a lista de demonstracao que ficava
-            // aqui e carimbava nome e genero de outro titulo no card.
+            // No data, no text — not the demo list that used to be here, stamping
+            // another title's name and genre onto the card.
             const char *name   = (ci && ci->title[0]) ? ci->title : NULL;
             const char *genre = (ci && ci->genre[0]) ? ci->genre
                                 : ci ? (!strcmp(ci->kind, "series") ? "Series" : "Film") : NULL;
@@ -2175,8 +2237,8 @@ void home_draw(Uint32 now) {
                         ? txt_line_trim(TXT_HERO_META, genre, 226, 228, 233, 255, ew - 64)
                         : (TxtLine){ 0, 0, 0 };
 
-            float dflt = kind == ROW_HIGHLIGHT ? 28.0f : 22.0f;
-            float base = ey + eh - dflt;
+            float pad = kind == ROW_HIGHLIGHT ? 28.0f : 22.0f;
+            float base = ey + eh - pad;
             float yMeta = base - tg.h;
             float hTitle;
             if (tlogo) {
@@ -2185,40 +2247,57 @@ void home_draw(Uint32 now) {
               hTitle = eh * .22f;
               float wTitle = hTitle * ap, maxW = ew * .65f;
               if (wTitle > maxW) { wTitle = maxW; hTitle = wTitle / ap; }
-              GfxRect rl = { ex + dflt, yMeta - hTitle - 10.0f, wTitle, hTitle };
+              GfxRect rl = { ex + pad, yMeta - hTitle - 10.0f, wTitle, hTitle };
               gfx_tex_aspect_current = 0.0f;
               { GfxMode m = tex_brand_dark(ci->logo) ? GFX_BRAND : GFX_TEXT;
               gfx_rect(rl, tlogo, m, 0, 0, 0, 0.0f, 1, 1, 1, 1.0f); }
             } else if (name) {
-              TxtLine tn = txt_line_trim(TXT_CW_TITLE, name, 245, 246, 249, 255, ew - dflt*2);
+              TxtLine tn = txt_line_trim(TXT_CW_TITLE, name, 245, 246, 249, 255, ew - pad*2);
               hTitle = (float)tn.h;
-              txt_draw(tn, ex + dflt, yMeta - hTitle - 10.0f);
+              txt_draw(tn, ex + pad, yMeta - hTitle - 10.0f);
             } else {
               hTitle = 0.0f;
             }
-            if (genre) txt_draw(tg, ex + dflt, yMeta);
+            if (genre) txt_draw(tg, ex + pad, yMeta);
 
-            // Selo etario vermelho, a direita da linha de genero. SO COM VALOR:
-            // o "16" de reserva que estava aqui carimbava uma faixa etaria em
-            // todo card sem classificacao, e o selo vermelho tem cara de aviso
-            // oficial — e o mesmo defeito do "14" cravado em descoberta.c, so
-            // que na home.
-            if (ci && ci->age_rating[0] && tg.w + 100 < ew - dflt*2) {
+            // A red age badge, to the right of the genre line. ONLY WITH A VALUE: the
+            // fallback "16" that used to be here stamped an age band on every card with
+            // no rating, and the red badge looks like an official warning — it is the
+            // same defect as the hard-coded "14" in discover.c, only on the home.
+            if (ci && ci->age_rating[0] && tg.w + 100 < ew - pad*2) {
               char cls[8];
               snprintf(cls, sizeof cls, "%s%s", ci->age_rating[0] == 'A' ? "" : "A", ci->age_rating);
               { TxtLine tb = txt_line(TXT_CAPTION, cls, 255, 255, 255, 255);
-                float bx = ex + dflt + tg.w + (genre ? 14.0f : 0.0f);
+                float bx = ex + pad + tg.w + (genre ? 14.0f : 0.0f);
                 GfxRect badge = { bx, yMeta + 2, tb.w + 16, tg.h - 4 };
                 gfx_color(badge, NV_RADIUS_BADGE, 0.78f, 0.14f, 0.14f, 0.95f);
                 txt_draw(tb, bx + 8, yMeta + 2); }
             }
           }
 
-          // Feedback progressivo do gesto, sem duplicar o menu contextual. A
-          // barra aparece somente enquanto o mesmo item esta sob pressao;
-          // atingido o limiar, ctxmenu ja foi aberto e a soltura e consumida.
+          // EVERY CARD BUT THE FOCUSED ONE IS DIMMED — see NV_DIM_UNFOCUSED. It is the
+          // web's strongest focus cue, and it is global: cards in the other rows go
+          // down too, and with focus parked outside the rows they all do.
+          //
+          // Multiplying by 0.8 and compositing black at 0.2 over the same pixels are
+          // the same arithmetic (`c*0.8 + 0*0.2`), so this needs no shader work and no
+          // new GfxMode — it is one rounded rect over the art, LAST, so that it takes
+          // the label veil, the resume overlay and the editorial block down with it,
+          // exactly as a CSS filter on the article would.
+          //
+          // Over the ART and not the card box: the card's own background is transparent
+          // in the web, so the 4px gutter has nothing in it to darken, and covering it
+          // would only spill onto the page behind.
+          if (f < 0.999f) {
+            gfx_color(art, radiusA, 0, 0, 0,
+                      (1.0f - NV_DIM_UNFOCUSED) * (1.0f - f));
+          }
+
+          // Progressive feedback for the gesture, without duplicating the context menu.
+          // The bar only appears while the same item is under pressure; once the
+          // threshold is reached, ctxmenu has already opened and the release is consumed.
           if (okPressing && okHold > 0.0f &&
-              focus_can_press_longa() && focus_index(&focus, r, c)) {
+              focus_can_press_long() && focus_index(&focus, r, c)) {
             float bx = art.x + NV_HOME_TEXT_GUTTER;
             float bw = art.w - NV_HOME_TEXT_GUTTER * 2.0f;
             GfxRect rail = { bx, art.y + art.h - 12.0f, bw, 4.0f };
@@ -2241,18 +2320,18 @@ void home_draw(Uint32 now) {
 }
 
 void home_shutdown(void) {}
-void home_registrar_return(int index_, double posSeg, double durationSeg) {
+void home_record_return(int index_, double posSeg, double durationSeg) {
   int new = -1;
   if (index_ >= 0 && durationSeg > 1.0) {
     double p = posSeg / durationSeg;
     if (p >= 0.01 && p < 0.90) new = index_;
   }
   if (new != resumeIndex) { resumeIndex = new; resumeRev++; }
-  else if (new >= 0) resumeRev++; // atualiza barra/tempo da mesma sessao
+  else if (new >= 0) resumeRev++; // updates the same session's bar/time
   const CatItem *c = new >= 0 ? cat_item_exact(new) : NULL;
   snprintf(resumeId, sizeof resumeId, "%s", c ? c->imdb : "");
 }
-int home_wants_exit(void) { return sair; }
+int home_wants_exit(void) { return wantsExit; }
 
 int home_item_focused(HomeItem *out) {
   if (!hasItemFocus) return 0;
@@ -2261,17 +2340,17 @@ int home_item_focused(HomeItem *out) {
 }
 
 int home_n_arts(void) { return nBd; }
-// Quando ha catalogo, a arte vem dele (na ordem certa, casada com o titulo);
-// sem catalogo, cai na varredura da pasta.
+// When there is a catalogue, the art comes from it (in the right order, matched to
+// the title); with no catalogue, it falls back to sweeping the folder.
 const char *home_backdrop(int i) {
   const CatItem *c = cat_item_exact(i);
   return c && c->backdrop[0] ? c->backdrop : NULL;
 }
 const char *home_art(int i) { return (nBd && i >= 0 && i < nBd) ? bd[i] : NULL; }
 
-// Consome o pedido de abrir: quem le, zera. Assim o OK vale uma vez so, mesmo
-// que o quadro demore.
+// Consumes the request to open: whoever reads it, clears it. That way OK counts once
+// only, even if the frame takes a while.
 int home_requested_open(void) { int v = requestOpen; requestOpen = 0; return v; }
 
-// Consome o pedido de abrir o menu lateral: quem le, zera.
+// Consumes the request to open the side menu: whoever reads it, clears it.
 int home_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }

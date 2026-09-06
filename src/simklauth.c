@@ -40,7 +40,7 @@ static char *take(const char *path, int *status) {
   return net_download_st(complete, 20, header, status);
 }
 
-// ---------------------------------------------------------------- disco
+// ---------------------------------------------------------------- disk
 
 static void save(void) {
   char buf[400];

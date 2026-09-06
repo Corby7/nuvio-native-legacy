@@ -5,9 +5,9 @@
 #include <string.h>
 #include <dlfcn.h>
 
-// Constantes da libcurl escritas a mao: nao ha curl.h no SDK do aparelho, e
-// puxar o header inteiro so por meia duzia de numeros nao se paga. Os valores
-// sao estaveis desde sempre (CURLOPTTYPE_OBJECTPOINT = 10000 etc).
+// libcurl constants written out by hand: there is no curl.h in the device's
+// SDK, and pulling in the whole header for half a dozen numbers does not pay
+// for itself. The values have been stable forever (CURLOPTTYPE_OBJECTPOINT = 10000 etc).
 #define OPT_URL             10002
 #define OPT_WRITEFUNCTION   20011
 #define OPT_WRITEDATA       10001
@@ -146,28 +146,28 @@ static void handleGive(void *h, int own, void *list) {
   if (own && h && curl_cleanup) curl_cleanup(h);
 }
 
-// CARREGAMENTO DA LIBCURL, UMA VEZ SO E COM TRAVA.
+// LOADING LIBCURL, ONCE ONLY AND UNDER A LOCK.
 //
-// `curl_global_init` NAO e seguro entre fios — e a propria libcurl documenta
-// isso. Isto aqui era uma bandeira simples, e enquanto so a descoberta e dois
-// fios de decode chamavam, a corrida quase nunca acontecia. Ao acrescentar
-// QUATRO fios de rede para as artes, todos partindo no arranque, ela passou a
-// acontecer: dois fios entram com `pronto == 0`, os dois fazem dlopen e os dois
-// chamam curl_global_init ao mesmo tempo. O estado global fica corrompido e
-// TODO download passa a falhar — catalogos, addons e artes de uma vez, que foi
-// exatamente o que o dono viu depois do ultimo deploy.
+// `curl_global_init` is NOT thread-safe — libcurl documents that itself. This
+// used to be a plain flag, and while only discovery and two decode threads
+// called it, the race almost never happened. Adding FOUR network threads for
+// the artwork, all starting at boot, made it happen: two threads enter with
+// `ready == 0`, both dlopen and both call curl_global_init at the same time.
+// The global state is corrupted and EVERY download starts failing — catalogues,
+// addons and artwork at once, which is exactly what the owner saw after the
+// last deploy.
 //
-// A trava e estatica e sem inicializacao dinamica de proposito: ela precisa
-// existir ANTES do primeiro fio, e um PTHREAD_MUTEX_INITIALIZER garante isso
-// sem depender de ninguem chamar nada primeiro.
+// The lock is static and without dynamic initialisation on purpose: it has to
+// exist BEFORE the first thread, and a PTHREAD_MUTEX_INITIALIZER guarantees
+// that without depending on anybody calling anything first.
 static pthread_mutex_t openLock = PTHREAD_MUTEX_INITIALIZER;
 
 static int openHandle(void) {
   void *h;
   int r;
-  // Leitura rapida sem trava para o caso comum (ja carregado). Escrita de int
-  // e atomica nas arquiteturas em que este app roda; o que precisa de trava e a
-  // SEQUENCIA dlopen+global_init, nao a bandeira.
+  // A quick lock-free read for the common case (already loaded). An int write
+  // is atomic on the architectures this app runs on; what needs the lock is the
+  // SEQUENCE dlopen+global_init, not the flag.
   if (ready) return ready > 0;
   pthread_mutex_lock(&openLock);
   if (ready) { r = ready > 0; pthread_mutex_unlock(&openLock); return r; }
@@ -223,21 +223,21 @@ char *net_download_chunk(const char *url, int seconds, long start, long end,
                          long *size) {
   char track[80];
   const char *header[2];
-  // Range e um cabecalho comum, entao o caminho com cabecalhos ja existente
-  // serve. Nao ha modo "binario com cabecalhos" separado porque
-  // rede_baixar_interno ja devolve o tamanho quando `tam` e passado — quem
-  // pediu texto e que ignora esse campo.
+  // Range is an ordinary header, so the existing with-headers path serves.
+  // There is no separate "binary with headers" mode because
+  // net_download_internal already returns the size when `size` is passed — it
+  // is whoever asked for text that ignores that field.
   snprintf(track, sizeof track, "Range: bytes=%ld-%ld", start, end);
   header[0] = track; header[1] = NULL;
-  // TETO DE VERDADE, e nao so o cabecalho. MEDIDO: um servidor que ignora o
-  // Range responde 200 com o arquivo INTEIRO — no teste vieram 31 MB para um
-  // pedido de 2 MB. Sem o teto, ler o cabecalho de um filme de 20 GB baixaria
-  // o filme. O corte e no recebedor, entao a conexao morre no limite em vez de
-  // esperar o fim.
+  // A REAL CEILING, and not just the header. MEASURED: a server that ignores
+  // Range answers 200 with the WHOLE file — in the test 31 MB came back for a
+  // 2 MB request. Without the ceiling, reading the header of a 20 GB film would
+  // download the film. The cut is in the receiver, so the connection dies at
+  // the limit instead of waiting for the end.
   return net_download_internal(url, seconds, size, header, end - start + 1);
 }
 
-char *net_download_com(const char *url, int seconds, const char *const *header) {
+char *net_download_headers(const char *url, int seconds, const char *const *header) {
   return net_download_internal(url, seconds, NULL, header, 0);
 }
 
@@ -268,38 +268,38 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   curl_setopt(c, OPT_FOLLOWLOCATION, (long)1);
   curl_setopt(c, OPT_TIMEOUT, (long)(seconds > 0 ? seconds : 30));
   curl_setopt(c, OPT_CONNECTTIMEOUT, CONNECT_SECONDS);
-  // O app roda com fios; sem NOSIGNAL a libcurl usa alarmes para o timeout de
-  // DNS e pode derrubar o processo inteiro a partir de um fio secundario.
+  // The app runs with threads; without NOSIGNAL libcurl uses alarms for the DNS
+  // timeout and can bring the whole process down from a secondary thread.
   curl_setopt(c, OPT_NOSIGNAL, (long)1);
-  // Os addons sao servidos por hosts com cadeias que este aparelho de 2019 nao
-  // conhece; o pacote de CAs dele e de fabrica e nao se atualiza. Verificar
-  // recusaria fontes legitimas do dono. O conteudo e midia publica e a escolha
-  // esta escrita aqui de proposito.
+  // The addons are served by hosts with chains this 2019 device does not know;
+  // its CA bundle is factory-fitted and does not update. Verifying would refuse
+  // the owner's legitimate sources. The content is public media and the choice
+  // is written down here deliberately.
   curl_setopt(c, OPT_SSL_VERIFYPEER, (long)0);
   curl_setopt(c, OPT_SSL_VERIFYHOST, (long)0);
   curl_setopt(c, OPT_USERAGENT, "Nuvio/1.0 (webOS)");
-  curl_setopt(c, OPT_ACCEPT_ENCODING, "");   // "" = todas as que a lib suporta
+  curl_setopt(c, OPT_ACCEPT_ENCODING, "");   // "" = all the ones the lib supports
   if (header && slist_append) {
     int k;
     for (k = 0; header[k]; k++) list = slist_append(list, header[k]);
     if (list) curl_setopt(c, OPT_HTTPHEADER, list);
   }
   r = curl_perform(c);
-  // STATUS HTTP, e nao so o codigo de erro da libcurl. MEDIDO: numa navegacao
-  // da home o log tinha 93 "decode falhou" e ZERO "[rede] falha" — ou seja, o
-  // curl_easy_perform devolvia 0 (sucesso de TRANSPORTE) para respostas que nao
-  // eram a imagem. Um 404, um 403 ou um 429 e uma transferencia bem-sucedida
-  // para a libcurl; quem tem de olhar o status e quem chama.
+  // THE HTTP STATUS, and not just libcurl's error code. MEASURED: on one pass
+  // through the home the log had 93 "decode failed" and ZERO "[net] failure" —
+  // that is, curl_easy_perform returned 0 (TRANSPORT success) for responses
+  // that were not the image. A 404, a 403 or a 429 is a successful transfer as
+  // far as libcurl is concerned; it is the caller who has to look at the status.
   //
-  // Sem isto o erro chegava sem nome ao tex_cache, que so via "corpo curto" e
-  // devolvia 0 em silencio — e o unico sintoma era card sem arte. A assinatura
-  // de imagem que ja existe la pega o 404 com pagina de erro GRANDE; esta
-  // conferencia pega o resto, e diz QUAL foi o codigo.
+  // Without this the error reached tex_cache nameless, which only saw "short
+  // body" and returned 0 silently — and the only symptom was a card with no
+  // art. The image signature that already lives there catches the 404 with a
+  // LARGE error page; this check catches the rest, and says WHICH code it was.
   //
-  // A EXCECAO e quem pediu `status`: para o Supabase, um 4xx nao e falha, e a
-  // resposta. O corpo do 404 diz QUAL funcao ou tabela nao existe (PGRST202 /
-  // PGRST205), e e essa string que distingue "servidor antigo" de "parametro
-  // errado". Jogar o corpo fora aqui apagaria a unica pista.
+  // THE EXCEPTION is anyone who asked for `status`: for Supabase, a 4xx is not
+  // a failure, it is the answer. The 404's body says WHICH function or table
+  // does not exist (PGRST202 / PGRST205), and it is that string that separates
+  // "old server" from "wrong parameter". Throwing the body away here would erase the only clue.
   { long http = 0;
     if (curl_getinfo) curl_getinfo(c, INFO_RESPONSE_CODE, &http);
     if (status) *status = (int)http;
@@ -311,10 +311,10 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
       return NULL;
     } }
   handleGive(c, own, list);
-  // 23 = CURLE_WRITE_ERROR. Quando ha teto, ele e o resultado ESPERADO: o
-  // recebedor devolve menos bytes de proposito para cortar a conexao assim que
-  // enche. Nesse caso o que ja veio e exatamente o que se queria — tratar como
-  // falha jogaria fora o cabecalho inteiro que acabamos de baixar.
+  // 23 = CURLE_WRITE_ERROR. When there is a ceiling, it is the EXPECTED result:
+  // the receiver returns fewer bytes on purpose to cut the connection as soon
+  // as it fills. In that case what has arrived is exactly what was wanted —
+  // treating it as a failure would throw away the whole header we just downloaded.
   if (r == 23 && b.cap > 0 && b.n > 0) r = 0;
   if (r != 0) { free(b.p); printf("[net] failure %d on %.60s\n", r, url); return NULL; }
   if (size) *size = (long)b.n;
@@ -339,8 +339,8 @@ int net_url_final(const char *url, int seconds, char *dst, unsigned size) {
   curl_setopt(c, OPT_SSL_VERIFYPEER, (long)0);
   curl_setopt(c, OPT_SSL_VERIFYHOST, (long)0);
   curl_setopt(c, OPT_USERAGENT, "Nuvio/1.0 (webOS)");
-  // Um pedaco minusculo em vez de HEAD: varios servidores de debrid respondem
-  // HEAD com 405 ou mentem no redirecionamento, mas honram Range.
+  // A tiny piece instead of a HEAD: several debrid servers answer HEAD with 405
+  // or lie in the redirect, but do honour Range.
   curl_setopt(c, OPT_RANGE, "0-64");
   r = curl_perform(c);
   if (!r) curl_getinfo(c, INFO_URL_FINAL, &end);
@@ -384,16 +384,16 @@ char *net_post_st(const char *url, int seconds, const char *const *header,
     if (list) curl_setopt(c, OPT_HTTPHEADER, list);
   }
   r = curl_perform(c);
-  // O codigo sai ANTES do cleanup: depois dele a alca nao existe mais.
+  // The code comes out BEFORE the cleanup: after it the handle no longer exists.
   if (status && !r && curl_getinfo) {
     long code = 0;
     curl_getinfo(c, INFO_RESPONSE_CODE, &code);
     *status = (int)code;
   }
   handleGive(c, own, list);
-  // Falha de TRANSPORTE (r != 0) continua sendo NULL — ai nao houve resposta
-  // nenhuma. O corpo de um 4xx, ao contrario, e devolvido: e nele que o
-  // PostgREST explica o que faltou.
+  // A TRANSPORT failure (r != 0) is still NULL — there was no response at all.
+  // The body of a 4xx, by contrast, IS returned: it is where PostgREST explains
+  // what was missing.
   if (r != 0) { free(b.p); return NULL; }
   return b.p ? b.p : strdup("");
 }

@@ -4,21 +4,21 @@
 #include "layout.h"
 #include <stdio.h>
 
-// Um programa por modo, e os uniforms de cada um: as posicoes NAO coincidem
-// entre programas, entao guardar um conjunto so devolveria lixo no segundo
-// shader que usasse a mesma variavel.
+// One program per mode, and each one's uniforms: the locations do NOT match
+// across programs, so keeping a single set would return rubbish in the second
+// shader that used the same variable.
 typedef struct {
   GLuint progress;
   GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect;
 } Program;
 static Program progs[GFX_NMODES];
 static int progressCurrent = -1;
-// Proporcao da textura corrente, para o "cover". Fica global porque o desenho e
-// imediato: quem chama define antes de cada rect com textura.
+// The current texture's aspect ratio, for the "cover". It is global because the
+// drawing is immediate: the caller sets it before each textured rect.
 float gfx_tex_aspect_current = 0.0f;
 float gfx_opacity_group = 1.0f;
-// Tamanho real do alvo da tela (em retina, maior que 1920x1080). Guardado aqui
-// porque toda volta de FBO precisa restaurar o viewport com ele.
+// The real size of the screen target (on retina, larger than 1920x1080). Kept
+// here because every return from an FBO has to restore the viewport with it.
 static int screenX = 0, screenY = 0;
 static int screenW = (int)NV_SCREEN_W, screenH = (int)NV_SCREEN_H;
 void gfx_size_target(int x, int y, int w, int h) {
@@ -34,8 +34,8 @@ static void viewportTarget(void) {
 
 static GLuint snapFbo = 0, snapTex = 0;
 static int snapW = 0, snapH = 0;
-// Dois alvos: o desfoque gaussiano e separavel, entao uma passada escreve no
-// segundo e a outra volta para o primeiro.
+// Two targets: the gaussian blur is separable, so one pass writes into the second
+// and the other comes back to the first.
 static GLuint borderFbo[4] = {0,0,0,0}, borderTex[4] = {0,0,0,0};
 static int borderW = 0, borderH = 0;
 
@@ -43,35 +43,35 @@ static const char *VS =
   NV_GLSL_PREFIX
   "attribute vec2 aPos;\n"
   "uniform vec4 uRect;\n"
-  "uniform vec2 uTela;\n"
+  "uniform vec2 uScreen;\n"
   "varying vec2 vUv;\n"
   "void main(){\n"
   "  vUv = aPos;\n"
   "  vec2 p = uRect.xy + aPos * uRect.zw;\n"
-  "  gl_Position = vec4(p.x/uTela.x*2.0-1.0, 1.0-p.y/uTela.y*2.0, 0.0, 1.0);\n"
+  "  gl_Position = vec4(p.x/uScreen.x*2.0-1.0, 1.0-p.y/uScreen.y*2.0, 0.0, 1.0);\n"
   "}\n";
 
-// O SDF corrige pela proporcao do rect (uAspect), senao o canto de um card
-// landscape sai oval.
-// UM PROGRAMA POR MODO. Antes isto era um shader unico com um `uniform int
-// uModo` e oito caminhos. Mesmo com o if sendo coerente para o desenho inteiro,
-// a GPU reserva registradores pelo PIOR caminho do shader, e menos
-// registradores livres significa menos fragmentos em voo ao mesmo tempo — a
-// Mali-G71 desta TV entregava ~40fps com apenas duas camadas de tela cheia.
-// Com um programa enxuto por modo cada desenho usa so o que precisa.
+// The SDF corrects for the rect's aspect (uAspect), otherwise a landscape card's
+// corner comes out oval.
+// ONE PROGRAM PER MODE. This used to be a single shader with a `uniform int
+// uModo` and eight branches. Even with the if being coherent across a whole
+// draw, the GPU reserves registers for the shader's WORST branch, and fewer free
+// registers means fewer fragments in flight at once — this TV's Mali-G71
+// delivered ~40fps with only two full-screen layers. With one lean program per
+// mode, each draw uses only what it needs.
 static const char *FS_HEAD =
   NV_GLSL_PREFIX
   "varying vec2 vUv;\n"
   "uniform sampler2D uTex;\n"
-  "uniform float uFoco;\n"
+  "uniform float uFocus;\n"
   "uniform vec2  uPar;\n"
-  "uniform float uRaio;\n"
-  "uniform vec4  uCor;\n"
+  "uniform float uRadius;\n"
+  "uniform vec4  uColor;\n"
   "uniform float uAspect;\n"
   "uniform float uTexAsp;   // w/h of the TEXTURE; 0 = do not adjust\n";
 
-// SDF de retangulo arredondado, corrigido pela proporcao — sem a correcao o
-// canto de um card landscape sai oval.
+// A rounded-rectangle SDF, corrected for the aspect ratio — without the
+// correction a landscape card's corner comes out oval.
 static const char *FS_SDF =
   "float sdf(vec2 uv, float r, float asp){\n"
   "  vec2 p = (uv - 0.5) * vec2(asp, 1.0);\n"
@@ -80,7 +80,7 @@ static const char *FS_SDF =
   "  return min(max(q.x,q.y),0.0) + length(max(q,0.0)) - r;\n"
   "}\n";
 
-// "cover": recorta o excedente em vez de deformar a arte.
+// "cover": it crops the excess instead of deforming the art.
 static const char *FS_COVER =
   "vec2 cover(vec2 uv){\n"
   "  if (uTexAsp <= 0.0) return uv;\n"
@@ -97,7 +97,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   // THREE EFFECTS CAME OFF THIS SHADER, and they were the reason a legacy card
   // did not look like the same card in the web app:
   //
-  //  1. A 3% over-scan, `(cover(vUv)-0.5)*(0.94-0.05*uFoco)+0.5`. It was the
+  //  1. A 3% over-scan, `(cover(vUv)-0.5)*(0.94-0.05*uFocus)+0.5`. It was the
   //     margin the parallax needed so a wobbling card never showed empty edge —
   //     but the parallax is gone (see the note in home.c) and every one of the
   //     ~25 call sites in this project passes uPar = 0. What was left was a
@@ -116,44 +116,45 @@ static const char *FS_BODY[GFX_NMODES] = {
   // non-zero focus already draws its own ring (home, library, search, seeall,
   // the two card rows in detail).
   "void main(){\n"
-  "  float d = sdf(vUv, uRaio, uAspect);\n"
+  "  float d = sdf(vUv, uRadius, uAspect);\n"
   "  float m = smoothstep(0.006,-0.006,d);\n"
   "  if (m <= 0.001) discard;\n"
   "  vec2 uv = clamp(cover(vUv) + uPar, 0.0, 1.0);\n"
-  "  gl_FragColor = vec4(texture2D(uTex, uv).rgb, m * uCor.a);\n"
+  "  gl_FragColor = vec4(texture2D(uTex, uv).rgb, m * uColor.a);\n"
   "}\n",
 
-  // GFX_SOMBRA — mancha difusa atras do item em foco
+  // GFX_SHADOW — a soft blot behind the focused item
   "void main(){\n"
-  "  float d = sdf(vUv, uRaio, uAspect);\n"
-  "  gl_FragColor = vec4(0.0,0.0,0.0, smoothstep(0.22,-0.03,d)*uFoco*uCor.a);\n"
+  "  float d = sdf(vUv, uRadius, uAspect);\n"
+  "  gl_FragColor = vec4(0.0,0.0,0.0, smoothstep(0.22,-0.03,d)*uFocus*uColor.a);\n"
   "}\n",
 
-  // GFX_COR — retangulo/pilula de cor solida
+  // GFX_COLOR — a solid-colour rectangle/pill
   "void main(){\n"
-  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRaio, uAspect));\n"
+  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
-  "  gl_FragColor = vec4(uCor.rgb, uCor.a*m);\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a*m);\n"
   "}\n",
 
-  // GFX_HERO — arte da faixa superior, dissolvendo no fundo.
+  // GFX_HERO — the top band's art, dissolving into the background.
   //
-  // As duas rampas sao as do app web, MEDIDAS nos pseudo-elementos de
-  // .home-modern-hero-media (getComputedStyle, nao leitura de folha):
+  // The two ramps are the web app's, MEASURED on the pseudo-elements of
+  // .home-modern-hero-media (getComputedStyle, not reading the stylesheet):
   //
-  //   ::before  horizontal, cobrindo os 639px ESQUERDOS de 1421 (= 45% da UV):
-  //             #0d0d0d -> 0.86 em 22% -> 0.56 em 46% -> 0.16 em 76% -> 0
-  //   ::after   vertical, altura toda:
-  //             0 ate 82% -> 0.25 em 89.2% -> 0.65 em 95.5% -> solido no fim
+  //   ::before  horizontal, covering the LEFT 639px of 1421 (= 45% of the UV):
+  //             #0d0d0d -> 0.86 at 22% -> 0.56 at 46% -> 0.16 at 76% -> 0
+  //   ::after   vertical, full height:
+  //             0 up to 82% -> 0.25 at 89.2% -> 0.65 at 95.5% -> solid at the end
   //
-  // Sao rampas LINEARES POR PARTES, entao a conta usa clamp e nao smoothstep:
-  // um smoothstep unico nao passa pelos pontos intermediarios (em 89.2% dava
-  // 0.35 no lugar de 0.25) e e justamente o miolo da rampa que se enxerga.
+  // They are PIECEWISE LINEAR ramps, so the arithmetic uses clamp and not
+  // smoothstep: a single smoothstep does not pass through the intermediate points
+  // (at 89.2% it gave 0.35 instead of 0.25) and it is precisely the middle of the
+  // ramp that you see.
   //
-  // O que estava aqui antes vinha do app da Apple: o fade vertical comecava em
-  // 45% da altura, quase o dobro de cedo, e o horizontal MULTIPLICAVA a cor
-  // (c*0.35) em vez de fundir no fundo — o que deixava a borda dura visivel em
-  // vez de dissolver.
+  // What used to be here came from the Apple app: the vertical fade started at
+  // 45% of the height, almost twice as early, and the horizontal one MULTIPLIED
+  // the colour (c*0.35) instead of blending into the background — which left the
+  // hard edge visible instead of dissolving it.
   "void main(){\n"
   "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
@@ -168,74 +169,75 @@ static const char *FS_BODY[GFX_NMODES] = {
   "                 - clamp((t-0.76)/0.24,0.0,1.0)*0.16;\n"
   "  ah *= step(vUv.x, 0.45);\n"
   "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
-  "  gl_FragColor = vec4(c, uCor.a);\n"
+  "  gl_FragColor = vec4(c, uColor.a);\n"
   "}\n",
 
-  // GFX_VEU — escurece a base E a esquerda, onde fica o texto sobreposto
+  // GFX_VEIL — darkens the base AND the left, where the overlaid text sits
   "void main(){\n"
-  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRaio, uAspect));\n"
+  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
   "  float gb = smoothstep(0.34, 1.0, vUv.y);\n"
   "  float ge = smoothstep(0.62, 0.0, vUv.x) * 0.78;\n"
-  "  gl_FragColor = vec4(0.0,0.0,0.0, clamp(gb+ge-gb*ge,0.0,1.0)*uCor.a*m);\n"
+  "  gl_FragColor = vec4(0.0,0.0,0.0, clamp(gb+ge-gb*ge,0.0,1.0)*uColor.a*m);\n"
   "}\n",
 
-  // GFX_TEXTO — a forma da letra vem do ALPHA da textura, nunca do RGB
+  // GFX_TEXT — the letter's shape comes from the texture's ALPHA, never the RGB
   "void main(){\n"
   "  vec4 g = texture2D(uTex, vUv);\n"
-  "  gl_FragColor = vec4(g.rgb, g.a * uCor.a);\n"
+  "  gl_FragColor = vec4(g.rgb, g.a * uColor.a);\n"
   "}\n",
 
-  // GFX_FUNDO — arte desfocada por mipmap (uFoco carrega o bias), com o
-  // gradiente medido no aparelho: claro no topo, quase preto na base, vinheta
+  // GFX_BACKGROUND — art blurred by mipmap (uFocus carries the bias), with the
+  // gradient measured on the device: light at the top, almost black at the base,
+  // plus a vignette
   "void main(){\n"
   "  // The texture already arrives blurred by the two-pass gaussian.\n"
   "  vec3 cb = texture2D(uTex, vec2(vUv.x, 1.0 - vUv.y)).rgb;\n"
-  // Curva conferida contra uma captura do app da Apple na mesma TV: a base
-  // dele fica bem mais escura que a minha estava (L~39 contra L~84 a 5/6 da
-  // altura) e a vinheta lateral e bem mais funda (L~55 na borda contra L~139 no
-  // centro, no topo). Sem escurecer a base o texto branco das secoes de baixo
-  // perde contraste; sem a vinheta a pagina nao tem centro.
-  // A queda comeca tarde: no original o fundo se mantem claro ate perto da
-  // metade e so entao escurece. Perseguir o brilho ABSOLUTO da referencia seria
-  // erro — ele depende da arte do titulo, que e outra — entao o que se copia
-  // aqui e a forma da curva.
-  // Comeca a cair mais cedo e de mais baixo: com o pico em 1.12 a faixa do
-  // meio ficava clara demais e o texto cinza dos cards sem foco sumia dentro
-  // dela. O fundo existe para dar cor a pagina, nao para competir com o texto.
+  // The curve was checked against a capture of the Apple app on the same TV: its
+  // base is much darker than mine was (L~39 against L~84 at 5/6 of the height)
+  // and the side vignette is much deeper (L~55 at the edge against L~139 in the
+  // centre, at the top). Without darkening the base, the white text of the lower
+  // sections loses contrast; without the vignette the page has no centre.
+  // The fall starts late: in the original the background stays light until near
+  // the middle and only then darkens. Chasing the reference's ABSOLUTE brightness
+  // would be a mistake — it depends on the title's art, which is different — so
+  // what is copied here is the shape of the curve.
+  // It starts falling earlier and from lower down: with the peak at 1.12 the
+  // middle band was too bright and the grey text of unfocused cards vanished into
+  // it. The background exists to give the page colour, not to compete with the text.
   "  float ky = mix(0.92, 0.05, smoothstep(0.16, 0.98, vUv.y));\n"
   "  float vg = 1.0 - 0.66 * smoothstep(0.46, 0.0, min(vUv.x, 1.0 - vUv.x));\n"
-  "  gl_FragColor = vec4(cb * ky * vg, uCor.a);\n"
+  "  gl_FragColor = vec4(cb * ky * vg, uColor.a);\n"
   "}\n",
 
-  // GFX_VEU_TOPO — degrade de cima para baixo, sob o cabecalho fixo
+  // GFX_VEIL_TOP — a top-to-bottom gradient, under the fixed header
   "void main(){\n"
-  "  gl_FragColor = vec4(0.0,0.0,0.0, smoothstep(1.0,0.15,vUv.y)*uCor.a);\n"
+  "  gl_FragColor = vec4(0.0,0.0,0.0, smoothstep(1.0,0.15,vUv.y)*uColor.a);\n"
   "}\n",
 
-  // GFX_SNAP — imagem ja pronta: sem SDF, sem efeito, so o quad.
-  // uPar.y > 0.5 diz que a fonte e um FBO: como o alvo de render tem a origem
-  // no canto INFERIOR e o resto do app trabalha com y crescendo para baixo, a
-  // imagem sai de cabeca para baixo se lida direto.
+  // GFX_SNAP — a ready-made image: no SDF, no effect, just the quad.
+  // uPar.y > 0.5 says the source is an FBO: since the render target has its origin
+  // in the BOTTOM corner and the rest of the app works with y growing downwards,
+  // the image comes out upside down if read directly.
   "void main(){\n"
   "  vec2 uv = (uPar.y > 0.5) ? vec2(vUv.x, 1.0 - vUv.y) : vUv;\n"
-  "  gl_FragColor = vec4(texture2D(uTex, uv).rgb, uCor.a);\n"
+  "  gl_FragColor = vec4(texture2D(uTex, uv).rgb, uColor.a);\n"
   "}\n",
 
-  // GFX_PLAY — triangulo apontando para a direita. Existe como primitiva
-  // porque depender do glifo U+25B6 da fonte e loteria: se a familia embarcada
-  // nao tiver o caractere, o simbolo simplesmente nao aparece, e desenhar um
-  // retangulo no lugar (o que eu tinha feito) fica pior que nao ter nada.
+  // GFX_PLAY — a triangle pointing right. It exists as a primitive because
+  // depending on the font's U+25B6 glyph is a lottery: if the embedded family does
+  // not have the character, the symbol simply does not appear, and drawing a
+  // rectangle in its place (which is what I had done) is worse than having nothing.
   "void main(){\n"
   "  float dy = abs(vUv.y - 0.5) * 2.0;\n"
   "  float m = smoothstep(0.02, -0.02, vUv.x - (1.0 - dy));\n"
   "  if (m <= 0.001) discard;\n"
-  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
   "}\n",
 
-  // GFX_BLUR — uma passada de desfoque gaussiano de 9 amostras. uPar da a
-  // direcao e o passo (horizontal numa passada, vertical na outra). Separar em
-  // duas passadas custa 18 leituras em vez das 81 de um kernel 9x9.
+  // GFX_BLUR — one pass of a 9-sample gaussian blur. uPar gives the direction and
+  // the step (horizontal on one pass, vertical on the other). Splitting into two
+  // passes costs 18 reads instead of the 81 of a 9x9 kernel.
   "void main(){\n"
   "  vec3 c = texture2D(uTex, vUv).rgb * 0.1633;\n"
   "  c += (texture2D(uTex, vUv + uPar).rgb        + texture2D(uTex, vUv - uPar).rgb)        * 0.1531;\n"
@@ -245,18 +247,18 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  gl_FragColor = vec4(c, 1.0);\n"
   "}\n",
 
-  // GFX_DETALHE — backdrop da tela de titulo, ja com a vinheta.
+  // GFX_DETAIL — the title screen's backdrop, with the vignette already in.
   //
-  // MEDIDO no app web (getComputedStyle em .series-detail-vignette, nao leitura
-  // de folha): um linear-gradient(90deg) de #0d0d0d indo a transparente, com
-  // NOVE paradas — 0%:1.00  7.8%:0.95  17.16%:0.84  28.08%:0.70  40.56%:0.52
-  // 51.48%:0.34  60.84%:0.18  70.2%:0.07  78%:0. Depois de 78% a arte aparece
-  // limpa. Como no hero da home, sao rampas LINEARES POR PARTES: um smoothstep
-  // unico erra o miolo, que e justamente onde o texto branco se apoia.
+  // MEASURED in the web app (getComputedStyle on .series-detail-vignette, not
+  // reading the stylesheet): a linear-gradient(90deg) from #0d0d0d to
+  // transparent, with NINE stops — 0%:1.00  7.8%:0.95  17.16%:0.84  28.08%:0.70
+  // 40.56%:0.52  51.48%:0.34  60.84%:0.18  70.2%:0.07  78%:0. After 78% the art
+  // shows clean. As in the home's hero, these are PIECEWISE LINEAR ramps: a single
+  // smoothstep misses the middle, which is exactly where the white text rests.
   //
-  // A arte entra em "cover" com ancoragem CENTRAL, que e o que o web faz na
-  // pratica: a regra e `background-position:100% 0`, mas o backdrop e 16:9 num
-  // quadro 16:9 e nao sobra nada para deslocar.
+  // The art comes in "cover" with CENTRAL anchoring, which is what the web app
+  // does in practice: the rule is `background-position:100% 0`, but the backdrop
+  // is 16:9 in a 16:9 frame and there is nothing left over to shift.
   "void main(){\n"
   "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
@@ -269,30 +271,30 @@ static const char *FS_BODY[GFX_NMODES] = {
   "                - clamp((x-0.5148)/0.0936,0.0,1.0)*0.16\n"
   "                - clamp((x-0.6084)/0.0936,0.0,1.0)*0.11\n"
   "                - clamp((x-0.7020)/0.0780,0.0,1.0)*0.07;\n"
-  // uFoco = FORCA da vinheta: 1 no topo, 0 com a pagina rolada. No web a
-  // vinheta e uma CAMADA IRMA do backdrop e tem opacidade propria — ao rolar,
-  // `.detail-scrolled` leva a arte a 0.15 E a vinheta a 0 (components.css:17348).
-  // Aqui os dois estao fundidos num modo so, por fill rate (ver gfx.h:21-25),
-  // entao a opacidade da vinheta precisa entrar como uniforme. Sem isto ela
-  // ficava em forca TOTAL sobre uma arte ja a 15%, e os 78% da esquerda — que e
-  // exatamente onde o texto se apoia — viravam preto solido.
-  "  c = mix(c, bg, clamp(a,0.0,1.0) * uFoco);\n"
-  "  gl_FragColor = vec4(c, uCor.a);\n"
+  // uFocus = the vignette's STRENGTH: 1 at the top, 0 with the page scrolled. In
+  // the web app the vignette is a SIBLING LAYER of the backdrop and has its own
+  // opacity — on scrolling, `.detail-scrolled` takes the art to 0.15 AND the
+  // vignette to 0 (components.css:17348). Here the two are merged into one mode,
+  // for fill rate (see gfx.h:21-25), so the vignette's opacity has to come in as a
+  // uniform. Without this it stayed at FULL strength over art already at 15%, and
+  // the left-hand 78% — which is exactly where the text rests — became solid black.
+  "  c = mix(c, bg, clamp(a,0.0,1.0) * uFocus);\n"
+  "  gl_FragColor = vec4(c, uColor.a);\n"
   "}\n",
 
-  // GFX_HERO_CHEIO — hero ocupando a tela inteira.
+  // GFX_HERO_FULL — a hero filling the whole screen.
   //
-  // MEDIDO nos pseudo-elementos de .home-modern-hero-media com
-  // `modernHeroFullScreenBackdropEnabled` ligado (1920x1062 em 0,0):
+  // MEASURED on the pseudo-elements of .home-modern-hero-media with
+  // `modernHeroFullScreenBackdropEnabled` on (1920x1062 at 0,0):
   //
-  //   ::before  horizontal, cobrindo os 1248px ESQUERDOS de 1920 (= 65%):
-  //             #0d0d0d -> 0.90 em 22% -> 0.80 em 46% -> 0.42 em 76% -> 0
-  //   ::after   vertical, altura toda:
-  //             0 ate 64% -> 0.35 em 74.8% -> 0.75 em 85.6% -> solido no fim
+  //   ::before  horizontal, covering the LEFT 1248px of 1920 (= 65%):
+  //             #0d0d0d -> 0.90 at 22% -> 0.80 at 46% -> 0.42 at 76% -> 0
+  //   ::after   vertical, full height:
+  //             0 up to 64% -> 0.35 at 74.8% -> 0.75 at 85.6% -> solid at the end
   //
-  // As paradas percentuais sao as MESMAS do hero em faixa; o que muda e a
-  // cobertura (65% da largura em vez de 45%) e a profundidade. Faz sentido: com
-  // a arte ocupando a tela toda, o texto precisa de mais fundo escuro sob ele.
+  // The percentage stops are the SAME as the banded hero's; what changes is the
+  // coverage (65% of the width instead of 45%) and the depth. That makes sense:
+  // with the art filling the whole screen, the text needs more dark ground under it.
   "void main(){\n"
   "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"
@@ -307,67 +309,64 @@ static const char *FS_BODY[GFX_NMODES] = {
   "                 - clamp((t-0.76)/0.24,0.0,1.0)*0.42;\n"
   "  ah *= step(vUv.x, 0.65);\n"
   "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
-  "  gl_FragColor = vec4(c, uCor.a);\n"
+  "  gl_FragColor = vec4(c, uColor.a);\n"
   "}\n",
 
-  // GFX_ANEL — contorno, cheio ou tracejado, sem miolo.
+  // GFX_RING — an outline, solid or dashed, with no middle.
   //
-  // Existe porque o selo de "episodio nao assistido" da pagina de titulo e um
-  // ANEL, e com GFX_COR saia um disco cinza. Pintar o miolo da cor do fundo nao
-  // resolve: ali o veu esta em 0.06 e o fundo aparece atraves dele, entao o
-  // "tampao" ficaria visivel como uma mancha mais clara.
+  // It exists because the title page's "unwatched episode" badge is a RING, and
+  // with GFX_COLOR it came out as a grey disc. Painting the middle in the
+  // background colour does not solve it: there the veil is at 0.06 and the
+  // background shows through, so the "plug" would be visible as a lighter smudge.
   //
-  // O SDF ja existente da a distancia com sinal ate a borda; um anel e
-  // simplesmente `abs(d) < espessura`. Por isso este modo custa o mesmo que
-  // GFX_COR e serve para retangulo arredondado tanto quanto para circulo (raio
-  // 0.5 no menor lado = circulo).
+  // The existing SDF gives the signed distance to the edge; a ring is simply
+  // `abs(d) < thickness`. That is why this mode costs the same as GFX_COLOR and
+  // serves a rounded rectangle as well as a circle (radius 0.5 on the smaller
+  // side = circle).
   //
-  // Parametros, reaproveitando uPar para nao criar uniform novo:
-  //   uPar.x = espessura do traco, na mesma escala normalizada de uRaio
-  //   uPar.y = numero de tracos do pontilhado; 0 (ou <0.5) = anel continuo
+  // Parameters, reusing uPar so as not to create a new uniform:
+  //   uPar.x = the stroke's thickness, on the same normalised scale as uRadius
+  //   uPar.y = the number of dashes; 0 (or <0.5) = a continuous ring
   "void main(){\n"
-  "  float d = sdf(vUv, uRaio, uAspect);\n"
+  "  float d = sdf(vUv, uRadius, uAspect);\n"
   "  float esp = max(uPar.x, 0.0015);\n"
-  // A borda externa e a interna recebem o mesmo esmaecimento, senao o anel fica
-  // com o lado de dentro serrilhado e o de fora liso.
+  // The outer and inner edges get the same feathering, otherwise the ring comes
+  // out jagged on the inside and smooth on the outside.
   "  float m = smoothstep(esp, esp*0.55, abs(d));\n"
   "  if (m <= 0.002) discard;\n"
   "  if (uPar.y > 0.5) {\n"
   "    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
   "    float t = fract((atan(p.y, p.x) / 6.2831853 + 0.5) * uPar.y);\n"
-  // Ciclo de 50%: metade traco, metade vao, com as pontas suavizadas para o
-  // pontilhado nao cintilar quando o circulo e pequeno.
+  // A 50% cycle: half stroke, half gap, with the ends softened so the dotting
+  // does not shimmer when the circle is small.
   "    m *= smoothstep(0.56, 0.44, t);\n"
   "    if (m <= 0.002) discard;\n"
   "  }\n"
-  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
   "}\n",
 
-  // GFX_OLHO — o olho de "marcar assistido".
+  // The lens is the INTERSECTION of two large discs offset up and down; it is the
+  // classic construction of the almond shape, and it comes out cheaper (two
+  // distances) than trying two Bezier arcs. The outline is `abs(d) < esp`, as in
+  // GFX_RING, and the iris is a filled disc in the centre.
   //
-  // A lente e a INTERSECCAO de dois discos de raio grande deslocados para cima
-  // e para baixo; e a construcao classica da forma de amendoa, e sai mais
-  // barata (duas distancias) que tentar dois arcos de Bezier. O contorno e
-  // `abs(d) < esp`, como no GFX_ANEL, e a iris e um disco cheio no centro.
-  //
-  // uPar.x > 0.5 acrescenta o risco na diagonal (estado "nao assistido"): uma
-  // faixa em torno da reta y = x, com a borda apagada dos dois lados para o
-  // traco nao serrilhar.
+  // uPar.x > 0.5 adds the diagonal stroke (the "unwatched" state): a band around
+  // the line y = x, with the edge faded on both sides so the stroke does not jag.
   "void main(){\n"
   "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
-  // Centros a +-0.62 e raio 0.78: a amendoa resultante tem cerca de 1.0 de
-  // largura por 0.32 de altura, que e a proporcao do glifo do web.
+  // Centres at +-0.62 and radius 0.78: the resulting almond is about 1.0 wide by
+  // 0.32 tall, which is the proportion of the web app's glyph.
   "  float d = max(length(p - vec2(0.0, 0.62)) - 0.78,\n"
   "                length(p + vec2(0.0, 0.62)) - 0.78);\n"
-  // Traco de 0.055 e nao 0.038: ao lado de um "+" de 5px o contorno fino fazia
-  // o olho parecer de outra familia de icone. A iris tambem cresceu.
+  // A stroke of 0.055 and not 0.038: next to a 5px "+" the thin outline made the
+  // eye look like it came from another icon family. The iris grew too.
   "  float esp = 0.055;\n"
   "  float m = smoothstep(esp, esp*0.45, abs(d));\n"
   "  m = max(m, smoothstep(0.185, 0.160, length(p)));\n"
-  // O risco: apaga um sulco no olho e desenha a barra dentro dele, para que o
-  // traco se leia por cima da lente como no SVG (que usa dois caminhos).
-  // O risco atravessa o olho inteiro, com um sulco de fundo para ele se
-  // destacar por cima da lente — e o que o SVG faz com dois caminhos.
+  // The stroke: it carves a groove in the eye and draws the bar inside it, so the
+  // stroke reads over the lens as it does in the SVG (which uses two paths).
+  // The stroke crosses the whole eye, with a groove behind it so it stands out
+  // over the lens — which is what the SVG does with two paths.
   "  if (uPar.x > 0.5) {\n"
   "    float r = (p.x - p.y) * 0.7071;\n"
   "    m *= smoothstep(0.045, 0.075, abs(r));\n"
@@ -375,18 +374,17 @@ static const char *FS_BODY[GFX_NMODES] = {
   "    m = max(m, smoothstep(0.045, 0.026, abs(r)) * lim);\n"
   "  }\n"
   "  if (m <= 0.002) discard;\n"
-  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
   "}\n",
 
-  // GFX_FONTES — tres barras empilhadas, a de baixo mais curta: e o simbolo de
-  // "lista de fontes". Substituiu o glifo do YouTube no terceiro botao redondo:
-  // o app nao toca trailer do YouTube, e um botao que promete o que nao faz e
-  // pior que um botao com outra funcao.
+  // GFX_SOURCES — three stacked bars, the bottom one shorter: it is the symbol
+  // for "source list". It replaced the YouTube glyph on the third round button:
+  // the app does not play YouTube trailers, and a button that promises what it
+  // does not do is worse than a button with another function.
   "void main(){\n"
   "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
-  // Tres barras de 0.12 de altura, centradas em -0.28, 0 e +0.28. A de baixo
-  // tem metade da largura, que e o que faz o simbolo ler como lista e nao como
-  // grade.
+  // Three bars 0.12 tall, centred at -0.28, 0 and +0.28. The bottom one is half
+  // the width, which is what makes the symbol read as a list and not as a grid.
   "  float m = 0.0;\n"
   "  for (int i = 0; i < 3; i++) {\n"
   "    float cy = (float(i) - 1.0) * 0.28;\n"
@@ -396,29 +394,26 @@ static const char *FS_BODY[GFX_NMODES] = {
   "    m = max(m, smoothstep(0.012, -0.012, d));\n"
   "  }\n"
   "  if (m <= 0.002) discard;\n"
-  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
   "}\n",
 
-  // GFX_MARCA — a forma vem do ALPHA, a cor de uCor. Ver a nota em gfx.h.
+  // GFX_BRAND — the shape comes from the ALPHA, the colour from uColor. See the note in gfx.h.
   "void main(){\n"
   "  float m = texture2D(uTex, vUv).a;\n"
-  "  gl_FragColor = vec4(uCor.rgb, uCor.a * m);\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
   "}\n",
 
-  // GFX_VEU_BAIXO — vertical puro, transparente em cima. Ver a nota em gfx.h.
+  // GFX_VEIL_BOTTOM — purely vertical, transparent at the top. See the note in gfx.h.
   //
   // The rounded mask is what lets this mode shade a CARD and not just a
   // full-bleed strip: the poster placeholder is a gradient inside a 22px
-  // radius, and without the mask the darkest end of the ramp squared off the
-  // two bottom corners. Callers that pass radius 0 — the player scrim — get a
-  // plain rectangle with an antialiased edge, which is what they already drew.
   "void main(){\n"
-  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRaio, uAspect));\n"
+  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
   "  float t = clamp(vUv.y, 0.0, 1.0);\n"
   "  float g = t * t * (3.0 - 2.0 * t);\n"
   "  g = g * g;\n"
-  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uCor.a * m);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a * m);\n"
   "}\n",
   // GFX_SOCIAL: broad off-centre light, quiet left side for copy.
   "void main(){\n"
@@ -428,33 +423,33 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  vec3 c = mix(vec3(0.105,0.065,0.095),vec3(0.40,0.14,0.18),glow);\n"
   "  c += vec3(0.065,0.028,0.020)*ribbon*glow;\n"
   "  c = mix(c,vec3(0.047,0.045,0.055),smoothstep(0.44,1.0,p.y));\n"
-  "  gl_FragColor = vec4(c,uCor.a);\n"
+  "  gl_FragColor = vec4(c,uColor.a);\n"
   "}\n",
 
-  // GFX_AVATAR: mascara radial exata. O GFX_CARD usa o SDF de retangulo
-  // arredondado e over-scan de parallax; num circulo pequeno isso deixava a
-  // aresta irregular e deslocava a fotografia dentro do disco.
+  // GFX_AVATAR: an exact radial mask. GFX_CARD uses the rounded-rectangle SDF and
+  // parallax over-scan; on a small circle that left the edge irregular and shifted
+  // the photograph inside the disc.
   "void main(){\n"
   "  vec2 p=(vUv-0.5)*vec2(uAspect,1.0);\n"
   "  float d=length(p);\n"
   "  float m=smoothstep(0.500,0.486,d);\n"
   "  if(m<=0.001) discard;\n"
   "  vec3 c=texture2D(uTex,clamp(cover(vUv),0.0,1.0)).rgb;\n"
-  "  gl_FragColor=vec4(c,m*uCor.a);\n"
+  "  gl_FragColor=vec4(c,m*uColor.a);\n"
   "}\n",
 
-  // GFX_RETRATO: preserva o enquadramento vertical do profile still e o
-  // ancora a direita. Fora da fotografia o shader fica transparente, deixando
-  // o hero de base aparecer sem a emenda de um segundo painel.
+  // GFX_PORTRAIT: it preserves the profile still's vertical framing and anchors it
+  // to the right. Outside the photograph the shader stays transparent, letting the
+  // base hero show through without the seam of a second panel.
   "void main(){\n"
-  // O pipeline pode entregar JPEG/RGB ou PNG com alpha real. Nao tentamos
-  // adivinhar o fundo por luminancia: cabelo e roupa escuros tambem sao pixels
-  // validos e um chroma-key heuristico os apagaria. Sem matte, o fallback e a
-  // foto inteira com uma dissolucao de borda segura; com alpha, a silhueta
-  // fornecida pela origem permanece intacta.
-  // Zoom editorial: a referencia nao mostra o retrato inteiro; mostra a
-  // cabeca ocupando o hero e saindo pela borda direita. O recorte vertical
-  // amplia o rosto sem esticar a textura.
+  // The pipeline may deliver JPEG/RGB or PNG with real alpha. We do not try to
+  // guess the background by luminance: dark hair and clothing are valid pixels too
+  // and a heuristic chroma-key would erase them. With no matte, the fallback is
+  // the whole photo with a safe edge dissolve; with alpha, the silhouette supplied
+  // by the source stays intact.
+  // An editorial zoom: the reference does not show the whole portrait; it shows the
+  // head filling the hero and running off the right edge. The vertical crop
+  // enlarges the face without stretching the texture.
   "  float cropY=0.05;\n"
   "  float cropH=0.78;\n"
   "  float dispW=clamp((uTexAsp/uAspect)/cropH,0.46,0.90);\n"
@@ -464,41 +459,42 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float inside=step(x0,vUv.x)*step(vUv.x,1.0);\n"
   "  vec4 pix=texture2D(uTex,clamp(uv,0.0,1.0));\n"
   "  vec3 c=pix.rgb;\n"
-  // Dissolve amplo nas quatro bordas: o retrato se mistura com o banner em
-  // vez de denunciar um retangulo cinza. O centro continua inteiro para o
-  // rosto manter detalhe e contraste.
+  // A wide dissolve on all four edges: the portrait blends into the banner instead
+  // of giving away a grey rectangle. The centre stays whole so the face keeps its
+  // detail and contrast.
   "  float left=smoothstep(0.0,0.28,localX);\n"
   "  float right=1.0-smoothstep(0.82,1.0,localX);\n"
   "  float top=smoothstep(0.0,0.12,vUv.y);\n"
   "  float bottom=1.0-smoothstep(0.68,0.99,vUv.y);\n"
   "  float mask=inside*left*right*top*bottom*pix.a;\n"
   "  if(mask<=0.001) discard;\n"
-  "  gl_FragColor=vec4(c,uCor.a*mask);\n"
+  "  gl_FragColor=vec4(c,uColor.a*mask);\n"
   "}\n",
 
-  // GFX_DISCO: preenchimento circular com antialias. Ao ficar atras do avatar
-  // produz um aro perfeito sem esconder pixels da imagem nem criar rebarbas.
+  // GFX_DISK: a circular fill with antialiasing. Sitting behind the avatar it
+  // produces a perfect rim without hiding pixels of the image or creating burrs.
   "void main(){\n"
   "  vec2 p=(vUv-0.5)*vec2(uAspect,1.0);\n"
   "  float m=smoothstep(0.500,0.486,length(p));\n"
   "  if(m<=0.001) discard;\n"
-  "  gl_FragColor=vec4(uCor.rgb,uCor.a*m);\n"
+  "  gl_FragColor=vec4(uColor.rgb,uColor.a*m);\n"
   "}\n",
 };
 
-// Cada corpo declara o que usa; montar so o necessario mantem o shader enxuto.
+// Each body declares what it uses; assembling only what is needed keeps the
+// shader lean.
 static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
   {0,1}, {0,1},
-  {1,0},   /* GFX_ANEL */
-  {0,0},   /* GFX_OLHO    — SDF proprio, nao o do retangulo */
-  {0,0},   /* GFX_FONTES  — idem */
-  {0,0},   /* GFX_MARCA   — so o alpha da textura: sem SDF, sem cover */
-  {1,0},   /* GFX_VEU_BAIXO — degrade vertical, recortado pelo raio */
+  {1,0},   /* GFX_RING */
+  {0,0},   /* GFX_EYE     — its own SDF, not the rectangle's */
+  {0,0},   /* GFX_SOURCES — likewise */
+  {0,0},   /* GFX_BRAND   — only the texture's alpha: no SDF, no cover */
+  {1,0},   /* GFX_VEIL_BOTTOM — a vertical gradient, clipped by the radius */
   {0,0},   /* GFX_SOCIAL */
   {0,1},   /* GFX_AVATAR */
-  {0,0},   /* GFX_RETRATO */
-  {0,0}    /* GFX_DISCO */
+  {0,0},   /* GFX_PORTRAIT */
+  {0,0}    /* GFX_DISK */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -527,12 +523,12 @@ int gfx_start(void) {
                printf("gfx link mode %d: %s\n", m, log); return 0; }
     progs[m].progress = p;
     progs[m].rect = glGetUniformLocation(p, "uRect");
-    progs[m].screen = glGetUniformLocation(p, "uTela");
+    progs[m].screen = glGetUniformLocation(p, "uScreen");
     progs[m].tex  = glGetUniformLocation(p, "uTex");
-    progs[m].focus = glGetUniformLocation(p, "uFoco");
+    progs[m].focus = glGetUniformLocation(p, "uFocus");
     progs[m].par  = glGetUniformLocation(p, "uPar");
-    progs[m].radius = glGetUniformLocation(p, "uRaio");
-    progs[m].color  = glGetUniformLocation(p, "uCor");
+    progs[m].radius = glGetUniformLocation(p, "uRadius");
+    progs[m].color  = glGetUniformLocation(p, "uColor");
     progs[m].aspect  = glGetUniformLocation(p, "uAspect");
     progs[m].texAspect = glGetUniformLocation(p, "uTexAsp");
     glUseProgram(p);
@@ -546,15 +542,15 @@ int gfx_start(void) {
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, quad);
   glEnable(GL_BLEND);
-  // Blend SEPARADO para cor e alpha, e o GL_ONE do alpha nao e detalhe.
+  // SEPARATE blending for colour and alpha, and the alpha's GL_ONE is no detail.
   //
-  // Com GL_SRC_ALPHA nos dois canais, cada desenho translucido computa
-  // dst.a = a*a + dst.a*(1-a) — ou seja, ele FURA a propria superficie. Um veu
-  // a 40% derruba o alpha do destino de 1.0 para 0.76. Na TV o compositor
-  // mistura a janela com o que esta atras dela usando esse alpha, entao o
-  // buraco aparece como uma mancha escura; numa captura por glReadPixels ele e
-  // invisivel, porque a captura le a cor e nao a composicao. Isso vale para
-  // TODOS os veus e fades do app, nao so para a tela de video.
+  // With GL_SRC_ALPHA on both channels, every translucent draw computes
+  // dst.a = a*a + dst.a*(1-a) — that is, it PUNCTURES its own surface. A veil at
+  // 40% drops the destination's alpha from 1.0 to 0.76. On the TV the compositor
+  // mixes the window with what is behind it using that alpha, so the hole appears
+  // as a dark smudge; in a glReadPixels capture it is invisible, because the
+  // capture reads the colour and not the composition. This holds for ALL the app's
+  // veils and fades, not just the video screen.
   glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
   return 1;
 }
@@ -565,36 +561,36 @@ void gfx_shutdown(void) {
   progressCurrent = -1;
 }
 
-// Ultima textura vista no bind. O driver ate ignora rebind do mesmo nome, mas
-// so depois de pagar a entrada na chamada — e num quadro cheio de texto a
-// MESMA textura de glifo e desenhada varias vezes seguida.
+// The last texture seen at bind time. The driver does ignore a rebind of the same
+// name, but only after paying the entry cost of the call — and in a frame full of
+// text the SAME glyph texture is drawn several times in a row.
 static GLuint texCurrent = 0;
 
-// Chamar quando uma textura e destruida (o nome pode ser reutilizado por
-// glGenTextures) ou quando alguem deu glBindTexture por fora do gfx_rect
-// (upload de arte, raster de glifo) — nos dois casos o cache mentiria.
-// tex = 0 significa "esqueca tudo": e o que os uploads usam.
+// Call it when a texture is destroyed (the name may be reused by glGenTextures)
+// or when somebody has called glBindTexture outside gfx_rect (an art upload, a
+// glyph raster) — in both cases the cache would be lying.
+// tex = 0 means "forget everything": that is what the uploads use.
 void gfx_tex_forget(GLuint tex) { if (tex == 0 || texCurrent == tex) texCurrent = 0; }
 
 int    gfx_n_rect = 0, gfx_n_progress = 0, gfx_n_bind = 0, gfx_n_others = 0;
 double gfx_ms_rect = 0.0, gfx_ms_others = 0.0;
-// PREENCHIMENTO SUBMETIDO no quadro, em telas cheias (1920x1080 = 1,0).
-// Nesta Mali o custo e de fragmento, nao de chamada: a nota no topo deste
-// arquivo diz que DUAS camadas de tela cheia derrubavam o quadro para ~40fps.
-// Sem contar a area, "quantas camadas cheias tem esta tela" e chute — com o
-// contador e uma medida por quadro.
+// FILL SUBMITTED this frame, in full screens (1920x1080 = 1.0).
+// On this Mali the cost is per fragment, not per call: the note at the top of this
+// file says TWO full-screen layers dropped the frame rate to ~40fps. Without
+// counting the area, "how many full layers does this screen have" is a guess —
+// with the counter it is a measurement per frame.
 double gfx_fill = 0.0;
-int    gfx_n_full = 0;   // desenhos que cobrem >= 50% da tela
+int    gfx_n_full = 0;   // draws covering >= 50% of the screen
 static double gfxFreqMs = 0.0;
 void gfx_new_frame(void) {
   gfx_n_rect = gfx_n_progress = gfx_n_bind = gfx_n_others = 0;
   gfx_ms_rect = gfx_ms_others = 0.0;
   gfx_fill = 0.0; gfx_n_full = 0;
 }
-// Relogio dos pontos de GL que NAO sao gfx_rect: recorte, FBO do snapshot e as
-// tres passadas do desfoque. Numa GPU de ladrilhos trocar de alvo de render no
-// meio do quadro forca descarga do ladrilho — e o suspeito natural para o custo
-// de CPU que sobra dentro de app_desenhar depois de descontar gfx_rect e texto.
+// A clock for the GL points that are NOT gfx_rect: the clip, the snapshot's FBO
+// and the blur's three passes. On a tiled GPU, changing render target mid-frame
+// forces a tile flush — and that is the natural suspect for the CPU cost left
+// inside app_draw once gfx_rect and text have been discounted.
 #define GFX_OUTRO_START() \
   if (gfxFreqMs == 0.0) gfxFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency(); \
   Uint64 tO_ = SDL_GetPerformanceCounter()
@@ -617,10 +613,11 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
     if (area >= 0.5f) gfx_n_full++; }
   const Program *P = &progs[mode];
   if (progressCurrent != (int)mode) { glUseProgram(P->progress); progressCurrent = (int)mode; gfx_n_progress++; }
-  // Uniform que o shader do modo nao declara volta como -1 do link; passar -1
-  // ao glUniform e no-op valido mas ainda paga a travessia da chamada GL. Num
-  // quadro tipico da home sao centenas de gfx_rect, a maioria em modos que nao
-  // usam foco/parallax/texAsp, entao o teste barato aqui poupa a chamada cara.
+  // A uniform the mode's shader does not declare comes back as -1 from the link;
+  // passing -1 to glUniform is a valid no-op but still pays the GL call's
+  // traversal. In a typical home frame there are hundreds of gfx_rect calls, most
+  // in modes that use no focus/parallax/texAsp, so the cheap test here saves the
+  // expensive call.
   glUniform4f(P->rect, r.x, r.y, r.w, r.h);
   if (P->focus >= 0)   glUniform1f(P->focus, focus);
   if (P->par >= 0)    glUniform2f(P->par, parx, pary);
@@ -643,13 +640,13 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) {
   gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, radius, cr, cg, cb, ca);
 }
-// Buraco transparente por onde o plano de video do aparelho aparece.
+// A transparent hole for the device's video plane to show through.
 //
-// Precisa ser com o blend DESLIGADO. Com blend ligado, escrever alpha 0 apenas
-// mistura com o que ja esta no destino e o alpha final continua 1 — a
-// superficie segue opaca e o video permanece invisivel, sem nenhum erro. E o
-// alpha aqui e o canal de composicao da janela, entao isto so tem efeito com
-// SDL_GL_ALPHA_SIZE 8 pedido antes de criar a janela.
+// It has to be done with blending OFF. With blending on, writing alpha 0 merely
+// mixes with what is already in the destination and the final alpha stays 1 — the
+// surface remains opaque and the video stays invisible, with no error at all. And
+// the alpha here is the window's composition channel, so this only has any effect
+// with SDL_GL_ALPHA_SIZE 8 requested before the window is created.
 void gfx_hole(GfxRect r) {
   glDisable(GL_BLEND);
   gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, 0.0f, 0, 0, 0, 0);
@@ -669,7 +666,7 @@ int gfx_snap_start(int w, int h) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  gfx_tex_forget(0);  // o bind acima foi por fora do gfx_rect
+  gfx_tex_forget(0);  // the bind above went around gfx_rect
   glGenFramebuffers(1, &snapFbo);
   glBindFramebuffer(GL_FRAMEBUFFER, snapFbo);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, snapTex, 0);
@@ -688,8 +685,8 @@ void gfx_snap_begin(void) {
   if (!snapFbo) return;
   GFX_OUTRO_START();
   glBindFramebuffer(GL_FRAMEBUFFER, snapFbo);
-  // uTela continua em coordenadas de tela cheia: o viewport menor faz a
-  // reducao sozinho, e nenhum codigo de layout precisa saber que existe FBO.
+  // uScreen stays in full-screen coordinates: the smaller viewport does the
+  // reduction by itself, and no layout code needs to know an FBO exists.
   glViewport(0, 0, snapW, snapH);
   GFX_OUTRO_END();
 }
@@ -726,15 +723,15 @@ void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float c
   char cam[600];
   GLuint t;
   if (!name || !name[0] || !dirIcons[0]) return;
-  // Caminho ABSOLUTO: o diretorio de trabalho do app nao e a pasta da arte, e
-  // com caminho relativo o IMG_Load falha em silencio e o icone some sem erro.
-  // Mesma armadilha ja documentada em extras_caminho_marca.
+  // An ABSOLUTE path: the app's working directory is not the art folder, and with
+  // a relative path IMG_Load fails silently and the icon disappears with no error.
+  // The same trap already documented in extras_path_brand.
   snprintf(cam, sizeof cam, "%s/%s.png", dirIcons, name);
-  // Pede pela largura de desenho: um icone de 38px nao precisa dos 128 do
-  // arquivo, e o teto por uso e o que mantem o cache fora do vermelho.
+  // Ask by drawing width: a 38px icon does not need the file's 128, and the
+  // per-use ceiling is what keeps the cache out of the red.
   t = tex_get_width(cam, r.w);
   if (!t) return;
-  gfx_tex_aspect_current = 0.0f;   // o arquivo ja e quadrado
+  gfx_tex_aspect_current = 0.0f;   // the file is already square
   gfx_rect(r, t, GFX_BRAND, 0, 0, 0, 0.0f, cr, cg, cb, ca);
 }
 
@@ -742,14 +739,14 @@ void gfx_crop(float x, float y, float w, float h) {
   GFX_OUTRO_START();
   if (w <= 0.0f || h <= 0.0f) { glEnable(GL_SCISSOR_TEST); glScissor(0, 0, 0, 0);
                                 GFX_OUTRO_END(); return; }
-  // Duas conversoes acontecem aqui, e em nenhum outro lugar do app:
+  // Two conversions happen here, and nowhere else in the app:
   //
-  // 1. glScissor conta do canto INFERIOR esquerdo; o resto trabalha com y
-  //    crescendo para baixo.
-  // 2. glScissor fala em PIXEIS DO BUFFER, nao nas coordenadas de layout. Em
-  //    tela retina o buffer tem o dobro do tamanho, e sem a escala o recorte
-  //    cobria um quarto da area pedida — o menu lateral perdia os dois
-  //    primeiros itens e os rotulos saiam cortados no meio da palavra.
+  // 1. glScissor counts from the BOTTOM-left corner; everything else works with y
+  //    growing downwards.
+  // 2. glScissor speaks in BUFFER PIXELS, not layout coordinates. On a retina
+  //    screen the buffer is twice the size, and without the scaling the clip
+  //    covered a quarter of the requested area — the side menu lost its first two
+  //    items and the labels came out cut mid-word.
   float ex = (float)screenW / NV_SCREEN_W, ey = (float)screenH / NV_SCREEN_H;
   // 3. the letterbox moves the origin: the bars are outside the box and the
   //    crop has to be measured from its corner, not the window's.
@@ -768,7 +765,7 @@ static int createsTarget(int i, int w, int h) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  gfx_tex_forget(0);  // o bind acima foi por fora do gfx_rect
+  gfx_tex_forget(0);  // the bind above went around gfx_rect
   glGenFramebuffers(1, &borderFbo[i]);
   glBindFramebuffer(GL_FRAMEBUFFER, borderFbo[i]);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, borderTex[i], 0);
@@ -779,7 +776,7 @@ static int createsTarget(int i, int w, int h) {
 
 int gfx_blur_start(int w, int h) {
   borderW = w; borderH = h;
-  // 0/1 = par do detalhe (ping-pong do gaussiano), 2/3 = par da home
+  // 0/1 = the detail's pair (the gaussian's ping-pong), 2/3 = the home's pair
   if (!createsTarget(0, w, h) || !createsTarget(1, w, h) ||
       !createsTarget(2, w, h) || !createsTarget(3, w, h)) {
     gfx_blur_shutdown();
@@ -789,8 +786,8 @@ int gfx_blur_start(int w, int h) {
   return 1;
 }
 
-// Desenha a arte no alvo e passa duas vezes o gaussiano. So roda quando a arte
-// muda — o resultado fica guardado na textura.
+// Draws the art into the target and runs the gaussian over it twice. It only runs
+// when the art changes — the result stays in the texture.
 void gfx_blur_generate(int via, unsigned int tex, float texAspect) {
   int a0 = via ? 2 : 0, a1 = via ? 3 : 1;
   if (!borderFbo[a0] || !tex) return;
@@ -804,8 +801,9 @@ void gfx_blur_generate(int via, unsigned int tex, float texAspect) {
   gfx_rect(full, tex, GFX_SNAP, 0, 0, 0, 0.0f, 0, 0, 0, 1.0f);
   gfx_tex_aspect_current = 0.0f;
 
-  // O passo e maior que um texel: com passo de um texel o desfoque mal cobre
-  // 4px do alvo, que esticado 4x ainda deixa a estrutura da imagem visivel.
+  // The step is larger than one texel: with a one-texel step the blur barely
+  // covers 4px of the target, which stretched 4x still leaves the image's
+  // structure visible.
   float px = NV_BLUR_STEP / (float)borderW, py = NV_BLUR_STEP / (float)borderH;
   glBindFramebuffer(GL_FRAMEBUFFER, borderFbo[a1]);
   gfx_rect(full, borderTex[a0], GFX_BLUR, 0, px, 0.0f, 0.0f, 0, 0, 0, 1.0f);

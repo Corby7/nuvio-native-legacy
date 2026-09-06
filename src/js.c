@@ -21,7 +21,7 @@ const char *js_end(const char *p) {
   return p;
 }
 
-// Acha `"chave"` dentro da faixa, ignorando ocorrencias dentro de textos.
+// Finds `"key"` within the range, ignoring occurrences inside strings.
 static const char *findsKey(const char *start, const char *end, const char *key) {
   char search[64];
   const char *p = start;

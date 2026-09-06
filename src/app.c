@@ -1,16 +1,16 @@
-// Roteador de telas.
+// The screen router.
 //
-// Antes disto o main.c decidia entre home e detalhe com um if. Com menu, busca,
-// biblioteca, ajustes e player, esse if viraria um emaranhado onde cada tela
-// precisa saber das outras — e a regra de "quem come a tecla" ficaria espalhada
-// por seis arquivos. Aqui existe uma tela CORRENTE e uma unica ordem de
-// prioridade, escrita num lugar so.
+// Before this, main.c decided between home and detail with an if. With the menu,
+// search, library, settings and player, that if would have become a tangle where
+// every screen has to know about the others — and the rule of "who eats the key"
+// would be spread across six files. Here there is one CURRENT screen and a single
+// priority order, written down in one place.
 //
-// Ordem de quem recebe o D-pad, de cima para baixo:
-//   1. player  — cobre a tela inteira
-//   2. detalhe — camada sobre a tela corrente
-//   3. menu    — camada sobre a tela corrente
-//   4. a tela corrente (home, busca, biblioteca ou ajustes)
+// The order of who receives the D-pad, from the top down:
+//   1. player  — covers the whole screen
+//   2. detail  — a layer over the current screen
+//   3. menu    — a layer over the current screen
+//   4. the current screen (home, search, library or settings)
 #include "app.h"
 #include "login.h"
 #include "session.h"
@@ -44,8 +44,8 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 
-// Link de debrid expira em minutos; um minuto e folga suficiente para o usuario
-// apertar Reproduzir logo depois de abrir o titulo sem pagar uma busca a mais.
+// A debrid link expires in minutes; one minute is slack enough for the user to
+// press Play right after opening the title without paying for another search.
 #define NV_LINK_VALID_MS 60000
 
 static int waitingSource;
@@ -54,7 +54,7 @@ static _Atomic int sourceChosen = -2;   // release/acquire entre verificacao e U
 
 static ProfileData profilePending;
 static int profileSuccess;
-static _Atomic int profileLoad; // 0=ocioso, 1=rede, 2=snapshot pronto
+static _Atomic int profileLoad; // 0=idle, 1=network, 2=snapshot ready
 static _Atomic unsigned profileGeneration = 1;
 static pthread_mutex_t profileLock = PTHREAD_MUTEX_INITIALIZER;
 typedef struct { unsigned generation; int profile; char account[96]; } ProfileRequest;
@@ -63,8 +63,8 @@ static void *loadProfile(void *u) {
   ProfileData new={0};
   int success=trakt_profile(&new);
   pthread_mutex_lock(&profileLock);
-  // A troca de conta/perfil invalida a resposta. O worker termina, mas nunca
-  // publica uma identidade antiga nem deixa um snapshot obsoleto na fila.
+  // A change of account/profile invalidates the answer. The worker finishes, but
+  // never publishes an old identity nor leaves a stale snapshot in the queue.
   if(request->generation==atomic_load_explicit(&profileGeneration,memory_order_acquire) &&
      atomic_load_explicit(&profileLoad,memory_order_relaxed)==1 && session_loggedin() &&
      profiles_active()==request->profile && !strcmp(session_user(),request->account)){
@@ -97,13 +97,13 @@ static void requestProfile(void) {
   else { free(request); atomic_store(&profileLoad,0); profile_set_error("Could not start the query. Try again."); }
 }
 
-// A verificacao faz uma requisicao por fonte candidata e bloqueia; num fio
-// proprio a tela segue em 60fps mostrando "Abrindo fonte".
+// Verification makes one request per candidate source and blocks; on a thread of
+// its own the screen carries on at 60fps showing "Opening source".
 static void *chooseSource(void *u) {
   (void)u;
-  // Ate 8: numa lista tipica de 12, as primeiras costumam ser do mesmo
-  // provedor e falham juntas quando o arquivo nao esta em cache. Testar poucas
-  // devolvia "nenhuma fonte serve" com fontes boas logo adiante.
+  // Up to 8: in a typical list of 12, the first ones are usually from the same
+  // provider and fail together when the file is not cached. Testing only a few
+  // returned "no source works" with good sources just further down.
   sourceChosen = stream_first_good(8);
   return NULL;
 }
@@ -114,11 +114,12 @@ static void *chooseSource(void *u) {
 #include <stdio.h>
 
 static Screen screen = SCREEN_HOME;
-static int sair = 0;
+static int wantsExit = 0;
 
-// O detalhe precisa do retangulo REAL de onde o card saiu para o voo comecar
-// dali. Cada tela que abre um titulo entrega o seu; quando nenhuma entrega
-// (caso do menu ou de um indice vindo de fora), cai para a tela inteira.
+// The detail screen needs the REAL rectangle the card came from so the flight can
+// start there. Each screen that opens a title supplies its own; when none does
+// (the menu's case, or an index coming from outside), it falls back to the whole
+// screen.
 static void openTitle(const HomeItem *it) {
   if (it && it->art) detail_open(it);
 }
@@ -128,15 +129,15 @@ static void openByIndex(int i) {
   if (!c || (!c->backdrop[0] && !c->poster[0])) return;
   HomeItem it;
   GfxRect all = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  // O `it` e da PILHA e esta funcao preenchia todos os campos MENOS o indice —
-  // que ia como lixo. Como a biblioteca e a busca abrem por aqui, qualquer
-  // titulo escolhido nelas levava ao mesmo filme. A home nao sofria porque ela
-  // entrega o HomeItem inteiro, ja com o indice.
+  // `it` is on the STACK and this function filled in every field EXCEPT the index
+  // — which went in as rubbish. Since the library and the search open through
+  // here, any title chosen in them led to the same film. The home did not suffer
+  // because it hands over the whole HomeItem, index included.
   //
-  // O campo existe exatamente por causa deste defeito, e o comentario dele em
-  // home.h ja avisava: "faltava, e por isso o detalhe abria sempre o item 0".
-  // Zerar a struct antes garante que o proximo campo novo nasca definido em vez
-  // de repetir a historia.
+  // The field exists precisely because of this defect, and its comment in home.h
+  // already warned: "it was missing, which is why the detail always opened item
+  // 0". Zeroing the struct first guarantees the next new field is born defined
+  // instead of repeating the history.
   memset(&it, 0, sizeof it);
   it.index_ = i;
   it.rect = all;
@@ -147,10 +148,10 @@ static void openByIndex(int i) {
   openTitle(&it);
 }
 
-// Monta o id que os addons esperam. Para serie e "tt1234567:temporada:episodio";
-// sem os dois numeros a resposta volta VAZIA com HTTP 200, e era por isso que o
-// addons_buscar cravava ":1:1" — o que fazia toda a serie mostrar as fontes do
-// episodio 1, qualquer que fosse o escolhido.
+// Builds the id the addons expect. For a series it is
+// "tt1234567:season:episode"; without those two numbers the answer comes back
+// EMPTY with HTTP 200, and that is why addons_fetch hard-coded ":1:1" — which
+// made every series show episode 1's sources, whichever one was chosen.
 static void idOfTarget(const CatItem *ci, char *dst, size_t n) {
   int t = 0, e = 0;
   if (!ci) { if (n) dst[0] = 0; return; }
@@ -163,8 +164,8 @@ static void idOfTarget(const CatItem *ci, char *dst, size_t n) {
 static void swapScreen(Screen new) {
   if (new == screen) return;
   screen = new;
-  // Cada tela zera o proprio estado ao ser aberta: voltar para a busca com o
-  // texto de duas navegacoes atras seria lixo, nao memoria util.
+  // Each screen zeroes its own state when it is opened: coming back to the search
+  // with the text from two navigations ago would be rubbish, not useful memory.
   switch (screen) {
     case SCREEN_SEARCH:      search_start();      break;
     case SCREEN_LIBRARY: library_start(); break;
@@ -196,12 +197,12 @@ static void episodeOfDetail(void) {
   player_set_episode(t,e);
 }
 
-// A home carregou? Sem arte no pacote ela nao carrega, e ate agora isso
-// DERRUBAVA o app: app_iniciar devolvia 0 e o main saia com codigo 1. Num
-// pacote de dono isso nunca acontecia porque a arte ia junto; num pacote
-// distribuivel, que nao pode levar arte nem credencial de ninguem, esse era o
-// comportamento da PRIMEIRA execucao de todo mundo — o app abria e fechava,
-// antes mesmo da tela de login.
+// Has the home loaded? Without art in the package it does not, and until now
+// that BROUGHT DOWN the app: app_start returned 0 and main exited with code 1.
+// In an owner's package that never happened because the art shipped with it; in a
+// distributable package, which can carry nobody's art or credentials, that was
+// EVERYONE's first-run behaviour — the app opened and closed, before even the
+// login screen.
 static int homeReady;
 
 int app_start(const char *dirArt) {
@@ -210,12 +211,14 @@ int app_start(const char *dirArt) {
     printf("[app] no art in the package: home only appears after the first sync\n");
   menu_start();
   profile_start();
-  // Sem conta, o app abre no login. Com sessao gravada ele nem passa por ela —
-  // pedir o codigo de novo a cada arranque seria o mesmo que nao ter gravado.
+  // With no account, the app opens on the login screen. With a stored session it
+  // does not even pass through it — asking for the code again on every start
+  // would be the same as never having stored it.
   if (session_loggedin()) {
     screen = SCREEN_HOME;
-    // Com sessao gravada o ciclo comeca no arranque: e ele que traz os addons
-    // e o Trakt da pessoa, sem os quais a home mostra so o que veio no pacote.
+    // With a stored session the cycle starts at boot: it is what brings in the
+    // person's addons and Trakt, without which the home shows only what came in
+    // the package.
     sync_start();
   } else {
     screen = SCREEN_LOGIN;
@@ -225,11 +228,11 @@ int app_start(const char *dirArt) {
 }
 
 void app_event(const SDL_Event *e) {
-  if (e->type == SDL_QUIT) { sair = 1; return; }
+  if (e->type == SDL_QUIT) { wantsExit = 1; return; }
 
-  // O login vem antes de tudo, inclusive do player: enquanto nao ha conta o
-  // resto do app nao tem dado nenhum para operar. A escolha de perfil vem logo
-  // depois, porque e ela que define para QUEM o resto do app vai sincronizar.
+  // Login comes before everything, the player included: while there is no account
+  // the rest of the app has no data to work with. Choosing a profile comes right
+  // after, because that is what decides WHO the rest of the app will sync for.
   if (screen == SCREEN_LOGIN)          { login_event(e);     return; }
   if (screen == SCREEN_CHOICE_PROFILE) { profilesel_event(e); return; }
 
@@ -241,8 +244,8 @@ void app_event(const SDL_Event *e) {
     return;
   }
 
-  // A folha de fontes fica acima de tudo: ela e uma pergunta, e enquanto ela
-  // esta em pe nada mais deve responder ao D-pad.
+  // The source sheet sits above everything: it is a question, and while it is
+  // standing nothing else should answer the D-pad.
   if (tracks_is_open()) { tracks_event(e); return; }
   if (episodes_is_open()) { episodes_event(e); return; }
   if (stream_sheet_is_open()) { stream_sheet_event(e); return; }
@@ -250,9 +253,10 @@ void app_event(const SDL_Event *e) {
   if (detail_is_open()) { detail_event(e); return; }
   if (profile_is_open() && profile_side()) { profile_event(e); return; }
   if (menu_is_open())   { menu_event(e);   return; }
-  // "Ver tudo" fica ENTRE a home e o detalhe: ela cobre a home e o detalhe
-  // cobre ela. Por isso vem depois do detalhe e antes do roteamento por tela.
-  // O menu do cartaz fica ACIMA de tudo que a home mostra: ele e modal.
+  // "See all" sits BETWEEN the home and the detail: it covers the home and the
+  // detail covers it. That is why it comes after the detail and before the
+  // per-screen routing.
+  // The poster's menu sits ABOVE everything the home shows: it is modal.
   if (ctx_is_open())     { ctx_event(e);     return; }
   if (seeall_is_open()) { seeall_event(e); return; }
 
@@ -265,21 +269,22 @@ void app_event(const SDL_Event *e) {
     default:              home_event(e);       break;
   }
 
-  // O menu abre AQUI, no mesmo evento que o pediu, e nao no proximo
-  // app_atualizar. Diferido por um quadro, as teclas que vierem logo depois do
-  // ESQUERDA — e num controle elas vem — sao entregues a tela de tras, que
-  // ainda acha que e a dona do foco.
+  // The menu opens HERE, in the same event that asked for it, and not in the next
+  // app_update. Deferred by one frame, the keys that come right after the LEFT —
+  // and on a remote they do come — are delivered to the screen behind, which still
+  // thinks it owns the focus.
   if (screen == SCREEN_HOME && home_requested_menu()) menu_open();
 }
 
-// A tela de detalhe pode pedir para abrir OUTRO titulo (um credito da
-// filmografia de um ator, um item de "Mais como este"). Quem troca e aqui, e
-// nao ela: reabrir a si mesma no meio do proprio desenho e o tipo de coisa que
-// quebra em silencio, e o roteador ja e o unico lugar que sabe abrir titulo.
-// O botao do olho: marcar como ASSISTIDO. Grava progresso cheio no arquivo do
-// app e avisa o Trakt, que e a fonte que o dono usa nos outros aparelhos. Fica
-// no roteador pelo mesmo motivo de tudo mais: e ele que conhece catalogo e
-// Trakt, e a tela de detalhe nao precisa conhecer nenhum dos dois.
+// The detail screen may ask to open ANOTHER title (a credit from an actor's
+// filmography, a "More like this" item). What swaps is here, and not it:
+// reopening itself in the middle of its own drawing is the kind of thing that
+// breaks silently, and the router is already the only place that knows how to
+// open a title.
+// The eye button: mark as WATCHED. It writes full progress into the app's file
+// and tells Trakt, which is the source the owner uses on their other devices. It
+// lives in the router for the same reason as everything else: it is the router
+// that knows the catalogue and Trakt, and the detail screen need know neither.
 static void markWatchedIfRequested(void) {
   const CatItem *c;
   int i;
@@ -287,15 +292,14 @@ static void markWatchedIfRequested(void) {
   i = detail_index();
   c = cat_item(i);
   if (!c) return;
-  // ALTERNA, e manda para o HISTORICO do Trakt.
+  // It used to call trakt_mark (which is /scrobble/pause) with a duration of 1.0
+  // — and that function starts with `durationSeg <= 1.0 -> return`. The button
+  // changed only the local mirror and Trakt was NEVER told: it looked like it
+  // worked and it did not. Now it goes through /sync/history, which is the
+  // "I watched it" endpoint.
   //
-  // Estava chamando trakt_marcar (que e /scrobble/pause) com duracao 1.0 — e
-  // aquela funcao comeca com `durSeg <= 1.0 -> return`. O botao mudava so o
-  // espelho local e o Trakt NUNCA era informado: parecia funcionar e nao
-  // funcionava. Agora vai por /sync/history, que e o endpoint de "assisti".
-  //
-  // E alterna em vez de so marcar: o icone ja mostra os dois estados, entao um
-  // botao que so soma nao teria como desfazer um toque errado.
+  // And it toggles rather than only marking: the icon already shows both states,
+  // so a button that only adds would have no way to undo a mistaken press.
   { int watched = (c->progress >= 90);
     cat_save_progress(i, watched ? 0.0 : 1.0, 1.0);
     if (c->imdb[0]) trakt_watched(c->imdb, !watched);
@@ -306,9 +310,10 @@ static void markWatchedIfRequested(void) {
 static void swapOfTitleIfRequested(void) {
   int target = detail_requested_open();
   if (target >= 0) { openByIndex(target); return; }
-  // Titulo que veio de FORA do catalogo: a descoberta buscou o meta num fio e
-  // avisa aqui quando ele entrou. Abrir no fio da rede seria mexer na tela de
-  // outro fio; este e o unico lugar que abre titulo.
+  // A title that came from OUTSIDE the catalogue: discovery fetched the meta on a
+  // thread and says so here once it has gone in. Opening it on the network thread
+  // would mean touching the screen from another thread; this is the only place
+  // that opens a title.
   { int new = disc_title_ready();
     if (new >= 0) openByIndex(new); }
 }
@@ -316,13 +321,13 @@ static void swapOfTitleIfRequested(void) {
 void app_update(float dt, Uint32 now) {
   if (screen == SCREEN_LOGIN) {
     login_update(dt, now);
-    // A troca so acontece AQUI, quando a sessao existe de verdade — nao no
-    // instante em que o servidor respondeu. Assim a home nunca abre com uma
-    // sessao pela metade.
+    // The swap only happens HERE, when the session really exists — not at the
+    // instant the server answered. That way the home never opens with a
+    // half-finished session.
     if (login_done()) {
-      // Logo apos entrar, o primeiro ciclo de sync: e ele que descobre quantos
-      // perfis a conta tem, e sem isso a tela de escolha nao teria o que
-      // mostrar.
+      // Right after signing in, the first sync cycle: it is what discovers how
+      // many profiles the account has, and without it the picker screen would
+      // have nothing to show.
       sync_reapply_settings();
       sync_start();
       screen = SCREEN_CHOICE_PROFILE;
@@ -332,9 +337,9 @@ void app_update(float dt, Uint32 now) {
     return;
   }
 
-  // Sessao perdida no meio do uso (renovacao recusada): voltar ao login e a
-  // unica saida honesta. Continuar na home mostraria o catalogo de exemplo do
-  // pacote como se fosse o da pessoa.
+  // A session lost mid-use (a refused renewal): going back to login is the only
+  // honest way out. Staying on the home would show the package's sample catalogue
+  // as though it were the person's.
   if (!session_loggedin()) {
     invalidateProfile();
     screen = SCREEN_LOGIN;
@@ -360,15 +365,15 @@ void app_update(float dt, Uint32 now) {
     profilesel_update(dt, now);
     if (profilesel_requested_retry()) { sync_start(); return; }
     if (profilesel_wants_exit()) {
-      // Sem uma escolha confirmada, voltar nao pode escolher o perfil 1 por
-      // acidente. A tela continua visivel e aguarda uma escolha explicita.
+      // Without a confirmed choice, going back must not pick profile 1 by
+      // accident. The screen stays visible and waits for an explicit choice.
       if (!profiles_needs_choose()) { screen = SCREEN_HOME; menu_set_destination(MENU_START); }
       return;
     }
     if (profilesel_done()) {
-      // O perfil mudou o destino do sync: rodar de novo traz os addons e o
-      // progresso DESTE perfil, e nao os do perfil 1 que o primeiro ciclo
-      // pegou por falta de escolha.
+      // The profile has changed the sync's destination: running again brings THIS
+      // profile's addons and progress, and not profile 1's, which the first cycle
+      // picked up for want of a choice.
       invalidateProfile();
       sync_reapply_settings();
       sync_start();
@@ -377,25 +382,25 @@ void app_update(float dt, Uint32 now) {
     return;
   }
 
-  // Um ciclo por vez, e so quando a conta existe. O passo e barato: sem fio
-  // terminado ele nao faz nada.
+  // One cycle at a time, and only when the account exists. The step is cheap:
+  // with no finished thread it does nothing.
   sync_step((unsigned)now);
 
-  // Conta com mais de um perfil e nenhum escolhido NESTA instalacao: perguntar.
-  // Isto vale tambem para quem abriu o app com sessao ja gravada — o caminho
-  // comum depois do primeiro dia. Sem isto o app assumia o perfil 1 para
-  // sempre, e `perfis_precisa_escolher()` era codigo morto.
+  // An account with more than one profile and none chosen ON THIS INSTALLATION:
+  // ask. This holds for someone who opened the app with a session already stored
+  // too — the common path after the first day. Without this the app assumed
+  // profile 1 forever, and `profiles_needs_choose()` was dead code.
   if (screen == SCREEN_HOME && !player_is_open() && !detail_is_open() &&
       profiles_needs_choose()) {
     screen = SCREEN_CHOICE_PROFILE;
     profilesel_start();
     return;
   }
-  // E o ciclo automatico — nunca com o player aberto: rajada de HTTP no meio
-  // do video disputa CPU e rede com o decodificador.
+  // And the automatic cycle — never with the player open: a burst of HTTP in the
+  // middle of the video competes for CPU and network with the decoder.
   if (!player_is_open()) sync_periodic((unsigned)now);
 
-  // Durante a verificacao nao substituir a lista que os workers consultam.
+  // During verification, do not replace the list the workers are reading.
   if (waitingSource != 2) addons_state();
   swapOfTitleIfRequested();
   markWatchedIfRequested();
@@ -420,7 +425,7 @@ void app_update(float dt, Uint32 now) {
   if (screen==SCREEN_HOME && home_requested_social()) {
     swapScreen(SCREEN_SETTINGS);menu_set_destination(MENU_SETTINGS);
   }
-  // Fora da home, o Back tem para onde voltar: a home. So nela ele fecha o app.
+  // Outside the home, Back has somewhere to go: the home. Only there does it close the app.
   if (screen != SCREEN_HOME) {
     int shouldClose = (screen == SCREEN_SEARCH      && search_wants_exit())
               || (screen == SCREEN_LIBRARY && library_wants_exit())
@@ -429,12 +434,12 @@ void app_update(float dt, Uint32 now) {
               || (screen == SCREEN_SETTINGS    && settings_wants_exit());
     if (shouldClose) { swapScreen(SCREEN_HOME); menu_set_destination(MENU_START); }
   } else if (home_wants_exit()) {
-    sair = 1;
+    wantsExit = 1;
   }
 
-  // Trocar de usuario, pedido pelo rodape da barra lateral. Vem ANTES do
-  // destino: as duas coisas saem do mesmo menu, e quem pediu troca nao quer
-  // mudar de aba.
+  // Switching user, asked for by the side bar's footer. It comes BEFORE the
+  // destination: the two come out of the same menu, and whoever asked to switch
+  // does not want to change tab.
   if (menu_requested_swap()) {
     invalidateProfile();
     screen = SCREEN_CHOICE_PROFILE;
@@ -451,7 +456,7 @@ void app_update(float dt, Uint32 now) {
       default:              swapScreen(SCREEN_HOME);       break;
     }
   }
-  // Pedidos de abrir um titulo, vindos de qualquer tela.
+  // Requests to open a title, coming from any screen.
   if (!detail_is_open() && !player_is_open()) {
     int idx = -1;
     HomeItem it;
@@ -476,20 +481,20 @@ void app_update(float dt, Uint32 now) {
     }
   }
 
-  // Botoes do detalhe: quem sabe que existe player e biblioteca e o roteador,
-  // nao a tela de detalhe.
+  // The detail screen's buttons: what knows there is a player and a library is the
+  // router, not the detail screen.
   if (detail_is_open()) {
-    // Reproduzir sem escolher = modo automatico: a regra do stream_automatico
-    // (MP4 4K Dolby Vision primeiro, senao o primeiro da lista) decide sozinha.
-    // Sem lista, o player abre sem video em vez de nao abrir — a tela dizendo
-    // que nao ha fonte e melhor que um botao que parece nao responder.
-    // Ao abrir um titulo, perguntar as fontes JA — a busca leva segundos e
-    // esperar o usuario apertar Reproduzir para so entao comecar faria a
-    // primeira reproducao parecer travada.
-    // O gatilho e o ID, nao o indice do titulo. Com o indice, mudar de EPISODIO
-    // nao repetia a busca e a lista continuava a do episodio anterior — meia
-    // correcao seria pior que nenhuma, porque a tela mostraria fontes de um
-    // episodio com o nome de outro.
+    // Play without choosing = automatic mode: the stream_automatic rule (MP4 4K
+    // Dolby Vision first, otherwise the first in the list) decides on its own.
+    // With no list, the player opens with no video rather than not opening — a
+    // screen saying there is no source beats a button that appears not to respond.
+    // On opening a title, ask for the sources NOW — the search takes seconds and
+    // waiting for the user to press Play before starting would make the first
+    // playback look frozen.
+    // The trigger is the ID, not the title's index. With the index, changing
+    // EPISODE did not repeat the search and the list stayed the previous
+    // episode's — half a fix would be worse than none, because the screen would
+    // show one episode's sources under another's name.
     { static char lastTarget[32] = "";
       int i = detail_index();
       const CatItem *ci = cat_item(i);
@@ -498,29 +503,30 @@ void app_update(float dt, Uint32 now) {
       if (!player_is_open() && waitingSource != 2 && ci && ci->imdb[0] && strcmp(target, lastTarget)) {
         snprintf(lastTarget, sizeof lastTarget, "%s", target);
         { addons_fetch(target, ci->kind); }
-        // Episodios do titulo aberto, na temporada onde o dono parou. Sai da
-        // rede na hora: guardar a lista de episodios de 40 titulos no pacote
-        // envelhecia a cada temporada nova.
-        // No FILME o mesmo fio busca o /meta/movie quando o catalogo ainda nao
-        // tem elenco: e de la que saem atores, direcao e generos da pagina.
+        // Episodes of the open title, in the season where the owner stopped. It
+        // comes from the network on the spot: keeping 40 titles' episode lists in
+        // the package went stale with every new season.
+        // On a FILM the same thread fetches /meta/movie when the catalogue does
+        // not have the cast yet: that is where the page's actors, directing and
+        // genres come from.
         if (!strcmp(ci->kind, "series") || ci->nCast == 0) disc_episodes(i, 0);
-        // Legendas do OpenSubtitles junto: sao dezenas por titulo e a busca
-        // leva segundos. Pedir so quando o dono abre a folha de faixas faria
-        // ele esperar de olho numa lista vazia.
+        // OpenSubtitles subtitles alongside: there are dozens per title and the
+        // search takes seconds. Asking only when the owner opens the tracks sheet
+        // would leave them waiting in front of an empty list.
         addons_fetch_subtitles(target, ci->kind);
       } }
     if (detail_requested_play() && waitingSource != 2) {
-      // A tela abre JA, no estado "abrindo fonte", e a escolha acontece depois.
-      // Escolher antes deixaria o botao sem resposta por segundos, e escolher
-      // sem verificar entregava o video de aviso do debrid — que toca normal e
-      // por isso passa por sucesso.
+      // The screen opens NOW, in the "opening source" state, and the choice
+      // happens afterwards. Choosing first would leave the button unresponsive
+      // for seconds, and choosing without verifying delivered the debrid's notice
+      // video — which plays normally and so passes for success.
       const CatItem *ci = cat_item(detail_index());
       player_open(detail_index(), NULL);
       episodeOfDetail();
-      // O episodio so fica definitivo DEPOIS de abrir o player. Refaça sempre
-      // o pedido de legenda nesse ponto; a busca de prefetch pode ter comecado
-      // no episodio anteriormente focado e o worker agora troca para o pedido
-      // mais recente sem publicar resultados velhos.
+      // The episode is only final AFTER the player opens. Always redo the
+      // subtitle request at that point; the prefetch search may have started on
+      // the previously focused episode, and the worker now switches to the most
+      // recent request without publishing stale results.
       if (ci && ci->imdb[0]) {
         char targetSub[64]; targetPlayer(targetSub, sizeof targetSub);
         addons_fetch_subtitles(targetSub, ci->kind);
@@ -534,9 +540,9 @@ void app_update(float dt, Uint32 now) {
       waitingSource = 1;
     }
     if (detail_requested_mark()) {
-      // Alterna no Trakt E no espelho local. O estado de partida vem de
-      // ci->naLista, que a descoberta preencheu com a watchlist de verdade;
-      // sem ele o botao adicionava de novo um titulo que ja estava la.
+      // Toggles on Trakt AND in the local mirror. The starting state comes from
+      // ci->inList, which discovery filled from the real watchlist; without it
+      // the button added a title that was already there all over again.
       int i = detail_index();
       const CatItem *c = cat_item(i);
       library_toggle_list(i);
@@ -545,11 +551,11 @@ void app_update(float dt, Uint32 now) {
     }
     if (detail_requested_sources())     stream_sheet_open();
   }
-  // Escolher uma fonte na folha inicia a reproducao DELA. Trocar de fonte com o
-  // player ja aberto tambem vale: fecha a sessao atual e abre na nova, senao
-  // duas ficariam presas no mesmo pipeline.
-  // A busca disparada por Reproduzir terminou: agora VERIFICA as fontes, em
-  // ordem, ate achar uma que leve ao arquivo — e so entao liga o video.
+  // Choosing a source in the sheet starts playing THAT one. Switching source with
+  // the player already open counts too: it closes the current session and opens on
+  // the new one, otherwise two would be stuck in the same pipeline.
+  // The search fired by Play has finished: now VERIFY the sources, in order, until
+  // one leads to the file — and only then switch the video on.
   if (waitingSource == 1 && addons_state() != ADD_SEARCHING) {
     waitingSource = 2;
     sourceChosen = -2;
@@ -562,11 +568,11 @@ void app_update(float dt, Uint32 now) {
     const Stream *s = sourceChosen >= 0 ? stream_item(sourceChosen) : NULL;
     waitingSource = 0;
     printf("automatic (checked): %s\n", s ? s->label : "(no usable source)");
-    // A afirmacao de HDR/DV vai ANTES do tocar: e ela que o bind do ACB
-    // descreve ao tv.display. Sem isto o C9 exibe tudo mapeado em SDR.
+    // The HDR/DV claim goes BEFORE playing: it is what the ACB bind describes to
+    // tv.display. Without it the C9 shows everything mapped to SDR.
     if (s) video_set_dv(s->dolbyVision);
-    // Anuncia o CONTENTOR pelo mesmo caminho: e o que dispensa a sonda de
-    // Matroska num arquivo que nunca teria um cabecalho desses.
+    // It announces the CONTAINER by the same route: it is what saves the Matroska
+    // probe on a file that would never have such a header.
     if (s) video_set_mp4(s->mp4 || strstr(s->url, ".mp4") != NULL);
     mark(s ? "source chosen" : "no usable source");
     if (player_is_open() && !player_wants_exit()) {
@@ -619,16 +625,16 @@ void app_update(float dt, Uint32 now) {
     }
   }
   episodes_update(dt);
-  // Prazo do recuo de Dolby Vision: se a declaracao nao render imagem, o video
-  // recarrega sozinho sem ela. Precisa bater todo quadro (ver video.h).
+  // The Dolby Vision fallback deadline: if the claim does not produce a picture,
+  // the video reloads itself without it. It has to tick every frame (see video.h).
   video_pump();
   // A rebuild requested when the account's addon list arrived. Here, and not in
   // sync_step, because the first build may still be running at that moment and the
   // request has to survive until it finishes.
   disc_step();
-  // O player devolve 1 para a coluna de audio e 2 para a de legenda.
+  // The player returns 1 for the audio column and 2 for the subtitle one.
   { int q = player_requested_tracks();
-    if (q) tracks_open_em(q == 2 ? 1 : 0); }
+    if (q) tracks_open_at(q == 2 ? 1 : 0); }
   tracks_update(dt, now);
   stream_sheet_update(dt, now);
 
@@ -653,13 +659,13 @@ void app_update(float dt, Uint32 now) {
       it.meta   = ci ? ci->meta : NULL;
       detail_open(&it);
     } }
-  // Titulo escolhido na grade: abre o detalhe, como se tivesse vindo da home.
+  // A title chosen in the grid: opens the detail, as though it had come from the home.
   { int idx = seeall_requested_open();
     if (idx >= 0) {
       const CatItem *ci = cat_item(idx);
-      // A grade nao tem retangulo de origem para a transicao crescer a partir
-      // dele: o card fica na tela que esta saindo. Entra centrado, do tamanho
-      // de um cartaz — o detalhe cobre a tela em seguida de qualquer forma.
+      // The grid has no source rectangle for the transition to grow out of: the
+      // card is on the screen that is leaving. It comes in centred, the size of a
+      // poster — the detail covers the screen straight afterwards anyway.
       HomeItem it;
       memset(&it, 0, sizeof it);
       it.index_ = idx;
@@ -686,7 +692,7 @@ void app_draw(Uint32 now) {
   if (screen == SCREEN_LOGIN)          { login_draw(now);     return; }
   if (screen == SCREEN_CHOICE_PROFILE) { profilesel_draw(now); return; }
 
-  // Estado vazio de verdade, em vez de uma tela preta que parece travamento.
+  // A real empty state, instead of a black screen that looks like a hang.
   if (!homeReady && screen == SCREEN_HOME && !player_is_open() && !detail_is_open()) {
     GfxRect background = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     TxtLine t, sb;
@@ -703,11 +709,12 @@ void app_draw(Uint32 now) {
     return;
   }
 
-  // O player cobre tudo; desenhar o que esta atras dele e trabalho jogado fora
-  // — a mesma conta que ja valia para o cartao de detalhe esticado.
+  // The player covers everything; drawing what is behind it is work thrown away —
+  // the same arithmetic that already held for the stretched detail card.
   if (!player_is_open()) {
-    // "Ver tudo" cobre a tela de tras por completo (fundo opaco), entao a home
-    // nao precisa ser desenhada por baixo — a mesma conta do detail_cobre_tela.
+    // "See all" covers the screen behind it completely (an opaque background), so
+    // the home need not be drawn underneath — the same arithmetic as
+    // detail_covers_screen.
     if (!detail_covers_screen() && !seeall_is_open()) {
       switch (screen) {
         case SCREEN_SEARCH:      search_draw(now);      break;
@@ -721,26 +728,26 @@ void app_draw(Uint32 now) {
     if (!detail_covers_screen()) seeall_draw(now);
     ctx_draw(now);
     detail_draw(now);
-    // A rail NAO existe na tela de detalhe do app web: ela e full-bleed e a
-    // coluna de conteudo comeca em x=72, ou seja, DENTRO do que a rail ocuparia.
-    // Com a rail por cima, o logo, o botao "Reproduzir" e a linha de duracao
-    // ficavam cortados pela faixa preta de 144px — foi o primeiro defeito que
-    // apareceu na captura do aparelho depois do port.
-    // A rail some com o detalhe aberto (o web nao a tem nessa tela) e some
-    // tambem quando `collapseSidebar` esta ligado, que e o estado do perfil do
-    // dono. Recolhida ela nao ocupa largura nenhuma: o conteudo passa a comecar
-    // em 104, e quem devolve esse x e ajustes_conteudo_x().
-    // A guarda de `collapseSidebar` NAO entra aqui. Ela ja existe DENTRO do
-    // menu_desenhar, e la ela pula so a RAIL FIXA — que e o correto: recolhida,
-    // a barra nao ocupa largura, mas continua abrindo como CAMADA ao ganhar
-    // foco, exatamente como o web faz.
+    // The rail does NOT exist on the web app's detail screen: it is full-bleed and
+    // the content column starts at x=72, that is, INSIDE what the rail would
+    // occupy. With the rail on top, the logo, the "Play" button and the duration
+    // line were clipped by the 144px black band — it was the first defect to show
+    // up in the device capture after the port.
+    // The rail disappears with the detail open (the web app does not have it on
+    // that screen) and disappears too when `collapseSidebar` is on, which is the
+    // state of the owner's profile. Collapsed, it takes no width at all: the
+    // content starts at 104, and what returns that x is settings_content_x().
+    // The `collapseSidebar` guard does NOT go here. It already exists INSIDE
+    // menu_draw, and there it skips only the FIXED RAIL — which is right:
+    // collapsed, the bar takes no width but still opens as a LAYER when it takes
+    // focus, exactly as the web app does.
     //
-    // Com a guarda tambem neste ponto, o menu_desenhar nunca era chamado no
-    // perfil do dono (collapseSidebar ligado): o menu abria, engolia as teclas
-    // e nao desenhava nada. Ficava sem menu e sem caminho para os Ajustes — foi
-    // o defeito relatado como "nao ta mostrando o menu e nao tem os ajustes".
-    // Guarda repetida em dois lugares para a mesma regra: no de dentro ela
-    // significa "nao pinte a faixa", no de fora significava "nao exista".
+    // With the guard at this point too, menu_draw was never called on the owner's
+    // profile (collapseSidebar on): the menu opened, swallowed the keys and drew
+    // nothing. There was no menu and no route to Settings — it was the defect
+    // reported as "the menu doesn't show and there are no settings".
+    // The same rule guarded in two places: on the inside it means "do not paint
+    // the band", on the outside it meant "do not exist".
     if (menu_visible() && !detail_is_open())
       menu_draw(now);
     if(profile_side() && !detail_is_open()) profile_draw(now);
@@ -751,7 +758,7 @@ void app_draw(Uint32 now) {
   tracks_draw(now);
 }
 
-int app_wants_exit(void) { return sair; }
+int app_wants_exit(void) { return wantsExit; }
 
 void app_shutdown(void) {
   if (waitingSource == 2) pthread_join(threadSource, NULL);

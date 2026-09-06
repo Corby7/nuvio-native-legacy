@@ -25,7 +25,7 @@
 #define QR_MAX_SIDE 41   // versao 6: 17 + 4*6
 
 typedef struct {
-  int side;                                  // 0 quando nao coube
+  int side;                                  // 0 when it did not fit
   unsigned char m[QR_MAX_SIDE * QR_MAX_SIDE];// 1 = modulo escuro
 } Qr;
 

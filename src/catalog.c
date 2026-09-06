@@ -4,17 +4,17 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Alocado conforme chega, nao dimensionado por um numero chutado.
+// Allocated as it arrives, not sized by a guessed number.
 static CatItem *items;
 static CatRow filters[CAT_FILTER_MAX];
 static int nFilters;
 static int nAllocated;
-// 1 enquanto o catalogo na tela veio do cache em disco, e nao da rede desta
-// sessao. Ver a nota em catalogo.h.
+// 1 while the catalogue on screen came from the on-disk cache and not from this
+// session's network. See the note in catalog.h.
 static int cameOfCache;
 
-// Garante espaco para `quero` itens. Devolve 0 se nao deu (e o chamador segue
-// com o que ja tinha, que e melhor que perder tudo).
+// Makes sure there is room for `want` items. Returns 0 if it could not (and the
+// caller carries on with what it had, which beats losing everything).
 static void ensureTracks(int count);
 
 static int ensureSpace(int want) {
@@ -33,19 +33,19 @@ static int ensureSpace(int want) {
 }
 static char dirWriting[512];
 
-// Episodios de todos os titulos num vetor unico, com faixa por titulo. Uma
-// matriz [titulo][episodio] gastaria memoria pelo pior caso em 40 titulos dos
-// quais a maioria e filme e nao tem episodio nenhum.
+// Episodes of every title in a single array, with a range per title. A
+// [title][episode] matrix would spend memory on the worst case across 40 titles,
+// most of which are films with no episodes at all.
 #define CAT_EP_MAX 600
 static CatEp eps[CAT_EP_MAX];
-// Faixas de episodio por titulo, do mesmo tamanho do vetor de itens — que
-// agora cresce, entao estes tambem.
+// Episode ranges per title, the same size as the item array — which now grows,
+// so these do too.
 static int  *epStart, *epCount, nEps;
 
-// O progresso de reproducao e uma posicao, nao uma prova de que o titulo foi
-// marcado como assistido. O historico do Trakt fica separado, por identidade
-// estavel, para que uma troca do catalogo nao transforme indice em identidade
-// e para que um progresso alto nao masque um historico real conhecido.
+// Playback progress is a position, not proof that the title was marked as
+// watched. Trakt's history is kept separate, by stable identity, so that a
+// change of catalogue does not turn an index into an identity and so that high
+// progress does not mask a known real history.
 typedef struct {
   char imdb[32];
   char kind[8];
@@ -85,8 +85,8 @@ static int history_pos(const char *imdb, const char *kind, int create) {
   return nHistory++;
 }
 
-// Leitura interna da modal: -1 = historico ainda nao consultado, 0 = nao
-// visto confirmado, 1 = visto confirmado.
+// The modal's internal reading: -1 = history not queried yet, 0 = confirmed
+// unwatched, 1 = confirmed watched.
 int cat_history_state_item(int index_) {
   const CatItem *it = cat_item(index_);
   int p;
@@ -95,8 +95,8 @@ int cat_history_state_item(int index_) {
   return p >= 0 && history[p].known ? history[p].watched : -1;
 }
 
-// Atualiza o retrato de historico somente depois de uma resposta 2xx do
-// Trakt. A chave e o IMDb sem sufixo de episodio, nunca o indice do vetor.
+// Updates the history snapshot only after a 2xx from Trakt. The key is the IMDb
+// id with no episode suffix, never the array index.
 void cat_history_set_id(const char *imdb, const char *kind, int watched) {
   int p = history_pos(imdb, kind, 1);
   if (p < 0) return;
@@ -104,9 +104,9 @@ void cat_history_set_id(const char *imdb, const char *kind, int watched) {
   history[p].watched = watched ? 1 : 0;
 }
 
-// Compatibilidade para chamadores antigos que so conhecem o IMDb. A serie e
-// inferida do proprio catalogo quando possivel; o sufixo de episodio e o
-// fallback para itens que ainda nao entraram no vetor.
+// Compatibility for older callers that only know the IMDb id. The series is
+// inferred from the catalogue itself where possible; the episode suffix is the
+// fallback for items that have not entered the array yet.
 const char *cat_kind_by_imdb(const char *imdb) {
   int i = cat_index_by_imdb(imdb);
   if (i >= 0 && cat_item(i)) return cat_item(i)->kind;
@@ -125,7 +125,8 @@ static void ensureTracks(int count) {
 }
 static int n = 0;
 
-// Copia o campo ate o proximo '|' (ou fim de linha), sem estourar o destino.
+// Copies the field up to the next '|' (or end of line), without overflowing the
+// destination.
 static const char *field(const char *p, char *destination, size_t size) {
   size_t k = 0;
   while (*p && *p != '|' && *p != '\n') {
@@ -150,7 +151,7 @@ int cat_load(const char *dirArt) {
     char rel[512];
     const char *p = line;
     p = field(p, rel, sizeof rel);
-    // os caminhos no arquivo sao relativos a pasta de arte
+    // the paths in the file are relative to the art folder
     if (rel[0]) snprintf(it->backdrop, sizeof it->backdrop, "%s/%s", dirArt, rel);
     else it->backdrop[0] = 0;
     p = field(p, rel, sizeof rel);
@@ -161,12 +162,12 @@ int cat_load(const char *dirArt) {
     else it->logo[0] = 0;
     p = field(p, it->title, sizeof it->title);
     p = field(p, it->genre, sizeof it->genre);
-    // O catalogo do pacote guarda o genero JA COMPOSTO e em ingles
-    // ("Filme  ·  Science Fiction  ·  Action"). Traduz cada pedaco entre os
-    // separadores; o primeiro ("Filme"/"Programa de TV") ja vem em portugues e
-    // atravessa a tabela sem mudanca. Feito aqui, na leitura, porque `genero` e
-    // lido por varias telas e traduzir no desenho deixaria cada uma resolver
-    // por conta propria.
+    // The package's catalogue stores the genre ALREADY COMPOSED and in English
+    // ("Film  ·  Science Fiction  ·  Action"). It translates each piece between
+    // the separators; the first one ("Film"/"TV Show") passes through the table
+    // unchanged. Done here, on reading, because `genre` is read by several
+    // screens and translating while drawing would leave each of them to work it
+    // out on its own.
     { char output[sizeof it->genre]; size_t o = 0;
       const char *q = it->genre;
       const char *SEP = "  \xc2\xb7  ";
@@ -192,10 +193,10 @@ int cat_load(const char *dirArt) {
   }
   fclose(f);
 
-  // ids.txt e um arquivo A PARTE, uma linha "tt1234567<TAB>movie|series" por
-  // titulo, na mesma ordem. Ficou fora de catalogo.txt para nao mexer na ordem
-  // das colunas de um arquivo que ja tem parser e dados. Sem ele o app roda
-  // igual, so nao consegue perguntar fontes aos addons.
+  // ids.txt is a SEPARATE file, one "tt1234567<TAB>movie|series" line per title,
+  // in the same order. It stayed out of catalog.txt so as not to disturb the
+  // column order of a file that already has a parser and data. Without it the app
+  // runs the same, it just cannot ask the addons for sources.
   snprintf(path, sizeof path, "%s/ids.txt", dirArt);
   f = fopen(path, "r");
   if (f) {
@@ -218,9 +219,10 @@ int cat_load(const char *dirArt) {
     printf("catalog: %d ids\n", i);
   }
 
-  // Elenco vem num arquivo separado, uma linha por titulo, na mesma ordem:
-  // "nome~papel~foto;nome~papel~foto|direcao". Separado porque tem tamanho bem
-  // diferente do resto e mudaria a linha do catalogo a cada ator a mais.
+  // The cast comes in a separate file, one line per title, in the same order:
+  // "name~role~photo;name~role~photo|directing". Separate because it is a very
+  // different size from the rest and would change the catalogue's line with every
+  // extra actor.
   snprintf(path, sizeof path, "%s/cast.txt", dirArt);
   FILE *fe = fopen(path, "r");
   if (fe) {
@@ -255,10 +257,10 @@ int cat_load(const char *dirArt) {
     fclose(fe);
   }
 
-  // extra.txt: "nota|logoProv|nomeProv|progresso|temporada|episodio|restanteMin", na
-  // mesma ordem. O progresso entrou como QUARTA coluna para nao invalidar
-  // arquivos antigos: faltando, o campo fica 0 e a barra some, que e o
-  // comportamento certo para quem nunca comecou o titulo.
+  // extra.txt: "score|providerLogo|providerName|progress|season|episode|remainingMin",
+  // in the same order. Progress went in as the FOURTH column so as not to
+  // invalidate older files: missing, the field stays 0 and the bar disappears,
+  // which is the right behaviour for anyone who never started the title.
   snprintf(path, sizeof path, "%s/extra.txt", dirArt);
   FILE *fx = fopen(path, "r");
   if (fx) {
@@ -284,9 +286,9 @@ int cat_load(const char *dirArt) {
     fclose(fx);
   }
 
-  // progresso.txt: "tt1234567<TAB>posicaoSeg<TAB>duracaoSeg" por linha, o que
-  // ESTE app gravou. Vem depois de extra.txt de proposito — o que se assistiu
-  // aqui e mais recente que o retrato trazido do app web.
+  // progress.txt: "tt1234567<TAB>positionSec<TAB>durationSec" per line, which is
+  // what THIS app recorded. It comes after extra.txt on purpose — what was
+  // watched here is more recent than the snapshot brought from the web app.
   snprintf(path, sizeof path, "%s/progress.txt", dirArt);
   { FILE *fp = fopen(path, "r");
     int applied = 0;
@@ -296,8 +298,8 @@ int cat_load(const char *dirArt) {
         int season = 0, episode = 0;
         if (sscanf(line, "%23s %lf %lf %d %d", id, &pos, &duration, &season, &episode) < 3 || duration <= 1.0) continue;
         for (i = 0; i < n; i++) {
-          // O id do catalogo pode trazer episodio ("tt123:4:9"); comparar so o
-          // prefixo do titulo, que e o que identifica a obra.
+          // The catalogue's id may carry an episode ("tt123:4:9"); compare only
+          // the title's prefix, which is what identifies the work.
           if (!strncmp(items[i].imdb, id, strlen(id)) &&
               (items[i].imdb[strlen(id)] == 0 || items[i].imdb[strlen(id)] == ':')) {
             items[i].progress = (int)(100.0 * pos / duration);
@@ -318,9 +320,9 @@ int cat_load(const char *dirArt) {
     snprintf(dirWriting, sizeof dirWriting, "%s", dirArt);
   }
 
-  // episodios.txt: "indice|temporada|episodio|nome|duracao|data|sinopse".
-  // Indice na frente porque so parte dos titulos tem episodio — uma linha por
-  // titulo, como nos outros arquivos, desperdicaria a maioria das linhas.
+  // episodes.txt: "index|season|episode|name|duration|date|synopsis".
+  // The index goes first because only some titles have episodes — one line per
+  // title, as in the other files, would waste most of the lines.
   snprintf(path, sizeof path, "%s/episodes.txt", dirArt);
   { FILE *fe2 = fopen(path, "r");
     nEps = 0;
@@ -362,11 +364,11 @@ int cat_load(const char *dirArt) {
   return n;
 }
 
-// --- CACHE EM DISCO ----------------------------------------------------------
+// --- ON-DISK CACHE -----------------------------------------------------------
 //
-// Ver a nota em catalogo.h. O cabecalho carrega a versao E o sizeof(CatItem):
-// e o sizeof que protege de verdade, porque acrescentar um campo na struct
-// muda o layout sem que ninguem se lembre de subir a versao a mao.
+// See the note in catalog.h. The header carries the version AND sizeof(CatItem):
+// it is the sizeof that really protects, because adding a field to the struct
+// changes the layout without anyone remembering to bump the version by hand.
 #define CACHE_MAGIC  0x4E56434Bu   /* "NVCK" */
 #define CACHE_VERSION 1
 
@@ -379,8 +381,8 @@ static void pathCache(const char *dirArt, char *dst, size_t size) {
   snprintf(dst, size, "%s/catalog-net.bin", dirArt ? dirArt : ".");
 }
 
-// Chamado pela descoberta quando o catalogo COMPLETO da rede substitui o do
-// cache. A partir daqui a tela ja e a desta sessao.
+// Called by discovery when the COMPLETE catalogue from the network replaces the
+// cached one. From here on the screen is this session's.
 void cat_cache_replaced(void) { cameOfCache = 0; }
 
 int cat_write_cache(const char *dirArt) {
@@ -389,8 +391,8 @@ int cat_write_cache(const char *dirArt) {
   FILE *f;
   if (n < 1) return 0;
   pathCache(dirArt, path, sizeof path);
-  // Grava num temporario e renomeia: quem le na proxima abertura nunca pega
-  // arquivo pela metade se o app for fechado no meio da escrita.
+  // Writes to a temporary file and renames: whoever reads on the next start
+  // never picks up a half-written file if the app is closed mid-write.
   snprintf(tmp, sizeof tmp, "%s.tmp", path);
   f = fopen(tmp, "wb");
   if (!f) return 0;
@@ -422,7 +424,7 @@ int cat_read_cache(const char *dirArt) {
   f = fopen(path, "rb");
   if (!f) return 0;
   if (fread(&c, sizeof c, 1, f) != 1) { fclose(f); return 0; }
-  // RECUSA em vez de ler torto. Struct diferente = arquivo de outra build.
+  // REFUSE rather than read it crooked. A different struct = a file from another build.
   if (c.magic != CACHE_MAGIC || c.version != CACHE_VERSION ||
       c.sizeItem != sizeof(CatItem) || c.sizeRow != sizeof(CatRow) ||
       c.nItems < 1 || c.nItems > CAT_MAX ||
@@ -445,8 +447,8 @@ int cat_read_cache(const char *dirArt) {
     nRead = c.nRows;
   }
   fclose(f);
-  // Reaproveita o caminho de troca de bloco, que ja e o seguro para o fio de
-  // desenho — e o que corta as janelas de fileira pelo tamanho real.
+  // Reuses the block-swap path, which is already the safe one for the drawing
+  // thread — and it is what trims the row windows to the real size.
   cat_set_all(new, c.nItems, readRows, nRead);
   cameOfCache = 1;
   free(new);
@@ -464,8 +466,8 @@ const CatItem *cat_item(int i) {
   return &items[((i % n) + n) % n];
 }
 
-// Compara so ate o primeiro ':' — o catalogo guarda "tt123:2:1" em serie com
-// progresso, e quem procura tem so o id do titulo.
+// Compares only up to the first ':' — the catalogue stores "tt123:2:1" for a
+// series with progress, and the searcher has only the title's id.
 static int sameTitle(const char *a, const char *b) {
   while (*a && *b && *a != ':' && *b != ':') { if (*a != *b) return 0; a++; b++; }
   return (!*a || *a == ':') && (!*b || *b == ':');
@@ -500,9 +502,9 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   it = &items[index_];
   if (!it->imdb[0]) return;
 
-  // Reescreve o arquivo inteiro trocando a linha deste titulo. E um arquivo de
-  // dezenas de linhas: ler tudo e regravar custa nada e evita duplicata, que
-  // um simples append acumularia.
+  // Rewrites the whole file, swapping this title's line. It is a file of a few
+  // dozen lines: reading it all and writing it back costs nothing and avoids the
+  // duplicate a plain append would accumulate.
   snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
   snprintf(tmp, sizeof tmp, "%s/progress.tmp", dirWriting);
   s = fopen(tmp, "w");
@@ -518,8 +520,8 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   }
   fprintf(s, "%s\t%.0f\t%.0f\t%d\t%d\n", it->imdb, posSeg, durationSeg,season,episode);
   fclose(s);
-  // Gravar em temporario e renomear: um corte de energia no meio da escrita
-  // deixaria o arquivo pela metade e o app subiria sem progresso nenhum.
+  // Write to a temporary and rename: a power cut mid-write would leave the file
+  // half-written and the app would come up with no progress at all.
   rename(tmp, path);
 
   items[index_].progress = (int)(100.0 * posSeg / durationSeg);
@@ -559,42 +561,44 @@ const CatRow *cat_row(int r) {
   return (r >= 0 && r < nFilters) ? &filters[r] : NULL;
 }
 
-// ACRESCENTA UM titulo ao fim do catalogo e devolve o indice dele.
+// APPENDS ONE title to the end of the catalogue and returns its index.
 //
-// Existe para o titulo que veio de FORA: um credito na filmografia de um ator
-// ou um item de "Mais como este" que o catalogo do dono nao tem. Sem isto o
-// item ficava apagado e nao abria, o que deixava a filmografia decorativa.
+// It exists for a title that came from OUTSIDE: a credit in an actor's
+// filmography or a "More like this" item the owner's catalogue does not have.
+// Without this the item was greyed out and would not open, which left the
+// filmography decorative.
 //
-// Usa a MESMA troca de bloco de cat_definir_tudo, pelo mesmo motivo (leitor no
-// fio de desenho dentro do bloco antigo), com duas diferencas:
-//   - acrescenta no FIM, entao as janelas (ini,n) das fileiras continuam
-//     valendo e nao precisam ser derrubadas;
-//   - `n` NAO e zerado: subir a contagem depois que o bloco novo ja esta
-//     publicado e seguro, e zerar faria a home piscar a cada titulo aberto.
+// It uses the SAME block swap as cat_set_all, for the same reason (a reader on
+// the drawing thread inside the old block), with two differences:
+//   - it appends at the END, so the rows' (start,n) windows still hold and do
+//     not need to be torn down;
+//   - `n` is NOT zeroed: raising the count after the new block is already
+//     published is safe, and zeroing would make the home flicker on every title
+//     opened.
 void cat_set_in_list(int i, int inList) {
   if (!items || n <= 0 || i < 0 || i >= n) return;
   items[i].inList = inList ? 1 : 0;
 }
 
-// Atualiza um espelho de item somente quando o indice ainda pertence ao bloco
-// atualmente publicado. A modal pode receber a resposta do worker depois que
-// a descoberta trocou o catalogo; nesse caso ignorar e seguro, escrever por um
-// indice antigo poderia alterar outro titulo.
+// Updates an item's mirror only while the index still belongs to the currently
+// published block. The modal may get the worker's answer after discovery has
+// swapped the catalogue; ignoring it in that case is safe, whereas writing
+// through an old index could alter another title.
 void cat_update_item(int i, const CatItem *item) {
   if (!item || !items || n <= 0 || i < 0 || i >= n) return;
   items[i] = *item;
 }
 
-// Acrescenta N de UMA VEZ. cat_acrescentar copia o catalogo inteiro a cada
-// chamada, e a busca a chamava POR RESULTADO: com 300 titulos no acervo sao
-// ~2,3 MB por copia, vezes 40 resultados, no fio de DESENHO, a cada tecla. Era
-// o travamento que aparecia como "a busca engasga quando digito".
+// Appends N AT ONCE. cat_append copies the whole catalogue on every call, and
+// the search called it PER RESULT: with 300 titles in the collection that is
+// ~2.3 MB per copy, times 40 results, on the DRAWING thread, on every keypress.
+// It was the freeze that showed up as "search stutters when I type".
 //
-// Uma troca de bloco so, seguindo a mesma ordem de cat_definir: zera `n` antes
-// de trocar o ponteiro (o desenho ve catalogo vazio por um quadro em vez de ler
-// memoria liberada) e nao libera o bloco velho aqui — um leitor pode estar
-// dentro dele; ele morre na proxima troca.
-int cat_append_lote(const CatItem *v, int count, int *outputIdx) {
+// A single block swap, following the same order as cat_set_all: it zeroes `n`
+// before swapping the pointer (the drawing sees an empty catalogue for one frame
+// instead of reading freed memory) and does not free the old block here — a
+// reader may be inside it; it dies on the next swap.
+int cat_append_batch(const CatItem *v, int count, int *outputIdx) {
   static CatItem *garbageLote;
   CatItem *new;
   int newN, k;
@@ -644,28 +648,28 @@ void cat_set_all(const CatItem *list, int count,
                       const CatRow *newFilters, int nNew) {
   int i;
   if (!list || count < 1) return;
-  // TROCA DE BLOCO, sem realloc no lugar.
+  // A BLOCK SWAP, with no realloc in place.
   //
-  // cat_definir roda no fio da descoberta enquanto o desenho le itens[] no fio
-  // principal. Com realloc, o bloco antigo e LIBERADO e o desenho passa a ler
-  // memoria morta — foi assim que o app comecou a morrer em home_desenhar
-  // assim que o catalogo cresceu de 40 para 303. Enquanto era vetor estatico o
-  // endereco nunca mudava e o problema nao existia.
+  // cat_set_all runs on the discovery thread while the drawing reads items[] on
+  // the main thread. With realloc the old block is FREED and the drawing starts
+  // reading dead memory — that is how the app began dying in home_draw as soon
+  // as the catalogue grew from 40 to 303. While it was a static array the
+  // address never changed and the problem did not exist.
   //
-  // A ordem das tres linhas abaixo e o que torna isto seguro sem trava:
-  // zerar `n` primeiro faz o desenho tratar o catalogo como vazio por um
-  // quadro (nao desenha nada), e so depois o ponteiro e a contagem sobem. O
-  // bloco antigo NAO e liberado aqui: um leitor pode estar dentro dele neste
-  // instante. Ele morre na proxima troca, quando ninguem mais o alcanca.
+  // The order of the three lines below is what makes this safe without a lock:
+  // zeroing `n` first makes the drawing treat the catalogue as empty for one
+  // frame (it draws nothing), and only then do the pointer and the count go up.
+  // The old block is NOT freed here: a reader may be inside it at this very
+  // moment. It dies on the next swap, when nothing can reach it any more.
   {
     int newN = count > CAT_MAX ? CAT_MAX : count;
     CatItem *new = malloc(sizeof(CatItem) * (size_t)newN);
     static CatItem *garbage;
     if (!new) return;
     memcpy(new, list, sizeof(CatItem) * (size_t)newN);
-    // As fileiras caem JUNTO com `n`. Elas sao janelas (ini,n) no vetor de
-    // itens; deixar as antigas de pe por um quadro enquanto o vetor troca faz o
-    // desenho ler fora da faixa.
+    // The rows fall TOGETHER with `n`. They are (start,n) windows into the item
+    // array; leaving the old ones standing for one frame while the array swaps
+    // makes the drawing read out of range.
     n = 0;
     nFilters = 0;
     free(garbage);
@@ -678,9 +682,9 @@ void cat_set_all(const CatItem *list, int count,
       int v = 0;
       for (k = 0; k < q; k++) {
         CatRow f = newFilters[k];
-        // Corta a janela pelo que sobrou de verdade. Um catalogo que respondeu
-        // menos itens do que o esperado deixaria a fileira apontando para o
-        // vizinho.
+        // Trims the window to what really remains. A catalogue that answered
+        // with fewer items than expected would leave the row pointing at its
+        // neighbour.
         if (f.start < 0 || f.start >= n) continue;
         if (f.start + f.n > n) f.n = n - f.start;
         if (f.n < 1) continue;
@@ -689,12 +693,13 @@ void cat_set_all(const CatItem *list, int count,
       nFilters = v;
     }
   }
-  // Episodios do catalogo anterior nao valem para o novo: os indices mudaram.
+  // Episodes from the previous catalogue do not apply to the new one: the
+  // indices have changed.
   nEps = 0;
   ensureTracks(nAllocated);
   (void)0;
-  // O progresso vem de arquivo e e por imdb, entao sobrevive a troca — mas
-  // precisa ser reaplicado, porque os itens novos nasceram zerados.
+  // Progress comes from a file and is keyed by imdb, so it survives the swap —
+  // but it has to be reapplied, because the new items were born zeroed.
   if (dirWriting[0]) {
     char path[600], line[256];
     FILE *fp;
@@ -730,12 +735,13 @@ void cat_set_episodes(int indexItem, const CatEp *list, int count) {
   if (!list || count < 1 || m < 1) return;
   indexItem = ((indexItem % m) + m) % m;
   if (count > CAT_EP_MAX) count = CAT_EP_MAX;
-  // Anexa no fim do vetor comum. Trocar de temporada varias vezes acumula, mas
-  // o teto de CAT_EP_MAX segura e o custo de compactar nao se paga.
+  // Appends at the end of the shared array. Switching season several times
+  // accumulates, but the CAT_EP_MAX ceiling holds it and compacting does not pay
+  // for itself.
   if (nEps + count > CAT_EP_MAX) {
     nEps = 0;
-    // Invalidar os indices antes de reutilizar o armazenamento: senao outra
-    // serie passa a exibir os episodios da obra que acabou de ser carregada.
+    // Invalidate the indices before reusing the storage: otherwise another
+    // series starts showing the episodes of the work that has just been loaded.
     memset(epCount,0,(size_t)nAllocated*sizeof *epCount);
     memset(epStart,0,(size_t)nAllocated*sizeof *epStart);
   }
@@ -745,8 +751,8 @@ void cat_set_episodes(int indexItem, const CatEp *list, int count) {
   nEps += count;
 }
 
-// Generos de um item, como uma lista de trechos separados por " · ". O primeiro
-// campo e sempre "Filme"/"Programa de TV" e nao conta como genero.
+// An item's genres, as a list of pieces separated by " · ". The first field is
+// always "Film"/"TV Show" and does not count as a genre.
 static int sharesGenre(const CatItem *a, const CatItem *b) {
   const char *p = a->genre;
   int first = 1;
@@ -784,8 +790,8 @@ int cat_similar(int index_, int *output, int max) {
     if (!sharesGenre(base, &items[i])) continue;
     output[k++] = i;
   }
-  // Sem nenhum genero em comum a fileira ficaria vazia; ai vale mais mostrar os
-  // vizinhos do mesmo tipo que sumir com a secao.
+  // With no genre in common the row would be empty; then it is worth more to
+  // show the neighbours of the same type than to lose the section.
   for (i = 0; i < m && k < max; i++) {
     int j, already = 0;
     if (i == index_) continue;
@@ -794,7 +800,7 @@ int cat_similar(int index_, int *output, int max) {
     if (base->kind[0] && items[i].kind[0] && strcmp(base->kind, items[i].kind)) continue;
     output[k++] = i;
   }
-  // Nota alta primeiro.
+  // High score first.
   { int a, b, t;
     for (a = 0; a < k; a++)
       for (b = a + 1; b < k; b++)

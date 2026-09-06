@@ -28,19 +28,20 @@ static char summary[220] = "not synced";
 static unsigned lastOk;
 static int dirtyProgress, dirtyAddons;
 
-// O fio NAO toca no app: ele so preenche estas caixas, e sync_passo aplica no
-// laco principal. Sem essa separacao, uma resposta de rede reescreveria a lista
-// de addons no meio de um quadro que ja estava lendo dela.
+// The thread does NOT touch the app: it only fills these boxes, and sync_step
+// applies them on the main loop. Without that separation, a network response
+// would rewrite the addon list in the middle of a frame already reading from it.
 static AddonRemote addonsRemote[SY_ADD_MAX];
 static int nAddonsRemote, hasAddonsRemote;
 
 static char traktToken[300];
 static int  hasTraktRemote;
 
-// Chaves de servico que a conta guarda e o app lia de arquivo do dono.
-// MEDIDO na conta real: os provedores presentes sao animeskip, debrid:*,
-// introdb, mdblist e tmdb — e NAO ha "trakt". O leitor de trakt continua aqui
-// porque a RPC e a mesma e a linha aparece assim que o app web a escrever.
+// Service keys the account stores and the app used to read from the owner's
+// file. MEASURED on the real account: the providers present are animeskip,
+// debrid:*, introdb, mdblist and tmdb — and there is NO "trakt". The trakt
+// reader stays here because the RPC is the same and the row will appear as soon
+// as the web app writes it.
 static char tmdbKey[120], mdbKey[120];
 static int  hasTmdb, hasMdb;
 
@@ -48,20 +49,20 @@ typedef struct { char imdb[40]; double pos, duration; int temp, ep; } ProgressIt
 static ProgressItem progressRemote[SY_PROGRESS_MAX];
 static int nProgressRemote;
 
-// Contagens do que foi puxado mas o app ainda nao consome. Elas existem para o
-// resumo poder dizer a verdade em vez de "sincronizado" sem qualificar.
+// Counts of what has been pulled but the app does not consume yet. They exist so
+// the summary can tell the truth instead of saying "synced" without qualifying it.
 static int cWatched, cLib, cSaved, cCollections, hasSettingsProfile, hasCatHome;
 
-// Blob de ajustes do perfil, cru, esperando ser aplicado no fio principal.
-// `aplicarAjustes` comeca ligado: no arranque nao ha mudanca local para
-// preservar, e e ai que a conta tem de mandar.
+// The profile's settings blob, raw, waiting to be applied on the main thread.
+// `applySettings` starts on: at boot there is no local change to preserve, and
+// that is when the account has to be in charge.
 //
-// ALOCADO, e nao um vetor fixo. MEDIDO na TV com uma conta de verdade: o blob
-// nao coube em 4096 bytes e o app recusou aplicar — a recusa estava certa
-// (aplicar metade das opcoes traria metade da conta e metade do padrao), mas o
-// efeito era o recurso simplesmente nao funcionar. O app web guarda no mesmo
-// objeto muito mais chaves do que este app conhece, e escolher um teto aqui e
-// escolher uma conta que nao vai funcionar.
+// ALLOCATED, and not a fixed array. MEASURED on the TV with a real account: the
+// blob did not fit in 4096 bytes and the app refused to apply it — the refusal
+// was right (applying half the options would bring half the account and half
+// the defaults), but the effect was the feature simply not working. The web app
+// keeps far more keys in that same object than this app knows about, and
+// choosing a ceiling here means choosing an account that will not work.
 static char *settingsBlob;
 static int  hasSettingsBlob;
 static int  applySettings = 1;
@@ -87,14 +88,14 @@ static void pullAddons(void) {
 
   if (!profiles_owner()[0]) return;
   cloud_url_escape(profiles_owner(), owner, sizeof owner);
-  // MEDIDO: `sync_pull_addons` NAO EXISTE neste servidor (PGRST202), e a
-  // tabela `tv_addons` tambem nao (PGRST205). O unico caminho que responde e a
-  // tabela `addons`, que e exatamente o caminho feliz do app web.
+  // MEASURED: `sync_pull_addons` DOES NOT EXIST on this server (PGRST202), and
+  // neither does the `tv_addons` table (PGRST205). The only path that answers is
+  // the `addons` table, which is exactly the web app's happy path.
   snprintf(query, sizeof query,
            "user_id=eq.%s&profile_id=eq.%d&select=*&order=sort_order.asc",
            owner, profiles_active());
-  // Com a chave anonima o RLS responde 401 "permission denied for table
-  // addons": ler as linhas de alguem exige o token de quem esta pedindo.
+  // With the anonymous key the RLS answers 401 "permission denied for table
+  // addons": reading someone's rows requires the token of whoever is asking.
   r = session_table("addons", query, &st);
   if (!ok2xx(r, st)) {
     if (r && cloud_error_missing(r)) printf("[sync] addons table missing\n");
@@ -119,8 +120,9 @@ static void pullAddons(void) {
       continue;
     }
     js_text(p, f, "name", addonsRemote[k].name, sizeof addonsRemote[k].name);
-    // Ausente conta como LIGADO: e assim que o web le, e um addon que some por
-    // causa de um campo que o servidor nao mandou e pior que um a mais.
+    // Absent counts as ON: that is how the web app reads it, and an addon that
+    // disappears because of a field the server did not send is worse than an
+    // extra one.
     addonsRemote[k].active = js_raw(p, f, "enabled", b, sizeof b)
                          ? (strcmp(b, "false") != 0) : 1;
     k++;
@@ -137,9 +139,9 @@ static void pushAddons(void) {
   int st = 0, n, i;
 
   n = addons_export(current, SY_ADD_MAX);
-  // Lista local vazia NAO vira push. Um push vazio apaga os addons da pessoa em
-  // todos os aparelhos dela, e "ainda nao carreguei nada" e indistinguivel de
-  // "o usuario removeu tudo" deste lado.
+  // An empty local list does NOT become a push. An empty push wipes the
+  // person's addons on every device of theirs, and "I have not loaded anything
+  // yet" is indistinguishable from "the user removed everything" on this side.
   if (n <= 0) return;
 
   jsw_start(&w);
@@ -180,16 +182,16 @@ static void pullCredentials(void) {
   jsw_free(&w);
   if (!ok2xx(r, st)) { free(r); return; }
 
-  // Trakt, debrid e mdblist compartilham as MESMAS RPC, separados so pelo campo
-  // `provider`. Uma leitura serve para os tres.
+  // Trakt, debrid and mdblist share the SAME RPCs, separated only by the
+  // `provider` field. One read serves all three.
   for (p = js_root_array(r); p; p = js_next(js_end(p))) {
     const char *f = js_end(p);
     char provider[48], cred[900];
     if (!js_text(p, f, "provider", provider, sizeof provider)) continue;
     if (!js_raw(p, f, "credential_json", cred, sizeof cred)) continue;
     if (!strcmp(provider, "trakt")) {
-      // O credential_json pode vir como OBJETO ou como string JSON — o web
-      // trata os dois. Aqui basta procurar a chave dentro do texto cru.
+      // credential_json may arrive as an OBJECT or as a JSON string — the web
+      // app handles both. Here it is enough to look for the key in the raw text.
       char tk[300];
       if (js_text(cred, cred + strlen(cred), "access_token", tk, sizeof tk)) {
         snprintf(traktToken, sizeof traktToken, "%s", tk);
@@ -204,10 +206,10 @@ static void pullCredentials(void) {
       if (js_text(cred, cred + strlen(cred), "api_key", mdbKey, sizeof mdbKey))
         hasMdb = 1;
     }
-    // debrid:* NAO e aplicado hoje de proposito: as chaves de debrid que este
-    // app usa ja vem embutidas na URL do addon (ver addons.h), entao aplicar a
-    // chave solta nao mudaria nada e daria a impressao falsa de que o app fala
-    // com o provedor por conta propria.
+    // debrid:* is deliberately NOT applied today: the debrid keys this app uses
+    // already come embedded in the addon's URL (see addons.h), so applying the
+    // loose key would change nothing and would give the false impression that
+    // the app talks to the provider on its own.
   }
   free(r);
 }
@@ -234,9 +236,9 @@ static void pullProgress(void) {
     int temp, ep;
     char id[40];
     if (!js_text(p, f, "content_id", id, sizeof id)) continue;
-    // O web aceita position_ms/duration_ms e position/duration; os primeiros
-    // ganham quando existem, porque os segundos ja vem em milissegundos nesta
-    // RPC e misturar as duas unidades produz progresso de 100% em tudo.
+    // The web app accepts position_ms/duration_ms and position/duration; the
+    // first pair wins when present, because the second already arrives in
+    // milliseconds from this RPC and mixing the two units makes everything 100%.
     pos = js_num(p, f, "position_ms", -1.0);
     duration = js_num(p, f, "duration_ms", -1.0);
     if (pos < 0) pos = js_num(p, f, "position", 0);
@@ -257,13 +259,13 @@ static void pullProgress(void) {
     k++;
   }
   free(r);
-  // Vazio nao apaga nada: quem consome so aplica o que veio.
+  // Empty deletes nothing: the consumer only applies what arrived.
   nProgressRemote = k;
 }
 
-// Le o progresso que ESTE aparelho gravou. E a unica superficie em que o app
-// nativo tem informacao propria de verdade — por isso e a unica, junto dos
-// addons, que ele empurra.
+// Reads the progress THIS device recorded. It is the only surface where the
+// native app has real information of its own — which is why it is the only one,
+// along with the addons, that it pushes.
 static int readProgressLocal(ProgressItem *output, int max) {
   char *buf, *line, *ctx;
   int k = 0;
@@ -291,7 +293,7 @@ static void pushProgress(void) {
   int n, i, st = 0;
 
   n = readProgressLocal(local, SY_PROGRESS_MAX);
-  if (n <= 0) return;   // vazio nunca vira push; delecao tem RPC propria
+  if (n <= 0) return;   // empty never becomes a push; deletion has its own RPC
 
   jsw_start(&w);
   jsw_obj_start(&w);
@@ -300,9 +302,9 @@ static void pushProgress(void) {
   jsw_key(&w, "p_entries");
   jsw_arr_start(&w);
   for (i = 0; i < n; i++) {
-    // "tt123:4:9" carrega temporada e episodio; o servidor quer os tres campos
-    // separados, e mandar o id composto em content_id faria cada episodio
-    // virar um titulo diferente na conta.
+    // "tt123:4:9" carries the season and episode; the server wants the three
+    // fields separately, and sending the composite id in content_id would make
+    // every episode a different title on the account.
     char id[40];
     int temp = 0, ep = 0;
     char *dp;
@@ -330,16 +332,17 @@ static void pushProgress(void) {
   free(r);
 }
 
-// ---------------------------------------------------------------- so leitura
+// ---------------------------------------------------------------- read only
 
-// Conta os itens de uma RPC que devolve array. Estas superficies sao puxadas
-// mas ainda nao consumidas: o app nativo nao tem tela propria para elas, e
-// EMPURRAR sem ter a tela mandaria lista vazia — que apaga o dado nos outros
-// aparelhos da pessoa. Contar e dizer no resumo e o comportamento honesto ate
-// a tela existir.
-// RPC que o servidor nao tem NAO e perguntada de novo. MEDIDO:
-// `sync_pull_saved_library` nao existe neste servidor, e sem esta lista o app
-// gastaria uma viagem por ciclo, para sempre, contra um 404 que nunca muda.
+// Counts the items of an RPC that returns an array. These surfaces are pulled
+// but not consumed yet: the native app has no screen of its own for them, and
+// PUSHING without having the screen would send an empty list — which wipes the
+// data on the person's other devices. Counting and saying so in the summary is
+// the honest behaviour until the screen exists.
+// An RPC the server does not have is NOT asked for again. MEASURED:
+// `sync_pull_saved_library` does not exist on this server, and without this
+// list the app would spend one round trip per cycle, forever, against a 404
+// that never changes.
 #define SY_MISSING 8
 static const char *missing[SY_MISSING];
 static int nMissing;
@@ -370,18 +373,18 @@ static int countRpc(const char *func, const char *body) {
   return k;
 }
 
-// O blob de ajustes NAO e contado, e lido: ele e o layout da pessoa. Ate agora
-// esta RPC so alimentava um numero no resumo, e as ~40 preferencias vinham dos
-// padroes transcritos a mao do perfil de quem montou o pacote.
+// The settings blob is NOT counted, it is read: it is the person's layout. Until
+// now this RPC only fed a number in the summary, and the ~40 preferences came
+// from defaults transcribed by hand from the profile of whoever built the package.
 static int pullSettingsProfile(const char *body) {
   char *r;
   int st = 0, ok = 0;
   const char *p;
-  if (!applySettings) return hasSettingsProfile;   // nada a fazer nesta volta
+  if (!applySettings) return hasSettingsProfile;   // nothing to do this time round
   r = session_rpc("sync_pull_profile_settings_blob", body, &st);
   if (!ok2xx(r, st)) { free(r); return 0; }
-  // A resposta e [{ "settings_json": { ... } }]; o que interessa e o objeto de
-  // dentro, cru e INTEIRO.
+  // The response is [{ "settings_json": { ... } }]; what matters is the object
+  // inside, raw and WHOLE.
   p = js_root_array(r);
   if (p) {
     const char *endObj = js_end(p);
@@ -405,9 +408,9 @@ static int pullSettingsProfile(const char *body) {
             printf("[sync] settings blob: %d bytes\n", (int)n);
           }
         } else {
-          // O web aceita o blob tambem como STRING JSON serializada. Este
-          // servidor devolve objeto; se um dia devolver string, o certo e
-          // dizer, nao aplicar um pedaco.
+          // The web app also accepts the blob as a serialised JSON STRING. This
+          // server returns an object; if one day it returns a string, the right
+          // thing is to say so, not to apply a fragment.
           printf("[sync] settings blob did not arrive as an object; not applied\n");
         }
       }
@@ -475,7 +478,7 @@ static int pullHomeCatalog(const char *body) {
   }
   root = js_root_array(r);
   if (!root) { free(r); return 0; }
-  // O corpo e [{"settings_json":{... ,"items":[...]}}].
+  // The body is [{"settings_json":{... ,"items":[...]}}].
   item = js_array(root, js_end(root), "items");
   if (!item) {
     printf("[sync] home catalog settings: no \"items\"\n");
@@ -511,10 +514,11 @@ static int pullHomeCatalog(const char *body) {
     n++;
   }
   disc_prefs_end();
-  // As colecoes do dono entram na MESMA ordenacao no web, e este app ainda nao
-  // tem de onde tirar o conteudo delas. Contar e dizer quantas sao e melhor do
-  // que ignora-las em silencio: e a diferenca entre "nao tenho colecoes" e
-  // "tenho e este app ainda nao as mostra".
+  // The owner's collections take part in the SAME ordering in the web app, and
+  // this app has nowhere to get their contents from yet. Counting them and
+  // saying how many there are beats ignoring them silently: it is the
+  // difference between "I have no collections" and "I have some and this app
+  // does not show them yet".
   if (nCollection)
     printf("[sync] %d collection(s) placed in the home order\n", nCollection);
   free(r);
@@ -531,8 +535,8 @@ static void pullSoRead(void) {
   // for the main thread to apply (see collectionsBlob).
   cCollections = pullCollections(body);
 
-  // MEDIDO: `p_page` comeca em 1. Com 0 o servidor responde 400 "OFFSET must
-  // not be negative" — a conta dele e (p_page - 1) * p_page_size.
+  // MEASURED: `p_page` starts at 1. With 0 the server answers 400 "OFFSET must
+  // not be negative" — its arithmetic is (p_page - 1) * p_page_size.
   snprintf(body, sizeof body,
            "{\"p_profile_id\":%d,\"p_page\":1,\"p_page_size\":200}", profile);
   cWatched = countRpc("sync_pull_watched_items", body);
@@ -554,7 +558,7 @@ static void pullSoRead(void) {
   if (hasCatHome) disc_rebuild();
 }
 
-// ---------------------------------------------------------------- ciclo
+// ---------------------------------------------------------------- cycle
 
 static void *run(void *u) {
   (void)u;
@@ -563,8 +567,8 @@ static void *run(void *u) {
   pullCredentials();
   pullProgress();
   pullSoRead();
-  // Empurrar DEPOIS de puxar, como o startupSyncService do web: puxar depois
-  // de empurrar faria o aparelho sobrescrever com o que ele mesmo mandou.
+  // Push AFTER pulling, like the web app's startupSyncService: pulling after
+  // pushing would make the device overwrite with what it sent itself.
   if (dirtyAddons)    pushAddons();
   if (dirtyProgress) pushProgress();
 
@@ -587,16 +591,16 @@ void sync_start(void) {
   else { state = SYNC_FAILED; snprintf(summary, sizeof summary, "no thread to sync with"); }
 }
 
-// Um ciclo automatico, se ja passou o intervalo. Devolve 1 quando disparou.
-// Separado de sync_passo porque quem chama sabe se a hora e boa: durante a
-// reproducao NAO e — uma rajada de HTTP no meio do video disputa CPU e rede
-// com o decodificador, e um engasgo de imagem custa mais que 5 minutos de
-// atraso no progresso.
+// One automatic cycle, if the interval has passed. Returns 1 when it fired.
+// Separate from sync_step because the caller knows whether the moment is right:
+// during playback it is NOT — a burst of HTTP in the middle of the video
+// competes for CPU and network with the decoder, and one stutter costs more
+// than 5 minutes of delay on the progress.
 int sync_periodic(unsigned nowMs) {
   if (!session_loggedin() || threadAlive) return 0;
   if (cloud_brake_active()) return 0;
-  // Sem nenhum ciclo bem-sucedido ainda, quem manda e quem chamou sync_iniciar
-  // — nao adianta insistir por cima de uma falha que o freio ja esta segurando.
+  // With no successful cycle yet, whoever called sync_start is in charge — there
+  // is no point insisting on top of a failure the brake is already holding.
   if (!lastOk) return 0;
   if (nowMs - lastOk < SYNC_INTERVAL_MS) return 0;
   sync_start();
@@ -632,17 +636,17 @@ void sync_step(unsigned nowMs) {
     free(settingsBlob);
     settingsBlob = NULL;
     hasSettingsBlob = 0;
-    applySettings = 0;   // daqui para frente, o que a pessoa mudar na TV fica
+    applySettings = 0;   // from here on, what the person changes on the TV stays
   }
   if (nProgressRemote) {
     int i, applied = 0;
     for (i = 0; i < nProgressRemote; i++) {
       int idx = cat_index_by_imdb(progressRemote[i].imdb);
       if (idx < 0) continue;
-      // O catalogo deste projeto sabe gravar progresso POR EPISODIO. Usar a
-      // versao sem temporada/episodio perderia em qual episodio a pessoa
-      // parou, que e a informacao que faz a fileira "continue assistindo"
-      // valer alguma coisa numa serie.
+      // This project's catalogue knows how to store progress PER EPISODE. Using
+      // the version without season/episode would lose which episode the person
+      // stopped on, which is the information that makes the "continue watching"
+      // row worth anything on a series.
       cat_save_progress_ep(idx, progressRemote[i].pos, progressRemote[i].duration,
                               progressRemote[i].temp, progressRemote[i].ep);
       applied++;
@@ -686,15 +690,15 @@ void sync_push_credential(const char *provider, const char *credJson) {
 void sync_reapply_settings(void) { applySettings = 1; }
 
 void sync_forget_user(void) {
-  // A ordem importa pouco, mas o CONJUNTO nao: cada linha aqui corresponde a
-  // uma coisa que sobrevivia ao logout.
+  // The order matters little, but the SET does: every line here corresponds to
+  // something that used to survive a sign-out.
   addons_forget();
   trakt_forget();
   profiles_forget();
   data_erase(FILE_PROGRESS);
 
-  // As caixas que o fio preenche tambem: um ciclo que terminou logo antes do
-  // logout aplicaria os addons da conta anterior no proximo sync_passo.
+  // The boxes the thread fills too: a cycle that finished just before the
+  // sign-out would apply the previous account's addons on the next sync_step.
   memset(addonsRemote, 0, sizeof addonsRemote);
   nAddonsRemote = 0; hasAddonsRemote = 0;
   traktToken[0] = 0; hasTraktRemote = 0;

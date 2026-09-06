@@ -1,29 +1,31 @@
-// Tela de reproducao, no formato do NOSSO APP WEB.
+// The playback screen, in OUR WEB APP's format.
 //
-// A referencia mudou: esta variante legacy segue o player do app web (o bloco
-// #playerUiRoot em css/components.css), nao o do app da Apple TV que o
-// prototipo nuvio-native desenha. O que veio de la e a MECANICA — mola de
-// foco, auto-esconder, furo do pipeline — porque essa parte nao e questao de
-// estilo. O arranjo e as medidas sao do web, anotadas uma a uma abaixo.
+// The reference has changed: this legacy variant follows the web app's player (the
+// #playerUiRoot block in css/components.css), not the Apple TV app's that the
+// nuvio-native prototype draws. What came from there is the MECHANICS — the focus
+// spring, auto-hide, the pipeline's hole — because that part is not a matter of
+// style. The arrangement and the measurements are the web app's, recorded one by
+// one below.
 //
-// Diferencas concretas em relacao ao que estava aqui: os botoes ficam a
-// ESQUERDA e nao centralizados; o tempo e UM rotulo "decorrido / total" na
-// ponta direita e nao dois com restante negativo; o subtitulo fica ABAIXO do
-// titulo; a barra tem 6px e nao 8, sem marcador na cabeca; as tres pilulas
-// informativas ("Informacoes", "Em Foco", "Continue Assistindo") sairam, que
-// sao mobiliario do app da Apple e nao existem no nosso.
+// Concrete differences from what used to be here: the buttons sit on the LEFT and
+// are not centred; the time is ONE "elapsed / total" label at the right-hand end and
+// not two with a negative remainder; the subtitle sits BELOW the title; the bar is
+// 6px and not 8, with no head marker; the three informational pills
+// ("Information", "In Focus", "Continue Watching") have gone, being furniture from
+// the Apple app that does not exist in ours.
 //
-// Sao tres comportamentos observados no aparelho, e cada um deles muda o
-// desenho inteiro:
+// There are three behaviours observed on the device, and each of them changes the
+// whole design:
 //
-//   1. Enquanto toca, a tela e SO o quadro. Zero interface. Nenhuma barra
-//      residual, nenhum relogio de canto — o que aparece por cima da imagem
-//      quando ninguem pediu e ruido.
-//   2. Qualquer direcao no D-pad SOBE os controles pela base. Eles nao piscam
-//      para dentro: entram com mola, deslizando de baixo, junto com o veu.
-//   3. Parado alguns segundos, eles somem sozinhos — mas nao enquanto o video
-//      esta pausado. Pausado sem controles o usuario fica olhando um quadro
-//      congelado sem saber o que houve.
+//   1. While it plays, the screen is JUST the frame. Zero interface. No residual
+//      bar, no corner clock — anything that appears over the image when nobody
+//      asked for it is noise.
+//   2. Any direction on the D-pad RAISES the controls from the base. They do not
+//      flash into place: they come in with a spring, sliding up from below,
+//      together with the veil.
+//   3. Left alone for a few seconds they disappear on their own — but not while
+//      the video is paused. Paused with no controls, the user is left staring at a
+//      frozen frame with no idea what happened.
 #include "player.h"
 #include "video.h"
 #include "tracks.h"
@@ -47,130 +49,132 @@
 #include <strings.h>   // strcasecmp, para comparar o hdrType do pipeline
 #include <math.h>
 
-// Quanto tempo os controles ficam de pe sem receber tecla. Medido a olho no
-// aparelho: perto de 4s. Menos que isso e o usuario perde a barra no meio de
-// uma leitura; muito mais e a interface some tarde demais e atrapalha a cena.
+// How long the controls stay up without receiving a key. Measured by eye on the
+// device: close to 4s. Less than that and the user loses the bar mid-read; much
+// more and the interface disappears too late and gets in the way of the scene.
 #define PLR_HIDES_MS   4000u
-// Salto de 10s do avanca/retrocede. E o passo do controle da Apple, e ele so
-// vale com os controles em pe: cegamente, seta seria um pulo invisivel.
+// The 10s jump of skip forward/back. It is the Apple remote's step, and it only
+// counts with the controls up: blind, an arrow would be an invisible jump.
 #define PLR_JUMP_SEG    10.0f
-// Duracao de reserva, em segundos, para quando o `meta` do catalogo nao traz
-// tempo de filme (as series trazem "3 temporadas", que nao e duracao de nada).
-// 1h54 e so um numero plausivel para o layout ter o que mostrar — assim que o
-// video real entrar, a duracao vem do decodificador e esta constante morre.
-#define PLR_DURATION_DFLT   (114.0f * 60.0f)
-// Geometria do bloco de controles, de baixo para cima. Tudo ancorado na BASE
-// da tela: e ela que nao se mexe quando o bloco desliza para dentro.
+// A fallback duration, in seconds, for when the catalogue's `meta` carries no film
+// running time (series carry "3 seasons", which is nobody's duration).
+// 1h54 is just a plausible number so the layout has something to show — as soon as
+// the real video comes in, the duration comes from the decoder and this constant dies.
+#define PLR_DURATION_DEFAULT   (114.0f * 60.0f)
+// The geometry of the controls block, from the bottom up. Everything anchored to
+// the BOTTOM of the screen: it is what does not move when the block slides in.
 // ---------------------------------------------------------------------------
-// MEDIDAS DO PLAYER DO APP WEB
+// THE WEB APP'S PLAYER MEASUREMENTS
 //
-// Esta tela nao segue mais o player do app da Apple: segue o nosso app web, que
-// e a referencia desta variante legacy. Os valores sao os do CSS resolvidos em
-// 1920x1080, que e onde o app roda — no arquivo eles sao min(Xvw, Ypx) e a TV
-// cai sempre no teto. A origem de cada um esta anotada para poder conferir.
+// This screen no longer follows the Apple app's player: it follows our web app,
+// which is this legacy variant's reference. The values are the CSS's resolved at
+// 1920x1080, which is where the app runs — in the file they are min(Xvw, Ypx) and
+// the TV always hits the ceiling. Each one's origin is recorded so it can be checked.
 //
 //   #playerUiRoot        --player-controls-x/y      64 / 48
 //   .player-control-btn  --player-control-size      96   (gap 4px)
-//   .player-progress-track  height 6 -> 10 com foco, radius 3
+//   .player-progress-track  height 6 -> 10 with focus, radius 3
 //   .player-progress-shell  margin-top 12
 //   .player-controls-row    margin-top 16
 //   .player-controls-gradient-top/bottom   150 / 200
 //
-// MAS ESSES SAO OS VALORES BASE, E NAO OS DESTA TELA. O bloco `#playerUiRoot`
-// (components.css:15251) e o port do player do Android TV e refaz quase todos
-// com a conversao x2 que o repositorio usa para o canvas de 1920 ("ATV 6dp ->
-// 12px"). O que estava aqui era metade do tamanho certo em quase tudo — a
-// barra, o vao dos botoes, o respiro da fileira e os dois degrades. Os que o
-// bloco ATV NAO refaz (padding 64/48, margin-top 12 da barra) ficam como estao.
+// BUT THOSE ARE THE BASE VALUES, AND NOT THIS SCREEN'S. The `#playerUiRoot` block
+// (components.css:15251) is the port of the Android TV player and redoes almost all
+// of them with the x2 conversion the repository uses for the 1920 canvas ("ATV 6dp
+// -> 12px"). What was here was half the right size on almost everything — the bar,
+// the buttons' gap, the row's breathing room and both gradients. The ones the ATV
+// block does NOT redo (padding 64/48, the bar's margin-top 12) stay as they are.
 //
-//   .player-progress-track  12 -> 20 com foco, radius 6
+//   .player-progress-track  12 -> 20 with focus, radius 6
 //   .player-control-buttons gap 8
 //   .player-controls-row    margin-top 32
 //   .player-control-icon    48
-//   gradientes              300 (topo) / 400 (base)
-#define PLR_DFLT_X         64.0f
-#define PLR_DFLT_Y         48.0f
-// Margem lateral do CONTEUDO do rodape (titulo, botoes, relogio). O trilho da
-// barra continua em 0..largura; so o conteudo recua, para nao cair na zona que
-// a TV corta por overscan. Mesmo valor do gutter da pagina de titulo.
+//   gradients               300 (top) / 400 (base)
+#define PLR_PAD_X         64.0f
+#define PLR_PAD_Y         48.0f
+// The side margin of the footer's CONTENT (title, buttons, clock). The bar's track
+// still runs 0..width; only the content is inset, so as not to fall in the zone the
+// TV cuts by overscan. The same value as the title page's gutter.
 #define PLR_MARGIN        96.0f
 #define PLR_BTN_D         76.0f
 #define PLR_BTN_GAP        8.0f
-// 12px em repouso, 20px com foco — as duas do bloco ATV. A barra PASSOU a receber
-// foco (CIMA a partir da fileira de botoes); antes so os botoes recebiam, e por
-// isso nao havia como procurar no filme pela barra.
-// BARRA MINIMALISTA, DE PONTA A PONTA. Era 12px de altura com 64px de margem
-// de cada lado e raio 6 — e o raio era o defeito: nesta API ele e FRACAO do
-// menor lado (ver gfx.h), no maximo 0.5, entao 6.0 degenerava o SDF. O efeito
-// era o preenchimento inicial virar uma bolha em vez de uma barra crescendo, e
-// so "aparecer" depois de muitos minutos de filme, quando ja era largo o
-// bastante para a forma se resolver. Foi o que o dono descreveu: "demora muito
-// para mostrar ela encher, nao ta bem calibrada".
+// 12px at rest, 20px with focus — both from the ATV block. The bar HAS STARTED
+// taking focus (UP from the button row); before, only the buttons did, and that is
+// why there was no way to seek through the film with the bar.
+// A MINIMAL BAR, EDGE TO EDGE. It was 12px tall with a 64px margin on each side and
+// radius 6 — and the radius was the defect: in this API it is a FRACTION of the
+// smaller side (see gfx.h), at most 0.5, so 6.0 degenerated the SDF. The effect was
+// the initial fill becoming a bubble instead of a bar growing, and only "appearing"
+// after many minutes of film, once it was wide enough for the shape to resolve. It
+// is what the owner described: "it takes ages to show it filling, it isn't well
+// calibrated".
 //
-// Agora e um fio reto de canto vivo (raio 0), colado nas bordas da tela. Sem
-// raio nao ha SDF para degenerar e o primeiro pixel de progresso ja aparece.
+// Now it is a straight hairline with square corners (radius 0), flush with the
+// screen's edges. With no radius there is no SDF to degenerate and the first pixel
+// of progress appears at once.
 #define PLR_RAIL_H       4.0f
-// 20px com foco (`min(1.04vw, 20px)` em .player-progress-shell.focused).
+// 20px with focus (`min(1.04vw, 20px)` in .player-progress-shell.focused).
 #define PLR_RAIL_H_FOCUS  8.0f
-#define PLR_RAIL_R       0.0f   // canto vivo: ver a nota acima
-#define PLR_GAP_BAR     12.0f   // meta -> barra
-#define PLR_GAP_ROW       32.0f   // barra -> fileira de botoes
+#define PLR_RAIL_R       0.0f   // a square corner: see the note above
+#define PLR_GAP_BAR     12.0f   // meta -> bar
+#define PLR_GAP_ROW       32.0f   // bar -> button row
 #define PLR_GRADIENT_BOTTOM   400.0f
 #define PLR_GRADIENT_TOP    300.0f
-// #f5f5f5 = --secondary-color, que e o que preenche a barra no web.
+// #f5f5f5 = --secondary-color, which is what fills the bar in the web app.
 #define PLR_FILL_C      (245.0f / 255.0f)
 
 #define PLR_ICON_H       48.0f
-// De quanto o bloco desliza para baixo quando escondido. Pequeno de proposito:
-// o que faz o movimento ser lido nao e a distancia, e a mola somada ao fade.
+// How far the block slides down when hidden. Deliberately small: what makes the
+// movement read is not the distance, it is the spring plus the fade.
 #define PLR_SLIDE       46.0f
-// Guia parental (.player-parental-*): barra de 6, lista recuada 20, linha de
-// 36 com 4 de vao. Nao passam pela conversao x2 do bloco ATV — a regra base
-// nao e refeita la.
+// The parental guide (.player-parental-*): a 6 bar, the list inset by 20, a 36 line
+// with a 4 gap. They do not go through the ATV block's x2 conversion — the base rule
+// is not redone there.
 #define PG_BAR_W         6.0f
-// Quanto tempo a guia parental fica na tela, contando do primeiro quadro com
-// imagem, e quanto dura o esmaecimento final. Sete segundos e o bastante para
-// ler quatro linhas curtas sem virar mobilia — depois disso ela nao volta nesta
-// reproducao.
+// How long the parental guide stays on screen, counting from the first frame with
+// a picture, and how long the final fade lasts. Seven seconds is enough to read four
+// short lines without becoming furniture — after that it does not come back during
+// this playback.
 #define PG_SEG_TOTAL       7.0f
 #define PG_SEG_OUTPUT       0.8f
 #define PG_LIST_PADX     20.0f
 #define PG_LINE_H        36.0f
 #define PG_LINE_GAP       4.0f
-// O veu virou os dois degrades do web (PLR_GRAD_TOPO/BAIXO). Ele existe para o
-// texto ler sobre a imagem — sem ele, uma cena clara apaga o nome do titulo.
+// The veil became the web app's two gradients (PLR_GRADIENT_TOP/BOTTOM). It exists
+// so the text reads over the image — without it, a bright scene wipes out the
+// title's name.
 
-// Transporte compacto. Os saltos continuam acessiveis pelas setas na barra.
+// Compact transport. The jumps are still reachable through the arrows on the bar.
 enum { PLR_PLAY, PLR_ASPECT, PLR_CC, PLR_AUDIO,
        PLR_SOURCES, PLR_EPISODES, PLR_NBTNS };
 
 static int   is_open = 0, exiting = 0, requestedExit = 0;
 static int   idx = 0;
 static int   playing = 1;
-// Botao em foco na fileira de transporte. Comeca no PLAY porque e a resposta
-// que nove de cada dez aberturas quer: o dedo para no centro e o OK decide.
+// The focused button in the transport row. It starts on PLAY because that is the
+// answer nine out of ten openings want: the finger stops in the centre and OK decides.
 static int   button = PLR_PLAY;
-// A barra de progresso e um alvo de foco, como no web: `.player-progress-shell`
-// engorda de 6 para 10px e clareia o trilho quando focada. Fica FORA do enum
-// dos botoes porque nao e um botao — o OK nela nao 'aperta' nada, e o
-// ESQUERDA/DIREITA muda de significado (procura, em vez de trocar de foco).
+// The progress bar is a focus target, as in the web app: `.player-progress-shell`
+// thickens from 6 to 10px and lightens the track when focused. It sits OUTSIDE the
+// buttons' enum because it is not a button — OK on it 'presses' nothing, and
+// LEFT/RIGHT change meaning (seeking, rather than moving focus).
 static int   barFocus = 0;
-static int   visible = 0;          // alvo dos controles (1 = em pe)
-static float anim = 0.0f;          // 0..1 seguindo `visivel`, por mola
-static float focusB[PLR_NBTNS];     // mola de foco de cada botao
-static float entry = 0.0f;       // 0..1 fade de abertura/fechamento da tela
+static int   visible = 0;          // the controls' target (1 = up)
+static float anim = 0.0f;          // 0..1 following `visible`, by spring
+static float focusB[PLR_NBTNS];     // each button's focus spring
+static float entry = 0.0f;       // 0..1 the screen's opening/closing fade
 static Uint32 lastInput = 0;
-// Instante em que a IMAGEM comecou (nao a abertura da tela: entre uma coisa e
-// outra ha a busca de fonte, que pode levar segundos). Zero enquanto nao houve.
-// A guia parental se apoia nisto para aparecer UMA vez, no comeco, e sumir.
+// The instant the PICTURE started (not the screen's opening: between the two there
+// is the source search, which can take seconds). Zero while there has been none.
+// The parental guide relies on this to appear ONCE, at the start, and disappear.
 static Uint32 startImage = 0;
-// AS DUAS VARIAVEIS DE MIDIA. Todo o resto do arquivo le so daqui — quando o
-// video real entrar, sao elas que passam a ser preenchidas pelo decodificador.
-static int   comVideo = 0;
+// THE TWO MEDIA VARIABLES. All the rest of the file reads only from here — when the
+// real video comes in, they are the ones the decoder starts filling.
+static int   hasVideo = 0;
 static int   reqTracks = 0;
-static int   waitingSource = 0;   // aberto sem URL, esperando o addon responder
+static int   waitingSource = 0;   // opened with no URL, waiting for the addon to answer
 static float posSeg = 0.0f;
-static float durationSeg = PLR_DURATION_DFLT;
+static float durationSeg = PLR_DURATION_DEFAULT;
 
 static char lineEp[220];          // "T1, E1 · <sinopse curta>", montada na abertura
 
@@ -206,13 +210,13 @@ void player_set_episode(int t, int e) {
   if (!c || strcmp(c->kind, "series")) { epT = epE = 0; intro_off(); return; }
   if (epT < 1) epT = c->season > 0 ? c->season : 1;
   if (epE < 1) epE = c->episode > 0 ? c->episode : 1;
-  snprintf(lineEp, sizeof lineEp, "T%dE%d", epT, epE);
+  snprintf(lineEp, sizeof lineEp, "S%dE%d", epT, epE);
   if (epT == c->season && epE == c->episode && c->nameEpisode[0])
-    snprintf(lineEp, sizeof lineEp, "T%dE%d · %s", epT, epE, c->nameEpisode);
+    snprintf(lineEp, sizeof lineEp, "S%dE%d · %s", epT, epE, c->nameEpisode);
   for (int i = 0; i < cat_n_episodes(idx); i++) {
     const CatEp *ep = cat_episode(idx, i);
     if (ep && ep->season == epT && ep->episode == epE) {
-      snprintf(lineEp, sizeof lineEp, "T%dE%d · %s", epT, epE, ep->name);
+      snprintf(lineEp, sizeof lineEp, "S%dE%d · %s", epT, epE, ep->name);
       break;
     }
   }
@@ -221,12 +225,12 @@ void player_set_episode(int t, int e) {
   }
 }
 
-// --- duracao a partir do texto livre do catalogo -----------------------------
-// O campo `meta` e prosa, nao dado: "2023 · 3 h 28 min" num filme e
-// "2022 · 3 temporadas" numa serie. Em vez de um parser posicional (que quebra
-// no primeiro titulo com formato diferente), procuro apenas os dois pares
-// numero+unidade em qualquer lugar da string. Nao achando NENHUM dos dois,
-// devolvo 0 e quem chama cai no padrao — que e o caso correto para series.
+// --- duration from the catalogue's free text ---------------------------------
+// The `meta` field is prose, not data: "2023 · 3 h 28 min" on a film and
+// "2022 · 3 seasons" on a series. Instead of a positional parser (which breaks on
+// the first title with a different format), I look only for the two number+unit
+// pairs anywhere in the string. Finding NEITHER, I return 0 and the caller falls
+// back to the default — which is the correct case for a series.
 static float durationOfMeta(const char *meta) {
   if (!meta) return 0.0f;
   float h = 0.0f, m = 0.0f;
@@ -236,9 +240,9 @@ static float durationOfMeta(const char *meta) {
     float v = 0.0f;
     while (*p >= '0' && *p <= '9') { v = v * 10.0f + (*p - '0'); p++; }
     while (*p == ' ') p++;
-    // "min" tem que ser testado ANTES de "m": senao todo "min" vira minuto por
-    // acidente do prefixo — o que ate daria certo aqui, mas escondia o bug do
-    // dia em que aparecer uma unidade nova comecando com m.
+    // "min" has to be tested BEFORE "m": otherwise every "min" becomes a minute by
+    // accident of the prefix — which would even work here, but would hide the bug
+    // on the day a new unit starting with m turns up.
     if (!strncmp(p, "min", 3))    { m = v; found = 1; p += 2; }
     else if (*p == 'h')           { h = v; found = 1; }
     if (!*p) break;
@@ -246,9 +250,9 @@ static float durationOfMeta(const char *meta) {
   return found ? (h * 3600.0f + m * 60.0f) : 0.0f;
 }
 
-// Corta a sinopse na primeira frase, sem passar de `maxBytes`. O corte respeita
-// UTF-8: os titulos do catalogo sao em portugues e cortar no meio de um "ç" ou
-// "ã" produz um retangulo vazio na fonte, nao um acento faltando.
+// Cuts the synopsis at the first sentence, without passing `maxBytes`. The cut
+// respects UTF-8: catalogue titles carry accents and cutting in the middle of a "ç"
+// or an "ã" produces an empty rectangle in the font, not a missing accent.
 static void fraseFirst(char *dst, size_t n, const char *src, size_t maxBytes) {
   if (!src || !*src) { dst[0] = 0; return; }
   if (maxBytes > n - 4) maxBytes = n - 4;
@@ -257,7 +261,7 @@ static void fraseFirst(char *dst, size_t n, const char *src, size_t maxBytes) {
     if (src[i] == '.') { cut = i; break; }
   if (!cut) {
     cut = i;
-    // volta ate o inicio de um caractere (bytes de continuacao sao 10xxxxxx)
+    // go back to the start of a character (continuation bytes are 10xxxxxx)
     while (cut > 0 && ((unsigned char)src[cut] & 0xC0) == 0x80) cut--;
     while (cut > 0 && src[cut - 1] == ' ') cut--;
   }
@@ -266,46 +270,49 @@ static void fraseFirst(char *dst, size_t n, const char *src, size_t maxBytes) {
   if (src[i] && src[i] != '.') strncat(dst, "\xe2\x80\xa6", n - strlen(dst) - 1);
 }
 
-// --- MODOS DE PROPORCAO ------------------------------------------------------
-// A porta do web para o nativo. No web o modo mexe em duas coisas do elemento
-// <video>: o `object-fit` e um `transform: scale()`. Aqui nao ha elemento — ha
-// um plano de hardware posicionado por video_janela() — entao os dois viram UMA
-// coisa so: o retangulo do plano.
+// --- ASPECT MODES ------------------------------------------------------------
+// The bridge from the web app to the native one. In the web app the mode touches two
+// things on the <video> element: `object-fit` and a `transform: scale()`. Here there
+// is no element — there is a hardware plane positioned by video_window() — so the
+// two become ONE thing: the plane's rectangle.
 //
-// A traducao e literal e nesta ordem, igual ao resolveAspectRender do web:
-//   1. o retangulo que o object-fit do modo produziria (contain/cover/fill);
-//   2. multiplicado pela escala do modo (resolveAspectScale), em torno do
-//      CENTRO da tela — que e o `transform-origin: center center` de la.
-// O retangulo aqui e VIRTUAL: ele pode sair da tela, e sair da tela e o que
-// significa "recortar". Mas ele NAO e o que se manda ao plano — ver
-// aplicarAspecto, que o converte em fonte + destino.
+// The translation is literal and in this order, just like the web's
+// resolveAspectRender:
+//   1. the rectangle the mode's object-fit would produce (contain/cover/fill);
+//   2. multiplied by the mode's scale (resolveAspectScale), about the CENTRE of the
+//      screen — which is its `transform-origin: center center`.
+// The rectangle here is VIRTUAL: it may run off the screen, and running off the
+// screen is what "crop" means. But it is NOT what is sent to the plane — see
+// applyAspect, which converts it into a source + destination.
 //
-// ERRO MEDIDO, e vale ficar escrito porque a leitura do web induz a ele: eu
-// mandava este retangulo direto ao ACB, com x/y negativos e tamanho maior que a
-// tela. O ACB aceitou as quatro chamadas sem reclamar e o log ficou bonito —
-//   [video] janela -144,-81  2208x1242 cheia=0   <- Zoom leve   (1.15)
-//   [video] janela -326,-184 2573x1447 cheia=0   <- Zoom cinema (1.34)
-//   [video] janela -528,-297 2976x1674 cheia=0   <- Zoom ultra  (1.55)
-// — batendo ate o pixel com o resolveAspectRender do web. E a TELA FICOU PRETA
-// em todos os tres. Aceitar a chamada nao e exibir: um plano de hardware nao
-// descarta o excedente como o compositor do navegador faz com transform:
-// scale(), entao retangulo fora do painel nao vira recorte, vira retangulo
-// invalido e o plano apaga. So o ORIGINAL mostrava imagem, por ser o unico com
-// escala 1. A licao: `resolveAspectScale` era justamente a parte do web que NAO
-// se traduz, porque a metade que fazia o recorte no web nem esta no arquivo.
+// A MEASURED MISTAKE, and it is worth writing down because reading the web app leads
+// you to it: I sent this rectangle straight to the ACB, with negative x/y and a size
+// larger than the screen. The ACB accepted all four calls without complaint and the
+// log looked fine —
+//   [video] window -144,-81  2208x1242 full=0   <- Light zoom  (1.15)
+//   [video] window -326,-184 2573x1447 full=0   <- Cinema zoom (1.34)
+//   [video] window -528,-297 2976x1674 full=0   <- Ultra zoom  (1.55)
+// — matching the web's resolveAspectRender to the pixel. And THE SCREEN WAS BLACK in
+// all three. Accepting the call is not displaying: a hardware plane does not discard
+// the excess the way the browser's compositor does with transform: scale(), so a
+// rectangle outside the panel does not become a crop, it becomes an invalid
+// rectangle and the plane goes dark. Only ORIGINAL showed a picture, being the only
+// one at scale 1. The lesson: `resolveAspectScale` was precisely the part of the web
+// app that does NOT translate, because the half that did the cropping in the web app
+// is not even in the file.
 //
-// NAO da para conferir isto por captura de tela: durante a reproducao o
-// /tmp/nuvio-shot.bmp sai PRETO onde esta o video, porque o plano fica atras da
-// superficie GL e o glReadPixels nao o enxerga. E foi essa cegueira que deixou
-// o erro passar — o log dizia sucesso, a captura era preta de qualquer jeito, e
-// so quem olhou a TV viu. Conferir zoom exige olhar o aparelho.
+// This CANNOT be checked by screenshot: during playback /tmp/nuvio-shot.bmp comes
+// out BLACK where the video is, because the plane sits behind the GL surface and
+// glReadPixels does not see it. And it was that blindness that let the mistake
+// through — the log said success, the capture was black either way, and only someone
+// looking at the TV saw. Checking zoom means looking at the device.
 static int    aspect = PLR_ASPECT_ORIGINAL;
-static Uint32 toastAte = 0;      // ate quando o aviso de modo fica de pe
+static Uint32 toastAte = 0;      // until when the mode notice stays up
 static char   dirPrefs[512];
 
-// Rotulos em portugues. Os do web sao "Fit (Original)", "Crop", "Stretch",
-// "Slight/Cinema/Ultra Zoom", "Fit Height", "Fit Width" — o resto do app fala
-// portugues, entao traduzir aqui e o que mantem a tela coerente.
+// Short labels for the on-screen notice. The web app's are "Fit (Original)",
+// "Crop", "Stretch", "Slight/Cinema/Ultra Zoom", "Fit Height", "Fit Width" — here
+// they are trimmed so the notice reads at a glance from the sofa.
 static const char *ASPECT_LABEL[PLR_ASPECT_N] = {
   "Original", "Crop", "Stretch", "Light zoom",
   "Cinema zoom", "Ultra zoom", "Fit height", "Fit width"
@@ -317,10 +324,10 @@ const char *player_aspect_label(int mode) {
 }
 int player_aspect(void) { return aspect; }
 
-// Onde o modo escolhido fica gravado. Mesmo diretorio que o main.c passa para o
-// resto do app (SDL_GetBasePath()+"art", com /tmp/art de reserva). O web guarda
-// isso em DeviceLocalPlayerPreferences, por aparelho: escolher "Zoom cinema" e
-// reencontrar "Original" no filme seguinte transformaria o modo em brinquedo.
+// Where the chosen mode is stored. The same directory main.c passes to the rest of
+// the app (SDL_GetBasePath()+"art", with /tmp/art as a fallback). The web app keeps
+// this in DeviceLocalPlayerPreferences, per device: choosing "Cinema zoom" and
+// finding "Original" again on the next film would turn the mode into a toy.
 static const char *prefsFile(void) {
   static char path[600];
   if (!dirPrefs[0]) {
@@ -332,9 +339,9 @@ static const char *prefsFile(void) {
   return path;
 }
 
-// ESTILO DA LEGENDA: preferencia DO APARELHO, como o aspecto — nao vai em
-// ajustes.txt, que espelha as chaves de layout do app web. Padrao: tamanho 2
-// (o do aparelho), branco, sem fundo, posicao central, contorno.
+// THE SUBTITLE STYLE: a DEVICE preference, like the aspect — it does not go into
+// settings.txt, which mirrors the web app's layout keys. Default: size 2 (the
+// device's), white, no background, centre position, outline.
 static VideoSubtitleStyle subStyle = { 120, 0, 0, 3, 1, 0, 0, TXT_FAMILY_INTER };
 
 // Keys written by 1.0.1 and earlier. Reading them keeps the device's aspect
@@ -360,11 +367,11 @@ static void prefsRead(void) {
   if (!f) return;
   while (fscanf(f, "%63s %d", raw, &v) == 2) {
     key = canonicalKey(raw);
-    // Valor de outra versao (ou arquivo editado a mao) cai no padrao em vez de
-    // indexar fora do vetor de rotulos.
+    // A value from another version (or a hand-edited file) falls back to the default
+    // instead of indexing outside the label array.
     if (!strcmp(key, "aspect") && v >= 0 && v < PLR_ASPECT_N) aspect = v;
     else if (!strcmp(key, "sub_size")) {
-      /* Migra o arquivo antigo 0..4 sem perder a preferencia do aparelho. */
+      /* Migrates the old 0..4 file without losing the device's preference. */
       static const int old[5]={60,80,120,160,200};
       if(v>=0&&v<=4)subStyle.size=old[v];
       else if(v>=50&&v<=200)subStyle.size=(v/10)*10;
@@ -395,16 +402,16 @@ static void prefsWrite(void) {
   fclose(f);
 }
 
-// Lidos pela folha de faixas, que e quem desenha os controles.
+// Read by the tracks sheet, which is what draws the controls.
 VideoSubtitleStyle *player_sub_style(void) { return &subStyle; }
 void player_sub_style_changed(void) {
   video_subtitle_style(&subStyle);
   prefsWrite();
 }
 
-// Proporcao do QUADRO decodificado. Sem videoInfo ainda, 16:9 — que e a
-// proporcao de quase todo arquivo entregue, e a suposicao que faz "Original"
-// abrir em tela cheia em vez de piscar uma faixa errada por um segundo.
+// The decoded FRAME's aspect ratio. With no videoInfo yet, 16:9 — which is the
+// aspect of almost every file delivered, and the assumption that makes "Original"
+// open full screen instead of flashing a wrong band for a second.
 static float aspectFrame(void) {
   int w = video_width(), h = video_height();
   if (w > 0 && h > 0) return (float)w / (float)h;
@@ -420,7 +427,7 @@ static PlrRect aspectRect(int mode) {
   PlrRect r;
   if (q <= 0.0f) q = screen;
 
-  // 1) o object-fit do modo. Os tres casos sao os do ASPECT_MODE_DEFINITIONS.
+  // 1) the mode's object-fit. The three cases are those of ASPECT_MODE_DEFINITIONS.
   switch (mode) {
     case PLR_ASPECT_STRETCH:                       // fill
       bw = NV_SCREEN_W; bh = NV_SCREEN_H;
@@ -438,7 +445,7 @@ static PlrRect aspectRect(int mode) {
       break;
   }
 
-  // 2) a escala do modo, copiada linha a linha do resolveAspectScale.
+  // 2) the mode's scale, copied line by line from resolveAspectScale.
   switch (mode) {
     case PLR_ASPECT_CROP:        sx = sy = (q > screen) ? q / screen : screen / q; break;
     case PLR_ASPECT_STRETCH:     if (q > screen) sy = q / screen; else sx = screen / q; break;
@@ -447,7 +454,7 @@ static PlrRect aspectRect(int mode) {
     case PLR_ASPECT_ZOOM_ULTRA:  sx = sy = PLR_ZOOM_ULTRA;  break;
     case PLR_ASPECT_FIT_HEIGHT:  if (q > screen) sx = sy = q / screen; break;
     case PLR_ASPECT_FIT_WIDTH: if (q < screen) sx = sy = screen / q; break;
-    default: break;   // ORIGINAL: contain e nada mais
+    default: break;   // ORIGINAL: contain and nothing more
   }
 
   r.w = bw * sx;
@@ -457,8 +464,8 @@ static PlrRect aspectRect(int mode) {
   return r;
 }
 
-// O retangulo VISIVEL do modo: o retangulo virtual cortado pela tela. E ele que
-// o furo do GL segue e que vira o destino do plano.
+// The mode's VISIBLE rectangle: the virtual rectangle clipped by the screen. It is
+// what the GL hole follows and what becomes the plane's destination.
 static PlrRect aspectVisible(int mode) {
   PlrRect r = aspectRect(mode), d;
   d.x = r.x < 0.0f ? 0.0f : r.x;
@@ -470,28 +477,28 @@ static PlrRect aspectVisible(int mode) {
   return d;
 }
 
-// Manda o modo ao plano de hardware. Chamado na abertura, na troca de modo e
-// quando o videoInfo chega — antes dele a proporcao do quadro e chute, e o modo
-// calculado com o chute estaria errado justamente nos filmes widescreen, que
-// sao o motivo de tudo isto existir.
+// Sends the mode to the hardware plane. Called on opening, on a mode change and
+// when the videoInfo arrives — before that the frame's aspect ratio is a guess, and
+// a mode computed from the guess would be wrong precisely on widescreen films,
+// which are the reason all of this exists.
 //
-// AQUI ESTAVA O ERRO que deixava a tela preta em todo modo com zoom. Eu mandava
-// o retangulo VIRTUAL direto ao plano — com x/y negativos e tamanho maior que a
-// tela — na suposicao de que o excedente sairia pela borda, como sai no web. No
-// web quem descarta o excedente e o compositor do navegador; um plano de
-// hardware nao tem esse passo, e retangulo fora do painel nao e recorte, e
-// retangulo invalido: o plano apaga. So o ORIGINAL sobrevivia, por ser o unico
-// com escala 1.
+// HERE WAS THE MISTAKE that left the screen black in every zoomed mode. I sent the
+// VIRTUAL rectangle straight to the plane — with negative x/y and a size larger
+// than the screen — on the assumption that the excess would run off the edge, as it
+// does in the web app. In the web app what discards the excess is the browser's
+// compositor; a hardware plane has no such step, and a rectangle outside the panel
+// is not a crop, it is an invalid rectangle: the plane goes dark. Only ORIGINAL
+// survived, being the only one at scale 1.
 //
-// A conta certa e a INVERSA: o destino nunca sai da tela, e o zoom vira um
-// pedaco MENOR da FONTE. O retangulo virtual continua sendo o mesmo do web —
-// ele so deixa de ser o que se manda e passa a ser o que se USA PARA CALCULAR
-// que fatia do quadro cai dentro da tela.
+// The right arithmetic is the INVERSE: the destination never leaves the screen, and
+// the zoom becomes a SMALLER piece of the SOURCE. The virtual rectangle is still the
+// web app's — it simply stops being what is sent and becomes what is USED TO WORK
+// OUT which slice of the frame falls inside the screen.
 static void applyAspect(void) {
   PlrRect r, d;
   float qw, qh;
   int sx, sy, sw, sh;
-  if (!comVideo) return;
+  if (!hasVideo) return;
 
   r = aspectRect(aspect);
   d = aspectVisible(aspect);
@@ -499,23 +506,23 @@ static void applyAspect(void) {
 
   qw = (float)video_width();
   qh = (float)video_height();
-  // Sem as dimensoes do quadro nao da para falar em coordenadas de fonte. Cai
-  // no caminho antigo, que serve ao caso sem recorte — e o unico em que ele
-  // funciona. Assim que o videoInfo chegar, aplicarAspecto roda de novo.
+  // Without the frame's dimensions there is no way to speak in source coordinates.
+  // It falls back to the old path, which serves the case with no crop — the only one
+  // where it works. As soon as the videoInfo arrives, applyAspect runs again.
   if (qw < 2.0f || qh < 2.0f) {
     video_window((int)(d.x + 0.5f), (int)(d.y + 0.5f),
                  (int)(d.w + 0.5f), (int)(d.h + 0.5f));
     return;
   }
 
-  // Que fatia do quadro cai dentro do destino: o quadro inteiro mapeia no
-  // retangulo virtual `r`, entao a fatia e a regra de tres de `d` dentro de `r`.
+  // Which slice of the frame falls inside the destination: the whole frame maps onto
+  // the virtual rectangle `r`, so the slice is the proportion of `d` within `r`.
   sx = (int)((d.x - r.x) / r.w * qw + 0.5f);
   sy = (int)((d.y - r.y) / r.h * qh + 0.5f);
   sw = (int)(d.w / r.w * qw + 0.5f);
   sh = (int)(d.h / r.h * qh + 0.5f);
-  // Par: o escalonador trabalha em 4:2:0 e origem ou tamanho impar em croma da
-  // meio pixel de deslocamento de cor na borda do recorte.
+  // Even: the scaler works in 4:2:0 and an odd origin or size gives half a pixel of
+  // chroma shift at the crop's edge.
   sx &= ~1; sy &= ~1; sw &= ~1; sh &= ~1;
   if (sx < 0) sx = 0;
   if (sy < 0) sy = 0;
@@ -543,8 +550,8 @@ void player_open(int indexCatalog, const char *url) {
   int n = cat_n(); if (n < 1) n = 1;
   idx = ((indexCatalog % n) + n) % n;
   is_open = 1; exiting = 0; requestedExit = 0; barFocus = 0;
-  // Guia parental do titulo: pedido AQUI e nao no desenho, para que a resposta
-  // ja tenha chegado quando os controles aparecerem pela primeira vez.
+  // The title's parental guide: requested HERE and not while drawing, so the answer
+  // has already arrived when the controls appear for the first time.
   { const CatItem *ci = cat_item(idx);
     if (ci && ci->imdb[0]) parental_request(ci->imdb); }
   playing = 1; visible = 1; anim = 0.0f; entry = 0.0f;
@@ -555,70 +562,70 @@ void player_open(int indexCatalog, const char *url) {
   posSeg = 0.0f;
   lastInput = SDL_GetTicks();
   waitingSource = (url == NULL);
-  // Legenda externa e da sessao que acabou, nao desta.
+  // An external subtitle belongs to the session that has just ended, not to this one.
   tracks_reset();
-  // O modo de proporcao e do APARELHO, nao da sessao: reler aqui e o que faz
-  // "Zoom cinema" continuar valendo no filme seguinte, como no web.
+  // The aspect mode belongs to the DEVICE, not to the session: rereading here is
+  // what makes "Cinema zoom" still apply on the next film, as in the web app.
   prefsRead();
   toastAte = 0;
-  comVideo = (url && *url && video_play(url));
+  hasVideo = (url && *url && video_play(url));
   applyAspect();
 
   const CatItem *c = item();
   float d = c ? durationOfMeta(c->meta) : 0.0f;
-  durationSeg = d > 1.0f ? d : PLR_DURATION_DFLT;
+  durationSeg = d > 1.0f ? d : PLR_DURATION_DEFAULT;
 
-  // Identidade do episodio e independente do foco no painel de navegacao.
+  // The episode's identity is independent of the focus in the navigation panel.
   player_set_episode(c ? c->season : 0, c ? c->episode : 0);
-  if (url && *url && !comVideo) player_error_source();
+  if (url && *url && !hasVideo) player_error_source();
 }
 
 int player_is_open(void)    { return is_open; }
 int player_wants_exit(void) { return requestedExit; }
-// So depois do loadCompleted. Antes disso o pipeline ainda nao pos nada no
-// plano de hardware, e furar a superficie cedo trocava a arte por um retangulo
-// PRETO enquanto o fluxo abria — que era o "clica em reproduzir e fica preto".
+// Only after loadCompleted. Before that the pipeline has put nothing on the hardware
+// plane, and punching the surface early swapped the art for a BLACK rectangle while
+// the stream opened — which was the "you press play and it goes black".
 void player_set_source(const char *url) {
   if (!is_open || !url || !*url) return;
   waitingSource = 0;
   errorSource = 0;
-  comVideo = video_play(url);
-  if (!comVideo) player_error_source();
+  hasVideo = video_play(url);
+  if (!hasVideo) player_error_source();
   applyAspect();
 }
 
-// Consome o pedido de abrir a folha de faixas: quem le, zera.
+// Consumes the request to open the tracks sheet: whoever reads it, clears it.
 int  player_requested_tracks(void) { int v = reqTracks; reqTracks = 0; return v; }
 
-int  player_com_video(void) { return comVideo && video_ready(); }
+int  player_has_video(void) { return hasVideo && video_ready(); }
 
-// Esta abrindo o fluxo: ha video pedido, mas ainda nao ha imagem.
-int  player_loading(void) { return waitingSource || (comVideo && !video_ready()); }
+// The stream is opening: video has been requested, but there is no picture yet.
+int  player_loading(void) { return waitingSource || (hasVideo && !video_ready()); }
 int  player_controls_visible(void) { return visible; }
 
 void player_shutdown(void) {
-  // Salvar ANTES de parar: video_parar descarrega o pipeline e a posicao some
-  // junto. Titulo quase no fim conta como visto por inteiro — voltar a um card
-  // marcando "2 min restantes" que na verdade acabou e pior que arredondar.
-  if (comVideo && video_ready() && durationSeg > 1.0f) {
+  // Save BEFORE stopping: video_stop unloads the pipeline and the position goes with
+  // it. A title almost at the end counts as watched in full — going back to a card
+  // saying "2 min left" when it has actually finished is worse than rounding.
+  if (hasVideo && video_ready() && durationSeg > 1.0f) {
     float pos = posSeg >= durationSeg - 60.0f ? durationSeg : posSeg;
     const CatItem *ci = cat_item(idx);
-    home_registrar_return(idx, pos, durationSeg);
+    home_record_return(idx, pos, durationSeg);
     cat_save_progress_ep(idx, pos, durationSeg,epT,epE);
-    // E tambem para o Trakt, que e de onde o "continue assistindo" vem: gravar
-    // so aqui deixaria este app discordando dos outros aparelhos do dono.
+    // And to Trakt too, which is where "continue watching" comes from: recording only
+    // here would leave this app disagreeing with the owner's other devices.
     if (ci && ci->imdb[0]) {
       char id[64];
       if (epT > 0 && epE > 0) snprintf(id, sizeof id, "%.*s:%d:%d", (int)strcspn(ci->imdb,":"),ci->imdb, epT, epE);
       else snprintf(id, sizeof id, "%s", ci->imdb);
       trakt_mark(id, pos, durationSeg);
-      // E para a CONTA. Trakt e conta sao dois destinos diferentes: nem todo
-      // usuario liga o Trakt, e o progresso do app oficial vem da conta.
+      // And to the ACCOUNT. Trakt and the account are two different destinations: not
+      // every user turns Trakt on, and the official app's progress comes from the account.
       sync_dirty_progress();
     }
   }
-  if (comVideo) video_stop();
-  comVideo = 0; waitingSource = 0; is_open = 0; exiting = 0; requestedExit = 0;
+  if (hasVideo) video_stop();
+  hasVideo = 0; waitingSource = 0; is_open = 0; exiting = 0; requestedExit = 0;
   startImage = 0;
   episodes_close();
   intro_off(); introIdx=introT=introE=-1;
@@ -632,23 +639,23 @@ static int offerNext(void) {
   return durationSeg-posSeg<=120.0f;
 }
 
-// Toda tecla acorda os controles, inclusive a que ja executou alguma acao: no
-// aparelho nao existe comando que aconteca com a barra escondida sem trazer a
-// barra junto — o usuario precisa ver o efeito do que apertou.
+// Every key wakes the controls, including one that has already carried out an
+// action: on the device there is no command that happens with the bar hidden without
+// bringing the bar along — the user needs to see the effect of what they pressed.
 static void wake(void) { visible = 1; lastInput = SDL_GetTicks(); }
 
 static void togglePlaying(void) {
   playing = !playing;
-  if (comVideo) video_pause(!playing);
+  if (hasVideo) video_pause(!playing);
 }
 
-// Salto de 10s com limite. So vale com os controles em pe: cegamente, seta
-// seria um pulo invisivel — com os botoes, quem aperta esta olhando para um
-// botao que diz «10 / 10».
+// A 10s jump with a limit. It only counts with the controls up: blind, an arrow
+// would be an invisible jump — with the buttons, whoever presses is looking at a
+// button that says «10 / 10».
 static void jump(int dir) {
   posSeg += dir * PLR_JUMP_SEG;
   posSeg = anim_clamp(posSeg, 0.0f, durationSeg);
-  if (comVideo) video_fetch(posSeg);
+  if (hasVideo) video_fetch(posSeg);
 }
 
 void player_event(const SDL_Event *e) {
@@ -661,21 +668,21 @@ void player_event(const SDL_Event *e) {
     return;
   }
 
-  // CONTROLES ESCONDIDOS: qualquer direcao so acorda a interface. O OK direto
-  // pausa/retoma sem navegar nada — e o gesto do aparelho: um toque no centro
-  // e o video obedece, sem passos no meio.
-  // A TECLA DE PROPORCAO vale sempre, com controles em pe ou escondidos. No web
-  // o modo so se troca por um botao dentro de "More Actions" — dois passos com
-  // um cursor que aqui nao existe. Numa TV o gesto tem que ser um toque, e o
-  // aviso que sobe na troca ja diz em que modo se entrou, entao a tecla nem
-  // precisa da interface aberta. O 0 e a tecla livre no controle da LG.
+  // CONTROLS HIDDEN: any direction only wakes the interface. OK straight away
+  // pauses/resumes without navigating anything — it is the device's gesture: one
+  // press in the centre and the video obeys, with no steps in between.
+  // THE ASPECT KEY works always, with the controls up or hidden. In the web app the
+  // mode is only changed through a button inside "More Actions" — two steps with a
+  // cursor that does not exist here. On a TV the gesture has to be one press, and the
+  // notice that rises on the change already says which mode you have entered, so the
+  // key does not even need the interface open. 0 is the free key on the LG remote.
   if (k == SDLK_0 || k == SDLK_KP_0) { player_aspect_cycle(); return; }
 
   if (!visible) {
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
       if(offerNext()) { const CatEp*p=player_next_episode();reqNextT=p->season;reqNextE=p->episode;return; }
       { double end;int kind;if(intro_active(posSeg,&end,&kind)&&kind!=INTRO_CREDITS){
-          posSeg=(float)end+.25f;if(comVideo)video_fetch(posSeg);return; } }
+          posSeg=(float)end+.25f;if(hasVideo)video_fetch(posSeg);return; } }
       togglePlaying(); wake(); return;
     }
     if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT)
@@ -683,42 +690,42 @@ void player_event(const SDL_Event *e) {
     return;
   }
 
-  // CONTROLES EM PE: o foco anda pelos botoes e o OK aperta o botao em foco.
+  // CONTROLS UP: the focus moves along the buttons and OK presses the focused one.
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
-    // Na barra o OK pausa/retoma: e o que sobra de util, ja que a barra nao
-    // tem acao propria no web.
+    // On the bar, OK pauses/resumes: it is what is left that is useful, since the bar
+    // has no action of its own in the web app.
     if (barFocus) { togglePlaying(); wake(); return; }
     switch (button) {
       case PLR_PLAY:    togglePlaying(); break;
       case PLR_ASPECT: player_aspect_cycle(); break;
-      // CC e AUDIO abrem a MESMA folha, mas em colunas diferentes: apertar
-      // "legendas" e cair no audio fazia os dois botoes parecerem um so.
-      case PLR_CC:      reqTracks = 2;     break;   // 2 = coluna da legenda
+      // CC and AUDIO open the SAME sheet, but on different columns: pressing
+      // "subtitles" and landing on audio made the two buttons look like one.
+      case PLR_CC:      reqTracks = 2;     break;   // 2 = the subtitle column
       case PLR_SOURCES:  reqSources = 1; break;
       case PLR_EPISODES: if (epT > 0) episodes_open(idx, epT, epE); break;
-      default:          reqTracks = 1;     break;   // 1 = coluna do audio
+      default:          reqTracks = 1;     break;   // 1 = the audio column
     }
     wake();
     return;
   }
-  // CIMA sobe para a BARRA, que no web e um alvo de foco de verdade
-  // (`.player-progress-shell.focused` engorda o trilho de 6 para 10px). Sem
-  // isso nao havia como adiantar o filme pela barra — so os saltos de 10s dos
-  // botoes, que e o defeito que o dono relatou.
+  // UP goes up to the BAR, which in the web app is a real focus target
+  // (`.player-progress-shell.focused` thickens the track from 6 to 10px). Without
+  // that there was no way to skip ahead in the film with the bar — only the buttons'
+  // 10s jumps, which is the defect the owner reported.
   //
-  // A folha de faixas NAO se perde: ela continua no CIMA, um nivel acima. Da
-  // fileira de botoes o primeiro CIMA pega a barra e o segundo abre a folha.
-  // Trocar o gesto por outro (um botao a mais, um menu) seria pior: no aparelho
-  // "pra cima revela legendas e audio" e o que a mao ja sabe.
+  // The tracks sheet is NOT lost: it is still on UP, one level higher. From the
+  // button row the first UP takes the bar and the second opens the sheet. Swapping
+  // the gesture for another (one more button, a menu) would be worse: on a device
+  // "up reveals subtitles and audio" is what the hand already knows.
   if (k == SDLK_UP) {
-    // Pelo gesto de CIMA a folha abre no AUDIO, que e a coluna que a mao
-    // procura mais.
+    // Through the UP gesture the sheet opens on AUDIO, which is the column the hand
+    // looks for most.
     if (!barFocus) barFocus = 1; else reqTracks = 1;
     wake();
     return;
   }
   if (barFocus) {
-    // Na barra, ESQUERDA e DIREITA procuram no filme em vez de trocar de botao.
+    // On the bar, LEFT and RIGHT seek through the film instead of changing button.
     if (k == SDLK_LEFT)       jump(-1);
     else if (k == SDLK_RIGHT) jump(1);
     else if (k == SDLK_DOWN)  barFocus = 0;
@@ -726,16 +733,16 @@ void player_event(const SDL_Event *e) {
     return;
   }
   if (k == SDLK_DOWN) {
-    // BAIXO a partir da fileira significa "tirar os controles da frente".
-    // Nao chama acordar(): isso recolocaria a barra no mesmo evento e faria o
-    // comando parecer quebrado. O proximo toque direcional a revela de novo.
+    // DOWN from the row means "get the controls out of the way".
+    // It does not call wake(): that would put the bar back in the same event and make
+    // the command look broken. The next directional press reveals it again.
     barFocus = 0;
     visible = 0;
     lastInput = SDL_GetTicks();
     return;
   }
-  // Sem rotacao nas pontas: a fileira e curta e cabe inteira no olhar; dar a
-  // volta no fim le como erro, nao como atalho.
+  // No wrap-around at the ends: the row is short and fits in a single glance; going
+  // round at the end reads as an error, not as a shortcut.
   if (k == SDLK_LEFT  && button > 0)          button--;
   else if (k == SDLK_RIGHT && button < PLR_NBTNS - (epT > 0 ? 1 : 2)) button++;
   wake();
@@ -745,28 +752,28 @@ void player_update(float dt, Uint32 now) {
   if (!is_open) return;
 
   entry = anim_spring(entry, exiting ? 0.0f : 1.0f, dt, NV_SPRING_SCREEN);
-  // Marca o primeiro quadro COM IMAGEM. E daqui que a guia parental conta o
-  // tempo dela — contar da abertura da tela faria a guia gastar o prazo
-  // enquanto o app ainda procurava fonte, e ela sumiria antes de o filme
-  // aparecer.
-  if (!startImage && comVideo && video_ready()) { startImage = now; wake(); }
+  // Marks the first frame WITH A PICTURE. It is from here that the parental guide
+  // counts its time — counting from the screen's opening would make the guide spend
+  // its allowance while the app was still looking for a source, and it would
+  // disappear before the film appeared.
+  if (!startImage && hasVideo && video_ready()) { startImage = now; wake(); }
   if (exiting && entry < 0.02f) { is_open = 0; exiting = 0; entry = 0.0f; return; }
 
-  // Havendo pipeline, posicao e duracao vem DELE; o dt so serve para as
-  // animacoes. O relogio somado continua existindo para quando nao ha video
-  // (no Mac, ou se a fonte falhar): sem ele a barra ficaria parada em zero e a
-  // tela mentiria dizendo que nada acontece.
-  // O retangulo depende da proporcao do QUADRO, e ela so existe quando o
-  // videoInfo chega — segundos depois da abertura. Sem esta releitura o modo
-  // ficaria calculado com o chute de 16:9 para sempre, e num arquivo 3840x1606
-  // (que e o caso real medido nesta TV) o "Original" cortaria a imagem.
-  if (comVideo) {
+  // With a pipeline, the position and duration come FROM IT; dt only serves the
+  // animations. The added-up clock still exists for when there is no video (on the
+  // Mac, or if the source fails): without it the bar would sit at zero and the screen
+  // would lie by saying nothing is happening.
+  // The rectangle depends on the FRAME's aspect ratio, and that only exists once the
+  // videoInfo arrives — seconds after the opening. Without this reread the mode would
+  // stay computed from the 16:9 guess forever, and on a 3840x1606 file (which is the
+  // real case measured on this TV) "Original" would crop the image.
+  if (hasVideo) {
     static int lastWidth, lastHeight;
     int lw = video_width(), lh = video_height();
     if (lw != lastWidth || lh != lastHeight) { lastWidth = lw; lastHeight = lh; applyAspect(); }
   }
 
-  if (comVideo && video_active()) {
+  if (hasVideo && video_active()) {
     double d = video_duration();
     posSeg = (float)video_pos();
     if (d > 1.0) durationSeg = (float)d;
@@ -780,8 +787,8 @@ void player_update(float dt, Uint32 now) {
     if (posSeg >= durationSeg) { posSeg = durationSeg; playing = 0; }
   }
 
-  // Pausado, os controles ficam. Sumir com eles deixaria o usuario diante de um
-  // quadro parado sem nenhuma pista de que foi ele quem pausou.
+  // Paused, the controls stay. Making them disappear would leave the user in front of
+  // a still frame with no clue that it was they who paused.
   if (visible && playing && !player_loading() && !episodes_is_open() &&
       !stream_sheet_is_open() && !tracks_is_open() && now - lastInput > PLR_HIDES_MS) visible = 0;
   if (epT > 0 && !strstr(lineEp, " · ")) player_set_episode(epT, epE);
@@ -795,8 +802,8 @@ void player_update(float dt, Uint32 now) {
   }
 }
 
-// hh:mm:ss so quando passa de uma hora — "0:03:12" num episodio curto le como
-// erro de formatacao, nao como tempo.
+// hh:mm:ss only when it passes an hour — "0:03:12" on a short episode reads as a
+// formatting error, not as a time.
 static void fmtTime(char *b, size_t n, float seg, int negative) {
   if (seg < 0.0f) seg = 0.0f;
   int t = (int)(seg + 0.5f);
@@ -806,15 +813,15 @@ static void fmtTime(char *b, size_t n, float seg, int negative) {
   else       snprintf(b, n, "%s%d:%02d", sinal, m, s);
 }
 
-// --- icones -----------------------------------------------------------------
-// ARQUIVOS DE VERDADE, de art/icones (os .svg do app web rasterizados a 128px).
-// Antes cada glifo era montado com as primitivas — o play de um triangulo, a
-// pausa de dois retangulos, a legenda de barras, o aspecto de quatro linhas de
-// 3px — e cada um era uma aproximacao do original.
+// --- icons -------------------------------------------------------------------
+// REAL FILES, from art/icons (the web app's .svg rasterised at 128px).
+// Each glyph used to be assembled from the primitives — play from a triangle, pause
+// from two rectangles, subtitles from bars, aspect from four 3px lines — and each
+// was an approximation of the original.
 //
-// A cor continua vindo daqui: gfx_icone desenha com GFX_MARCA, que tira a forma
-// do ALPHA do arquivo, entao o mesmo PNG serve escuro sobre o circulo branco do
-// foco e claro sobre o circulo translucido.
+// The colour still comes from here: gfx_icon draws with GFX_BRAND, which takes the
+// shape from the file's ALPHA, so the same PNG serves dark over the focus's white
+// circle and light over the translucent one.
 //
 static void iconFile(float cx, float cy, float a, float luma,
                          const char *name, float size) {
@@ -838,8 +845,8 @@ static void iconAspect(float cx, float cy, float a, float luma) {
   iconFile(cx, cy, a, luma, "aspect", PLR_ICON_H * 1.15f);
 }
 
-// Um botao circular do transporte: translucido quando solto, branco quando em
-// foco, e o glifo sempre com o contraste certo contra o fundo dele.
+// A round transport button: translucent when idle, white when focused, and the glyph
+// always with the right contrast against its background.
 static void buttonCircle(float cx, float cy, float f, float a, int sel) {
   float d = PLR_BTN_D * (1.0f + 0.09f * f);
   GfxRect r = { cx - d * 0.5f, cy - d * 0.5f, d, d };
@@ -853,8 +860,8 @@ static void colorSubtitle(int i,int *r,int *g,int *b){
   if(i<0||i>=VIDEO_SUB_NCOLORS)i=0;*r=c[i][0];*g=c[i][1];*b=c[i][2];
 }
 
-/* O uMS da C9 limita fonte e escala. OpenSubtitles passa por este overlay
- * SDL/GLES, exatamente como o overlay HTML do app web. */
+/* The C9's uMS limits the font and the scale. OpenSubtitles goes through this
+ * SDL/GLES overlay, exactly like the web app's HTML overlay. */
 static void drawSubtitleExternal(void){
   char text[768],*line,*salva;TxtLine color[4],border[4];int n=0,r,g,b;
   if(!subtitle_text(posSeg,subStyle.delayMs,text,sizeof text))return;
@@ -894,7 +901,7 @@ static void drawActionsEpisode(void){
     const char *art=next->thumb[0]?next->thumb:(item()&&item()->backdrop[0]?item()->backdrop:NULL);
     if(art){GLuint tx=tex_get_width(art,288);if(tx){gfx_tex_aspect_current=tex_aspect(art);gfx_rect((GfxRect){450,738,288,158},tx,GFX_CARD,0,0,0,.08f,1,1,1,entry);gfx_tex_aspect_current=0;}}
     TxtLine l=txt_line(TXT_PLR_BODY,"Next episode",205,207,213,255);txt_draw_alpha(l,782,752,entry);
-    char name[220];snprintf(name,sizeof name,"T%dE%d · %s",next->season,next->episode,next->name);
+    char name[220];snprintf(name,sizeof name,"S%dE%d · %s",next->season,next->episode,next->name);
     TxtLine t=txt_line_trim(TXT_PLR_TITLE,name,250,250,252,255,430);txt_draw_alpha(t,782,794,entry);
     GfxRect bot={1240,775,220,76};gfx_color(bot,.5f,.08f,.08f,.09f,.96f*entry);gfx_rect(bot,0,GFX_RING,0,.018f,0,.5f,1,1,1,.35f*entry);
     gfx_icon((GfxRect){1264,793,40,40},"play",1,1,1,entry);TxtLine rt=txt_line(TXT_BODY,"Play",246,246,248,255);txt_draw_alpha(rt,1310,797,entry);
@@ -911,36 +918,36 @@ void player_draw(Uint32 now) {
   if (!is_open) return;
   const CatItem *c = item();
 
-  // --- o quadro de video ---
-  // Com pipeline nao ha o que desenhar: o video esta num plano de hardware ATRAS
-  // desta superficie, e o que se faz aqui e abrir o buraco por onde ele aparece.
-  // O furo tem de sair DAQUI e nao no fim do quadro: feito por ultimo ele
-  // apagaria os proprios controles. Tudo o que vem depois (veu, barra, textos)
-  // desenha por cima do buraco e continua visivel, porque o alpha do blend e
-  // somado — um veu a 60% sobre o furo devolve 0.6 de opacidade, que e
-  // exatamente o escurecimento que se quer sobre o video.
+  // --- the video frame ---
+  // With a pipeline there is nothing to draw: the video is on a hardware plane BEHIND
+  // this surface, and what is done here is opening the hole it shows through.
+  // The hole has to come from HERE and not at the end of the frame: done last it
+  // would erase the controls themselves. Everything that comes after (veil, bar,
+  // text) draws over the hole and stays visible, because the blend's alpha is added
+  // — a veil at 60% over the hole gives back 0.6 of opacity, which is exactly the
+  // darkening wanted over the video.
   //
-  // Sem pipeline, o lugar do quadro fica com a arte-chave parada. GFX_CARD com
-  // raio 0 e o quad de tela inteira: o recorte (cover) do shader e o que impede
-  // a arte 16:9 de esticar quando a tela nao for exatamente 16:9.
+  // With no pipeline, the frame's place holds the still key art. GFX_CARD with radius
+  // 0 is the full-screen quad: the shader's crop (cover) is what stops the 16:9 art
+  // stretching when the screen is not exactly 16:9.
   GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  if (player_com_video()) {
-    // O furo acompanha o MESMO retangulo que foi ao plano de hardware, cortado
-    // na tela. Furar sempre a tela inteira, como antes, deixava faixa preta nos
-    // modos que nao ocupam tudo ("Original" num 2.39:1 entregue como 2.39:1):
-    // o furo mostrava o nada atras do plano em vez de mostrar o plano.
+  if (player_has_video()) {
+    // The hole follows the SAME rectangle that went to the hardware plane, clipped by
+    // the screen. Always punching the whole screen, as before, left a black band in
+    // the modes that do not fill everything ("Original" on a 2.39:1 delivered as
+    // 2.39:1): the hole showed the nothing behind the plane instead of showing the plane.
     PlrRect r = aspectVisible(aspect);
     GfxRect hole;
     hole.x = r.x; hole.y = r.y; hole.w = r.w; hole.h = r.h;
-    // Fora do furo fica PRETO, e nao a arte-chave: e o que a TV mostra ao lado
-    // do plano de video, e pintar outra coisa ali criaria uma borda que nao
-    // existe no aparelho.
+    // Outside the hole is BLACK, and not the key art: it is what the TV shows beside
+    // the video plane, and painting something else there would create a border that
+    // does not exist on the device.
     if (hole.w < NV_SCREEN_W - 0.5f || hole.h < NV_SCREEN_H - 0.5f)
       gfx_color(screen, 0.0f, 0, 0, 0, 1.0f);
     if (hole.w > 0.0f && hole.h > 0.0f) gfx_hole(hole);
   } else {
     const char *art = (c && c->backdrop[0]) ? c->backdrop : NULL;
-    GLuint tex = art ? tex_get_hero(art) : 0;   // ocupa a tela inteira
+    GLuint tex = art ? tex_get_hero(art) : 0;   // it fills the whole screen
     if (tex) {
       gfx_tex_aspect_current = tex_aspect(art);
       gfx_rect(screen, tex, GFX_CARD, 0, 0, 0, 0.0f, 0, 0, 0, entry);
@@ -950,9 +957,9 @@ void player_draw(Uint32 now) {
     }
   }
 
-  // Indicador de abertura: pontos pulsando no centro, sobre a arte escurecida.
-  // Um giro exigiria rotacao no shader; tres pontos em contrafase dizem a mesma
-  // coisa com o que ja existe, e leem bem de longe.
+  // An opening indicator: dots pulsing in the centre, over the darkened art.
+  // A spinner would need rotation in the shader; three dots in counterphase say the
+  // same thing with what already exists, and they read well from a distance.
   if (player_loading()) {
     GfxRect dark = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     int k;
@@ -967,7 +974,7 @@ void player_draw(Uint32 now) {
       TxtLine t = txt_line_trim(TXT_PLR_TITLE,c?c->title:"Playing",240,241,244,255,680);
       txt_draw_alpha(t,(NV_SCREEN_W-t.w)*.5f,NV_SCREEN_H*.5f-150,entry);
     }
-    // Anel com cauda luminosa, animado sem novas texturas por quadro.
+    // A ring with a luminous tail, animated with no new textures per frame.
     for (k = 0; k < 12; k++) {
       float ang = k * 6.2831853f / 12.0f + now * .006f;
       float br = .18f + .82f * k / 11.0f;
@@ -991,121 +998,121 @@ void player_draw(Uint32 now) {
     txt_draw_alpha(aj,(NV_SCREEN_W-aj.w)*.5f,448,entry);
   }
 
-  // --- aviso de troca de modo de proporcao ---------------------------------
-  // O #playerAspectToast do web, com as medidas do bloco de TV do CSS:
-  //   top min(8.33vw,160px)=160  altura min(6.67vw,128px)=128
-  //   padding lateral min(3.33vw,64px)=64  fonte min(2.92vw,56px)=56
-  //   fundo rgba(9,13,20,0.88), borda rgba(255,255,255,0.18), raio 999 (pilula)
-  // Ele e desenhado ANTES do corte por `a`: a tecla de proporcao funciona com
-  // os controles escondidos, e um aviso que so aparecesse com a barra em pe
-  // deixaria a troca sem nenhuma confirmacao no caso mais comum.
+  // --- the aspect-mode change notice ---------------------------------------
+  // The web app's #playerAspectToast, with the measurements of the CSS's TV block:
+  //   top min(8.33vw,160px)=160  height min(6.67vw,128px)=128
+  //   side padding min(3.33vw,64px)=64  font min(2.92vw,56px)=56
+  //   background rgba(9,13,20,0.88), border rgba(255,255,255,0.18), radius 999 (a pill)
+  // It is drawn BEFORE the cut by `a`: the aspect key works with the controls hidden,
+  // and a notice that only appeared with the bar up would leave the change with no
+  // confirmation at all in the most common case.
   if (toastAte > now) {
-    // Some com fade nos ultimos 200ms, que e a `transition: opacity 200ms` do
-    // bloco de TV. Aparecer e sumir de estalo le como falha de desenho.
+    // It fades out over the last 200ms, which is the TV block's
+    // `transition: opacity 200ms`. Appearing and disappearing instantly reads as a
+    // drawing fault.
     float remains = (float)(toastAte - now);
     float at = (remains < 200.0f ? remains / 200.0f : 1.0f) * entry;
     TxtLine l = txt_line(TXT_PLR_TITLE, player_aspect_label(aspect),
                            243, 248, 255, 242);
     float pw = (float)l.w + 128.0f, ph = 128.0f;
     GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 160.0f, pw, ph };
-    // Raio e FRACAO do menor lado (ver gfx.h): 0.5 e a pilula completa.
+    // The radius is a FRACTION of the smaller side (see gfx.h): 0.5 is the full pill.
     gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.88f * at);
     txt_draw_alpha(l, pil.x + (pw - l.w) * 0.5f,
                        pil.y + (ph - (float)l.h) * 0.5f, at);
   }
 
-  /* Permanecem quando os controles somem: sao conteudo, nao chrome do player. */
+  /* They stay when the controls disappear: they are content, not player chrome. */
   drawSubtitleExternal();
   drawActionsEpisode();
 
   float a = anim * entry;
-  if (a <= 0.005f) return;   // tocando limpo: nada por cima da imagem
+  if (a <= 0.005f) return;   // playing clean: nothing over the image
 
-  // Dois degrades, como no web: .player-controls-gradient-top (150px, 0.7 -> 0)
-  // e .player-controls-gradient-bottom (200px, 0 -> 0.8). O de baixo sustenta o
-  // titulo e a barra; o de cima existe porque os selos e a classificacao ficam
-  // no alto e sem ele sumiriam sobre cena clara. Ambos acompanham a animacao
-  // dos controles: fixos, deixariam sombra permanente em toda cena.
+  // Two gradients, as in the web app: .player-controls-gradient-top (150px, 0.7 -> 0)
+  // and .player-controls-gradient-bottom (200px, 0 -> 0.8). The bottom one supports
+  // the title and the bar; the top one exists because the badges and the age rating
+  // sit up there and without it they would disappear over a bright scene. Both follow
+  // the controls' animation: fixed, they would leave a permanent shadow over every scene.
   GfxRect veil = { 0, NV_SCREEN_H - PLR_GRADIENT_BOTTOM, NV_SCREEN_W, PLR_GRADIENT_BOTTOM };
-  // GFX_VEU_BAIXO e nao GFX_VEU: aquele escurece tambem a ESQUERDA (feito para
-  // o hero da home) e deixava o canto superior esquerdo deste retangulo escuro
-  // com o direito transparente — a borda entre os dois lia como uma placa.
+  // GFX_VEIL_BOTTOM and not GFX_VEIL: that one darkens the LEFT too (made for the
+  // home's hero) and left this rectangle's top-left corner dark with its right
+  // transparent — the boundary between the two read as a plate.
   gfx_rect(veil, 0, GFX_VEIL_BOTTOM, 0, 0, 0, 0.0f, 0, 0, 0, 0.86f * a);
   { GfxRect top = { 0, 0, NV_SCREEN_W, PLR_GRADIENT_TOP };
     gfx_rect(top, 0, GFX_VEIL_TOP, 0, 0, 0, 0.0f, 0, 0, 0, 0.70f * a); }
 
-  // O bloco inteiro desliza junto: titulo, barra e icones sao UM objeto que
-  // sobe. Animar cada linha por conta propria produz um escalonamento que o
-  // aparelho nao tem.
-  // O deslize acompanha as DUAS coisas: o OSD aparecendo/sumindo (`anim`) e a
-  // TELA abrindo (`entrada`). Antes so o primeiro entrava aqui, entao abrir o
-  // player era um fade seco — os controles nasciam no lugar final, so que
-  // transparentes. Com a abertura tambem deslizando, o bloco entra de baixo e a
-  // tela deixa de "piscar" para o estado final.
+  // The whole block slides together: title, bar and icons are ONE object that rises.
+  // Animating each line on its own produces a staggering the device does not have.
+  // The slide follows BOTH things: the OSD appearing/disappearing (`anim`) and the
+  // SCREEN opening (`entry`). Before, only the first came in here, so opening the
+  // player was a plain fade — the controls were born in their final place, only
+  // transparent. With the opening sliding too, the block comes in from below and the
+  // screen stops "flashing" to its final state.
   //
-  // A curva da abertura e uma desaceleracao (1-(1-t)^3) e nao a mola crua: a
-  // mola passa do ponto e volta, e num bloco de 200px de altura esse repique le
-  // como tremida.
+  // The opening's curve is a deceleration (1-(1-t)^3) and not the raw spring: the
+  // spring overshoots and comes back, and on a block 200px tall that bounce reads as
+  // a wobble.
   float eEnt  = 1.0f - (1.0f - entry) * (1.0f - entry) * (1.0f - entry);
-  float scrolldown = (1.0f - anim) * PLR_SLIDE
+  float slideDown = (1.0f - anim) * PLR_SLIDE
               + (1.0f - eEnt) * PLR_SLIDE * 1.8f;
 
-  // Ancoragem de baixo para cima, na ordem da coluna .player-controls-bottom do
-  // web lida ao contrario: a fileira de botoes encosta na margem inferior, a
-  // barra fica 16px acima dela e a meta 12px acima da barra. A margem e
-  // --player-controls-y (48), nao a margem geral do app.
-  float yRowTop = NV_SCREEN_H - PLR_DFLT_Y - PLR_BTN_D + scrolldown;
+  // Anchored from the bottom up, in the order of the web app's
+  // .player-controls-bottom column read backwards: the button row rests against the
+  // bottom margin, the bar sits 16px above it and the meta 12px above the bar. The
+  // margin is --player-controls-y (48), not the app's general margin.
+  float yRowTop = NV_SCREEN_H - PLR_PAD_Y - PLR_BTN_D + slideDown;
   float cyButtons = yRowTop + PLR_BTN_D * 0.5f;
   float yBar   = yRowTop - PLR_GAP_ROW - PLR_RAIL_H;
 
-  // --- barra de progresso ---
-  // A barra ocupa a largura util inteira, entre as margens do player. Sem
-  // marcador na cabeca: o web nao tem um — a barra engorda de 6 para 10px
-  // quando recebe foco, e e isso que diz que ela e operavel. Aqui o foco anda
-  // so pelos botoes, entao ela fica sempre em 6.
-  // DE PONTA A PONTA: encosta nas duas bordas da tela. Com margem ela lia como
-  // um componente solto no meio do rodape; encostada, ela e a borda do video.
+  // --- the progress bar ---
+  // The bar occupies the whole usable width, between the player's margins. With no
+  // head marker: the web app has none — the bar thickens from 6 to 10px when it takes
+  // focus, and that is what says it is operable. Here the focus moves only along the
+  // buttons, so it stays at 6.
+  // EDGE TO EDGE: it touches both edges of the screen. With a margin it read as a
+  // component floating in the middle of the footer; flush, it is the video's edge.
   float bx = 0.0f, bw = NV_SCREEN_W;
-  // MARGEM DE SEGURANCA para o CONTEUDO (titulo, meta, botoes, relogio).
+  // A SAFE MARGIN for the CONTENT (title, meta, buttons, clock).
   //
-  // O trilho continua de ponta a ponta de proposito — encostado, ele le como a
-  // borda do video. O que nao pode encostar e o TEXTO: em x=0 ele cai na zona
-  // que a TV corta por overscan, e o dono viu o titulo e o tempo cortados nas
-  // duas beiradas. Sao dois papeis diferentes que estavam compartilhando o
-  // mesmo x so porque nasceram juntos.
+  // The track still runs edge to edge on purpose — flush, it reads as the video's
+  // edge. What must not touch the edge is the TEXT: at x=0 it falls in the zone the
+  // TV cuts by overscan, and the owner saw the title and the time cut off at both
+  // edges. They are two different roles that were sharing the same x only because
+  // they were born together.
   //
-  // 96 e a mesma margem lateral da pagina de titulo (NV_DETP_X, o
-  // --tv-safe-gutter-width do web), entao o player deixa de ser o unico lugar
-  // do app com uma regra propria de borda. Fica como constante local porque
-  // player.c nao inclui detail.h — e nao deve incluir so por um numero.
+  // 96 is the same side margin as the title page's (NV_DETP_X, the web app's
+  // --tv-safe-gutter-width), so the player stops being the only place in the app with
+  // an edge rule of its own. It stays a local constant because player.c does not
+  // include detail.h — and should not, just for one number.
   float cx = bx + PLR_MARGIN;
   float cw = bw - PLR_MARGIN * 2.0f;
   float frac = durationSeg > 0.0f ? anim_clamp(posSeg / durationSeg, 0.0f, 1.0f) : 0.0f;
-  // Com foco o trilho engorda de 6 para 10 e clareia de 0.30 para 0.45, e ele
-  // cresce para BAIXO a partir da mesma linha de base — subir moveria tambem a
-  // meta e o titulo, que estao ancorados nela.
-  // O trilho cresce para BAIXO a partir da mesma linha de base — subir moveria
-  // tambem o titulo, que esta ancorado nela.
+  // With focus the track thickens from 6 to 10 and lightens from 0.30 to 0.45, and it
+  // grows DOWNWARDS from the same baseline — growing upwards would move the meta and
+  // the title too, which are anchored to it.
+  // The track grows DOWNWARDS from the same baseline — growing upwards would move the
+  // title too, which is anchored to it.
   float hRail = barFocus ? PLR_RAIL_H_FOCUS : PLR_RAIL_H;
   GfxRect rail = { bx, yBar, bw, hRail };
   GfxRect traveled = { bx, yBar, bw * frac, hRail };
   gfx_color(rail, PLR_RAIL_R, 1, 1, 1, (barFocus ? 0.34f : 0.22f) * a);
-  // O buffer do pipeline, entre o andado e o fim: e o que mostra que o video
-  // esta a frente do relogio. Sem dado do pipeline o segmento nao existe —
-  // inventar "quase todo carregado" seria pior que a barra simples. No web ele
-  // e a MESMA cor do preenchimento a 0.35 (.player-progress-buffered).
+  // The pipeline's buffer, between what has been played and the end: it is what shows
+  // the video is ahead of the clock. With no data from the pipeline the segment does
+  // not exist — inventing "almost all loaded" would be worse than the plain bar. In
+  // the web app it is the SAME colour as the fill at 0.35 (.player-progress-buffered).
   { float bufFrac = durationSeg > 0.0f ? anim_clamp(video_buffer_end() / durationSeg, 0.0f, 1.0f) : 0.0f;
     if (bufFrac > frac + 0.004f) {
       GfxRect buf = { bx + bw * frac, yBar, bw * (bufFrac - frac), hRail };
       gfx_color(buf, PLR_RAIL_R, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, 0.35f * a);
     } }
-  // Meio pixel ja conta: com o teste em 1.0 o inicio do filme nao desenhava
-  // nada, e a barra parecia so comecar a andar depois de um tempo.
+  // Half a pixel already counts: with the test at 1.0 the start of the film drew
+  // nothing, and the bar seemed only to start moving after a while.
   if (traveled.w > 0.5f)
     gfx_color(traveled, PLR_RAIL_R, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, a);
 
-  // Filme: somente nome. Serie: nome seguido de T/E e titulo do episodio.
-  // O arquivo e o provedor pertencem a folha de fontes, nao ao transporte.
+  // A film: the name only. A series: the name followed by S/E and the episode's title.
+  // The file and the provider belong to the sources sheet, not to the transport.
   float yMetaBase = yBar - PLR_GAP_BAR;
   if (lineEp[0]) {
     TxtLine le=txt_line_trim(TXT_PLR_BODY,lineEp,218,220,224,255,cw*.67f);
@@ -1114,15 +1121,15 @@ void player_draw(Uint32 now) {
     yMetaBase-=6;
   }
 
-  // O NOME DO FILME, EM TEXTO. Aqui o player preferia o LOGO do titulo quando
-  // havia um, e caia no texto so na falta dele. Duas coisas davam errado: o
-  // logo tem altura e proporcao proprias, entao o bloco pulava de titulo para
-  // titulo; e quando o TMDB entregava a variante escura o nome sumia sobre a
-  // cena. O dono pediu direto: "o titulo do filme que aparece no player pode
-  // deixar escrito como tava antes... so o nome do filme".
+  // THE FILM'S NAME, IN TEXT. Here the player used to prefer the title's LOGO when
+  // there was one, and fell back to text only in its absence. Two things went wrong:
+  // the logo has a height and aspect ratio of its own, so the block jumped from title
+  // to title; and when TMDB delivered the dark variant the name disappeared over the
+  // scene. The owner asked directly: "the film title that shows in the player can go
+  // back to being written like it was... just the film's name".
   //
-  // Texto tambem e o que o resto da tela usa (o relogio, o tempo, os selos),
-  // entao o canto passa a ter UMA gramatica so.
+  // Text is also what the rest of the screen uses (the clock, the time, the badges),
+  // so the corner now has ONE grammar.
   float hTitle, yTitle;
   { const char *name = (c && c->title[0]) ? c->title : "Playing";
     TxtLine lt = txt_line_trim(TXT_PLR_TITLE, name, 255, 255, 255, 255,
@@ -1131,12 +1138,12 @@ void player_draw(Uint32 now) {
     yTitle = yMetaBase - hTitle;
     txt_draw_alpha(lt, cx, yTitle, a); }
 
-  // --- fileira de BOTOES: o transporte do aparelho --------------------------
-  // Sem botoes redundantes de salto. O foco percorre so as acoes visiveis.
+  // --- the BUTTON row: the device's transport ------------------------------
+  // No redundant jump buttons. The focus runs only through the visible actions.
   {
-    // .player-controls-row e space-between: o grupo de botoes a ESQUERDA, com
-    // gap de 4px entre eles, e o rotulo de tempo empurrado para a direita por
-    // margin-left:auto. Nao e o transporte centralizado do app da Apple.
+    // .player-controls-row is space-between: the group of buttons on the LEFT, with a
+    // 4px gap between them, and the time label pushed to the right by
+    // margin-left:auto. It is not the Apple app's centred transport.
     float step = PLR_BTN_D + PLR_BTN_GAP;
     float x0    = cx + PLR_BTN_D * 0.5f;
     float cxs[PLR_NBTNS];
@@ -1162,11 +1169,11 @@ void player_draw(Uint32 now) {
     }
   }
 
-  // --- rotulo de tempo, na ponta direita da mesma fileira --------------------
-  // Um rotulo so, "decorrido / total", como o #playerTimeLabel do web. Aqui
-  // eram DOIS — decorrido a esquerda da barra e restante NEGATIVO a direita —
-  // que e a convencao do app da Apple, nao a nossa. Centrado na vertical com os
-  // circulos porque no web ele e um item de uma flex row com align-items:center.
+  // --- the time label, at the right-hand end of the same row -----------------
+  // A single label, "elapsed / total", like the web app's #playerTimeLabel. Here there
+  // were TWO — elapsed to the left of the bar and a NEGATIVE remainder to the right —
+  // which is the Apple app's convention, not ours. Vertically centred with the circles
+  // because in the web app it is an item of a flex row with align-items:center.
   {
     char t1[24], t2[24], all[52];
     fmtTime(t1, sizeof t1, posSeg, 0);
@@ -1177,10 +1184,10 @@ void player_draw(Uint32 now) {
                          cyButtons - (float)l.h * 0.5f, a * 0.9f); }
   }
 
-  // Selos de formato no alto a direita. Vem do FLUXO, nao de constante: os
-  // dois estavam fixos e anunciavam Dolby Vision em arquivo HDR10 e Atmos em
-  // faixa estereo. Selo que mente e pior que selo ausente, porque e nele que o
-  // dono confia para saber se pegou a versao boa.
+  // Format badges at the top right. They come from the STREAM, not from a constant:
+  // the two used to be hard-coded and announced Dolby Vision on an HDR10 file and
+  // Atmos on a stereo track. A badge that lies is worse than no badge, because it is
+  // what the owner trusts to know whether they got the good version.
   {
     const char *badges[3];
     int nBadges = 0;
@@ -1188,28 +1195,28 @@ void player_draw(Uint32 now) {
     if (video_width() >= 3840)      snprintf(res, sizeof res, "4K");
     else if (video_width() >= 1920) snprintf(res, sizeof res, "HD");
     if (res[0]) badges[nBadges++] = res;
-    // MEDIDO nesta TV, linha do proprio log durante a reproducao de um MKV que
-    // o addon anunciava como Dolby Vision:
-    //   [video] HDR do pipeline: HDR10 (fonte afirmava DV=1)
-    // Era exatamente esse o caso em que o selo mentia.
+    // MEASURED on this TV, a line from the log itself while playing an MKV the addon
+    // advertised as Dolby Vision:
+    //   [video] pipeline HDR: HDR10 (source claimed DV=1)
+    // That was exactly the case where the badge lied.
     //
-    // "Dolby Vision" so quando o PIPELINE devolveu DolbyVision no videoInfo —
-    // video_tem_dolby_vision nao le mais a afirmacao do addon. Esta MEDIDO que
-    // nesta TV um MKV anunciado como DV volta HDR10; o selo dizia Dolby Vision
-    // por cima de um fluxo HDR10, e o dono confia nele justamente para saber se
-    // pegou a versao boa. Quando o pipeline diz HDR10, o selo diz HDR10 — calar
-    // seria esconder metade da resposta.
+    // "Dolby Vision" only when the PIPELINE returned DolbyVision in the videoInfo —
+    // video_has_dolby_vision no longer reads the addon's claim. It is MEASURED that on
+    // this TV an MKV advertised as DV comes back HDR10; the badge said Dolby Vision
+    // over an HDR10 stream, and the owner trusts it precisely to know whether they got
+    // the good version. When the pipeline says HDR10, the badge says HDR10 — staying
+    // quiet would hide half the answer.
     if (video_has_dolby_vision())                  badges[nBadges++] = "Dolby Vision";
     else if (!strcasecmp(video_hdr(), "HDR10"))    badges[nBadges++] = "HDR10";
     if (video_has_atmos())        badges[nBadges++] = "Dolby Atmos";
 
-    // RELOGIO e "Termina as", que sao o que o web poe neste canto
-    // (.player-controls-top, playerScreen.js:5846). Os selos de qualidade sao
-    // acrescimo do port e passam a ficar ABAIXO deles, nao no lugar.
+    // THE CLOCK and "Ends at", which are what the web app puts in this corner
+    // (.player-controls-top, playerScreen.js:5846). The quality badges are the port's
+    // addition and now sit BELOW them, not in their place.
     //
-    //   .player-clock    26/600 branco 96%
-    //   .player-ends-at  20/400 branco 78%, logo abaixo
-    float yRel = PLR_DFLT_Y + scrolldown;
+    //   .player-clock    26/600 white 96%
+    //   .player-ends-at  20/400 white 78%, just below
+    float yRel = PLR_PAD_Y + slideDown;
     {
       time_t nowT = time(NULL);
       struct tm lt;
@@ -1224,60 +1231,58 @@ void player_draw(Uint32 now) {
         snprintf(end, sizeof end, "Ends at %s", h2); }
       TxtLine lh = txt_line(TXT_PG_CLOCK, hora, 255, 255, 255, 255);
       TxtLine lf = txt_line(TXT_PG_END, end, 255, 255, 255, 255);
-      txt_draw_alpha(lh, NV_SCREEN_W - PLR_DFLT_X - lh.w, yRel, a * 0.96f);
-      txt_draw_alpha(lf, NV_SCREEN_W - PLR_DFLT_X - lf.w, yRel + lh.h + 2.0f,
+      txt_draw_alpha(lh, NV_SCREEN_W - PLR_PAD_X - lh.w, yRel, a * 0.96f);
+      txt_draw_alpha(lf, NV_SCREEN_W - PLR_PAD_X - lf.w, yRel + lh.h + 2.0f,
                          a * 0.78f);
       yRel += lh.h + 2.0f + lf.h;
     }
 
     { float sy = yRel + 16.0f;
       int i;
-      // ENTRADA ESCALONADA. Estes selos ja apareciam um a um, mas por acidente:
-      // o rasterizador de texto faz no maximo TXT_POR_QUADRO linhas por quadro
-      // (text.c:40, e ha razao medida para isso), entao o terceiro selo chegava
-      // dois quadros depois do primeiro. Lido na TV isso e um defeito — "vai
-      // aparecendo e mostrando um por um", nas palavras do dono.
+      // A STAGGERED ENTRANCE. These badges already appeared one by one, but by
+      // accident: the text rasteriser does at most TXT_PER_FRAME lines per frame
+      // (text.c:40, and there is a measured reason for that), so the third badge
+      // arrived two frames after the first. Read on a TV that is a defect — "they come
+      // in showing one at a time", in the owner's words.
       //
-      // A correcao nao e apressar o rasterizador: e ASSUMIR o escalonamento e
-      // dar a ele uma curva. Cada selo entra 90 ms depois do anterior, subindo
-      // 10px e ganhando opacidade. O que era artefato vira cadencia, e o atraso
-      // do raster fica escondido dentro da propria animacao.
+      // The fix is not to hurry the rasteriser: it is to OWN the staggering and give
+      // it a curve. Each badge comes in 90 ms after the previous one, rising 10px and
+      // gaining opacity. What was an artefact becomes a cadence, and the raster's delay
+      // hides inside the animation itself.
       float t0 = (float)(now - lastInput) / 1000.0f;
       for (i = 0; i < nBadges; i++) {
         float ts = anim_clamp((t0 - i * 0.09f) / 0.26f, 0.0f, 1.0f);
         float e  = 1.0f - (1.0f - ts) * (1.0f - ts);   // desaceleracao
         TxtLine l = txt_line(TXT_MINI, badges[i], 236, 237, 242, 255);
         if (e > 0.004f)
-          txt_draw_alpha(l, NV_SCREEN_W - PLR_DFLT_X - l.w,
+          txt_draw_alpha(l, NV_SCREEN_W - PLR_PAD_X - l.w,
                              sy + (1.0f - e) * 10.0f, a * 0.85f * e);
         sy += l.h + 6.0f;
       } }
   }
 
-  // GUIA PARENTAL, canto superior esquerdo (.player-parental-guide).
-  //
-  // Aqui havia um selo de classificacao com o GENERO do titulo ao lado, que
-  // nao existe no app web — genero nao e advertencia de conteudo, e "Drama"
-  // dentro de um selo laranja se le como aviso. O web mostra ate cinco linhas
-  // "Categoria · Gravidade" vindas do guia parental do IMDb, com uma barra
-  // vertical de 6px na cor de destaque encostada a esquerda.
+  // There used to be an age-rating badge here with the title's GENRE beside it, which
+  // does not exist in the web app — a genre is not a content warning, and "Drama"
+  // inside an orange badge reads as a warning. The web app shows up to five
+  // "Category · Severity" lines from IMDb's parental guide, with a vertical 6px bar
+  // in the accent colour flush left.
   //
   //   .player-parental-guide  left 64, top 48
-  //   .player-parental-line   6 de largura, raio 3, altura = a da lista
+  //   .player-parental-line   6 wide, radius 3, height = the list's
   //   .player-parental-list   padding-left 20, gap 4
-  //   .player-parental-item   36 de altura
-  //   rotulo 22/600 branco 85% · separador 22/400 branco 40% ·
-  //   gravidade 22/400 branco 50%
+  //   .player-parental-item   36 tall
+  //   label 22/600 white 85% · separator 22/400 white 40% ·
+  //   severity 22/400 white 50%
   //
-  // TEMPO PROPRIO, e nao o alpha do OSD. Esta guia e um AVISO DE ABERTURA: diz
-  // o que o filme contem antes de a cena comecar a valer. Presa ao OSD ela
-  // reaparecia toda vez que o dono mexia no controle, no meio do filme, quando
-  // a informacao ja nao serve para nada — "ele deveria so aparecer animado no
-  // inicio do filme e depois nao deveria aparecer mais".
+  // A CLOCK OF ITS OWN, and not the OSD's alpha. This guide is an OPENING WARNING: it
+  // says what the film contains before the scene starts to matter. Tied to the OSD it
+  // reappeared every time the owner touched the remote, mid-film, when the
+  // information is no longer any use — "it should only appear animated at the start of
+  // the film and then never again".
   //
-  // Conta de inicioImagem (o primeiro quadro com imagem, nao a abertura da
-  // tela): entra escalonada linha a linha, fica PG_SEG_VISIVEL e sai. Depois
-  // disso nao volta nesta reproducao.
+  // It counts from startImage (the first frame with a picture, not the screen's
+  // opening): it comes in staggered line by line, stays PG_SEG_TOTAL and leaves. After
+  // that it does not come back during this playback.
   {
     int np = parental_n();
     float tg = startImage ? (float)(now - startImage) / 1000.0f : -1.0f;
@@ -1285,22 +1290,22 @@ void player_draw(Uint32 now) {
       float output = anim_clamp((PG_SEG_TOTAL - tg) / PG_SEG_OUTPUT, 0.0f, 1.0f);
       float lin = PG_LINE_H, gap = PG_LINE_GAP;
       float height = np * lin + (np - 1) * gap;
-      float y0 = PLR_DFLT_Y;
-      // A barra so cresce depois que a primeira linha entrou, senao ela aparece
-      // sozinha apontando para o vazio.
+      float y0 = PLR_PAD_Y;
+      // The bar only grows once the first line has come in, otherwise it appears on
+      // its own pointing at nothing.
       float eB = anim_clamp((tg - 0.10f) / 0.34f, 0.0f, 1.0f);
       eB = 1.0f - (1.0f - eB) * (1.0f - eB);
-      { GfxRect bar = { PLR_DFLT_X, y0, PG_BAR_W, height * eB };
+      { GfxRect bar = { PLR_PAD_X, y0, PG_BAR_W, height * eB };
         if (eB > 0.01f)
           gfx_color(bar, 0.5f * (PG_BAR_W / (height * eB)),
                   PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, entry * output); }
-      float xt = PLR_DFLT_X + PG_BAR_W + PG_LIST_PADX;
+      float xt = PLR_PAD_X + PG_BAR_W + PG_LIST_PADX;
       for (int i = 0; i < np; i++) {
         float yl = y0 + i * (lin + gap);
         float ts = anim_clamp((tg - 0.18f - i * 0.10f) / 0.30f, 0.0f, 1.0f);
         float ee = 1.0f - (1.0f - ts) * (1.0f - ts);   // desaceleracao
         float ag = entry * output * ee;
-        float dx = (1.0f - ee) * 18.0f;                // entra deslizando da esquerda
+        float dx = (1.0f - ee) * 18.0f;                // it slides in from the left
         TxtLine lr, ls, lg;
         float cy, x;
         if (ag <= 0.004f) continue;

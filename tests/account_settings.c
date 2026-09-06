@@ -1,13 +1,13 @@
-// O blob da conta chega nos ajustes com o SENTIDO certo?
+// Does the account blob reach the settings with the right MEANING?
 //
-// Este e o teste que importa mais nesta area, porque o defeito aqui e MUDO:
-// um mapeamento invertido nao da erro, nao trava, nao aparece no log — a
-// pessoa so acha que a TV "veio com outras opcoes". Cada caso abaixo foi
-// conferido contra o valor literal que o app web grava.
+// This is the test that matters most in this area, because the defect here is
+// SILENT: an inverted mapping raises no error, does not hang, does not show up
+// in the log — the person just thinks the TV "came with different options".
+// Every case below was checked against the literal value the web app writes.
 //
-// Dois casos sao propositalmente traicoeiros:
-//   - `true` do web vira INDICE 0 ("Ligado"), nao 1;
-//   - `collapseSidebar: true` vira "Recolhida", que tambem e o indice 0.
+// Two cases are deliberately treacherous:
+//   - the web's `true` becomes INDEX 0 ("On"), not 1;
+//   - `collapseSidebar: true` becomes "Collapsed", which is also index 0.
 #include <stdio.h>
 #include <string.h>
 #include "settings.h"
@@ -20,12 +20,12 @@ static void checks(const char *what, int got, int expected) {
 }
 
 int main(void) {
-  // Blob com TODO valor no oposto do padrao de fabrica, para que qualquer
-  // opcao que nao seja aplicada apareca como falha em vez de coincidir.
-  // FORMATO REAL, medido contra a conta na TV: version + features, chave em
-  // snake_case, valor embrulhado em {"type","value"}. O teste antigo usava um
-  // mapa plano de camelCase — passava, e o app nao aplicava NADA no aparelho.
-  // Teste que nao usa o formato do servidor nao prova nada.
+  // A blob with EVERY value the opposite of the factory default, so that any
+  // option that is not applied shows up as a failure instead of coinciding.
+  // THE REAL FORMAT, measured against the account on the TV: version +
+  // features, key in snake_case, value wrapped in {"type","value"}. The old
+  // test used a flat camelCase map — it passed, and the app applied NOTHING on
+  // the device. A test that does not use the server's format proves nothing.
   static const char *BLOB =
     "{\"version\":1,\"features\":{\"layout_settings\":{"
     "\"modern_landscape_posters_enabled\":{\"type\":\"boolean\",\"value\":true},"
@@ -56,8 +56,8 @@ int main(void) {
   printf("\nbooleans (true from the web = ON):\n");
   checks("modernLandscapePostersEnabled:true -> on", settings_posters_landscape(), 1);
   checks("modernHeroFullScreenBackdropEnabled:false",    settings_hero_full(), 0);
-  checks("modernSidebar:false -> desligado",             settings_rail_modern(), 0);
-  checks("heroSectionEnabled:false -> desligado",        settings_hero_on(), 0);
+  checks("modernSidebar:false -> off",             settings_rail_modern(), 0);
+  checks("heroSectionEnabled:false -> off",        settings_hero_on(), 0);
   checks("posterLabelsEnabled:false",                    settings_labels_poster(), 0);
   checks("hideUnreleasedContent:true",                   settings_hide_unreleased(), 1);
   checks("continueWatchingEnabled:false",                settings_cw_on(), 0);
@@ -82,10 +82,10 @@ int main(void) {
   checks("posterCardWidthDp 150",                        settings_width_poster_dp(), 150);
   checks("posterCardCornerRadiusDp 12",                  settings_radius_poster_dp(), 12);
 
-  // Segunda rodada: valor de texto que este app NAO conhece (versao nova do
-  // web, opcao nova). A opcao tem de FICAR COMO ESTA. Cair num padrao aqui
-  // inventaria uma preferencia que a pessoa nunca marcou — e ela veria a TV
-  // mudar sozinha sem ter mexido em nada.
+  // Second round: a text value this app does NOT know (a newer version of the
+  // web app, a new option). The option has to STAY AS IT IS. Falling back to a
+  // default here would invent a preference the person never set — and they
+  // would see the TV change on its own without having touched anything.
   printf("\nan unknown value does not invent a preference:\n");
   { int beforeDiscover = settings_local_discover();
     int beforeStyle    = settings_cw_style();
@@ -96,8 +96,8 @@ int main(void) {
     checks("discoverLocation invalido -> mantido", settings_local_discover(), beforeDiscover);
     checks("cardStyle invalido -> mantido",        settings_cw_style(), beforeStyle); }
 
-  // E chave ausente tambem nao mexe: um blob de uma opcao so nao pode zerar as
-  // outras 39.
+  // And a missing key does not disturb anything either: a blob with a single
+  // option cannot zero out the other 39.
   printf("\na missing key does not disturb the rest:\n");
   { int before = settings_width_poster_dp();
     settings_apply_blob("{\"features\":{\"layout_settings\":{"

@@ -49,7 +49,7 @@ char *cloud_post(const char *path, const char *bodyJson,
                  const char *bearer, int *status);
 
 // Shorthand for /rest/v1/rpc/<function>.
-char *cloud_rpc_com(const char *func, const char *bodyJson,
+char *cloud_rpc(const char *func, const char *bodyJson,
                     const char *bearer, int *status);
 
 // GET on /rest/v1/<table>?<query>. MEASURED: not every surface has an RPC —

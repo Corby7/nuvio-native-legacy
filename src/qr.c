@@ -5,10 +5,10 @@
 
 // --------------------------------------------------------------- tabelas
 //
-// Versoes 1..6, correcao L. Cada linha: total de codewords, codewords de
-// correcao POR BLOCO, e numero de blocos. Numeros da ISO 18004; a versao 6 e a
-// unica destas que se divide em dois blocos, e e por isso que o entrelacamento
-// abaixo e generico em vez de assumir bloco unico.
+// Versions 1..6, correction level L. Each row: total codewords, correction
+// codewords PER BLOCK, and number of blocks. Numbers from ISO 18004; version 6
+// is the only one of these that splits into two blocks, and that is why the
+// interleaving below is generic instead of assuming a single block.
 static const struct { int total, ecByBlock, blocks; } SEE[7] = {
   { 0,   0,  0 },
   { 26,  7,  1 },
@@ -19,8 +19,8 @@ static const struct { int total, ecByBlock, blocks; } SEE[7] = {
   { 172,18,  2 }
 };
 
-// Centro do unico padrao de alinhamento de cada versao (o outro centro e
-// sempre 6, e as tres combinacoes com ele caem em cima dos localizadores).
+// Centre of each version's single alignment pattern (the other centre is always
+// 6, and the three combinations with it land on top of the finders).
 static const int ALIGN[7] = { 0, 0, 18, 22, 26, 30, 34 };
 
 // --------------------------------------------------------------- GF(256)
@@ -44,14 +44,14 @@ static unsigned char gfMul(unsigned char a, unsigned char b) {
   return gfExp[gfLog[a] + gfLog[b]];
 }
 
-// Divisao polinomial: o resto sao os codewords de correcao.
+// Polynomial division: the remainder is the correction codewords.
 static void rs(const unsigned char *data, int nData, int nEc, unsigned char *output) {
   unsigned char ger[32], rest[32];
   int i, j, degree = 1;
   gfStart();
   memset(ger, 0, sizeof ger);
   ger[0] = 1;
-  // Gerador = produto de (x - a^i). Construido no lugar, do grau 1 para cima.
+  // Generator = product of (x - a^i). Built in place, from degree 1 upwards.
   for (i = 0; i < nEc; i++) {
     for (j = degree; j > 0; j--) ger[j] = (unsigned char)(ger[j - 1] ^ gfMul(ger[j], gfExp[i]));
     ger[0] = gfMul(ger[0], gfExp[i]);
@@ -69,9 +69,9 @@ static void rs(const unsigned char *data, int nData, int nEc, unsigned char *out
 
 // --------------------------------------------------------------- matriz
 
-// `func` marca os modulos de FUNCAO (localizadores, tempo, formato): eles nao
-// recebem dados nem mascara. Sem essa marca separada, a mascara inverteria o
-// padrao de tempo e nenhum leitor acharia o simbolo.
+// `func` marks the FUNCTION modules (finders, timing, format): they take
+// neither data nor mask. Without that separate mark, the mask would invert the
+// timing pattern and no reader would find the symbol.
 static unsigned char func[QR_MAX_SIDE * QR_MAX_SIDE];
 
 static void per(Qr *q, int x, int y, int v) {
@@ -87,7 +87,7 @@ static int isFunc(const Qr *q, int x, int y) { return func[y * q->side + x]; }
 
 static void locator(Qr *q, int cx, int cy) {
   int dx, dy;
-  // Inclui a faixa de separacao (raio 4), que e clara e tambem e funcao.
+  // Includes the separator band (radius 4), which is light and is also function.
   for (dy = -4; dy <= 4; dy++) {
     for (dx = -4; dx <= 4; dx++) {
       int x = cx + dx, y = cy + dy;
@@ -127,14 +127,14 @@ static void defaults(Qr *q, int version) {
 
   per(q, 8, n - 8, 1); mark(q, 8, n - 8);   // modulo escuro fixo
 
-  // Area do formato: reservada agora, escrita depois de escolher a mascara.
+  // Format area: reserved now, written after the mask has been chosen.
   for (i = 0; i <= 8; i++) { mark(q, i, 8); mark(q, 8, i); }
   for (i = 0; i < 8; i++)  { mark(q, n - 1 - i, 8); mark(q, 8, n - 1 - i); }
 }
 
-// --------------------------------------------------------------- mascara
+// --------------------------------------------------------------- mask
 
-static int mascara(int m, int x, int y) {
+static int mask(int m, int x, int y) {
   switch (m) {
     case 0: return ((y + x) & 1) == 0;
     case 1: return (y & 1) == 0;
@@ -147,12 +147,12 @@ static int mascara(int m, int x, int y) {
   }
 }
 
-// As quatro penalidades da norma. Sem elas o simbolo ate e valido, mas escolhe
-// mascaras ruins e a leitura falha em angulo ou com pouca luz.
+// The standard's four penalties. Without them the symbol is still valid, but it
+// picks bad masks and the read fails at an angle or in poor light.
 static int penalty(const Qr *q) {
   int n = q->side, p = 0, x, y, dark = 0;
 
-  for (y = 0; y < n; y++) {          // N1: corridas de 5 ou mais
+  for (y = 0; y < n; y++) {          // N1: runs of 5 or more
     int race = 1;
     for (x = 1; x < n; x++) {
       if (take(q, x, y) == take(q, x - 1, y)) { race++; }
@@ -168,14 +168,14 @@ static int penalty(const Qr *q) {
     }
     if (race >= 5) p += 3 + (race - 5);
   }
-  for (y = 0; y + 1 < n; y++)        // N2: blocos 2x2 da mesma cor
+  for (y = 0; y + 1 < n; y++)        // N2: 2x2 blocks of the same colour
     for (x = 0; x + 1 < n; x++) {
       int v = take(q, x, y);
       if (v == take(q, x + 1, y) && v == take(q, x, y + 1) && v == take(q, x + 1, y + 1))
         p += 3;
     }
-  // N3: o padrao 1:1:3:1:1 com quatro claros de um lado — o mesmo desenho do
-  // localizador, que confundiria o leitor se aparecesse no meio dos dados.
+  // N3: the 1:1:3:1:1 pattern with four light modules on one side — the finder's
+  // own drawing, which would confuse a reader if it turned up amid the data.
   for (y = 0; y < n; y++)
     for (x = 0; x < n; x++) {
       static const int target[7] = { 1, 0, 1, 1, 1, 0, 1 };
@@ -213,27 +213,27 @@ static int penalty(const Qr *q) {
 
 static void writeFormat(Qr *q, int m) {
   int n = q->side, i;
-  // L = 01. BCH(15,5) com o gerador 0x537 e mascara final 0x5412 — os dois
-  // numeros sao da norma; o XOR final existe para o formato nunca sair todo
-  // zero, que seria indistinguivel de area em branco.
+  // L = 01. BCH(15,5) with generator 0x537 and final mask 0x5412 — both
+  // numbers are from the standard; the final XOR exists so the format never
+  // comes out all zero, which would be indistinguishable from blank area.
   unsigned data = (unsigned)((1 << 3) | m);
   unsigned bch = data << 10;
   for (i = 14; i >= 10; i--) if (bch & (1u << i)) bch ^= 0x537u << (i - 10);
   { unsigned f = ((data << 10) | bch) ^ 0x5412u;
-    // ORDEM: a primeira posicao recebe o bit MAIS significativo, nao o menos.
-    // Este foi o erro que custou mais tempo — escrito ao contrario o simbolo
-    // desenha perfeito, os localizadores estao certos, o olho nao ve nada, e
-    // NENHUM leitor decodifica. Conferido lendo o formato de um simbolo gerado
-    // por outra implementacao e comparando com o valor calculado aqui.
+    // ORDER: the first position takes the MOST significant bit, not the least.
+    // This was the mistake that cost the most time — written backwards the
+    // symbol draws perfectly, the finders are right, the eye sees nothing, and
+    // NO reader decodes it. Checked by reading the format of a symbol generated
+    // by another implementation and comparing it with the value computed here.
     #define BIT_F(k) ((f >> (14 - (k))) & 1)
     for (i = 0; i <= 5; i++)  per(q, i, 8, BIT_F(i));
     per(q, 7, 8, BIT_F(6));
     per(q, 8, 8, BIT_F(7));
     per(q, 8, 7, BIT_F(8));
     for (i = 9; i <= 14; i++) per(q, 8, 14 - i, BIT_F(i));
-    // Segunda copia: os 7 primeiros bits descem pela COLUNA 8 a partir da base,
-    // e os 8 ultimos correm pela LINHA 8 ate a borda direita. A divisao NAO e
-    // 8+7 como a da primeira copia.
+    // Second copy: the first 7 bits run down COLUMN 8 from the bottom, and the
+    // last 8 run along ROW 8 to the right edge. The split is NOT 8+7 like the
+    // first copy's.
     for (i = 0; i <= 6; i++)  per(q, 8, n - 1 - i, BIT_F(i));
     for (i = 7; i <= 14; i++) per(q, n - 15 + i, 8, BIT_F(i));
     #undef BIT_F
@@ -252,8 +252,8 @@ int qr_generate(Qr *q, const char *text) {
   nText = (int)strlen(text);
   if (nText <= 0) return 0;
 
-  // Menor versao que cabe. O cabecalho do modo byte custa 12 bits (4 de modo +
-  // 8 de contagem), o que da 1,5 byte — por isso a conta usa bits e nao bytes.
+  // The smallest version that fits. The byte-mode header costs 12 bits (4 of
+  // mode + 8 of count), which is 1.5 bytes — hence the arithmetic in bits.
   for (version = 1; version <= 6; version++) {
     nData = SEE[version].total - SEE[version].ecByBlock * SEE[version].blocks;
     if (4 + 8 + nText * 8 <= nData * 8) break;
@@ -268,11 +268,11 @@ int qr_generate(Qr *q, const char *text) {
       for (k = (count) - 1; k >= 0; k--) { \
         if (((value) >> k) & 1) bits[nBits >> 3] |= (unsigned char)(0x80 >> (nBits & 7)); \
         nBits++; }
-    PER_BITS(4, 4);            // modo byte
-    PER_BITS(nText, 8);       // contagem (8 bits ate a versao 9)
+    PER_BITS(4, 4);            // byte mode
+    PER_BITS(nText, 8);       // count (8 bits up to version 9)
     for (i = 0; i < nText; i++) { PER_BITS((unsigned char)text[i], 8); }
-    // Terminador de ate 4 zeros e alinhamento ao byte; depois o enchimento
-    // alternado da norma.
+    // A terminator of up to 4 zeros and byte alignment; then the standard's
+    // alternating padding.
     { int missing = nData * 8 - nBits;
       int term = missing > 4 ? 4 : missing;
       PER_BITS(0, term); }
@@ -282,7 +282,7 @@ int qr_generate(Qr *q, const char *text) {
   { int nBytes = nBits / 8, toggles = 0;
     while (nBytes < nData) bits[nBytes++] = (toggles++ & 1) ? 0x11 : 0xEC; }
 
-  // --- blocos e entrelacamento
+  // --- blocks and interleaving
   { int nBlocks = SEE[version].blocks, nEc = SEE[version].ecByBlock;
     int short_ = nData / nBlocks, rest = nData % nBlocks;
     int off = 0, maxLen = 0;
@@ -309,8 +309,8 @@ int qr_generate(Qr *q, const char *text) {
   q->side = 17 + 4 * version;
   defaults(q, version);
 
-  // Zigue-zague de baixo para cima, em pares de colunas, pulando a coluna 6
-  // (padrao de tempo vertical).
+  // Zigzag from the bottom upwards, in column pairs, skipping column 6 (the
+  // vertical timing pattern).
   { int bit = 0, total = SEE[version].total * 8;
     int col, line, up = 1;
     for (col = q->side - 1; col > 0; col -= 2) {
@@ -330,7 +330,7 @@ int qr_generate(Qr *q, const char *text) {
     }
   }
 
-  // --- mascara: aplica as 8, pontua, fica com a melhor
+  // --- mask: apply all 8, score them, keep the best
   { int best = -1, bestP = 0;
     unsigned char base[QR_MAX_SIDE * QR_MAX_SIDE];
     memcpy(base, q->m, sizeof base);
@@ -339,7 +339,7 @@ int qr_generate(Qr *q, const char *text) {
       memcpy(q->m, base, sizeof base);
       for (y = 0; y < q->side; y++)
         for (x = 0; x < q->side; x++)
-          if (!isFunc(q, x, y) && mascara(i, x, y))
+          if (!isFunc(q, x, y) && mask(i, x, y))
             q->m[y * q->side + x] ^= 1;
       writeFormat(q, i);
       p = penalty(q);
@@ -349,7 +349,7 @@ int qr_generate(Qr *q, const char *text) {
     { int x, y;
       for (y = 0; y < q->side; y++)
         for (x = 0; x < q->side; x++)
-          if (!isFunc(q, x, y) && mascara(best, x, y))
+          if (!isFunc(q, x, y) && mask(best, x, y))
             q->m[y * q->side + x] ^= 1; }
     writeFormat(q, best);
   }
@@ -358,8 +358,8 @@ int qr_generate(Qr *q, const char *text) {
 
 // --------------------------------------------------------------- textura
 
-// Zona de silencio, em modulos. Sem ela a camera nao acha o simbolo: o padrao
-// de busca precisa de fundo claro em volta para ser reconhecido.
+// The quiet zone, in modules. Without it the camera does not find the symbol:
+// the finder pattern needs light background around it to be recognised.
 #define QR_TEX_MARGIN 4
 
 GLuint qr_texture(const char *text) {
@@ -378,7 +378,7 @@ GLuint qr_texture(const char *text) {
   side = q.side + 2 * QR_TEX_MARGIN;
   px = (unsigned char *)malloc((size_t)side * side * 3);
   if (!px) return 0;
-  memset(px, 255, (size_t)side * side * 3);   // fundo claro, inclusive a margem
+  memset(px, 255, (size_t)side * side * 3);   // light background, margin included
   for (y = 0; y < q.side; y++)
     for (x = 0; x < q.side; x++)
       if (qr_modulo(&q, x, y)) {
@@ -388,8 +388,8 @@ GLuint qr_texture(const char *text) {
 
   if (!tex) glGenTextures(1, &tex);
   glBindTexture(GL_TEXTURE_2D, tex);
-  // NEAREST, nao LINEAR: um modulo borrado com o vizinho e o jeito mais rapido
-  // de tornar o simbolo ilegivel numa camera de celular.
+  // NEAREST, not LINEAR: a module blurred into its neighbour is the fastest way
+  // to make the symbol unreadable to a phone camera.
   glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, side, side, 0, GL_RGB, GL_UNSIGNED_BYTE, px);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);

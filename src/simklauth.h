@@ -40,7 +40,7 @@ const char *simklauth_url(void);
 const char *simklauth_error(void);
 
 void simklauth_cancel(void);
-int  simklauth_load(void);    // le o token guardado; 1 quando havia
+int  simklauth_load(void);    // reads the stored token; 1 when there was one
 void simklauth_forget(void);
 
 #endif

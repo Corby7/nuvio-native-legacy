@@ -31,7 +31,7 @@ static int  ready, threadAlive;
 static pthread_t thread;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-// known_for_department arrives in English from TMDB even with language=pt-BR.
+// known_for_department arrives in English from TMDB whatever the language asked for.
 static const char *translatesArea(const char *s) {
   if (!strcmp(s, "Acting"))    return "Acting";
   if (!strcmp(s, "Directing")) return "Directing";
@@ -61,7 +61,7 @@ static void *fetch(void *arg) {
   // to draw one screen — and the second is only useful if the first
   // succeeded.
   snprintf(url, sizeof url,
-           "%s/person/%ld?api_key=%s&language=pt-BR"
+           "%s/person/%ld?api_key=%s&language=en-US"
            "&append_to_response=combined_credits", TMDB, id, key);
   body = net_download(url, 20);
   if (!body) {
@@ -90,7 +90,7 @@ static void *fetch(void *arg) {
         const char *end = js_end(p);
         char date[16] = "", path[128] = "";
         ach[k].t[0] = ach[k].p[0] = ach[k].y[0] = ach[k].po[0] = ach[k].im[0] = 0;
-        // Filme tem "title"/"release_date"; serie tem "name"/"first_air_date".
+        // A film has "title"/"release_date"; a series has "name"/"first_air_date".
         if (!js_text(p, end, "title", ach[k].t, sizeof ach[k].t))
           js_text(p, end, "name", ach[k].t, sizeof ach[k].t);
         js_text(p, end, "character", ach[k].p, sizeof ach[k].p);

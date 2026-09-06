@@ -1,93 +1,97 @@
-// Camada de desenho: um shader unico com SDF de retangulo arredondado, capaz de
-// desenhar card com textura, sombra difusa, retangulo de cor e o hero com
-// gradiente. Um so programa GL evita troca de estado a cada primitiva, que e o
-// que mais custa nesta GPU.
+// The drawing layer: a single shader with a rounded-rectangle SDF, able to draw
+// a textured card, a soft shadow, a solid-colour rectangle and the hero with its
+// gradient. One GL program avoids a state change per primitive, which is what
+// costs most on this GPU.
 #ifndef NV_GFX_H
 #define NV_GFX_H
 #include "gl_compat.h"
 
 typedef enum {
-  GFX_CARD   = 0,  // textura com cantos, parallax e especular
-  GFX_SHADOW = 1,  // sombra difusa atras do card focado
-  GFX_COLOR    = 2,  // retangulo/pill de cor solida
-  GFX_HERO   = 3,  // arte com gradiente para o fundo (aceita alpha p/ crossfade)
-  GFX_VEIL    = 4,  // veu escuro na base do card, sob texto sobreposto
-  GFX_TEXT  = 5,  // glifo: a forma vem do alpha da textura, nao do RGB
-  GFX_BACKGROUND  = 6,  // arte desfocada por mipmap; `foco` carrega o bias
-  GFX_VEIL_TOP = 7,// degrade escuro do topo para baixo (barra de cabecalho)
-  GFX_SNAP   = 8,  // imagem ja pronta: sem SDF, sem efeito, so o quad
-  GFX_PLAY   = 9,  // triangulo de "reproduzir", apontando para a direita
-  GFX_BLUR   = 10, // uma passada de desfoque gaussiano; uPar da a direcao
-  // Fundo da tela de DETALHE: a arte em "cover" ja fundida na vinheta
-  // horizontal do app web. Um modo so, e nao arte + veu por cima, porque sao
-  // duas camadas de tela CHEIA — nesta GPU o custo e de preenchimento, e a
-  // segunda passada sozinha derrubava o quadro.
+  GFX_CARD   = 0,  // texture with corners, parallax and specular
+  GFX_SHADOW = 1,  // soft shadow behind the focused card
+  GFX_COLOR    = 2,  // solid-colour rectangle/pill
+  GFX_HERO   = 3,  // art with a gradient into the background (takes alpha for crossfade)
+  GFX_VEIL    = 4,  // dark veil at the card's base, under overlaid text
+  GFX_TEXT  = 5,  // a glyph: the shape comes from the texture's alpha, not its RGB
+  GFX_BACKGROUND  = 6,  // art blurred by mipmap; `focus` carries the bias
+  GFX_VEIL_TOP = 7,// dark gradient from the top downwards (header bar)
+  GFX_SNAP   = 8,  // a ready-made image: no SDF, no effect, just the quad
+  GFX_PLAY   = 9,  // the "play" triangle, pointing right
+  GFX_BLUR   = 10, // one gaussian blur pass; uPar gives the direction
+  // The DETAIL screen's background: the art in "cover" already blended into the
+  // web app's horizontal vignette. One mode, and not art + veil on top, because
+  // those are two FULL-screen layers — on this GPU the cost is fill, and the
+  // second pass alone dropped the frame rate.
   GFX_DETAIL = 11,
-  // Hero em tela cheia. Mesma ideia do GFX_HERO, com as rampas do OUTRO estado
-  // da preferencia: cobrem mais da tela e sao mais fundas. Dois modos e nao um
-  // parametrizado porque as paradas estao anotadas junto das medidas, e e assim
-  // que este shader vem sendo mantido.
+  // A full-screen hero. The same idea as GFX_HERO, with the ramps of the OTHER
+  // state of the preference: they cover more of the screen and are deeper. Two
+  // modes rather than one parameterised because the stops are recorded alongside
+  // the measurements, and that is how this shader has been maintained.
   GFX_HERO_FULL = 12,
-  // Contorno sem miolo, cheio ou tracejado. Usa o mesmo SDF dos outros modos —
-  // um anel e `abs(d) < espessura` —, entao serve para retangulo arredondado
-  // tanto quanto para circulo (raio 0.5 = circulo).
+  // An outline with no fill, solid or dashed. It uses the same SDF as the other
+  // modes — a ring is `abs(d) < thickness` — so it serves a rounded rectangle as
+  // well as a circle (radius 0.5 = circle).
   //
-  // Passe a espessura em `parx`, na mesma escala normalizada de `raio`, e o
-  // numero de tracos do pontilhado em `pary` (0 = anel continuo). Exemplo, o
-  // circulo tracejado de "episodio nao assistido":
+  // Pass the thickness in `parx`, on the same normalised scale as `radius`, and
+  // the number of dashes in `pary` (0 = a continuous ring). For example, the
+  // dashed circle of "unwatched episode":
   //
-  //   gfx_rect(r, 0, GFX_ANEL, 0, 0.06f, 12.0f, 0.5f, 1,1,1, 0.55f);
+  //   gfx_rect(r, 0, GFX_RING, 0, 0.06f, 12.0f, 0.5f, 1,1,1, 0.55f);
   //
-  // Nao pinte o miolo da cor do fundo para simular anel: onde o veu esta em
-  // 0.06 o fundo aparece atraves dele e o tampao se ve como mancha clara.
+  // Do not paint the middle in the background colour to fake a ring: where the
+  // veil is at 0.06 the background shows through it and the plug reads as a
+  // light smudge.
   GFX_RING = 13,
-  // Icones dos botoes redondos da tela de titulo. Existem como SDF pelo mesmo
-  // motivo do GFX_PLAY: os glifos sao SVG no web e a familia embarcada nao
-  // garante simbolo nenhum. Antes os tres botoes eram "+" e dois "...", que nao
-  // dizem o que fazem.
+  // Icons for the title screen's round buttons. They exist as SDFs for the same
+  // reason as GFX_PLAY: the glyphs are SVG in the web app and the embedded family
+  // guarantees no symbol at all. The three buttons used to be a "+" and two
+  // "...", which say nothing about what they do.
   //
-  // GFX_OLHO — "marcar como assistido". Lente (dois arcos), iris cheia e, com
-  // `parx > 0.5`, o risco na diagonal do estado "nao assistido".
+  // GFX_EYE — "mark as watched". A lens (two arcs), a filled iris and, with
+  // `parx > 0.5`, the diagonal stroke of the "unwatched" state.
   GFX_EYE = 14,
-  // GFX_FONTES — tres barras empilhadas, simbolo de "lista de fontes". Ocupou o
-  // lugar do glifo do YouTube: este app nao toca trailer do YouTube (nao ha
-  // extrator de stream), e um botao que promete o que nao faz e pior que um
-  // botao com outra funcao. Fontes e coisa que o app SABE fazer.
+  // GFX_SOURCES — three stacked bars, the symbol for "source list". It took the
+  // place of the YouTube glyph: this app does not play YouTube trailers (there is
+  // no stream extractor), and a button that promises what it does not do is worse
+  // than a button with another function. Sources are something the app CAN do.
   GFX_SOURCES = 15,
-  // GFX_MARCA — logo de UMA COR: a forma vem do ALPHA da textura e a cor vem de
-  // uCor. E o oposto do GFX_TEXTO, que preserva o RGB da textura.
+  // GFX_BRAND — a ONE-COLOUR logo: the shape comes from the texture's ALPHA and
+  // the colour from uColor. It is the opposite of GFX_TEXT, which preserves the
+  // texture's RGB.
   //
-  // Existe para o logo do titulo. O TMDB serve logos claros e escuros sem
-  // marcar qual e qual, e logo preto sobre backdrop escuro some. Tingir pelo
-  // GFX_TEXTO nao serve: la o RGB da textura passa direto, e TEM de passar —
-  // senao o logo do IMDb vira silhueta branca e todo texto colorido da tela
-  // perde a cor, que ja vem assada pelo SDL_ttf.
+  // It exists for the title's logo. TMDB serves light and dark logos without
+  // marking which is which, and a black logo on a dark backdrop disappears.
+  // Tinting through GFX_TEXT does not work: there the texture's RGB passes
+  // straight through, and it HAS to — otherwise the IMDb logo becomes a white
+  // silhouette and every piece of coloured text on screen loses its colour, which
+  // is already baked in by SDL_ttf.
   //
-  // Use SO com arte de uma cor. Logo colorido (o dourado, o vermelho) vai por
-  // GFX_CARD, senao vira mancha chapada.
+  // Use it ONLY with single-colour art. A colourful logo (the gold one, the red
+  // one) goes through GFX_CARD, otherwise it becomes a flat smudge.
   GFX_BRAND = 16,
-  // GFX_VEU_BAIXO — degrade PURAMENTE VERTICAL, transparente em cima e escuro
-  // na base. E o par do GFX_VEU_TOPO.
+  // GFX_VEIL_BOTTOM — a PURELY VERTICAL gradient, transparent at the top and dark
+  // at the base. It is the counterpart of GFX_VEIL_TOP.
   //
-  // O player usava GFX_VEU aqui, que escurece a base E A ESQUERDA. Aquele veu
-  // foi feito para o hero da home, onde o texto fica no canto inferior
-  // esquerdo; no player a componente lateral deixava o canto superior esquerdo
-  // do retangulo escuro enquanto o direito era transparente, e a borda entre os
-  // dois lia como uma placa — o "retangulo reto" que o dono apontou.
+  // The player used GFX_VEIL here, which darkens the base AND THE LEFT. That veil
+  // was made for the home's hero, where the text sits in the bottom-left corner;
+  // in the player the sideways component left the rectangle's top-left corner
+  // dark while the right was transparent, and the boundary between the two read
+  // as a plate — the "straight rectangle" the owner pointed out.
   //
-  // A curva e o smoothstep ELEVADO AO QUADRADO: um smoothstep simples ainda
-  // deixa uma banda percebivel onde a rampa comeca, porque o olho enxerga a
-  // segunda derivada. Ao quadrado o inicio e quase plano e a transicao some.
+  // The curve is the smoothstep SQUARED: a plain smoothstep still leaves a
+  // perceptible band where the ramp starts, because the eye sees the second
+  // derivative. Squared, the start is almost flat and the transition disappears.
   GFX_VEIL_BOTTOM = 17,
   GFX_SOCIAL = 18, // static wine/coral ambient background, no texture or blur
-  // Foto circular sem o SDF de card. O disco tem sua propria mascara radial,
-  // para a borda ficar uniforme e sem rebarbas em qualquer tamanho.
+  // A circular photo without the card SDF. The disc has its own radial mask, so
+  // the edge stays even and free of burrs at any size.
   GFX_AVATAR = 19,
-  // Retrato editorial: foto limpa ancorada a direita, dessaturada e dissolvida
-  // no fundo. Feito para pessoas, nao para backdrops 16:9 com texto embutido.
+  // An editorial portrait: a clean photo anchored to the right, desaturated and
+  // dissolved into the background. Made for people, not for 16:9 backdrops with
+  // text baked in.
   GFX_PORTRAIT = 20,
-  // Disco geometrico sólido. Usado como base do avatar e do foco para que o
-  // contorno seja sempre concentrico, em vez de ser pintado sobre a foto.
+  // A solid geometric disc. Used as the base of the avatar and the focus so that
+  // the outline is always concentric, instead of being painted over the photo.
   GFX_DISK = 21,
   GFX_NMODES = 22
 } GfxMode;
@@ -96,24 +100,24 @@ typedef struct {
   float x, y, w, h;
 } GfxRect;
 
-// Proporcao (w/h) da textura a desenhar. 0 = mapeia direto (texto, veu).
-// Definir ANTES de gfx_rect para que a arte seja recortada, nunca esticada.
+// The aspect ratio (w/h) of the texture to draw. 0 = maps directly (text, veil).
+// Set it BEFORE gfx_rect so the art is cropped, never stretched.
 extern float gfx_tex_aspect_current;
-// Opacidade de grupo: deve voltar a 1 ao terminar o grupo.
+// Group opacity: it must go back to 1 when the group ends.
 extern float gfx_opacity_group;
 
-// Snapshot: renderiza uma tela inteira para textura, para poder redesenha-la
-// como um unico quad. Existe porque a home continua visivel pela moldura da
-// tela de detalhe, e redesenhar hero + ~20 cards a cada quadro so para preencher
-// uma borda de 120px derrubava o app para 30fps. A home nao muda enquanto o
-// detalhe esta aberto, entao basta guardar a imagem dela.
+// Snapshot: renders a whole screen to a texture, so it can be redrawn as a
+// single quad. It exists because the home stays visible through the detail
+// screen's frame, and redrawing the hero + ~20 cards every frame just to fill a
+// 120px border dropped the app to 30fps. The home does not change while the
+// detail screen is open, so keeping its image is enough.
 //
-// A meia resolucao e deliberada: o snapshot aparece escurecido e so nas bordas,
-// e ninguem distingue — mas o custo de preenchimento cai a um quarto.
-// Recorte de tesoura: limita o desenho a um retangulo da tela. Serve para
-// pintar so a parte que aparece — no detalhe, o cartao cobre o centro e a home
-// atras so e vista pela moldura, entao pintar a tela inteira por baixo dele e
-// trabalho jogado fora.
+// The half resolution is deliberate: the snapshot appears darkened and only at
+// the edges, and nobody can tell — but the fill cost drops to a quarter.
+// Scissor clip: limits the drawing to a rectangle of the screen. It serves to
+// paint only the part that shows — in the detail screen the card covers the
+// centre and the home behind it is seen only through the frame, so painting the
+// whole screen underneath it is work thrown away.
 void gfx_crop(float x, float y, float w, float h);
 
 // --- ICONS -------------------------------------------------------------------
@@ -142,23 +146,23 @@ void gfx_no_crop(void);
 
 int  gfx_snap_start(int w, int h);
 
-// Desfoque por REDUCAO, no lugar do mipmap. O mipmap parecia a saida barata,
-// mas as texturas de arte nao tem lado potencia de dois, e em GLES2 a piramide
-// de uma textura NPOT e mal definida — o resultado era um padrao de listras
-// verticais no fundo da pagina, bem visivel contra a referencia. Aqui a arte e
-// desenhada num alvo minusculo e depois esticada com filtro linear: o borrao
-// sai liso e custa uma leitura por pixel.
-// `via` escolhe o alvo: 0 = pagina de detalhe, 1 = fundo da home. Dois alvos
-// porque as duas telas coexistem — o detalhe cobre a home, mas a home continua
-// desenhada por tras dele, e um alvo so faria as duas brigarem pela mesma
-// textura a cada quadro.
+// Blur by DOWNSCALING, in place of the mipmap. The mipmap looked like the cheap
+// way out, but the art textures have no power-of-two side, and in GLES2 the
+// pyramid of an NPOT texture is ill-defined — the result was a pattern of
+// vertical stripes on the page's background, clearly visible against the
+// reference. Here the art is drawn into a tiny target and then stretched with a
+// linear filter: the blur comes out smooth and costs one read per pixel.
+// `via` picks the target: 0 = the detail page, 1 = the home's background. Two
+// targets because the two screens coexist — the detail covers the home, but the
+// home is still drawn behind it, and a single target would make the two fight
+// over the same texture every frame.
 int  gfx_blur_start(int w, int h);
 void gfx_blur_generate(int via, unsigned int tex, float texAspect);
 void gfx_blur_draw(int via, GfxRect r, float alpha);
 void gfx_blur_shutdown(void);
-void gfx_snap_begin(void);   // redireciona o desenho para o snapshot
-void gfx_snap_finish(void);  // volta para a tela
-void gfx_snap_draw(void);  // pinta o snapshot ocupando a tela toda
+void gfx_snap_begin(void);   // redirects the drawing into the snapshot
+void gfx_snap_finish(void);  // back to the screen
+void gfx_snap_draw(void);  // paints the snapshot over the whole screen
 void gfx_snap_shutdown(void);
 
 // The box the 1920x1080 layout is drawn into, in BUFFER pixels: where to put
@@ -173,37 +177,39 @@ void gfx_size_target(int x, int y, int w, int h);
 int  gfx_start(void);
 void gfx_shutdown(void);
 
-// O gfx_rect lembra a ultima textura que ele mesmo bindou e pula rebinds
-// repetidos. Quem binda ou destroi textura POR FORA dele precisa avisar:
-// passe o nome destruido, ou 0 para "esqueca tudo" (apos um upload).
+// gfx_rect remembers the last texture it bound itself and skips repeated
+// rebinds. Anything that binds or destroys a texture OUTSIDE it has to say so:
+// pass the destroyed name, or 0 for "forget everything" (after an upload).
 void gfx_tex_forget(GLuint tex);
 
-// Desenha um retangulo. `foco` 0..1 controla especular/sombra; `parx/pary`
-// deslocam a arte dentro do card (parallax); `raio` em fracao do menor lado.
-// TELEMETRIA DE QUADRO. Zerados por gfx_novo_quadro, uma vez por quadro.
+// Draws a rectangle. `focus` 0..1 controls the specular/shadow; `parx/pary`
+// shift the art inside the card (parallax); `radius` as a fraction of the
+// smaller side.
+// FRAME TELEMETRY. Zeroed by gfx_new_frame, once per frame.
 //
-// O QUE ESTES NUMEROS JA RESPONDERAM (medido na TV, home rolando, 1920x1080):
-// o pior quadro gastava ~20ms dentro de app_desenhar e a suspeita era travessia
-// de GL. Nao era: com 123 desenhos por quadro, gfx_rect somava 1,9ms — menos de
-// 10% do quadro. O custo estava em CPU de layout/texto, fora deste arquivo.
+// WHAT THESE NUMBERS HAVE ALREADY ANSWERED (measured on the TV, home scrolling,
+// 1920x1080): the worst frame spent ~20ms inside app_draw and the suspicion was
+// GL traversal. It was not: with 123 draws per frame, gfx_rect added up to 1.9ms
+// — less than 10% of the frame. The cost was in layout/text CPU, outside this file.
 //
-// `gfx_fill` e o que sobrou de util no dia a dia: a nota no topo do gfx.c diz
-// que DUAS camadas de tela cheia derrubavam esta Mali para ~40fps, e sem medir
-// a area "quantas camadas cheias tem esta tela" e chute. Medido: home 1,4-1,9
-// telas de preenchimento; DETALHE 2,2-3,5 telas, com 2 desenhos cobrindo mais
-// de meia tela cada. A tela de detalhe e a que anda perto do limite.
+// `gfx_fill` is what stayed useful day to day: the note at the top of gfx.c says
+// TWO full-screen layers dropped this Mali to ~40fps, and without measuring the
+// area, "how many full layers does this screen have" is a guess. Measured: the
+// home 1.4-1.9 screens of fill; the DETAIL screen 2.2-3.5 screens, with 2 draws
+// covering more than half a screen each. The detail screen is the one that runs
+// near the limit.
 //
-// Os relogios finos (gfx_ms_rect, tex_ms_busca) ficam atras de NV_PERF_FINO
-// porque custam DUAS leituras de relogio por desenho — cerca de 250 chamadas
-// por quadro so para medir. Ligue com -DNV_PERF_FINO quando a pergunta voltar.
-extern int    gfx_n_rect;   // chamadas de gfx_rect
-extern int    gfx_n_progress;   // trocas de programa GL (glUseProgram)
-extern int    gfx_n_bind;   // trocas de textura (glBindTexture)
-extern double gfx_ms_rect;  // ms de CPU dentro de gfx_rect
-extern int    gfx_n_others;  // chamadas de recorte/FBO/desfoque
-extern double gfx_ms_others; // ms de CPU nesses pontos de GL
-extern double gfx_fill;      // area submetida no quadro, em telas cheias
-extern int    gfx_n_full;   // desenhos cobrindo >= 50% da tela
+// The fine-grained clocks (gfx_ms_rect, tex_ms_search) sit behind NV_PERF_FINO
+// because they cost TWO clock reads per draw — around 250 calls per frame just to
+// measure. Turn them on with -DNV_PERF_FINO when the question comes back.
+extern int    gfx_n_rect;   // gfx_rect calls
+extern int    gfx_n_progress;   // GL program changes (glUseProgram)
+extern int    gfx_n_bind;   // texture changes (glBindTexture)
+extern double gfx_ms_rect;  // ms of CPU inside gfx_rect
+extern int    gfx_n_others;  // clip/FBO/blur calls
+extern double gfx_ms_others; // ms of CPU at those GL points
+extern double gfx_fill;      // area submitted this frame, in full screens
+extern int    gfx_n_full;   // draws covering >= 50% of the screen
 void gfx_new_frame(void);
 
 void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
@@ -212,8 +218,8 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
 
 // Atalhos legiveis para os casos comuns.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
-// Zera cor E alpha do retangulo, com blend desligado, abrindo a superficie para
-// o plano de video que fica atras dela. Ver video.h.
+// Zeroes the rectangle's colour AND alpha, with blending off, opening the
+// surface to the video plane behind it. See video.h.
 void gfx_hole(GfxRect r);
 void gfx_texture(GfxRect r, GLuint tex);
 

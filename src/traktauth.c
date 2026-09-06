@@ -15,8 +15,8 @@
 #define TRA_FILE  "trakt.txt"
 #define TRA_STREAM "trakt-flow.txt"
 #define TRA_BASE "https://api.trakt.tv"
-// Quando o Trakt nao manda `interval`, 5s e o que a documentacao dele sugere.
-#define TRA_POLL_DFLT 5000u
+// When Trakt does not send `interval`, 5s is what its documentation suggests.
+#define TRA_POLL_DEFAULT 5000u
 
 static TraState state = TRA_STOPPED;
 static char deviceCode[128];
@@ -24,36 +24,37 @@ static char userCode[32];
 static char url[160];
 static char error[200];
 static char token[300], refresh[300];
-static unsigned pollMs = TRA_POLL_DFLT;
+static unsigned pollMs = TRA_POLL_DEFAULT;
 static unsigned nextPoll, beganMs, limitMs;
-// Prazo em RELOGIO DE PAREDE, nao em ticks: o pedido tem de sobreviver a um
-// reinicio do app, e SDL_GetTicks zera junto com o processo.
+// A deadline in WALL CLOCK, not in ticks: the request has to survive an app
+// restart, and SDL_GetTicks resets along with the process.
 static long expiresIn;
 
 static pthread_t thread;
 static int threadAlive, threadReady;
-// 1 quando o fio acabou de conseguir o token e o laco principal ainda nao o
-// aplicou. Aplicar dentro do fio mexeria em trakt.c enquanto a UI le dele.
+// 1 when the thread has just obtained the token and the main loop has not
+// applied it yet. Applying it inside the thread would touch trakt.c while the
+// UI is reading from it.
 static int tokenNew;
 
 static char *post(const char *path, const char *body, int *status) {
   char complete[300];
   const char *header[2];
   snprintf(complete, sizeof complete, "%s%s", TRA_BASE, path);
-  // O Trakt exige o cabecalho de versao da API; sem ele responde 412.
+  // Trakt requires the API version header; without it it answers 412.
   header[0] = "trakt-api-version: 2";
   header[1] = NULL;
   return net_post_st(complete, 20, header, body, status);
 }
 
-// ---------------------------------------------------------------- disco
+// ---------------------------------------------------------------- disk
 
-// O PEDIDO PENDENTE vai para o disco. Sem isto o codigo do dispositivo vivia so
-// na memoria: bastava o app reiniciar — ou o proprio deploy — para a
-// autorizacao feita no celular nao ter mais ninguem perguntando por ela. Foi
-// exatamente o que aconteceu: o dono autorizou e o app "nao atualizou", porque
-// a instancia que tinha pedido o codigo ja nao existia. O app web guarda o
-// mesmo estado (TraktAuthStore.saveDeviceFlow).
+// THE PENDING REQUEST goes to disk. Without this the device code lived only in
+// memory: the app restarting — or the deploy itself — was enough for the
+// authorisation done on the phone to have nobody left asking about it. That is
+// exactly what happened: the owner authorised and the app "did not update",
+// because the instance that had asked for the code no longer existed. The web
+// app stores the same state (TraktAuthStore.saveDeviceFlow).
 static void writeStream(void) {
   char buf[600];
   snprintf(buf, sizeof buf, "%s\t%s\t%s\t%ld\n", deviceCode, userCode, url, expiresIn);
@@ -68,9 +69,9 @@ static void forgetStream(void) {
 
 static void save(void) {
   char buf[400];
-  // Mesmo formato do art/trakt.txt de antes ("token<TAB>clientId"), para o
-  // arquivo continuar legivel por quem ja conhecia o de la. A diferenca e o
-  // LUGAR: aqui e a pasta da instalacao, nao o pacote.
+  // The same format as the old art/trakt.txt ("token<TAB>clientId"), so the
+  // file stays readable to anyone who already knew that one. The difference is
+  // the PLACE: here it is the installation folder, not the package.
   snprintf(buf, sizeof buf, "%s\t%s\n", token, cloud_trakt_client());
   data_write(TRA_FILE, buf);
 }
@@ -91,7 +92,7 @@ int traktauth_load(void) {
   free(b);
   if (token[0]) return 1;
 
-  // Sem token, mas pode haver um pedido em andamento de antes do reinicio.
+  // No token, but there may be a request in flight from before the restart.
   { char *f = data_read(TRA_STREAM);
     if (f) {
       char *c[4] = { f, NULL, NULL, NULL };
@@ -138,8 +139,8 @@ static void *threadRequest(void *u) {
   error[0] = userCode[0] = deviceCode[0] = 0;
 
   if (!cloud_trakt_client()[0] || !cloud_trakt_secret()[0]) {
-    // Caso de COMPILACAO, nao do usuario: o pacote saiu sem as chaves do
-    // aplicativo. Dizer isso evita a pessoa tentar de novo para sempre.
+    // A BUILD case, not a user one: the package shipped without the
+    // application's keys. Saying so stops the person retrying forever.
     snprintf(error, sizeof error, "package has no Trakt keys");
     state = TRA_ERROR;
     threadReady = 1;
@@ -198,8 +199,9 @@ static void *threadPoll(void *u) {
     char t[300];
     if (js_text(r, r + strlen(r), "access_token", t, sizeof t)) {
       snprintf(token, sizeof token, "%s", t);
-      // O refresh vai junto para a conta: sem ele, o vinculo morre no dia em
-      // que o access token vencer e o app web nao teria como renovar.
+      // The refresh token goes to the account alongside it: without it the link
+      // dies the day the access token expires and the web app would have no way
+      // to renew it.
       if (!js_text(r, r + strlen(r), "refresh_token", refresh, sizeof refresh))
         refresh[0] = 0;
       tokenNew = 1;
@@ -210,9 +212,9 @@ static void *threadPoll(void *u) {
       state = TRA_ERROR;
     }
   } else if (st == 400) {
-    /* ainda nao autorizado: seguir perguntando */
+    /* not authorised yet: keep asking */
   } else if (st == 429) {
-    // O Trakt mandou ir mais devagar. Subir o intervalo, com teto.
+    // Trakt told us to slow down. Raise the interval, with a ceiling.
     pollMs += 5000u;
     if (pollMs > 60000u) pollMs = 60000u;
   } else if (st == 409) {
@@ -247,7 +249,7 @@ void traktauth_begin(void) {
   if (state == TRA_REQUESTING || state == TRA_WAITING) return;
   error[0] = 0;
   beganMs = 0;
-  pollMs = TRA_POLL_DFLT;
+  pollMs = TRA_POLL_DEFAULT;
   state = TRA_REQUESTING;
   release(threadRequest);
 }
@@ -256,15 +258,15 @@ void traktauth_step(unsigned nowMs) {
   if (threadAlive && threadReady) { threadAlive = 0; threadReady = 0; }
   if (threadAlive) return;
 
-  // Aplicar o token no LACO PRINCIPAL, nunca no fio: trakt.c e lido pela UI.
+  // Apply the token in the MAIN LOOP, never in the thread: trakt.c is read by the UI.
   if (tokenNew) {
     tokenNew = 0;
     trakt_set(token, cloud_trakt_client());
     save();
-    // E manda para a CONTA, para os outros aparelhos da pessoa herdarem o
-    // vinculo — e a linha `trakt` que hoje nao existe la.
-    { // A forma do credential_json e a que o app web grava, para os dois lados
-      // lerem a mesma coisa.
+    // And send it to the ACCOUNT, so the person's other devices inherit the
+    // link — it is the `trakt` line that does not exist there today.
+    { // The shape of credential_json is the one the web app writes, so both
+      // sides read the same thing.
       Jsw c;
       jsw_start(&c);
       jsw_obj_start(&c);

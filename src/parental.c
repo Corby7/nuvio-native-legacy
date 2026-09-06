@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// Endereco em js/config.js do app web: PARENTAL_GUIDE_API_URL.
+// Address in the web app's js/config.js: PARENTAL_GUIDE_API_URL.
 #define PG_URL "https://api.tiffara.com/titles/%s/parentsGuide"
 
 // THE ORDER matters: it is the same one the web lists the categories in

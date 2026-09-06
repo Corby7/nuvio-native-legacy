@@ -12,11 +12,11 @@
 #include <ctype.h>
 #include <stdint.h>
 
-// Nomes que o uMS aceita em charColor, e os rotulos que a folha mostra.
+// The names the uMS accepts in charColor, and the labels the sheet shows.
 //
-// FORA do #if do aparelho: a folha de faixas desenha os rotulos tambem no Mac,
-// onde o resto do modulo e stub. Deixa-los no lado da TV quebrava a ligacao da
-// build de desenvolvimento — que e onde a interface e conferida.
+// OUTSIDE the device's #if: the tracks sheet draws the labels on the Mac too,
+// where the rest of the module is a stub. Leaving them on the TV side broke the
+// development build's link — and that is where the interface is checked.
 const char *const VIDEO_SUB_COLORS[VIDEO_SUB_NCOLORS] = {
   "white", "yellow", "green", "blue", "red", "black"
 };
@@ -56,62 +56,61 @@ void video_normalize_url_subtitle(const char *url, char *dst, unsigned size) {
   memcpy(dst + before + 4, q, suffix + 1);
 }
 
-// Declarada aqui porque o loadCompleted a chama muito antes de ela ser
-// definida. O clang do Mac aceita a implicita; o gcc do ARM recusa — e o ARM
-// que esta certo.
+// Declared here because loadCompleted calls it long before it is defined. The
+// Mac's clang accepts the implicit declaration; the ARM gcc refuses — and the ARM
+// is right.
 static void applyStyle(void);
 
-// Declarada aqui porque o loadCompleted a chama muito antes de ela ser
-// definida. O clang do Mac aceita a implicita e o gcc do ARM recusa — e o ARM
-// que esta certo.
+// Declared here because loadCompleted calls it long before it is defined. The
+// Mac's clang accepts the implicit declaration and the ARM gcc refuses — and the
+// ARM is right.
 static void applyStyle(void);
 
 
-// Definidos adiante (junto de urlAtual, que e o que o fio consome); declarados
-// aqui porque o parse do sourceInfo, bem acima, e quem dispara o fio.
-static char  urlCurrent[1024];   // URL da reproducao corrente
-// Recuperacao de pipeline destruido: pedida pelo fio de resposta do luna e
-// executada no fio principal (video_bombear), porque recarregar de dentro do
-// tratador de evento reentra no mesmo caminho que acabou de falhar.
+// Defined further down (alongside urlCurrent, which is what the thread consumes);
+// declared here because the sourceInfo parse, well above, is what starts the thread.
+static char  urlCurrent[1024];   // the current playback's URL
+// Recovery from a destroyed pipeline: asked for by luna's response thread and
+// carried out on the main thread (video_pump), because reloading from inside the
+// event handler re-enters the very path that has just failed.
 static int    recovering;
 static double resumeIn;
-// Posicao a aplicar assim que o load terminar. Seek antes do loadCompleted e
-// mandado para um pipeline que ainda nao existe e some sem erro.
+// The position to apply as soon as the load finishes. A seek before loadCompleted
+// is sent to a pipeline that does not exist yet and disappears with no error.
 static double posOnLoad;
-// FAIXAS a restaurar depois de uma queda de pipeline. Sem isto o video voltava
-// com OUTRO audio — o pipeline novo comeca sempre na faixa 0, e o dono, que
-// tinha escolhido a dele, via a escolha ser desfeita sozinha. `-1` = nao ha o
-// que restaurar.
+// TRACKS to restore after a pipeline drop. Without this the video came back with
+// DIFFERENT audio — a new pipeline always starts on track 0, and the owner, who
+// had chosen theirs, saw the choice undone by itself. `-1` = nothing to restore.
 static int   audioOnLoad = -1, subOnLoad = -1;
 static char  subUrlOnLoad[1024];
-// URL da legenda EXTERNA em uso. O legAtual nao a representa: quem escolhe uma
-// legenda do OpenSubtitles nao mexe em faixa nenhuma do arquivo, so aponta o
-// setSubtitleSource. Sem guardar a URL, a recuperacao trazia de volta a legenda
-// embutida de antes, ou nenhuma.
+// The URL of the EXTERNAL subtitle in use. subCurrent does not represent it:
+// choosing an OpenSubtitles subtitle touches none of the file's tracks, it only
+// points setSubtitleSource. Without storing the URL, recovery brought back the
+// embedded subtitle from before, or none at all.
 static char  subUrlCurrent[1024];
-// Avanco pendente: alvo e quando manda-lo. Ver SEEK_REPOUSO_MS.
-static int    pauseRequested;   // 1 enquanto a pausa foi pedida por nos
-// Sonda de MKV pedida, esperando o buffer. Ver a nota no sourceInfo.
+// A pending seek: the target and when to send it. See SEEK_REST_MS.
+static int    pauseRequested;   // 1 while the pause was asked for by us
+// An MKV probe requested, waiting for the buffer. See the note in sourceInfo.
 static int    mkvPending;
-// 1 quando a fonte foi anunciada como MP4. Ver video_definir_mp4.
+// 1 when the source was announced as MP4. See video_set_mp4.
 static int    sourceMp4;
 static double seekTarget;
 static Uint32 seekIn;
-// Declarada aqui porque video_bombear a chama antes da definicao. O clang do
-// Mac aceita a implicita; o gcc do ARM recusa — e o ARM que esta certo. Terceira
-// vez neste arquivo.
+// Declared here because video_pump calls it before its definition. The Mac's clang
+// accepts the implicit declaration; the ARM gcc refuses — and the ARM is right.
+// Third time in this file.
 static void seekNow(double seconds);
 static void *readMkv(void *arg);
 static pthread_t threadMkv;
 static int       threadMkvAlive;
-// Identidade monotonica do pipeline. Callbacks do LS2 podem sobreviver ao
-// unload; sem uma geracao, a resposta antiga pode ocupar o estado da proxima
-// abertura e fazer o load correto ser ignorado.
+// The pipeline's monotonic identity. LS2 callbacks can outlive the unload; without
+// a generation, an old response can take over the next opening's state and make
+// the correct load be ignored.
 static unsigned  session;
 
 #ifdef __APPLE__
-// No Mac nao existe barramento nem plano de video. Os cotos deixam o resto do
-// app compilar e rodar igual, so sem imagem em movimento.
+// On the Mac there is no bus and no video plane. The stubs let the rest of the app
+// compile and run the same, only with no moving image.
 int  video_start(void) { return 0; }
 int  video_play(const char *u) { (void)u; return 0; }
 void video_pump(void) {}
@@ -119,12 +118,12 @@ void video_stop(void) {}
 void video_pause(int p) { (void)p; }
 void video_fetch(double s) { (void)s; }
 void video_window(int x,int y,int w,int h) { (void)x;(void)y;(void)w;(void)h; }
-// Coto que FALTAVA: a funcao existia so no ramo do aparelho, entao o build do
-// Mac quebrava no link com "_video_janela_fonte, referenced from
-// _aplicarAspecto". E o espelho da armadilha ja conhecida — o Mac nao compila a
-// metade do pipeline, e por isso nao valida `video.c`; aqui ele cobra a
-// declaracao que a outra metade nao tem. Toda funcao nova de video precisa
-// aparecer NOS DOIS ramos.
+// The stub that was MISSING: the function existed only in the device's branch, so
+// the Mac build broke at link time with "_video_window_source, referenced from
+// _applyAspect". It is the mirror of the trap already known — the Mac does not
+// compile half the pipeline, and so does not validate `video.c`; here it demands
+// the declaration the other half does not have. Every new video function has to
+// appear in BOTH branches.
 void video_window_source(int sx,int sy,int sw,int sh,int dx,int dy,int dw,int dh) {
   (void)sx;(void)sy;(void)sw;(void)sh;(void)dx;(void)dy;(void)dw;(void)dh;
 }
@@ -159,8 +158,8 @@ typedef struct LSHandle LSHandle;
 typedef struct LSMessage LSMessage;
 typedef int (*Filter)(LSHandle *, LSMessage *, void *);
 
-// LSError e struct por valor e nao ha header C no SDK. Um buffer folgado evita
-// corromper a pilha quando a lib escreve o erro dentro dele.
+// LSError is a struct by value and there is no C header in the SDK. A generous
+// buffer avoids corrupting the stack when the library writes the error into it.
 static char ERROR[256];
 
 static int         (*lsRegister)(const char *, LSHandle **, void *);
@@ -195,44 +194,44 @@ static int       windowX, windowY, windowW = 1920, windowH = 1080;
 // belongs to the drawing thread and LS2 callbacks run on the GMainLoop thread, so
 // what crosses between them is THIS flag, read by video_pump.
 static volatile int windowDirty;
-// Ultimo par fonte/destino aplicado pelo setDisplayWindow do uMS, para nao
-// repetir a mesma chamada a cada quadro. fonX = -1 quer dizer "nada aplicado".
+// The last source/destination pair applied by the uMS's setDisplayWindow, so as
+// not to repeat the same call every frame. fontX = -1 means "nothing applied".
 static int       fontX = -1, fontY, fontW, fontH, dstX = -1, dstY, dstW, dstH;
-// Caracteristicas do fluxo, tiradas do evento videoInfo da assinatura do uMS.
-// O ACB precisa delas para descrever o video ao pipeline de exibicao.
+// The stream's characteristics, taken from the videoInfo event of the uMS
+// subscription. The ACB needs them to describe the video to the display pipeline.
 static int       vidW = 1920, vidH = 1080, vidRate = 30;
 static long      vidBits;
 static char      vidScan[24] = "progressive";
-// hdrType real informado pelo uMS para a camada que chegou ao decoder. Isto
-// vence o rotulo do addon: um arquivo marcado HDR-DV pode entregar apenas a
-// camada HDR10 nesta TV/perfil.
+// The real hdrType the uMS reports for the layer that reached the decoder. This
+// beats the addon's label: a file marked HDR-DV may deliver only the HDR10 layer
+// on this TV/profile.
 static char      vidHdr[24] = "none";
 static long      seiX0, seiX1, seiX2, seiY0, seiY1, seiY2;
 static long      seiWhiteX, seiWhiteY, seiMinLuma, seiMaxLuma;
 static long      seiMaxCLL, seiMaxFALL;
 static int       vuiFirst = 2, vuiTrans = 2, vuiMatrix = 2;
 static int       vidAtmos, vidDV;
-// Estado do recuo de Dolby Vision (ver o bloco em video_tocar). Declarados
-// AQUI e nao junto da funcao porque o parser do videoInfo, bem acima, marca
-// viuVideo — e no C a ordem de declaracao manda.
+// The state of the Dolby Vision fallback (see the block in video_play). Declared
+// HERE and not next to the function because the videoInfo parser, well above, sets
+// sawVideo — and in C the declaration order is what counts.
 static int       dvInLoad, dvInset, sawVideo;
 
-// Faixas lidas do sourceInfo. Guardadas porque a tela precisa delas a cada
-// quadro e reprocessar o JSON no desenho seria desperdicio.
+// Tracks read from the sourceInfo. Kept because the screen needs them every frame
+// and reprocessing the JSON while drawing would be wasteful.
 static VideoTrack trackAudio[NV_TRACK_MAX], trackSub[NV_TRACK_MAX];
 static int nAudio, nSub, audioCurrent, subCurrent = -1;
 
-// Afirmacao de DV da fonte escolhida. Setada por video_definir_dv ANTES do
-// tocar, porque o video_tocar zera vidDV ao comecar uma sessao nova.
+// The chosen source's DV claim. Set by video_set_dv BEFORE playing, because
+// video_play zeroes vidDV when starting a new session.
 static int dvRequest;
 
-// Nome legivel do idioma. So os que aparecem de verdade neste acervo; o resto
-// fica com o codigo, que e melhor que "Desconhecido" — o codigo ao menos
-// identifica.
+// A readable name for the language. Only those that actually turn up in this
+// collection; the rest keep the code, which is better than "Unknown" — the code at
+// least identifies it.
 static const char *languageReadable(const char *c) {
-  // Tabela com ACENTO — e nome de idioma na tela, nao identificador. E com os
-  // codigos de tres letras (ISO 639-2) alem dos de duas, porque MKV de release
-  // etiqueta quase sempre com os de tres.
+  // A table WITH ACCENTS — it is a language name on screen, not an identifier. And
+  // with the three-letter codes (ISO 639-2) as well as the two-letter ones, because
+  // a release MKV almost always tags with the three-letter ones.
   static const struct { const char *cod, *name; } T[] = {
     { "pt", "Portuguese" },  { "pob", "Portuguese (BR)" }, { "por", "Portuguese" },
     { "pt-br", "Portuguese (BR)" }, { "ptb", "Portuguese (BR)" },
@@ -268,9 +267,9 @@ static const char *languageReadable(const char *c) {
   if (!c || !*c) return "";
   for (i = 0; i < sizeof T / sizeof *T; i++)
     if (!strcasecmp(c, T[i].cod)) return T[i].name;
-  // Sem nome na tabela, devolve o CODIGO EM MAIUSCULAS — e o que o app web faz
-  // quando nao sabe nomear ("ENG", "POR"). Mostrar o codigo diz alguma coisa;
-  // cair em "Legenda 3" nao diz nada.
+  // With no name in the table, it returns the CODE IN CAPITALS — which is what the
+  // web app does when it cannot name it ("ENG", "POR"). Showing the code says
+  // something; falling back to "Subtitle 3" says nothing.
   { static char cx[16]; size_t k;
     for (k = 0; c[k] && k + 1 < sizeof cx; k++)
       cx[k] = (c[k] >= 'a' && c[k] <= 'z') ? (char)(c[k] - 32) : c[k];
@@ -281,12 +280,12 @@ static char      media[64];
 static double    posSeg, durationSeg;
 static int       playing, ready, on;
 
-// Procura a chave e exige que o que vem depois seja NUMERO.
+// Looks for the key and requires what follows to be a NUMBER.
 //
-// O evento e {"currentTime":{"currentTime":8580,...}}: a primeira ocorrencia da
-// chave e o objeto externo, e atof("{...") devolve 0. A barra ficava parada em
-// 0:00 com a duracao correta ao lado — o tipo de erro que parece "o player nao
-// atualiza" e na verdade e leitura do campo errado.
+// The event is {"currentTime":{"currentTime":8580,...}}: the key's first
+// occurrence is the outer object, and atof("{...") returns 0. The bar sat at 0:00
+// with the correct duration beside it — the kind of error that looks like "the
+// player does not update" and is really reading the wrong field.
 static double numberOf(const char *p, const char *key) {
   const char *q = p;
   size_t n = strlen(key);
@@ -299,9 +298,9 @@ static double numberOf(const char *p, const char *key) {
   return -1.0;
 }
 
-// Latencia do pipeline: pedido de load -> loadCompleted -> primeiro quadro.
-// Sao os numeros que dizem se o comeco e o buffer estao saudaveis; sem eles
-// "ta lento" e impressao.
+// The pipeline's latency: the load request -> loadCompleted -> the first frame.
+// These are the numbers that say whether the start and the buffer are healthy;
+// without them "it's slow" is an impression.
 static struct timespec t0Request;
 static int cronRequested, cronLoad, cronFrame;
 static long msSinceRequest(void) {
@@ -309,7 +308,7 @@ static long msSinceRequest(void) {
   clock_gettime(CLOCK_MONOTONIC, &a);
   return (a.tv_sec - t0Request.tv_sec) * 1000L + (a.tv_nsec - t0Request.tv_nsec) / 1000000L;
 }
-// Ate onde o buffer do pipeline ja cobre (segundos), do evento bufferRange.
+// How far the pipeline's buffer already reaches (seconds), from the bufferRange event.
 static double bufferSeg;
 
 
@@ -324,8 +323,8 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     const char *q;
     nAudio = nSub = 0;
     vidAtmos = 0;
-    // Percorre audioTrackInfo item a item. O sourceInfo e um objeto so, entao
-    // andar pelos "{" depois da chave do vetor e o suficiente aqui.
+    // It walks audioTrackInfo item by item. The sourceInfo is a single object, so
+    // walking the "{"s after the array's key is enough here.
     q = strstr(p, "\"audioTrackInfo\"");
     if (q) {
       const char *endVet = strchr(q, ']');
@@ -369,11 +368,11 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
         o = fo ? strchr(fo, '{') : NULL;
       }
     }
-    // DIAGNOSTICO: despeja o sourceInfo CRU uma vez por titulo. A TV nao
-    // devolve idioma de legenda nos arquivos do dono (todas saem como
-    // "Legenda N"), e sem ver o JSON de verdade qualquer conserto e chute —
-    // pode ser outro nome de campo, pode ser que o pipeline nao etiquete mesmo.
-    // Ler com: sshpass ... scp root@TV:/tmp/nuvio-faixas.json .
+    // DIAGNOSTIC: it dumps the RAW sourceInfo once per title. The TV does not
+    // return a subtitle language on the owner's files (they all come out as
+    // "Subtitle N"), and without seeing the real JSON any fix is a guess — it could
+    // be a different field name, or the pipeline may genuinely not tag them.
+    // Read it with: sshpass ... scp root@TV:/tmp/nuvio-tracks.json .
     { static int evicted;
       if (!evicted) {
         FILE *fd = fopen("/tmp/nuvio-tracks.json", "w");
@@ -396,8 +395,8 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
             f->language[k] = 0;
             if (!strcmp(f->language, "(null)")) f->language[0] = 0;
           } }
-        // Arquivo sem etiqueta de idioma e o caso comum em MKV de release.
-        // Numerar e honesto; inventar "Ingles" seria pior.
+        // A file with no language tag is the common case in a release MKV.
+        // Numbering is honest; inventing "English" would be worse.
         if (f->language[0])
           snprintf(f->label, sizeof f->label, "%s", languageReadable(f->language));
         else
@@ -409,35 +408,26 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     printf("[video] tracks: audio=%d subtitle=%d atmos=%d\n", nAudio, nSub, vidAtmos);
     fflush(stdout);
 
-    // O PIPELINE NAO DA IDIOMA DE LEGENDA. Medido nesta TV, num arquivo com 43
-    // legendas: o audioTrackInfo vem com "en"/"es"/"fr"/"it" e TODA entrada do
-    // subtitleTrackInfo vem com "language":"(null)". Nao ha outro campo ali —
-    // a informacao nao sai do pipeline, e a lista virava "Legenda 1..43", que
-    // nao ajuda ninguem a escolher.
+    // THE PIPELINE DOES NOT GIVE A SUBTITLE LANGUAGE. Measured on this TV, on a
+    // file with 43 subtitles: audioTrackInfo comes with "en"/"es"/"fr"/"it" and
+    // EVERY subtitleTrackInfo entry comes with "language":"(null)". There is no
+    // other field there — the information does not come out of the pipeline, and
+    // the list became "Subtitle 1..43", which helps nobody choose.
     //
-    // O jeito de saber e ler o proprio arquivo, que e o que o navegador faz de
-    // graca no app web. Dispara um fio que baixa os primeiros 2 MB por Range e
-    // le o elemento Tracks do Matroska; quando volta, casa por trackNum e
-    // reescreve os rotulos. Nao bloqueia a reproducao: se falhar, ou se o
-    // arquivo nao for MKV, fica o que ja estava.
+    // The way to know is to read the file itself, which is what the browser does
+    // for free in the web app. It fires a thread that downloads the first 2 MB by
+    // Range and reads the Matroska Tracks element; when it comes back, it matches
+    // by trackNum and rewrites the labels. It does not block playback: if it fails,
+    // or if the file is not an MKV, what was already there stays.
     { int missing = 0, i;
       for (i = 0; i < nSub; i++) if (!trackSub[i].language[0]) missing = 1;
-      // SO ANOTA. Quem dispara e o video_bombear, quando o buffer estiver
-      // saudavel — a sonda concorre com a propria reproducao (mesma conexao,
-      // mesmo servidor) e o sourceInfo chega justamente no pior instante, com o
-      // pipeline ainda enchendo o buffer. MEDIDO na TV: buffer em falta 1,6 s
-      // depois da leitura, caindo a 2,8 s e levando 9 s para se recuperar.
-      //
-      // O idioma da legenda nao tem pressa: so importa quando o dono abre a
-      // folha de faixas.
-      // MP4 nunca tem Tracks de Matroska: sondar e trafego garantidamente
-      // perdido, e ele sai da MESMA conexao do video.
+      // IT ONLY NOTES IT DOWN. What fires it is video_pump, once the buffer is
       if (missing && !sourceMp4) mkvPending = 1;
       else if (missing) mark("mkv: source is MP4, probe skipped"); }
   }
 
   if (strstr(p, "videoInfo")) {
-    sawVideo = 1;   // fecha o prazo do recuo de DV
+    sawVideo = 1;   // closes the DV fallback's deadline
     double v;
     int wasW = vidW, wasH = vidH;
     v = numberOf(p, "\"width\":");      if (v > 0) vidW = (int)v;
@@ -459,24 +449,25 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
       if (q) { const char *f; q += 11; f = strchr(q, '"');
         if (f && f - q < (int)sizeof vidHdr) {
           memcpy(vidHdr, q, f - q); vidHdr[f - q] = 0;
-          // Junto com o que a FONTE afirmava. Sozinho, o hdrType nao responde a
-          // pergunta que importa em MKV: "pedimos Dolby Vision e a TV entregou
-          // Dolby Vision, ou ela rebaixou para HDR10?". Os relatos de fora
-          // (Kodi, Plex, UMS) dizem que o webOS aciona DV nativo em MP4 perfis
-          // 5 e 8 e cai para HDR10 em Matroska; esta linha e o que permite
-          // confirmar ou desmentir isso NESTA TV, com medida em vez de fama.
+          // Alongside what the SOURCE claimed. On its own, the hdrType does not
+          // answer the question that matters on MKV: "did we ask for Dolby Vision
+          // and did the TV deliver Dolby Vision, or did it downgrade to HDR10?".
+          // The reports from elsewhere (Kodi, Plex, UMS) say webOS engages native
+          // DV on MP4 profiles 5 and 8 and falls back to HDR10 on Matroska; this
+          // line is what lets us confirm or refute that ON THIS TV, by measurement
+          // rather than by reputation.
           printf("[video] pipeline HDR: %s (source claimed DV=%d)\n",
                  vidHdr, dvRequest);
-          // Vai tambem para os MARCOS, que sao legiveis no aparelho: o stdout
-          // do app lancado pelo applicationManager nao chega a lugar nenhum, e
-          // era por isso que esta medida — a unica que responde se a TV honrou
-          // ou rebaixou o Dolby Vision — so existia em teoria.
+          // It goes to the MILESTONES too, which are readable on the device: the
+          // stdout of an app launched by applicationManager reaches nowhere, and
+          // that is why this measurement — the only one that answers whether the TV
+          // honoured or downgraded Dolby Vision — existed only in theory.
           { char m[64];
             snprintf(m, sizeof m, "pipeline hdr: %s (source DV=%d)",
                      vidHdr, dvRequest);
             mark(m); } } } }
-    // O Nuvio web que toca corretamente repassa estes valores sem alterar.
-    // Para DolbyVision ele omite os dois blocos; montarVideoData faz o mesmo.
+    // The web Nuvio that plays correctly passes these values through unchanged.
+    // For DolbyVision it omits both blocks; buildVideoData does the same.
     { double x;
 #define READ_SEI(name, dst) do { x = numberOf(p, "\"" name "\":"); if (x >= 0) dst = (long)x; } while (0)
       READ_SEI("displayPrimariesX0", seiX0); READ_SEI("displayPrimariesX1", seiX1);
@@ -495,8 +486,8 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   }
   if (strstr(p, "loadCompleted")) {
     mark("video loadCompleted");
-    // ORDEM: faixas primeiro, posicao depois. Trocar de faixa reinicia o
-    // decode no pipeline; fazer isso DEPOIS do seek jogaria a posicao fora.
+    // ORDER: tracks first, position after. Switching track restarts the decode in
+    // the pipeline; doing that AFTER the seek would throw the position away.
     if (audioOnLoad >= 0) {
       int a2 = audioOnLoad; audioOnLoad = -1;
       if (a2 > 0) video_choose_audio(a2);
@@ -516,7 +507,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
       video_fetch(target);
       mark("resumed after the pipeline died");
     }
-    // O pipeline e novo: o estilo da legenda nao sobrevive ao load anterior.
+    // The pipeline is new: the subtitle style does not survive the previous load.
     applyStyle();
     ready = 1;
     if (cronRequested && !cronLoad) {
@@ -538,13 +529,13 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     double e = numberOf(p, "\"endTime\":");
     if (e >= 0) bufferSeg = e;
   }
-  // PAUSA POR FALTA DE DADOS. O dono relatou "fica pausando" e os marcos nao
-  // registravam NADA — porque encher e esvaziar o buffer nao gera evento neste
-  // lado, e uma pausa dessas nao passa por `paused` nem por erro. Sem isto a
-  // unica coisa que sobra e adivinhar.
+  // A PAUSE FOR WANT OF DATA. The owner reported "it keeps pausing" and the
+  // milestones recorded NOTHING — because filling and emptying the buffer raises no
+  // event on this side, and a pause like that goes through neither `paused` nor an
+  // error. Without this, all that is left is guessing.
   //
-  // Carimba quanto do buffer havia no instante: e o numero que separa "a fonte
-  // nao entrega" de "o decoder engasgou".
+  // It stamps how much buffer there was at that instant: it is the number that
+  // separates "the source is not delivering" from "the decoder choked".
   if (strstr(p, "bufferingStart")) {
     char m[64];
     snprintf(m, sizeof m, "buffering START (buffer %+.1fs ahead)",
@@ -567,41 +558,42 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     windowDirty = 1;
   }
   if (strstr(p, "paused")) {
-    // So carimba quando NAO fomos nos que pausamos: pausa do dono e esperada,
-    // pausa vinda do pipeline e o defeito.
+    // It only stamps when it was NOT us who paused: a pause by the owner is
+    // expected, a pause coming from the pipeline is the defect.
     if (playing && !pauseRequested) mark("paused BY THE PIPELINE");
     playing = 0;
   }
   if (strstr(p, "endOfStream")) { playing = 0; mark("endOfStream"); }
 
-  // ERRO DO PIPELINE. Nao havia tratamento nenhum: quando o uMS recusava um
-  // seek ou perdia a fonte, o app simplesmente parava e ninguem sabia por que —
-  // "eu passei e ele nao continuou mais" e exatamente o formato desse silencio.
-  // Nao ha o que consertar sem saber a causa, e a causa vem no proprio evento.
-  // ERRO DE VERDADE, e nao "errorCode: 0".
+  // A PIPELINE ERROR. There was no handling at all: when the uMS refused a seek or
+  // lost the source, the app simply stopped and nobody knew why — "I skipped ahead
+  // and it never carried on" is exactly the shape of that silence. There is nothing
+  // to fix without knowing the cause, and the cause comes in the event itself.
+  // A REAL ERROR, and not "errorCode: 0".
   //
-  // A primeira versao carimbava tudo que tivesse `errorCode`, e o uMS manda
-  // esse campo em resposta NORMAL — os marcos encheram de
-  // `pipeline erro: errorText":"No Error"`, que e ruido escondendo o sinal.
+  // The first version stamped anything with an `errorCode`, and the uMS sends that
+  // field in a NORMAL response — the milestones filled up with
+  // `pipeline error: errorText":"No Error"`, which is noise hiding the signal.
   if (strstr(p, "errorText") && !strstr(p, "\"No Error\"")) {
     const char *q = strstr(p, "errorText");
     char m[96];
     snprintf(m, sizeof m, "pipeline error: %.60s", q);
     { char *n2; for (n2 = m; *n2; n2++) if (*n2 == '\n' || *n2 == '\r') *n2 = ' '; }
     mark(m);
-    // PIPELINE DESTRUIDO. Medido duas vezes na TV do dono: ~71 s depois de um
-    // avanco, o uMS responde "com.webos.pipeline.<id> is not running" e o video
-    // simplesmente para — o app nao fazia NADA, e era isso que ele descrevia
-    // como "passei e nao continuou mais".
+    // THE PIPELINE DESTROYED. Measured twice on the owner's TV: ~71 s after a seek,
+    // the uMS answers "com.webos.pipeline.<id> is not running" and the video simply
+    // stops — the app did NOTHING, and that is what they described as "I skipped
+    // ahead and it never carried on".
     //
-    // Recarrega a mesma fonte e volta para onde estava. Nao e conserto da
-    // CAUSA (o pipeline morre por algo entre o seek e a fonte do debrid, que
-    // este lado nao enxerga), e sim de nao deixar o dono na tela parada.
+    // It reloads the same source and goes back to where it was. It is not a fix for
+    // the CAUSE (the pipeline dies from something between the seek and the debrid
+    // source, which this side cannot see), but for not leaving the owner on a
+    // frozen screen.
     if (strstr(p, "is not running") && urlCurrent[0] && !recovering) {
       recovering = 1;
       resumeIn = posSeg;
-      // GUARDA AS ESCOLHAS. A posicao sozinha nao basta: o pipeline novo nasce
-      // com a faixa 0 e a legenda desligada.
+      // IT KEEPS THE CHOICES. The position alone is not enough: the new pipeline is
+      // born on track 0 with the subtitle off.
       audioOnLoad = audioCurrent;
       subOnLoad   = subCurrent;
       snprintf(subUrlOnLoad, sizeof subUrlOnLoad, "%s", subUrlCurrent);
@@ -611,7 +603,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   { double v = numberOf(p, "\"currentTime\":");
     if (v >= 0) {
       posSeg = v / 1000.0;
-      // Primeiro quadro com avanco: o numero de inicio de verdade.
+      // The first frame after a seek: the real start-up number.
       if (cronRequested && !cronFrame && posSeg > 0.0) {
         cronFrame = 1;
         printf("[video] load->first frame %lums\n", msSinceRequest());
@@ -636,9 +628,9 @@ static void call(const char *method, const char *load, Filter cb) {
     printf("[video] %s failed\n", method);
 }
 
-// Variante para callbacks que precisam saber a qual sessao pertencem. O
-// contexto e um inteiro convertido em ponteiro; nao ha alocacao para vazar nem
-// memoria cujo tempo de vida possa acabar antes da resposta assincrona.
+// A variant for callbacks that need to know which session they belong to. The
+// context is an integer cast to a pointer; there is no allocation to leak and no
+// memory whose lifetime could end before the asynchronous response.
 static void callCtx(const char *method, const char *load, Filter cb,
                       void *ctx) {
   char uri[128]; unsigned long token = 0;
@@ -666,8 +658,8 @@ static int onLoad(LSHandle *h, LSMessage *m, void *u) {
   if (mySession != session) {
     printf("[video] stale load ignored (session %u, current %u)\n",
            mySession, session);
-    // Um load cancelado ainda pode criar um pipeline no uMS. Liberar esse
-    // recurso evita deixar o decoder ocupado quando o usuario reabre o filme.
+    // A cancelled load can still create a pipeline in the uMS. Releasing that
+    // resource avoids leaving the decoder busy when the user reopens the film.
     char old[96] = "";
     if (p) js_text(p, NULL, "mediaId", old, sizeof old);
     if (old[0] && strcmp(old, media)) {
@@ -723,17 +715,17 @@ int video_start(void) {
   SIM(G, loopRun,  "g_main_loop_run");
   SIM(G, loopStop,  "g_main_loop_quit");
 
-  // O nome PRECISA casar com o padrao do papel LS2 do app
-  // (allowedNames: "com.webos.media.client.*"). Qualquer outro nome e recusado
-  // pelo hub e nada depois disso acontece.
+  // The name MUST match the pattern of the app's LS2 role
+  // (allowedNames: "com.webos.media.client.*"). Any other name is refused by the
+  // hub and nothing after that happens.
   if (!lsRegister("com.webos.media.client.nuvio", &bus, ERROR)) {
-    printf("[video] LSRegister recusado\n"); return 0;
+    printf("[video] LSRegister refused\n"); return 0;
   }
   loop = loopNew(NULL, 0);
   if (!lsAttach(bus, loop, ERROR)) { printf("[video] attach failed\n"); return 0; }
-  // Laco proprio: o LS2 exige um GMainLoop girando, e girar isso no laco de
-  // desenho custaria quadros. As respostas chegam neste fio e so mexem em
-  // variaveis simples, lidas pelo desenho sem trava.
+  // A loop of its own: LS2 requires a GMainLoop spinning, and spinning it in the
+  // drawing loop would cost frames. The responses arrive on this thread and only
+  // touch simple variables, read by the drawing without a lock.
   pthread_create(&thread, NULL, runLoop, NULL);
 
   on = 1;
@@ -744,25 +736,24 @@ int video_start(void) {
   return 1;
 }
 
-// --- recuo automatico do Dolby Vision ---------------------------------------
+// MEASURED on the OLED65C9, two DV files in MKV:
+//   file A: without DolbyHdrInfo it plays in HDR10; WITH the block it engages Dolby Vision.
+//   file B: without the block it plays normally (HDR10, with a picture); WITH the
+//           block there is ONLY AUDIO, and the pipeline never reports videoInfo.
+// 8/"single" and 7/"dual" were tested on file B: both break the same way.
 //
-// MEDIDO na OLED65C9, dois arquivos DV em MKV:
-//   arquivo A: sem DolbyHdrInfo toca em HDR10; COM o bloco engata Dolby Vision.
-//   arquivo B: sem o bloco toca normal (HDR10, com imagem); COM o bloco fica
-//              SO O AUDIO, e o pipeline nunca reporta videoInfo.
-// Testado 8/"single" e 7/"dual" no arquivo B: os dois quebram igual.
-//
-// Como nao demuxamos, nao ha como saber de antemao em qual dos dois casos a
-// fonte cai — declarar as cegas ganha DV num arquivo e perde a IMAGEM no outro,
-// que e troca ruim. Entao a declaracao vira uma APOSTA COM PRAZO: se o pipeline
-// nao reportar videoInfo em NV_DV_PRAZO_MS, recarrega a mesma URL sem o bloco.
-// O custo e alguns segundos no arquivo que nao aceita; o ganho e nunca ficar
-// sem imagem por causa de uma afirmacao nossa.
+// Since we do not demux, there is no way to know in advance which of the two cases
+// a source falls into — declaring blind wins DV on one file and loses the PICTURE
+// on the other, which is a bad trade. So the declaration becomes a BET WITH A
+// DEADLINE: if the pipeline does not report videoInfo within NV_DV_DEADLINE_MS, it
+// reloads the same URL without the block. The cost is a few seconds on the file
+// that does not accept it; the gain is never being left with no picture because of
+// a claim of ours.
 #define NV_DV_DEADLINE_MS 7000
 
 
-// --- idioma das legendas lido do proprio arquivo -----------------------------
-// Ver a nota no ponto de disparo, logo abaixo do parse do sourceInfo.
+// --- the subtitles' language read from the file itself -----------------------
+// See the note at the trigger point, just below the sourceInfo parse.
 static void *readMkv(void *arg) {
   MkvTrack fx[MKV_MAX_TRACKS];
   char url[1024];
@@ -773,24 +764,24 @@ static void *readMkv(void *arg) {
 
   n = mkv_tracks(url, fx, MKV_MAX_TRACKS);
   if (n < 1) {
-    // Sem isto o unico sinal era uma linha de stdout, que na TV nao chega a
-    // lugar nenhum — e a lista ficava em "Legenda 1, Legenda 2" sem ninguem
-    // saber se o arquivo nao e MKV, se o Range falhou ou se o cabecalho passa
-    // dos 2 MB que baixamos.
+    // Without this the only sign was a line on stdout, which on the TV reaches
+    // nowhere — and the list stayed at "Subtitle 1, Subtitle 2" with nobody
+    // knowing whether the file is not an MKV, whether the Range failed or whether
+    // the header runs past the 2 MB we downloaded.
     mark("mkv: no track read (not an MKV, or Range failed)");
     threadMkvAlive = 0; return NULL;
   }
 
-  // SEM MUTEX, e de proposito: este arquivo nao tem um. faixaLeg ja e escrito
-  // pelo fio de resposta do luna e lido pelo desenho sem trava nenhuma, e
-  // introduzir uma trava so aqui daria falsa seguranca — protegeria a escrita
-  // e nao a leitura. O dano possivel e um rotulo lido pela metade em UM quadro;
-  // por isso cada campo e preenchido de uma vez, com um snprintf so, e o
-  // rotulo (que e o que aparece) e escrito por ULTIMO, depois do idioma.
-  // O trackNum do sourceInfo da LG e o TrackNumber do Matroska: casar por ele,
-  // e nao por ordem. As duas listas nao vem na mesma ordem (o sourceInfo desta
-  // TV comecou em 42, 40, 41, 32...), e casar por posicao trocaria os idiomas
-  // de lugar — pior que nao ter idioma nenhum.
+  // NO MUTEX, and deliberately: this file has none. trackSub is already written by
+  // luna's response thread and read by the drawing with no lock at all, and
+  // introducing a lock only here would give false safety — it would protect the
+  // write and not the read. The possible damage is a half-read label in ONE frame;
+  // that is why each field is filled in one go, with a single snprintf, and the
+  // label (which is what shows) is written LAST, after the language.
+  // The trackNum in LG's sourceInfo is Matroska's TrackNumber: match by it, and not
+  // by order. The two lists do not arrive in the same order (this TV's sourceInfo
+  // started at 42, 40, 41, 32...), and matching by position would swap the
+  // languages around — worse than having no language at all.
   for (i = 0; i < nSub; i++) {
     if (trackSub[i].language[0]) continue;
     for (j = 0; j < n; j++) {
@@ -799,9 +790,9 @@ static void *readMkv(void *arg) {
         snprintf(trackSub[i].language, sizeof trackSub[i].language, "%s", fx[j].language);
         matched++;
       }
-      // O NOME da faixa ("Forced", "SDH", "Full") e o que separa duas legendas
-      // do MESMO idioma. Sem ele o dono ve "Portugues" tres vezes e escolhe no
-      // escuro — e essa e justamente a lista que ele reclamou.
+      // The track's NAME ("Forced", "SDH", "Full") is what separates two subtitles
+      // in the SAME language. Without it the owner sees "Portuguese" three times
+      // and chooses in the dark — and that is precisely the list they complained about.
       if (fx[j].name[0])
         snprintf(trackSub[i].label, sizeof trackSub[i].label, "%s%s%s",
                  trackSub[i].language[0] ? languageReadable(trackSub[i].language) : "",
@@ -838,8 +829,8 @@ int video_play(const char *url) {
   return playInternal(url, 1);
 }
 
-// Chamado uma vez por quadro. So existe para o prazo acima: sem ele o recuo
-// dependeria de o usuario perceber que nao ha imagem e sair da tela.
+// Called once per frame. It exists only for the deadline above: without it the
+// fallback would depend on the user noticing there is no picture and leaving the screen.
 void video_pump(void) {
   // Reapplies a rectangle requested from inside an LS2 callback. Here we are on
   // the drawing thread, which owns the Wayland connection — the only place a
@@ -850,16 +841,16 @@ void video_pump(void) {
     windowDirty = 0;
     if (media[0]) { plane_forget(); pushWindow(); }
   }
-  // SONDA DE MKV so com folga de buffer. 20 s a frente e o sinal de que a
-  // fonte esta entregando mais rapido do que o decoder consome, e portanto de
-  // que ha banda sobrando para os 320 KB do cabecalho.
+  // AN MKV PROBE only with buffer to spare. 20 s ahead is the sign that the source
+  // is delivering faster than the decoder consumes, and therefore that there is
+  // bandwidth left for the header's 320 KB.
   if (mkvPending && !threadMkvAlive && urlCurrent[0] && bufferSeg - posSeg >= 20.0) {
     mkvPending = 0;
     threadMkvAlive = 1;
     if (pthread_create(&threadMkv, NULL, readMkv, NULL) != 0) threadMkvAlive = 0;
     else pthread_detach(threadMkv);
   }
-  // Avanco pendente que ja repousou.
+  // A pending seek that has already settled.
   if (seekIn && SDL_GetTicks() >= seekIn) {
     Uint32 q = seekIn; seekIn = 0; (void)q;
     seekNow(seekTarget);
@@ -870,21 +861,21 @@ void video_pump(void) {
     recovering = 0;
     mark("reloading the source");
     if (playInternal(urlCurrent, 1) && target > 1.0) {
-      // O seek so vale depois do load; guardar o alvo e deixar o
-      // loadCompleted aplica-lo evita mandar posicao para um pipeline que
-      // ainda nao existe.
+      // The seek only counts after the load; storing the target and letting
+      // loadCompleted apply it avoids sending a position to a pipeline that does
+      // not exist yet.
       posOnLoad = target;
     }
   }
-  // O recuo por prazo foi REMOVIDO por nao funcionar: o gatilho era "o pipeline
-  // nao reportou videoInfo", e o uMS reporta videoInfo, sourceInfo e
-  // loadCompleted normalmente mesmo nos arquivos que ficam sem imagem. Medido:
-  // videoInfo 3840x1606 hdrType=DolbyVision e loadCompleted em 3212ms, tela
-  // preta com audio correndo. Nao ha no uMS sinal de QUADRO EXIBIDO — o
-  // currentTime avanca puxado pelo audio.
+  // The deadline fallback was REMOVED because it did not work: the trigger was "the
+  // pipeline did not report videoInfo", and the uMS reports videoInfo, sourceInfo
+  // and loadCompleted normally even on files that end up with no picture. Measured:
+  // videoInfo 3840x1606 hdrType=DolbyVision and loadCompleted at 3212ms, a black
+  // screen with the audio running. There is no FRAME DISPLAYED signal in the uMS —
+  // currentTime advances pulled along by the audio.
   //
-  // A funcao fica porque a batida por quadro e util assim que existir um sinal
-  // melhor (contador de quadros, ou o proprio perfil lido do MKV).
+  // The function stays because the per-frame tick is useful as soon as a better
+  // signal exists (a frame counter, or the profile itself read from the MKV).
   (void)dvInLoad; (void)dvInset; (void)sawVideo;
   (void)msOfLoad; (void)urlCurrent; (void)nowMs; (void)playInternal;
 }
@@ -896,10 +887,12 @@ static int playInternal(const char *url, int comDV) {
   video_stop();
   mySession = ++session;
   sawVideo = 0;
-  // O retangulo aplicado e da SESSAO: sem zerar, uma sessao nova que calcule o
-  // mesmo rect cairia no "ja e esse" e nunca chegaria a mandar nada ao plano.
-  // (semUms NAO zera: se esta TV nao entende o recorte de fonte, nao passa a
-  // entender no titulo seguinte, e insistir so arrisca a imagem de novo.)
+  // The applied rectangle belongs to the SESSION: without zeroing it, a new session
+  // that computes the same rect would fall into "it is already that" and would
+  // never send anything to the plane.
+  // (noUms is NOT zeroed: if this TV does not understand source cropping, it will
+  // not start understanding on the next title, and insisting only risks the picture
+  // again.)
   fontX = -1; dstX = dstY = dstW = dstH = -1;
   posSeg = durationSeg = bufferSeg = 0; playing = ready = 0; media[0] = 0;
   nAudio = nSub = 0; audioCurrent = 0; subCurrent = -1; vidAtmos = 0;
@@ -913,28 +906,30 @@ static int playInternal(const char *url, int comDV) {
   vidDV = dvRequest;
   cronRequested = 1; cronLoad = 0; cronFrame = 0;
   clock_gettime(CLOCK_MONOTONIC, &t0Request);
-  // DolbyHdrInfo: e assim que o Kodi anuncia Dolby Vision a este mesmo pipeline
+  // DolbyHdrInfo: this is how Kodi announces Dolby Vision to this same pipeline
   // (xbmc/cores/VideoPlayer/MediaPipelineWebOS.cpp):
   //   contents["DolbyHdrInfo"]["encryptionType"] = "clear"
   //   contents["DolbyHdrInfo"]["profileId"]      = dovi.dv_profile
   //   contents["DolbyHdrInfo"]["trackType"]      = el_present_flag ? "dual" : "single"
   //
-  // DIFERENCA QUE PODE INVALIDAR TUDO ISTO, e por isso e um EXPERIMENTO: o Kodi
-  // demuxa com ffmpeg e ENTREGA BUFFERS por option.externalStreamingInfo, onde
-  // esse bloco vive. Nos passamos uma URI e a TV faz HTTP, demux e decode.
-  // Declarar o bloco no modo URI pode ser ignorado em silencio — e a unica forma
-  // de saber e medir o hdrType que volta.
+  // A DIFFERENCE THAT MAY INVALIDATE ALL OF THIS, and that is why it is an
+  // EXPERIMENT: Kodi demuxes with ffmpeg and DELIVERS BUFFERS through
+  // option.externalStreamingInfo, which is where that block lives. We pass a URI
+  // and the TV does the HTTP, the demux and the decode. Declaring the block in URI
+  // mode may be silently ignored — and the only way to know is to measure the
+  // hdrType that comes back.
   //
-  // profileId 8 / "single" e o que o Kodi declara DEPOIS de converter o perfil 7,
-  // nao o que o arquivo tem. Como nao demuxamos, nao sabemos o perfil real; por
-  // isso os valores sao ajustaveis por variavel de ambiente para poder testar
-  // 7/"dual" contra 8/"single" no mesmo arquivo sem recompilar.
+  // profileId 8 / "single" is what Kodi declares AFTER converting profile 7, not
+  // what the file has. Since we do not demux, we do not know the real profile; that
+  // is why the values are adjustable by environment variable, so 7/"dual" can be
+  // tested against 8/"single" on the same file without recompiling.
   char dolby[192] = "";
   dvInLoad = 0;
   if (dvRequest && comDV) {
-    // Os valores tambem saem de /tmp/nuvio-dv.conf ("<perfil> <trilha>", ex:
-    // "7 dual"), porque o app e lancado pelo SAM e nao da para passar variavel
-    // de ambiente por ali. Sem o arquivo, valem o ambiente e depois o padrao.
+    // The values also come from /tmp/nuvio-dv.conf ("<profile> <track>", e.g.
+    // "7 dual"), because the app is launched by SAM and there is no way to pass an
+    // environment variable through it. Without the file, the environment applies
+    // and then the default.
     static char pFile[16], tFile[16];
     const char *profile = getenv("NUVIO_DV_PROFILE");
     const char *track = getenv("NUVIO_DV_TRACK");
@@ -947,28 +942,29 @@ static int playInternal(const char *url, int comDV) {
         }
         fclose(f);
       } }
-    // DESLIGADO POR PADRAO, e a razao esta medida:
+    // OFF BY DEFAULT, and the reason is measured:
     //
-    //   arquivo A: sem o bloco toca em HDR10; COM o bloco engata Dolby Vision.
-    //   varios outros: sem o bloco tocam normal; COM o bloco ficam SEM IMAGEM
-    //                  (um chegou a mostrar o primeiro quadro e congelar, com o
-    //                  audio correndo).
+    //   file A: without the block it plays in HDR10; WITH the block it engages Dolby Vision.
+    //   several others: without the block they play normally; WITH the block they
+    //                   end up WITH NO PICTURE (one showed the first frame and
+    //                   froze, with the audio running).
     //
-    // Ganhar DV num arquivo e perder a imagem em varios e troca ruim. E nao ha
-    // como escolher sozinho: tentei um prazo que recarregaria sem o bloco caso
-    // o pipeline nao reportasse video, e ele NAO SERVE — o uMS reporta videoInfo
-    // (3840x1606, hdrType DolbyVision) e loadCompleted normalmente mesmo quando
-    // nenhum quadro chega ao plano. "Reportou" nao e "exibiu", e nao existe no
-    // uMS um sinal de quadro avancando: currentTime anda com o audio.
+    // Gaining DV on one file and losing the picture on several is a bad trade. And
+    // there is no way to decide on its own: I tried a deadline that would reload
+    // without the block if the pipeline did not report video, and it DOES NOT WORK
+    // — the uMS reports videoInfo (3840x1606, hdrType DolbyVision) and
+    // loadCompleted normally even when no frame reaches the plane. "Reported" is
+    // not "displayed", and there is no signal in the uMS for a frame advancing:
+    // currentTime moves with the audio.
     //
-    // Entao vira OPT-IN, para experimentar arquivo a arquivo:
-    //   echo "8 single" > /tmp/nuvio-dv.conf   (ou "7 dual")
-    //   rm /tmp/nuvio-dv.conf                  volta ao seguro
-    // O caminho definitivo e saber o perfil real do arquivo antes de afirmar
-    // qualquer coisa: ler o cabecalho do MKV por HTTP Range e achar o
-    // BlockAdditionMapping com dvcC/dvvC, que e onde o Matroska guarda isso.
+    // So it becomes OPT-IN, to experiment file by file:
+    //   echo "8 single" > /tmp/nuvio-dv.conf   (or "7 dual")
+    //   rm /tmp/nuvio-dv.conf                  back to safe
+    // The definitive route is knowing the file's real profile before claiming
+    // anything: reading the MKV header over HTTP Range and finding the
+    // BlockAdditionMapping with dvcC/dvvC, which is where Matroska stores it.
     if (!profile || !*profile || !strcmp(profile, "off")) {
-      /* sem declaracao: comportamento conhecido e seguro */
+      /* no declaration: known, safe behaviour */
     } else {
       snprintf(dolby, sizeof dolby,
                "\"externalStreamingInfo\":{\"contents\":{\"DolbyHdrInfo\":{"
@@ -1005,9 +1001,9 @@ static int playInternal(const char *url, int comDV) {
 
 void video_stop(void) {
   char b[128];
-  // Invalida tambem a sessao que ainda esta esperando o retorno de load. Esse
-  // era o caso abrir -> sair -> abrir que travava: nao havia mediaId para
-  // descarregar, mas o callback antigo continuava vivo e contaminava o novo.
+  // It also invalidates the session that is still waiting for the load's return.
+  // That was the open -> exit -> open case that froze: there was no mediaId to
+  // unload, but the old callback stayed alive and contaminated the new one.
   session++;
   windowDirty = 0;
   recovering = 0; resumeIn = posOnLoad = 0.0;
@@ -1030,16 +1026,14 @@ void video_pause(int paused) {
   pauseRequested = paused;
 }
 
-// AVANCO COM REPOUSO.
+// Measured on the TV: holding the arrow produced FOUR seeks in 0.8 s (16 s, 26 s,
+// 36 s, 46 s) — four consecutive seek requests to the same source, and ~71 s later
+// the pipeline died. It is not proven that one causes the other, but sending four
+// positions when the owner wanted ONE is wasteful either way: the first three are
+// discarded as soon as the fourth arrives.
 //
-// Medido na TV: segurar a seta produzia QUATRO seeks em 0,8 s (16 s, 26 s, 36 s,
-// 46 s) — quatro pedidos de faixa seguidos a mesma fonte, e ~71 s depois o
-// pipeline morria. Nao esta provado que um causa o outro, mas mandar quatro
-// posicoes quando o dono quis UMA e desperdicio de qualquer forma: as tres
-// primeiras sao descartadas assim que a quarta chega.
-//
-// A posicao MOSTRADA muda na hora (senao a barra nao responde ao toque); o que
-// espera o repouso e o comando ao pipeline.
+// The DISPLAYED position changes at once (otherwise the bar does not respond to the
+// press); what waits for the rest is the command to the pipeline.
 #define SEEK_IDLE_MS 350
 
 void video_fetch(double seconds) {
@@ -1050,7 +1044,7 @@ void video_fetch(double seconds) {
   seekIn = SDL_GetTicks() + SEEK_IDLE_MS;
 }
 
-// Manda de fato. Chamado pelo video_bombear quando o repouso vence.
+// Actually sends it. Called by video_pump when the rest period expires.
 static void seekNow(double seconds) {
   char b[192];
   if (!on || !media[0]) return;
@@ -1060,27 +1054,15 @@ static void seekNow(double seconds) {
   { char m[48]; snprintf(m, sizeof m, "seek to %ds", (int)seconds); mark(m); }
 }
 
-// O retangulo do plano de hardware. E por AQUI que os modos de zoom acontecem:
-// o video nao e um elemento com `transform: scale()` como no app web — e um
-// plano atras da superficie GL, e ampliar significa mandar um retangulo MAIOR
-// que a tela, com x/y negativos, e deixar o excedente sair pela borda. E o
-// mesmo resultado do transform do web: a barra preta embutida no quadro sai da
-// area visivel em vez de ser (impossivelmente) recortada por object-fit.
+// The hardware plane's rectangle. This is where the zoom modes happen: the video
+// is not an element with `transform: scale()` as in the web app — it is a plane
+// behind the GL surface, and enlarging means sending a rectangle LARGER than the
+// screen, with negative x/y, and letting the excess run off the edge. It is the
+// same result as the web's transform: the black bar baked into the frame leaves
+// the visible area instead of being (impossibly) cropped by object-fit.
 //
 // The rectangle MUST NOT run off the screen. MEASURED on webOS 4 and kept here
 // because the reason was never the ACB's: sending the plane a rectangle with a
-// negative origin or larger than the panel (which was how I first tried to zoom)
-// does NOT crop anything — the plane simply GOES BLANK, and the screen is black in
-// every scaled mode, with a picture only in ORIGINAL, the one where the scale is
-// 1. A hardware plane does not discard the overflow the way the browser's
-// compositor does with transform: scale(). What zooms is video_window_source
-// below, by cropping the SOURCE.
-//
-// Sends the compositor the current source/destination pair. The source is only
-// known after videoInfo; until then vidW/vidH are 1920x1080, which is the right
-// guess for almost everything. BOTH rectangles must always be sent: neither
-// argument of set_exported_window accepts null, and sending null does not return
-// an error — the compositor disconnects the client, i.e. the whole app dies.
 static void pushWindow(void) {
   int sx = fontX, sy = fontY, sw = fontW, sh = fontH;
   if (fontX < 0) {
@@ -1098,10 +1080,10 @@ void video_window(int x, int y, int w, int h) {
   if (x + w > 1920) w = 1920 - x;
   if (y + h > 1080) h = 1080 - y;
   if (w < 1 || h < 1) return;
-  if (x == windowX && y == windowY && w == windowW && h == windowH) return;  // sem repetir o mesmo rect a cada quadro
+  if (x == windowX && y == windowY && w == windowW && h == windowH) return;  // do not repeat the same rect every frame
   windowX = x; windowY = y; windowW = w; windowH = h;
   fontX = -1;   // a destination with no crop was asked for: the source is whole again
-  if (!on || !media[0]) return;   // sem midia presa, aplicar seria no vazio
+  if (!on || !media[0]) return;   // with no media attached, applying it would go nowhere
   pushWindow();
 }
 
@@ -1143,10 +1125,10 @@ double video_duration(void)  { return durationSeg; }
 double video_buffer_end(void) { return bufferSeg; }
 int    video_playing(void)  { return playing; }
 int    video_ready(void)   { return ready; }
-// Ha midia carregada. O furo na superficie usa ISTO e nao o loadCompleted:
-// abrir o buraco cedo nao custa nada (atras dele so existe o plano de video) e
-// esperar o evento deixaria a tela desenhada por cima do video se o evento
-// mudar de nome ou nao vier.
+// There is media loaded. The hole in the surface uses THIS and not loadCompleted:
+// opening the hole early costs nothing (behind it there is only the video plane)
+// and waiting for the event would leave the screen drawn over the video if the
+// event changed name or did not arrive.
 int    video_active(void)    { return media[0] != 0; }
 
 int  video_n_audio(void)   { return nAudio; }
@@ -1156,24 +1138,25 @@ const VideoTrack *video_subtitle(int i) { return (i >= 0 && i < nSub) ? &trackSu
 int  video_audio_current(void)   { return audioCurrent; }
 int  video_subtitle_current(void) { return subCurrent; }
 int  video_has_atmos(void)        { return vidAtmos; }
-// O SELO agora sai do PIPELINE, nao da afirmacao da fonte.
+// THE BADGE now comes from the PIPELINE, not from the source's claim.
 //
-// `vidDV` e o que o addon AFIRMOU sobre a URL, e continua sendo o que o bind
-// descreve ao tv.display (montarVideoData le vidDV, nao esta funcao) — la a
-// afirmacao e a unica informacao disponivel antes de haver imagem, e sem ela
-// nao ha como pedir Dolby Vision. Mas para o SELO ela e a fonte errada: esta
-// MEDIDO nesta TV que um MKV anunciado como DV volta com hdrType "HDR10" no
-// videoInfo. Ligar o selo na afirmacao fazia a tela anunciar Dolby Vision em
-// cima de um fluxo HDR10 — e selo que mente e pior que selo ausente, porque e
-// nele que o dono confia para saber se pegou a versao boa.
+// `vidDV` is what the addon CLAIMED about the URL, and it is still what the bind
+// describes to tv.display (buildVideoData reads vidDV, not this function) — there
+// the claim is the only information available before there is a picture, and
+// without it there is no way to ask for Dolby Vision. But for the BADGE it is the
+// wrong source: it is MEASURED on this TV that an MKV advertised as DV comes back
+// with hdrType "HDR10" in the videoInfo. Wiring the badge to the claim made the
+// screen announce Dolby Vision over an HDR10 stream — and a badge that lies is
+// worse than no badge, because it is what the owner trusts to know whether they got
+// the good version.
 //
-// Antes do videoInfo chegar, vidHdr e "none" e a resposta e 0: nenhum selo por
-// alguns segundos e honesto; um selo que aparece e depois se desmente, nao.
+// Before the videoInfo arrives, vidHdr is "none" and the answer is 0: no badge for
+// a few seconds is honest; a badge that appears and then contradicts itself is not.
 int  video_has_dolby_vision(void) {
   return !strcasecmp(vidHdr, "DolbyVision") || !strcasecmp(vidHdr, "dolby_vision");
 }
-// hdrType cru do pipeline, para a tela poder dizer "HDR10" quando for HDR10 em
-// vez de calar. "none" quando o fluxo e SDR ou ainda nao se sabe.
+// The pipeline's raw hdrType, so the screen can say "HDR10" when it is HDR10
+// instead of staying quiet. "none" when the stream is SDR or it is not known yet.
 const char *video_hdr(void)       { return vidHdr; }
 int  video_width(void)          { return vidW; }
 int  video_height(void)           { return vidH; }
@@ -1207,20 +1190,20 @@ void video_choose_subtitle(int i) {
              media, f->number);
     call("selectTrack", b, soLog);
     subCurrent = i;
-    subUrlCurrent[0] = 0;   // voltou para uma faixa do arquivo
+    subUrlCurrent[0] = 0;   // back to a track from the file
     applyStyle(); }
 }
 
-// O estilo escolhido, guardado porque o PIPELINE NASCE A CADA LOAD e nao herda
-// nada do video anterior. Reaplicado em loadCompleted e sempre que a legenda e
-// (re)selecionada.
+// The chosen style, kept because THE PIPELINE IS BORN ON EVERY LOAD and inherits
+// nothing from the previous video. Reapplied on loadCompleted and whenever the
+// subtitle is (re)selected.
 static VideoSubtitleStyle style = { 120, 0, 0, 3, 1, 0, 0, 0 };
 static int hasStyle;
 
 static void applyStyle(void) {
   char b[256];
   if (!on || !media[0] || !hasStyle) return;
-  /* Embutida ainda pertence ao uMS: reduz o percentual aos cinco degraus. */
+  /* An embedded one still belongs to the uMS: reduce the percentage to five steps. */
   { int p=style.size, t=p<=70?0:p<=100?1:p<=130?2:p<=165?3:4;
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"fontSize\":%d}", media, t);
     call("setSubtitleFontSize", b, soLog); }
@@ -1229,15 +1212,15 @@ static void applyStyle(void) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charColor\":\"%s\"}",
              media, VIDEO_SUB_COLORS[c]);
     call("setSubtitleCharacterColor", b, soLog); }
-  // Opacidade DA LETRA, separada da do fundo. O handler existe no firmware da
-  // C9 (`setSubtitleCharacterOpacity`) e recebe 0..255. Tres niveis evitam uma
-  // folha interminavel no controle remoto e mantem o texto legivel sobre video.
+  // The LETTER's opacity, separate from the background's. The handler exists in the
+  // C9's firmware (`setSubtitleCharacterOpacity`) and takes 0..255. Three levels
+  // avoid an endless sheet on the remote control and keep the text legible over video.
   { int op = style.opacity == 3 ? 64 : style.opacity == 2 ? 128
            : style.opacity == 1 ? 191 : 255;
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charOpacity\":%d}", media, op);
     call("setSubtitleCharacterOpacity", b, soLog); }
-  // O fundo e a dupla cor+opacidade: sem declarar a cor, mudar so a opacidade
-  // nao tem o que revelar.
+  // The background is the colour+opacity pair: without declaring the colour,
+  // changing only the opacity has nothing to reveal.
   { int f = style.background; if (f < 0) f = 0; if (f > 4) f = 4;
     int op = f == 4 ? 255 : f * 64;
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"bgColor\":\"black\"}", media);
@@ -1248,9 +1231,9 @@ static void applyStyle(void) {
   { int p = style.position; if (p < 0) p = 0; if (p > 7) p = 7;
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", media, p - 3);
     call("setSubtitlePosition", b, soLog); }
-  // VERIFICADO NA TELA: "uniform" desenha contorno em volta das letras.
-  // "none" e o sem-borda. O retorno do uMS nao serve de prova aqui — ele
-  // respondeu returnValue:true ate para valores inventados.
+  // CHECKED ON SCREEN: "uniform" draws an outline around the letters. "none" is the
+  // borderless one. The uMS's return value is no proof here — it answered
+  // returnValue:true even to values I invented.
   { const char *ed = style.border == 2 ? "dropShadow"
                    : (style.border == 1 ? "uniform" : "none");
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charEdgeType\":\"%s\"}",
@@ -1274,10 +1257,10 @@ void video_set_mp4(int isMp4) { sourceMp4 = isMp4; }
 void video_subtitle_external(const char *url) {
   char b[1400], recognizable[1024];
   if (!on || !media[0] || !url || !*url) return;
-  // O uMS baixa e sincroniza sozinho — o app so aponta. E o que permite usar
-  // legenda do OpenSubtitles em arquivo que nao traz nenhuma embutida. Nesta
-  // LG, URI /file/123 produziu errorCode 210 "Unknown Subtitle"; o MESMO
-  // arquivo servido como /file/123.srt e reconhecido pelo formato.
+  // The uMS downloads and syncs it by itself — the app only points. That is what
+  // allows an OpenSubtitles subtitle on a file that carries none embedded. On this
+  // LG, a /file/123 URI produced errorCode 210 "Unknown Subtitle"; the SAME file
+  // served as /file/123.srt is recognised by its format.
   video_normalize_url_subtitle(url, recognizable, sizeof recognizable);
   snprintf(b, sizeof b,
            "{\"mediaId\":\"%s\",\"uri\":\"%s\",\"preferredEncodings\":[\"UTF-8\"]}",

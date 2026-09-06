@@ -67,9 +67,9 @@ void video_window(int x, int y, int w, int h);
 void video_window_source(int sx, int sy, int sw, int sh,
                         int dx, int dy, int dw, int dh);
 
-double video_pos(void);      // segundos decorridos
-double video_duration(void);  // 0 enquanto desconhecida
-double video_buffer_end(void); // ate onde o buffer cobre (s); 0 se desconhecido
+double video_pos(void);      // seconds elapsed
+double video_duration(void);  // 0 while unknown
+double video_buffer_end(void); // how far the buffer reaches (s); 0 if unknown
 // The chosen SOURCE's Dolby Vision claim (the addon describes the file). Call it
 // BEFORE video_play/video_set_source: it is what decides the hdrType the ACB
 // describes to tv.display.
@@ -83,8 +83,8 @@ void video_set_dv(int dv);
 // said "no track read" every time.
 void video_set_mp4(int isMp4);
 int    video_playing(void);
-int    video_ready(void);   // 1 depois do loadCompleted
-int    video_active(void);    // 1 assim que ha mediaId — e o que abre o furo
+int    video_ready(void);   // 1 after loadCompleted
+int    video_active(void);    // 1 as soon as there is a mediaId — this is what opens the hole
 
 // --- tracks ------------------------------------------------------------------
 // All of this comes from the sourceInfo event on the uMS subscription: the addon
@@ -93,9 +93,9 @@ int    video_active(void);    // 1 assim que ha mediaId — e o que abre o furo
 #define NV_TRACK_MAX 12
 
 typedef struct {
-  char label[48];   // "Ingles · Atmos 5.1" ou "Legenda 3"
-  char language[8];    // "en"; vazio quando o arquivo nao etiqueta
-  int  number;       // indice que o selectTrack espera
+  char label[48];   // "English · Atmos 5.1" or "Subtitle 3"
+  char language[8];    // "en"; empty when the file does not tag it
+  int  number;       // index selectTrack expects
 } VideoTrack;
 
 int  video_n_audio(void);
@@ -103,13 +103,13 @@ int  video_n_subtitle(void);
 const VideoTrack *video_audio(int i);
 const VideoTrack *video_subtitle(int i);
 int  video_audio_current(void);
-int  video_subtitle_current(void);   // -1 = desligada
+int  video_subtitle_current(void);   // -1 = off
 
 void video_choose_audio(int i);
-void video_choose_subtitle(int i);   // -1 desliga
+void video_choose_subtitle(int i);   // -1 turns it off
 
-// Legenda de arquivo externo (OpenSubtitles). O uMS baixa e sincroniza
-// sozinho; o app so passa a URL.
+// Subtitle from an external file (OpenSubtitles). The uMS downloads and syncs
+// it on its own; the app only passes the URL.
 void video_subtitle_external(const char *url);
 // The uMS identifies the format from the URI's extension. Addons often serve
 // /file/123 with no .srt; this function makes the URI recognisable without
@@ -133,14 +133,14 @@ void video_normalize_url_subtitle(const char *url, char *dst, unsigned size);
 // the translation into the device's vocabulary lives in video.c, which is what
 // knows the pipeline.
 typedef struct {
-  int size;    // 50..200%, passo 10 (120 = padrao)
-  int color;        // indice em VIDEO_LEG_CORES
-  int background;      // 0 nenhum; 1..4 = escuro 25/50/75/100%
-  int position;    // 0..7  -> position -3..4 no uMS
-  int border;      // 0 nenhuma, 1 contorno, 2 sombra
-  int delayMs;   // negativo adianta
-  int opacity;  // 0..3 = texto 100/75/50/25%
-  int family;    // TxtFamilia; aplicada ao overlay externo (OpenSubtitles)
+  int size;    // 50..200%, step 10 (120 = default)
+  int color;        // index into VIDEO_SUB_COLORS
+  int background;      // 0 none; 1..4 = dark 25/50/75/100%
+  int position;    // 0..7  -> position -3..4 in the uMS
+  int border;      // 0 none, 1 outline, 2 shadow
+  int delayMs;   // negative brings it forward
+  int opacity;  // 0..3 = text 100/75/50/25%
+  int family;    // TxtFamilia; applied to the external overlay (OpenSubtitles)
 } VideoSubtitleStyle;
 
 #define VIDEO_SUB_NCOLORS 6

@@ -18,7 +18,7 @@ typedef struct {
 } Focus;
 
 void focus_start(Focus *f, int nRows, const int *nColumns);
-int  focus_mover(Focus *f, int dx, int dy);   // 1 se moveu
+int  focus_move(Focus *f, int dx, int dy);   // 1 se moveu
 int  focus_index(const Focus *f, int row, int column);
 
 #endif

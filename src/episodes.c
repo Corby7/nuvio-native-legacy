@@ -149,7 +149,7 @@ void episodes_draw(void) {
     GfxRect tr={x+54,y+14,184,130};
     gfx_color(tr,.10f,.19f,.19f,.20f,anim);
     if(tex){gfx_tex_aspect_current=tex_aspect(art);gfx_rect(tr,tex,GFX_CARD,0,0,0,.10f,0,0,0,anim);gfx_tex_aspect_current=0;}
-    char num[40];snprintf(num,sizeof num,"T%dE%d",ep->season,ep->episode);
+    char num[40];snprintf(num,sizeof num,"S%dE%d",ep->season,ep->episode);
     gfx_color((GfxRect){tr.x+8,tr.y+92,72,30},.15f,.025f,.025f,.03f,.9f*anim);
     txt_draw_alpha(txt_line(TXT_MINI,num,240,240,242,255),tr.x+15,tr.y+97,anim);
     float tx=x+260, w=EP_W-310;

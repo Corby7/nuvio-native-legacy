@@ -14,7 +14,7 @@
 #define DIR_MAX 16
 typedef struct {
   char name[96];
-  int state;               // 0 vazio, 1 em voo, 2 pronto, 3 falhou
+  int state;               // 0 empty, 1 in flight, 2 ready, 3 failed
   unsigned attempts;
   uint64_t retryIn;
   long tmdb;
@@ -94,7 +94,7 @@ static void *fetch(void *arg) {
   if (!key || !key[0]) goto failure;
   encode(f->name, enc, sizeof enc);
   snprintf(url, sizeof url, "https://api.themoviedb.org/3/search/person?api_key=%s"
-           "&language=pt-BR&query=%s", key, enc);
+           "&language=en-US&query=%s", key, enc);
   body = net_download(url, 15);
   if (!body) goto failure;
   { const char *r = js_array(body, NULL, "results");
@@ -138,23 +138,25 @@ static void *fetch(void *arg) {
   }
   free(body);
   if (!id) goto failure;
-  for (int tent = 0; tent < 2 && !bio[0]; tent++) {
-    snprintf(url, sizeof url, "https://api.themoviedb.org/3/person/%ld?api_key=%s&language=%s",
-             id, key, tent ? "en-US" : "pt-BR");
-    body = net_download(url, 15);
-    if (!body) continue;
+  // ONE request, in en-US. This used to ask in pt-BR first and retry in en-US
+  // when the biography came back empty — TMDB translates biographies unevenly,
+  // so the second attempt was the one that usually answered. With the app in
+  // English there is nothing to fall back FROM, and the retry became the same
+  // request twice.
+  snprintf(url, sizeof url, "https://api.themoviedb.org/3/person/%ld?api_key=%s&language=en-US",
+           id, key);
+  body = net_download(url, 15);
+  if (body) {
     { char department[64] = "";
       js_text(body, NULL, "known_for_department", department, sizeof department);
       if (department[0] && !isDirecting(department)) { free(body); goto failure; }
     }
     js_text(body, NULL, "biography", bio, sizeof bio);
-    if (!tent) {
-      js_text(body, NULL, "birthday", birth, sizeof birth);
-      js_text(body, NULL, "place_of_birth", place, sizeof place);
-    }
+    js_text(body, NULL, "birthday", birth, sizeof birth);
+    js_text(body, NULL, "place_of_birth", place, sizeof place);
     free(body);
   }
-  // Quebras de paragrafo viram espaco: no hero cabem tres linhas.
+  // Paragraph breaks become spaces: three lines fit in the hero.
   for (char *p = bio; *p; p++) if (*p == '\n' || *p == '\r') *p = ' ';
   pthread_mutex_lock(&lock);
   f->tmdb = id;

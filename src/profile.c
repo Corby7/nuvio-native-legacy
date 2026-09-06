@@ -41,7 +41,7 @@ static const uint32_t PALETTE[PROFILE_MAX_GENRES] = {
 };
 
 static ProfileData data;
-static int is_open, sair, loading, hasData;
+static int is_open, wantsExit, loading, hasData;
 static int hasIdentity;
 static int section, item, chosen = -1;
 static int day, requestUpdate;
@@ -87,7 +87,7 @@ static void trim(TxtStyle e,const char *s,int c,float x,float y,float w,float a)
 
 int profile_start(void) {
   memset(&data, 0, sizeof(data));
-  is_open = sair = hasData = hasIdentity = loading = 0;
+  is_open = wantsExit = hasData = hasIdentity = loading = 0;
   state = PF_LOADING;
   section = item = 0; chosen = -1;
   day = requestUpdate = 0; error[0] = 0;
@@ -99,16 +99,16 @@ int profile_start(void) {
 void profile_shutdown(void) { profile_start(); }
 void profile_open(void) {
   side = complete = 0;
-  is_open = 1; sair = 0; chosen = -1; section = item = 0;
+  is_open = 1; wantsExit = 0; chosen = -1; section = item = 0;
   scroll = scrollTarget = velScroll = 0;
   requestUpdate = 0;
 }
 void profile_open_side(void) { profile_open(); side=1; sideFocus=0; }
 int profile_side(void) { return side && (is_open || entry>.002f); }
 int profile_requested_complete(void) { int v=complete;complete=0;return v; }
-void profile_close(void) { is_open = 0; sair = 1; }
+void profile_close(void) { is_open = 0; wantsExit = 1; }
 int profile_is_open(void) { return is_open; }
-int profile_wants_exit(void) { int q = sair; sair = 0; return q; }
+int profile_wants_exit(void) { int q = wantsExit; wantsExit = 0; return q; }
 void profile_set_loading(int v) {
   loading = !!v;
   if(loading) state=hasData?PF_UPDATING:PF_LOADING;
@@ -354,7 +354,7 @@ static void drawSummary(float a) {
     snprintf(b,sizeof(b),"%s per play",t);
     trim(TXT_CAPTION,b,193,x,PF_SUMMARY_Y+292,PF_W*.42f,a);
   }
-  // As contagens representam eventos de reproducao, nao titulos unicos.
+  // The counts represent playback events, not unique titles.
   double total=(double)data.movies+data.episodes;
   if(total>0) {
     float w=PF_W*.50f, movies=w*(float)(data.movies/total);
@@ -405,7 +405,7 @@ static void drawActivity(float a) {
     gfx_color((GfxRect){lx+i*38,PF_ACT_Y+150-scroll,28,28},.18f,
              i?.38f+.23f*q:.12f,i?.13f+.13f*q:.12f,i?.52f+.31f*q:.14f,a);
   }
-  snprintf(b,sizeof(b),"0 a %d por dia",max);
+  snprintf(b,sizeof(b),"0 to %d per day",max);
   trim(TXT_MINI,b,184,lx,PF_ACT_Y+196,panel.w-480,a);
   if(data.activity[best]){
     snprintf(b,sizeof(b),"Peak: %d plays on day %d",max,best+1);

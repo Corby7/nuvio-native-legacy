@@ -4,27 +4,27 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Quanto do arquivo baixar. O elemento Tracks fica logo apos o SeekHead e o
-// Info, antes do primeiro Cluster — na pratica dentro dos primeiros 200 KB.
+// How much of the file to download. The Tracks element sits right after the
+// SeekHead and the Info, before the first Cluster — in practice within the
+// first 200 KB.
 //
-// 320 KB e nao 2 MB. Os 2 MB eram "folga larga" para remux com capa embutida
-// antes do Tracks, e custavam caro no unico momento em que esta leitura
-// acontece: COM O VIDEO JA TOCANDO, pela mesma conexao e do mesmo servidor.
-// MEDIDO na TV do dono — a leitura terminou aos 45,9 s e o buffer entrou em
-// falta 1,6 s depois, caindo a 2,8 s e levando 9 s para se recuperar.
-//
-// O caso que os 2 MB cobriam (capa antes do Tracks) e raro; o custo era pago
-// em TODA reproducao. Perder o idioma num arquivo desses e melhor que engasgar
-// o video em todos.
+// 320 KB and not 2 MB. The 2 MB were "generous slack" for a remux with cover
+// art embedded before Tracks, and they cost dearly at the one moment this read
+// happens: WITH THE VIDEO ALREADY PLAYING, over the same connection and from
+// the same server. MEASURED on the owner's TV — the read finished at 45.9 s
+// and the buffer ran short 1.6 s later, dropping to 2.8 s and taking 9 s to
+// recover. The case the 2 MB covered (cover art before Tracks) is rare; the
+// cost was paid on EVERY playback. Losing the language on one such file beats
+// stuttering the video on all of them.
 #define MKV_CHUNK  (320L * 1024)
 
-// --- EBML: inteiros de tamanho variavel --------------------------------------
+// --- EBML: variable-length integers ------------------------------------------
 //
-// O primeiro byte diz, pela posicao do bit 1 mais alto, quantos bytes o numero
-// ocupa. No ID esse bit FAZ PARTE do valor (por isso os IDs sao escritos como
-// 0x1A45DFA3); no TAMANHO ele e mascara e sai fora. Trocar os dois e o erro
-// classico de quem escreve isto pela primeira vez, e o sintoma e a arvore
-// inteira sair deslocada.
+// The first byte says, by the position of the highest 1 bit, how many bytes the
+// number occupies. In the ID that bit IS PART of the value (which is why IDs
+// are written as 0x1A45DFA3); in the SIZE it is a marker and drops out.
+// Swapping the two is the classic first-timer's mistake here, and the symptom
+// is the whole tree coming out shifted.
 static int widthOf(unsigned char b) {
   int i;
   for (i = 0; i < 8; i++) if (b & (0x80 >> i)) return i + 1;
@@ -44,9 +44,9 @@ static unsigned long readId(const unsigned char *p, long remains, int *used) {
   return v;
 }
 
-// Le um TAMANHO (removendo o bit marcador). Devolve -1 no invalido e -2 no
-// tamanho "desconhecido" (todos os bits de dado em 1), que Segment usa em
-// arquivo transmitido ao vivo — ali a leitura continua DENTRO do elemento em
+// Reads a SIZE (stripping the marker bit). Returns -1 on invalid and -2 on the
+// "unknown" size (all data bits 1), which Segment uses in a live-streamed file
+// — there the read continues INSIDE the element instead of skipping over it.
 // vez de pular por cima dele.
 static long readSize(const unsigned char *p, long remains, int *used) {
   int w, i;
@@ -79,8 +79,8 @@ static void readText(const unsigned char *p, long n, char *dst, size_t size) {
   if (k > size - 1) k = size - 1;
   memcpy(dst, p, k);
   dst[k] = 0;
-  // O Matroska preenche string com NUL a direita; cortar aqui evita que o
-  // resto do campo vire lixo na tela.
+  // Matroska pads strings with NUL on the right; cutting here stops the rest of
+  // the field turning into rubbish on screen.
   { size_t i; for (i = 0; i < k; i++) if (dst[i] == 0) { dst[i] = 0; break; } }
 }
 
@@ -90,12 +90,12 @@ static void readText(const unsigned char *p, long n, char *dst, size_t size) {
 #define ID_TRACKENTRY  0xAEUL
 #define ID_TRACKNUMBER 0xD7UL
 #define ID_TRACKTYPE   0x83UL
-#define ID_LANGUAGE    0x22B59CUL     // Language (ISO 639-2), o classico
-#define ID_LANG_BCP47  0x22B59DUL     // LanguageBCP47 ("pt-BR"), mais novo
+#define ID_LANGUAGE    0x22B59CUL     // Language (ISO 639-2), the classic one
+#define ID_LANG_BCP47  0x22B59DUL     // LanguageBCP47 ("pt-BR"), newer
 #define ID_NAME        0x536EUL
 #define ID_CODECID     0x86UL
 
-// Le os TrackEntry de dentro de um Tracks ja localizado.
+// Reads the TrackEntry elements inside an already-located Tracks.
 static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max) {
   long o = 0;
   int found = 0;
@@ -125,8 +125,8 @@ static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max)
           if (fid == ID_TRACKNUMBER) f.number = (int)readUint(v, fontSize);
           else if (fid == ID_TRACKTYPE) f.kind = (int)readUint(v, fontSize);
           else if (fid == ID_LANGUAGE || fid == ID_LANG_BCP47) {
-            // BCP47 ganha do ISO 639-2 quando os dois existem: "pt-BR" diz
-            // mais que "por", e e o que o dono quer ver na lista.
+            // BCP47 beats ISO 639-2 when both exist: "pt-BR" says more than
+            // "por", and it is what the owner wants to see in the list.
             if (fid == ID_LANG_BCP47 || !f.language[0])
               readText(v, fontSize, f.language, sizeof f.language);
           }
@@ -141,9 +141,9 @@ static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max)
   return found;
 }
 
-// Anda pela arvore ate achar Tracks. Entra em Segment (que e um contentor
-// gigante) e PULA o resto — sem o pulo a busca varreria byte a byte e casaria
-// com qualquer coincidencia dentro dos dados de video.
+// Walks the tree until it finds Tracks. Descends into Segment (which is a giant
+// container) and SKIPS the rest — without the skip the search would sweep byte
+// by byte and match any coincidence inside the video data.
 static int findTracks(const unsigned char *p, long n, MkvTrack *output, int max) {
   long o = 0;
   while (o < n) {
@@ -155,17 +155,17 @@ static int findTracks(const unsigned char *p, long n, MkvTrack *output, int max)
     if (size == -1) return 0;
     o += ui + ut;
     if (id == ID_SEGMENT || size == -2) {
-      // Segment: descer para dentro. Tamanho desconhecido idem — nao ha por
-      // onde pular.
+      // Segment: descend into it. An unknown size likewise — there is nothing
+      // to skip by.
       if (id == ID_SEGMENT) continue;
       return 0;
     }
     if (id == ID_TRACKS) {
       long disp = n - o;
-      if (size > disp) size = disp;     // cabecalho maior que o trecho baixado
+      if (size > disp) size = disp;     // header larger than the downloaded chunk
       return readTracks(p + o, size, output, max);
     }
-    if (o + size > n) return 0;        // elemento passa do que baixamos
+    if (o + size > n) return 0;        // the element runs past what we downloaded
     o += size;
   }
   return 0;
@@ -178,8 +178,8 @@ int mkv_tracks(const char *url, MkvTrack *output, int max) {
   if (!url || !url[0] || !output || max < 1) return 0;
   buf = net_download_chunk(url, 20, 0, MKV_CHUNK - 1, &n);
   if (!buf) return 0;
-  // Assinatura EBML. Sem ela nao e Matroska (pode ser MP4, ou um HTML de erro
-  // que o servidor devolveu com 200), e seguir seria interpretar lixo.
+  // The EBML signature. Without it this is not Matroska (it could be MP4, or an
+  // error HTML the server returned with a 200), and going on would read rubbish.
   if (n < 64 || (unsigned char)buf[0] != 0x1A || (unsigned char)buf[1] != 0x45 ||
       (unsigned char)buf[2] != 0xDF || (unsigned char)buf[3] != 0xA3) {
     free(buf);

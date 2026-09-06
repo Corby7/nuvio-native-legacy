@@ -63,8 +63,8 @@ int  trakt_profile(ProfileData *output);
 // a thread.
 void trakt_mark(const char *imdb, double posSeg, double durationSeg);
 
-// Watchlist ("Minha Lista") e colecao ("Comprados") do dono. `qual` e
-// "watchlist" ou "collection". BLOQUEIA — chamar do fio de descoberta.
+// The owner's watchlist ("My List") and collection ("Purchased"). `which` is
+// "watchlist" or "collection". BLOCKS — call from the discovery thread.
 int  trakt_list(const char *which, CatItem *output, int max);
 
 // Adds the title to, or removes it from, the owner's WATCHLIST. Does not block.

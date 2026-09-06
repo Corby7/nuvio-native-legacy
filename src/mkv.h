@@ -21,10 +21,10 @@
 #define MKV_MAX_TRACKS 64
 
 typedef struct {
-  int  number;        // TrackNumber, o mesmo `trackNum` do sourceInfo da LG
-  int  kind;          // 1 video, 2 audio, 17 legenda (TrackType do Matroska)
-  char language[8];     // "por", "eng"... vazio quando o arquivo nao etiqueta
-  char name[48];      // Name, quando existe ("Forced", "SDH", "Full")
+  int  number;        // TrackNumber, the same `trackNum` as LG's sourceInfo
+  int  kind;          // 1 video, 2 audio, 17 subtitle (Matroska TrackType)
+  char language[8];     // "por", "eng"... empty when the file does not tag it
+  char name[48];      // Name, when present ("Forced", "SDH", "Full")
   char codec[24];     // CodecID ("S_TEXT/UTF8", "S_HDMV/PGS")
 } MkvTrack;
 

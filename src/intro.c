@@ -22,7 +22,7 @@ int intro_parse(const char *j,IntroChunk *out,int max){
 typedef struct{char url[256];unsigned g;}Request;
 static void *download(void *u){Request*p=u;char*j=net_download(p->url,12);IntroChunk v[3];int n=j?intro_parse(j,v,3):0;free(j);
  pthread_mutex_lock(&lock);if(p->g==generation){memcpy(chunks,v,(size_t)n*sizeof *v);nChunks=n;}pthread_mutex_unlock(&lock);
- printf("[intro] %d marcadores\n",n);fflush(stdout);free(p);return NULL;}
+ printf("[intro] %d markers\n",n);fflush(stdout);free(p);return NULL;}
 void intro_request(const char *imdb,int t,int e){Request*p;pthread_t thread;if(!imdb||strncmp(imdb,"tt",2)||t<1||e<1){intro_off();return;}
  p=calloc(1,sizeof*p);if(!p)return;pthread_mutex_lock(&lock);nChunks=0;p->g=++generation;pthread_mutex_unlock(&lock);
  snprintf(p->url,sizeof p->url,"https://api.introdb.app/segments?imdb_id=%.*s&season=%d&episode=%d",(int)strcspn(imdb,":"),imdb,t,e);

@@ -15,7 +15,7 @@
 #define ACCOUNT_PROFILE_MAX 8
 
 typedef struct {
-  int  index_;          // profile_index (1..n) — e o que vai em p_profile_id
+  int  index_;          // profile_index (1..n) — this is what goes in p_profile_id
   char name[64];
   char colorHex[10];      // avatar_color_hex, "#1E88E5"
   // MEASURED on this account: `avatar_url` comes back NULL and `avatar_id`
@@ -25,7 +25,7 @@ typedef struct {
   // representation, not a patch.
   char avatarUrl[300];
   int  primary;        // is_primary
-  int  hasPin;          // veio de sync_pull_profile_locks
+  int  hasPin;          // came from sync_pull_profile_locks
 } AccountProfile;
 
 // Fetches the profiles and the owner. BLOCKS — call from the sync thread.
@@ -38,24 +38,24 @@ int           profiles_n(void);
 const AccountProfile *profiles_item(int i);
 // The profile in force, or NULL when the list has not arrived yet.
 const AccountProfile *profiles_item_active(void);
-const char   *profiles_owner(void);        // uuid de get_sync_owner; "" se nao veio
+const char   *profiles_owner(void);        // uuid from get_sync_owner; "" if it did not arrive
 
 // The active AccountProfile. Persisted to disk: choosing again on every start
 // would be a question the app already knows the answer to.
-int  profiles_active(void);                // profile_index; 1 quando nada escolhido
+int  profiles_active(void);                // profile_index; 1 when nothing has been chosen
 void profiles_set_active(int index_);
-void profiles_load_active(void);       // le do disco; chamar no arranque
+void profiles_load_active(void);       // reads from disk; call at startup
 
 // 1 when there is more than one profile and the user has not chosen yet on this
 // account — it is what makes the picker screen appear once, and only once.
 int  profiles_needs_choose(void);
 
-// Valida o PIN de um perfil travado. BLOQUEIA. 1 quando o servidor aceitou.
+// Validates the PIN of a locked profile. BLOCKS. 1 when the server accepted it.
 int  profiles_verify_pin(int index_, const char *pin);
 
-// Esquece os perfis, o dono e a escolha gravada. Chamado ao SAIR: manter a
-// escolha faria a conta seguinte comecar sincronizando o `p_profile_id` da
-// conta anterior — ou seja, ESCREVENDO progresso no perfil errado.
+// Forgets the profiles, the owner and the recorded choice. Called on SIGNING
+// OUT: keeping the choice would make the next account start syncing the
+// previous account's `p_profile_id` — that is, WRITING progress to the wrong profile.
 void profiles_forget(void);
 
 #endif

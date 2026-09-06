@@ -16,13 +16,13 @@
 typedef struct {
   char name[40];
   int  count;
-  uint32_t color;              // 0xRRGGBB; zero usa a paleta da tela
+  uint32_t color;              // 0xRRGGBB; zero uses the screen palette
 } ProfileGenre;
 
 typedef struct {
-  char id[64];               // imdb/trakt/slug, devolvido sem interpretacao
+  char id[64];               // imdb/trakt/slug, returned uninterpreted
   char title[128];
-  char detail[96];          // ex.: "T2E3 · Solo" ou "Filme"
+  char detail[96];          // e.g. "S2E3 · Solo" or "Film"
   char poster[768];
   char backdrop[768];
   int  plays;
@@ -33,7 +33,7 @@ typedef struct {
   char name[96];
   char user[64];
   char avatar[768];
-  char period[48];          // ex.: "SETEMBRO 2026"
+  char period[48];          // e.g. "SEPTEMBER 2026"
 
   int minutes;
   int plays;
@@ -44,7 +44,7 @@ typedef struct {
   int streakPrevious;
   int daysActiveMonth;
   int daysActiveYear;
-  int firstDayWeek;     // 0=domingo..6=sabado
+  int firstDayWeek;     // 0=Sunday..6=Saturday
   int nDays;
   unsigned short activity[PROFILE_MAX_DAYS];
 
@@ -88,7 +88,7 @@ int profile_side(void);
 int profile_requested_complete(void);
 void profile_close(void);
 int  profile_is_open(void);
-int  profile_wants_exit(void);       // consome o pedido de voltar
+int  profile_wants_exit(void);       // consumes the request to go back
 
 // While loading, the screen preserves the structure with skeletons. A NULL
 // snapshot, or one with no activity, produces the empty state — never invented

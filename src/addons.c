@@ -12,10 +12,10 @@
 
 #define ADD_MAX 12
 
-// `fonte` marca quem realmente entrega stream. Descoberto pelo manifesto: o
-// Xperience declara resources catalog/meta/subtitles e NENHUM stream, entao
-// respondia {"streams":[]} para tudo. Consultar quem nao fornece e um
-// round-trip jogado fora em CADA abertura de titulo.
+// `source` marks who actually delivers streams. Discovered from the manifest:
+// Xperience declares the catalog/meta/subtitles resources and NO stream, so it
+// answered {"streams":[]} to everything. Querying something that supplies
+// nothing is a round trip thrown away on EVERY title opening.
 // `id` is the identifier the addon declares in its OWN manifest, not something
 // the account stores: the account's addon list carries a name and a URL, nothing
 // more. It lives here because the owner's COLLECTIONS reference catalogues by
@@ -31,7 +31,7 @@ static Stream *result;
 static int nResult;
 static char pendingId[64], pendingKind[16];
 
-// --- leitura do arquivo de configuracao -------------------------------------
+// --- reading the configuration file ------------------------------------------
 
 int addons_load(const char *dirArt) {
   char path[600], line[900];
@@ -44,15 +44,15 @@ int addons_load(const char *dirArt) {
     char *tab = strchr(line, '\t');
     char *end;
     size_t n;
-    // TAB e nao "|" como separador: nome de addon contem "|" de verdade
-    // ("AIOStreams | ElfHosted") e partir no primeiro pipe corrompia a URL.
+    // TAB and not "|" as the separator: an addon name really can contain "|"
+    // ("AIOStreams | ElfHosted") and splitting at the first pipe corrupted the URL.
     if (!tab) continue;
     *tab = 0;
     end = tab + 1 + strlen(tab + 1);
     while (end > tab + 1 && (end[-1] == '\n' || end[-1] == '\r' || end[-1] == ' ')) *--end = 0;
     if (line[0] == '#' || !tab[1]) continue;
-    // Terceira coluna (opcional): 1 = fornece stream. Ausente vale 1, para
-    // arquivo antigo continuar funcionando.
+    // Third column (optional): 1 = supplies streams. Absent counts as 1, so an
+    // older file keeps working.
     addon[nAddon].source = 1;
     addon[nAddon].catalog = 1;
     addon[nAddon].subtitle = 0;
@@ -71,7 +71,7 @@ int addons_load(const char *dirArt) {
       } }
     snprintf(addon[nAddon].name, sizeof addon[nAddon].name, "%s", line);
     snprintf(addon[nAddon].base, sizeof addon[nAddon].base, "%s", tab + 1);
-    // A URL guardada aponta para o manifesto; a base e ela sem esse sufixo.
+    // The stored URL points at the manifest; the base is it without that suffix.
     n = strlen(addon[nAddon].base);
     if (n > 14 && !strcmp(addon[nAddon].base + n - 14, "/manifest.json"))
       addon[nAddon].base[n - 14] = 0;
@@ -106,9 +106,9 @@ int addons_set_list(const AddonRemote *new, int n) {
   int i, accepted = 0;
   unsigned before = listSignature();
   if (!new || n <= 0) {
-    // Vazio nao substitui. Ver o comentario no cabecalho: uma resposta vazia
-    // nao se distingue de uma delecao, e a diferenca entre as duas e a pessoa
-    // ficar ou nao sem nenhuma fonte.
+    // Empty does not replace. See the comment in the header: an empty response
+    // is indistinguishable from a deletion, and the difference between the two
+    // is whether the person is left with no sources at all.
     printf("[addons] account list came back empty; keeping the local one (%d)\n", nAddon);
     return 0;
   }
@@ -122,10 +122,10 @@ int addons_set_list(const AddonRemote *new, int n) {
     if (k > 14 && !strcmp(addon[accepted].base + k - 14, "/manifest.json"))
       addon[accepted].base[k - 14] = 0;
     else while (k && addon[accepted].base[k - 1] == '/') addon[accepted].base[--k] = 0;
-    // A conta nao diz o que cada addon fornece; o manifesto e que diria, e
-    // consultar todos no arranque custaria uma viagem por addon. Assumir que
-    // fornece tudo faz no maximo uma consulta vazia a mais por titulo — o
-    // contrario (assumir que nao fornece) esconderia fontes de verdade.
+    // The account does not say what each addon supplies; the manifest would,
+    // and querying them all at startup would cost one round trip per addon.
+    // Assuming it supplies everything costs at most one extra empty query per
+    // title — the opposite (assuming it does not) would hide real sources.
     addon[accepted].source = 1;
     addon[accepted].catalog = 1;
     addon[accepted].subtitle = 0;
@@ -195,14 +195,14 @@ const char *addons_base_for_id(const char *id) {
   return "";
 }
 
-// Quarta coluna de addons.txt. Como a de stream, ausente vale 1 — arquivo
-// antigo continua funcionando, so faz uma consulta a mais que pode dar vazio.
+// The fourth column of addons.txt. Like the stream one, absent counts as 1 — an
+// older file keeps working, it just makes one extra query that may come back empty.
 int addons_has_catalog(int i) {
   return (i >= 0 && i < nAddon) ? addon[i].catalog : 0;
 }
 AddState addons_state(void) {
   AddState e = atomic_load(&state);
-  // Publica no fio da UI: nenhum desenho observa uma lista parcialmente escrita.
+  // Publish on the UI thread: no drawing ever observes a half-written list.
   if (threadAlive && e != ADD_SEARCHING) {
     pthread_join(thread, NULL);
     threadAlive = 0;
@@ -220,18 +220,18 @@ AddState addons_state(void) {
   return e;
 }
 
-// --- leitura tolerante de JSON ----------------------------------------------
-// Um analisador completo nao se paga aqui: o formato e conhecido e raso, e o
-// que importa e nunca travar com campo faltando. Cada funcao devolve o que
-// achou ou nada, e quem chama decide.
+// --- tolerant JSON reading ---------------------------------------------------
+// A complete parser does not pay for itself here: the format is known and
+// shallow, and what matters is never falling over on a missing field. Each
+// function returns what it found or nothing, and the caller decides.
 
 static const char *skipSpace(const char *p) {
   while (*p && (unsigned char)*p <= ' ') p++;
   return p;
 }
 
-// Copia o valor textual de "chave" dentro do objeto que comeca em `obj`,
-// respeitando escapes. Devolve 1 se achou.
+// Copies the text value of "key" inside the object beginning at `obj`,
+// respecting escapes. Returns 1 if it found one.
 static int fieldText(const char *obj, const char *endObj, const char *key,
                       char *dst, size_t size) {
   char search[48];
@@ -248,8 +248,8 @@ static int fieldText(const char *obj, const char *endObj, const char *key,
   while (*p && *p != '"' && k + 1 < size) {
     if (*p == '\\' && p[1]) {
       p++;
-      // \u..... vira "?" de proposito: os nomes vem cheios de emoji e o texto
-      // e so para exibicao. Decodificar UTF-16 aqui seria trabalho sem retorno.
+      // \u..... becomes "?" on purpose: the names arrive full of emoji and the
+      // text is for display only. Decoding UTF-16 here would be work with no return.
       if (*p == 'u') { p += 5; dst[k++] = ' '; continue; }
       if (*p == 'n' || *p == 't' || *p == 'r') { p++; dst[k++] = ' '; continue; }
     }
@@ -259,7 +259,7 @@ static int fieldText(const char *obj, const char *endObj, const char *key,
   return k > 0;
 }
 
-// Acha o fim do objeto JSON que comeca em `p` (que aponta para '{').
+// Finds the end of the JSON object beginning at `p` (which points at '{').
 static const char *endObject(const char *p) {
   int depth = 0, text = 0;
   for (; *p; p++) {
@@ -271,7 +271,7 @@ static const char *endObject(const char *p) {
   return p;
 }
 
-// --- legendas ---------------------------------------------------------------
+// --- subtitles ---------------------------------------------------------------
 
 static Subtitle subs[SUB_MAX];
 static int nSubs;
@@ -294,9 +294,9 @@ const Subtitle *addons_subtitle(int i) {
   return r;
 }
 
-// Idiomas que interessam a esta casa, na ordem em que devem aparecer. Trazer as
-// 70 que o OpenSubtitles devolve seria uma lista impossivel de percorrer com
-// controle remoto.
+// The languages this household cares about, in the order they should appear.
+// Bringing in the 70 OpenSubtitles returns would be a list impossible to walk
+// with a remote control.
 static const char *LANGUAGES_PT[] = {
   "pob", "pt-br", "pt_br", "ptb", "br", "por", "pt"
 };
@@ -304,9 +304,9 @@ static const char *LANGUAGES_EN[] = {
   "eng", "en", "en-us", "en_us", "en-gb", "en_gb"
 };
 
-// 0 = portugues, 1 = ingles. O usuario pediu explicitamente estes dois grupos;
-// espanhol nao entra mais como fallback silencioso. Variantes regionais sao
-// normalizadas aqui, antes de ocupar uma das doze linhas da TV.
+// 0 = Portuguese, 1 = English. The user asked explicitly for these two groups;
+// Spanish no longer comes in as a silent fallback. Regional variants are
+// normalised here, before taking up one of the TV's twelve rows.
 static int groupLanguage(const char *l) {
   size_t i;
   for (i = 0; i < sizeof LANGUAGES_PT / sizeof *LANGUAGES_PT; i++)
@@ -344,14 +344,14 @@ static int episodeCorrect(const char *obj, const char *end, int season, int epis
   if (season <= 0 || episode <= 0) return 1;
   t = (int)js_num(obj, end, "season", -1);
   e = (int)js_num(obj, end, "episode", -1);
-  // Alguns addons antigos nao devolvem os campos. Quando devolvem, eles sao
-  // uma garantia: nunca mostre T2E3 numa busca por T2E4.
+  // Some older addons do not return the fields. When they do, they are a
+  // guarantee: never show S2E3 in a search for S2E4.
   if ((t >= 0 && t != season) || (e >= 0 && e != episode)) return 0;
   if (t >= 0 || e >= 0) return 1;
-  // Alguns addons omitem season/episode mas devolvem o episodio no nome do
-  // arquivo. Antes aceitavamos S02E03 numa busca por T2E4 e depois fabricavamos
-  // o rotulo T2E4 com base no pedido, escondendo o erro. Se o nome traz uma
-  // identidade verificavel, ela precisa casar; nome sem marcador segue aceito.
+    // Some addons omit season/episode but return the episode in the file name.
+    // We used to accept S02E03 in a search for S2E4 and then fabricate the
+    // label S2E4 from the request, hiding the error. If the name carries a
+    // verifiable identity it has to match; a name with no marker is still accepted.
   { char name[160] = "", bottom[160]; size_t i;
     if (!js_text(obj, end, "subtitleFileName", name, sizeof name))
       js_text(obj, end, "movieReleaseName", name, sizeof name);
@@ -387,8 +387,8 @@ static void *fetchSubtitles(void *u) {
     for (i = 0; i < nAddon && nFound < SUB_MAX; i++) {
       char url[900], *body;
       const char *p;
-    // Addon que nao declara legenda nao e consultado: o AIOStreams responderia
-    // vazio e o Xperience tambem, dois round-trips sem retorno.
+    // An addon that does not declare subtitles is not queried: AIOStreams would
+    // answer empty and so would Xperience, two round trips with no return.
       if (!addon[i].subtitle) continue;
       snprintf(url, sizeof url, "%s/subtitles/%s/%s.json",
                addon[i].base, kind, id);
@@ -398,9 +398,9 @@ static void *fetchSubtitles(void *u) {
       p = js_array(body, NULL, "subtitles");
       {
         int group;
-        // Uma passada por grupo garante ordem PT -> EN e evita que doze
-        // resultados portugueses consumam a lista inteira antes do ingles.
-        // Seis por idioma e um limite deliberado para navegacao por D-pad.
+        // One pass per group guarantees the PT -> EN order and stops twelve
+        // Portuguese results consuming the whole list before English.
+        // Six per language is a deliberate limit for D-pad navigation.
         for (group = 0; group < 2; group++) {
           const char *q = p;
           int inGroup = 0, j;
@@ -417,7 +417,7 @@ static void *fetchSubtitles(void *u) {
               if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);
               snprintf(d->language, sizeof d->language, "%s", l);
               if (season > 0 && episode > 0)
-                snprintf(d->label, sizeof d->label, "T%dE%d  \xc2\xb7  %s%s%.22s",
+                snprintf(d->label, sizeof d->label, "S%dE%d  \xc2\xb7  %s%s%.22s",
                          season, episode, nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
               else
                 snprintf(d->label, sizeof d->label, "%s%s%.36s",
@@ -478,16 +478,16 @@ void addons_fetch_subtitles(const char *imdb, const char *kind) {
   pthread_mutex_unlock(&subLock);
 }
 
-// UM FIO POR ADDON DE FONTE.
+// ONE THREAD PER SOURCE ADDON.
 //
-// MEDIDO NA TV, na sessao do dono: 16,5 s entre abrir o titulo e ter uma fonte
-// escolhida (detail_abrir 51098 -> fonte escolhida 67659). Eram consultas em
-// SERIE com 25 s de timeout cada; um addon lento atrasa todos os outros, e a
-// tela fica com "buscando" o tempo todo.
+// MEASURED ON THE TV, in the owner's session: 16.5 s between opening the title
+// and having a chosen source (detail_open 51098 -> source chosen 67659). They
+// were SERIAL queries with a 25 s timeout each; one slow addon delays all the
+// others, and the screen sits on "searching" the whole time.
 //
-// Os addons sao independentes e `extrair` so escreve no balde que recebe, entao
-// cada um le no proprio. A ORDEM e preservada na juncao: ela decide qual fonte
-// o automatico ve primeiro, e trocar a ordem trocaria a fonte escolhida.
+// The addons are independent and `extract` only writes into the bucket it is
+// given, so each one reads into its own. The ORDER is preserved on the join: it
+// decides which source automatic mode sees first — changing it changes the pick.
 #define ADD_THREADS 4
 
 typedef struct {
@@ -512,8 +512,8 @@ static void *threadSources(void *u) {
     i = buckets[mine].idx;
     snprintf(url, sizeof url, "%s/stream/%s/%s.json",
              addon[i].base, targetKind, targetId);
-    // 12 s e nao 25: com os addons em paralelo o timeout deixa de ser somado,
-    // mas continua sendo o tempo que o dono espera pelo mais lento.
+    // 12 s and not 25: with the addons in parallel the timeout stops adding up,
+    // but it is still the time the owner waits for the slowest one.
     body = net_download(url, 12);
     if (!body) { printf("[addons] %s: no response\n", addon[i].name); continue; }
     buckets[mine].n = stream_parse(body, addon[i].name, &buckets[mine].found);
@@ -540,9 +540,9 @@ static void *fetch(void *u) {
     int created = 0, q;
     for (q = 0; q < ADD_THREADS && q < nBuckets; q++)
       if (pthread_create(&threads[created], NULL, threadSources, NULL) == 0) created++;
-    if (!created) threadSources(NULL);        // sem fios: em serie, mesmo resultado
+    if (!created) threadSources(NULL);        // no threads: in series, same result
     for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
-    // Junta NA ORDEM DOS ADDONS, que e a ordem em que o dono os instalou.
+    // Joins IN ADDON ORDER, which is the order the owner installed them in.
     for (q = 0; q < nBuckets; q++) {
       int k = buckets[q].n;
       if (k > 0) {
@@ -578,11 +578,11 @@ void addons_fetch(const char *imdb, const char *kind) {
   }
   stream_set_list(NULL, 0);
   series = kind && !strcmp(kind, "series");
-  // Serie SEM episodio devolve lista vazia, com HTTP 200 e sem erro nenhum
-  // (medido: 14 bytes de resposta). O identificador tem de ser
-  // "tt1234567:temporada:episodio". Como o catalogo ainda nao traz lista de
-  // episodios, assume T1E1 — e o mesmo lugar onde o episodio real entra quando
-  // houver.
+  // A series WITHOUT an episode returns an empty list, with HTTP 200 and no
+  // error at all (measured: a 14-byte response). The identifier has to be
+  // "tt1234567:season:episode". Since the catalogue does not carry an episode
+  // list yet, it assumes S1E1 — the same place the real episode goes in when
+  // there is one.
   if (series && !strchr(imdb, ':'))
     snprintf(targetId, sizeof targetId, "%s:1:1", imdb);
   else
