@@ -103,15 +103,22 @@ void sync_forget_user(void);
 // change holds for the rest of the session.
 void sync_reapply_settings(void);
 
-// Sends a service credential to the ACCOUNT, so the person's other devices
-// inherit the link. `credJson` is the finished object (the server stores
-// whatever arrives). BLOCKS — call from a thread, or accept the cost of one
-// round trip.
+// Sends a TRACKER's token to the ACCOUNT, so the person's other devices inherit
+// the link. BLOCKS — call from a thread, or accept the cost of one round trip.
 //
-// It exists because of Trakt: the owner's account had no `trakt` row, so linking
-// on the TV did not help the phone. Linking here now WRITES into the account,
-// which is what the web app does.
-void sync_push_credential(const char *provider, const char *credJson);
+// It used to be sync_push_credential(), writing an opaque credential_json into
+// the provider-credential table. That path is GONE on the server: it answers 400
+// with PG 22023 "Unsupported provider credential: trakt", so linking on the TV
+// wrote nothing and the phone never saw it. Trackers have their own RPC now,
+// taking the token in fields, and `get_tracker_tokens` reads it back.
+//
+// `refresh` may be empty (Simkl issues no refresh token). `lifetimeSeconds` is
+// what is LEFT of the token, not its original span; 0 asks for the default.
+// `trackerUserId` and `username` may be empty when the device has not asked the
+// service who the user is.
+void sync_push_tracker(const char *tracker, const char *access, const char *refresh,
+                       long lifetimeSeconds, const char *trackerUserId,
+                       const char *username);
 
 void sync_shutdown(void);
 

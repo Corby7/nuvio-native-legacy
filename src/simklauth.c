@@ -4,7 +4,6 @@
 #include "net.h"
 #include "sync.h"
 #include "js.h"
-#include "jsw.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -153,16 +152,14 @@ void simklauth_step(unsigned nowMs) {
   if (threadAlive) return;
 
   if (tokenNew) {
-    Jsw c;
     tokenNew = 0;
     save();
-    jsw_start(&c);
-    jsw_obj_start(&c);
-    jsw_cs(&c, "access_token", token);
-    jsw_obj_end(&c);
-    sync_push_credential("simkl", jsw_text_final(&c));
-    jsw_free(&c);
-    printf("[simkl] vinculado nesta TV\n");
+    // The same RPC Trakt uses — the provider-credential table refuses trackers.
+    // Simkl issues NO refresh token and its access token does not expire, so the
+    // refresh goes empty and the lifetime is left to the default; whatever the
+    // server makes of that now says so in the log instead of failing silently.
+    sync_push_tracker("simkl", token, "", 0, "", "");
+    printf("[simkl] linked on this TV\n");
     fflush(stdout);
   }
 

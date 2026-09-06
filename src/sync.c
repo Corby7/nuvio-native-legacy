@@ -354,6 +354,69 @@ static int alreadyMissing(const char *func) {
   return 0;
 }
 
+// TRAKT'S TOKEN DOES NOT COME FROM pullCredentials ANY MORE.
+//
+// The backend retired tracker storage from the provider-credential table: a
+// push of { provider: "trakt" } answers 400 with PG 22023 "Unsupported provider
+// credential: trakt", and nothing is ever written there, so the read above finds
+// no `trakt` row no matter which device did the linking. The web app moved to a
+// pair of dedicated RPCs (traktCredentialSyncService.js) and this follows it —
+// otherwise the TV can push a link nobody can read and read a link nobody can
+// push.
+//
+// tmdb and mdblist STAY in pullCredentials: those are API keys, not tracker
+// tokens, and that table is still where they live.
+static int trackerTakeTrakt(const char *p, const char *f) {
+  char name[48], tk[300];
+  // The row names the tracker in one of three ways depending on which view it
+  // comes back from; the web app accepts all three (trackerNameOf).
+  if (!js_text(p, f, "tracker", name, sizeof name) &&
+      !js_text(p, f, "provider", name, sizeof name) &&
+      !js_text(p, f, "tracker_name", name, sizeof name)) return 0;
+  if (strcmp(name, "trakt")) return 0;
+  if (!js_text(p, f, "access_token", tk, sizeof tk)) return 0;
+  snprintf(traktToken, sizeof traktToken, "%s", tk);
+  hasTraktRemote = 1;
+  // Silence on this path is what made the old failure so hard to place: the pull
+  // finding nothing and the pull not running look identical in a log that says
+  // neither.
+  printf("[sync] trakt token from the account\n");
+  return 1;
+}
+
+static void pullTracker(void) {
+  static const char *const FUNC = "get_tracker_tokens";
+  Jsw w;
+  char *r;
+  int st = 0;
+  const char *p;
+  // The same brake the other optional RPCs use: a server without this function
+  // would otherwise cost one round trip per cycle against a 404 that will never
+  // change its mind.
+  if (alreadyMissing(FUNC)) return;
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_obj_end(&w);
+  r = session_rpc(FUNC, jsw_text_final(&w), &st);
+  jsw_free(&w);
+  if (!ok2xx(r, st)) {
+    if (r && cloud_error_missing(r)) {
+      printf("[sync] %s does not exist on this server\n", FUNC);
+      if (nMissing < SY_MISSING) missing[nMissing++] = FUNC;
+    }
+    free(r);
+    return;
+  }
+  for (p = js_root_array(r); p; p = js_next(js_end(p)))
+    if (trackerTakeTrakt(p, js_end(p))) break;
+  // js_root_array answers NULL for a body that is one bare object, and the
+  // envelope is not pinned down by the schema — the web app accepts a row set OR
+  // a single row for exactly this reason.
+  if (!hasTraktRemote && r && *r == '{') trackerTakeTrakt(r, r + strlen(r));
+  free(r);
+}
+
 static int countRpc(const char *func, const char *body) {
   char *r;
   int st = 0, k = 0;
@@ -565,6 +628,7 @@ static void *run(void *u) {
   profiles_pull();
   pullAddons();
   pullCredentials();
+  pullTracker();
   pullProgress();
   pullSoRead();
   // Push AFTER pulling, like the web app's startupSyncService: pulling after
@@ -670,28 +734,50 @@ const char *sync_summary(void)      { return summary; }
 unsigned    sync_last_ok(void)   { return lastOk; }
 void        sync_dirty_progress(void) { dirtyProgress = 1; }
 void        sync_dirty_addons(void)    { dirtyAddons = 1; }
-void sync_push_credential(const char *provider, const char *credJson) {
+// Trakt's own token lifetime is 90 days; the fallback is the web app's, for a
+// server answer that carries no expiry at all.
+#define SY_TRACKER_LIFETIME_MAX  7776000L
+#define SY_TRACKER_LIFETIME_DFLT   86400L
+
+void sync_push_tracker(const char *tracker, const char *access, const char *refresh,
+                       long lifetimeSeconds, const char *trackerUserId,
+                       const char *username) {
   Jsw w;
   char *r;
   int st = 0;
-  if (!session_loggedin() || !provider || !*provider || !credJson || !*credJson) return;
+  if (!session_loggedin() || !tracker || !*tracker || !access || !*access) return;
+  if (lifetimeSeconds <= 0) lifetimeSeconds = SY_TRACKER_LIFETIME_DFLT;
+  if (lifetimeSeconds > SY_TRACKER_LIFETIME_MAX) lifetimeSeconds = SY_TRACKER_LIFETIME_MAX;
   jsw_start(&w);
   jsw_obj_start(&w);
   jsw_ci(&w, "p_profile_id", profiles_active());
-  jsw_cs(&w, "p_origin_client_id", data_client_id());
-  jsw_key(&w, "p_credentials");
-  jsw_arr_start(&w);
-  jsw_obj_start(&w);
-  jsw_cs(&w, "provider", provider);
-  jsw_key(&w, "credential_json");
-  jsw_raw(&w, credJson);
+  jsw_cs(&w, "p_tracker", tracker);
+  jsw_cs(&w, "p_access_token", access);
+  jsw_cs(&w, "p_refresh_token", refresh ? refresh : "");
+  // A LIFETIME, not an instant. Sending the original 90 days on every push would
+  // walk the expiry 90 days further into the future each time and hide a dead
+  // token from whoever tries to refresh it.
+  jsw_ci(&w, "p_expires_in_seconds", lifetimeSeconds);
+  // EVERY argument is required by the signature, so what this device does not
+  // know goes as an empty string rather than being left out — the TV links
+  // before it has ever asked Trakt who the user is.
+  jsw_cs(&w, "p_tracker_user_id", trackerUserId ? trackerUserId : "");
+  jsw_cs(&w, "p_username", username ? username : "");
   jsw_obj_end(&w);
-  jsw_arr_end(&w);
-  jsw_obj_end(&w);
-  r = session_rpc("sync_push_provider_credentials", jsw_text_final(&w), &st);
+  // NO p_origin_client_id: this is not a sync_push_* function and the signature
+  // does not take one. The web app's client makes the same distinction.
+  r = session_rpc("upsert_tracker_tokens", jsw_text_final(&w), &st);
   jsw_free(&w);
-  if (!ok2xx(r, st)) printf("[sync] credential push %s failed (HTTP %d)\n", provider, st);
-  else printf("[sync] credential %s stored in the account\n", provider);
+  if (!ok2xx(r, st)) {
+    // THE SERVER'S OWN MESSAGE, not just the number. The old line printed
+    // "(HTTP 400)" and stopped there, and 400 alone does not separate a retired
+    // RPC from a rejected argument — which is the whole question when this
+    // fails.
+    printf("[sync] tracker push %s failed (HTTP %d)%s%.200s\n", tracker, st,
+           r ? ": " : "", r ? r : "");
+  } else {
+    printf("[sync] tracker %s stored in the account\n", tracker);
+  }
   free(r);
 }
 

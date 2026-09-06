@@ -30,6 +30,9 @@ static unsigned nextPoll, beganMs, limitMs;
 // A deadline in WALL CLOCK, not in ticks: the request has to survive an app
 // restart, and SDL_GetTicks resets along with the process.
 static long expiresIn;
+// The ACCESS TOKEN's lifetime, which is a different clock from expiresIn above —
+// that one is the pairing code's deadline. Trakt sends 90 days here.
+static long tokenLifetime;
 
 static pthread_t thread;
 static int threadAlive, threadReady;
@@ -125,6 +128,7 @@ int traktauth_load(void) {
 
 void traktauth_forget(void) {
   token[0] = refresh[0] = url[0] = error[0] = 0;
+  tokenLifetime = 0;
   state = TRA_STOPPED;
   data_erase(TRA_FILE);
   forgetStream();
@@ -205,6 +209,10 @@ static void *threadPoll(void *u) {
       // to renew it.
       if (!js_text(r, r + strlen(r), "refresh_token", refresh, sizeof refresh))
         refresh[0] = 0;
+      // The account stores a lifetime, so it has to come from the answer. It was
+      // never read before because the old push sent an opaque credential_json
+      // that had no room for it.
+      tokenLifetime = (long)js_num(r, r + strlen(r), "expires_in", 0.0);
       tokenNew = 1;
       forgetStream();
       state = TRA_ON;
@@ -264,26 +272,21 @@ void traktauth_step(unsigned nowMs) {
     tokenNew = 0;
     trakt_set(token, cloud_trakt_client());
     save();
-    // And send it to the ACCOUNT, so the person's other devices inherit the
-    // link — it is the `trakt` line that does not exist there today.
-    { // The shape of credential_json is the one the web app writes, so both
-      // sides read the same thing.
-      Jsw c;
-      jsw_start(&c);
-      jsw_obj_start(&c);
-      jsw_cs(&c, "access_token", token);
-      if (refresh[0]) jsw_cs(&c, "refresh_token", refresh);
-      jsw_cs(&c, "token_type", "bearer");
-      jsw_obj_end(&c);
-      sync_push_credential("trakt", jsw_text_final(&c));
-      jsw_free(&c); }
+    // And send it to the ACCOUNT, so the person's other devices inherit the link.
+    // Trakt's own RPC, not the provider-credential table: that table rejects
+    // trackers outright (400, PG 22023 "Unsupported provider credential: trakt")
+    // and every link made on this TV was being dropped on the floor.
+    //
+    // The user id and the username go empty: linking finishes before the app has
+    // asked Trakt who this is, and the RPC takes them as required arguments.
+    sync_push_tracker("trakt", token, refresh, tokenLifetime, "", "");
     // THE HOME HAS TO BE BUILT AGAIN. "Continue watching" is assembled inside
     // discover's build(), which calls trakt_resume() — and that returns 0 the
     // moment the credential is not there yet. Linking on this TV happens LONG
     // after that build, so without this the row only appeared on the next
     // launch: the link said it had worked and the home showed nothing.
     disc_rebuild();
-    printf("[trakt] vinculado nesta TV\n");
+    printf("[trakt] linked on this TV\n");
     fflush(stdout);
   }
 

@@ -1716,7 +1716,15 @@ static void drawShortcuts(int r, float y) {
     float w = lw * scale, h = lh * scale;
     float x = settings_content_x() + c * stepOf(ROW_CATALOGS) - scrollX[r]
             - (w - lw) * 0.5f;
-    if (x + w < 0 || x > NV_SCREEN_W) continue;
+    // A CARD OF MARGIN EACH SIDE, which the poster rows already had and this did not.
+    // The cull is not only about pixels: tex_get_width is what QUEUES the decode, so a
+    // card the loop skips has not even been asked for. Testing the exact bounds meant a
+    // collection cover was requested at the moment a pixel of it appeared — and these
+    // are CDN URLs that land seconds later (collections.h), so the card scrolled in
+    // grey and filled itself in afterwards. The poster rows never showed that because
+    // their test (further down, on the card's CENTRE) already reaches a width past the
+    // edge.
+    if (x + w < -lw || x > NV_SCREEN_W + lw) continue;
     float radius = radiusOf(w, h);
     GfxRect card = {x, y, w, h};
     if (f > .01f) {
