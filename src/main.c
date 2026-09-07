@@ -582,6 +582,9 @@ int main(int argc, char **argv) {
   // (that is what produced blocks when stretching) but the blur being real.
   // Stretched 4x, no texel edge shows.
   gfx_blur_start(480, 270);
+  // The side menu's glass: the strip is grabbed at the menu's WIDEST, so the
+  // texture never has to be reallocated while the bar opens.
+  gfx_backdrop_start(NV_MENU_W_IS_OPEN, NV_SCREEN_H);
 
   Uint32 lastReport = SDL_GetTicks();
   double txtMsFrame = 0, worstTxtMs = 0;
@@ -598,6 +601,19 @@ int main(int argc, char **argv) {
   // phase that caused it.
   double perFreq = (double)SDL_GetPerformanceFrequency();
   Uint64 lastFrame = SDL_GetPerformanceCounter();
+  // What the Mac frame limiter slept at the END of the previous frame. It has to
+  // come back out of the next frame's dt: dt is wall clock, so the sleep is in it,
+  // and without subtracting it `worst` would be the target frametime on every
+  // frame and the phase breakdown would describe a frame taken at random. Stays 0
+  // off the Mac, so the arithmetic below is unchanged on the device.
+  double lastSleepMs = 0;
+#ifdef __APPLE__
+  // The limiter's rolling deadline. Zero means "not started"; it is seeded from
+  // the first frame rather than from here, so the window setup above does not
+  // count as time the loop already owes.
+  Uint64 frameTicks = (Uint64)(perFreq / 60.0);
+  Uint64 nextFrame = 0;
+#endif
   double fEv=0, fPump=0, fUpd=0, fDraw=0, fSwap=0, fAux=0, fColor=0;
   double pEv=0, pPump=0, pUpd=0, pDraw=0, pSwap=0, pAux=0, pColor=0;
   // Inside `draw`: how much is GL traversal and how much is cache lookup.
@@ -674,12 +690,16 @@ int main(int argc, char **argv) {
     if (dtms > 100.0) dtms = 100.0;
     if (dtms < 0.0) dtms = 0.0;
     float dt = (float)(dtms / 1000.0);
+    // WORK time, not wall time: dtms minus whatever the limiter slept. On the
+    // device the two are the same number.
+    double workMs = dtms - lastSleepMs;
+    if (workMs < 0.0) workMs = 0.0;
     if (frames > 20) {
-      if (dtms > worst) { worst = dtms; worstTxtMs = txtMsFrame; worstTxtN = txtNFrame;
+      if (workMs > worst) { worst = workMs; worstTxtMs = txtMsFrame; worstTxtN = txtNFrame;
                          pEv=fEv; pPump=fPump; pUpd=fUpd; pDraw=fDraw; pSwap=fSwap; pAux=fAux; pColor=fColor;
                          pGfxMs=fGfxMs; pTexMs=fTexMs; pNRect=fNRect; pNProgress=fNProgress;
                          pNBind=fNBind; pNSearch=fNSearch; pOutMs=fOutMs; pNOut=fNOut; pFill=fFill; pNFull=fNFull; }
-      if (dtms > 33.0) janks++;
+      if (workMs > 33.0) janks++;
     }
     // zeroes the counters of the frame that starts now; what was measured above
     // belongs to the previous frame, which is what has just cost dtms
@@ -759,7 +779,7 @@ int main(int argc, char **argv) {
           fprintf(fp, "drawable=%dx%d FPS=%.1f worst=%.1fms janks=%d"
                   " text=%.1fms/%d textures=%d %.1fMB"
                   " | worst: ev=%.1f pump=%.1f upd=%.1f clr=%.1f draw=%.1f aux=%.1f swap=%.1f"
-                  " | des: gfx=%.1f/%d(p%d,b%d) tex=%.2f/%d out=%.1f/%d fill=%.2fx(cheias=%d)"
+                  " | des: gfx=%.1f/%d(p%d,b%d) tex=%.2f/%d out=%.1f/%d fill=%.2fx(full=%d)"
                   " | evictions=%d\n",
                   dw, dh,
                   frames * 1000.0 / (double)(now - lastReport), worst, janks,
@@ -774,8 +794,54 @@ int main(int argc, char **argv) {
       pEv=pPump=pUpd=pDraw=pSwap=pAux=pColor=0;
       pGfxMs=pTexMs=pOutMs=0; pNRect=pNProgress=pNBind=pNSearch=pNOut=0; pFill=0; pNFull=0;
     }
+
+#ifdef __APPLE__
+    // FRAME LIMITER, Mac only. With SetSwapInterval(0) above there is nothing
+    // pacing this loop and it free-ran at 1383 fps — 23x the device — which is
+    // pure heat for a preview that can only ever show 60. The swap interval
+    // cannot simply go back to 1: under sdl2-compat that is the hang described
+    // where it is set.
+    //
+    // A ROLLING DEADLINE, not "sleep out the rest of this frame". SDL_Delay only
+    // promises to sleep AT LEAST what it is asked for, and the truncation to
+    // whole milliseconds loses the rest: measured, sleeping per-frame from the
+    // frame's own start settled at 58.0 fps, never 60. Advancing a deadline by a
+    // fixed 1/60 lets a long sleep shorten the next one, so the AVERAGE is the
+    // target even though no single sleep is exact.
+    //
+    // The catch-up is capped at one frame: after a stall the deadline resets to
+    // now instead of firing off the frames it "owes" back to back.
+    //
+    // AFTER the telemetry, never inside it. Folding this into `swap` would make
+    // swap a constant ~16 ms on the Mac and destroy the one signal it carries —
+    // that a GPU-heavy frame shows up as a large swap.
+    {
+      if (!nextFrame) nextFrame = cFrame;
+      nextFrame += frameTicks;
+      Uint64 nowTicks = SDL_GetPerformanceCounter();
+      lastSleepMs = 0;
+      // Signed: these are counters, and `nextFrame - nowTicks` on a frame that
+      // overran wraps instead of going negative.
+      if ((Sint64)(nextFrame - nowTicks) <= 0) {
+        nextFrame = nowTicks;
+      } else {
+        double restMs = (double)(nextFrame - nowTicks) * 1000.0 / perFreq;
+        // Under a millisecond is not worth asking for: SDL_Delay rounds up to the
+        // scheduler's granularity and would overshoot the budget it is protecting.
+        // The deadline absorbs the skipped fraction on the next frame.
+        if (restMs > 1.0) {
+          Uint64 tSleep = SDL_GetPerformanceCounter();
+          SDL_Delay((Uint32)restMs);
+          // What it ACTUALLY slept, not what was asked for — the subtraction from
+          // the next dt has to use the real number or it lands short.
+          lastSleepMs = (double)(SDL_GetPerformanceCounter() - tSleep) * 1000.0 / perFreq;
+        }
+      }
+    }
+#endif
   }
 
+  gfx_backdrop_shutdown();
   gfx_blur_shutdown();
   gfx_snap_shutdown();
   app_shutdown();

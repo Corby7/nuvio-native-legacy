@@ -18,6 +18,16 @@ typedef struct {
   char groupId[96];
   char id[96], title[128], group[64], cover[512], hero[512], logo[512];
   char frameDir[600];
+  // The focus animation as ONE sprite sheet, for collections that come from the
+  // ACCOUNT. Empty when there is none, which is the common case.
+  //
+  // The account carries `focusGifUrl`, and for the owner's collections that URL
+  // is an MP4 (nuvio-assets/heroes/<name>-ident.mp4). The web app plays it in a
+  // <video>; this app has no way to composite video into a tile — see the note
+  // on gfx_tex_cell_current — so it draws the sheet baked beside it instead.
+  // Derived by col_focus_sheet, never fetched: a miss costs a 404 the texture
+  // cache forgets, and the tile stays static, which is what it does today.
+  char focusSheet[512];
   char detailHero[512];
   int editorial;
   int frames, hideTitle, nSources;

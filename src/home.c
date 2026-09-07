@@ -417,12 +417,19 @@ static float heightOf(KindRow t) {
 // Without adding the label here, the next row rises over the text — it was the same
 // defect the row title already had over the cards.
 static int hasLabel(KindRow t) {
-  // The label below the poster only exists on the UPRIGHT poster. On the landscape
-  // card the web app puts the caption INSIDE the frame
-  // (.home-poster-landscape-copy) and hides the outer block
-  // (.home-poster-card.is-landscape .home-poster-copy{display:none}).
-  return t == ROW_NORMAL && settings_labels_poster()
-      && !settings_posters_landscape();
+  // NOTHING UNDER THE POSTER. The upright card used to carry the title and the genre
+  // in a block below the art (.home-poster-copy, 74 tall), which is what the web app
+  // does; here the art already says which title it is, and the row read as a list of
+  // captions rather than as artwork.
+  //
+  // This is the ONLY gate: it feeds heightTotalOf as well, so the 74 goes back to the
+  // row instead of being left as a blank strip under every card.
+  //
+  // The LANDSCAPE card is untouched. Its caption is a different element and sits INSIDE
+  // the frame over the gradient (.home-poster-landscape-copy), where it is not a label
+  // under a poster; it is drawn from settings_labels_poster() directly.
+  (void)t;
+  return 0;
 }
 static float heightTotalOf(KindRow t) {
   return heightOf(t) + (hasLabel(t) ? NV_POSTER_COPY_H : 0.0f);
@@ -1102,7 +1109,17 @@ void home_update(float dt, Uint32 now) {
   // touching the same art would give changes on top of the user's choice.
   {
     int target = -1;
+    // `driven` answers "is a card focused at all", which is NOT the same question as
+    // "does the focused card name a title". Three cases give a target of -1 while the
+    // focus is very much on something: a collection row (its hero is drawn on its own
+    // path, further down), the see-all card at the end of a row, and the social row's
+    // empty state. Reading -1 as "nobody is here" handed all three back to the
+    // automatic carousel — so parking on a See all rotated the hero every 7 s, and
+    // walking a collection row left the carousel turning UNSEEN behind its hero, then
+    // flashed whatever it had landed on when the focus returned to a poster row.
+    int driven = 0;
     if (focus.row >= 0 && focus.row < nRows) {
+      driven = 1;
       int i = rows[focus.row].start + focus.column;
       if (rows[focus.row].kind == ROW_CATALOGS)
         i = -1;
@@ -1129,9 +1146,10 @@ void home_update(float dt, Uint32 now) {
       // It only ANNOUNCES the wish. What carries out the swap is the drawing, once
       // the new art's texture is ready — see heroWanted.
       heroWanted = heroPending;
-    } else if (target < 0 && now >= heroSwapIn) {
-      // With no card in focus, it schedules the next item and lets the drawing carry
-      // out the swap only once the texture or the placeholder is ready.
+    } else if (target < 0 && !driven && now >= heroSwapIn) {
+      // With no card in focus — genuinely none, which on a populated home means the
+      // rows have not been built yet — it schedules the next item and lets the drawing
+      // carry out the swap only once the texture or the placeholder is ready.
       int total = nArchiveHero();
       int next = total > 0 ? (heroCurrent + 1) % total : 0;
       heroPending = next;
@@ -1240,6 +1258,39 @@ static GfxRect heroArtRect = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
 void home_hero_rect(float *x, float *y, float *w, float *h) {
   *x = heroArtRect.x; *y = heroArtRect.y;
   *w = heroArtRect.w; *h = heroArtRect.h;
+}
+
+// ONE separator dot on the hero's meta line, and it is the BULLET.
+//
+// The line was drawn with two different characters. The catalogue writes its own
+// separators as U+00B7 MIDDLE DOT ("  \xc2\xb7  ", catalog.c:174) and they arrive baked
+// into `genre` and `meta`; the group join here was U+2022 BULLET. Side by side in one
+// sentence the middle dot does not read as a different KIND of separator, it reads as
+// the same dot rendered smaller and fainter — a size change nobody chose.
+//
+// Converted HERE, on the way to the screen, and not in the catalogue: detail.c (1330,
+// 1644) and catalog.c (777) split those same strings by SEARCHING for the U+00B7, and
+// changing what is stored would break every one of those parsers at once.
+//
+// The spaces around the dot are normalised with it, so a "  \xc2\xb7  " from the file and
+// the "   \xe2\x80\xa2   " written here end up identical.
+static void bulletize(char *s, size_t cap) {
+  char out[352];
+  size_t o = 0;
+  const char *p = s;
+  while (*p && o + 1 < sizeof out) {
+    if ((unsigned char)p[0] == 0xC2 && (unsigned char)p[1] == 0xB7) {
+      while (o && out[o - 1] == ' ') o--;
+      if (o + 9 + 1 > sizeof out) break;
+      memcpy(out + o, "   \xe2\x80\xa2   ", 9); o += 9;
+      p += 2;
+      while (*p == ' ') p++;
+    } else {
+      out[o++] = *p++;
+    }
+  }
+  out[o] = 0;
+  snprintf(s, cap, "%s", out);
 }
 
 // `output` = 0..1 of how much the detail has already taken over the screen. Only the
@@ -1529,7 +1580,8 @@ static void drawHero(Uint32 now, float output) {
   //   .home-hero-brand         the logo's box, 440x200, art at the top left
   //   .home-modern-hero-meta-line   21/500 #b3b3b3, tokens separated by •
   //   .home-modern-hero-secondary   18/600 white 88%, with the badges and the IMDb
-  //   .home-hero-description        22/400 white, width 560, leading 30
+  //   .home-hero-description        24/400 white, leading 35 (the modern rule;
+  //                                 `.legacy-webos` would drop it to 22/30/560)
   // Each empty block disappears (`.is-empty { display: none }`), and that is why the
   // set's height changes from title to title — not by absolute position.
   //
@@ -1554,26 +1606,34 @@ static void drawHero(Uint32 now, float output) {
     snprintf(metaLine + n, sizeof metaLine - n, "%s%s",
              n ? "   \xe2\x80\xa2   " : "", ci->meta);
   }
+  bulletize(metaLine, sizeof metaLine);
 
-  // The secondary line: the progress highlight, the badges and the IMDb score. The web
-  // app only shows the IMDb here when there is already a highlight or a badge
-  // (showImdbSecondary); otherwise it goes at the end of the meta line.
+  // The secondary line: the progress highlight, and nothing else. The age badge has left
+  // the hero, and the IMDb score went up to the end of the meta line with it — the web
+  // app's showImdbSecondary kept the score down here to give this line company, which is
+  // not a reason to separate it from the year and the runtime it belongs with.
   char highlight[64];
   highlight[0] = 0;
   if (contHero) snprintf(highlight, sizeof highlight, "%d MINUTES LEFT",
                          ci->remainingMin);
-  const char *badge = (ci && ci->age_rating[0] && !contHero) ? ci->age_rating : NULL;
   char score[8];
   score[0] = 0;
   if (ci && ci->score > 0) snprintf(score, sizeof score, "%.1f", ci->score / 10.0f);
-  int hasSec = (highlight[0] || badge || score[0]);
+  // The empty line COLLAPSES, it is not drawn blank: `.is-empty { display: none }` on
+  // the flex column, which is what lifts the copy back up on a title with no highlight.
+  int hasSec = (highlight[0] != 0);
 
   const char *synopsis = (ci && ci->synopsis[0]) ? ci->synopsis : "";
 
   // --- stacking from the bottom up, like the CSS's flex-end ---
   float base = NV_SHELF_TOP - NV_HERO_COPY_GAP + slideDownCopy;
+  // FOUR lines, the -webkit-line-clamp on .home-hero-description in both the modern
+  // rule and the .legacy-webos one. It clamped at 3 here, and at 24 fewer characters
+  // reach each line than at 22 — the third line was ending mid-sentence on titles the
+  // web app shows whole. MEASURED HERE and drawn below with the same count: the two
+  // calls have to agree or the copy stacks against a height it is not drawn at.
   float hSin = synopsis[0] ? txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, -1, 0,
-                                      NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, 3)
+                                      NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, 4)
                           : 0.0f;
   float ySin  = base - hSin;
   float ySec  = hasSec ? (ySin - (synopsis[0] ? NV_HERO_COPY_LINE : 0.0f)
@@ -1630,54 +1690,63 @@ static void drawHero(Uint32 now, float output) {
 
   if (metaLine[0]) {
     float badgeW=ci?badges_draw(badges_provider(ci->providerName),x,yMeta,150,24,aText):0;
-    TxtLine lm = txt_line_trim(TXT_HERO_META, metaLine, 179, 179, 179, 255,
-                                  NV_HERO_SIN_W-badgeW);
+    // THE IMDb SCORE IS THIS LINE'S LAST TOKEN, straight after the runtime. The web app
+    // sends it down to the secondary line only when that line already has something on
+    // it (showImdbSecondary) — with the age badge gone, keeping the rule would have
+    // parked the score on a line of its own, away from the numbers it reads with.
+    //
+    // The "•" goes INSIDE the string, so its spacing is the font's own and
+    // matches the separator between the genres and the year. Only the gap to the yellow
+    // chip is a number here: the chip is a box, not a glyph, and three spaces of Inter
+    // left it sitting too far out.
+    TxtLine ls = { 0, 0, 0 }, ln = { 0, 0, 0 };
+    float imdbW = 0.0f;
+    if (score[0]) {
+      size_t n = strlen(metaLine);
+      ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
+      ln = txt_line(TXT_HERO_META, score, 179, 179, 179, 255);
+      imdbW = NV_HERO_IMDB_GAP + NV_HERO_IMDB_W + 10.0f + (float)ln.w;
+      snprintf(metaLine + n, sizeof metaLine - n, "   \xe2\x80\xa2");
+    }
+    // WIDTH: to the safe right edge, NOT to the synopsis's 640. In the web app only
+    // .home-hero-description carries a width; the meta line has none. Sharing the
+    // description's cap left "Film • Comedy • Drama • 2026 • 107 min" ellipsised
+    // mid-line — 640 has to hold the provider badge and the score as well, and with a
+    // badge in front there were barely 400 left for the text.
+    //
+    // The score is still subtracted: it is drawn AFTER the line ends, so without it in
+    // the budget a long enough genre list would run under the chip.
+    float metaW = NV_SCREEN_W - x - NV_HOME_SAFE_RIGHT - badgeW - imdbW;
+    TxtLine lm = txt_line_trim(TXT_HERO_META, metaLine, 179, 179, 179, 255, metaW);
     // THE META AND THE SYNOPSIS SWAP AT ONCE, without fading with the art. MEASURED:
     // on the frame at 205 ms, with the old art still at 85%, the meta line and the
     // synopsis were already the NEW title's, with the text opaque. Multiplying by a
     // swap alpha here was our invention — and, with the rasteriser doing 2 lines per
     // frame (text.c:40), fading text that is still settling is the worst possible case.
     txt_draw_alpha(lm, x+badgeW, yMeta, aText);
-  }
-
-  if (hasSec) {
-    float cx = x;
-    float a = aText;
-    if (highlight[0]) {
-      // .home-modern-hero-highlight: full white, weight 600, tracking 0.04em.
-      cx += txt_tracking(TXT_HERO_SEC, highlight, 255, 255, 255, cx, ySec, a,
-                         NV_FT_HERO_SEC * 0.04f);
-      cx += 14.0f;
-    }
-    if (badge) {
-      // Metadata, not a focus target: compact neutral surface and soft corners.
-      TxtLine lb = txt_line(TXT_CAPTION, badge, 235, 235, 240, 255);
-      float bw = lb.w + 22.0f, bh = 32.0f;
-      float by = ySec + (NV_LD_HERO_SEC - bh) * 0.5f;
-      gfx_color((GfxRect){ cx, by, bw, bh }, 0.22f,
-              0.13f, 0.14f, 0.16f, 0.94f * a);
-      txt_draw_alpha(lb, cx + 11.0f, by + (bh - lb.h) * 0.5f, a);
-      cx += bw + 14.0f;
-    }
     if (score[0]) {
       // .home-hero-imdb: the 40px yellow badge and the score just after it, with 10
       // of breathing room. The IMDb SVG is not packaged here; the yellow rectangle
       // with black letters reads the same at this scale.
-      TxtLine ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
-      float sw = 40.0f, sh = ls.h + 6.0f;
-      gfx_color((GfxRect){ cx, ySec + (NV_LD_HERO_SEC - sh) * 0.5f, sw, sh },
-              0.12f, 0.96f, 0.78f, 0.06f, a);
-      txt_draw_alpha(ls, cx + (sw - ls.w) * 0.5f,
-                         ySec + (NV_LD_HERO_SEC - sh) * 0.5f + 3.0f, a);
-      cx += sw + 10.0f;
-      TxtLine ln = txt_line(TXT_HERO_SEC, score, 179, 179, 179, 255);
-      txt_draw_alpha(ln, cx, ySec, a);
+      float cx = x + badgeW + (float)lm.w + NV_HERO_IMDB_GAP;
+      float sh = (float)ls.h + 6.0f;
+      float sy = yMeta + ((float)lm.h - sh) * 0.5f;
+      gfx_color((GfxRect){ cx, sy, NV_HERO_IMDB_W, sh },
+              0.12f, 0.96f, 0.78f, 0.06f, aText);
+      txt_draw_alpha(ls, cx + (NV_HERO_IMDB_W - ls.w) * 0.5f, sy + 3.0f, aText);
+      txt_draw_alpha(ln, cx + NV_HERO_IMDB_W + 10.0f, yMeta, aText);
     }
+  }
+
+  if (hasSec) {
+    // .home-modern-hero-highlight: full white, weight 600, tracking 0.04em.
+    txt_tracking(TXT_HERO_SEC, highlight, 255, 255, 255, x, ySec, aText,
+                 NV_FT_HERO_SEC * 0.04f);
   }
 
   if (synopsis[0])
     txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, x, ySin, NV_HERO_SIN_W,
-              NV_LD_HERO_SIN, aText, 3);
+              NV_LD_HERO_SIN, aText, 4);
 }
 
 // A GREY background, and nothing else. I had put the highlighted title's art here,
@@ -1727,6 +1796,10 @@ static void drawShortcuts(int r, float y) {
     if (x + w < -lw || x > NV_SCREEN_W + lw) continue;
     float radius = radiusOf(w, h);
     GfxRect card = {x, y, w, h};
+    // The whole texture unless the focus animation below picks a cell out of a
+    // sprite sheet. Re-set per card, never carried over: leaving a cell set would
+    // crop the NEXT tile to one frame of the previous one's animation.
+    GfxRect cell = {0.0f, 0.0f, 1.0f, 1.0f};
     if (f > .01f) {
       float smaller = w < h ? w : h;
       gfx_color((GfxRect){x - NV_RING_FOCUS, y - NV_RING_FOCUS,
@@ -1738,15 +1811,50 @@ static void drawShortcuts(int r, float y) {
     if (folder) {
       const char *art = folder->cover;
       GLuint tex = art && art[0] ? tex_get_width(art, w) : 0;
-      if(focus.row==r&&focus.column==c&&folder->frames>0 &&
-         !settings_animations_reduced()) {
+      // The aspect the art is CROPPED to. It follows `tex` — when a frame of the
+      // focus animation replaces the cover below, the aspect has to become the
+      // frame's or the shader would crop the animation to the cover's shape.
+      float texAspect = art && art[0] ? tex_aspect(art) : 0.0f;
+      int animating = focus.row==r && focus.column==c &&
+                      !settings_animations_reduced();
+      if(animating && (folder->frames>0 || folder->focusSheet[0])) {
         int id=rows[r].folders[c];Uint32 now=SDL_GetTicks();
         if(last!=id){last=id;since=now;}
-        if(now-since>350) {
-          char frame[700];int index=(int)((now-since-350)/67)%folder->frames+1;
+        if(folder->focusSheet[0]) {
+          // ONE SPRITE SHEET, and the request is made from the moment the tile takes
+          // the focus rather than after the delay below. It is a CDN file, not a
+          // local one: asking only once the animation was due to start meant the
+          // first pass through the loop had nothing to draw and the tile sat still
+          // for as long as the download took. Asked for here, it is usually
+          // resident by the time the 350 ms are up.
+          //
+          // 1920 and not `w`: the cap tex_get_width applies is the DECODE width, and
+          // it is the WHOLE sheet being decoded, not one frame. Asking for the
+          // tile's 360 would give cells of 45 pixels to draw at 360. The cell
+          // arithmetic itself is unaffected — the coordinates below are normalised,
+          // so they survive any uniform scale — this is only about resolution.
+          // NV_TEX_HERO_WIDTH_MAX is 1920, the sheet's own width, so nothing is lost.
+          GLuint sheet = tex_get_width(folder->focusSheet, 1920.0f);
+          if(sheet && now-since>NV_FOCUS_DELAY_MS) {
+            int n = NV_FOCUS_SHEET_COLS * NV_FOCUS_SHEET_ROWS;
+            int index = (int)((now-since-NV_FOCUS_DELAY_MS)/NV_FOCUS_FRAME_MS) % n;
+            cell.x = (float)(index % NV_FOCUS_SHEET_COLS) / NV_FOCUS_SHEET_COLS;
+            cell.y = (float)(index / NV_FOCUS_SHEET_COLS) / NV_FOCUS_SHEET_ROWS;
+            cell.w = 1.0f / NV_FOCUS_SHEET_COLS;
+            cell.h = 1.0f / NV_FOCUS_SHEET_ROWS;
+            tex = sheet;
+            // The CELL's aspect, not the sheet's. They happen to be equal here (a
+            // grid of 16:9 cells is itself 16:9), but writing the sheet's would be
+            // right by accident and would break the day the grid stops being square.
+            texAspect = tex_aspect(folder->focusSheet)
+                      * (float)NV_FOCUS_SHEET_ROWS / (float)NV_FOCUS_SHEET_COLS;
+          }
+        } else if(now-since>NV_FOCUS_DELAY_MS) {
+          char frame[700];
+          int index=(int)((now-since-NV_FOCUS_DELAY_MS)/NV_FOCUS_FRAME_MS)%folder->frames+1;
           snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,index);
           GLuint motion=tex_get_width(frame,480);
-          if(motion)tex=motion;
+          if(motion){tex=motion;texAspect=tex_aspect(frame);}
           snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,index%folder->frames+1);
           tex_get_width(frame,480);
           snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,(index+1)%folder->frames+1);
@@ -1754,8 +1862,10 @@ static void drawShortcuts(int r, float y) {
         }
       }
       if (tex) {
-        gfx_tex_aspect_current = tex_aspect(art);
+        gfx_tex_aspect_current = texAspect;
+        gfx_tex_cell_current = cell;
         gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1);
+        gfx_tex_cell_current = (GfxRect){0.0f, 0.0f, 1.0f, 1.0f};
         gfx_tex_aspect_current = 0;
       } else if (folder->title[0]) {
         // NO ART YET, so the name stands in for it. The packaged collections' covers
@@ -1827,7 +1937,6 @@ void home_draw(Uint32 now) {
     float cardY = y + NV_LEGACY_ROW_HEAD_H;
 
     int landscape = editorial(kind) || ((kind != ROW_CONTINUE) && settings_posters_landscape());
-    int labelFora = hasLabel(kind);
     if (y < NV_SCREEN_H + 200 && y + NV_LEGACY_ROW_HEAD_H + lh > -200) {
       // `catalogTypeSuffixEnabled`. formatCatalogRowTitle (homeUtils.js:62) does
       // `if (!showTypeSuffix) return base;` — it returns the capitalised name and
@@ -2186,10 +2295,10 @@ void home_draw(Uint32 now) {
                                                        : settings_depth_posters());
 
           // --- posterLabelsEnabled ---------------------------------------
-          // A LANDSCAPE card: the caption goes INSIDE the frame, over a gradient
+          // A LANDSCAPE card only: the caption goes INSIDE the frame, over a gradient
           // covering 54% of the height, with 14 of side inset and 12 from the base
-          // (.home-poster-landscape-copy). An UPRIGHT card: it goes BELOW the poster,
-          // in a block 74 tall with 8 of padding at the top (.home-poster-copy).
+          // (.home-poster-landscape-copy). The UPRIGHT card's block below the poster
+          // (.home-poster-copy) is gone — see hasLabel.
           if (kind != ROW_CONTINUE && kind != ROW_RETURN && !editorial(kind) && settings_labels_poster() && cItem) {
             const char *name = cItem->title[0] ? cItem->title : NULL;
             const char *sub  = cItem->genre[0] ? cItem->genre : NULL;
@@ -2210,27 +2319,6 @@ void home_draw(Uint32 now) {
                                    bottom - NV_LAND_COPY_BASE - ts.h - 4.0f - tn.h, 0.98f);
               } else {
                 txt_draw_alpha(tn, bx, bottom - NV_LAND_COPY_BASE - tn.h, 0.98f);
-              }
-            } else if (labelFora && name) {
-              // `.home-poster-copy` is a SIBLING of the frame, inside the card:
-              // it starts at the card's content box, so its 2px of padding sits
-              // on top of the card's own 2px border, and it begins 8px below the
-              // frame's border box — the art plus the frame border it wears.
-              float bx = card.x + NV_CARD_BORDER * scale + NV_POSTER_COPY_PADX;
-              float by = art.y + art.h + NV_FRAME_BORDER * scale + NV_POSTER_COPY_PADT;
-              float maxW = card.w - (NV_CARD_BORDER * scale + NV_POSTER_COPY_PADX) * 2.0f;
-              // 16/500 e 13/400 rgba(255,255,255,.7) — os corpos de
-              // .home-poster-title e .home-poster-subtitle.
-              // `.home-poster-copy` is a sibling of the frame, so it sits outside the
-              // art rect the dim above covers — but the CSS filter is on the article
-              // and takes the copy with it. Dim it at the text instead. Alpha is not
-              // brightness, but over a #0D0D0D page the two land in the same place.
-              float lit = NV_DIM_UNFOCUSED + (1.0f - NV_DIM_UNFOCUSED) * f;
-              TxtLine tn = txt_line_trim(TXT_CAPTION2, name, 245, 246, 250, 255, maxW);
-              txt_draw_alpha(tn, bx, by, 0.98f * lit);
-              if (sub) {
-                TxtLine ts = txt_line_trim(TXT_MINI, sub, 255, 255, 255, 255, maxW);
-                txt_draw_alpha(ts, bx, by + tn.h + 2.0f, 0.70f * lit);
               }
             }
           }
@@ -2343,19 +2431,9 @@ void home_draw(Uint32 now) {
             }
             if (genre) txt_draw(tg, ex + pad, yMeta);
 
-            // A red age badge, to the right of the genre line. ONLY WITH A VALUE: the
-            // fallback "16" that used to be here stamped an age band on every card with
-            // no rating, and the red badge looks like an official warning — it is the
-            // same defect as the hard-coded "14" in discover.c, only on the home.
-            if (ci && ci->age_rating[0] && tg.w + 100 < ew - pad*2) {
-              char cls[8];
-              snprintf(cls, sizeof cls, "%s%s", ci->age_rating[0] == 'A' ? "" : "A", ci->age_rating);
-              { TxtLine tb = txt_line(TXT_CAPTION, cls, 255, 255, 255, 255);
-                float bx = ex + pad + tg.w + (genre ? 14.0f : 0.0f);
-                GfxRect badge = { bx, yMeta + 2, tb.w + 16, tg.h - 4 };
-                gfx_color(badge, NV_RADIUS_BADGE, 0.78f, 0.14f, 0.14f, 0.95f);
-                txt_draw(tb, bx + 8, yMeta + 2); }
-            }
+            // No age badge here. A red plate beside the genre reads as an official
+            // warning, and the certification is not what this card is for — the same
+            // reason the rating left the hero and the detail screen's meta line.
           }
 
           // EVERY CARD BUT THE FOCUSED ONE IS DIMMED — see NV_DIM_UNFOCUSED. It is the

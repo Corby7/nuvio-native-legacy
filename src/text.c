@@ -165,7 +165,7 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_DET_SIN,   WEIGHT_REGULAR },
   { NV_FT_DET_META2, WEIGHT_REGULAR },
   { NV_FT_HERO_META, WEIGHT_MEDIUM  },   // .home-modern-hero-meta-line (21/500)
-  { NV_FT_HERO_SIN,  WEIGHT_REGULAR },   // .home-hero-description (22/400)
+  { NV_FT_HERO_SIN,  WEIGHT_REGULAR },   // .home-hero-description (24/400)
   { NV_FT_PG_CLOCK, WEIGHT_MEDIUM  },  // .player-clock (26/600)
   { NV_FT_PG_END,     WEIGHT_REGULAR },  // .player-ends-at (20/400)
   { NV_FT_PG_LABEL,  WEIGHT_MEDIUM  },  // .player-parental-label (22/600)

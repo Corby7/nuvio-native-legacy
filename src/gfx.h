@@ -93,7 +93,21 @@ typedef enum {
   // A solid geometric disc. Used as the base of the avatar and the focus so that
   // the outline is always concentric, instead of being painted over the photo.
   GFX_DISK = 21,
-  GFX_NMODES = 22
+  // GFX_BACKDROP — the frosted glass of the side menu: a strip of the screen
+  // already blurred by gfx_backdrop, put back with the web app's filter chain on
+  // it — `backdrop-filter: blur(52px) saturate(160%) brightness(0.85)` and the
+  // rgba(8,12,24,0.62) plate over the result.
+  //
+  // The saturation is not decoration. Blurring alone pulls every pixel towards
+  // the average and the strip comes out grey; the web app puts the colour back
+  // with the same 160%, which is what makes the glass pick up the poster art
+  // behind it instead of reading as one more dark band.
+  //
+  // The source texture comes from an FBO, so it is sampled UPSIDE DOWN, and uCell
+  // picks the part of the strip the panel actually covers (see gfx_backdrop).
+  // uPar.x carries the height of the white sheen at the top, in 0..1 of the rect.
+  GFX_BACKDROP = 22,
+  GFX_NMODES = 23
 } GfxMode;
 
 typedef struct {
@@ -103,6 +117,20 @@ typedef struct {
 // The aspect ratio (w/h) of the texture to draw. 0 = maps directly (text, veil).
 // Set it BEFORE gfx_rect so the art is cropped, never stretched.
 extern float gfx_tex_aspect_current;
+
+// The sub-rectangle of the texture GFX_CARD samples, in 0..1 texture space:
+// {x, y} is the offset and {w, h} the scale. The default {0,0,1,1} is the whole
+// texture and is what every caller wants.
+//
+// It exists for ONE case: the collection tile's focus animation. The web app
+// plays an mp4 there in a <video> element (`focusGifUrl`); this app cannot —
+// video.c is a hardware plane BEHIND the GL surface, one instance, a bare
+// rectangle, so it can neither be rounded nor clipped to a scrolling row. The
+// animation is a sprite sheet instead, and this is how one cell of it is drawn.
+//
+// Set it BEFORE gfx_rect and PUT IT BACK afterwards, exactly like the aspect
+// above — leaving it set would crop every card drawn after it to one cell.
+extern GfxRect gfx_tex_cell_current;
 // Group opacity: it must go back to 1 when the group ends.
 extern float gfx_opacity_group;
 
@@ -138,10 +166,21 @@ void gfx_crop(float x, float y, float w, float h);
 // mapping, and a name with no file loads nothing and draws nothing, with no
 // error. The set is: "more", "watched", "unwatched", "sources", "play",
 // "pause", "subtitles", "audio", "aspect", "forward", "episodes", "trailer",
-// and "menu_home" / "menu_library" / "menu_profile" / "menu_search" /
-// "menu_settings".
+// the side menu's "menu_home" / "menu_library" / "menu_profile" / "menu_search" /
+// "menu_settings", each with a "_fill" twin for the row the user is on, and
+// "brand_wordmark".
+//
+// "brand_mark" also lives there but does NOT go through gfx_icon: it is a colour
+// gradient, and this function's GFX_BRAND would flatten it to one tint. Fetch its
+// path with gfx_icon_path and draw it with GFX_TEXT, the only mode that keeps a
+// texture's RGB and its alpha at the same time.
 void gfx_icons_dir(const char *dirArt);
 void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca);
+// The file gfx_icon would load, for the callers that need something gfx_icon does
+// not do: the icon's own aspect ratio (tex_aspect), or a mode other than
+// GFX_BRAND — the brand mark is a colour gradient and the tinting mode would
+// flatten it. The buffer is static, so use it before calling again.
+const char *gfx_icon_path(const char *name);
 void gfx_no_crop(void);
 
 int  gfx_snap_start(int w, int h);
@@ -160,6 +199,37 @@ int  gfx_blur_start(int w, int h);
 void gfx_blur_generate(int via, unsigned int tex, float texAspect);
 void gfx_blur_draw(int via, GfxRect r, float alpha);
 void gfx_blur_shutdown(void);
+
+// --- BACKDROP ----------------------------------------------------------------
+//
+// A LIVE blur of what has ALREADY been drawn this frame, which is what the web
+// app's `backdrop-filter` is and what gfx_blur_* is not: gfx_blur_generate blurs
+// A TEXTURE the caller hands it (a piece of art), and the side menu needs the
+// blur of the home BEHIND it — cards, hero and all — which exists nowhere but in
+// the frame buffer.
+//
+// `w`/`h` fix the STRIP that is grabbed, in layout units, always anchored at the
+// screen's top-left corner: the menu grows from 144 to 392 and grabbing the wider
+// figure once means the texture never has to be reallocated mid-animation, with
+// gfx_backdrop's own rect deciding how much of it is drawn.
+//
+// Returns 0 if the target could not be created; then gfx_backdrop draws nothing
+// and the caller's own plate is all that shows — which is exactly the app as it
+// was before the glass.
+int  gfx_backdrop_start(float w, float h);
+// Takes the picture. CALL IT BEFORE DRAWING ANY OF THE PANEL, veil included:
+// the source is the frame buffer, so a grab taken after the panel is painted
+// photographs the panel — and since the result is fed straight back into the same
+// place, each grab compounds the last. It shows as ghosts of the focus pill
+// hanging in the glass, and the strip drifting towards a flat wash.
+//
+// `now` is the app's clock: the strip is re-grabbed at most every NV_BACKDROP_MS,
+// because a blur this wide cannot be told apart at 20 updates a second and the
+// grab forces a tile flush on this GPU.
+void gfx_backdrop_grab(unsigned now);
+// Draws the last grab over `r`, tinted and filtered like the web app's plate.
+void gfx_backdrop(GfxRect r, float alpha, float sheen);
+void gfx_backdrop_shutdown(void);
 void gfx_snap_begin(void);   // redirects the drawing into the snapshot
 void gfx_snap_finish(void);  // back to the screen
 void gfx_snap_draw(void);  // paints the snapshot over the whole screen

@@ -1,5 +1,6 @@
 #include "catalog.h"
 #include "discover.h"
+#include "data.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -377,8 +378,24 @@ typedef struct {
   int nItems, nRows;
 } CacheHeader;
 
+// THE CACHE GOES TO THE USER'S FOLDER, NEVER TO THE PACKAGE'S.
+//
+// It was written next to the art, and on the TV that silently never happened:
+// the installed folder is root:root and the app runs as uid 5514, so the fopen
+// failed, cat_write_cache returned 0 WITHOUT a line in the log, and on the next
+// start cat_read_cache found nothing. The visible effect was the packaged
+// catalogue — 40 titles that are not the owner's — on screen at EVERY launch,
+// which is the one thing this cache exists to prevent. Verified on the device:
+// no catalog-net.bin, and "cached catalog on screen" absent from every boot.
+//
+// data_dir() is the folder data_start already PROVED writable (it writes a file
+// there and reads it back), the same one holding the session and the progress.
+// dirArt stays as the fallback for when no candidate accepted a write — there
+// the package folder is as good a guess as any, and on the Mac it works.
 static void pathCache(const char *dirArt, char *dst, size_t size) {
-  snprintf(dst, size, "%s/catalog-net.bin", dirArt ? dirArt : ".");
+  const char *dir = data_dir();
+  if (!dir || !dir[0]) dir = (dirArt && *dirArt) ? dirArt : ".";
+  snprintf(dst, size, "%s/catalog-net.bin", dir);
 }
 
 // Called by discovery when the COMPLETE catalogue from the network replaces the

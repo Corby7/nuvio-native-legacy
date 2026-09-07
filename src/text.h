@@ -27,9 +27,9 @@ typedef enum {
   // (22/400) nor TXT_CALLOUT (28/500) — one gets the weight wrong, the other the
   // size, and the line came out either too faint or too heavy against the art.
   TXT_HERO_META,
-  // The hero's synopsis: .home-hero-description, 22/400 full white. TXT_CAPTION
-  // has the same size but is grey — the colour comes from whoever draws, not
-  // from the style.
+  // The hero's synopsis: .home-hero-description, 24/400 full white — the modern
+  // rule's size, not the 22 `.legacy-webos` drops to (see NV_FT_HERO_SIN). The
+  // colour comes from whoever draws, not from the style.
   TXT_HERO_SIN,
   // Top corner of the PLAYER, from the web app's #playerUiRoot block:
   //   .player-clock          26 / 600

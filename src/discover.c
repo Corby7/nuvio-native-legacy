@@ -45,6 +45,26 @@ void disc_date_long(const char *iso, char *dst, size_t size) {
 // dist/nuvio.env.js) — do not commit it. Without it the cast has names only.
 static char tmdbKey[64];
 static char dirArtDisc[512];
+// 1 once a COMPLETE catalogue has reached the screen this session.
+//
+// The partial publishes below exist to fill an EMPTY-ish home while the network
+// works, and they were gated on cat_do_cache() alone. But cat_cache_replaced()
+// clears that flag at the first complete publish, so the SECOND build — the
+// rebuild disc_rebuild() asks for when the account's addons arrive from the
+// sync — published in pieces over a home that was already fully populated.
+// Measured on the TV: the home stood complete at 2335 ms, collapsed to the
+// single "Continue watching" row at 3201 ms (the hero blank, its art a CDN URL
+// still downloading) and only filled again at 5576 ms. That is the black flash
+// between the packaged catalogue and the real screen.
+//
+// Once something complete is on screen, a rebuild only ever swaps in another
+// complete result.
+static int completeOnScreen;
+// May a HALF-BUILT catalogue go on screen? Only while what is showing is the
+// packaged fallback: replacing 40 strangers' titles with one real row is a
+// gain, replacing the owner's own home with it is the regression above. Both
+// the cache and a previous complete build count as the owner's.
+static int partialAllowed(void) { return !cat_do_cache() && !completeOnScreen; }
 
 void disc_tmdb_set(const char *key) {
   if (!key || !*key) return;
@@ -1064,7 +1084,7 @@ static void *build(void *u) {
   // holding everything back to the end.
   // It builds straight into filtersBuilt: the local `filter` array only exists
   // further down, and creating one here just to copy from would be wasted work.
-  if (n > 0 && !cat_do_cache()) {
+  if (n > 0 && partialAllowed()) {
     int nf = 0;
     if (nResume > 0) {
       CatRow *f0 = &filtersBuilt[nf++];
@@ -1275,10 +1295,11 @@ static void *build(void *u) {
           // comes after the loop.
           //
           // Only publishes in pieces when the screen is showing the PACKAGED
-          // catalogue. Over the cache it would be a visible regression: 16 rows
-          // become 1.
+          // catalogue — see partialAllowed. Over anything of the owner's (the
+          // cache, or a complete build from earlier this session) it would be a
+          // visible regression: 16 rows become 1.
           { Uint32 now = SDL_GetTicks();
-            if (!cat_do_cache() && (done == nTasks || now - lastPublish >= 16)) {
+            if (partialAllowed() && (done == nTasks || now - lastPublish >= 16)) {
               lastPublish = now;
               cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
               // A flag of its own: `nFilter == 1` never happens here because
@@ -1316,6 +1337,7 @@ static void *build(void *u) {
   if (n) {
     cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
     cat_cache_replaced();
+    completeOnScreen = 1;
     mark("network catalog published");
     printf("[disc] catalog built with %d titles\n", n);
     // It only writes the COMPLETE result, not the partial publications: a cache

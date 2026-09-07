@@ -14,6 +14,11 @@
 // The legacy shell uses a 72dp rail (144px on the 1080p canvas) and starts the
 // content 104px after it, as in the CSS .home-main + --home-content-start.
 #define NV_LEGACY_RAIL_W        144.0f
+// The bar's OPEN width. It lives here and not in menu.c because main.c sizes the
+// backdrop's grab from it: the strip has to be as wide as the menu ever gets.
+// It stays at 392 and not at .home-sidebar's 340: the web app has no "Profile and
+// Stats" row, and that label does not fit 340 without being cut.
+#define NV_MENU_W_IS_OPEN       392.0f
 #define NV_LEGACY_CONTENT_X     248.0f
 #define NV_LEGACY_CONTENT_RIGHT 104.0f
 // The real rule, measured in both states: the content ALWAYS has a 104 inset, and
@@ -186,10 +191,42 @@
 #define NV_COLLECTION_HERO_LOGO_MAX_W   520.0f
 #define NV_COLLECTION_HERO_LOGO_MAX_H   150.0f
 #define NV_COLLECTION_HERO_CAPTION_Y    448.0f
-// line-height do CSS: sinopse 22*1.35, meta 21*1.25, secundaria 18*1.35.
-#define NV_LD_HERO_SIN   30
+
+// THE COLLECTION TILE'S FOCUS ANIMATION. Two shapes feed the same loop in
+// home.c's drawShortcuts:
+//
+//  - PACKAGED collections carry a folder of numbered JPEGs (frameDir/%03d.jpg),
+//    written into the .ipk by tools/import-collections.mjs;
+//  - ACCOUNT collections carry one sprite sheet over the network
+//    (ColFolder.focusSheet), written by nuvio-assets/scripts/make-focus-sheet.sh.
+//
+// The sheet's grid is FIXED and needs no metadata from the account, because the
+// script loops short clips and truncates long ones to fill every cell — the
+// idents run from 2.5 s to 16 s, so a fixed frame rate over each clip's own
+// length would have made the count vary per service.
+//
+// 8x8 at 1920 wide, because tex_get_width clamps every decode to
+// NV_TEX_HERO_WIDTH_MAX: a wider sheet would come back downscaled, and since the
+// whole sheet shares one decode budget, every cell would pay for it in
+// sharpness. The cell coordinates are normalised and would still be correct.
+#define NV_FOCUS_SHEET_COLS  8
+#define NV_FOCUS_SHEET_ROWS  8
+// 15 fps, the rate the packaged path already chose for this same animation.
+#define NV_FOCUS_FRAME_MS    67
+// How long the tile has to KEEP the focus before it starts moving. It stops the
+// animation firing on every tile you merely pass through on the way to another.
+#define NV_FOCUS_DELAY_MS    350
+// CSS line-heights: description 24*1.45, meta 21*1.25, secondary 18*1.35.
+#define NV_LD_HERO_SIN   35
 #define NV_LD_HERO_META  26
 #define NV_LD_HERO_SEC   24
+// The IMDb chip at the end of the hero's meta line. NV_HERO_IMDB_W is the plate the
+// "IMDb" letters sit in — the web app's 40px badge, kept because the SVG is not
+// packaged. NV_HERO_IMDB_GAP is the space between the "•" and that plate: the line's
+// own separator is three spaces of Inter (~16), which left a box-shaped token floating
+// away from the text, so it is tighter here on purpose.
+#define NV_HERO_IMDB_W   40.0f
+#define NV_HERO_IMDB_GAP 12.0f
 // MEASURED in the web app: the first row's title sits at y=518 and the cards at
 // y=564. The "2/3 of the screen" rule that used to be here is from tvOS's
 // productTemplate, and is not ours: in the web app the rows rise over the bottom
@@ -376,7 +413,12 @@
 // .home-modern-hero-secondary: 18/600 in the signed-in session.
 #define NV_FT_HERO_SEC   18   // --modern-hero-secondary-size (212*0.085)
 #define NV_FT_HERO_META  21   // --modern-hero-meta-size (212*0.1), weight 500
-#define NV_FT_HERO_SIN   22   // --modern-hero-description-size, weight 400
+// .home-hero-description at the MODERN rule's 24/1.45, and NOT the 22/30 that
+// `.legacy-webos` hands the C3 (components.css:19453). A deliberate divergence: the
+// stylesheet only drops to 22 on webOS <= 6, so every other client the project ships —
+// the Mac build included — shows the synopsis at 24, and beside one of those the 22
+// read as a smaller font rather than as the same design.
+#define NV_FT_HERO_SIN   24   // --modern-hero-description-size, weight 400
 // The DETAIL screen, measured in the running web app (getBoundingClientRect and
 // getComputedStyle over .series-detail-shell), not read from the stylesheet.
 #define NV_FT_DET_BUTTON  25   // .series-primary-btn (weight 600)
@@ -811,6 +853,50 @@
 // Measured: on the page's background NO structure smaller than ~250px survives — it
 // is practically a gradient of blotches. A bias of 5.5 preserved too much detail.
 #define NV_BLUR_STEP       2.4f   // the gaussian's step, in texels of the target
+// THE SIDE MENU'S GLASS: the size the strip ends up blurred at, and how often it
+// is re-grabbed.
+//
+// 64x176 for a 392x1080 strip — 6.1 screen pixels per texel in BOTH directions,
+// and the isotropy is not incidental. This was 64x256, which is 6.1 across and 4.2
+// down, and the gaussian steps in TEXELS: the same kernel then reached 45% further
+// sideways than downwards and the glass came out smeared horizontally.
+//
+// The strip does not arrive here in one jump. gfx_backdrop walks it down in
+// HALVING steps (see BD_LEVEL) because GL_LINEAR reads FOUR texels, no matter how
+// far apart the source pixels are: minifying 6x in a single draw samples a grid
+// out of the picture instead of averaging it, and what came back was a crosshatch
+// of thin streaks that crawled whenever the content behind scrolled. Halving keeps
+// each step inside what four taps can actually average.
+//
+// 80ms = 12.5 updates a second, and it is a MEASURED figure, not a guess. With the
+// regeneration pinned off, the worst frame with the bar open sat at 6.7-12.4ms; at
+// 20 updates a second it went to 12.8-28.2ms. So one regeneration costs the better
+// part of a frame, and it lands on whole frames rather than spreading. The blur is
+// 6 screen pixels per texel: at that softness nothing in it can be seen to lag 80ms
+// behind, and dropping from 20 to 12.5 takes a third of the cost off for nothing.
+//
+// TURN IT UP, not down, if the device shows janks with the bar open. This is the
+// knob for it, and the numbers above were taken on the Mac preview at retina — the
+// TV grabs roughly half as many pixels, and has not been measured.
+//
+// THREE ITERATIONS OF THE GAUSSIAN, and the number is arithmetic rather than
+// taste. GFX_BLUR's nine taps have a sigma of 2.078 x its step, so at
+// NV_BLUR_STEP 2.4 on a target where one texel is 392/64 = 6.1 screen pixels, one
+// pass blurs with sigma 30.5px. The web app asks for `blur(52px)`, and CSS means
+// the STANDARD DEVIATION by that number — so a single pass was at 59% strength,
+// which is why card edges behind the bar still came through as soft vertical
+// bands after the aliasing was fixed. Convolving a gaussian with itself adds
+// variance, so n passes give sigma*sqrt(n): 30.5 -> 43.2 -> 52.9. Three lands on
+// 52.9px, the figure in the stylesheet.
+//
+// Three iterations and NOT one wide one. The same sigma is reachable by opening
+// NV_BLUR_STEP to 4.16, and it costs four fewer render-target switches — but the
+// nine taps would then be 4.2 texels apart on a picture that still carries detail
+// down to the texel, which point-samples it and puts the streaks straight back.
+#define NV_BACKDROP_W        64
+#define NV_BACKDROP_H       176
+#define NV_BACKDROP_PASSES    3
+#define NV_BACKDROP_MS       80
 // The textures' memory ceiling. The TV has a quota, and real art is large: a
 // 1920x1080 backdrop takes 8 MB once decoded.
 // 72 MB was the ceiling set after a "double free" — but that overflow came from the

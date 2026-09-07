@@ -1705,16 +1705,16 @@ static void heroWeb(float a, float offset) {
     }
   }
 
-  // --- meta line 2: [rating | status]  ·  duration  ·  country -----------
+  // --- meta line 2: [status]  ·  duration  ·  country ---------------------
   //
-  // The age rating and the production's status live INSIDE the same outline badge, with
-  // a divider between them ("TV-MA | RENEWED", "R | RELEASED"). Here the rating used to
-  // be a loose badge on the line above.
+  // The outline badge used to carry the age rating, with the production's status beside
+  // it behind a divider ("TV-MA | RENEWED"). The rating has gone from the app: a
+  // certification plate in the hero is a warning label, and it is not what the line is
+  // for. The badge is now the status alone, so on a FILM it does not appear at all.
   //
-  // STATUS: CatItem does not have the field. It stays NULL, and the badge comes out
-  // with the rating alone — no divider and no fallback text. Stamping "RELEASED" on
-  // everything would repeat the mistake that already removed the fixed "14" rating and
-  // the demo cast from here.
+  // STATUS: it comes from TMDB and only on a series. Stamping "RELEASED" on everything
+  // would repeat the mistake that already removed the fixed "14" rating and the demo
+  // cast from here.
   //
   // DURATION on a FILM only. On a series `meta`'s second field is the season count
   // ("3 seasons"), and the reference does not show it in the hero — what counts the
@@ -1730,9 +1730,8 @@ static void heroWeb(float a, float offset) {
       else if(!strcmp(raw,"returning series"))status="NOW SHOWING";
       else if(!strcmp(raw,"renewed"))status="RENEWED";
     }
-    if ((ci && ci->age_rating[0]) || status) {
-      x += drawBadgeMeta(x, yMeta2, ci && ci->age_rating[0] ? ci->age_rating : status,
-                           ci && ci->age_rating[0] ? status : NULL, a);
+    if (status) {
+      x += drawBadgeMeta(x, yMeta2, status, NULL, a);
       something = 1;
     }
     if (!isSeries() && duration[0]) {

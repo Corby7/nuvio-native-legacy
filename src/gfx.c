@@ -9,13 +9,24 @@
 // shader that used the same variable.
 typedef struct {
   GLuint progress;
-  GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect;
+  GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect, cell;
+  // The last uCell uploaded to THIS program. Uniforms are per-program state, so
+  // the cache has to be too — and it is what keeps the sprite sheet off the hot
+  // path: exactly one card on the screen is ever animating, so every other
+  // GFX_CARD draw in the frame finds the default already loaded and skips the
+  // call. See the note above the uniform block in gfx_rect.
+  float cellLast[4];
 } Program;
 static Program progs[GFX_NMODES];
 static int progressCurrent = -1;
 // The current texture's aspect ratio, for the "cover". It is global because the
 // drawing is immediate: the caller sets it before each textured rect.
 float gfx_tex_aspect_current = 0.0f;
+// The sub-rectangle of the texture to sample, in 0..1 texture space. The whole
+// texture by default; a single cell of a sprite sheet when the collection tile
+// is animating (home.c). Global for the same reason the aspect above is: the
+// drawing is immediate and the caller sets it before the rect.
+GfxRect gfx_tex_cell_current = {0.0f, 0.0f, 1.0f, 1.0f};
 float gfx_opacity_group = 1.0f;
 // The real size of the screen target (on retina, larger than 1920x1080). Kept
 // here because every return from an FBO has to restore the viewport with it.
@@ -68,7 +79,8 @@ static const char *FS_HEAD =
   "uniform float uRadius;\n"
   "uniform vec4  uColor;\n"
   "uniform float uAspect;\n"
-  "uniform float uTexAsp;   // w/h of the TEXTURE; 0 = do not adjust\n";
+  "uniform float uTexAsp;   // w/h of the TEXTURE; 0 = do not adjust\n"
+  "uniform vec4  uCell;     // xy offset + zw scale into the texture; 0,0,1,1 = all\n";
 
 // A rounded-rectangle SDF, corrected for the aspect ratio — without the
 // correction a landscape card's corner comes out oval.
@@ -120,6 +132,10 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float m = smoothstep(0.006,-0.006,d);\n"
   "  if (m <= 0.001) discard;\n"
   "  vec2 uv = clamp(cover(vUv) + uPar, 0.0, 1.0);\n"
+  // AFTER the clamp, never before: the clamp is what stops the parallax reaching
+  // past the edge, and mapping first would let a neighbouring cell of the sprite
+  // sheet bleed in instead of the edge pixel repeating.
+  "  uv = uCell.xy + uv * uCell.zw;\n"
   "  gl_FragColor = vec4(texture2D(uTex, uv).rgb, m * uColor.a);\n"
   "}\n",
 
@@ -479,6 +495,29 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  if(m<=0.001) discard;\n"
   "  gl_FragColor=vec4(uColor.rgb,uColor.a*m);\n"
   "}\n",
+
+  // GFX_BACKDROP — the side menu's frosted glass. The strip arrives already
+  // blurred (gfx_backdrop ran the separable gaussian over it); what is left here
+  // is the rest of the web app's chain, in the order the browser applies it.
+  //
+  // MEASURED from .home-sidebar::before: backdrop-filter is
+  // `blur(52px) saturate(160%) brightness(0.85)` and the background over it is
+  // `linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 18%)` on the
+  // top 100px, over a flat rgba(8,12,24,0.62).
+  //
+  // The source is an FBO, hence the vertical flip, and uCell narrows the strip to
+  // the width the panel currently has.
+  "void main(){\n"
+  "  vec2 uv = uCell.xy + vec2(vUv.x, 1.0 - vUv.y) * uCell.zw;\n"
+  "  vec3 c = texture2D(uTex, uv).rgb;\n"
+  "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+  "  c = clamp(mix(vec3(l), c, 1.60), 0.0, 1.0) * 0.85;\n"
+  "  c = mix(c, vec3(0.0314, 0.0471, 0.0941), 0.62);\n"
+  // The sheen is ADDED, not mixed: it is a white glaze at 6%, and mixing towards
+  // white at that strength washes the colour the saturation has just restored.
+  "  c += 0.06 * (1.0 - smoothstep(0.0, max(uPar.x, 0.0001), vUv.y));\n"
+  "  gl_FragColor = vec4(c, uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -494,7 +533,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_SOCIAL */
   {0,1},   /* GFX_AVATAR */
   {0,0},   /* GFX_PORTRAIT */
-  {0,0}    /* GFX_DISK */
+  {0,0},   /* GFX_DISK */
+  {0,0}    /* GFX_BACKDROP — the strip is a flat quad: no SDF, no cover */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -531,9 +571,19 @@ int gfx_start(void) {
     progs[m].color  = glGetUniformLocation(p, "uColor");
     progs[m].aspect  = glGetUniformLocation(p, "uAspect");
     progs[m].texAspect = glGetUniformLocation(p, "uTexAsp");
+    progs[m].cell      = glGetUniformLocation(p, "uCell");
+    progs[m].cellLast[0] = 0.0f; progs[m].cellLast[1] = 0.0f;
+    progs[m].cellLast[2] = 1.0f; progs[m].cellLast[3] = 1.0f;
     glUseProgram(p);
     glUniform2f(progs[m].screen, NV_SCREEN_W, NV_SCREEN_H);
     glUniform1i(progs[m].tex, 0);
+    // THE DEFAULT HAS TO BE UPLOADED, not merely assumed. A GLSL uniform starts
+    // at ZERO, so leaving uCell alone makes the shader compute uv*0 and sample
+    // texel (0,0) for the whole quad — every card comes out one flat colour, in
+    // silence. The cache above only skips a write it believes has already
+    // happened, so seeding the cache without seeding the uniform is what makes
+    // the two disagree. Caught by tests/focus_sheet.c.
+    if (progs[m].cell >= 0) glUniform4f(progs[m].cell, 0.0f, 0.0f, 1.0f, 1.0f);
   }
   glUseProgram(progs[GFX_CARD].progress);
   progressCurrent = GFX_CARD;
@@ -624,6 +674,16 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
   if (P->radius >= 0)   glUniform1f(P->radius, radius);
   if (P->aspect >= 0)    glUniform1f(P->aspect, r.h > 0 ? r.w / r.h : 1.0f);
   if (P->texAspect >= 0) glUniform1f(P->texAspect, gfx_tex_aspect_current);
+  if (P->cell >= 0) {
+    Program *W = &progs[mode];
+    if (W->cellLast[0] != gfx_tex_cell_current.x || W->cellLast[1] != gfx_tex_cell_current.y ||
+        W->cellLast[2] != gfx_tex_cell_current.w || W->cellLast[3] != gfx_tex_cell_current.h) {
+      glUniform4f(P->cell, gfx_tex_cell_current.x, gfx_tex_cell_current.y,
+                           gfx_tex_cell_current.w, gfx_tex_cell_current.h);
+      W->cellLast[0] = gfx_tex_cell_current.x; W->cellLast[1] = gfx_tex_cell_current.y;
+      W->cellLast[2] = gfx_tex_cell_current.w; W->cellLast[3] = gfx_tex_cell_current.h;
+    }
+  }
   if (P->color >= 0)    glUniform4f(P->color, cr, cg, cb, ca * gfx_opacity_group);
   if (tex && tex != texCurrent) {
     glActiveTexture(GL_TEXTURE0);
@@ -719,13 +779,21 @@ void gfx_icons_dir(const char *dirArt) {
   snprintf(dirIcons, sizeof dirIcons, "%s/icons", dirArt ? dirArt : ".");
 }
 
+// An ABSOLUTE path: the app's working directory is not the art folder, and with
+// a relative path IMG_Load fails silently and the icon disappears with no error.
+// The same trap already documented in extras_path_brand.
+const char *gfx_icon_path(const char *name) {
+  static char cam[600];
+  cam[0] = 0;
+  if (name && name[0] && dirIcons[0])
+    snprintf(cam, sizeof cam, "%s/%s.png", dirIcons, name);
+  return cam;
+}
+
 void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca) {
   char cam[600];
   GLuint t;
   if (!name || !name[0] || !dirIcons[0]) return;
-  // An ABSOLUTE path: the app's working directory is not the art folder, and with
-  // a relative path IMG_Load fails silently and the icon disappears with no error.
-  // The same trap already documented in extras_path_brand.
   snprintf(cam, sizeof cam, "%s/%s.png", dirIcons, name);
   // Ask by drawing width: a 38px icon does not need the file's 128, and the
   // per-use ceiling is what keeps the cache out of the red.
@@ -757,21 +825,28 @@ void gfx_crop(float x, float y, float w, float h) {
 }
 void gfx_no_crop(void) { glDisable(GL_SCISSOR_TEST); }
 
-static int createsTarget(int i, int w, int h) {
-  glGenTextures(1, &borderTex[i]);
-  glBindTexture(GL_TEXTURE_2D, borderTex[i]);
+// The colour target and the FBO that writes into it, together: every render
+// target in this file is the same pair, and the blur's four and the backdrop's
+// two used to be two copies of it.
+static int createsTargetIn(GLuint *tex, GLuint *fbo, int w, int h) {
+  glGenTextures(1, tex);
+  glBindTexture(GL_TEXTURE_2D, *tex);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   gfx_tex_forget(0);  // the bind above went around gfx_rect
-  glGenFramebuffers(1, &borderFbo[i]);
-  glBindFramebuffer(GL_FRAMEBUFFER, borderFbo[i]);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, borderTex[i], 0);
+  glGenFramebuffers(1, fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, *fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *tex, 0);
   GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   return st == GL_FRAMEBUFFER_COMPLETE;
+}
+
+static int createsTarget(int i, int w, int h) {
+  return createsTargetIn(&borderTex[i], &borderFbo[i], w, h);
 }
 
 int gfx_blur_start(int w, int h) {
@@ -828,4 +903,156 @@ void gfx_blur_shutdown(void) {
     if (borderFbo[i]) { glDeleteFramebuffers(1, &borderFbo[i]); borderFbo[i] = 0; }
     if (borderTex[i]) { glDeleteTextures(1, &borderTex[i]); borderTex[i] = 0; }
   }
+}
+
+// --- backdrop ----------------------------------------------------------------
+//
+// The glass under the side menu. The pipeline is the blur's, with ONE difference
+// that changes everything: the source is not a texture the caller owns, it is the
+// FRAME BUFFER — whatever app_draw has already put on the screen this frame.
+//
+// THE DOWNSCALE IS MOST OF THE BLUR, and it has to be done in HALVING STEPS.
+//
+// GL_LINEAR reads exactly four texels. Asked to minify 6x in one draw it does not
+// average the 36 source pixels it covers — it picks four of them and interpolates,
+// which is point-sampling on a grid. That is an alias, not a blur, and it showed
+// as a crosshatch of thin bright streaks over the whole panel, crawling sideways
+// whenever the row behind the bar scrolled. The one-shot 64x256 target this
+// started as had exactly that defect.
+//
+// So the strip walks down a chain, each level half the last, where four taps
+// really do cover the footprint. The last two levels are the same size: they are
+// the separable gaussian's ping-pong pair. Levels 0..BD_FINAL are the descent,
+// BD_FINAL is where the blur lands and where gfx_backdrop reads from.
+// The top level is 3x the last, not 4x, and that is sized off THE DEVICE: the TV
+// grabs 392x1080, so 192x528 is a clean 2.04x first step — the most four taps can
+// average — while costing 44% less fill than the 256x704 it started at. The Mac
+// preview grabs at retina and takes a 2.9x first step instead, which is the one
+// place the two differ and the softer of the two errors to make.
+static const struct { int w, h; } BD_LEVEL[] = {
+  { NV_BACKDROP_W * 3, NV_BACKDROP_H * 3 },
+  { NV_BACKDROP_W + NV_BACKDROP_W / 2, NV_BACKDROP_H + NV_BACKDROP_H / 2 },
+  { NV_BACKDROP_W,     NV_BACKDROP_H     },
+  { NV_BACKDROP_W,     NV_BACKDROP_H     }
+};
+#define BD_LEVELS  ((int)(sizeof BD_LEVEL / sizeof BD_LEVEL[0]))
+#define BD_FINAL   (BD_LEVELS - 2)
+static GLuint bdGrab = 0;
+static GLuint bdFbo[BD_LEVELS] = {0}, bdTex[BD_LEVELS] = {0};
+static int   bdW = 0, bdH = 0;     // the strip, in layout units
+static int   bdGw = 0, bdGh = 0;   // the grab, in buffer pixels
+static unsigned bdWhen = 0;
+static int   bdHas = 0;
+
+int gfx_backdrop_start(float w, float h) {
+  int i;
+  bdW = (int)w; bdH = (int)h;
+  bdGw = bdGh = 0; bdHas = 0; bdWhen = 0;
+  for (i = 0; i < BD_LEVELS; i++) {
+    if (createsTargetIn(&bdTex[i], &bdFbo[i], BD_LEVEL[i].w, BD_LEVEL[i].h)) continue;
+    gfx_backdrop_shutdown();
+    printf("backdrop unavailable: carrying on without the glass\n");
+    return 0;
+  }
+  glGenTextures(1, &bdGrab);
+  return 1;
+}
+
+// Grabs the strip and runs the gaussian over it. It is the whole cost of the
+// glass, and the reason gfx_backdrop rations it by the clock.
+static void backdropGenerates(void) {
+  float ex = (float)screenW / NV_SCREEN_W, ey = (float)screenH / NV_SCREEN_H;
+  int gw = (int)(bdW * ex), gh = (int)(bdH * ey);
+  // glCopyTexImage2D reads from the BOTTOM-left corner, and the letterbox moves
+  // the origin — the same two conversions gfx_crop documents.
+  int gx = screenX, gy = (int)((NV_SCREEN_H - bdH) * ey) + screenY;
+  GfxRect full = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+  float px, py;
+  int i;
+  if (gw < 1 || gh < 1) return;
+
+  GFX_OUTRO_START();
+  glBindTexture(GL_TEXTURE_2D, bdGrab);
+  if (gw != bdGw || gh != bdGh) {
+    // The first grab, and any window resize: glCopyTexImage2D ALLOCATES as well
+    // as copying, so the filter has to be set again with it.
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, gx, gy, gw, gh, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    bdGw = gw; bdGh = gh;
+  } else {
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, gx, gy, gw, gh);
+  }
+  gfx_tex_forget(0);  // the bind above went around gfx_rect
+
+  glDisable(GL_BLEND);
+  gfx_tex_aspect_current = 0.0f;
+
+  // THE DESCENT. Only the FIRST step flips (pary = 1): the grab comes off the
+  // frame buffer bottom-up, like an FBO, and GFX_SNAP's flip is what puts it the
+  // right way up. Every step after it reads an FBO and writes an FBO, so the two
+  // already agree and flipping again would stand the picture back on its head.
+  // The number of steps therefore does not reach the final draw at all.
+  glViewport(0, 0, BD_LEVEL[0].w, BD_LEVEL[0].h);
+  glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[0]);
+  gfx_rect(full, bdGrab, GFX_SNAP, 0, 0.0f, 1.0f, 0.0f, 0, 0, 0, 1.0f);
+  for (i = 1; i <= BD_FINAL; i++) {
+    glViewport(0, 0, BD_LEVEL[i].w, BD_LEVEL[i].h);
+    glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[i]);
+    gfx_rect(full, bdTex[i - 1], GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+  }
+
+  // THE GAUSSIAN, over a picture the descent has already box-filtered. Both halves
+  // live at the same size, so the viewport is already right from the last step
+  // down. Each iteration is one horizontal pass out to the partner and one
+  // vertical pass back, which leaves the result in BD_FINAL whatever the count.
+  // See NV_BACKDROP_PASSES for why the count is three and not one wider pass.
+  px = NV_BLUR_STEP / (float)BD_LEVEL[BD_FINAL].w;
+  py = NV_BLUR_STEP / (float)BD_LEVEL[BD_FINAL].h;
+  for (i = 0; i < NV_BACKDROP_PASSES; i++) {
+    glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[BD_FINAL + 1]);
+    gfx_rect(full, bdTex[BD_FINAL], GFX_BLUR, 0, px, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+    glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[BD_FINAL]);
+    gfx_rect(full, bdTex[BD_FINAL + 1], GFX_BLUR, 0, 0.0f, py, 0.0f, 0, 0, 0, 1.0f);
+  }
+
+  glEnable(GL_BLEND);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  viewportTarget();
+  GFX_OUTRO_END();
+}
+
+// THE CLOCK, not the frame: the rail is on screen every frame of the app's life,
+// and a grab plus three passes at 60Hz is a bill it does not need to pay. A 52px
+// blur simply has no detail left that 20 updates a second cannot carry.
+void gfx_backdrop_grab(unsigned now) {
+  if (!bdFbo[0] || bdW <= 0) return;
+  if (bdHas && now - bdWhen < (unsigned)NV_BACKDROP_MS) return;
+  backdropGenerates();
+  bdWhen = now; bdHas = 1;
+}
+
+void gfx_backdrop(GfxRect r, float alpha, float sheen) {
+  float cw;
+  if (!bdFbo[0] || !bdHas || bdW <= 0 ||
+      r.w <= 1.0f || r.h <= 1.0f || alpha <= 0.004f) return;
+  // The strip was grabbed at its widest; the panel takes the left slice of it.
+  // Sampling the whole strip into a narrower rect would SQUEEZE the picture, and
+  // the glass would stop lining up with the content beside it.
+  cw = r.w / (float)bdW; if (cw > 1.0f) cw = 1.0f;
+  gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, cw, 1.0f };
+  gfx_tex_aspect_current = 0.0f;
+  gfx_rect(r, bdTex[BD_FINAL], GFX_BACKDROP, 0, sheen, 0.0f, 0.0f, 0, 0, 0, alpha);
+  gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
+}
+
+void gfx_backdrop_shutdown(void) {
+  for (int i = 0; i < BD_LEVELS; i++) {
+    if (bdFbo[i]) { glDeleteFramebuffers(1, &bdFbo[i]); bdFbo[i] = 0; }
+    if (bdTex[i]) { glDeleteTextures(1, &bdTex[i]); bdTex[i] = 0; }
+  }
+  if (bdGrab) { glDeleteTextures(1, &bdGrab); bdGrab = 0; }
+  bdGw = bdGh = 0; bdHas = 0;
 }
