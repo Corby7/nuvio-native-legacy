@@ -107,7 +107,37 @@ typedef enum {
   // picks the part of the strip the panel actually covers (see gfx_backdrop).
   // uPar.x carries the height of the white sheen at the top, in 0..1 of the rect.
   GFX_BACKDROP = 22,
-  GFX_NMODES = 23
+  // GFX_PROFILE_BG — the profile picker's page, washed with the colour of the
+  // profile the cursor is on. It is a MODE and not two stacked quads because the
+  // web app's background is two overlapping CSS gradients and BOTH are derived
+  // from the same accent colour (buildBackgroundGradient in
+  // profileSelectionScreen.js), so one colour uniform describes the whole thing:
+  //
+  //   linear-gradient(90deg,  rgba(a,.26) 0, rgba(a,.08) 45%, transparent 72%)
+  //   linear-gradient(180deg, mix(#1A1A1A,a,.30) 0, mix(#0D0D0D,a,.14) 42%, #0D0D0D)
+  //
+  // Two full-screen quads would also cost two full screens of fill, and gfx.c
+  // records that as the thing this Mali cannot afford.
+  //
+  // Pass the accent in uColor.rgb. There are no parameters.
+  GFX_PROFILE_BG = 23,
+  // GFX_RING_CSS — a ring at an ARBITRARY radius inside the quad, antialiased on
+  // both edges. It exists because GFX_RING cannot draw a CSS border.
+  //
+  // GFX_RING strokes `abs(d) < thickness` around the SDF's zero, and that zero is
+  // the quad's INSCRIBED CIRCLE — so half the stroke always falls outside the
+  // circle and the quad clips it. On a small dashed badge nobody notices. On the
+  // profile picker's 256px ring it is the whole shape: MEASURED on the TV, the
+  // white stopped dead at radius 128.1 with no antialiasing at 12 o'clock, and
+  // ran on to 134 at 45 degrees, where the quad's CORNER leaves room. A circle
+  // cut flat at four points and swollen between them.
+  //
+  // Here the radius is a parameter, so the caller pads the quad and the whole
+  // stroke — ramp included — lands inside it:
+  //   uPar.x = the ring's OUTER radius / the quad's width  (0.5 = inscribed)
+  //   uPar.y = the stroke's thickness  / the quad's width
+  GFX_RING_CSS = 24,
+  GFX_NMODES = 25
 } GfxMode;
 
 typedef struct {

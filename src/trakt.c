@@ -124,11 +124,17 @@ static int decorate(CatItem *d, const char *kind) {
   js_text(body, NULL, "logo", d->logo, sizeof d->logo);
   if (!d->title[0]) js_text(body, NULL, "name", d->title, sizeof d->title);
   js_text(body, NULL, "description", d->synopsis, sizeof d->synopsis);
+  // The same rewrite discover.c does on this same field, and it was missing here:
+  // these are the history and watchlist items, which fill Continue watching and
+  // the Library — the rows the hero sits above. See cat_backdrop_shrink.
+  cat_backdrop_shrink(d->backdrop, sizeof d->backdrop);
   if (!d->backdrop[0]) snprintf(d->backdrop, sizeof d->backdrop, "%s", d->poster);
   { char r[24] = "", year[24] = "";
     js_text(body, NULL, "runtime", r, sizeof r);
     js_text(body, NULL, "releaseInfo", year, sizeof year);
-    { char *tr = strstr(year, "\xe2\x80\x93"); if (tr) *tr = 0; }
+    // Both dash spellings, as in discover.c (ofMeta): the en dash Cinemeta writes
+    // and the ASCII hyphen other addons do.
+    { char *tr = strstr(year, "\xe2\x80\x93"); if (!tr) tr = strchr(year, '-'); if (tr) *tr = 0; }
     snprintf(d->meta, sizeof d->meta, "%.20s%s%.20s", year,
              (year[0] && r[0]) ? "  \xc2\xb7  " : "", r);
     // Minutes remaining, for the card's caption. Trakt gives the percentage and

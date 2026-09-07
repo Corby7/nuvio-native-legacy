@@ -37,6 +37,12 @@ typedef struct {
   // hero was decoded at half the resolution and stretched to 1920 on screen, which
   // is the blur the owner saw.
   int limit;
+  // The ceiling the RESIDENT texture was actually decoded for, which is NOT `limit`
+  // while a promotion is in flight: there `limit` is already the new, bigger one and
+  // this still describes the texture on the GPU. It is what lets a caller whose
+  // request the current texture already satisfies keep drawing while the bigger
+  // decode runs — see the answer at the end of tex_get_limit.
+  int serves;
   unsigned long usage;  // LRU counter
   // The average luminance of the OPAQUE pixels, 0..255; -1 while it is not known.
   // Measured once, on the decode thread. It serves the title's logo: TMDB marks
@@ -425,7 +431,16 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
     // Writes to a temporary and renames: another thread may be reading the same
     // file, and a half file decodes as a broken image and stays cached that way
     // forever.
-    snprintf(tmp, sizeof tmp, "%s.partial", dst);
+    //
+    // THE TEMPORARY CARRIES THE THREAD'S ID, and that is not decoration. Two
+    // threads can be downloading the SAME url at the same time — the prefetch
+    // lane warms art that a net thread is asked for a moment later, and the
+    // items[] table that keeps two net threads off the same path does not know
+    // about the lane. With one shared "<hash>.partial" both would write into the
+    // same file and each other's bytes; with one per thread, both write a whole
+    // file and the rename (atomic) simply picks a winner.
+    snprintf(tmp, sizeof tmp, "%s.%lu.partial", dst,
+             (unsigned long)SDL_ThreadID());
     f = fopen(tmp, "wb");
     // It failed SILENTLY. See the note in tex_cache_dir: a folder without write
     // permission throws away every downloaded image and the only symptom was a
@@ -438,6 +453,79 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
   }
   free(body);
   return 1;
+}
+
+// --- THE PREFETCH LANE -------------------------------------------------------
+//
+// A queue of URLs to put in the DISK cache and nothing more. See tex_prefetch in
+// the header for why the warming cannot go through tex_get_hero.
+//
+// IT HAS A LOCK OF ITS OWN, deliberately. `mtx` is taken by the drawing thread
+// two or three times per card per frame, and the note at findIndex measured what
+// happens when a background thread holds it: the drawing waits for a thread that
+// is not even running. The lane has nothing to say to items[], so it shares
+// nothing with it.
+//
+// A STACK AND NOT A QUEUE. What is worth downloading is the LAST thing asked
+// for: sweeping across twenty cards, the useful url is the one under the focus
+// now, and a FIFO would serve it last, after nineteen the owner has already gone
+// past. Pushing the candidate AFTER its neighbours therefore serves it first.
+#define NV_TEX_PREFETCH 16
+// The last few paths handed over, so a focus that goes back and forth does not
+// queue the same download again. It only needs to cover the sweep: with the ring
+// this size, one row of movement never repeats itself.
+#define NV_TEX_PREFETCH_SEEN 48
+static char  queuePre[NV_TEX_PREFETCH][512];
+static int   nPre = 0;
+static unsigned long preSeen[NV_TEX_PREFETCH_SEEN];
+static int   preSeenNext = 0;
+static SDL_mutex *mtxPre;
+static SDL_cond  *condPre;
+static SDL_Thread *thrPre;
+
+void tex_prefetch(const char *path) {
+  unsigned long h;
+  int i;
+  if (!path || !*path || !mtxPre) return;
+  // A local file is ALREADY local: there is nothing to warm, and queuing it would
+  // only push a real download off the stack.
+  if (strncmp(path, "http://", 7) && strncmp(path, "https://", 8)) return;
+  h = hashPath(path);
+  SDL_LockMutex(mtxPre);
+  for (i = 0; i < NV_TEX_PREFETCH_SEEN; i++)
+    if (preSeen[i] == h) { SDL_UnlockMutex(mtxPre); return; }
+  preSeen[preSeenNext] = h;
+  preSeenNext = (preSeenNext + 1) % NV_TEX_PREFETCH_SEEN;
+  // Full: the OLDEST goes, which is the one at the bottom. It is the one whose
+  // moment has passed — the focus is nowhere near it any more.
+  if (nPre == NV_TEX_PREFETCH) {
+    memmove(queuePre[0], queuePre[1], sizeof queuePre[0] * (NV_TEX_PREFETCH - 1));
+    nPre--;
+  }
+  snprintf(queuePre[nPre], sizeof queuePre[0], "%s", path);
+  nPre++;
+  SDL_CondSignal(condPre);
+  SDL_UnlockMutex(mtxPre);
+}
+
+// ONE thread, and one is the point: this lane serves art nobody is looking at
+// yet. The four net threads serve art that is on screen NOW, and a prefetch that
+// competes with them for the link would make the visible case slower to make the
+// speculative one faster — the wrong trade in every case where the guess is wrong.
+static int threadPrefetch(void *arg) {
+  (void)arg;
+  for (;;) {
+    char path[512], local[600];
+    SDL_LockMutex(mtxPre);
+    while (running && nPre == 0) SDL_CondWait(condPre, mtxPre);
+    if (!running) { SDL_UnlockMutex(mtxPre); return 0; }
+    nPre--;
+    snprintf(path, sizeof path, "%s", queuePre[nPre]);
+    SDL_UnlockMutex(mtxPre);
+    // ensureLocal answers at once when the file is already there, so the stat is
+    // its job and not the caller's — the caller is the drawing thread.
+    ensureLocal(path, local, sizeof local);
+  }
 }
 
 // NETWORK THREAD: it takes from the queue, makes sure the file is in the disk cache
@@ -768,6 +856,10 @@ int tex_start(int max_items) {
   memset(items, 0, sizeof items);
   mtx = SDL_CreateMutex(); cond = SDL_CreateCond();
   condDec = SDL_CreateCond(); condFree = SDL_CreateCond();
+  mtxPre = SDL_CreateMutex(); condPre = SDL_CreateCond();
+  nPre = 0;
+  memset(preSeen, 0, sizeof preSeen);
+  preSeenNext = 0;
   running = 1;
   // TWO decode threads, not one. The queue is taken under the mutex and each thread
   // carries an index of its own, so more consumers is safe with no other change.
@@ -789,6 +881,9 @@ int tex_start(int max_items) {
     // socket is zero CPU. Four covers the four posters that come on screen at once.
     for (k = 0; k < NV_TEX_THREADS_NET; k++)
       thrsNet[k] = SDL_CreateThread(threadNet, "nv-net", NULL);
+    // The prefetch lane: one thread, parked on the socket like the others. See
+    // threadPrefetch for why it is one and not four.
+    thrPre = SDL_CreateThread(threadPrefetch, "nv-warm", NULL);
     thr = thrs[0]; }
   return thr != NULL;
 }
@@ -798,6 +893,14 @@ void tex_shutdown(void) {
   SDL_CondBroadcast(cond); SDL_CondBroadcast(condDec);
   SDL_CondBroadcast(condFree);
   SDL_UnlockMutex(mtx);
+  // The prefetch thread waits on a condition of ITS OWN: the broadcast above does
+  // not reach it, and without this it would sleep through the shutdown and be
+  // waited for forever.
+  if (mtxPre) {
+    SDL_LockMutex(mtxPre);
+    SDL_CondBroadcast(condPre);
+    SDL_UnlockMutex(mtxPre);
+  }
   // Wait for BOTH threads. Waiting only for the first left the other decoding into
   // items[] while the loop below was already freeing the surfaces.
   { int k;
@@ -805,12 +908,18 @@ void tex_shutdown(void) {
       if (thrs[k]) { SDL_WaitThread(thrs[k], NULL); thrs[k] = NULL; }
     for (k = 0; k < NV_TEX_THREADS_NET; k++)
       if (thrsNet[k]) { SDL_WaitThread(thrsNet[k], NULL); thrsNet[k] = NULL; }
+    if (thrPre) { SDL_WaitThread(thrPre, NULL); thrPre = NULL; }
     thr = NULL; }
   for (int i = 0; i < nMax; i++) {
     if (items[i].tex) glDeleteTextures(1, &items[i].tex);
     if (items[i].sup) SDL_FreeSurface(items[i].sup);
   }
   SDL_DestroyCond(cond); SDL_DestroyMutex(mtx);
+  if (condPre) { SDL_DestroyCond(condPre); condPre = NULL; }
+  // Cleared LAST and to NULL: tex_prefetch reads it to decide whether the lane
+  // exists at all, and a drawing thread still finishing its frame may call in
+  // after the shutdown has started.
+  if (mtxPre) { SDL_DestroyMutex(mtxPre); mtxPre = NULL; }
 }
 
 static GLuint tex_get_limit(const char *path, int limit) {
@@ -821,6 +930,17 @@ static GLuint tex_get_limit(const char *path, int limit) {
   if (i >= 0 && items[i].state == FAILED) {
     items[i].lastFrame = frameCurrent;
     items[i].lastRequest = SDL_GetTicks();
+    // A FAILURE THAT IS ONLY THE PROMOTION'S. If a texture is still resident and it
+    // already satisfies this caller, the art is NOT missing: what failed is the
+    // bigger re-decode somebody else asked for. Answering 0 here would blank the card
+    // for good and, after the third attempt, caption it "Art unavailable" — over art
+    // that is sitting on the GPU. Whoever wanted the bigger one still gets 0.
+    if (items[i].tex && limit <= items[i].serves) {
+      items[i].usage = ++lruClock;
+      GLuint kept = items[i].tex;
+      SDL_UnlockMutex(mtx);
+      return kept;
+    }
     // It has already failed: it only goes back into the queue when the backoff
     // expires, and never after the third attempt. Without this the request came
     // back on every frame.
@@ -859,7 +979,31 @@ static GLuint tex_get_limit(const char *path, int limit) {
         }
       }
     }
-    output = items[i].state == READY ? items[i].tex : 0;
+    // A PROMOTION IN FLIGHT MUST NOT BLANK WHOEVER WAS ALREADY HAPPY.
+    //
+    // The promotion above sends a READY item back to PENDING, and this line used to
+    // answer 0 to EVERY caller until the bigger decode landed — including the card
+    // that was drawing the small version perfectly well. The two share one entry, so
+    // the hero asking for 1920 took the art out of the card's hands: MEASURED on the
+    // continue-watching row, where the card and the hero resolve to the SAME backdrop
+    // (art_by_identity(idx, 1) in both), the card fell back to drawArtSkeleton — and
+    // that skeleton is #1c1c1c rolled down to black, which on a 419x236 landscape card
+    // is the black flicker you get scrolling the row.
+    //
+    // `serves` is the ceiling the RESIDENT texture was decoded for, so the test is
+    // "was this caller's request already satisfied": the card asked for 544 and holds
+    // 544, so it keeps drawing; the hero asked for 1920 and holds 544, so it still
+    // gets 0 and waits. That last part matters — the hero's swap is gated on this
+    // very answer (see heroWanted in home.c), and handing it the card's small texture
+    // would swap it in and stretch it to 1920, which is exactly the blurred hero the
+    // promotion exists to prevent.
+    //
+    // Nothing else has to change: a PENDING item is invisible to slotFree() and
+    // prune() (both walk READY only), so the texture it is still drawing from cannot
+    // be evicted underneath it, and tex_pump deletes the old one only at the instant
+    // it installs the new, under this same mutex.
+    output = (items[i].state == READY || (items[i].tex && limit <= items[i].serves))
+           ? items[i].tex : 0;
   } else {
     int new = slotFree();
     if (new >= 0) {
@@ -908,7 +1052,12 @@ float tex_aspect(const char *path) {
   float a = 0.0f;
   unsigned long h = hashPath(path);
   int i; SEARCH_MEASURE(i, path, h);
-  if (i >= 0 && items[i].state == READY && items[i].h > 0)
+  // NOT gated on READY: while a promotion re-decodes, the item is PENDING and the
+  // PREVIOUS texture is still on the GPU and still being drawn (see tex_get_limit).
+  // Answering 0 for those frames would hand the card an unknown aspect and the
+  // shader would stretch the art — trading the black blink for a squashed one.
+  // `h > 0` is the real question: it is only set once a texture exists.
+  if (i >= 0 && items[i].h > 0)
     a = (float)items[i].w / (float)items[i].h;
   SDL_UnlockMutex(mtx);
   return a;
@@ -937,7 +1086,8 @@ int tex_brand_dark(const char *path) {
   SEARCH_MEASURE(i, path, h);
   // luma < 0 means "not measured yet": answer NO, so as not to tint art that is
   // still to arrive. Err on the side of not touching it.
-  if (i >= 0 && items[i].state == READY && items[i].luma >= 0)
+  // Same as tex_aspect: luma belongs to the resident texture, not to the state.
+  if (i >= 0 && items[i].luma >= 0)
     r = (items[i].luma < NV_LOGO_LUMA_MIN && items[i].chroma < NV_LOGO_CHROMA_MAX);
   SDL_UnlockMutex(mtx);
   return r;
@@ -1010,6 +1160,8 @@ int tex_pump(int max_per_frame) {
       if (bytesUsed < 0) bytesUsed = 0;
     }
     items[target].tex = t; items[target].w = sup->w; items[target].h = sup->h;
+    // The ceiling this texture answers for, from now until a promotion replaces it.
+    items[target].serves = items[target].limit;
     items[target].state = READY;
     bytesUsed += bytesTexture(sup->w, sup->h);
     prune();

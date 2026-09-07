@@ -235,6 +235,11 @@ int  detail_requested_do_start(void);
 #define NV_DETW2_LD_SIN       40.0f   // the step between synopsis lines (measured)
 #define NV_DETW2_SIN_LINES       5   // the most seen in the reference
 #define NV_DETW2_TEXT_W    1040.0f   // the synopsis and the support line (96..1136)
+// Where the ratings row (Rotten Tomatoes, Trakt) stops adding sources: 96 + 640.
+// It used to reach for the HOME hero's NV_HERO_SIN_W to get that 640 — a constant
+// from another screen, so widening the hero's synopsis silently widened this row.
+// Same number it has always drawn at, under a name of its own.
+#define NV_DETW2_RATE_W     640.0f
 // The distance between the BOX TOPS of neighbouring lines, with the font's metrics
 // already discounted: between the ink the reference gives 62 from the top of the
 // "W" of "Writer" to the top of the "C" of the synopsis, and both lines use the

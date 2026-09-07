@@ -42,6 +42,63 @@ static void readOwner(void) {
   }
 }
 
+// NUVIO'S OWN AVATARS. Static content — 42 rows today — so it is read ONCE per
+// run and only when a profile actually names one. An account where everybody
+// pasted their own address never pays for this request.
+//
+// The address is assembled exactly as avatarRepository.js assembles it: the web
+// app's AVATAR_PUBLIC_BASE_URL is configured to `<supabase>/storage/v1/object/
+// public/avatars`, which is also the fallback it computes when that property is
+// empty. Both spellings agree, so the base is derived from cloud_url() and no
+// new build flag is needed.
+#define AVATAR_BUCKET_PATH "/storage/v1/object/public/avatars/"
+#define AVATAR_CATALOG_MAX 64
+typedef struct { char id[40]; char path[80]; } AvatarArt;
+static AvatarArt catalog[AVATAR_CATALOG_MAX];
+static int catalogN;
+static int catalogTried;
+
+static void readCatalog(void) {
+  char *r;
+  int st = 0;
+  const char *p;
+  // Tried, not loaded: a server that answers 500 must not be asked again on
+  // every sync cycle for a picture.
+  if (catalogTried) return;
+  catalogTried = 1;
+  r = session_rpc("get_avatar_catalog", "{}", &st);
+  if (!r || st < 200 || st >= 300) {
+    printf("[profiles] avatar catalogue unavailable (HTTP %d)\n", st);
+    free(r);
+    return;
+  }
+  for (p = js_root_array(r); p && catalogN < AVATAR_CATALOG_MAX; p = js_next(js_end(p))) {
+    const char *f = js_end(p);
+    AvatarArt a;
+    memset(&a, 0, sizeof a);
+    if (!js_text(p, f, "id", a.id, sizeof a.id)) continue;
+    if (!js_text(p, f, "storage_path", a.path, sizeof a.path)) continue;
+    catalog[catalogN++] = a;
+  }
+  free(r);
+  printf("[profiles] avatar catalogue: %d entries\n", catalogN);
+}
+
+int profiles_avatar(const AccountProfile *p, char *out, unsigned long n) {
+  int i;
+  if (!p || !out || n < 2) return 0;
+  out[0] = 0;
+  // The web app's order: whatever the person pasted wins over the catalogue.
+  if (p->avatarUrl[0]) { snprintf(out, n, "%s", p->avatarUrl); return 1; }
+  if (!p->avatarId[0]) return 0;
+  for (i = 0; i < catalogN; i++)
+    if (strcmp(catalog[i].id, p->avatarId) == 0) {
+      snprintf(out, n, "%s" AVATAR_BUCKET_PATH "%s", cloud_url(), catalog[i].path);
+      return 1;
+    }
+  return 0;
+}
+
 int profiles_pull(void) {
   char *r;
   int st = 0;
@@ -68,6 +125,7 @@ int profiles_pull(void) {
       if (!js_text(p, f, "name", tmp[new].name, sizeof tmp[new].name))
         snprintf(tmp[new].name, sizeof tmp[new].name, "Profile %d", (int)idx);
       js_text(p, f, "avatar_url", tmp[new].avatarUrl, sizeof tmp[new].avatarUrl);
+      js_text(p, f, "avatar_id", tmp[new].avatarId, sizeof tmp[new].avatarId);
       if (!js_text(p, f, "avatar_color_hex", tmp[new].colorHex, sizeof tmp[new].colorHex))
         snprintf(tmp[new].colorHex, sizeof tmp[new].colorHex, "#1E88E5");
       { char b[16];
@@ -79,6 +137,12 @@ int profiles_pull(void) {
     if (new > 0) { memcpy(list, tmp, sizeof list); n = new; }
   }
   free(r);
+
+  // Only if a profile actually names one of Nuvio's avatars. Fetching it for an
+  // account that has none is a round trip whose answer nobody reads.
+  { int i;
+    for (i = 0; i < n; i++)
+      if (list[i].avatarId[0] && !list[i].avatarUrl[0]) { readCatalog(); break; } }
 
   // Locks: a profile with a PIN cannot be opened merely by being in the list.
   r = session_rpc("sync_pull_profile_locks", "{}", &st);
@@ -158,6 +222,8 @@ int profiles_verify_pin(int index_, const char *pin) {
 }
 
 void profiles_forget(void) {
+  catalogN = 0;
+  catalogTried = 0;
   memset(list, 0, sizeof list);
   n = 0;
   owner[0] = 0;

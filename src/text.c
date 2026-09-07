@@ -98,7 +98,7 @@ static Entry cache[MAX_LINES];
 static int traceThisFrame;
 static unsigned long frameTxt = 1;
 
-void txt_new_frame(void) { traceThisFrame = 0; frameTxt++; }
+void txt_new_frame(void) { traceThisFrame = 0; txt_misses = 0; frameTxt++; }
 static unsigned long lruClock = 1;
 int    txt_rasterized = 0;
 // How many lines have been EVICTED to make room for others. Zero is the healthy
@@ -106,6 +106,7 @@ int    txt_rasterized = 0;
 // again and the text will flicker — better to read that off a counter than to
 // find out from the complaint of whoever is looking at the screen.
 int    txt_evictions = 0;
+int    txt_misses = 0;
 double txt_ms = 0.0;
 
 // The weight per style. Each weight is a real Inter Display FILE (Regular 400,
@@ -182,6 +183,25 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 56, WEIGHT_REGULAR }, { 60, WEIGHT_REGULAR }, { 64, WEIGHT_REGULAR },
   { 68, WEIGHT_REGULAR }, { 72, WEIGHT_REGULAR }, { 76, WEIGHT_REGULAR },
   { 80, WEIGHT_REGULAR },
+  // The profile picker. 500 goes MEDIUM; 600 goes MEDIUM too, by the rule already
+  // written above for the detail screen's button — the embedded Inter has only
+  // Regular, Medium and Bold, and Bold at these sizes is 100 too heavy.
+  //
+  // TXT_PSEL_NAME_F is the exception and IS Bold. The web app changes the name's
+  // weight from 500 to 600 on focus, and font-weight is not in that rule's
+  // `transition` list, so it pops — with Medium on both sides the focused name
+  // would differ only in colour, and the weight step is half the cue.
+  { 48, WEIGHT_MEDIUM  },   // TXT_PSEL_TITLE
+  { 36, WEIGHT_MEDIUM  },   // TXT_PSEL_SUB
+  { 34, WEIGHT_MEDIUM  },   // TXT_PSEL_NAME
+  { 34, WEIGHT_BOLD    },   // TXT_PSEL_NAME_F
+  { 22, WEIGHT_MEDIUM  },   // TXT_PSEL_BADGE
+  { 28, WEIGHT_MEDIUM  },   // TXT_PSEL_HINT
+  // Rasterised at the RESTING size and scaled up by the focus, not the other way
+  // round: three of the four cards on screen are at rest, and that is where the
+  // glyph has to land on the pixel.
+  { 77, WEIGHT_BOLD    },   // TXT_PSEL_INITIAL
+  { 28, WEIGHT_BOLD    },   // TXT_PSEL_STAR
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
@@ -207,19 +227,53 @@ typedef enum { SCRIPT_CJK, SCRIPT_ARABIC, SCRIPT_CYRILLIC_ETC, SCRIPT_N } Script
 static TTF_Font *fallbacks[SCRIPT_N][TXT_NFONTS];
 static char pathFallback[SCRIPT_N][512];
 
-// The first codepoint OUTSIDE ASCII, or 0. It decodes UTF-8 by hand because it is
-// the only point in the app that needs it and pulling in a library for three lines
-// does not pay.
+// A character that DRAWS NOTHING: the bidi marks, the zero-width joiners and the
+// soft hyphen. They are invisible by definition, so they must never be what
+// decides which font a line is drawn in.
+//
+// This is not hypothetical. A collection whose title is "\u200EDiscover" — a
+// LEFT-TO-RIGHT MARK before the D, which the web app keeps in the name and no
+// screen has ever shown — had a first non-ASCII codepoint that Inter does not
+// provide, so fontOf sent the WHOLE row header to the script fallback: a
+// regular-weight face with none of Inter Bold's shapes. On the home the row read
+// as if somebody had un-bolded that one title.
+static int invisibleFormat(Uint32 cp) {
+  return cp == 0x00AD                      // soft hyphen
+      || (cp >= 0x200B && cp <= 0x200F)    // ZWSP, ZWNJ, ZWJ, LRM, RLM
+      || (cp >= 0x202A && cp <= 0x202E)    // bidi embedding and override
+      || (cp >= 0x2060 && cp <= 0x2064)    // word joiner and the invisible operators
+      || (cp >= 0x2066 && cp <= 0x2069)    // bidi isolates
+      || cp == 0xFEFF;                     // zero-width no-break space (BOM)
+}
+
+// The first codepoint OUTSIDE ASCII that could need another font, or 0. It decodes
+// UTF-8 by hand because it is the only point in the app that needs it and pulling
+// in a library for three lines does not pay.
+//
+// Skipping the invisible characters means the loop can no longer return on the
+// first sequence it meets, so it has to ADVANCE past the continuation bytes: read
+// as single bytes they look like the start of nothing and the scan would answer
+// with rubbish.
 static Uint32 firstNotAscii(const char *s) {
   const unsigned char *p = (const unsigned char *)s;
   for (; *p; p++) {
+    Uint32 cp;
     if (*p < 0x80) continue;
-    if ((*p & 0xE0) == 0xC0 && p[1])
-      return (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F));
-    if ((*p & 0xF0) == 0xE0 && p[1] && p[2])
-      return (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F));
-    if ((*p & 0xF8) == 0xF0) return 0x10000;   // outside the BMP: we do not handle it
-    return 0;
+    if ((*p & 0xE0) == 0xC0 && p[1]) {
+      cp = (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F));
+      p += 1;
+    } else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) {
+      cp = (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F));
+      p += 2;
+    } else if ((*p & 0xF8) == 0xF0) {
+      return 0x10000;   // outside the BMP: we do not handle it
+    } else {
+      return 0;
+    }
+    // An emoji joiner (U+200D) inside a 4-byte sequence never reaches here: the
+    // branch above answers for the whole thing. What is skipped here is a mark
+    // standing on its own, and a line made ONLY of those needs no fallback at all.
+    if (!invisibleFormat(cp)) return cp;
   }
   return 0;
 }
@@ -247,9 +301,18 @@ static TTF_Font *fontOf(TxtStyle style, const char *s) {
   if (TTF_GlyphIsProvided(fonts[style], (Uint16)cp)) return fonts[style];
   e = scriptOf(cp);
   if (!pathFallback[e][0]) return fonts[style];
-  if (!fallbacks[e][style])
+  if (!fallbacks[e][style]) {
     fallbacks[e][style] = TTF_OpenFont(pathFallback[e],
                                        (int)(STYLES[style].body * scaleTxt + 0.5f));
+    // THE FALLBACK FILES COME IN ONE WEIGHT — DroidSansFallback has no Bold, and
+    // neither has the Mac's Arial Unicode. Without this a Cyrillic or CJK title in
+    // a Bold style came out regular beside its Latin neighbours: the same mismatch
+    // the invisible mark above produced, except here for text that really does need
+    // the fallback. Synthetic bold is what txt_start already does for the LG and
+    // Droid families, for the same reason and with the same reservations.
+    if (fallbacks[e][style] && STYLES[style].weight == WEIGHT_BOLD)
+      TTF_SetFontStyle(fallbacks[e][style], TTF_STYLE_BOLD);
+  }
   return fallbacks[e][style] ? fallbacks[e][style] : fonts[style];
 }
 
@@ -475,6 +538,12 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
     }
   }
 
+  // NOT IN THE CACHE. Counted BEFORE the budget check, because a line the budget
+  // refused is just as absent from the screen as one that has not been asked for
+  // — and a caller waiting for its block to settle has to see both. See
+  // txt_misses.
+  txt_misses++;
+
   // Budget blown: return empty and try again next frame. The line appears one
   // frame late instead of freezing the current one.
   if (traceThisFrame >= TXT_PER_FRAME) return empty;
@@ -531,6 +600,85 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   return cache[slot].line;
 }
 
+// --- MEASURING WITHOUT RASTERISING -------------------------------------------
+//
+// txt_block looked for its wrap point by calling txt_line on EVERY cumulative
+// prefix of every line: ~30 GL textures per synopsis, created and thrown away
+// after comparing a single number. With TXT_PER_FRAME at 2 the block needed
+// fifteen frames to settle, and that was visible — the hero's description typed
+// itself in, two lines at a time. Worse, a prefix the budget refused came back
+// with w = 0, so the fit test passed and the wrap was WRONG on those frames: the
+// text also reflowed as it settled.
+//
+// TTF_SizeUTF8 answers the same question with no surface, no GL object and no
+// budget. Only the lines that are actually DRAWN go through lineFamily now, and
+// those are four, not thirty-four.
+//
+// The cache is here because the same prefix is asked for every frame — the hero
+// lays its copy out twice per frame, once to measure the block's height and once
+// to draw it — and walking the glyph metrics of a whole line is not free on this
+// CPU. An entry costs no GL object, so it is NOT budgeted: refusing a
+// measurement is what caused the defect in the first place.
+#define MAX_MEASURES 512
+typedef struct {
+  char key[288];
+  unsigned long hash;
+  float width;
+  unsigned long usage;
+  int busy;
+} Measure;
+static Measure measures[MAX_MEASURES];
+
+// The width in LAYOUT units — the same units lineFamily stores, so the two are
+// interchangeable in a comparison.
+static float widthOf(TxtStyle style, const char *s, TxtFamily family) {
+  if (!s || !*s || style < 0 || style >= TXT_NFONTS || !fonts[style]) return 0.0f;
+  if (family < TXT_FAMILY_INTER || family >= TXT_FAMILY_N)
+    family = TXT_FAMILY_INTER;
+
+  // NO COLOUR in the key: the width of a string does not depend on it, so the
+  // same line measured in two colours is measured once. The LENGTH is in the key
+  // because the string is truncated into it: txt_line_trim asks for variants
+  // that differ only past the truncation point, and without the length they
+  // would all share an entry and give the same width.
+  char key[288];
+  snprintf(key, sizeof key, "%d:%d:%u|%.240s", (int)family, (int)style,
+           (unsigned)strlen(s), s);
+  unsigned long h = 2166136261UL;
+  { const char *p = key;
+    for (; *p; p++) { h ^= (unsigned char)*p; h *= 16777619UL; } }
+
+  int free_ = -1;
+  for (int k = 0; k < MAX_MEASURES; k++) {
+    int i = (int)((h + (unsigned long)k) % MAX_MEASURES);
+    if (!measures[i].busy) { free_ = i; break; }
+    if (measures[i].hash == h && strcmp(measures[i].key, key) == 0) {
+      measures[i].usage = ++lruClock;
+      return measures[i].width;
+    }
+  }
+
+  int w = 0, hGlyph = 0;
+  if (TTF_SizeUTF8(subtitleFontOf(style, s, family), s, &w, &hGlyph) != 0)
+    return 0.0f;
+  float width = (float)w / scaleTxt;
+
+  int slot = free_;
+  if (slot < 0) {
+    unsigned long smaller = ~0UL;
+    for (int i = 0; i < MAX_MEASURES; i++)
+      if (measures[i].usage < smaller) { smaller = measures[i].usage; slot = i; }
+  }
+  if (slot < 0) return width;   // cannot happen; the measurement is still right
+  measures[slot].busy = 1;
+  measures[slot].hash = h;
+  strncpy(measures[slot].key, key, sizeof measures[slot].key - 1);
+  measures[slot].key[sizeof measures[slot].key - 1] = 0;
+  measures[slot].width = width;
+  measures[slot].usage = ++lruClock;
+  return width;
+}
+
 TxtLine txt_line(TxtStyle style, const char *s, int r, int g, int b, int a) {
   return lineFamily(style, s, r, g, b, a, TXT_FAMILY_INTER);
 }
@@ -570,6 +718,11 @@ static float fits(float v) {
 
 void txt_draw_alpha(TxtLine l, float x, float y, float alpha) {
   if (!l.tex) return;
+  // Fully transparent is not drawn. The callers that MEASURE a block (txt_block
+  // with a negative x, the hero laying its copy out during the gap) run the
+  // whole layout with alpha 0, and every one of those lines was still being
+  // submitted to the batch.
+  if (alpha <= 0.004f) return;
   GfxRect r = { fits(x), fits(y), (float)l.w, (float)l.h };
   gfx_rect(r, l.tex, GFX_TEXT, 0, 0, 0, 0.0f, 1, 1, 1, alpha);
 }
@@ -609,8 +762,14 @@ TxtLine txt_line_trim(TxtStyle style, const char *s, int r, int g, int b,
 TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
                                  int b, int a, float maxW,
                                  TxtFamily family) {
-  TxtLine l = txt_line_family(style, s, r, g, b, a, family);
-  if (!s || !*s || (float)l.w <= maxW) return l;
+  if (!s || !*s) return txt_line_family(style, s, r, g, b, a, family);
+  // MEASURED before it is rasterised. This used to rasterise the WHOLE string
+  // just to discover it did not fit, and then one texture per candidate on the
+  // way down: a long meta line spent the frame's entire TXT_PER_FRAME budget on
+  // strings nobody would ever see, and the line that did fit arrived frames
+  // later. Only the winner is rasterised now.
+  if (widthOf(style, s, family) <= maxW)
+    return txt_line_family(style, s, r, g, b, a, family);
   char buf[512];
   size_t n = strlen(s);
   if (n >= sizeof buf - 4) n = sizeof buf - 4;
@@ -628,8 +787,8 @@ TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
     if (!n) break;
     char t[520];
     snprintf(t, sizeof t, "%s\xe2\x80\xa6", buf);
-    l = txt_line_family(style, t, r, g, b, a, family);
-    if ((float)l.w <= maxW) return l;
+    if (widthOf(style, t, family) <= maxW)
+      return txt_line_family(style, t, r, g, b, a, family);
   }
   return txt_line_family(style, "\xe2\x80\xa6", r, g, b, a, family);
 }
@@ -656,8 +815,9 @@ float txt_block(TxtStyle style, const char *s, int r, int g, int b,
     memcpy(attempt + nl, start, np);
     attempt[nl + np] = 0;
 
-    TxtLine m = txt_line(style, attempt, r, g, b, 255);
-    if (m.w > width && line[0]) {
+    // The FIT TEST, and nothing more: no texture is made for a prefix that is
+    // only being compared against a number. See widthOf.
+    if (widthOf(style, attempt, TXT_FAMILY_INTER) > width && line[0]) {
       // it did not fit: close the current line and start again with the word
       TxtLine l = txt_line(style, line, r, g, b, 255);
       txt_draw_alpha(l, x, y + used, alpha);
@@ -701,8 +861,9 @@ float txt_block_dir(TxtStyle style, const char *s, int r, int g, int b,
     memcpy(attempt + nl, start, np);
     attempt[nl + np] = 0;
 
-    TxtLine m = txt_line(style, attempt, r, g, b, 255);
-    if (m.w > width && line[0]) {
+    // The FIT TEST, and nothing more: no texture is made for a prefix that is
+    // only being compared against a number. See widthOf.
+    if (widthOf(style, attempt, TXT_FAMILY_INTER) > width && line[0]) {
       TxtLine l = txt_line(style, line, r, g, b, 255);
       if (xDir >= 0.0f) txt_draw_alpha(l, xDir - l.w, y + used, alpha);
       used += leading; nLines++;

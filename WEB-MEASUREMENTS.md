@@ -43,13 +43,87 @@ Open at 1920×1080 and measure from the console.
 | title without a logo | 76px, weight 600, letter-spacing −2.28 |
 | meta line | y=327, h=52, font 21, weight 500, `rgb(179,179,179)` |
 | synopsis | y=411, width 640, h 89, font 22, weight 400, ls 0.5 |
-| row title | y=518, h=31, font 26, weight 600, ls −0.52 |
-| row 0 cards | y=564 |
+| rows viewport | y=518.4, h=561.6 (52% of the height), `overflow-y: auto` |
+| row title | y=**564.4**, h=33.6, font 26, weight 600, ls −0.52 |
+| row 0 cards | y=**614** |
 | card | 212×322, radius 24 |
 | gap between cards | 60 (step 272) |
 | step between rows | 416 |
 | poster title | 16, weight 500 |
 | poster subtitle | 13, weight 400, `rgba(255,255,255,0.7)` |
+
+### The 46px the rows rest below the viewport — RE-MEASURED 2026-09-07
+
+This table used to say "row title y=518, row 0 cards y=564", and both were one
+step out: **518.4 is the top of `.home-modern-rows-viewport`**, not of the title,
+and the 564 quoted for the cards is where the **title** actually sits.
+
+`.home-modern-rows-scroll`, the flex column inside that viewport, opens with
+`padding-top: var(--modern-rows-top-feather)` = **46px** (components.css:7346),
+so at `scrollTop: 0` the first row's header lands at 564.4 and its cards at 614.
+It is not a first-row quirk: with the focus two rows down (`scrollTop: 782`) the
+focused row's header still measures 564.6. It is where a row comes to **rest**.
+
+The padding exists because the viewport carries a mask fading its own top 46px
+(components.css:7295) — "opaque by 46px, which is where rows come to rest", in
+the sheet's own words.
+
+Consequence at the other end of the screen, which is how it was caught: with the
+shelf 46px too high the port showed **65px** of the second row's cards where the web
+shows **20**. `NV_SHELF_PAD_TOP` in `layout.h` now carries it.
+
+### The hero's text block — RE-MEASURED 2026-09-07
+
+Measured on the elements of `.home-modern-hero-copy`, with a poster focused (no
+"N MINUTES LEFT" line) at 1920×1080:
+
+| element | y | h | notes |
+|---|---|---|---|
+| copy box | 48 | 422.4 | `flex-end`, `gap: 12px`, bottom **470.4** |
+| `.home-hero-brand` | 75.7 | 200 | logo 440 wide |
+| meta line | 287.7 | 27.5 | font **22**/500 |
+| secondary | — | 27 | font **20**/600, `display:none` when empty |
+| description | 331.2 | 139.2 | font 24/400, leading 34.8, width **760**, `margin-top: 4` |
+| first row head | 565 | 33.6 | |
+
+Four numbers this file and `layout.h` had wrong, all of them pushing the block
+**up**:
+
+1. **The base is 470.4, not 478.4.** It has nothing to do with
+   `--modern-hero-copy-bottom-gap` (40). The copy sits in `.home-hero-card`, a box
+   of 518.4 (48% of the height) with `padding: 48px 64px`; the base is 518.4 − 48.
+2. **The column's gap is 12, not 16** — and the description adds `margin-top: 4px`
+   of its own, so the one 16 in the block is the space above the synopsis.
+3. **The synopsis is 760 wide, not 640.** The 640 was read off the `.legacy-webos`
+   block, which in fact narrows it to 560 and needs webOS ≤ 6 — the C3 is webOS 23.
+4. **The line count is not a constant.** The CSS clamp is 4;
+   `applyModernHeroDescriptionBounds` (homeScreen.js:6531) then lowers it to however
+   many WHOLE lines are left in the fixed 422.4 box once the logo, the meta line and
+   the secondary have taken their share — `floor(available / lineHeight)`, capped at
+   4. With the secondary line present that is 3; without it, 4.
+
+The port had been passing a fixed 4 at 640 wide with 16px gaps, which on a
+continue-watching hero lifted the logo to y=40 against the web's 71.5. It now ports
+the rule and lands at 75/76 against the web's 75.7 in both shapes.
+
+#### …and then deliberately diverges by 46
+
+Those two anchors are INDEPENDENT in the web: the copy hangs 48 under the hero
+card's edge (base 470.4) and the rows rest 46 under the viewport's (title 564.4),
+which leaves **94px of nothing** between the synopsis and the row title. Ported
+literally — and it was, and it was measured band by band on the running app to
+confirm it — the block reads as floating away from the row beneath it. The owner's
+verdict with the two side by side: *"it still looks way too high, should be
+connecting more to the element under it."*
+
+So the copy now hangs off the FIRST ROW'S TITLE rather than off the viewport:
+`base = NV_SHELF_TOP + NV_SHELF_PAD_TOP - NV_HERO_COPY_GAP`. The 48 is still the
+web's number; what changed is what it is measured from. Everything in the hero
+therefore sits 46px lower than the web, and the whole composition moves as one.
+
+This is the only deliberate divergence in the home's vertical layout. Do not
+"correct" it back to the web's 94 without asking — it has been rejected twice.
+
 
 ### Hero gradients
 
@@ -91,7 +165,7 @@ landscape cards.
 | meta line | y=327, font 21/500 | y=**257**, h 52, font 21/500 `rgb(179,179,179)` |
 | secondary line | *does not exist* | y=**341**, h 38, font **18/600**, `rgba(255,255,255,.88)` — "2H LEFT • 6.3 • EN" |
 | synopsis | y=411, 640, font 22 | y=411, 640×89, font 22/400 |
-| row title | y=518, h 31, font 26/600, ls −0.52 | identical, at x=104 |
+| row title | y=**564.4**, h 33.6, font 26/600, ls −0.52 | identical, at x=104 |
 | row cards | y=564 | y=**563.6** (header top + 45.2) |
 | poster | 212×322, radius 24, step 272 | **identical** |
 | "Continue watching" card | — | **432×247**, radius 24, step **492** |
@@ -115,7 +189,8 @@ The port now reads the preferences and exposes them in Settings.
 
 ## Focus — MEASURED, and it fixes a real defect
 
-The web app **barely scales the focused item**, and **never lifts it**:
+The web app **never lifts the focused item**. How much it GROWS it was wrong here
+until 2026-09-07 — see the correction below.
 
 ```
 .home-screen-shell .home-poster-card.focused   { transform: none }
@@ -125,6 +200,32 @@ The web app **barely scales the focused item**, and **never lifts it**:
 .series-episode-card.focused, .series-insight-tab.focused { transform: none }
 .movie-cast-card.focused, .series-insight-tab.focused     { transform: scale(1.03) }
 ```
+
+### The home card grows 1.05, not 1.02 and not 0 — RE-MEASURED 2026-09-07
+
+Four rules compete for a focused poster card, and reading only the first three
+gives the wrong answer twice over:
+
+```
+.home-screen-shell .home-content-card.focused                    -> 1.01  (0,3,0)
+.home-screen-shell .home-poster-card.focused                     -> 1.05  (0,3,0)
+.home-screen-shell.home-layout-modern .home-content-card.focused -> 1.02  (0,4,0)
+[class*="-card"].focusable:not([class*="player-"]).focused       -> 1.05  (0,4,0)
+```
+
+The last one (components.css:21168) wins: an attribute selector weighs the same
+as a class and `:not()` takes its argument's weight, so it **ties** the modern
+rule at (0,4,0) and comes ~13 000 lines later in the same sheet. Source order
+breaks the tie.
+
+MEASURED rather than deduced, with focus on a poster in the running app:
+`getComputedStyle().transform` is `matrix(1.05, 0, 0, 1.05, 0, 0)`, origin
+`114.5px 0px` (top centre), and the border box is **240.4 × 364.3** against the
+**229 × 347** of the card beside it. The continue-watching card reaches the same
+1.05 by its own route (`.home-continue-card.focused`, with `!important`).
+
+The `transform: none` in the block above was read off an older build of the web
+app; this one scales. `NV_FOCUS_SCALE_POSTER` went 0.02 → 0.05.
 
 Focus is marked by **border colour and box-shadow**, not by geometry:
 
@@ -414,44 +515,56 @@ alongside the library? I did not invent an order.
 | `posterCardWidthDp` / `posterCardCornerRadiusDp` | 126 / 12 | 120 / 12 | see below |
 | `cardDepth*`, `focusedPosterBackdropExpand*` | — | on | **not ported** |
 
-### The poster size does NOT come from `posterCardWidthDp`
+### The poster size DOES come from `posterCardWidthDp` (re-measured 2026-09-07)
 
-Worth correcting a reasonable but wrong assumption. `buildModernHomeSizingStyle`
-(homeScreen.js:521) computes, with `dpToPx = 2`:
+**This section said the opposite until 2026-09-07, and the web app has since
+changed.** What it described was real: the modern layout used to pin the card
+with `min-width: 212px` / `height: 318px`, which beat the inline variable, and
+the experiment of 2026-09-01 (raising the inline value and watching nothing
+move) was correct against that stylesheet.
 
-```
-portraitWidth  = round(dp * 0.84 * 1.08 * 2)   // 120 -> 218
-portraitHeight = round(dp * 1.5 * 0.84 * 1.08 * 2)  // 120 -> 327
-radius         = round(radiusDp * 2)           // 12  -> 24
-```
-
-And indeed `--home-poster-width: 218px` / `--home-poster-height: 327px`. **But
-the measured card is 212×322.** The reason is in the modern layout's CSS, which
-ignores the variable:
+Today those rules read the variables instead (components.css:7494 and 7499):
 
 ```css
 .home-screen-shell.home-layout-modern .home-poster-card:not(.is-landscape)
-  { min-width: 212px; max-width: 212px; flex-basis: 212px }
+  { flex-basis: var(--home-modern-portrait-poster-width); min-width: same; max-width: same }
 .home-screen-shell.home-layout-modern .home-poster-card:not(.is-landscape)
-  .home-poster-frame { height: 318px }
+  .home-poster-frame { height: var(--home-modern-portrait-poster-height) }
 ```
 
-212 wide, a 318 frame plus 2px of border top and bottom = **322**. The
-`--home-poster-*` variables belong to the **classic** layout. In other words:
-212×322 is a constant of the modern layout and does **not** change with
-`posterCardWidthDp` — only the radius (24) comes from the preference. `layout.h`
-may keep the numbers, as long as it says so.
+and `buildModernHomeSizingStyle` (homeScreen.js:246) writes them in the shell's
+**style attribute**, where they beat the modern block's own
+`--home-poster-width: 212px` (6662). MEASURED live, signed in, at the default
+`posterCardWidthDp: 126`:
 
-**CONFIRMED BY EXPERIMENT (2026-09-01), no longer by reading.** With home open, I
-changed the inline variable on the shell:
+| element | value |
+|---|---|
+| shell inline | `--home-poster-width:229px; --home-poster-height:343px; --home-landscape-poster-width:419px; --home-landscape-poster-height:237px; --home-poster-radius:24px` |
+| `.home-poster-card` | **229 x 347** (the 343 frame + 2px of card border top and bottom) |
+| `.home-poster-frame` | 225 x 343, `border: 2px`, radius 24 |
+| the art inside both borders | **221 x 339** |
+| step between cards | 253 (229 + a 24 gap) |
 
-```
---home-modern-portrait-poster-width: 218px -> 300px   the card stayed 212
---home-modern-portrait-poster-height: 327px -> 400px  the frame stayed 318
-```
+So the port's 212 x 322 was a screenshot of an older stylesheet. `layout.h`
+carries 229 x 347 for the DEFAULT 126 dp; the preference itself is still not
+wired to it here.
 
-So `posterCardWidthDp` **sizes nothing** in the modern layout. All that comes out
-of the preference is the radius.
+### Rows — re-measured 2026-09-07 (modern, signed in, 1920 wide)
+
+The row is `.home-row-head` (the title, no padding of its own) followed by
+`.home-track` (`padding: 16px 52px 16px 104px`), and the rows sit in
+`.home-modern-rows-scroll`, a flex column with `gap: 32px`.
+
+| element | value |
+|---|---|
+| `.home-row-title` | **28 / 600**, line-height 1.2 = 33.6, letter-spacing −0.56 |
+| title top -> first card | 33.6 + **16** of track padding = 49.6 |
+| last card -> next title | **16** of track padding + **32** of flex gap = 48 |
+| row step, end to end | 444.6 (rows at y=740.2 and 1184.8) |
+| landscape-poster variant | the scroll's gap drops to 24, so the same sum gives 40 |
+
+The 26px and the 46 of header this file carried for the row title came from the
+signed-out session of 2026-08-31 and no longer hold.
 
 ### Three more traps, found in the source
 

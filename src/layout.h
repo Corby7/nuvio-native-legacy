@@ -78,15 +78,46 @@
 // title, and between the lines of the block itself. It comes from the difference
 // measured in the captures: the synopsis ends ~48px above the row's title, and the
 // block's lines are ~52 apart.
-// The hero's text block, READ from the web app's CSS and not estimated from the
-// captures. `.home-modern-hero-copy` (components.css:6723) is a flex column with
-// justify-content:flex-end and gap:16 — that is, ANCHORED TO THE BASE, with the
-// lines 16 apart, not the 52/84 I had deduced from an image. The base:
-//   bottom: var(--modern-rows-viewport-height) + var(--modern-hero-copy-bottom-gap)
-//         = 52% of 1080 + 40 = 601.6  ->  the block's base at y = 478.4
-// and the top of the rows falls at the same 518.4 NV_SHELF_TOP already uses.
-#define NV_HERO_COPY_GAP        40.0f   // --modern-hero-copy-bottom-gap
-#define NV_HERO_COPY_LINE      16.0f   // the flex column's gap
+// The hero's text block. `.home-modern-hero-copy` is a flex column with
+// justify-content:flex-end — ANCHORED TO ITS BASE — and everything below was
+// MEASURED in the running app at 1920x1080 (2026-09-07), which corrected three
+// numbers this block had been carrying from the stylesheet alone.
+//
+// THE BASE IS 470.4, NOT 478.4. It does not come from
+// `--modern-hero-copy-bottom-gap` (40) at all: the copy lives inside
+// `.home-hero-card`, a box of 518.4 (48% of the height) with `padding: 48px 64px`,
+// so the block's base is 518.4 - 48. The 40 in the variable is not what lands on
+// screen — the 48 of padding is. Measured: copy box y=48, h=422.4, bottom 470.4.
+//
+// THE GAP BETWEEN LINES IS 12, NOT 16. `gap: 12px` on the column, confirmed by the
+// children's rects (brand ends 271.5, meta starts 283.5).
+//
+// AND THE SYNOPSIS HAS 4 MORE. `.home-hero-description` is a <p> with
+// `margin-top: 4px` (components.css:7255) on top of the column's gap, which is why
+// the one space in the block that measures 16 is the one above the synopsis.
+// AND IT IS MEASURED FROM THE FIRST ROW'S TITLE, NOT FROM THE VIEWPORT — a
+// DELIBERATE DIVERGENCE, asked for twice by the owner with the two apps side by side.
+//
+// In the web these are two independent anchors: the copy hangs 48 under the hero
+// card's own edge (base 470.4) and the rows rest 46 under the viewport's (title
+// 564.4), which leaves 94 of nothing between the synopsis and the title. Ported
+// literally it reads as a block floating away from the row beneath it — "it still
+// looks way too high, should be connecting more to the element under it". Hanging the
+// copy off the title keeps the 48 the port has always drawn and moves the whole
+// composition down together, which is what "move everything down" meant.
+//
+// The number itself is still the web's: 48 is the hero card's bottom padding. What
+// changed is what it is subtracted FROM (home.c, `base`).
+#define NV_HERO_COPY_GAP        48.0f   // .home-hero-card's bottom padding
+#define NV_HERO_COPY_LINE      12.0f   // the flex column's gap
+#define NV_HERO_SIN_MARGIN      4.0f   // .home-hero-description's margin-top
+
+// THE HEIGHT OF THE COPY BOX, which is what decides how many lines of synopsis are
+// drawn. 518.4 of card minus its 48 of padding top and bottom = 422.4, and the box
+// is fixed: the flex column does not grow with the text, the text is fitted to it.
+// See the line count computed in home.c, which is the port of
+// applyModernHeroDescriptionBounds (homeScreen.js:6531).
+#define NV_HERO_COPY_H        422.4f
 
 // The BACK scancode in LG's SDL (SDL_SCANCODE_WEBOS_BACK). It is not in the
 // standard SDL_scancode.h, so it comes as a number.
@@ -176,10 +207,17 @@
 #define NV_HERO_LOGO_Y   135.0f
 #define NV_HERO_META_Y   327.0f
 #define NV_HERO_SIN_Y    411.0f
-// 560 is the default theme's value; the TV falls into the `.legacy-webos` rule
-// (components.css:19171), which returns 640 for the meta, the secondary line AND
-// the synopsis — at 560 an episode's meta line broke over two or three lines.
-#define NV_HERO_SIN_W    640.0f
+// 760, MEASURED on the element (`.home-hero-description` comes back 760 wide) and
+// declared as `max-width: min(100%, 760px)` in the modern rule (components.css:7255).
+//
+// The 640 that was here came from the `.legacy-webos` block, which narrows this to
+// 560 and was read as if it gave 640. It applies to neither of the two things it was
+// chosen for: that block needs webOS <= 6 (js/app.js:186) and the C3 is webOS 23, so
+// what the owner's TV renders is the 760 above. The narrower column is also what made
+// the synopsis need FOUR lines where the web takes three — at 760 the same text fits
+// in three without ending mid-sentence, which is the whole reason the clamp had been
+// raised here.
+#define NV_HERO_SIN_W    760.0f
 
 // THE EDITORIAL HERO FOR COLLECTIONS. A collection's art is already a finished 16:9
 // composition (gradient, light and breathing room); the text must not compete with
@@ -227,12 +265,48 @@
 // away from the text, so it is tighter here on purpose.
 #define NV_HERO_IMDB_W   40.0f
 #define NV_HERO_IMDB_GAP 12.0f
-// MEASURED in the web app: the first row's title sits at y=518 and the cards at
-// y=564. The "2/3 of the screen" rule that used to be here is from tvOS's
-// productTemplate, and is not ours: in the web app the rows rise over the bottom
-// part of the hero's art (which runs to 670), instead of starting after it.
-#define NV_SHELF_TOP     518.0f   // the top of the first row's header
-#define NV_LEGACY_ROW_HEAD_H 46.0f // title + margin down to the cards (564 - 518)
+// MEASURED in the web app (getBoundingClientRect at 1920x1080, modern layout,
+// 2026-09-07): `.home-modern-rows-viewport` is a block pinned to the bottom of the
+// screen, 52% of its height — y=518.4, h=561.6 — and the rows scroll INSIDE it.
+// The "2/3 of the screen" rule that used to be here is from tvOS's productTemplate,
+// and is not ours: in the web app the rows rise over the bottom part of the hero's
+// art (which runs to 670), instead of starting after it.
+#define NV_SHELF_TOP     518.0f   // the top of the ROWS VIEWPORT
+
+// AND THE FIRST ROW DOES NOT BEGIN THERE. `.home-modern-rows-scroll` — the flex
+// column that lives inside that viewport — opens with
+// `padding-top: var(--modern-rows-top-feather)` = 46px (components.css:7346), so the
+// first row's header rests at 564.4 and its cards at 614.
+//
+// The note that used to sit here read "the first row's title sits at y=518 and the
+// cards at y=564": it had taken the VIEWPORT's top for the title's, and the 564 it
+// quoted for the cards is in fact where the TITLE sits. The whole shelf was drawn
+// 46px too high because of it, and what gave it away was the BOTTOM of the screen —
+// 65px of the second row's cards showing where the web shows 20.
+//
+// The padding is not decoration in the web either: the viewport carries a mask that
+// fades its own top 46px (components.css:7295), and this is what keeps the first
+// row's title clear of it — "opaque by 46px, which is where rows come to rest", in
+// the sheet's own comment.
+//
+// MEASURED as a CONSTANT offset and not only at rest: with the focus moved two rows
+// down, so that the scroll is 782px in, the focused row's header still lands at
+// 564.6. It is where a row comes to rest, not where the first one happens to start,
+// which is why it is added to the shelf's origin rather than to the first row alone.
+#define NV_SHELF_PAD_TOP  46.0f
+// The header block down to the first card: the title's LINE BOX plus the 16px the
+// web puts between the two. Those 16 are `.home-track`'s `padding: 16px 52px 16px
+// 104px` (components.css:7415) — the row's cards start one padding below the
+// `.home-row-head` that carries the title, and nothing else sits between them.
+//
+// 51 and not the web's 49.6, and the 1.4 is not slop. SDL_ttf's line box is
+// ascent + descent = ceil(1984*28/2048) + floor(494*28/2048) = 35, where the CSS
+// box is line-height 1.2 = 33.6 with a NEGATIVE half-leading of -0.7. The glyphs
+// are the same in both, so ours land ~1.6px lower inside a box that starts at the
+// same y; adding that back is what makes the WHITE SPACE the eye actually judges —
+// from the descender down to the card — come out at the web's 16.
+#define NV_ROW_TITLE_GAP     16.0f
+#define NV_LEGACY_ROW_HEAD_H 51.0f // 35 of line box + NV_ROW_TITLE_GAP
 
 // The four visual sections the Apple TV home uses, each with its own proportion —
 // OBSERVED in the reference photos:
@@ -240,14 +314,21 @@
 //  2. CARD      an ordinary 16:9 landscape, the default row
 //  3. POSTER    2:3 portrait, used in the Top 10 beside the numeral
 //  4. HIGHLIGHT a large card with a metadata block below ("Watch next")
-// The OFFICIAL widths from tvOS's grid table (they add up to 1760 = the usable area):
-//   4 columns -> 410   |   5 -> 320   |   6 -> 260   |   8 -> 184
-// MEASURED in the web app running at 1920x1080 (getBoundingClientRect, not reading
-// the CSS): .home-content-card = 212 x 322, the first card at x=248, the second at
-// x=520. The previous values came from tvOS's grid and were wrong on both: a height
-// of 318 (the "neat" 212 x 1.5 the web app does not use) and a gap of 24.
-#define NV_CARD_W        212.0f
-#define NV_CARD_H        322.0f
+// MEASURED LIVE in the web app (getBoundingClientRect on `.home-poster-card`, the
+// modern layout signed in, 2026-09-07): the card's border box is 229 x 347 and the
+// `.home-poster-frame` inside it 229 x 343. The art that survives both borders is
+// therefore 221 x 339, which is exactly NV_CARD_W/H minus NV_CARD_PAD on each side.
+//
+// 212 x 322 — what this was — came from `--home-poster-width: 212px` in the modern
+// block (components.css:6662) and from the note in settings.h saying the inline
+// variable loses to it. THE NOTE IS WRONG, and the element proves it: the shell
+// carries `--home-poster-width:229px;--home-poster-height:343px` in its style
+// attribute, written by `buildModernHomeSizingStyle` out of `posterCardWidthDp`
+// (126 dp: round(126 * 0.84 * 1.08 * 2) = 229, and x1.5 for the height), and an
+// inline custom property beats a stylesheet's. The 347 is the 343 frame plus the
+// card's own 2px border top and bottom.
+#define NV_CARD_W        229.0f
+#define NV_CARD_H        347.0f
 
 // This gutter belongs to the POSTER card only. The continue-watching card is
 // built differently in the web: `.home-continue-media` has `border: 0` and the
@@ -269,9 +350,12 @@
 // Effect: from ~6.6 to ~7.8 posters per screen, and the row stops looking sparse —
 // which was the opposite of the defect the old comment claimed to fix.
 #define NV_CARD_GAP      24.0f
-// The step between rows MEASURED: row 0's title at y=518, row 1's at y=934 -> 416.
-// Of those, 46 are from the header down to the cards (518 -> 564) and 322 the
-// card's, leaving 48 of breathing room between one row and the next.
+// From the bottom of a row's cards to the top of the next row's title. It is TWO
+// numbers in the web and not one: `.home-track` closes with `padding-bottom: 16px`
+// (components.css:7415) and `.home-modern-rows-scroll` — the flex column the rows
+// sit in — adds `gap: 32px` (7346). 16 + 32 = 48, which is also what the step
+// measured end to end: rows at y=740.2 and y=1184.8, a card 347 tall under a
+// 33.6 title with 16 above it.
 #define NV_ROW_GAP  48.0f
 
 // A LANDSCAPE POSTER (`modernLandscapePostersEnabled`). MEASURED in the web app
@@ -288,10 +372,15 @@
 //
 // The landscape row also tightens the vertical step: `--home-row-gap` drops from 32
 // to 24 in `.home-modern-landscape-posters` (components.css:6473).
-#define NV_CARD_LAND_W   318.0f
-#define NV_CARD_LAND_H   182.9f   // a 178.875 frame + 2px of border top and bottom
-#define NV_CARD_LAND_ART 178.875f
-#define NV_ROW_GAP_LAND 24.0f
+// 419 x 237 of frame, from the SAME inline block as the portrait above
+// (`--home-landscape-poster-width/height`, round(126 * 1.24 * 1.34 * 2) and that
+// over 1.77), plus the card's 2px border top and bottom. The 318 x 182.9 here
+// before was the stylesheet's `calc(212px * 1.5)`, which the inline overrides.
+#define NV_CARD_LAND_W   419.0f
+#define NV_CARD_LAND_H   241.0f   // a 237 frame + 2px of border top and bottom
+#define NV_CARD_LAND_ART 237.0f
+// 24 of flex gap, like NV_ROW_GAP, plus the same 16 of track padding.
+#define NV_ROW_GAP_LAND 40.0f
 // The landscape card's caption sits INSIDE the frame: left/right 14, bottom 12, a
 // maximum width of 76% of the card, over a gradient covering 54% of the height.
 #define NV_LAND_COPY_PAD  14.0f
@@ -371,6 +460,14 @@
 // crossing the row fires no change at all; and short enough that stopping on a card
 // and seeing the background respond feels immediate.
 #define NV_HERO_IDLE_MS    220
+// HOW LONG THE COPY WAITS FOR THE TITLE'S LOGO before coming in without it.
+//
+// The logo is a CDN file; the description is already in the catalogue and costs
+// nothing. Holding one hostage to the other left the hero's text blank for the
+// whole download, which is worse than the logo arriving a moment later on a fade
+// of its own. Below this the two come in together, which is the common case with
+// the art cached.
+#define NV_HERO_LOGO_WAIT_MS  400
 #define NV_HERO_DOT           9.0f
 #define NV_HERO_DOT_GAP      14.0f
 
@@ -402,14 +499,16 @@
 // min(1.67vw,32px), and the TV always hits the ceiling. 56 does not become TITLE2
 // (57) and 32 does not become HEADLINE (38) because the difference shows: the
 // subtitle at 38 pushes the progress bar out of the place the web app reserves for it.
-// The web app's .home-row-title: 26px, weight 600. The native one used HEADLINE
-// (38), and that is what made the row's title invade the card just below it.
-// 33 and not 26. MEASURED by comparing the SAME string ("Top 100 Today - Film")
-// present in both captures: the ink's width 258 px in ours against 329 in the
-// reference, the height 25.2 against 32.0 — a ratio of 1.27 on both axes. 26 x 1.27
-// = 33. The 26 came from the web app's `.home-row-title`; the web and the TCL
-// diverge here and the TCL wins, being the device.
-#define NV_FT_ROW_TITLE 33
+// `.home-row-title` under the MODERN layout: 28px / 1.2, weight 600
+// (components.css:7406). Note it is the modern rule that wins and not the 24px of
+// `.home-screen-shell .home-row-title` at 5519, nor the 30px of the bare
+// `.home-row-title` at 5086 — two classes plus the element beat both.
+//
+// It was 33 for a while, scaled up by the 1.27 the SAME string measured wider on
+// the TCL ("Top 100 Today - Film", ink 329 px there against 258 here). The owner
+// has since asked for the WEB's size, seen side by side with it: the TCL is no
+// longer the reference for this line, nuvioweb is.
+#define NV_FT_ROW_TITLE 28
 // .home-modern-hero-secondary: 18/600 in the signed-in session.
 #define NV_FT_HERO_SEC   18   // --modern-hero-secondary-size (212*0.085)
 #define NV_FT_HERO_META  21   // --modern-hero-meta-size (212*0.1), weight 500
@@ -463,13 +562,25 @@
 // `0 0 0 4px var(--focus-color)` — a real outset box-shadow (components.css:
 // 5874), with --focus-color #ffffff (base.css:24).
 //
-// THICKER THAN THE WEB, and deliberately: the sheet says 2px, the owner asked
-// for more after seeing 2px on the C3. At 4 it fills the whole NV_CARD_PAD
-// gutter, so the lit border runs flush with the card outline and the artwork
-// keeps its 4px inset — the resting card does not move when it takes focus.
-// The alpha is still the web's 0.8, because only the weight was the complaint.
+// 4 IS THE WEB'S OWN BAND, not a thickening of it, and the arithmetic only closed
+// once the card was measured properly (see NV_CARD_W): the focused frame lights its
+// 2px border AND a `0 0 0 2px` shadow around it, so what shows is the whole 4px
+// gutter between the card's box (229 x 347) and the art (221 x 339) — the same
+// gutter NV_CARD_PAD opens here. The card keeps its footprint either way: the band
+// grows inwards from the card outline, never past it.
+//
+// THE COLOUR IS #F5F5F5 SOLID, not white at 0.8. The 0.8 came from
+// `.home-poster-card.focused .home-poster-frame` at components.css:5619, and the
+// MODERN layout overrides that rule at 7765: `border-color: var(--secondary-color)`
+// plus a `0 0 0 2px var(--secondary-color)` shadow, and --secondary-color is
+// #f5f5f5 (base.css:11). The difference is not subtle on a dark card — white at
+// 0.8 over the #0D0D0D background composites to 207, against 245 — and it is
+// exactly the "nuvioweb's is whiter" the owner saw with the two side by side.
+// The pure #FFFFFF of NV_RING_FOCUS is a different token (--focus-color) and stays
+// where it is: the continue-watching card really does use white in the web.
 #define NV_FRAME_RING      4.0f
-#define NV_FRAME_RING_A    0.8f
+#define NV_FRAME_RING_C    0.9608f  // 245/255
+#define NV_FRAME_RING_A    1.0f
 
 // Area util explicita da home: a rail pode variar, mas o texto e o foco nunca
 // encostam na safe area direita.
@@ -548,13 +659,23 @@
 // home card barely grows, and does the work of showing focus with a border and with
 // the dimming of everything else.
 //
-// The two card families really do differ, and this is not an oversight in the sheet:
-//   .home-layout-modern .home-content-card.focused  -> scale(1.02)  (components.css:7747)
-//   .home-continue-card.focused                     -> scale(1.05)  (components.css:5933,
-//                                                                    with !important)
-// Specificity decides the poster: the 1.05 at components.css:5587 is real but dead in
-// the modern layout, where 7747 (0,4,0) outranks it. In classic/grid the 1.05 is what
-// runs, which is presumably where it came from.
+// The two families land on the SAME number, and the poster's is 1.05 — not the 1.02
+// that used to be here. Four rules compete for a focused poster card, and the sheet
+// is read in the wrong order if you stop at the first three:
+//   .home-screen-shell .home-content-card.focused                    -> 1.01  (0,3,0)
+//   .home-screen-shell .home-poster-card.focused                     -> 1.05  (0,3,0)
+//   .home-screen-shell.home-layout-modern .home-content-card.focused -> 1.02  (0,4,0)
+//   [class*="-card"].focusable:not([class*="player-"]).focused       -> 1.05  (0,4,0)
+// The last one (components.css:21168) is what wins: an attribute selector weighs the
+// same as a class, `:not()` takes its argument's weight, so it TIES with the modern
+// rule at (0,4,0) and comes ~13000 lines later in the same sheet. The tie-break is
+// source order, and the previous note stopped one rule short of it.
+//
+// CONFIRMED, not deduced: with the focus on a poster in the running app,
+// getComputedStyle().transform is `matrix(1.05, 0, 0, 1.05, 0, 0)` and the card's
+// border box measures 240.4 x 364.3 against the 229 x 347 of the one beside it.
+// The continue-watching card reaches 1.05 by its own route
+// (`.home-continue-card.focused`, with !important) and so is unchanged.
 //
 // Both grow from `transform-origin: top` — that is `50% 0%`, so horizontally centred
 // and vertically PINNED. The card only ever grows downward. This matters: the note that
@@ -566,10 +687,10 @@
 // !important), and neither do loading skeletons.
 //
 // NOT APPLICABLE HERE, but worth recording so nobody "fixes" this against the wrong
-// device: components.css:19313 crushes the scale to 1.005 under .legacy-webos /
+// device: components.css:19314 crushes the scale to 1.005 under .legacy-webos /
 // .legacy-tizen. That needs webOS <= 6 (js/app.js:186) and the C3 is webOS 23, so the
-// full 1.02 is what the reference actually shows on the owner's TV.
-#define NV_FOCUS_SCALE_POSTER 0.02f
+// full 1.05 is what the reference actually shows on the owner's TV.
+#define NV_FOCUS_SCALE_POSTER 0.05f
 #define NV_FOCUS_SCALE_CW     0.05f
 
 // EVERY CARD THAT IS NOT FOCUSED IS DIMMED. This is the strongest focus cue the web
@@ -934,5 +1055,108 @@
 // overshoot the opening looks like it "appeared larger"; with it, it looks like it
 // came forward.
 #define NV_DET_OVERFLOW   0.035f
+
+// ---------------------------------------------------------------------------
+// THE ACCOUNT'S PROFILE PICKER ("Who's watching?")
+//
+// MEASURED in the web app at 1920x1080, from `.profile-screen` and the block of
+// rules under it (components.css:420-660) plus the markup in
+// profileSelectionScreen.js `render()`. Every number below is a rendered
+// bounding box, not a value read off the stylesheet: the layout is a column of
+// flex items whose top is decided by `.profile-title { margin: auto 0 0 0 }` —
+// the auto margin pushes title, subtitle, grid and hint to the BASE of the
+// padded content box, so their y depends on how tall the grid is. The tokens are
+// therefore the pieces, and profile_select.c stacks them from NV_PSEL_BOTTOM up.
+//
+// The one number that is not a measurement is NV_PSEL_COLS. The web app wraps
+// with `flex-wrap: wrap` inside 1696px of content width, and 5 cards
+// (5*304 + 4*56 = 1744) do not fit while 4 (1384) do. Four is that wrap point
+// written down, not a choice.
+
+// The wordmark: `.profile-logo`, 380x88 at the top of the content box, with a
+// 56px margin under it. It is dropped when the cards need two rows — there is no
+// room for it and the web app, whose grid is a fixed 400px tall, simply overflows.
+#define NV_PSEL_LOGO_W        380.0f
+#define NV_PSEL_LOGO_H         88.0f
+#define NV_PSEL_LOGO_Y         96.0f
+#define NV_PSEL_LOGO_GAP       56.0f
+// `.profile-main-layer` is padded 96px top and bottom: 1080 - 96 = 984.
+#define NV_PSEL_BOTTOM        984.0f
+#define NV_PSEL_TOP            96.0f
+
+// The header block, in CSS LINE BOXES (font-size x line-height), because that is
+// what decides the spacing — the rasterised ink is centred inside each one.
+#define NV_PSEL_TITLE_H        50.4f   // .profile-title      48 / 1.05
+#define NV_PSEL_TITLE_SUB      24.0f
+#define NV_PSEL_SUB_H          46.8f   // .profile-subtitle   36 / 1.3
+#define NV_PSEL_SUB_GRID       32.0f
+#define NV_PSEL_GRID_HINT      48.0f
+#define NV_PSEL_HINT_H         37.8f   // .profile-hint       28 / 1.35
+
+// One card. `.profile-card` is 304 wide with 16/20 padding; the ring's own
+// `margin: 12px auto` collapses with the name's 24px margin-top, which is why the
+// gap under the ring is 24 and not 36 — measured, and the reason the card is
+// 384.8 tall and not 396.8.
+#define NV_PSEL_CARD_W        304.0f
+#define NV_PSEL_GAP            56.0f
+#define NV_PSEL_PAD_TOP        16.0f
+#define NV_PSEL_RING_MARGIN    12.0f
+#define NV_PSEL_NAME_GAP       24.0f
+#define NV_PSEL_NAME_H         40.8f   // .profile-name       34 / 1.2
+#define NV_PSEL_BADGE_GAP      16.0f
+#define NV_PSEL_BADGE_LINE     24.2f   // .profile-badge      22 / 1.1
+#define NV_PSEL_BADGE_H        32.0f   // min-height, so both states align
+#define NV_PSEL_PAD_BOTTOM     16.0f
+// `.profile-grid` is a fixed 400px against a 384.8 card: 15.2 of slack under the
+// row, which is where the focused card's 5% growth goes.
+#define NV_PSEL_GRID_SLACK     15.2f
+#define NV_PSEL_COLS              4
+
+// Focus. The ring and the avatar change SIZE (a layout change in the web app),
+// and the whole card is then scaled — `[class*="-card"].focusable.focused`
+// (components.css:21169) wins over `.profile-card.focused`'s 1.04 with a
+// transform of scale(1.05), and the origin computes to `center top`, not the
+// `center center` .profile-card declares. Growing downwards only is why the row
+// of names does not shift when the cursor moves.
+#define NV_PSEL_RING          228.0f
+#define NV_PSEL_RING_F        244.0f
+#define NV_PSEL_BORDER          2.0f
+#define NV_PSEL_BORDER_F        6.0f
+#define NV_PSEL_AVATAR        192.0f
+#define NV_PSEL_AVATAR_F      204.0f
+#define NV_PSEL_SCALE_F        0.05f
+// The initial inside the disc is 77 and goes to 82 on focus — a font-size change
+// ON TOP of the transform, so the ink really grows by 82/77 * 1.05.
+#define NV_PSEL_INITIAL_F     (82.0f / 77.0f)
+
+// The star that marks the primary profile. `.profile-primary-dot` is 52px, and
+// its right/bottom offsets are measured against the ring's PADDING box — inside
+// the border — which is why the offset changes with the focus state.
+#define NV_PSEL_DOT            52.0f
+#define NV_PSEL_DOT_RIGHT      16.0f
+#define NV_PSEL_DOT_BOTTOM     14.0f
+#define NV_PSEL_DOT_BORDER      4.0f
+// .profile-badge letter-spacing. At 22px over seven capitals it is 11px of extra
+// width — 12% of the word, and visible.
+#define NV_PSEL_BADGE_TRACK     1.6f
+
+// Colours. rgba(51,51,51,0.75) for the resting ring, white for the focused one;
+// the name goes --text-secondary -> --text-color; #FFB300 is the primary marker.
+#define NV_PSEL_RING_RGB       0.200f
+#define NV_PSEL_RING_A         0.750f
+#define NV_PSEL_NAME_RGB       0.702f   // #B3B3B3
+#define NV_PSEL_HINT_RGB       0.502f   // rgba(128,128,128,0.9)
+#define NV_PSEL_HINT_A         0.900f
+#define NV_PSEL_GOLD_R         1.000f
+#define NV_PSEL_GOLD_G         0.702f
+#define NV_PSEL_GOLD_B         0.000f
+// The default when a profile carries no colour: --secondary-color #F5F5F5,
+// which is `DEFAULT_PROFILE_COLOR` in profileSelectionScreen.js.
+#define NV_PSEL_DEFAULT_RGB    0.961f
+
+// The background tween. updateBackground() runs a 520ms RAF loop over the accent
+// colour with a fast-out-slow-in curve; the gradient itself is baked into the
+// GFX_PROFILE_BG shader, because both of its layers derive from that one colour.
+#define NV_PSEL_BG_MS         520.0f
 
 #endif

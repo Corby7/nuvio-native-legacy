@@ -9,7 +9,7 @@
 // shader that used the same variable.
 typedef struct {
   GLuint progress;
-  GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect, cell;
+  GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect, cell, aa;
   // The last uCell uploaded to THIS program. Uniforms are per-program state, so
   // the cache has to be too — and it is what keeps the sprite sheet off the hot
   // path: exactly one card on the screen is ever animating, so every other
@@ -79,6 +79,7 @@ static const char *FS_HEAD =
   "uniform float uRadius;\n"
   "uniform vec4  uColor;\n"
   "uniform float uAspect;\n"
+  "uniform float uAA;      // half-ramp of the edge, in the SDF's units\n"
   "uniform float uTexAsp;   // w/h of the TEXTURE; 0 = do not adjust\n"
   "uniform vec4  uCell;     // xy offset + zw scale into the texture; 0,0,1,1 = all\n";
 
@@ -129,7 +130,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   // the two card rows in detail).
   "void main(){\n"
   "  float d = sdf(vUv, uRadius, uAspect);\n"
-  "  float m = smoothstep(0.006,-0.006,d);\n"
+  "  float m = smoothstep(uAA,-uAA,d);\n"
   "  if (m <= 0.001) discard;\n"
   "  vec2 uv = clamp(cover(vUv) + uPar, 0.0, 1.0);\n"
   // AFTER the clamp, never before: the clamp is what stops the parallax reaching
@@ -147,7 +148,7 @@ static const char *FS_BODY[GFX_NMODES] = {
 
   // GFX_COLOR — a solid-colour rectangle/pill
   "void main(){\n"
-  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRadius, uAspect));\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
   "  gl_FragColor = vec4(uColor.rgb, uColor.a*m);\n"
   "}\n",
@@ -190,7 +191,7 @@ static const char *FS_BODY[GFX_NMODES] = {
 
   // GFX_VEIL — darkens the base AND the left, where the overlaid text sits
   "void main(){\n"
-  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRadius, uAspect));\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
   "  float gb = smoothstep(0.34, 1.0, vUv.y);\n"
   "  float ge = smoothstep(0.62, 0.0, vUv.x) * 0.78;\n"
@@ -424,7 +425,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   // The rounded mask is what lets this mode shade a CARD and not just a
   // full-bleed strip: the poster placeholder is a gradient inside a 22px
   "void main(){\n"
-  "  float m = smoothstep(0.006,-0.006, sdf(vUv, uRadius, uAspect));\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
   "  float t = clamp(vUv.y, 0.0, 1.0);\n"
   "  float g = t * t * (3.0 - 2.0 * t);\n"
@@ -450,8 +451,16 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float d=length(p);\n"
   "  float m=smoothstep(0.500,0.486,d);\n"
   "  if(m<=0.001) discard;\n"
-  "  vec3 c=texture2D(uTex,clamp(cover(vUv),0.0,1.0)).rgb;\n"
-  "  gl_FragColor=vec4(c,m*uColor.a);\n"
+  "  vec4 t=texture2D(uTex,clamp(cover(vUv),0.0,1.0));\n"
+  // THE ART'S OWN ALPHA, which this mode used to throw away — it took the .rgb
+  // and lit every texel opaque. On a photograph that is invisible: tex_cache
+  // converts everything to ABGR8888, so a JPEG arrives with alpha 255 and this
+  // multiply changes nothing. On a PNG WITH A TRANSPARENT GROUND it is the whole
+  // picture: the transparent texels carry rgb (0,0,0) and were painted as a
+  // BLACK DISC. Seen on the profile picker, where the web app puts the profile's
+  // colour behind the avatar precisely so it shows through the cut-out, and the
+  // native circle came out black instead of red.
+  "  gl_FragColor=vec4(t.rgb,m*t.a*uColor.a);\n"
   "}\n",
 
   // GFX_PORTRAIT: it preserves the profile still's vertical framing and anchors it
@@ -518,6 +527,55 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  c += 0.06 * (1.0 - smoothstep(0.0, max(uPar.x, 0.0001), vUv.y));\n"
   "  gl_FragColor = vec4(c, uColor.a);\n"
   "}\n",
+
+  // GFX_PROFILE_BG — the profile picker's page. See the note in gfx.h: two CSS
+  // gradients, both derived from the accent in uColor.rgb.
+  //
+  // The stops are the web app's, in the order the browser composites them: the
+  // vertical one IS the page, and the horizontal accent is painted over it. That
+  // order is what puts the strongest wash on the LEFT, where the first card sits.
+  //
+  // #0D0D0D and #1A1A1A are --bg-color and --bg-elevated. They are written in as
+  // literals rather than passed in because getBackgroundThemeColors() reads them
+  // from :root once and this app has one theme.
+  //
+  // Branchless on purpose: `mix` with a `step` costs the same everywhere, and a
+  // divergent branch across a full-screen quad does not.
+  "void main(){\n"
+  "  vec3 a = uColor.rgb;\n"
+  "  vec3 bg = vec3(0.05098);\n"
+  "  vec3 el = vec3(0.10196);\n"
+  "  vec3 hi = mix(el, a, 0.30);\n"
+  "  vec3 md = mix(bg, a, 0.14);\n"
+  "  float y = clamp(vUv.y, 0.0, 1.0);\n"
+  "  vec3 c = mix(mix(hi, md, clamp(y / 0.42, 0.0, 1.0)),\n"
+  "               mix(md, bg, clamp((y - 0.42) / 0.58, 0.0, 1.0)),\n"
+  "               step(0.42, y));\n"
+  "  float x = clamp(vUv.x, 0.0, 1.0);\n"
+  "  float w = mix(mix(0.26, 0.08, clamp(x / 0.45, 0.0, 1.0)),\n"
+  "                mix(0.08, 0.00, clamp((x - 0.45) / 0.27, 0.0, 1.0)),\n"
+  "                step(0.45, x));\n"
+  "  gl_FragColor = vec4(mix(c, a, w), uColor.a);\n"
+  "}\n",
+
+  // GFX_RING_CSS — a border at a given radius, ramped on BOTH edges. See gfx.h
+  // for why GFX_RING could not do this.
+  //
+  // Its own `length(p)`, not the shared sdf(): that one measures from the rect's
+  // rounded edge and its zero is pinned to the inscribed circle, which is exactly
+  // the constraint being escaped here.
+  "void main(){\n"
+  "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+  "  float d = length(p);\n"
+  "  float ro = uPar.x;\n"
+  "  float ri = max(uPar.x - uPar.y, 0.0);\n"
+  // Two ramps multiplied: the outer falls off going out, the inner going in. On a
+  // stroke thinner than two ramps they overlap and the ring simply comes out
+  // fainter, which is the right answer for a hairline.
+  "  float m = smoothstep(ro + uAA, ro - uAA, d) * smoothstep(ri - uAA, ri + uAA, d);\n"
+  "  if (m <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -534,7 +592,9 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,1},   /* GFX_AVATAR */
   {0,0},   /* GFX_PORTRAIT */
   {0,0},   /* GFX_DISK */
-  {0,0}    /* GFX_BACKDROP — the strip is a flat quad: no SDF, no cover */
+  {0,0},   /* GFX_BACKDROP — the strip is a flat quad: no SDF, no cover */
+  {0,0},   /* GFX_PROFILE_BG — a full-screen wash: no SDF, no texture */
+  {0,0}    /* GFX_RING_CSS — its own radial distance, not the rect SDF */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -568,6 +628,7 @@ int gfx_start(void) {
     progs[m].focus = glGetUniformLocation(p, "uFocus");
     progs[m].par  = glGetUniformLocation(p, "uPar");
     progs[m].radius = glGetUniformLocation(p, "uRadius");
+    progs[m].aa     = glGetUniformLocation(p, "uAA");
     progs[m].color  = glGetUniformLocation(p, "uColor");
     progs[m].aspect  = glGetUniformLocation(p, "uAspect");
     progs[m].texAspect = glGetUniformLocation(p, "uTexAsp");
@@ -648,6 +709,32 @@ void gfx_new_frame(void) {
   gfx_ms_others += (double)(SDL_GetPerformanceCounter() - tO_) * gfxFreqMs; \
   gfx_n_others++; } while (0)
 
+// THE EDGE'S ANTIALIASING, IN PIXELS AND NOT IN A FRACTION OF THE ELEMENT.
+//
+// The SDF is normalised by the rect's HEIGHT, so the `smoothstep(0.006,-0.006,d)`
+// that used to be written into every mask meant a ramp of 0.012 x height: a
+// quarter of a pixel on a 20px chip and SIX pixels on a 500px card. The card is
+// where it showed — the poster's 4px focus border is drawn as the gap between two
+// of these masks, so with 6px of ramp on each of them the border had no hard edge
+// anywhere and read as a grey smear rather than a white line. That is the "the
+// focus border looks fuzzy", and it was never about the border's own drawing.
+//
+// 1.25 device pixels of TOTAL ramp, so an axis-aligned edge lights about one
+// partial pixel and a curve still resolves smoothly. `screenH` is the letterboxed
+// viewport in device pixels, which is what turns a layout height into the real
+// one (2 on a 4K panel, 1 at 1080p, 1.4167 on this Mac's retina window).
+static float edgeAA(float h) {
+  if (h <= 0.0f) return 0.006f;
+  float scale = screenH > 0 ? (float)screenH / NV_SCREEN_H : 1.0f;
+  float dev = h * scale;
+  if (dev < 1.0f) dev = 1.0f;
+  float aa = 0.625f / dev;
+  // A floor for mediump: below ~0.0008 the ramp gets close to the precision the
+  // varying itself carries, and the edge starts to dither instead of ramping.
+  if (aa < 0.0008f) aa = 0.0008f;
+  return aa;
+}
+
 void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
               float parx, float pary, float radius,
               float cr, float cg, float cb, float ca) {
@@ -672,6 +759,7 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
   if (P->focus >= 0)   glUniform1f(P->focus, focus);
   if (P->par >= 0)    glUniform2f(P->par, parx, pary);
   if (P->radius >= 0)   glUniform1f(P->radius, radius);
+  if (P->aa >= 0)       glUniform1f(P->aa, edgeAA(r.h));
   if (P->aspect >= 0)    glUniform1f(P->aspect, r.h > 0 ? r.w / r.h : 1.0f);
   if (P->texAspect >= 0) glUniform1f(P->texAspect, gfx_tex_aspect_current);
   if (P->cell >= 0) {

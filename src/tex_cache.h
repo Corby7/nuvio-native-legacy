@@ -28,6 +28,25 @@ GLuint tex_get(const char *path);
 // cap those three were decoded at half resolution and scaled up on screen.
 GLuint tex_get_hero(const char *path);
 
+// DOWNLOADS THE ART AND STOPS THERE — no slot, no decode, no texture.
+//
+// It exists for the art we know we are ABOUT to need but have not been asked to
+// draw: the hero the focus is resting towards, and the neighbours in the
+// direction of travel. tex_get_hero cannot serve that purpose, because it costs
+// a 1920 texture (~8 MB) the moment it is called — and the note at
+// NV_HERO_IDLE_MS records what a dozen of those across one row does to the
+// budget: it evicts the posters that are on screen.
+//
+// So this asks for the only part that is BOTH expensive and free of memory: the
+// file. It goes into the disk cache; when the real request follows, ensureLocal
+// finds it there and only the decode is left. The 220 ms rest period before the
+// hero swaps then holds the download instead of coming before it.
+//
+// It never blocks, never allocates a slot, and answers nothing: a failure here
+// is not recorded and not retried, because the request that follows will do the
+// download properly, with the backoff and the FAILED state.
+void tex_prefetch(const char *path);
+
 // The scale between a BUFFER pixel and a layout pixel (1 on the TV, 2 on a
 // retina Mac). Set once at startup, alongside the text's.
 void tex_scale(float e);

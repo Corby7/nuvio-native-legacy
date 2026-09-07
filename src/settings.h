@@ -92,14 +92,20 @@ int   settings_depth_cast(void);
 int   settings_depth_trailers(void);
 
 // --- LAYOUT: item size -------------------------------------------------------
-// CAREFUL, this is the trap that already cost one wrong measurement: in the
-// MODERN layout `posterCardWidthDp` does NOT change the poster size.
-// `buildModernHomeSizingStyle` produces --home-poster-width: 218px for 120dp,
-// but the modern layout's stylesheet redefines the variable to 212px in
-// .home-screen-shell.home-layout-modern (components.css:6462) and that is the
-// one that wins — CHECKED in the running app: changing the inline variable from
-// 218 to 300 did not move the card by a pixel. All that comes out of the
-// preference is the RADIUS.
+// `posterCardWidthDp` DOES set the poster's size in the modern layout. This said
+// the opposite until 2026-09-07, on the grounds that
+// `.home-screen-shell.home-layout-modern` redefines `--home-poster-width` to 212px
+// (components.css:6662) — it does, and it loses: `buildModernHomeSizingStyle`
+// writes the variable in the shell's STYLE ATTRIBUTE, and an inline custom property
+// beats a stylesheet. Read off the running app at 126 dp:
+//
+//   style="--home-poster-width:229px;--home-poster-height:343px;
+//          --home-landscape-poster-width:419px;--home-landscape-poster-height:237px;
+//          --home-poster-radius:24px"
+//
+// and `.home-poster-card` measures 229 x 347 (the frame plus its 2px border).
+// NV_CARD_W/H carry those numbers for the DEFAULT 126 dp; the preference itself is
+// still not wired to them here, so a profile on another width will differ.
 int   settings_width_poster_dp(void);
 int   settings_radius_poster_dp(void);
 float settings_radius_poster_px(void);   // radius in px (dp x 2)

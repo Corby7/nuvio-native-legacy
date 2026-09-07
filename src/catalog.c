@@ -14,6 +14,17 @@ static int nAllocated;
 // session's network. See the note in catalog.h.
 static int cameOfCache;
 
+void cat_backdrop_shrink(char *url, unsigned size) {
+  char *o;
+  char new[1024];
+  if (!url || !*url) return;
+  o = strstr(url, "/t/p/original/");
+  if (!o) return;
+  if (size > sizeof new) size = sizeof new;
+  snprintf(new, sizeof new, "%.*s/t/p/w1280/%s", (int)(o - url), url, o + 14);
+  snprintf(url, size, "%s", new);
+}
+
 // Makes sure there is room for `want` items. Returns 0 if it could not (and the
 // caller carries on with what it had, which beats losing everything).
 static void ensureTracks(int count);

@@ -109,6 +109,26 @@ typedef struct {
   char thumb[512];     // the episode's still; empty falls back to the title's art
 } CatEp;
 
+// TAKES A BACKDROP OFF TMDB'S `original` AND ONTO w1280, IN PLACE.
+//
+// Cinemeta's `background` is often a TMDB url at /t/p/original/, which is
+// 3840x2160. The download is not the problem (268 KB against w1280's 201 KB) —
+// the DECODE is: 8.3 MP become 33 MB in RAM, plus another 33 MB in the format
+// conversion, before SDL_BlitScaled reduces it to the cache's 1920 ceiling. On a
+// weak core that is ~0.5 s of one of the two decode threads, per piece of art,
+// and on the home it lands on every hero change. At w1280 it is 3.7 MB and ~9x
+// less work; the hero is drawn at 1920, so it is enlarged 1.5x, and under the
+// gradient and the text the difference does not show. The jolt did.
+//
+// It lives here, and not where the url is parsed, because EVERY filler of a
+// CatItem needs it and only one of them had it: discover.c did this inline while
+// trakt.c's decorate() — the same Cinemeta /meta endpoint, feeding Continue
+// watching and the whole Library, which is the top of the home — did not, and
+// paid the half second on every swap.
+//
+// A url that is not TMDB `original` is left exactly as it is.
+void cat_backdrop_shrink(char *url, unsigned size);
+
 // Reads <dir>/catalog.txt. Returns how many items it loaded (0 = none, and the
 // caller should carry on with whatever it has).
 int  cat_load(const char *dirArt);

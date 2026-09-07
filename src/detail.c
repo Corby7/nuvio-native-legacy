@@ -1692,7 +1692,7 @@ static void heroWeb(float a, float offset) {
       TxtLine lv=txt_line(TXT_DET_META2,value,220,220,225,255);
       float mh=sources[i]==EX_TRAKT?22.0f:32.0f,mw=mh;
       if(logo){float ap=tex_aspect(brand);if(ap>0)mw=mh*ap;if(mw>110)mw=110;}
-      if(x+24+mw+10+lv.w>NV_DETW2_X+NV_HERO_SIN_W)break;
+      if(x+24+mw+10+lv.w>NV_DETW2_X+NV_DETW2_RATE_W)break;
       x+=24;
       // GFX_TEXT and not GFX_SNAP: SNAP ignores the texture's alpha and the tomato came
       // out with a dark square around it. TEXT preserves the RGB and uses the alpha.

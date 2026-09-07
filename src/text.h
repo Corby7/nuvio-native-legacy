@@ -46,6 +46,20 @@ typedef enum {
   TXT_SUB_90, TXT_SUB_100, TXT_SUB_110, TXT_SUB_120,
   TXT_SUB_130, TXT_SUB_140, TXT_SUB_150, TXT_SUB_160,
   TXT_SUB_170, TXT_SUB_180, TXT_SUB_190, TXT_SUB_200,
+  // The account's profile picker, measured in the web app. None of the tvOS
+  // styles fits: the title there is 48/500 and TXT_TITLE3 is 48/BOLD, which is
+  // the same size shouting, and the name at 34 has no neighbour at all.
+  //
+  // They are APPENDED, like the subtitle sizes above and for the same reason:
+  // STYLES in text.c is indexed by this order.
+  TXT_PSEL_TITLE,    // .profile-title     48 / 500
+  TXT_PSEL_SUB,      // .profile-subtitle  36 / 500
+  TXT_PSEL_NAME,     // .profile-name      34 / 500
+  TXT_PSEL_NAME_F,   // the same, focused: 34 / 600
+  TXT_PSEL_BADGE,    // .profile-badge     22 / 600, tracked out 1.6px
+  TXT_PSEL_HINT,     // .profile-hint      28 / 500
+  TXT_PSEL_INITIAL,  // .profile-avatar    77 / 700 (82 focused; drawn scaled)
+  TXT_PSEL_STAR,     // .profile-primary-dot 28 / 700 — U+2605, which Inter has
   TXT_NFONTS
 } TxtStyle;
 
@@ -72,6 +86,13 @@ extern int    txt_rasterized;
 // means the table does not fit what the screen draws, and the text flickers.
 extern int    txt_evictions;
 extern double txt_ms;
+// How many lines the frame did NOT find in the cache — the ones it rasterised
+// AND the ones TXT_PER_FRAME refused. It answers the question a caller cannot
+// answer for itself: "is this block of text settled, or is it still arriving?".
+// The hero reads it to decide whether its copy can be shown whole; without it,
+// the description faded in while it was still being rasterised two lines at a
+// time, which is precisely the worst case.
+extern int    txt_misses;
 
 // `dirAssets` is the folder containing fonts/. On the device it is the app's
 // folder; on the Mac, the package's — without this parameter the font was only

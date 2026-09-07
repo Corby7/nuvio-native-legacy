@@ -18,12 +18,19 @@ typedef struct {
   int  index_;          // profile_index (1..n) — this is what goes in p_profile_id
   char name[64];
   char colorHex[10];      // avatar_color_hex, "#1E88E5"
-  // MEASURED on this account: `avatar_url` comes back NULL and `avatar_id`
-  // ("avatar_lalo") only becomes an image through the `avatars` table, which
-  // does NOT exist on this server (PGRST205). In other words: when there is no
-  // url, there is no photo to fetch — the circle with the initial is the
-  // representation, not a patch.
+  // THE TWO WAYS A PROFILE CARRIES A PICTURE, and it took a wrong turn to find
+  // the second. `avatar_url` is a plain address the person pasted in the web
+  // app. `avatar_id` ("avatar_lalo") names one of Nuvio's own avatars, and the
+  // note that used to sit here said those could not be fetched because the
+  // `avatars` TABLE does not exist on this server (PGRST205) — which is true,
+  // and beside the point: the web app never reads that table. It calls the RPC
+  // `get_avatar_catalog` (avatarRepository.js), which answers 42 rows, and
+  // builds the address out of `storage_path`. The picture was always there.
+  //
+  // Order of preference is the web app's resolveProfileAvatarUrl: the explicit
+  // url first, the catalogue second, the initial only when there is neither.
   char avatarUrl[300];
+  char avatarId[40];      // avatar_id; resolved through profiles_avatar()
   int  primary;        // is_primary
   int  hasPin;          // came from sync_pull_profile_locks
 } AccountProfile;
@@ -49,6 +56,12 @@ void profiles_load_active(void);       // reads from disk; call at startup
 // 1 when there is more than one profile and the user has not chosen yet on this
 // account — it is what makes the picker screen appear once, and only once.
 int  profiles_needs_choose(void);
+
+// The address of the profile's picture, or 0 when it has none and the circle
+// falls back to the initial. `out` is the caller's buffer — no static, because
+// the picker resolves one profile while it is still drawing with the last one's
+// address (tex_get_width and tex_aspect both take the path).
+int profiles_avatar(const AccountProfile *p, char *out, unsigned long n);
 
 // Validates the PIN of a locked profile. BLOCKS. 1 when the server accepted it.
 int  profiles_verify_pin(int index_, const char *pin);

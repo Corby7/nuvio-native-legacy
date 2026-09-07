@@ -190,6 +190,42 @@ static Uint32 heroSwapIn = 0;
 static float heroExits   = 0.0f;
 static float heroEnters = 1.0f;
 
+// THE COPY IS ONE BLOCK — the logo, the meta line, the highlight and the
+// synopsis — and it arrives whole or not at all.
+//
+// It used to arrive in pieces, and that is what the owner saw as the text
+// "streaming in" beside a backdrop that fades properly. Two causes, both fixed:
+// txt_block rasterised a texture for every cumulative word-prefix while looking
+// for its wrap point (see widthOf in text.c), so at TXT_PER_FRAME 2 the block
+// needed a dozen frames to settle and typed itself in; and the logo simply
+// appeared on the frame its download decoded.
+//
+// `heroCopy` is that block's alpha. It leaves AT THE COMMIT, on the frame the new
+// art is adopted — zeroed there, beside heroLogo and heroCopyIn — and it comes
+// back once drawHeroCopy has confirmed every line of it is rasterised AND the
+// logo is in (or has been waited for long enough; see NV_HERO_LOGO_WAIT_MS).
+//
+// THIS NOTE USED TO SAY the copy leaves when the swap is DECIDED (heroWanted) and
+// not when it lands, "which is what gives the copy the same fade-out -> gap ->
+// fade-in shape the art has". No code ever did that: heroCopy is written in one
+// place and that place is the commit. Corrected rather than implemented, because
+// the shape it describes is not obviously the better one — leaving at the
+// decision blanks the text while the OLD art is still standing, which is the one
+// moment nothing has changed on screen yet. Whoever wants to try it should move
+// the three zeroed lines, not trust this paragraph.
+static float  heroCopy = 1.0f;      // 0 hidden, 1 fully in
+static int    heroCopyReady = 1;    // written by drawHeroCopy, read by home_update
+static Uint32 heroCopyIn = 0;       // when the copy on screen became the current one
+// The logo has a ramp of ITS OWN for one case only: it lands AFTER the block is
+// already up. While the block is still coming in the logo just rides the block's
+// alpha, so the two are never seen out of step.
+static float  heroLogo = 1.0f;
+static int    heroLogoReady = 1;
+// The candidate whose copy has already been laid out by the warm pass, so it runs
+// only for the frames it actually has work in. -1 = nothing warmed. See the call
+// at the end of drawHero.
+static int    heroWarmedFor = -1;
+
 // THE COLLECTION HERO CROSS-FADE, which is the same idea one row type over.
 //
 // The poster rows keep heroCurrent/heroPrevious and only swap once the new art has
@@ -207,6 +243,10 @@ static float heroEnters = 1.0f;
 // NV_HERO_FADE_MS rate, because that is where dt lives.
 static int   colHeroCurrent = -1, colHeroPrevious = -1;
 static float colHeroFade = 0.0f;
+// The folder whose NEIGHBOURS have already been warmed. It is not colHeroCurrent:
+// that one lags behind until the art decodes, and the warming has to happen while
+// it is still lagging — which is the whole point of warming.
+static int   colWarmFor = -1;
 // The hero art of a collection, with the card's cover as the fallback the drawing
 // already used.
 static const char *colHeroArt(const ColFolder *f) {
@@ -245,7 +285,9 @@ static float widthOf(KindRow t) {
     case ROW_COLLECTION: return 480.0f;
     case ROW_SERVICE: return 360.0f;
     case ROW_SOCIAL: return 540.0f;
-    case ROW_TOP10: return 212.0f;
+    // The ranking's card is an ordinary portrait poster with a numeral beside it;
+    // the web has no top-10 row to measure, so it follows the poster.
+    case ROW_TOP10: return NV_CARD_W;
     case ROW_RETURN: return 680.0f;
     case ROW_CATALOGS: return 360.0f;
     default:               return settings_posters_landscape() ? NV_CARD_LAND_W
@@ -407,7 +449,7 @@ static float heightOf(KindRow t) {
     case ROW_SERVICE: return 203.0f;
     case ROW_SOCIAL: return 240.0f;
     case ROW_RETURN: return 178.0f;
-    case ROW_TOP10: return 320.0f;
+    case ROW_TOP10: return NV_CARD_H;
     case ROW_CATALOGS: return 203.0f;
     default:               return settings_posters_landscape() ? NV_CARD_LAND_H
                                                               : NV_CARD_H;
@@ -481,12 +523,32 @@ static float radiusInset(float w, float h, float pad) {
   return r / h;
 }
 // Radius of everything INSIDE the frame — the art, the scrim, the label veil.
-// The web writes it once, as `calc(var(--home-poster-radius) - 2px)`, and
-// applies that same 22px to the frame and to the image nested in it
-// (components.css:5612 and 5636). Note it is 24 - 2 and not 24 - 4, even though
-// the art is 4px in: that is the reference's own number, not a rounding of it.
+// 24 - 2 = 22, which is the `.home-poster-frame`'s own inner corner: the frame
+// carries `border-radius: var(--home-poster-radius)` on a border box and a 2px
+// border, so what it clips its image to is 22 (components.css:7757).
+//
+// The centre of that corner is 4 + 22 = 26 px in from the CARD's corner on both
+// axes, and the focus band's outer corner has to share it — see radiusFocus.
 static float radiusArt(float w, float h) {
   return radiusInset(w, h, NV_FRAME_BORDER);
+}
+// The outer corner of the focus band, `in` px inside the card's box.
+//
+// IT IS THE CARD'S RADIUS PLUS 2, not the card's radius, and that is the whole of
+// the "border isn't even on all sides". Concentric corners share a centre: the art
+// is 4px in with a radius of 22, so its centre sits 26px in from the corner, and
+// only a 26 outer radius puts the band's outer arc on that same centre. Drawn at
+// 24 the two arcs came apart — 4px of band along the straight edges, about 2 at
+// each corner, which is exactly where the eye checks a rounded frame.
+//
+// 26 is also the web's own number: the focused frame lights its 2px border AND a
+// `0 0 0 2px` shadow around it (components.css:7765), and a spread shadow's corner
+// is the element's radius plus the spread — 24 + 2.
+static float radiusFocus(float h, float in) {
+  if (h <= 0.0f) return NV_RADIUS_CARD;
+  float r = settings_radius_poster_px() + NV_FRAME_BORDER - in;
+  if (r < 0.0f) r = 0.0f;
+  return r / h;
 }
 
 // Which rows are `.home-poster-card` in the web, and so open the NV_CARD_PAD
@@ -1072,6 +1134,65 @@ static void syncRows(void) {
   printf("[home] %d rows from the catalog\n", nRows);
 }
 
+// WARMING THE ART THE FOCUS IS ABOUT TO NEED.
+//
+// The hero's file is downloaded HERE, the moment the candidate changes, and not
+// at the swap. Before, the first request for the new art was the tex_get_hero in
+// drawHero — which only runs once heroWanted is set, that is, once the 220 ms of
+// NV_HERO_IDLE_MS have ALREADY passed. Download, decode and upload were stacked
+// AFTER the rest period, one behind the other, and the empty gap the owner sees
+// is their sum.
+//
+// This makes the rest period hold the download instead of preceding it: by the
+// time it expires the file is on disk (or on its way) and the swap only has the
+// decode left. It cannot go through tex_get_hero — that costs a 1920 texture at
+// the moment of the call, which is precisely what NV_HERO_IDLE_MS exists to
+// avoid — so it goes down the download-only lane; see tex_prefetch.
+//
+// The NEIGHBOURS go too, in the direction of travel. Sweeping a row, the card
+// after the one under the focus is the likeliest place to stop, and two ahead
+// covers the held key. A wrong guess costs a file in the disk cache and nothing
+// else: no texture, no slot, no budget.
+static void warmHero(int target, int previous) {
+  const CatItem *ci;
+  const char *art;
+  if (target < 0) return;
+  // THE LANE SERVES THE LAST THING PUSHED (see tex_prefetch), so this goes from
+  // the least urgent to the most: the far neighbour, then the near one, then the
+  // title's logo, and the backdrop under the focus LAST — which is the first the
+  // lane will fetch.
+  if (focus.row >= 0 && focus.row < nRows) {
+    const Row *s = &rows[focus.row];
+    int column = target - s->start;
+    int columnPrev = previous - s->start;
+    int steps[2], k;
+    // The direction comes from the PREVIOUS candidate, and only when it was on
+    // this same row. Arriving from another row there is no direction to speak of
+    // — the neighbour is one to each side, with the right-hand one pushed last
+    // because that is the way a row is read.
+    int direction = 0;
+    if (columnPrev >= 0 && columnPrev < s->n)
+      direction = (column > columnPrev) - (column < columnPrev);
+    if (direction > 0)      { steps[0] =  2; steps[1] =  1; }
+    else if (direction < 0) { steps[0] = -2; steps[1] = -1; }
+    else                    { steps[0] = -1; steps[1] =  1; }
+    for (k = 0; k < 2; k++) {
+      int c = column + steps[k];
+      const char *a;
+      if (c < 0 || c >= s->n) continue;
+      a = art_by_identity(s->start + c, 1);
+      if (a) tex_prefetch(a);
+    }
+  }
+  // The logo is the hero's OTHER download, and the copy waits for it — see
+  // NV_HERO_LOGO_WAIT_MS. Warming only the backdrop would bring the art forward
+  // and leave the text lagging behind it, which is the same defect one layer up.
+  ci = cat_item_exact(target);
+  if (ci && ci->logo[0]) tex_prefetch(ci->logo);
+  art = art_by_identity(target, 1);
+  if (art) tex_prefetch(art);
+}
+
 void home_update(float dt, Uint32 now) {
   syncRows();
 
@@ -1135,11 +1256,16 @@ void home_update(float dt, Uint32 now) {
     // crossing a row asked for a dozen of them in two seconds — the cache overflowed
     // and evicted the visible posters. See the note in layout.h.
     if (target >= 0 && target != heroPending) {
+      int previous = heroPending;
       heroPending = target;
       heroPendingIn = now;
       // Back to the art that is already on screen: it cancels the swap that has not
       // happened yet, otherwise it would fire later with nobody having asked for it.
       if (heroPending == heroCurrent) heroWanted = -1;
+      // THE DOWNLOAD STARTS HERE, not at the swap — see warmHero. This is the
+      // one place that knows the candidate has changed, and it runs once per
+      // keypress, not once per frame.
+      warmHero(target, previous);
     }
     if (target >= 0 && heroPending != heroCurrent &&
         now - heroPendingIn >= NV_HERO_IDLE_MS) {
@@ -1189,6 +1315,33 @@ void home_update(float dt, Uint32 now) {
     if (colHeroFade < 0.0f) colHeroFade = 0.0f;
   }
 
+  // THE COPY'S FADE, on the art's clock and at the art's duration.
+  //
+  // It follows the ART, which is not the same as following the FOCUS: the swap is
+  // held back until the new backdrop has decoded (see heroWanted), so the old
+  // copy stays up for the whole download and both change at the commit. heroCopy
+  // is zeroed there — the old copy is simply GONE from that frame, and only the
+  // new one fades. See the note at the call in drawHero for why this one does not
+  // crossfade the way the art does.
+  //
+  // The one thing it adds over the art: it does not come up until every line of
+  // the block is rasterised. That is what stops the description arriving two
+  // lines at a time.
+  //
+  // ONCE FULLY IN IT STAYS IN. `heroCopyReady` is recomputed every frame from
+  // text.c's cache, and a single eviction there would otherwise tear the whole
+  // block down and fade it back for no reason the viewer can see.
+  { float copyTarget = (heroCopyReady || heroCopy >= 0.999f) ? 1.0f : 0.0f;
+    heroCopy = motionReduced ? copyTarget
+                             : anim_ramp(heroCopy, copyTarget, dt, NV_HERO_FADE_MS);
+    // While the block itself is coming in, the logo takes the block's alpha
+    // directly: giving it a ramp of its own there would fade it a second time,
+    // over the fade it is already inside. The ramp is only for the logo that
+    // lands late, with the text already standing.
+    float logoTarget = heroLogoReady ? 1.0f : 0.0f;
+    if (heroCopy < 0.999f || motionReduced) heroLogo = logoTarget;
+    else heroLogo = anim_ramp(heroLogo, logoTarget, dt, NV_HERO_FADE_MS); }
+
   // The automatic focus walk was only there to see the prototype moving with nobody
   // on the remote. With the app navigable it gets in the way: it steals the focus in
   // the middle of any test.
@@ -1237,8 +1390,9 @@ void home_update(float dt, Uint32 now) {
   // hero's text pass over the row's title.
   //
   // The offset is the sum of the rows BEFORE the focused one, so the focused one's
-  // top falls exactly on NV_SHELF_TOP. It still has a spring: a hard jump between rows
-  // of different heights reads as a cut, not as navigation.
+  // top falls exactly on the shelf's resting line (NV_SHELF_TOP + NV_SHELF_PAD_TOP,
+  // measured at 564.4 in the web whatever the scroll position). It still has a spring:
+  // a hard jump between rows of different heights reads as a cut, not as navigation.
   float targetY = 0.0f;
   { int r = focus.row;
     for (int i = 0; i < r && i < nRows; i++)
@@ -1297,6 +1451,276 @@ static void bulletize(char *s, size_t cap) {
 // hero's TEXT leaves (it drops and fades); the art stays put, because it is the same
 // art the detail will use. That was what was missing for the opening to read as a
 // rearrangement of the layout and not as a change of screen.
+// THE HERO'S COPY, laid out and drawn as ONE thing.
+//
+// It lives in a function of its own because the layout and the drawing cannot be
+// separated here: the block stacks upward from a fixed base, so its position is
+// only known once every line of it has been measured. That is also why it is
+// called during the gap, at alpha 0.
+//
+// Returns how many lines text.c had to go and rasterise (or refused to, on the
+// TXT_PER_FRAME budget). ZERO means the block is settled and can be shown whole.
+// It is deliberately called with alpha 0 while the block is still coming in: it
+// is the LAYOUT that asks text.c for the lines, so a block nobody lays out never
+// becomes ready.
+// `warm` LAYS THE BLOCK OUT WITHOUT SHOWING IT, for a title that is not the hero
+// yet. It is the copy's half of the warming warmHero does for the art: the whole
+// function runs, so every txt_* call puts its line in text.c's cache and the
+// logo's decode is started, but nothing is drawn and — the part that matters —
+// heroCopyReady and heroLogoReady are NOT written, because those two describe
+// the block that is ON SCREEN and the caller is asking about a different title.
+//
+// It costs the rasteriser's budget and nothing else, which is why the caller runs
+// it AFTER the visible copy: TXT_PER_FRAME is 2 for the whole frame, and the
+// block that is coming in has to have first claim on it.
+static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
+                        int full, int warm) {
+  int missBefore = txt_misses;
+  // Belt and braces with the caller: warming draws nothing. txt_draw_alpha and
+  // txt_block already discard a line at alpha 0 AFTER rasterising it (see the
+  // note in text.c) — which is exactly the asymmetry this pass is built on.
+  if (warm) alpha = 0.0f;
+  // THE HERO'S TEXT BLOCK — transcribed from the web app's CSS, not deduced from a
+  // capture. `.home-modern-hero-copy` is a flex column with justify-content flex-end
+  // and gap 16, anchored to a fixed base; the children, in order:
+  //   .home-hero-brand         the logo's box, 440x200, art at the top left
+  //   .home-modern-hero-meta-line   21/500 #b3b3b3, tokens separated by •
+  //   .home-modern-hero-secondary   18/600 white 88%, with the badges and the IMDb
+  //   .home-hero-description        24/400 white, leading 35 (the modern rule;
+  //                                 `.legacy-webos` would drop it to 22/30/560)
+  // Each empty block disappears (`.is-empty { display: none }`), and that is why the
+  // set's height changes from title to title — not by absolute position.
+  //
+  // Each line's content comes from buildModernHeroPresentation
+  // (homeScreen.js:2497), which separates the "continue watching" case from the rest.
+  int contHero = (ci && ci->progress > 0 && ci->remainingMin > 0);
+
+  // The meta line. In the web app these are tokens joined by "•"; ci->genre already
+  // arrives as "Film · Horror", which is the web app's (type, first genre) pair.
+  char metaLine[288];
+  metaLine[0] = 0;
+  if (contHero && ci->season > 0) {
+    char header[64];
+    snprintf(header, sizeof header, "S%d E%d", ci->season, ci->episode);
+    snprintf(metaLine, sizeof metaLine, "%s%s%s", header,
+             (ci->genre[0] ? "  \xc2\xb7  " : ""), ci->genre);
+  } else if (ci && ci->genre[0]) {
+    snprintf(metaLine, sizeof metaLine, "%s", ci->genre);
+  }
+  if (ci && ci->meta[0]) {
+    size_t n = strlen(metaLine);
+    snprintf(metaLine + n, sizeof metaLine - n, "%s%s",
+             n ? "   \xe2\x80\xa2   " : "", ci->meta);
+  }
+  bulletize(metaLine, sizeof metaLine);
+
+  // The secondary line: the progress highlight, and nothing else. The age badge has left
+  // the hero, and the IMDb score went up to the end of the meta line with it — the web
+  // app's showImdbSecondary kept the score down here to give this line company, which is
+  // not a reason to separate it from the year and the runtime it belongs with.
+  char highlight[64];
+  highlight[0] = 0;
+  if (contHero) snprintf(highlight, sizeof highlight, "%d MINUTES LEFT",
+                         ci->remainingMin);
+  char score[8];
+  score[0] = 0;
+  if (ci && ci->score > 0) snprintf(score, sizeof score, "%.1f", ci->score / 10.0f);
+  // The empty line COLLAPSES, it is not drawn blank: `.is-empty { display: none }` on
+  // the flex column, which is what lifts the copy back up on a title with no highlight.
+  int hasSec = (highlight[0] != 0);
+
+  const char *synopsis = (ci && ci->synopsis[0]) ? ci->synopsis : "";
+
+  // --- stacking from the bottom up, like the CSS's flex-end ---
+  // 48 above the FIRST ROW'S TITLE, not above the rows viewport: see the note on
+  // NV_HERO_COPY_GAP for why this one number leaves the web's own anchor behind.
+  float base = NV_SHELF_TOP + NV_SHELF_PAD_TOP - NV_HERO_COPY_GAP + slideDownCopy;
+
+  // HOW MANY LINES OF SYNOPSIS. Not a constant in the web either: the CSS clamp is 4,
+  // and applyModernHeroDescriptionBounds (homeScreen.js:6531) then lowers it to
+  // however many WHOLE lines are left in the copy box once the logo, the meta line
+  // and the secondary have taken their share — `floor(available / lineHeight)`,
+  // capped at 4. That is the rule ported here, and not a fixed number, because it is
+  // what makes the block breathe: with the "N MINUTES LEFT" line present three lines
+  // fit and with it absent four do, in both apps.
+  //
+  // A fixed 4 was what this used to pass, and it is what pushed the whole block up:
+  // a fourth line of 35 that the web was not drawing lifted the logo by exactly that
+  // much, on top of the gap and base errors recorded on the constants.
+  //
+  // MEASURED AND DRAWN WITH THE SAME COUNT: the two txt_block calls have to agree or
+  // the copy stacks against a height it is not drawn at.
+  float reserved = NV_LOGO_HERO_H + NV_HERO_COPY_LINE + NV_HERO_SIN_MARGIN
+                 + (metaLine[0] ? NV_HERO_COPY_LINE + NV_LD_HERO_META : 0.0f)
+                 + (hasSec      ? NV_HERO_COPY_LINE + NV_LD_HERO_SEC  : 0.0f);
+  int nSin = (int)floorf((NV_HERO_COPY_H - reserved) / NV_LD_HERO_SIN);
+  if (nSin > 4) nSin = 4;
+  if (nSin < 1) nSin = 1;
+
+  float hSin = synopsis[0] ? txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, -1, 0,
+                                      NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, nSin)
+                          : 0.0f;
+  float ySin  = base - hSin;
+  // The synopsis carries its own 4px of margin on top of the column's gap; the rest
+  // of the block is spaced by the gap alone.
+  float ySec  = hasSec ? (ySin - (synopsis[0] ? NV_HERO_COPY_LINE + NV_HERO_SIN_MARGIN
+                                              : 0.0f)
+                          - NV_LD_HERO_SEC) : ySin;
+  float yMeta = ySec - (hasSec ? NV_HERO_COPY_LINE
+                              : (synopsis[0] ? NV_HERO_COPY_LINE + NV_HERO_SIN_MARGIN
+                                             : 0.0f))
+                - (metaLine[0] ? NV_LD_HERO_META : 0.0f);
+  float logoY = yMeta - NV_HERO_COPY_LINE - NV_LOGO_HERO_H;
+  float x = settings_content_x();
+
+  // The title's logo, or the name in text when there is no logo
+  // (.home-hero-title-text, 56/600 in modern — not TXT_TITLE1's 76).
+  // ASKED FOR AT THE WIDTH IT IS DRAWN, not at tex_get's blanket 640. At
+  // NV_LOGO_HERO_FULL_MAX_W the two numbers happen to be the same 640, and the
+  // art was landing decoded at exactly its drawn size with none of the slack
+  // NV_TEX_SLACK exists to give — the shader samples with filtering, so 1:1 is
+  // the point where a logo starts to look soft rather than the point where it
+  // stops.
+  GLuint tlogo = (ci && ci->logo[0])
+      ? tex_get_width(ci->logo, full ? NV_LOGO_HERO_FULL_MAX_W
+                                     : NV_LOGO_HERO_MAX_W) : 0;
+  if (tlogo) {
+    float ap = tex_aspect(ci->logo);
+    if (ap <= 0.0f) ap = 4.0f;
+    float hTitle = NV_LOGO_HERO_H, wTitle = hTitle * ap;
+    float maxW = full ? NV_LOGO_HERO_FULL_MAX_W : NV_LOGO_HERO_MAX_W;
+    if (wTitle > maxW) { wTitle = maxW; hTitle = wTitle / ap; }
+    // object-position: left top — a arte encosta no TOPO da caixa.
+    GfxRect rl = { x, logoY, wTitle, hTitle };
+    gfx_tex_aspect_current = 0.0f;
+    // A dark logo becomes white. The same rule as the detail screen's: TMDB does not
+    // mark light/dark, so the decision comes from the MEASURED luminance
+    // (tex_luminance). A light or colourful logo passes through untouched; -1 (still
+    // loading) does not tint.
+    { GfxMode m = tex_brand_dark(ci->logo) ? GFX_BRAND : GFX_TEXT;
+      // THE TITLE'S LOGO GOES WITH THE REST OF THE COPY. It used to be gated on
+      // heroEnters alone, which meant it disappeared at the swap and came back on
+      // the frame the new art did — and if its own download was not finished by
+      // then it simply popped in later, on its own, which is half of what the
+      // owner saw as the hero "streaming in".
+      //
+      // heroCopy already waits for it (NV_HERO_LOGO_WAIT_MS). anim_smooth(heroLogo)
+      // is only for the logo that misses that window: it is 1 in the ordinary case
+      // and rides heroCopy, and fades in by itself when it lands late.
+      //
+      // FULLY TRANSPARENT IS NOT SUBMITTED, the same rule txt_draw_alpha applies
+      // to every line (text.c) and for the same reason: gfx_rect has no alpha
+      // early-out of its own, so an invisible logo still cost geometry. Two cases
+      // reach it — the warm pass, which runs the whole layout at 0, and the first
+      // frames of the ordinary fade, where heroCopy starts there.
+      float aLogo = alpha * anim_smooth(heroLogo);
+      if (aLogo > 0.004f)
+        gfx_rect(rl, tlogo, m, 0, 0, 0, 0.0f, 1, 1, 1, aLogo); }
+  } else {
+    // .legacy-webos .home-hero-title-text: 76px (components.css:19164), not the
+    // default theme's 56.
+    // With no title, do NOT invent a title. There used to be a demo list here
+    // ("Severance", "Silo", "Shrinking"...) that filled the hero with another
+    // series' name when the item did not have one yet — indistinguishable from real
+    // data to whoever is looking at the screen. The same family as the cast and the
+    // age rating that have already left the detail screen. With no name, the hero
+    // keeps just the art, which is enough, and the text appears when the data arrives.
+    if (ci && ci->title[0]) {
+      TxtLine title = txt_line(TXT_TITLE1, ci->title, 255, 255, 255, 255);
+      txt_draw_alpha(title, x, logoY + NV_LOGO_HERO_H - (float)title.h,
+                         alpha);
+    }
+  }
+
+  if (metaLine[0]) {
+    float badgeW=ci?badges_draw(badges_provider(ci->providerName),x,yMeta,150,24,alpha):0;
+    // THE IMDb SCORE IS THIS LINE'S LAST TOKEN, straight after the runtime. The web app
+    // sends it down to the secondary line only when that line already has something on
+    // it (showImdbSecondary) — with the age badge gone, keeping the rule would have
+    // parked the score on a line of its own, away from the numbers it reads with.
+    //
+    // The "•" goes INSIDE the string, so its spacing is the font's own and
+    // matches the separator between the genres and the year. Only the gap to the yellow
+    // chip is a number here: the chip is a box, not a glyph, and three spaces of Inter
+    // left it sitting too far out.
+    TxtLine ls = { 0, 0, 0 }, ln = { 0, 0, 0 };
+    float imdbW = 0.0f;
+    if (score[0]) {
+      size_t n = strlen(metaLine);
+      ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
+      ln = txt_line(TXT_HERO_META, score, 179, 179, 179, 255);
+      imdbW = NV_HERO_IMDB_GAP + NV_HERO_IMDB_W + 10.0f + (float)ln.w;
+      snprintf(metaLine + n, sizeof metaLine - n, "   \xe2\x80\xa2");
+    }
+    // WIDTH: to the safe right edge, NOT to the synopsis's 640. In the web app only
+    // .home-hero-description carries a width; the meta line has none. Sharing the
+    // description's cap left "Film • Comedy • Drama • 2026 • 107 min" ellipsised
+    // mid-line — 640 has to hold the provider badge and the score as well, and with a
+    // badge in front there were barely 400 left for the text.
+    //
+    // The score is still subtracted: it is drawn AFTER the line ends, so without it in
+    // the budget a long enough genre list would run under the chip.
+    float metaW = NV_SCREEN_W - x - NV_HOME_SAFE_RIGHT - badgeW - imdbW;
+    TxtLine lm = txt_line_trim(TXT_HERO_META, metaLine, 179, 179, 179, 255, metaW);
+    // THE META AND THE SYNOPSIS NOW FADE WITH THE ART, and they did not use to.
+    //
+    // The measurement said they swapped opaque, and the reason given for keeping
+    // it was sound: with the rasteriser doing 2 lines per frame, fading text that
+    // is STILL SETTLING is the worst possible case. What changed is the settling.
+    // txt_block no longer rasterises a texture for every word-prefix it measures
+    // (see widthOf in text.c), so the block is ready in two frames instead of
+    // fifteen, and heroCopy holds the whole thing back until it is. Fading it is
+    // safe now, and the alternative — text cutting over an art that is still
+    // crossfading — is what prompted this.
+    txt_draw_alpha(lm, x+badgeW, yMeta, alpha);
+    if (score[0]) {
+      // .home-hero-imdb: the 40px yellow badge and the score just after it, with 10
+      // of breathing room. The IMDb SVG is not packaged here; the yellow rectangle
+      // with black letters reads the same at this scale.
+      float cx = x + badgeW + (float)lm.w + NV_HERO_IMDB_GAP;
+      float sh = (float)ls.h + 6.0f;
+      float sy = yMeta + ((float)lm.h - sh) * 0.5f;
+      // Invisible is not submitted — see the note on the logo above.
+      if (alpha > 0.004f)
+        gfx_color((GfxRect){ cx, sy, NV_HERO_IMDB_W, sh },
+                0.12f, 0.96f, 0.78f, 0.06f, alpha);
+      txt_draw_alpha(ls, cx + (NV_HERO_IMDB_W - ls.w) * 0.5f, sy + 3.0f, alpha);
+      txt_draw_alpha(ln, cx + NV_HERO_IMDB_W + 10.0f, yMeta, alpha);
+    }
+  }
+
+  if (hasSec) {
+    // .home-modern-hero-highlight: full white, weight 600, tracking 0.04em.
+    txt_tracking(TXT_HERO_SEC, highlight, 255, 255, 255, x, ySec, alpha,
+                 NV_FT_HERO_SEC * 0.04f);
+  }
+
+  if (synopsis[0])
+    txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, x, ySin, NV_HERO_SIN_W,
+              NV_LD_HERO_SIN, alpha, nSin);
+  // IS THE BLOCK SETTLED? Anything above zero means it would arrive in pieces —
+  // which is exactly the "streaming in" this whole path exists to stop — so
+  // heroCopy holds it back for another frame.
+  int missed = txt_misses - missBefore;
+  // THE WARM PASS ANSWERS FOR NOBODY. heroCopyReady and heroLogoReady describe the
+  // block ON SCREEN; this call was about a title that is not the hero yet, and
+  // writing them here would tell home_update the visible copy had gone unready and
+  // fade it out under a viewer who had not asked for anything.
+  //
+  // `missed` is still returned: it is the count for THIS block, and it is the one
+  // number that says whether the warming has finished its work.
+  if (warm) return missed;
+  heroLogoReady = !(ci && ci->logo[0]) || tlogo != 0;
+  // A logo is a CDN download that can land seconds after the backdrop. Waiting
+  // for it unconditionally leaves the hero's text blank for the whole download;
+  // not waiting at all means it always arrives separately. So: wait a little,
+  // then come in without it and let heroLogo bring it in if it is late.
+  { int logoOk = heroLogoReady || tex_failed(ci->logo)
+               || SDL_GetTicks() - heroCopyIn > NV_HERO_LOGO_WAIT_MS;
+    heroCopyReady = (missed == 0) && logoOk; }
+  return missed;
+}
+
 static void drawHero(Uint32 now, float output) {
   (void)now;
   const int motionReduced = settings_animations_reduced();
@@ -1371,6 +1795,29 @@ static void drawHero(Uint32 now, float output) {
     // row leaves the picture standing instead of blanking it. See colHeroFade.
     int want = (focus.column >= 0 && focus.column < rows[focus.row].n)
              ? rows[focus.row].folders[focus.column] : -1;
+    // The same warming the poster rows get, one row type over — and it matters
+    // MORE here, because these covers are CDN urls that land seconds later (the
+    // note in collections.h) and this hero has no rest period to hide it in: it
+    // asks the instant the focus arrives.
+    //
+    // Guarded by colWarmFor because this is drawing code and runs every frame,
+    // while `want != colHeroCurrent` stays true for the whole download.
+    if (want >= 0 && want != colWarmFor) {
+      const Row *s = &rows[focus.row];
+      int k;
+      colWarmFor = want;
+      // Both sides, the right-hand one last so the lane serves it first. A
+      // collection row is walked in one direction far more often than a poster
+      // row is, but there is no cheap way to tell which — and a folder cover is
+      // a fraction of a backdrop.
+      for (k = 0; k < 2; k++) {
+        int c = focus.column + (k ? 1 : -1);
+        const char *a;
+        if (c < 0 || c >= s->n) continue;
+        a = colHeroArt(col_folder(s->folders[c]));
+        if (a) tex_prefetch(a);
+      }
+    }
     if (want >= 0 && want != colHeroCurrent) {
       const char *artW = colHeroArt(col_folder(want));
       // No art is a ready state too — the folder's title block can come in without
@@ -1533,6 +1980,17 @@ static void drawHero(Uint32 now, float output) {
       heroExits = (motionReduced || !artD) ? 0.0f : 1.0f;
       heroEnters = (motionReduced || !artD) ? 1.0f : 0.0f;
       heroSwapIn = SDL_GetTicks() + NV_HERO_INTERVAL_MS;
+      // The copy changes HERE, with the art: the old one stops being drawn on this
+      // very frame and the new one starts at zero and waits for its lines. It is
+      // zeroed even under reduced motion — there the ramp snaps, so the only thing
+      // the zero buys is the two frames the text needs, which nobody sees.
+      //
+      // heroLogo goes back to zero too: a logo that has to be fetched for the new
+      // title must not inherit the previous one's ramp and arrive already faded
+      // in. heroCopyIn is what NV_HERO_LOGO_WAIT_MS counts against.
+      heroCopy = 0.0f;
+      heroLogo = 0.0f;
+      heroCopyIn = SDL_GetTicks();
     }
   }
 
@@ -1574,179 +2032,51 @@ static void drawHero(Uint32 now, float output) {
   float slideDownCopy = output * NV_SCREEN_H * 0.06f;
   if (aText <= 0.004f) return;
 
-  // THE HERO'S TEXT BLOCK — transcribed from the web app's CSS, not deduced from a
-  // capture. `.home-modern-hero-copy` is a flex column with justify-content flex-end
-  // and gap 16, anchored to a fixed base; the children, in order:
-  //   .home-hero-brand         the logo's box, 440x200, art at the top left
-  //   .home-modern-hero-meta-line   21/500 #b3b3b3, tokens separated by •
-  //   .home-modern-hero-secondary   18/600 white 88%, with the badges and the IMDb
-  //   .home-hero-description        24/400 white, leading 35 (the modern rule;
-  //                                 `.legacy-webos` would drop it to 22/30/560)
-  // Each empty block disappears (`.is-empty { display: none }`), and that is why the
-  // set's height changes from title to title — not by absolute position.
+  // THE COPY FADES IN ONLY. The outgoing one is NOT drawn: it goes on the frame
+  // of the swap.
   //
-  // Each line's content comes from buildModernHeroPresentation
-  // (homeScreen.js:2497), which separates the "continue watching" case from the rest.
-  int contHero = (ci && ci->progress > 0 && ci->remainingMin > 0);
+  // It was on a second layer at first, fading on heroExits like the art it sits
+  // on — but the art and the copy are not the same kind of thing. Two backdrops
+  // crossfading occupy the same rectangle and read as one image dissolving; two
+  // COPIES do not. The block is anchored to its base and stacks upward, so the
+  // outgoing and incoming texts sit at different heights (different line counts,
+  // different logo) and the overlap reads as doubled text, not as a dissolve.
+  //
+  // Drawn even at alpha 0: this is the call that ASKS text.c for the lines, and
+  // without it the block could never become ready.
+  (void)drawHeroCopy(ci, anim_smooth(heroCopy) * aText, slideDownCopy, full, 0);
 
-  // The meta line. In the web app these are tokens joined by "•"; ci->genre already
-  // arrives as "Film · Horror", which is the web app's (type, first genre) pair.
-  char metaLine[288];
-  metaLine[0] = 0;
-  if (contHero && ci->season > 0) {
-    char header[64];
-    snprintf(header, sizeof header, "S%d E%d", ci->season, ci->episode);
-    snprintf(metaLine, sizeof metaLine, "%s%s%s", header,
-             (ci->genre[0] ? "  \xc2\xb7  " : ""), ci->genre);
-  } else if (ci && ci->genre[0]) {
-    snprintf(metaLine, sizeof metaLine, "%s", ci->genre);
+  // THE NEXT TITLE'S COPY IS LAID OUT NOW, while this one is still up.
+  //
+  // The art had the same defect and warmHero fixed it: nothing was ASKED FOR
+  // until the swap, so the whole cost fell after it. For the copy the cost is the
+  // rasteriser — the block is 3 to 7 lines and TXT_PER_FRAME is 2, so it needed
+  // two to four frames AFTER the commit before `missed` reached 0 and the fade
+  // was even allowed to start. Running the layout here spends those frames during
+  // the wait instead, so the block is already in text.c's cache when the art
+  // lands and the fade begins on the first frame.
+  //
+  // It also calls tex_get_width on the next logo, which starts the DECODE — the
+  // half tex_prefetch cannot do, since it only puts the file on disk.
+  //
+  // AFTER the visible copy, never before: they share TXT_PER_FRAME, and the block
+  // coming in has to have first claim on it. Whatever is left over goes to the
+  // next one, which by definition can wait.
+  //
+  // The condition is the candidate, not heroWanted: that way the warming has the
+  // whole of NV_HERO_IDLE_MS as well, and not only the art's loading time.
+  // IT STOPS WHEN IT IS DONE. `missed == 0` means every line of the next block
+  // came out of text.c's cache, so there is nothing left to warm and the layout
+  // arithmetic would just repeat itself on every frame until the swap. It matters
+  // more than it looks: the swap can WAIT INDEFINITELY — the commit needs the art
+  // decoded, and art that never decodes never commits — so without this the pass
+  // would spin for as long as the hero is stuck.
+  if (heroPending != heroCurrent && heroWarmedFor != heroPending) {
+    const CatItem *cNext = cat_item_exact(heroPending);
+    if (!cNext) heroWarmedFor = heroPending;
+    else if (drawHeroCopy(cNext, 0.0f, slideDownCopy, full, 1) == 0)
+      heroWarmedFor = heroPending;
   }
-  if (ci && ci->meta[0]) {
-    size_t n = strlen(metaLine);
-    snprintf(metaLine + n, sizeof metaLine - n, "%s%s",
-             n ? "   \xe2\x80\xa2   " : "", ci->meta);
-  }
-  bulletize(metaLine, sizeof metaLine);
-
-  // The secondary line: the progress highlight, and nothing else. The age badge has left
-  // the hero, and the IMDb score went up to the end of the meta line with it — the web
-  // app's showImdbSecondary kept the score down here to give this line company, which is
-  // not a reason to separate it from the year and the runtime it belongs with.
-  char highlight[64];
-  highlight[0] = 0;
-  if (contHero) snprintf(highlight, sizeof highlight, "%d MINUTES LEFT",
-                         ci->remainingMin);
-  char score[8];
-  score[0] = 0;
-  if (ci && ci->score > 0) snprintf(score, sizeof score, "%.1f", ci->score / 10.0f);
-  // The empty line COLLAPSES, it is not drawn blank: `.is-empty { display: none }` on
-  // the flex column, which is what lifts the copy back up on a title with no highlight.
-  int hasSec = (highlight[0] != 0);
-
-  const char *synopsis = (ci && ci->synopsis[0]) ? ci->synopsis : "";
-
-  // --- stacking from the bottom up, like the CSS's flex-end ---
-  float base = NV_SHELF_TOP - NV_HERO_COPY_GAP + slideDownCopy;
-  // FOUR lines, the -webkit-line-clamp on .home-hero-description in both the modern
-  // rule and the .legacy-webos one. It clamped at 3 here, and at 24 fewer characters
-  // reach each line than at 22 — the third line was ending mid-sentence on titles the
-  // web app shows whole. MEASURED HERE and drawn below with the same count: the two
-  // calls have to agree or the copy stacks against a height it is not drawn at.
-  float hSin = synopsis[0] ? txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, -1, 0,
-                                      NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, 4)
-                          : 0.0f;
-  float ySin  = base - hSin;
-  float ySec  = hasSec ? (ySin - (synopsis[0] ? NV_HERO_COPY_LINE : 0.0f)
-                          - NV_LD_HERO_SEC) : ySin;
-  float yMeta = ySec - ((hasSec || synopsis[0]) ? NV_HERO_COPY_LINE : 0.0f)
-                - (metaLine[0] ? NV_LD_HERO_META : 0.0f);
-  float logoY = yMeta - NV_HERO_COPY_LINE - NV_LOGO_HERO_H;
-  float x = settings_content_x();
-
-  // The title's logo, or the name in text when there is no logo
-  // (.home-hero-title-text, 56/600 in modern — not TXT_TITLE1's 76).
-  // ASKED FOR AT THE WIDTH IT IS DRAWN, not at tex_get's blanket 640. At
-  // NV_LOGO_HERO_FULL_MAX_W the two numbers happen to be the same 640, and the
-  // art was landing decoded at exactly its drawn size with none of the slack
-  // NV_TEX_SLACK exists to give — the shader samples with filtering, so 1:1 is
-  // the point where a logo starts to look soft rather than the point where it
-  // stops.
-  GLuint tlogo = (ci && ci->logo[0])
-      ? tex_get_width(ci->logo, full ? NV_LOGO_HERO_FULL_MAX_W
-                                     : NV_LOGO_HERO_MAX_W) : 0;
-  if (tlogo) {
-    float ap = tex_aspect(ci->logo);
-    if (ap <= 0.0f) ap = 4.0f;
-    float hTitle = NV_LOGO_HERO_H, wTitle = hTitle * ap;
-    float maxW = full ? NV_LOGO_HERO_FULL_MAX_W : NV_LOGO_HERO_MAX_W;
-    if (wTitle > maxW) { wTitle = maxW; hTitle = wTitle / ap; }
-    // object-position: left top — a arte encosta no TOPO da caixa.
-    GfxRect rl = { x, logoY, wTitle, hTitle };
-    gfx_tex_aspect_current = 0.0f;
-    // A dark logo becomes white. The same rule as the detail screen's: TMDB does not
-    // mark light/dark, so the decision comes from the MEASURED luminance
-    // (tex_luminance). A light or colourful logo passes through untouched; -1 (still
-    // loading) does not tint.
-    { GfxMode m = tex_brand_dark(ci->logo) ? GFX_BRAND : GFX_TEXT;
-      // THE TITLE'S LOGO follows the ART, not the text. MEASURED: 205 ms after the
-      // keypress the old art was still at 85% and the logo had ALREADY disappeared
-      // completely; it only reappears on the same frame the new art comes in.
-      gfx_rect(rl, tlogo, m, 0, 0, 0, 0.0f, 1, 1, 1, aText * heroEnters); }
-  } else {
-    // .legacy-webos .home-hero-title-text: 76px (components.css:19164), not the
-    // default theme's 56.
-    // With no title, do NOT invent a title. There used to be a demo list here
-    // ("Severance", "Silo", "Shrinking"...) that filled the hero with another
-    // series' name when the item did not have one yet — indistinguishable from real
-    // data to whoever is looking at the screen. The same family as the cast and the
-    // age rating that have already left the detail screen. With no name, the hero
-    // keeps just the art, which is enough, and the text appears when the data arrives.
-    if (ci && ci->title[0]) {
-      TxtLine title = txt_line(TXT_TITLE1, ci->title, 255, 255, 255, 255);
-      txt_draw_alpha(title, x, logoY + NV_LOGO_HERO_H - (float)title.h,
-                         aText);
-    }
-  }
-
-  if (metaLine[0]) {
-    float badgeW=ci?badges_draw(badges_provider(ci->providerName),x,yMeta,150,24,aText):0;
-    // THE IMDb SCORE IS THIS LINE'S LAST TOKEN, straight after the runtime. The web app
-    // sends it down to the secondary line only when that line already has something on
-    // it (showImdbSecondary) — with the age badge gone, keeping the rule would have
-    // parked the score on a line of its own, away from the numbers it reads with.
-    //
-    // The "•" goes INSIDE the string, so its spacing is the font's own and
-    // matches the separator between the genres and the year. Only the gap to the yellow
-    // chip is a number here: the chip is a box, not a glyph, and three spaces of Inter
-    // left it sitting too far out.
-    TxtLine ls = { 0, 0, 0 }, ln = { 0, 0, 0 };
-    float imdbW = 0.0f;
-    if (score[0]) {
-      size_t n = strlen(metaLine);
-      ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
-      ln = txt_line(TXT_HERO_META, score, 179, 179, 179, 255);
-      imdbW = NV_HERO_IMDB_GAP + NV_HERO_IMDB_W + 10.0f + (float)ln.w;
-      snprintf(metaLine + n, sizeof metaLine - n, "   \xe2\x80\xa2");
-    }
-    // WIDTH: to the safe right edge, NOT to the synopsis's 640. In the web app only
-    // .home-hero-description carries a width; the meta line has none. Sharing the
-    // description's cap left "Film • Comedy • Drama • 2026 • 107 min" ellipsised
-    // mid-line — 640 has to hold the provider badge and the score as well, and with a
-    // badge in front there were barely 400 left for the text.
-    //
-    // The score is still subtracted: it is drawn AFTER the line ends, so without it in
-    // the budget a long enough genre list would run under the chip.
-    float metaW = NV_SCREEN_W - x - NV_HOME_SAFE_RIGHT - badgeW - imdbW;
-    TxtLine lm = txt_line_trim(TXT_HERO_META, metaLine, 179, 179, 179, 255, metaW);
-    // THE META AND THE SYNOPSIS SWAP AT ONCE, without fading with the art. MEASURED:
-    // on the frame at 205 ms, with the old art still at 85%, the meta line and the
-    // synopsis were already the NEW title's, with the text opaque. Multiplying by a
-    // swap alpha here was our invention — and, with the rasteriser doing 2 lines per
-    // frame (text.c:40), fading text that is still settling is the worst possible case.
-    txt_draw_alpha(lm, x+badgeW, yMeta, aText);
-    if (score[0]) {
-      // .home-hero-imdb: the 40px yellow badge and the score just after it, with 10
-      // of breathing room. The IMDb SVG is not packaged here; the yellow rectangle
-      // with black letters reads the same at this scale.
-      float cx = x + badgeW + (float)lm.w + NV_HERO_IMDB_GAP;
-      float sh = (float)ls.h + 6.0f;
-      float sy = yMeta + ((float)lm.h - sh) * 0.5f;
-      gfx_color((GfxRect){ cx, sy, NV_HERO_IMDB_W, sh },
-              0.12f, 0.96f, 0.78f, 0.06f, aText);
-      txt_draw_alpha(ls, cx + (NV_HERO_IMDB_W - ls.w) * 0.5f, sy + 3.0f, aText);
-      txt_draw_alpha(ln, cx + NV_HERO_IMDB_W + 10.0f, yMeta, aText);
-    }
-  }
-
-  if (hasSec) {
-    // .home-modern-hero-highlight: full white, weight 600, tracking 0.04em.
-    txt_tracking(TXT_HERO_SEC, highlight, 255, 255, 255, x, ySec, aText,
-                 NV_FT_HERO_SEC * 0.04f);
-  }
-
-  if (synopsis[0])
-    txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, x, ySin, NV_HERO_SIN_W,
-              NV_LD_HERO_SIN, aText, 4);
 }
 
 // A GREY background, and nothing else. I had put the highlighted title's art here,
@@ -1810,7 +2140,10 @@ static void drawShortcuts(int r, float y) {
     const ColFolder *folder=col_folder(rows[r].folders[c]);
     if (folder) {
       const char *art = folder->cover;
-      GLuint tex = art && art[0] ? tex_get_width(art, w) : 0;
+      // `lw` and not `w`: the focus scale must not move the decode ceiling, or the
+      // cover is re-decoded the moment the card is landed on and the card blinks
+      // back to its skeleton. Same reasoning as the poster rows below.
+      GLuint tex = art && art[0] ? tex_get_width(art, lw) : 0;
       // The aspect the art is CROPPED to. It follows `tex` — when a frame of the
       // focus animation replaces the cover below, the aspect has to become the
       // frame's or the shader would crop the animation to the cover's shape.
@@ -1923,7 +2256,10 @@ void home_draw(Uint32 now) {
   // top appeared across the hero's block instead of disappearing. The hero does not
   // scroll: only its contents change with the focus.
   gfx_crop(0, NV_SHELF_TOP-96, NV_SCREEN_W, NV_SCREEN_H - NV_SHELF_TOP+96);
-  float y = NV_SHELF_TOP - scrollY + slideDown;
+  // NV_SHELF_PAD_TOP is the web's `padding-top` on the scroll column, not a nudge:
+  // the rows come to rest 46px below the viewport's top edge, clear of the mask
+  // that fades it. See the note on the constant.
+  float y = NV_SHELF_TOP + NV_SHELF_PAD_TOP - scrollY + slideDown;
   for (int r = 0; r < nRows; r++) {
     KindRow kind = rows[r].kind;
     float fade=anim_clamp((y-(NV_SHELF_TOP-80))/80,0,1);
@@ -2172,7 +2508,26 @@ void home_draw(Uint32 now) {
           // Ask by the card's REAL width: it is this row that multiplies.
           // With the blanket ceiling of 640 each poster cost 2.4 MB and the cache
           // overflowed at ~40 textures, evicting what was still on screen.
-          GLuint t = path ? tex_get_width(path, w) : 0;
+          //
+          // BUT AT THE RESTING WIDTH, NEVER THE ANIMATED ONE. `w` carries the
+          // focus scale (5%) and the expansion, so it grows frame by frame while
+          // the card takes focus — and tex_get_width rounds the ceiling up to a
+          // multiple of 32, so that growth crosses a step and PROMOTES the entry:
+          // the poster that was already decoded is thrown away and decoded again
+          // for 32 more pixels. MEASURED, landing on a card: `PROMOTE
+          // ready->pending w=416 limit=448` and, on the very next line, that same
+          // card drawing its skeleton. That is the blink of a frame or two on
+          // every poster you move onto — grey while the re-decode runs, and "Art
+          // unavailable" when it fails, before the poster comes back.
+          //
+          // NV_TEX_SLACK is 1.25 precisely so the focused card needs no second
+          // decode; it can only do that job if the ceiling STANDS STILL while the
+          // scale moves. Open, the art is the landscape one — a different entry —
+          // and its width is asked for whole, for the same reason.
+          float wAsk = openAmt > 0.5f
+                     ? artH * (1.0f + scaleOf(kind)) * NV_EXP_ASPECT
+                     : lw;
+          GLuint t = path ? tex_get_width(path, wAsk) : 0;
           float radius = radiusOf(w, h);
           GfxRect card = { px, py, w, h };
           // Continue watching keeps the old geometry, and that is the reference
@@ -2184,7 +2539,7 @@ void home_draw(Uint32 now) {
           float radiusA = framed ? radiusArt(art.w, art.h) : radius;
           if (f > 0.01f) {
             if (framed) {
-              // The frame's own 2px border, lit to rgba(255,255,255,0.8), and
+              // The frame's own border, lit to #F5F5F5 (NV_FRAME_RING_C), and
               // PAINTED THE WAY CSS PAINTS A BORDER: fill the frame's border
               // box, then let the artwork land on top of it. What is left
               // showing is exactly the 2px band.
@@ -2204,8 +2559,9 @@ void home_draw(Uint32 now) {
               if (in < 0.0f) in = 0.0f;
               in *= scale;
               GfxRect frame = frameOf(card, in);
-              gfx_color(frame, radiusInset(frame.w, frame.h, in),
-                        1.0f, 1.0f, 1.0f, NV_FRAME_RING_A * f);
+              gfx_color(frame, radiusFocus(frame.h, in),
+                        NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
+                        NV_FRAME_RING_A * f);
             } else {
               // 4 px of #FFFFFF, OUTSIDE the art. MEASURED on the reference device
               // (TCL, same card, same row): 4 solid px, x 102->105 with no ramp, and

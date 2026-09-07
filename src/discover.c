@@ -500,23 +500,11 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
   if (!js_text(start, end, "poster", d->poster, sizeof d->poster)) return 0;
   js_text(start, end, "background", d->backdrop, sizeof d->backdrop);
   js_text(start, end, "logo", d->logo, sizeof d->logo);
-  // TMDB serves the backdrop at /original/, which is 3840x2160. The download is not
-  // even the problem (268 KB against the w1280's 201 KB) — the problem is the
-  // DECODED size: 8.3 MP become 33 MB in RAM, plus another 33 MB in the format
-  // conversion, before SDL_BlitScaled reduces it to the 1920 ceiling. On a weak
-  // core that is ~0.5 s per piece of art, on every hero change. At w1280 it is
-  // 3.7 MB and ~9x less work; the hero is drawn at 1920, so it enlarges 1.5x — with
-  // the gradient and the text on top, the difference does not show, and the jolt did.
-  //
-  // Done by rewriting the URL and not by asking for another field because Cinemeta
-  // only returns this one; TMDB's ladder is w300/w780/w1280/original.
-  { char *o = strstr(d->backdrop, "/t/p/original/");
-    if (o) {
-      char new[sizeof d->backdrop];
-      snprintf(new, sizeof new, "%.*s/t/p/w1280/%s",
-               (int)(o - d->backdrop), d->backdrop, o + 14);
-      snprintf(d->backdrop, sizeof d->backdrop, "%s", new);
-    } }
+  // Off TMDB's `original` and onto w1280 — the measurement that says why, and the
+  // reason this is no longer written out here, are in catalog.h. Done by rewriting
+  // the URL and not by asking for another field because Cinemeta only returns this
+  // one; TMDB's ladder is w300/w780/w1280/original.
+  cat_backdrop_shrink(d->backdrop, sizeof d->backdrop);
   if (!d->backdrop[0]) snprintf(d->backdrop, sizeof d->backdrop, "%s", d->poster);
 
   if (!js_text(start, end, "imdb_id", d->imdb, sizeof d->imdb))
@@ -559,8 +547,12 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
   js_text(start, end, "releaseInfo", v, sizeof v);
   { char duration[24] = "";
     js_text(start, end, "runtime", duration, sizeof duration);
-    // "2024–" becomes "2024": the en dash of an ongoing series clutters the line.
-    { char *tr = strstr(v, "\xe2\x80\x93"); if (tr) *tr = 0; }
+    // "2024–" becomes "2024": the dash of an ongoing series clutters the line.
+    // BOTH spellings, because the catalogue is not all one addon: Cinemeta writes
+    // the EN DASH ("2024\xe2\x80\x93", and "44 min" with a space), the TMDB addon
+    // writes a plain ASCII hyphen ("2024-", and "44min" without one). Cutting only
+    // the en dash left the hyphen on screen on every TMDB-sourced row.
+    { char *tr = strstr(v, "\xe2\x80\x93"); if (!tr) tr = strchr(v, '-'); if (tr) *tr = 0; }
     snprintf(d->meta, sizeof d->meta, "%.20s%s%.20s", v,
              (v[0] && duration[0]) ? "  \xc2\xb7  " : "", duration); }
   js_text(start, end, "description", d->synopsis, sizeof d->synopsis);

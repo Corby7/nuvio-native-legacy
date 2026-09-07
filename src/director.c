@@ -122,8 +122,13 @@ static void *fetch(void *arg) {
             if (!js_text(k, fk, "title", t, sizeof t)) js_text(k, fk, "name", t, sizeof t);
             if (!hero[0]) {
               char camHero[128] = "";
+              // w1280 and NOT original, unlike the portrait above: this one is a
+              // 16:9 BACKDROP, where original means 3840x2160 and ~0.5 s of a
+              // decode thread for a difference that the gradient and the text
+              // cover. See cat_backdrop_shrink. The portrait keeps original for
+              // the reason written there — it is scaled UP, not down.
               if (js_text(k, fk, "backdrop_path", camHero, sizeof camHero) && camHero[0] == '/')
-                snprintf(hero, sizeof hero, "https://image.tmdb.org/t/p/original%s", camHero);
+                snprintf(hero, sizeof hero, "https://image.tmdb.org/t/p/w1280%s", camHero);
             }
             if (t[0]) {
               if (z && z + 5 < sizeof known) { memcpy(known + z, " \xc2\xb7 ", 4); z += 4; }
