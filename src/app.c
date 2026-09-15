@@ -758,6 +758,59 @@ void app_draw(Uint32 now) {
   tracks_draw(now);
 }
 
+// --- THE DEV CHANNEL, see app.h for why -------------------------------------
+
+// Opens a title's detail by IMDb id, as though a card had been chosen. The source
+// rect is the centred poster the "see all" grid already uses when it has no card
+// on screen to grow out of — the same situation, and the detail covers the screen
+// a moment later anyway.
+int app_goto_detail(const char *imdb) {
+  int i;
+  if (!imdb || !imdb[0]) return 0;
+  i = cat_index_by_imdb(imdb);
+  if (i < 0) return 0;
+  { const CatItem *ci = cat_item(i);
+    HomeItem it;
+    memset(&it, 0, sizeof it);
+    it.index_ = i;
+    it.rect = (GfxRect){ NV_SCREEN_W * 0.5f - 124.0f, NV_SCREEN_H * 0.5f - 186.0f,
+                         248.0f, 372.0f };
+    it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
+    it.title = ci ? ci->title : NULL;
+    it.genre = ci ? ci->genre : NULL;
+    it.meta  = ci ? ci->meta : NULL;
+    // The detail draws OVER whatever is behind it, and the home is what it expects
+    // to find there — opening it from the settings screen would leave that drawing
+    // underneath and the Back key returning to it.
+    if (screen != SCREEN_HOME) swapScreen(SCREEN_HOME);
+    detail_open(&it);
+    printf("[goto] %s -> catalogue index %d (%s)\n",
+           imdb, i, ci && ci->title[0] ? ci->title : "?");
+    fflush(stdout); }
+  return 1;
+}
+
+void app_where(char *out, size_t n) {
+  static const char *NAME[] = { "login", "profile-picker", "home", "search",
+                                "library", "profile", "settings", "player",
+                                "social" };
+  const char *base = ((int)screen >= 0 && (int)screen < 9) ? NAME[screen] : "?";
+  // The OVERLAYS are what the arrow keys actually reach, and they are the part a
+  // blind sequence gets wrong: the player and the detail both sit over the home.
+  if (player_is_open()) { snprintf(out, n, "player"); return; }
+  if (detail_is_open()) {
+    int t = 0, e = 0;
+    if (detail_ep_focus(&t, &e) && t > 0)
+      snprintf(out, n, "detail idx=%d S%dE%d", detail_index(), t, e);
+    else
+      snprintf(out, n, "detail idx=%d", detail_index());
+    return;
+  }
+  if (seeall_is_open()) { snprintf(out, n, "seeall"); return; }
+  if (menu_is_open())   { snprintf(out, n, "%s+menu", base); return; }
+  snprintf(out, n, "%s", base);
+}
+
 int app_wants_exit(void) { return wantsExit; }
 
 void app_shutdown(void) {

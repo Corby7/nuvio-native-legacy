@@ -159,6 +159,58 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
   consumeOrBlocks("/tmp/nuvio-key", &blockedKey);
 }
 
+// --- GOTO: reach a screen without driving the arrows -------------------------
+//
+// Write an IMDb id into /tmp/nuvio-goto and the app opens that title's detail.
+// Same protocol as the key and capture files, and it exists for the same reason
+// they do: without it, reaching one screen is a blind sequence of injected arrows
+// followed by a screenshot to find out where it landed, and the app restores a
+// different focus on every launch so the sequence is not repeatable.
+//
+// IT RETRIES RATHER THAN CONSUMING ON FAILURE. On a cold start the catalogue is
+// still arriving and the id resolves to nothing; consuming the request there
+// would silently do nothing at all, which is the failure mode this whole channel
+// exists to avoid. It holds for ~8s, then gives up and says so.
+static void gotoIfRequested(void) {
+  static time_t blocked;
+  static Uint32 since;
+  char id[32];
+  FILE *f;
+  if (!requestNew("/tmp/nuvio-goto", &blocked)) { since = 0; return; }
+  f = fopen("/tmp/nuvio-goto", "r");
+  if (!f) return;
+  if (!fgets(id, sizeof id, f)) { id[0] = 0; }
+  fclose(f);
+  { char *e = id + strlen(id);
+    while (e > id && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0; }
+  if (!id[0]) { consumeOrBlocks("/tmp/nuvio-goto", &blocked); return; }
+  if (!since) since = SDL_GetTicks();
+  if (app_goto_detail(id)) {
+    consumeOrBlocks("/tmp/nuvio-goto", &blocked);
+    since = 0;
+    return;
+  }
+  if (SDL_GetTicks() - since > 8000) {
+    printf("[goto] %s is not in the catalogue\n", id);
+    fflush(stdout);
+    consumeOrBlocks("/tmp/nuvio-goto", &blocked);
+    since = 0;
+  }
+}
+
+// WHERE THE INTERFACE IS, printed only when it CHANGES. A screenshot costs a
+// megapixel to answer a question a line of text answers; this is what makes
+// "which screen am I on" a grep.
+static void whereIfChanged(void) {
+  static char last[64];
+  char now[64];
+  app_where(now, sizeof now);
+  if (!strcmp(now, last)) return;
+  snprintf(last, sizeof last, "%s", now);
+  printf("[nav] %s\n", now);
+  fflush(stdout);
+}
+
 // The size of the buffer the capture reads from. Set at startup, alongside the
 // viewport.
 static int capX = 0, capY = 0;
@@ -746,6 +798,8 @@ int main(int argc, char **argv) {
     t0 = NV_T0();
     plane_pump();
     videoIfRequested();
+    gotoIfRequested();
+    whereIfChanged();
     rectIfRequested();
     captureIfRequested();
     fAux = NV_DT(t0);

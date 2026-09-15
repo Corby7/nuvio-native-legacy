@@ -31,4 +31,23 @@ void app_draw(Uint32 now);
 int  app_wants_exit(void);
 void app_shutdown(void);
 
+// --- THE DEV CHANNEL --------------------------------------------------------
+//
+// Both of these exist because DRIVING THE APP BY INJECTED ARROW KEYS IS THE
+// EXPENSIVE PART OF WORKING ON IT. Reaching one screen meant a blind sequence of
+// up/down/ok followed by a screenshot to find out where it had actually landed,
+// and the app restores a different focus on every launch, so the sequence is not
+// even repeatable. Most captures taken while porting the detail screen were
+// orientation, not evidence.
+//
+// app_goto opens a title's detail directly. `imdb` is the id ("tt12637874"); it
+// answers 0 when the catalogue has no such title, which on a cold start simply
+// means the rows have not arrived yet and the caller should try again.
+int  app_goto_detail(const char *imdb);
+// A one-line description of where the interface IS: screen, overlay, and the
+// detail's own row/column when it is open. It changes rarely, so main.c prints it
+// only when it differs from the last — which turns "where am I" from a screenshot
+// into a grep.
+void app_where(char *out, size_t n);
+
 #endif

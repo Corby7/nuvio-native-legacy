@@ -248,6 +248,38 @@ a BMP written by hand.
 bash /tmp/shot.sh 6          # build + deploy + capture + download + convert
 ```
 
+> **The two scripts this file names live in `/tmp` and are therefore GONE**
+> whenever the machine has been rebooted. The protocol is what matters and it is
+> written out above; two traps when rebuilding them: the request file must be
+> NON-EMPTY (`requestNew` tests `st_size > 0`, so `: >` never fires), and a
+> reader must wait for `/tmp/nuvio-shot.bmp`'s MTIME to change rather than for it
+> to exist — on the TV ssh cannot delete the app's own file out of a sticky
+> `/tmp`, so waiting for existence hands back the PREVIOUS capture.
+
+## 2b. Goto and where — the two that pay for themselves
+
+Added 2026-09-15, after a session porting the detail screen in which MOST of the
+screenshots taken were not evidence but orientation: *"which screen did that
+land on?"* after a blind sequence of injected arrows. The app restores a
+different focus on every launch, so the sequence is not even repeatable.
+
+```bash
+echo tt12637874 > /tmp/nuvio-goto     # open that title's detail, directly
+grep '^\[nav\]' /tmp/nuvio.log | tail -1   # where the interface IS
+```
+
+- **`/tmp/nuvio-goto`** takes an IMDb id and opens the detail as though a card
+  had been chosen. It RETRIES for ~8s rather than consuming on failure: on a
+  cold start the catalogue is still arriving and the id resolves to nothing,
+  and consuming it there would silently do nothing — the exact failure this
+  channel exists to avoid. After that it gives up and says so.
+- **`[nav] ...`** is printed only when the description CHANGES: the screen, the
+  overlay above it (player, detail, seeall, menu), and the detail's focused
+  episode. A screenshot costs a megapixel to answer what one line of text
+  answers.
+
+Both go through `app_goto_detail` / `app_where` in app.h.
+
 ## 3. Key injection
 
 Lets you open the detail screen and navigate with nobody on the sofa holding the
