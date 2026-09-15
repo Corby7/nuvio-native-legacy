@@ -2226,7 +2226,14 @@ static void cardScore(float x, float y, const char *brand, const char *value,
   const char *cam = brand;
   GLuint t;
   frame(card, 14.0f, a);
-  t = tex_get(cam);
+  // The mark is 28 tall in a card that never resizes, and the files are ~96 tall:
+  // tex_get's 640 ceiling left them at full size on the GPU to be drawn a third as
+  // wide, which sends the mipmap filter two levels down and draws the badge from a
+  // quarter-resolution copy. tex_get_exact asks for the width it is about to use —
+  // known here without the aspect, because the width is capped at 96 either way.
+  { float ap0 = tex_aspect(cam);
+    float w0 = ap0 > 0.0f ? 28.0f * ap0 : 96.0f;
+    t = tex_get_exact(cam, w0 > 96.0f ? 96.0f : w0); }
   { TxtLine lv = txt_line(TXT_TITLE3, value, 245, 248, 255, 255);
     float hLogo = 28.0f, hBlock = hLogo + 12.0f + lv.h;
     float yb = y + (RATING_CARD_H - hBlock) * 0.5f;
@@ -2540,9 +2547,12 @@ static float headerComments(float x, float y, float a) {
   // the width would deform the drawing if the art were swapped.
   float widthBrand = 0.0f;
   { const char *cam = extras_path_brand_name("trakt_wordmark");
-    GLuint t = tex_get_width(cam, 160.0f);
+    // 320x122 drawn at 34 tall, i.e. 89 wide: the 160 ceiling was 1.8x that, deep
+    // into the half-resolution mip. Asked for at the drawn width, as the brand art
+    // in menu.c and profile_select.c is.
+    float ap = tex_aspect(cam);
+    GLuint t = tex_get_exact(cam, ap > 0.0f ? 34.0f * ap : 160.0f);
     if (t) {
-      float ap = tex_aspect(cam);
       float h = 34.0f;
       if (ap <= 0.0f) ap = 282.0f / 106.0f;
       widthBrand = h * ap;

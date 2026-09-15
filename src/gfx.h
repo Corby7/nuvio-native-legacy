@@ -137,7 +137,46 @@ typedef enum {
   //   uPar.x = the ring's OUTER radius / the quad's width  (0.5 = inscribed)
   //   uPar.y = the stroke's thickness  / the quad's width
   GFX_RING_CSS = 24,
-  GFX_NMODES = 25
+  // GFX_CW_SCRIM — the copy scrim of the Continue Watching card, clipped by the
+  // card's own rounded corner. `.home-screen-shell .home-continue-media::after`,
+  // a SEVEN-STOP linear-gradient(to top) in rgba(8,8,10,…):
+  //
+  //   0.96 at 0% · 0.90 at 12% · 0.74 at 28% · 0.48 at 46%
+  //   0.22 at 64% · 0.06 at 82% · 0 at 100%
+  //
+  // Piecewise linear, for the reason GFX_HERO already records: a smoothstep does
+  // not pass through the intermediate points, and on a ramp this long it is the
+  // MIDDLE that is actually looked at — at 46% the curve gives 0.31 where the
+  // sheet asks for 0.48, and the card comes out with its artwork washed out
+  // exactly where the title sits.
+  //
+  // It replaces a flat GFX_VEIL at 0.85 over the WHOLE card, which is what made
+  // the port's cards read as muddy next to the web's: the web darkens the base
+  // and lets the top of the frame through untouched.
+  //
+  // The ink is rgba(8,8,10) and not black. At 0.96 over bright artwork the
+  // difference is a hair; over the dark frames that most episode stills are, the
+  // slightly blue-lifted black is what keeps the base from reading as a hole.
+  GFX_CW_SCRIM = 25,
+  // GFX_CW_BAR — the same card's progress bar, `.home-continue-progress`:
+  // full-bleed against the bottom edge, 6px tall, a rgba(255,255,255,0.16) track
+  // with a #F5F5F5 fill over it.
+  //
+  // It is a MODE and not two gfx_color rectangles because the bar is full-bleed
+  // and the card's corner is 24px: a square rectangle across the base pokes its
+  // corners 24px out past the card's outline, which the web never shows because
+  // `.home-continue-media` clips it with `overflow: hidden`. Passing the CARD's
+  // rect and radius here borrows the same SDF the artwork is cut with, so both
+  // ends of the bar round exactly as the corner does.
+  //
+  //   uPar.x = the bar's height / the card's height  (the band, from the base)
+  //   uPar.y = the filled fraction of the width      (0 draws the track alone)
+  //
+  // resume.c never passes 0: a Continue Watching card that has not been started
+  // draws no bar at all rather than an empty rail. The mode still supports the
+  // track-only state — it is the caller's policy, not the shader's.
+  GFX_CW_BAR = 26,
+  GFX_NMODES = 27
 } GfxMode;
 
 typedef struct {

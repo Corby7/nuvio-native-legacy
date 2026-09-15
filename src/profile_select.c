@@ -394,13 +394,18 @@ static void psLayout(PsLayout *L, int n) {
 // tint, the trap gfx.h records for brand_mark.
 static void drawLogo(void) {
   const char *path = gfx_icon_path("brand_lockup");
-  GLuint tex = tex_get_width(path, NV_PSEL_LOGO_W);
-  float aspect, w;
-  if (!tex) return;
-  aspect = tex_aspect(path);
-  if (aspect <= 0.0f) return;
-  w = NV_PSEL_LOGO_H * aspect;
+  float aspect = tex_aspect(path);
+  float w = aspect > 0.0f ? NV_PSEL_LOGO_H * aspect : NV_PSEL_LOGO_W;
+  GLuint tex;
   if (w > NV_PSEL_LOGO_W) w = NV_PSEL_LOGO_W;
+  // The drawn width EXACTLY. tex_get_width's ceiling put this 1085-wide file on the
+  // GPU at 480 to be drawn at 278 — a minification of 1.73, past the 1.414 where
+  // GL_LINEAR_MIPMAP_NEAREST stops sampling level 0 and takes level 1 instead, so
+  // the lockup on the profile picker was a 240px copy stretched back to 278. The
+  // first request cannot know the width (see the same note in menu.c drawBrand);
+  // it asks for the box and re-decodes once.
+  tex = tex_get_exact(path, w);
+  if (!tex || aspect <= 0.0f) return;
   gfx_tex_aspect_current = 0.0f;
   gfx_rect((GfxRect){ (NV_SCREEN_W - w) * 0.5f, NV_PSEL_LOGO_Y, w, NV_PSEL_LOGO_H },
            tex, GFX_TEXT, 0, 0, 0, 0.0f, 1, 1, 1, 1.0f);
@@ -648,14 +653,15 @@ void profilesel_draw(Uint32 now) {
     drawCard(i, &L, x, L.gridY + row * (L.cardH + L.gap));
   }
 
-  // The web app's hint here is "Hold to manage profile". This app cannot manage
-  // profiles — there is no editor, no avatar picker and no delete — so it says
-  // what it CAN do instead. A hint that promises a gesture the app does not have
-  // is worse than no hint at all.
-  { int c = (int)(NV_PSEL_HINT_RGB * 255);
-    TxtLine d = txt_line(TXT_PSEL_HINT, "Left and right to move  \xC2\xB7  OK to continue",
-                         c, c, c, (int)(NV_PSEL_HINT_A * 255));
-    drawCentred(d, NV_SCREEN_W * 0.5f, L.hintY, NV_PSEL_HINT_H, 1.0f, 1.0f); }
+  // NO HINT LINE. The web app puts "Hold to manage profile" here; this app has
+  // no management to hint at, and the D-pad line that stood in its place was
+  // explaining a remote the viewer is already holding.
+  //
+  // The SPACE it occupied stays reserved (psLayout still counts
+  // NV_PSEL_GRID_HINT + NV_PSEL_HINT_H). Reclaiming it would drop the whole
+  // bottom-anchored column 86px down the screen and every measurement in this
+  // file against the reference with it — the text is what was unwanted, not the
+  // margin under the cards.
 
   if (pinOf >= 0) drawPin();
 }

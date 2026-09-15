@@ -576,6 +576,47 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  if (m <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
   "}\n",
+
+  // GFX_CW_SCRIM — the Continue Watching card's copy scrim. See gfx.h for the
+  // seven stops and for why they are not a smoothstep.
+  //
+  // `u` runs from 0 at the BASE to 1 at the top, which is the direction the CSS
+  // `to top` gradient is written in, so the stops below can be read straight off
+  // the stylesheet. Each clamp() is one segment's contribution, subtracted from
+  // the 0.96 the base starts at; they sum to exactly 0.96, so the top of the card
+  // is untouched and the whole ramp is one expression with no branches.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  float u = clamp(1.0 - vUv.y, 0.0, 1.0);\n"
+  "  float a = 0.96\n"
+  "          - clamp( u        / 0.12, 0.0, 1.0) * 0.06\n"
+  "          - clamp((u - 0.12)/ 0.16, 0.0, 1.0) * 0.16\n"
+  "          - clamp((u - 0.28)/ 0.18, 0.0, 1.0) * 0.26\n"
+  "          - clamp((u - 0.46)/ 0.18, 0.0, 1.0) * 0.26\n"
+  "          - clamp((u - 0.64)/ 0.18, 0.0, 1.0) * 0.16\n"
+  "          - clamp((u - 0.82)/ 0.18, 0.0, 1.0) * 0.06;\n"
+  "  gl_FragColor = vec4(0.0314, 0.0314, 0.0392, a * uColor.a * m);\n"
+  "}\n",
+
+  // GFX_CW_BAR — the same card's progress bar, cut by the card's own corner.
+  //
+  // The quad IS the card, and everything above the band is discarded: that is
+  // what buys the rounded ends, and it costs nothing, because a discarded
+  // fragment never reaches the blender.
+  //
+  // The track/fill boundary is a `step` and not a smoothstep on purpose — CSS
+  // puts a hard edge at the end of the span, and a ramp there reads as the bar
+  // being out of focus.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  if (vUv.y < 1.0 - uPar.x) discard;\n"
+  "  float fill = step(vUv.x, uPar.y);\n"
+  "  vec3  c = mix(vec3(1.0), vec3(0.9608), fill);\n"
+  "  float a = mix(0.16, 1.0, fill);\n"
+  "  gl_FragColor = vec4(c, a * uColor.a * m);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -594,7 +635,9 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_DISK */
   {0,0},   /* GFX_BACKDROP — the strip is a flat quad: no SDF, no cover */
   {0,0},   /* GFX_PROFILE_BG — a full-screen wash: no SDF, no texture */
-  {0,0}    /* GFX_RING_CSS — its own radial distance, not the rect SDF */
+  {0,0},   /* GFX_RING_CSS — its own radial distance, not the rect SDF */
+  {1,0},   /* GFX_CW_SCRIM — a vertical ramp, clipped by the card's corner */
+  {1,0}    /* GFX_CW_BAR   — the same corner, cutting the bar's ends */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -883,9 +926,12 @@ void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float c
   GLuint t;
   if (!name || !name[0] || !dirIcons[0]) return;
   snprintf(cam, sizeof cam, "%s/%s.png", dirIcons, name);
-  // Ask by drawing width: a 38px icon does not need the file's 128, and the
-  // per-use ceiling is what keeps the cache out of the red.
-  t = tex_get_width(cam, r.w);
+  // Ask by drawing width EXACTLY, not tex_get_width's width-plus-headroom: an icon
+  // is drawn at one fixed size and never scales, so any headroom is a texture the
+  // GPU has to minify — and the mipmap filter snaps to the half-resolution level
+  // once that minification passes 1.414x. The rail's wordmark sat at 1.4147 and was
+  // being drawn from an 80px copy of a 221px file. See tex_get_exact.
+  t = tex_get_exact(cam, r.w);
   if (!t) return;
   gfx_tex_aspect_current = 0.0f;   // the file is already square
   gfx_rect(r, t, GFX_BRAND, 0, 0, 0, 0.0f, cr, cg, cb, ca);

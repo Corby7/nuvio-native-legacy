@@ -60,6 +60,15 @@ typedef enum {
   TXT_PSEL_HINT,     // .profile-hint      28 / 500
   TXT_PSEL_INITIAL,  // .profile-avatar    77 / 700 (82 focused; drawn scaled)
   TXT_PSEL_STAR,     // .profile-primary-dot 28 / 700 — U+2605, which Inter has
+  // The Continue Watching card, measured in the web app's MODERN layout. The
+  // TXT_CW_* three above are the CLASSIC block's sizes and stay where they are:
+  // the "Among friends" card still draws with them.
+  //
+  // APPENDED, for the reason given twice above: STYLES in text.c is indexed by
+  // this order and an insertion in the middle shifts every following style.
+  TXT_CWC_TITLE,     // .home-continue-title    30 / 600
+  TXT_CWC_KICKER,    // .home-continue-kicker   17 / 600, uppercase, ls 0.14em
+  TXT_CWC_SUB,       // .home-continue-subtitle 21 / 400
   TXT_NFONTS
 } TxtStyle;
 

@@ -32,6 +32,14 @@ typedef struct {
   SDL_Surface *sup;   // filled by the thread; consumed in the pump
   GLuint tex;
   int w, h;
+  // The dimensions of the FILE, before the decode's width ceiling shrank it. They
+  // are what tex_aspect answers with — see the note on it in tex_cache.h.
+  int srcW, srcH;
+  // Asked for through tex_get_exact: decode to the drawing width exactly, upload
+  // with no mipmap chain, and re-decode when that width MOVES rather than only when
+  // it grows. Set on the request, not on the file: the same art asked for by an
+  // ordinary caller as well would lose it, which is why only UI furniture uses it.
+  int exact;
   // The width ceiling REQUESTED for this item. The full-screen hero needs 1920; a
   // 212 poster does not. A single ceiling for all served both badly: at 960 the
   // hero was decoded at half the resolution and stretched to 1920 on screen, which
@@ -667,6 +675,11 @@ static int threadDecode(void *arg) {
       // produces, so there is nothing left to convert.
       conv = webp_load(path);
     }
+    // The FILE's dimensions, taken before the ceiling below shrinks the surface:
+    // once it has been box-filtered to `limit` the original shape is gone, and the
+    // integer division that computes the new height has already rounded it.
+    int srcW = conv ? conv->w : 0, srcH = conv ? conv->h : 0;
+
     // A WIDTH CEILING. The art used to come from the package already reduced; now
     // it comes from the network at whatever size the server has, and a 1920
     // backdrop costs 8 MB DECODED — half a dozen of them blow the budget and the
@@ -783,6 +796,7 @@ static int threadDecode(void *arg) {
       items[idx].luma = lumaMedia;
       items[idx].chroma = chromaMedia;
       items[idx].sup = conv;
+      if (conv) { items[idx].srcW = srcW; items[idx].srcH = srcH; }
       if (conv) {
         items[idx].state = DECODED;
         items[idx].failures = 0;
@@ -922,7 +936,12 @@ void tex_shutdown(void) {
   if (mtxPre) { SDL_DestroyMutex(mtxPre); mtxPre = NULL; }
 }
 
-static GLuint tex_get_limit(const char *path, int limit) {
+// `exact` is tex_get_exact's request: decode to `limit` on the nose and upload with
+// no mipmap. It travels with the REQUEST rather than the file so that the two
+// callers of one path cannot silently disagree — an ordinary tex_get_width on art
+// an icon also uses turns the flag back off, and the art goes back to being
+// mipmapped, which is what a caller that scales it wants.
+static GLuint tex_get_limit_mode(const char *path, int limit, int exact) {
   if (!path || !*path) return 0;
   GLuint output = 0;
   unsigned long h = hashPath(path);
@@ -959,6 +978,27 @@ static GLuint tex_get_limit(const char *path, int limit) {
     items[i].lastFrame = frameCurrent;
     items[i].lastRequest = SDL_GetTicks();
     items[i].usage = ++lruClock;
+    items[i].exact = exact;
+    // AN EXACT ITEM ALSO GOES DOWN. The promotion below only ever redoes a decode
+    // that turned out too SMALL, which is right for art whose ceiling is a budget;
+    // here the ceiling is the drawing size itself, and a texture larger than it is
+    // the whole defect — it is what leaves the minification filter with a choice to
+    // make. So a move in either direction re-decodes.
+    //
+    // The 2px deadband is not tidiness: the caller derives its width from
+    // tex_aspect, which lands on a fraction, and a request oscillating between 110
+    // and 111 would decode on every other frame. Widths this stable settle after ONE
+    // re-decode — the first request, made before the aspect is known.
+    if (exact && items[i].state == READY &&
+        (items[i].limit - limit >= 2 || limit - items[i].limit >= 2) &&
+        !(limit > items[i].limit && items[i].w < items[i].limit)) {
+      int next = (queueEnd + 1) % MAX_QUEUE;
+      if (next != queueStart) {
+        items[i].limit = limit;
+        items[i].state = PENDING;
+        queue[queueEnd] = i; queueEnd = next; SDL_CondSignal(cond);
+      }
+    }
     // PROMOTION: the same art may be asked for as a poster (960) and later as a
     // hero (1920). If the new ceiling is larger and the ready texture came out
     // smaller than it, redo it — otherwise the hero inherits forever the small
@@ -1010,6 +1050,7 @@ static GLuint tex_get_limit(const char *path, int limit) {
       strncpy(items[new].path, path, sizeof items[new].path - 1);
       items[new].hash = h;
       items[new].limit = limit;
+      items[new].exact = exact;
       items[new].state = PENDING;
       items[new].usage = ++lruClock;
       items[new].lastFrame = frameCurrent;
@@ -1021,6 +1062,10 @@ static GLuint tex_get_limit(const char *path, int limit) {
   }
   SDL_UnlockMutex(mtx);
   return output;
+}
+
+static GLuint tex_get_limit(const char *path, int limit) {
+  return tex_get_limit_mode(path, limit, 0);
 }
 
 GLuint tex_get(const char *path) {
@@ -1047,6 +1092,19 @@ GLuint tex_get_hero(const char *path) {
   return tex_get_limit(path, NV_TEX_HERO_WIDTH_MAX);
 }
 
+// The drawing width and NOTHING MORE: no NV_TEX_SLACK, no rounding up to 32, no 128
+// floor. Each of those exists to stop a decode being repeated, and each of them puts
+// the texture above the size it is drawn at — which is exactly what this call is for
+// avoiding. See the note in tex_cache.h.
+GLuint tex_get_exact(const char *path, float widthLayout) {
+  int cap;
+  if (widthLayout <= 1.0f) return tex_get(path);
+  cap = (int)(widthLayout * scaleBuf + 0.5f);
+  if (cap < 1) cap = 1;
+  if (cap > NV_TEX_HERO_WIDTH_MAX) cap = NV_TEX_HERO_WIDTH_MAX;
+  return tex_get_limit_mode(path, cap, 1);
+}
+
 float tex_aspect(const char *path) {
   if (!path || !*path) return 0.0f;
   float a = 0.0f;
@@ -1057,8 +1115,15 @@ float tex_aspect(const char *path) {
   // Answering 0 for those frames would hand the card an unknown aspect and the
   // shader would stretch the art — trading the black blink for a squashed one.
   // `h > 0` is the real question: it is only set once a texture exists.
-  if (i >= 0 && items[i].h > 0)
-    a = (float)items[i].w / (float)items[i].h;
+  // Gated on the TEXTURE existing (`h > 0`) but answered from the FILE's shape: a
+  // caller reading an aspect before there is anything to draw would size a box for
+  // art that may never arrive.
+  if (i >= 0 && items[i].h > 0) {
+    if (items[i].srcW > 0 && items[i].srcH > 0)
+      a = (float)items[i].srcW / (float)items[i].srcH;
+    else
+      a = (float)items[i].w / (float)items[i].h;
+  }
   SDL_UnlockMutex(mtx);
   return a;
 }
@@ -1102,11 +1167,12 @@ int tex_pump(int max_per_frame) {
         (double)(SDL_GetPerformanceCounter() - start) * 1000.0 / freq >=
             NV_TEX_UPLOAD_BUDGET_MS)
       break;
-    SDL_Surface *sup = NULL; int target = -1;
+    SDL_Surface *sup = NULL; int target = -1; int exact = 0;
     SDL_LockMutex(mtx);
     for (int i = 0; i < nMax; i++) {
       if (items[i].state == DECODED && items[i].sup) {
-        sup = items[i].sup; items[i].sup = NULL; target = i; break;
+        sup = items[i].sup; items[i].sup = NULL; target = i;
+        exact = items[i].exact; break;
       }
     }
     SDL_UnlockMutex(mtx);
@@ -1129,7 +1195,14 @@ int tex_pump(int max_per_frame) {
   //
   // Without a mipmap the filter MUST be GL_LINEAR: with MIPMAP_NEAREST on a texture
   // with no pyramid the sampling is undefined and the texture comes out BLACK.
-  int comMip = (sup->w < 1024);
+  //
+  // AND NEVER ON EXACT ART. tex_get_exact decodes to the drawing width, so the only
+  // level that will ever be sampled is level 0 — the pyramid would be memory nobody
+  // reads. Worse than useless, in fact: LINEAR_MIPMAP_NEAREST snaps to the nearest
+  // level, and a rect that lands a hair under the drawn size (a card's focus scale,
+  // a half-pixel of centring) is enough to send the sampler to level 1 and draw the
+  // art at half resolution. Without a pyramid there is no other level to fall to.
+  int comMip = (sup->w < 1024) && !exact;
   if (comMip) glGenerateMipmap(GL_TEXTURE_2D);
   // MIPMAP_NEAREST and not _LINEAR: trilinear reads TWO levels of the pyramid per
   // sample, and on this GPU that is double the texture cost on every pixel of every

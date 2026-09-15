@@ -202,6 +202,17 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   // glyph has to land on the pixel.
   { 77, WEIGHT_BOLD    },   // TXT_PSEL_INITIAL
   { 28, WEIGHT_BOLD    },   // TXT_PSEL_STAR
+  // The Continue Watching card's copy, in the MODERN layout's sizes. The three
+  // that were already here (TXT_CW_TITLE 28/500 and TXT_CW_META 23/400 doing
+  // double duty) came from the CLASSIC block, which is roughly half the scale,
+  // and they are still in use by the "Among friends" card — hence three new
+  // entries rather than three edits.
+  //
+  // Both 600s go BOLD by the optical rule written at the top of this table:
+  // light text over dark artwork, where Medium reads a weight too thin.
+  { 30, WEIGHT_BOLD    },   // TXT_CWC_TITLE  .home-continue-title    30 / 600
+  { 17, WEIGHT_BOLD    },   // TXT_CWC_KICKER .home-continue-kicker   17 / 600
+  { 21, WEIGHT_REGULAR },   // TXT_CWC_SUB    .home-continue-subtitle 21 / 400
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
@@ -244,6 +255,62 @@ static int invisibleFormat(Uint32 cp) {
       || (cp >= 0x2060 && cp <= 0x2064)    // word joiner and the invisible operators
       || (cp >= 0x2066 && cp <= 0x2069)    // bidi isolates
       || cp == 0xFEFF;                     // zero-width no-break space (BOM)
+}
+
+// Copies `s` into `out` WITHOUT the characters that draw nothing, and returns the
+// copy. When there is nothing to remove — nearly every line the app ever draws —
+// it returns `s` ITSELF and copies not one byte: this runs for every line of every
+// frame and must not turn into a memcpy of the whole screen's text.
+//
+// SKIPPING THEM IN firstNotAscii WAS NOT ENOUGH. That put "\u200EDiscover" back
+// into Inter Display Bold, which is right, and Inter has NO GLYPH for U+200E — so
+// the mark that had been invisible in the fallback face came out as .notdef, a
+// box in front of the D. A character that is defined to draw nothing must not
+// reach the rasteriser at all; picking the right font for it was only half the
+// job.
+//
+// A string that does not fit `out` is returned UNTOUCHED: truncating it would eat
+// the end of a synopsis to remove a mark, which is a far worse trade. At 1024 the
+// only callers near the limit are the subtitle lines, and those come from files
+// that have no reason to carry bidi marks.
+static const char *withoutInvisible(const char *s, char *out, size_t n) {
+  const unsigned char *p = (const unsigned char *)s;
+  size_t k = 0;
+  int found = 0;
+  for (; *p; p++) {
+    Uint32 cp;
+    int len;
+    if (*p < 0x80) continue;
+    if      ((*p & 0xE0) == 0xC0 && p[1]) { cp = (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F)); len = 2; }
+    else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { cp = (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F)); len = 3; }
+    else continue;   // 4-byte sequences are emoji; nothing invisible lives there
+    if (invisibleFormat(cp)) { found = 1; break; }
+    p += len - 1;
+  }
+  if (!found) return s;
+  if (strlen(s) >= n) return s;
+  for (p = (const unsigned char *)s; *p; ) {
+    Uint32 cp;
+    int len = 1;
+    if      ((*p & 0xF8) == 0xF0) len = 4;
+    else if ((*p & 0xF0) == 0xE0) len = 3;
+    else if ((*p & 0xE0) == 0xC0) len = 2;
+    // A truncated sequence at the end of the buffer: copy the bytes as they are
+    // and let TTF answer for them, exactly as it did before this function existed.
+    { int i = 0;
+      while (i < len && p[i]) i++;
+      if (i < len) len = i ? i : 1; }
+    cp = len == 2 ? (Uint32)((p[0] & 0x1F) << 6 | (p[1] & 0x3F))
+       : len == 3 ? (Uint32)((p[0] & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F))
+       : 0;
+    if (!(len == 2 || len == 3) || !invisibleFormat(cp)) {
+      int i;
+      for (i = 0; i < len; i++) out[k++] = (char)p[i];
+    }
+    p += len;
+  }
+  out[k] = 0;
+  return out;
 }
 
 // The first codepoint OUTSIDE ASCII that could need another font, or 0. It decodes
@@ -502,7 +569,16 @@ void txt_shutdown(void) {
 static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
                              int b, int a, TxtFamily family) {
   TxtLine empty = {0, 0, 0};
+  char clean[1024];
   if (!s || !*s || style < 0 || style >= TXT_NFONTS || !fonts[style]) return empty;
+
+  // HERE AND IN widthOf, and nowhere else: those two are what every public entry
+  // point funnels through, so cleaning at both keeps the measurement and the
+  // rasterisation looking at the SAME string — a line stripped for drawing but
+  // measured raw would wrap at the wrong word. It also means "\u200EDiscover" and
+  // "Discover" share one cache entry instead of two.
+  s = withoutInvisible(s, clean, sizeof clean);
+  if (!*s) return empty;   // nothing but invisible marks: nothing to draw
 
   if (family < TXT_FAMILY_INTER || family >= TXT_FAMILY_N)
     family = TXT_FAMILY_INTER;
@@ -632,7 +708,12 @@ static Measure measures[MAX_MEASURES];
 // The width in LAYOUT units — the same units lineFamily stores, so the two are
 // interchangeable in a comparison.
 static float widthOf(TxtStyle style, const char *s, TxtFamily family) {
+  char clean[1024];
   if (!s || !*s || style < 0 || style >= TXT_NFONTS || !fonts[style]) return 0.0f;
+  // The other half of the pair described in lineFamily: measure what will be
+  // drawn, never what was passed in.
+  s = withoutInvisible(s, clean, sizeof clean);
+  if (!*s) return 0.0f;
   if (family < TXT_FAMILY_INTER || family >= TXT_FAMILY_N)
     family = TXT_FAMILY_INTER;
 
@@ -741,6 +822,12 @@ float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
     char c[5]; int k = 0;
     while (k < n && p[k]) { c[k] = (char)p[k]; k++; }
     c[k] = 0; p += k ? k : 1;
+
+    // A character that draws nothing takes no space and no tracking either: the
+    // stripping happens inside txt_line, so without this test an invisible mark
+    // would still open a gap the width of the tracking in the middle of a word.
+    char one[8];
+    if (!*withoutInvisible(c, one, sizeof one)) continue;
 
     TxtLine l = txt_line(style, c, r, g, b, 255);
     if (x >= 0.0f && l.w) txt_draw_alpha(l, x + width, y, alpha);

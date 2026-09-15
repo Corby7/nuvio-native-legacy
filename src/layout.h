@@ -417,12 +417,52 @@
 // the shader crops (cover) instead of stretching; without that the image deforms,
 // which was exactly the defect that showed up on the first attempt.
 #define NV_HIGHLIGHT_W    419.0f
+// The badge's own inset. It is NOT the copy's — see NV_CW_COPY_X below — and it
+// is deliberately the port's 18 rather than the web's 16: the remaining-time pill
+// is the one part of this card the owner asked to keep as it is.
 #define NV_CW_PAD          18.0f
-#define NV_CW_BAR_H         4.0f
-#define NV_CW_BAR_BOTTOM   10.0f
 #define NV_CW_BADGE_PAD_X  14.0f
 #define NV_CW_BADGE_PAD_Y   8.0f
 #define NV_CW_BADGE_RADIUS  7.0f
+
+// THE COPY AND THE BAR, read off `.home-screen-shell.home-layout-modern
+// .home-continue-*` (components.css:7709-7754) with the base block at 5892-6103.
+// Everything here is the MODERN layout's number: the base block is the classic
+// one and is half the size — 11/18/13 against 17/30/21 — and reading it instead
+// is what left the port's card with type a third too small.
+//
+// The port used to put the copy at 18 from the side and 30 from the base, with
+// one 23px style doing for both the episode code and the episode name and no
+// tracking on either, so the three lines read as one grey block. The web gives
+// them three different jobs: a tracked-out uppercase LABEL, a title with real
+// weight, and a supporting line, the outer two dimmed to 62%.
+#define NV_CW_COPY_X       24.0f   // .home-continue-copy left / right
+#define NV_CW_COPY_BOTTOM  22.0f   // .home-continue-copy bottom
+// The LINE BOXES, not the glyph heights: the block is bottom-anchored and CSS
+// stacks it by line box, so the port lays out the boxes and centres each
+// rasterised line inside its own. Doing it by glyph height instead makes the
+// spacing depend on the font's ascent, which is not what moves in the browser.
+#define NV_CW_KICKER_LH    22.1f   // 17 * 1.3
+#define NV_CW_TITLE_LH     37.2f   // 30 * 1.24
+#define NV_CW_SUB_LH       27.3f   // 21 * 1.3
+#define NV_CW_TITLE_GAP     4.0f   // .home-continue-title    margin-top
+#define NV_CW_SUB_GAP       3.0f   // .home-continue-subtitle margin-top
+#define NV_CW_KICKER_TRACK  2.38f  // letter-spacing 0.14em at 17px
+// The kicker and the subtitle are rgba(255,255,255,0.62); the title is #FFF.
+#define NV_CW_DIM           0.62f
+// `-webkit-line-clamp: 2`. One line ate real titles on a card this narrow, and
+// the block grows UPWARD into the scrim, so the second line costs nothing below.
+#define NV_CW_TITLE_LINES      2
+// Full-bleed against the base, 6px tall, with a visible track behind the fill.
+// It was a 4px line inset by the copy's margin and floating 10px up, with no
+// track at all.
+//
+// The bar is drawn ONLY on a title that has been started — see resume.c, which
+// diverges from the web here on purpose. NV_CW_BAR_MINW is therefore the floor
+// for a REAL position, so a title two minutes in still shows something; it is
+// not the web's "always paint a 12px stub" state.
+#define NV_CW_BAR_H         6.0f
+#define NV_CW_BAR_MINW     12.0f   // .home-continue-progress span { min-width }
 #define NV_HIGHLIGHT_H    236.0f   // continue watching: 419 x 236
                                   //  compared side by side on the TV)
 // The hero carousel: the time on each piece of art and the crossfade's duration.
@@ -1158,5 +1198,6 @@
 // colour with a fast-out-slow-in curve; the gradient itself is baked into the
 // GFX_PROFILE_BG shader, because both of its layers derive from that one colour.
 #define NV_PSEL_BG_MS         520.0f
+
 
 #endif

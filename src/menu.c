@@ -337,12 +337,24 @@ static void drawBrand(float px, float w, float alpha) {
   // back ONE static buffer, so holding two at a time would leave the first
   // pointing at the second's file — harmless in this order today, and a silent
   // swap of the two logos the moment anyone reorders the lines.
+  //
+  // TEX_GET_EXACT, and the size asked for is the size drawn — which is a small
+  // circularity, because that width comes from the aspect and the aspect only
+  // exists once the file has been decoded. So the FIRST request is made at the
+  // box's own height, and the one that follows it, on the frame the art lands,
+  // asks for the real width and re-decodes once. It settles there: tex_aspect
+  // answers from the FILE's shape, so the width it produces does not move with the
+  // texture underneath it.
   { const char *cam = gfx_icon_path("brand_mark");
-    tMark = tex_get_width(cam, NV_MENU_BRAND);
-    if (tMark) apMark = tex_aspect(cam); }
+    apMark = tex_aspect(cam);
+    tMark = tex_get_exact(cam, apMark > 0.0f && apMark < 1.0f
+                               ? NV_MENU_BRAND * apMark : NV_MENU_BRAND);
+    if (!tMark) apMark = 0.0f; }
   { const char *cam = gfx_icon_path("brand_wordmark");
-    tWord = tex_get_width(cam, NV_MENU_BRAND_WORD * 6.0f);
-    if (tWord) apWord = tex_aspect(cam); }
+    apWord = tex_aspect(cam);
+    tWord = tex_get_exact(cam, apWord > 0.0f ? NV_MENU_BRAND_WORD * apWord
+                                             : NV_MENU_BRAND_WORD * 6.0f);
+    if (!tWord) apWord = 0.0f; }
   if (apMark <= 0.0f || apWord <= 0.0f) return;
 
   // "contain" in a 54 box: the taller-than-wide mark keeps the height and gives up
@@ -414,7 +426,20 @@ static void drawFooter(float px, float w, float alpha, float focus) {
   // A PHOTO when the account has one; otherwise the circle with the initial,
   // which is what the web app shows when `avatar_url` is null — and on this
   // account it is.
-  { GLuint tex = (p && p->avatarUrl[0]) ? tex_get_width(p->avatarUrl, av.w) : 0;
+  // THE SAME PICTURE THE PICKER SHOWS, resolved the same way: this used to read
+  // p->avatarUrl on its own, so a profile whose picture is one of Nuvio's own
+  // avatars (avatar_id, no url) fell through to the initial here while the picker
+  // two screens back showed the photograph. profiles_avatar() knows both routes.
+  { char url[420];
+    int has = p ? profiles_avatar(p, url, sizeof url) : 0;
+    GLuint tex = has ? tex_get_width(url, av.w) : 0;
+    // The colour goes DOWN FIRST, under the photo — these avatars are PNGs on a
+    // transparent ground and without it the cut-out sits on the frosted glass
+    // with nothing behind it. The picker does the same, and for the same reason.
+    if (tex) {
+      colorAvatar(p ? p->colorHex : NULL, &cr, &cg, &cb);
+      gfx_rect(av, 0, GFX_DISK, 0, 0, 0, 0.5f, cr, cg, cb, alpha);
+    }
     if (tex) {
       // THE FILE'S OWN ASPECT, and GFX_AVATAR. This was GFX_CARD with
       // gfx_tex_aspect_current pinned to 1.0 — a claim that every avatar is
@@ -426,7 +451,7 @@ static void drawFooter(float px, float w, float alpha, float focus) {
       // GFX_AVATAR rather than a rounded GFX_CARD for the reason gfx.h gives: at
       // 44px the rectangle SDF's corner rounding leaves burrs on the rim, and the
       // disc's own radial mask does not. The same pair social.c and profile.c use.
-      gfx_tex_aspect_current = tex_aspect(p->avatarUrl);
+      gfx_tex_aspect_current = tex_aspect(url);
       gfx_rect(av, tex, GFX_AVATAR, 0, 0, 0, 0.0f, 1, 1, 1, alpha);
       gfx_tex_aspect_current = 0.0f;
     } else {
@@ -449,9 +474,10 @@ static void drawFooter(float px, float w, float alpha, float focus) {
       TxtLine name = txt_line_trim(TXT_BODY, p ? p->name : "Your account",
                                       c, c, c, 255,
                                       NV_MENU_W_IS_OPEN - NV_MENU_LABEL_X - 28.0f);
-      TxtLine action = txt_line(TXT_CAPTION, "Switch user", 128, 128, 128, 255);
-      txt_draw_alpha(name, px + NV_MENU_LABEL_X, cy - name.h - 2.0f, aText);
-      txt_draw_alpha(action, px + NV_MENU_LABEL_X, cy + 4.0f, aText);
+      // The name alone, CENTRED on the row. There used to be a "Switch user"
+      // caption under it, which is why the name sat a line high; with the caption
+      // gone that offset would leave it hanging above the avatar it belongs to.
+      txt_draw_alpha(name, px + NV_MENU_LABEL_X, cy - name.h * 0.5f, aText);
     } }
 }
 

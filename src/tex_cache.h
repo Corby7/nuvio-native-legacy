@@ -60,8 +60,40 @@ void tex_scale(float e);
 // Prefer this over tex_get for any list art: that is where the cache blows.
 GLuint tex_get_width(const char *path, float widthLayout);
 
+// FOR ART THAT MUST COME OUT SHARP AT ONE FIXED SIZE: the brand lockup, the rail's
+// icons — UI furniture, drawn at a width the layout already knows and never
+// animates.
+//
+// tex_get_width deliberately asks for MORE than the drawing width (NV_TEX_SLACK,
+// then rounded up to a multiple of 32) so that a card taking focus does not force a
+// second decode. The cost of that headroom is that the texture is always between
+// 1.25x and 1.6x the size it is drawn at — and the minification filter is
+// GL_LINEAR_MIPMAP_NEAREST, which SNAPS at a scale factor of 1.414: below it the
+// GPU samples level 0 and undersamples (aliasing, jagged edges); above it the GPU
+// takes level 1, HALF the resolution, and magnifies it back up (blur). The wordmark
+// in the side rail landed at 1.4147 and came out visibly soft.
+//
+// This asks for the drawing width EXACTLY — no slack, no rounding — and the texture
+// is uploaded WITHOUT a mipmap chain and with GL_LINEAR, so what reaches the screen
+// is a 1:1 blit and the filter never has a choice to get wrong.
+//
+// Only for art whose drawn size is fixed: an entry re-decodes when the requested
+// width moves (in EITHER direction, unlike the promotion tex_get_width relies on),
+// so asking with a size that animates would decode on every frame.
+GLuint tex_get_exact(const char *path, float widthLayout);
+
 // The aspect (w/h) of the already-loaded texture; 0 if it is not ready yet.
 // Needed for the shader's "cover" — without it the art stretches.
+//
+// It is the SOURCE file's aspect, not the decoded texture's. Those differ: the
+// decode scales to a width ceiling and the height follows as an integer division,
+// so a 221x41 wordmark capped at 160 becomes 160x29 — an aspect of 5.517 where the
+// file's is 5.390. Callers size their box from this (`w = h * tex_aspect(...)`), so
+// the truncation was reaching the screen as a 2% horizontal stretch on the very art
+// that is most sensitive to it, the wordmarks. It also has to be STABLE for
+// tex_get_exact: a caller that derives its width from the aspect and then asks for
+// a decode at that width would otherwise chase its own tail, each decode moving the
+// aspect that chooses the next one.
 float tex_aspect(const char *path);
 
 // 1 when the cache has GIVEN UP on this art: the decode failed and the retries
