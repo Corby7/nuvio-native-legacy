@@ -165,6 +165,27 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_DET_META,  WEIGHT_REGULAR },
   { NV_FT_DET_SIN,   WEIGHT_REGULAR },
   { NV_FT_DET_META2, WEIGHT_REGULAR },
+  // The primary button's 600 stays MEDIUM by the optical rule written above. The
+  // pill now has TWO grounds — #222 with white ink at rest, #f5f5f5 with #111 ink
+  // focused — and Medium is the side of the choice that serves the focused state,
+  // which is the one being read.
+  { NV_FT_DETWEB_BTN, WEIGHT_MEDIUM },
+  // The tooltip is the exception: the sheet says `font-weight: bold`, so this 700
+  // is not a 600 being resolved and goes straight to Bold.
+  { NV_FT_DETWEB_TIP, WEIGHT_BOLD   },
+  // The picker's value is 600 on a DARK pill, so it goes Bold by the optical rule
+  // above; the " · N Eps" tail beside it really is 400 and stays Regular.
+  { NV_FT_DETWEB_SEA, WEIGHT_BOLD    },
+  { NV_FT_DETWEB_SEA, WEIGHT_REGULAR },
+  // An option is 500, and it is read on a LIGHT row as often as a dark one (the
+  // focused one inverts). Medium is the value 500 itself, with nothing to resolve.
+  { NV_FT_DETWEB_OPT, WEIGHT_MEDIUM  },
+  { NV_FT_DETWEB_EPB, WEIGHT_BOLD    },   // 600, white on a dark pill
+  { NV_FT_DETWEB_EPM, WEIGHT_REGULAR },
+  // 800 is past Bold and the embedded family stops there; the caller adds a heavier
+  // pass on top (txt_weight), which is how the old episode title already did it.
+  { NV_FT_DETWEB_EPT, WEIGHT_BOLD    },
+  { NV_FT_DETWEB_EPD, WEIGHT_REGULAR },
   { NV_FT_HERO_META, WEIGHT_MEDIUM  },   // .home-modern-hero-meta-line (21/500)
   { NV_FT_HERO_SIN,  WEIGHT_REGULAR },   // .home-hero-description (24/400)
   { NV_FT_PG_CLOCK, WEIGHT_MEDIUM  },  // .player-clock (26/600)
@@ -311,6 +332,112 @@ static const char *withoutInvisible(const char *s, char *out, size_t n) {
   }
   out[k] = 0;
   return out;
+}
+
+// A DECORATIVE codepoint: symbol, arrow, pictogram, emoji, variation selector.
+// It belongs to no script, so it must never be what decides which font the WHOLE
+// LINE is drawn in.
+//
+// WHY THIS EXISTS, with Inter's coverage MEASURED rather than assumed.
+//
+// fontOf sends the entire line to the fallback face when the first non-ASCII
+// character is not in Inter. That rule is right for SCRIPT — "Deadpool &
+// ウルヴァリン" comes out legible in DroidSansFallback — and wrong for SYMBOL.
+// The stream names addons return are full of decoration, and a single symbol
+// Inter lacks was enough to flip the whole Sources sheet to DroidSansFallback,
+// which is a CJK face: its Latin is heavier and hinted differently, and on
+// screen that reads exactly as the report did — "all the text appears in bold,
+// the information looks pixelated". It was also extra work (opening a second
+// font file per style and rasterising with a much larger face) on the very
+// screen the same report calls slow.
+//
+// CHECKED across the three embedded InterDisplay weights with TTF_GlyphIsProvided:
+//   HAS      arrows, bullet, ellipsis, en/em dash, curly quotes, star, play, tick, middot
+//   HAS NOT  high voltage, gear, glowing star
+// So what brought the line down were the ones Inter does not have, and the high
+// voltage sign is the most common of those in Torrentio and AIOStreams names.
+// The arrows and the play triangle the INTERFACE itself uses in its own labels
+// always passed, and still pass: the decision below is per available glyph, not
+// per codepoint range.
+//
+// Emoji had the OTHER symptom, not this one: fontOf returns the main font for a
+// codepoint outside the BMP (TTF_GlyphIsProvided takes a Uint16 and cannot reach
+// them), so those never changed the line's font — they came out as the .notdef
+// box. Both cases die here.
+static int decorative(Uint32 cp) {
+  if (cp >= 0x2000  && cp <= 0x2BFF)  return 1;  // punctuation, arrows, symbols, dingbats
+  if (cp >= 0x2E00  && cp <= 0x2E7F)  return 1;  // supplemental punctuation
+  if (cp >= 0xFE00  && cp <= 0xFE0F)  return 1;  // variation selectors
+  if (cp >= 0x1F000 && cp <= 0x1FAFF) return 1;  // emoji and pictographs
+  return 0;
+}
+
+// Decodes one UTF-8 codepoint and says how many bytes it took. An invalid
+// sequence returns the raw byte with a length of 1, so the loop can never stall.
+static Uint32 decodeCp(const unsigned char *p, int *n) {
+  if (*p < 0x80) { *n = 1; return *p; }
+  if ((*p & 0xE0) == 0xC0 && p[1]) { *n = 2; return (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F)); }
+  if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { *n = 3;
+    return (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F)); }
+  if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) { *n = 4;
+    return (Uint32)((*p & 0x07) << 18 | (p[1] & 0x3F) << 12 |
+                    (p[2] & 0x3F) << 6 | (p[3] & 0x3F)); }
+  *n = 1; return *p;
+}
+
+// Takes out of the line the decorative codepoints the main font DOES NOT HAVE,
+// and only those.
+//
+// Without this there were two bad outcomes and no good one: keep the character
+// and draw the .notdef box (which is what happened to emoji), or swap the font
+// for the entire line (which is what happened to BMP symbols). Removing is the
+// third: "<bolt> 1080p · 4.2 GB" stays "1080p · 4.2 GB", in Inter, with no box.
+//
+// What the font HAS stays: en dash, ellipsis, curly quotes and the middot itself
+// are in Inter and pass through untouched — the decision is per available glyph,
+// not per range. Emoji outside the BMP always go: TTF_GlyphIsProvided takes a
+// Uint16 and cannot reach those codepoints, and none of this app's faces has them.
+//
+// COST: one pass per line, and only when the line has a non-ASCII byte — the
+// common path leaves on the first comparison. The rasterised line is cached, but
+// the cache KEY is built from the already-cleaned text, so this pass runs every
+// frame; that is why the early exit matters.
+static const char *withoutDecorativeNoGlyph(TxtStyle style, const char *s,
+                                            char *dst, size_t n) {
+  const unsigned char *p = (const unsigned char *)s;
+  size_t k = 0;
+  int any = 0;
+  // No face, no glyph question to ask — and TTF_GlyphIsProvided would be handed
+  // a NULL font. txt_tracking reaches here without the style check its callers
+  // in lineFamily and widthOf already made.
+  if (style < 0 || style >= TXT_NFONTS || !fonts[style]) return s;
+  for (; *p; p++) if (*p >= 0x80) { any = 1; break; }
+  if (!any) return s;
+  // A line longer than the buffer is left exactly as it is. Cutting visible text
+  // to fit a buffer of mine would trade a cosmetic defect for lost information.
+  if (strlen(s) + 1 > n) return s;
+  p = (const unsigned char *)s;
+  while (*p) {
+    int len = 1;
+    Uint32 cp = decodeCp(p, &len);
+    int drop = 0;
+    if (decorative(cp))
+      drop = cp >= 0x10000 || !TTF_GlyphIsProvided(fonts[style], (Uint16)cp);
+    if (!drop) { int i; for (i = 0; i < len; i++) dst[k++] = (char)p[i]; }
+    p += len;
+  }
+  dst[k] = 0;
+  // A double space, or one at either edge, is a leftover of what was removed —
+  // not of the text.
+  { size_t r = 0, w = 0;
+    while (dst[r] == ' ') r++;
+    for (; dst[r]; r++) {
+      if (dst[r] == ' ' && w && dst[w - 1] == ' ') continue;
+      dst[w++] = dst[r];
+    }
+    while (w && dst[w - 1] == ' ') w--;
+    dst[w] = 0; }
+  return dst;
 }
 
 // The first codepoint OUTSIDE ASCII that could need another font, or 0. It decodes
@@ -569,7 +696,7 @@ void txt_shutdown(void) {
 static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
                              int b, int a, TxtFamily family) {
   TxtLine empty = {0, 0, 0};
-  char clean[1024];
+  char clean[1024], clean2[1024];
   if (!s || !*s || style < 0 || style >= TXT_NFONTS || !fonts[style]) return empty;
 
   // HERE AND IN widthOf, and nowhere else: those two are what every public entry
@@ -582,6 +709,20 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
 
   if (family < TXT_FAMILY_INTER || family >= TXT_FAMILY_N)
     family = TXT_FAMILY_INTER;
+
+  // AND THE DECORATIVE CHARACTERS THE FACE HAS NO GLYPH FOR — before the cache
+  // key, so the line that is stored is the line that is drawn: two entries
+  // differing only by an emoji nobody renders become one, which also relieves
+  // the table on the Sources screen.
+  //
+  // ONLY ON THE MAIN FAMILY. The test asks fonts[style] whether the glyph
+  // exists, and the subtitle families draw from subFontsHeight instead: applying
+  // it there would strip a subtitle of a symbol ITS OWN face has. The screen
+  // that motivated this — the source list — is all Inter.
+  if (family == TXT_FAMILY_INTER) {
+    s = withoutDecorativeNoGlyph(style, s, clean2, sizeof clean2);
+    if (!*s) return empty;
+  }
 
   char key[288];
   snprintf(key, sizeof key, "%d:%d|%02x%02x%02x|%.236s", (int)family,
@@ -708,7 +849,7 @@ static Measure measures[MAX_MEASURES];
 // The width in LAYOUT units — the same units lineFamily stores, so the two are
 // interchangeable in a comparison.
 static float widthOf(TxtStyle style, const char *s, TxtFamily family) {
-  char clean[1024];
+  char clean[1024], clean2[1024];
   if (!s || !*s || style < 0 || style >= TXT_NFONTS || !fonts[style]) return 0.0f;
   // The other half of the pair described in lineFamily: measure what will be
   // drawn, never what was passed in.
@@ -716,6 +857,12 @@ static float widthOf(TxtStyle style, const char *s, TxtFamily family) {
   if (!*s) return 0.0f;
   if (family < TXT_FAMILY_INTER || family >= TXT_FAMILY_N)
     family = TXT_FAMILY_INTER;
+  // The other half of the pair, for the decorative strip too: measuring the raw
+  // string while drawing the cleaned one would wrap at the wrong word.
+  if (family == TXT_FAMILY_INTER) {
+    s = withoutDecorativeNoGlyph(style, s, clean2, sizeof clean2);
+    if (!*s) return 0.0f;
+  }
 
   // NO COLOUR in the key: the width of a string does not depend on it, so the
   // same line measured in two colours is measured once. The LENGTH is in the key
@@ -826,8 +973,12 @@ float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
     // A character that draws nothing takes no space and no tracking either: the
     // stripping happens inside txt_line, so without this test an invisible mark
     // would still open a gap the width of the tracking in the middle of a word.
-    char one[8];
+    // The same holds for a decorative character the face has no glyph for, which
+    // txt_line now removes as well — it would otherwise be an invisible
+    // character that still cost a letter's spacing.
+    char one[8], one2[8];
     if (!*withoutInvisible(c, one, sizeof one)) continue;
+    if (!*withoutDecorativeNoGlyph(style, c, one2, sizeof one2)) continue;
 
     TxtLine l = txt_line(style, c, r, g, b, 255);
     if (x >= 0.0f && l.w) txt_draw_alpha(l, x + width, y, alpha);

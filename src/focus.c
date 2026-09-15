@@ -37,6 +37,33 @@ int focus_move(Focus *f, int dx, int dy) {
   return (f->row != fBefore || f->column != cBefore);
 }
 
+int focus_move_grid(Focus *f, int dx, int dy) {
+  int rBefore = f->row, cBefore = f->column;
+
+  if (dx) {
+    int new = f->column + dx;
+    if (new >= 0 && new < f->nColumns[f->row]) f->column = new;
+  }
+  if (dy) {
+    // The same SKIP-AN-EMPTY-ROW rule as focus_move: a row with no item never
+    // takes focus.
+    int new = f->row + dy;
+    while (new >= 0 && new < f->nRows && f->nColumns[new] <= 0) new += dy;
+    if (new >= 0 && new < f->nRows) {
+      int target = f->column;
+      // The memory is still WRITTEN, in case the same structure is also walked
+      // by focus_move — the library switches mode and restarts the focus. It is
+      // only not READ here.
+      f->columnRemembered[f->row] = f->column;
+      if (target >= f->nColumns[new]) target = f->nColumns[new] - 1;
+      if (target < 0) target = 0;
+      f->row = new;
+      f->column = target;
+    }
+  }
+  return (f->row != rBefore || f->column != cBefore);
+}
+
 int focus_index(const Focus *f, int row, int column) {
   return (f->row == row && f->column == column);
 }

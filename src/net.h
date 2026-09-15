@@ -75,4 +75,33 @@ char *net_download_st(const char *url, int seconds, const char *const *headers,
 // first. Calling it more than once costs nothing.
 void net_prepare(void);
 
+// SAY SO WHEN A REQUEST COMES BACK 401.
+//
+// WHY THE NETWORK LAYER ANNOUNCES IT. An expired Trakt token used to reach the
+// log and nowhere else: the screen carried on saying "connected" and the owner
+// only noticed when "Continue watching" stopped arriving. The 401 can come back
+// from any call, so the one place that sees every response code is the one place
+// that can notice. Who ACTS on it is traktauth_step, which renews from the
+// stored refresh token.
+//
+// One listener, replacing whatever was there. Called ON THE NETWORK THREAD, so
+// the callback must only set a flag.
+void net_notify_401(void (*f)(const char *url));
+
+// A URL SAFE FOR THE LOG: scheme and host only, path cut off.
+//
+// WHY THIS EXISTS, and it is not paranoia. A debrid key travels in the PATH of
+// addon URLs ("https://host/manifest/<id>/<jwt>", "https://host/d/<key>/
+// file.mkv"), and the app PRINTS those URLs in several places. The destination
+// of that text is not a development file any more: on webOS it goes to
+// /tmp/nuvio.log, which any process can read.
+//
+// Cutting only at the point of display would protect the room and not the file.
+// Cutting at the ORIGIN protects both, and the host — which is what matters for
+// working out which addon answered — stays in the log.
+//
+// Writes into `dst` and returns `dst`, so it can go straight into a printf.
+// Text with no "://" is copied as it is (not a URL, no path to hide).
+const char *net_url_public(const char *url, char *dst, unsigned size);
+
 #endif

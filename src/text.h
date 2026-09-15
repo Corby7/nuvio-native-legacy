@@ -23,6 +23,18 @@ typedef enum {
   TXT_DET_META,    // .series-detail-support   25 / 400
   TXT_DET_SIN,     // .series-detail-description 26 / 400
   TXT_DET_META2,   // .detail-meta-row.secondary 23 / 400
+  // The hero's actions row, re-measured in NuvioWeb on 2026-09-15. TXT_DET_BUTTON
+  // stays where it is because profile.c draws its "OK · Try again" hint with it.
+  TXT_DETWEB_BTN,  // .series-primary-btn       32 / 600
+  TXT_DETWEB_TIP,  // .series-circle-btn::after 24 / 700
+  // The season picker and the episode card, re-measured in NuvioWeb 2026-09-15.
+  TXT_DETWEB_SEA,      // .library-picker-value       30 / 600
+  TXT_DETWEB_SEA_EPS,  // its " · N Eps" tail          30 / 400
+  TXT_DETWEB_OPT,      // .library-picker-option      28 / 500
+  TXT_DETWEB_EP_BADGE, // .series-episode-badge       20 / 600
+  TXT_DETWEB_EP_META,  // .series-episode-meta        20 / 400
+  TXT_DETWEB_EP_TITLE, // .series-episode-title       32 / 800
+  TXT_DETWEB_EPD,      // .series-episode-desc-row    32 / 400
   // The HERO's meta line: 21 / 500, rgb(179,179,179). It is neither TXT_CAPTION
   // (22/400) nor TXT_CALLOUT (28/500) — one gets the weight wrong, the other the
   // size, and the line came out either too faint or too heavy against the art.

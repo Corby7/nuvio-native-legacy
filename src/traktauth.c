@@ -33,6 +33,14 @@ static long expiresIn;
 // The ACCESS TOKEN's lifetime, which is a different clock from expiresIn above —
 // that one is the pairing code's deadline. Trakt sends 90 days here.
 static long tokenLifetime;
+// WHEN the access token was issued (Trakt's `created_at`, in seconds). Together
+// with tokenLifetime it is the only way to know, without asking, that the token
+// on disk is already dead.
+static long createdAt;
+// 1 when the load found an access token expired ON PAPER but a refresh token
+// still in hand: the renewal goes out on the first step, rather than spending
+// the whole first discovery cycle collecting 401s with a dead credential.
+static int renewPending;
 
 static pthread_t thread;
 static int threadAlive, threadReady;
@@ -72,25 +80,56 @@ static void forgetStream(void) {
 }
 
 static void save(void) {
-  char buf[400];
-  // The same format as the old art/trakt.txt ("token<TAB>clientId"), so the
-  // file stays readable to anyone who already knew that one. The difference is
-  // the PLACE: here it is the installation folder, not the package.
-  snprintf(buf, sizeof buf, "%s\t%s\n", token, cloud_trakt_client());
+  char buf[800];
+  // Starts with the old art/trakt.txt shape ("token<TAB>clientId"), so the file
+  // stays readable to anyone who knew that one; the difference is the PLACE,
+  // this being the installation folder rather than the package.
+  //
+  // THE THREE COLUMNS AFTER IT ARE WHAT MAKES RENEWAL POSSIBLE AT ALL. The
+  // refresh token was being fetched and pushed to the account and then dropped
+  // on the floor here, so a restart lost it: this installation had no way to
+  // renew, and when the access token expired the screen went on saying
+  // "connected" while every call came back 401. `createdAt` + `expiresIn` are
+  // what let the load tell a live token from a dead one without asking.
+  snprintf(buf, sizeof buf, "%s\t%s\t%s\t%ld\t%ld\n", token,
+           cloud_trakt_client(), refresh, createdAt, tokenLifetime);
   data_write(TRA_FILE, buf);
 }
 
 int traktauth_load(void) {
   char *b = data_read(TRA_FILE);
-  char *tab;
   if (!b) return 0;
-  tab = strchr(b, '\t');
-  if (tab) *tab = 0;
-  { char *end = b + strlen(b);
-    while (end > b && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0; }
-  if (b[0]) {
-    snprintf(token, sizeof token, "%s", b);
-    trakt_set(token, cloud_trakt_client());
+  // Up to five tab-separated columns: token, clientId, refresh, createdAt,
+  // expiresIn. A TWO-COLUMN FILE STILL LOADS — that is what every install
+  // written before the renewal existed has — and simply reports no refresh and
+  // no deadline, which the guard below reads as "cannot tell, use it".
+  { char *col[5] = {0}, *p = b;
+    int k = 0;
+    col[k++] = p;
+    while (k < 5 && (p = strchr(p, '\t')) != NULL) { *p++ = 0; col[k++] = p; }
+    { char *end = col[k - 1] + strlen(col[k - 1]);
+      while (end > col[k - 1] && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0; }
+    if (col[0] && col[0][0]) snprintf(token, sizeof token, "%s", col[0]);
+    if (col[2] && col[2][0]) snprintf(refresh, sizeof refresh, "%s", col[2]);
+    if (col[3]) createdAt = atol(col[3]);
+    if (col[4]) tokenLifetime = atol(col[4]);
+  }
+  if (token[0]) {
+    // EXPIRED ON PAPER: createdAt + expiresIn has already passed. Handing this
+    // token to trakt.c would send every call of the first discovery cycle out to
+    // the network to come back 401 — seconds each, in the same pool the rest of
+    // the home is waiting on. With a refresh in hand the renewal resolves it
+    // first; the step applies the new token and asks for the rows again.
+    //
+    // Five minutes of margin, because a token that expires during the cycle is
+    // the same problem arriving slightly later.
+    if (refresh[0] && createdAt > 0 && tokenLifetime > 0 &&
+        (long)time(NULL) >= createdAt + tokenLifetime - 300) {
+      renewPending = 1;
+      printf("[trakt] token expired in the file — renewing before the 401\n");
+    } else {
+      trakt_set(token, cloud_trakt_client());
+    }
     state = TRA_ON;
   }
   free(b);
@@ -127,6 +166,8 @@ int traktauth_load(void) {
 }
 
 void traktauth_forget(void) {
+  renewPending = 0;
+  createdAt = 0;
   token[0] = refresh[0] = url[0] = error[0] = 0;
   tokenLifetime = 0;
   state = TRA_STOPPED;
@@ -213,6 +254,10 @@ static void *threadPoll(void *u) {
       // never read before because the old push sent an opaque credential_json
       // that had no room for it.
       tokenLifetime = (long)js_num(r, r + strlen(r), "expires_in", 0.0);
+      // `created_at` comes from Trakt; falling back to now is right, because
+      // "now" is when we received it. Without this the deadline in the file is
+      // unknowable and the load cannot tell a live token from a dead one.
+      createdAt = (long)js_num(r, r + strlen(r), "created_at", (double)time(NULL));
       tokenNew = 1;
       forgetStream();
       state = TRA_ON;
@@ -247,6 +292,63 @@ static void *threadPoll(void *u) {
   return NULL;
 }
 
+// RENEW FROM THE REFRESH TOKEN.
+//
+// The refresh has always been FETCHED (it is read out of the pairing answer and
+// pushed to the account) and was never USED here: an expired access token stayed
+// expired for ever, and the screen said "connected" while everything came back
+// 401. Standard OAuth grant; Trakt answers with a NEW refresh token — it
+// rotates — which travels on to the account with the rest.
+static void *threadRenew(void *u) {
+  Jsw w;
+  char *r;
+  int st = 0;
+  (void)u;
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_cs(&w, "refresh_token", refresh);
+  jsw_cs(&w, "client_id", cloud_trakt_client());
+  jsw_cs(&w, "client_secret", cloud_trakt_secret());
+  jsw_cs(&w, "redirect_uri", "urn:ietf:wg:oauth:2.0:oob");
+  jsw_cs(&w, "grant_type", "refresh_token");
+  jsw_obj_end(&w);
+  r = post("/oauth/token", jsw_text_final(&w), &st);
+  jsw_free(&w);
+
+  if (r && st >= 200 && st < 300) {
+    char t[300];
+    const char *end = r + strlen(r);
+    if (js_text(r, end, "access_token", t, sizeof t)) {
+      snprintf(token, sizeof token, "%s", t);
+      // THE REFRESH ROTATES: the old one dies with this answer, so failing to
+      // read the new one has to clear the field rather than keep a dead value
+      // that would be retried for ever.
+      if (!js_text(r, end, "refresh_token", refresh, sizeof refresh))
+        refresh[0] = 0;
+      createdAt = (long)js_num(r, end, "created_at", (double)time(NULL));
+      tokenLifetime = (long)js_num(r, end, "expires_in", 86400.0);
+      tokenNew = 1;
+      state = TRA_ON;
+      printf("[trakt] credential renewed from the refresh token\n");
+    } else {
+      snprintf(error, sizeof error, "the renewal came back without a token");
+      state = TRA_ERROR;
+    }
+  } else if (st == 400 || st == 401 || st == 403 || st == 404) {
+    // invalid_grant: the refresh has died too. Only a fresh pairing fixes this,
+    // and the screen has to say so instead of showing "connected".
+    snprintf(error, sizeof error, "the Trakt session expired \xe2\x80\x94 connect again");
+    state = TRA_ERROR;
+  }
+  // A TRANSPORT failure (st == 0) leaves the state alone on purpose: the step
+  // will try again. A TV with no network for a minute is not a dead session.
+  free(r);
+  threadReady = 1;
+  return NULL;
+}
+
+static void release(void *(*routine)(void *));
+
 static void release(void *(*routine)(void *)) {
   if (threadAlive) return;
   threadReady = 0;
@@ -267,9 +369,37 @@ void traktauth_step(unsigned nowMs) {
   if (threadAlive && threadReady) { threadAlive = 0; threadReady = 0; }
   if (threadAlive) return;
 
+  // A 401 IN THIS SESSION, or a token already dead when it was loaded. With a
+  // refresh stored, renew — one attempt a minute, because a transport failure
+  // must not burn the session. With no refresh there is no route at all (a
+  // credential that came from the package, or from an account row without one),
+  // so the state drops to ERROR and the screen finally tells the truth instead
+  // of showing "connected".
+  //
+  // The guard is not `state == TRA_ON`: a token loaded from the package leaves
+  // the state STOPPED with trakt_active() true, and that was exactly the case
+  // that displayed "connected" with everything failing.
+  if ((renewPending || (trakt_refused() && trakt_active())) &&
+      state != TRA_REQUESTING && state != TRA_WAITING) {
+    // lastRenewal == 0 means "never tried", not "tried at instant zero".
+    // Without that case a 401 in the app's first minute waited for 60 s of
+    // uptime before renewing — which is the "Trakt takes a while to show up".
+    static unsigned lastRenewal;
+    if (refresh[0]) {
+      if (!lastRenewal || nowMs - lastRenewal > 60000u) {
+        lastRenewal = nowMs;
+        release(threadRenew);
+      }
+    } else if (state != TRA_ERROR) {
+      snprintf(error, sizeof error, "the Trakt session expired \xe2\x80\x94 connect again");
+      state = TRA_ERROR;
+    }
+  }
+
   // Apply the token in the MAIN LOOP, never in the thread: trakt.c is read by the UI.
   if (tokenNew) {
     tokenNew = 0;
+    renewPending = 0;
     trakt_set(token, cloud_trakt_client());
     save();
     // And send it to the ACCOUNT, so the person's other devices inherit the link.

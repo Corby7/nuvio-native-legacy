@@ -64,12 +64,32 @@ typedef struct {
   // How much of the title the owner has watched, 0..100. It comes from the web
   // app (the watchProgressItems key), the fourth column of extra.txt. 0 = not started.
   int  progress;
+  // WHEN this title was last watched, in ms since the epoch. 0 = not known.
+  //
+  // It travels ON THE ITEM and not in an array indexed by position, and that is
+  // the whole point: trakt_resume COMPACTS the batch after decorating, dropping
+  // whatever Cinemeta does not know, so a parallel array desynchronises exactly
+  // there — in silence, with a wrongly ordered row as the only symptom.
+  //
+  // Two producers stamp it: the Trakt path from `paused_at` in /sync/playback,
+  // and the local path from the last column of progress.txt. It is what lets
+  // "Continue watching" merge both sources and order them by recency instead of
+  // by whichever answered first.
+  long long resumedMs;
   // The card's caption in "Continue Watching". A series shows "S1, E8 · 16 min";
   // a film shows only the time remaining. Season/episode stay at 0 on a film,
   // and that is what separates the two cases while drawing.
   int  season, episode;
   int  remainingMin;
   char nameEpisode[120]; // the title of the episode in progress, never the file name
+  // THE EPISODE'S OWN STILL, when Cinemeta has one. The Continue watching card
+  // used to draw `backdrop`, which is the SERIES' `background` — the very image
+  // the hero above it is already showing. The row came out as the hero repeated
+  // four times over, and nothing on the card said which episode it resumes.
+  //
+  // Empty is the normal state for a film, and for a series Cinemeta has no still
+  // for; whoever draws falls back to `backdrop`.
+  char thumbEp[512];
   // The seasons the series has, in order. It comes out of Cinemeta's `videos`
   // field, fetched when the title opens. 0 = not known yet (or it is a film), and
   // the tabs fall back to the fixed 3 that used to be there.
@@ -107,6 +127,17 @@ typedef struct {
   char date[40];
   char synopsis[420];
   char thumb[512];     // the episode's still; empty falls back to the title's art
+  // The episode's IMDb score in TENTHS (85 = 8.5); 0 = none. It is the field the web
+  // app puts on the card (`episode.imdbRating`, metaDetailsScreen.js:496), and it comes
+  // from the SAME Cinemeta `videos` entry as everything else here — so it costs no
+  // extra request.
+  //
+  // IT IS OFTEN 0, and that is Cinemeta and not a parse fault: every Fallout and
+  // Gentlemen episode answers `"rating": "0"`. The web renders that as a literal
+  // "IMDb 0.0" on every card, because its guard is `rating != null` and "0" is not
+  // null. This port draws the badge only when the number means something — see the
+  // note in detail.c.
+  int  imdb;
 } CatEp;
 
 // TAKES A BACKDROP OFF TMDB'S `original` AND ONTO w1280, IN PLACE.
@@ -211,6 +242,31 @@ void cat_set_in_list(int i, int inList);
 void cat_save_progress(int index_, double posSeg, double durationSeg);
 void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int season, int episode);
 
+// ONE LINE of progress.txt, as it was RECORDED — not as it was applied to the
+// catalogue.
+//
+// The difference matters. Applying progress walks the catalogue and drops any id
+// it cannot find (cat_index_by_imdb), which is right for painting a card that is
+// on screen and wrong for the question "what was this person watching?": what
+// the phone sent for a title this TV's catalogue never loaded is real history,
+// and it used to be thrown away without a word. "Continue watching" asks the
+// second question, so it reads the records.
+typedef struct {
+  char   imdb[24];        // the WORK's id, episode suffix stripped
+  double posSeg, durationSeg;
+  int    season, episode; // 0/0 on a film
+  // 0 on a line written before this column existed. Those lines still work
+  // everywhere; they simply order after the ones that know their instant.
+  long long lastWatchedMs;
+} CatProgress;
+
+#define CAT_PROGRESS_MAX 64
+
+// Reads progress.txt into `out`, MOST RECENT FIRST, and returns how many. A
+// missing or unreadable file is 0 and not an error: a fresh install has no
+// history.
+int cat_progress_read(CatProgress *out, int max);
+
 // Episodes of title `indexItem`. A film returns 0 — which is what the screen uses
 // to decide whether to show the episodes section.
 // Replaces the whole catalogue with what came from the network. The art paths
@@ -268,6 +324,13 @@ void cat_set_all(const CatItem *list, int count,
 
 // Replaces the episodes of ONE title. Called when the detail screen opens.
 void cat_set_episodes(int indexItem, const CatEp *list, int n);
+// Fills ONE episode's IMDb score (tenths) in place, matched on season+episode.
+// It exists because the score arrives from a DIFFERENT request than the episodes
+// themselves — the ratings API is called after the row is already on screen — and
+// republishing the whole list to add a number would restart the thumbnails.
+// Returns 1 when an episode matched, so the caller can log what LANDED rather
+// than what it parsed.
+int  cat_set_ep_score(int indexItem, int season, int episode, int tenths);
 
 // Replaces ONE item, preserving the rest. Used when the detail screen opens and
 // brings cast, directing and seasons the row's catalogue did not have.

@@ -372,17 +372,21 @@ void search_event(const SDL_Event *e) {
     }
     if (k == SDLK_TAB && nFilter > 0) { panel = 1; return; }
     switch (k) {
-      case SDLK_LEFT:  focus_move(&focusKb, -1, 0); break;
+      case SDLK_LEFT:  focus_move_grid(&focusKb, -1, 0); break;
       case SDLK_RIGHT:
         // Going past the keyboard's LAST column enters the results. It is the
         // only bridge between the two panels, and that is why it must not fail
         // silently: with no results at all, the focus stays where it is.
         if (focusKb.column >= KB_COLUMNS[focusKb.row] - 1) {
           if (nFilter > 0) panel = 1;
-        } else focus_move(&focusKb, 1, 0);
+        } else focus_move_grid(&focusKb, 1, 0);
         break;
-      case SDLK_UP:     focus_move(&focusKb, 0, -1); break;
-      case SDLK_DOWN:   focus_move(&focusKb, 0,  1); break;
+      // A GRID, not rows: see focus_move_grid. This is where "it jumps to a
+      // random letter" came from — the per-row column memory sent the cursor to
+      // wherever it had last been in the destination row instead of keeping the
+      // column it was standing in.
+      case SDLK_UP:     focus_move_grid(&focusKb, 0, -1); break;
+      case SDLK_DOWN:   focus_move_grid(&focusKb, 0,  1); break;
       case SDLK_RETURN: case SDLK_KP_ENTER: applyKey(); break;
       default: break;
     }

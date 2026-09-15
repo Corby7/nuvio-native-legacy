@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
 
 static const char *skip(const char *p) {
   while (*p && (unsigned char)*p <= ' ') p++;
@@ -156,4 +157,41 @@ int js_flag(const char *start, const char *end, const char *key, int dflt) {
   if (p + 4 <= end && !strncmp(p, "true", 4))  return 1;
   if (p + 5 <= end && !strncmp(p, "false", 5)) return 0;
   return dflt;
+}
+
+// An ISO-8601 instant in MILLISECONDS since the epoch, or 0 when it cannot be
+// read. Accepts what these APIs actually emit: "2026-09-14T22:31:07.000Z",
+// "2026-09-14T22:31:07Z", and a bare "2026-09-14" (midnight UTC).
+//
+// SHARED ON PURPOSE. This app had THREE copies of this parse — one in social.c,
+// one inside the profile statistics in trakt.c, and the Trakt `paused_at` needed
+// a fourth. Two copies of a date parser diverge, and they diverge IN SILENCE:
+// the symptom is a row in the wrong order, never an error anybody sees. So the
+// parse lives here, next to the readers that produce the strings.
+//
+// UTC, always: `timegm` and not `mktime`. These timestamps are UTC by
+// definition, and mktime would read them in the TV's local zone — which, three
+// hours off, silently reorders anything sorted by this value.
+long long js_ms_iso(const char *s) {
+  struct tm tm;
+  int year, month, day, h = 0, m = 0, sec = 0, frac = 0, n;
+  char sep;
+  time_t t;
+  if (!s || !*s) return 0;
+  n = sscanf(s, "%d-%d-%d%c%d:%d:%d", &year, &month, &day, &sep, &h, &m, &sec);
+  if (n < 3) return 0;
+  memset(&tm, 0, sizeof tm);
+  tm.tm_year = year - 1900; tm.tm_mon = month - 1; tm.tm_mday = day;
+  tm.tm_hour = h; tm.tm_min = m; tm.tm_sec = sec;
+  t = timegm(&tm);
+  if (t < 0) return 0;
+  // The fractional part, to three digits. "…07.5Z" is 500 ms and not 5.
+  { const char *p = strchr(s, '.');
+    if (p) {
+      int k = 0;
+      p++;
+      while (*p >= '0' && *p <= '9' && k < 3) { frac = frac * 10 + (*p - '0'); p++; k++; }
+      while (k < 3) { frac *= 10; k++; }
+    } }
+  return (long long)t * 1000 + frac;
 }

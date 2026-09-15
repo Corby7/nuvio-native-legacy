@@ -26,3 +26,7 @@ deploy/app/art/addons.txt
 deploy/app/art/ajustes.txt
 deploy/app/art/collections.json
 deploy/app/art/collections/
+
+# Screenshots taken while comparing against NuvioWeb. Dev-only, never shipped.
+.macref/
+.webref/

@@ -1,4 +1,5 @@
 #include "extras.h"
+#include "watchedep.h"
 #include "trakt.h"
 #include "net.h"
 #include "js.h"
@@ -243,6 +244,19 @@ static void *fetch(void *arg) {
                                while (*v == ' ' || *v == ':') v++;
                                watched = (*v == 't'); }
             if (watched && en > 0 && en < EX_VIS_E) new[t][en] = 1;
+            // THE SAME PARSE FEEDS THE EPISODE MAP, with no second request.
+            //
+            // `new` above is this title's grid and it is bounded: EX_VIS_T 20
+            // seasons by EX_VIS_E 40 episodes, so a long-running series loses
+            // its later marks silently. It also dies when the screen changes
+            // title. watchedep has neither limit and holds for the session,
+            // which is what the marking gestures need — they have to enumerate
+            // which episodes exist before they can mark a batch of them.
+            //
+            // It records the 0 as well as the 1: this response enumerates the
+            // whole series and says yes or no per line, so after it a state of
+            // -1 means only "never asked about this series".
+            if (en > 0 && t >= 0) watchedep_set(id, t, en, watched);
             q = js_next(qf);
           }
         }

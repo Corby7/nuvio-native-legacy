@@ -13,10 +13,11 @@
 #ifndef NV_TRAKT_H
 #define NV_TRAKT_H
 #include "catalog.h"
+#include "watchedep.h"
 #include "profile.h"
 #include <stddef.h>
 
-int  trakt_load(const char *dirArt);   // 1 quando ha credencial
+int  trakt_load(const char *dirArt);   // 1 when a credential is present
 
 // Builds the three headers EVERY Trakt request requires (the token, the API
 // version and the application key) into `header`, which needs 4 slots — the last
@@ -29,6 +30,12 @@ int  trakt_load(const char *dirArt);   // 1 quando ha credencial
 int  trakt_headers(const char **header, char *auth, size_t nAuth,
                       char *key, size_t nKey);
 int  trakt_active(void);
+
+// 1 once a Trakt call has come back 401 in this session — the credential is
+// loaded but the server refuses it, which is what an expired access token looks
+// like from here. Cleared by trakt_set, i.e. by a renewal or a fresh pairing.
+// traktauth_step is what acts on it.
+int  trakt_refused(void);
 
 // The credential from the ACCOUNT, in place of the file. The token comes from
 // sync_pull_provider_credentials (provider "trakt"); the clientId belongs to the
@@ -44,7 +51,21 @@ void trakt_forget(void);
 
 // Fills up to `max` "continue watching" items, with the art already resolved.
 // BLOCKS — call from the discovery thread. Returns how many it filled.
+//
+// Only what is genuinely IN PROGRESS comes back: /sync/playback keeps every
+// resume point any Trakt client ever recorded, so the 1%-to-90% window is
+// applied here, and each item is stamped with the `paused_at` instant.
 int  trakt_resume(CatItem *output, int max);
+
+// Resolves art, synopsis and duration for `n` items that carry only an id and a
+// kind, in parallel, and returns how many survived — Cinemeta does not know
+// everything, and the ones it does not know are compacted out.
+//
+// The local "Continue watching" list is the second caller: it is built from
+// progress.txt, which stores a position and nothing a screen can draw. NOT
+// reentrant (the task queue is file-static); callers serialise on discover.c's
+// lock.
+int  trakt_decorate_batch(CatItem *output, int n);
 
 // The recent activity of the owner's FRIENDS. It uses Trakt's official social
 // feed (/users/me/friends/activities), keeping the normal title and art in the
@@ -72,6 +93,16 @@ int  trakt_list(const char *which, CatItem *output, int max);
 // during discovery — what was missing was writing back: the "+" button only
 // touched a local array and the list on the other devices never knew.
 void trakt_watchlist(const char *imdb, int add);
+
+// Marks or unmarks a BATCH OF EPISODES in /sync/history — one POST for the whole
+// batch, which is what makes "up to here" and "the whole season" a single
+// request instead of one per episode.
+//
+// SYNCHRONOUS and it can take the full 20 s timeout: the caller has already
+// applied the local effect (watchedep_mark_batch), so a caller on the draw
+// thread must hand this to a thread of its own or it freezes the TV.
+int trakt_mark_episodes(const char *imdb, const WatchedPair *pairs, int count,
+                        int watched);
 
 // Marks (or unmarks) the title as WATCHED in /sync/history.
 //

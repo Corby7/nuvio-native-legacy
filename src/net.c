@@ -72,11 +72,11 @@ static size_t receive(void *data, size_t size, size_t count, void *u) {
   Bucket *b = (Bucket *)u;
   size_t bytes = size * count;
   char *new;
-  if (b->cap > 0 && b->n >= (size_t)b->cap) return 0;   // corta a conexao
+  if (b->cap > 0 && b->n >= (size_t)b->cap) return 0;   // cuts the connection
   if (b->cap > 0 && b->n + bytes > (size_t)b->cap)
     bytes = (size_t)b->cap - b->n;
   new = realloc(b->p, b->n + bytes + 1);
-  if (!new) return 0;              // devolver 0 aborta a transferencia
+  if (!new) return 0;              // returning 0 aborts the transfer
   b->p = new;
   memcpy(b->p + b->n, data, bytes);
   b->n += bytes;
@@ -161,6 +161,15 @@ static void handleGive(void *h, int own, void *list) {
 // exist BEFORE the first thread, and a PTHREAD_MUTEX_INITIALIZER guarantees
 // that without depending on anybody calling anything first.
 static pthread_mutex_t openLock = PTHREAD_MUTEX_INITIALIZER;
+
+// THE SINGLE 401 LISTENER — see net_notify_401 in net.h.
+//
+// A pointer and not a list: exactly one module cares (traktauth, through
+// trakt.c), and a 401 can arrive on ANY call — continue watching, history,
+// extras — so the hook belongs at the one place that sees every response code
+// rather than at each caller.
+static void (*notify401)(const char *url);
+void net_notify_401(void (*f)(const char *url)) { notify401 = f; }
 
 static int openHandle(void) {
   void *h;
@@ -303,10 +312,18 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   { long http = 0;
     if (curl_getinfo) curl_getinfo(c, INFO_RESPONSE_CODE, &http);
     if (status) *status = (int)http;
+    // Told BEFORE the 4xx-to-NULL decision below, and regardless of whether the
+    // caller asked for the status: a credential that has been refused is refused
+    // whoever happened to make the call.
+    if (http == 401 && notify401) notify401(url);
     if (!r && http >= 400 && !status) {
       handleGive(c, own, list);
       free(b.p);
-      printf("[net] HTTP %ld on %.60s\n", http, url);
+      // REDACTED, and not the 60 characters that used to be here: those were
+      // enough to include the path segment that carries a debrid key or a JWT.
+      // See net_url_public in net.h.
+      { char safe[120];
+        printf("[net] HTTP %ld on %s\n", http, net_url_public(url, safe, sizeof safe)); }
       fflush(stdout);
       return NULL;
     } }
@@ -316,7 +333,9 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   // as it fills. In that case what has arrived is exactly what was wanted —
   // treating it as a failure would throw away the whole header we just downloaded.
   if (r == 23 && b.cap > 0 && b.n > 0) r = 0;
-  if (r != 0) { free(b.p); printf("[net] failure %d on %.60s\n", r, url); return NULL; }
+  if (r != 0) { char safe[120]; free(b.p);
+    printf("[net] failure %d on %s\n", r, net_url_public(url, safe, sizeof safe));
+    return NULL; }
   if (size) *size = (long)b.n;
   return b.p;
 }
@@ -385,10 +404,13 @@ char *net_post_st(const char *url, int seconds, const char *const *header,
   }
   r = curl_perform(c);
   // The code comes out BEFORE the cleanup: after it the handle no longer exists.
-  if (status && !r && curl_getinfo) {
+  // It is read whether or not the caller wanted it, because the 401 listener has
+  // to be told either way — see net_notify_401.
+  if (!r && curl_getinfo) {
     long code = 0;
     curl_getinfo(c, INFO_RESPONSE_CODE, &code);
-    *status = (int)code;
+    if (status) *status = (int)code;
+    if (code == 401 && notify401) notify401(url);
   }
   handleGive(c, own, list);
   // A TRANSPORT failure (r != 0) is still NULL — there was no response at all.

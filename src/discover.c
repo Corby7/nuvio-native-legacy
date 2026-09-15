@@ -1030,6 +1030,150 @@ static int manifestsJoin(Decl *output, int max) {
   return n;
 }
 
+// --- "CONTINUE WATCHING": THE TWO SOURCES, MERGED ----------------------------
+//
+// THE DEFECT. This row used to be built exclusively from Trakt:
+//     nResume = trakt_resume(lote, 8);
+// so with Trakt linked, the progress of the NUVIO ACCOUNT — which is what
+// arrives from the person's phone, lands in progress.txt through sync.c, and is
+// the only record this TV keeps of what was watched HERE — was simply never
+// read. Both halves of the report are that one line:
+//   "I watch on my phone and it does not show up in Continue watching on the TV"
+//     -> the record existed on disk and nothing ever looked at it;
+//   "films and series I never watched appear there"
+//     -> those came from Trakt's /sync/playback, which keeps every resume point
+//        any Trakt client ever recorded, and this path applied none of the
+//        1%-to-90% limits the local side always did.
+//
+// WHY MERGING IS THE RIGHT ANSWER rather than picking a source: the two answer
+// the same question about DIFFERENT universes. Trakt knows what was watched in
+// any Trakt client; the Nuvio account knows what was watched on Nuvio devices.
+// Picking one throws away half the history, in whichever direction. Dedupe by
+// work and order by the most recent instant, and the row becomes what was
+// actually being watched, wherever it was watched.
+//
+// WHEN THE TWO DISAGREE ABOUT ONE TITLE, THE MORE RECENT WINS — and both sides
+// now know their instant: the Trakt item from `paused_at`, the local one from
+// the last column of progress.txt. An entry from before that column existed
+// reports 0 and orders after everything that knows its own instant, which is
+// the honest placement: unknown is not the same as old.
+#define CONT_MAX 8
+
+// The window the local path always had and the Trakt one never did. Below 1% it
+// was not started; from 90% on it is finished. "Continue" is neither.
+static int inProgress(int pct) { return pct >= 1 && pct < 90; }
+
+// 1 when the two items are the SAME WORK. Only the part before the ':' counts:
+// "tt123:4:9" and "tt123:1:2" are two episodes of one series, and the row shows
+// the series once.
+static int sameWork(const char *a, const char *b) {
+  size_t la, lb;
+  const char *ca, *cb;
+  if (!a || !b || !*a || !*b) return 0;
+  ca = strchr(a, ':'); cb = strchr(b, ':');
+  la = ca ? (size_t)(ca - a) : strlen(a);
+  lb = cb ? (size_t)(cb - b) : strlen(b);
+  return la && la == lb && !strncmp(a, b, la);
+}
+
+// "Continue watching" from the LOCAL progress record, in the same shape
+// trakt_resume returns: id (with the episode composed in for a series), kind,
+// percentage, season/episode — and the art comes from Cinemeta through the same
+// decorator. Most recent first, which is the order cat_progress_read gives.
+static int resumeLocal(CatItem *output, int max) {
+  static CatProgress regs[CAT_PROGRESS_MAX];
+  int k, i, n = 0;
+  k = cat_progress_read(regs, CAT_PROGRESS_MAX);
+  for (i = 0; i < k && n < max; i++) {
+    const CatProgress *r = &regs[i];
+    CatItem *d;
+    int pct, j, repeated = 0;
+    if (r->durationSeg < 60.0) continue;
+    pct = (int)(100.0 * r->posSeg / r->durationSeg);
+    if (!inProgress(pct)) continue;
+    // A series with several episodes recorded enters ONCE, at the most recent —
+    // and the list is already ordered, so the first one seen is that one.
+    for (j = 0; j < n; j++)
+      if (sameWork(output[j].imdb, r->imdb)) { repeated = 1; break; }
+    if (repeated) continue;
+    d = &output[n];
+    memset(d, 0, sizeof *d);
+    d->progress = pct;
+    d->remainingMin = (int)((r->durationSeg - r->posSeg) / 60.0 + 0.5);
+    // The instant is already in the record: stamping it here saves a lookup
+    // later and, more to the point, survives the compaction inside
+    // trakt_decorate_batch. See resumedMs in catalog.h.
+    d->resumedMs = r->lastWatchedMs;
+    if (r->episode > 0) {
+      d->season = r->season;
+      d->episode = r->episode;
+      snprintf(d->imdb, sizeof d->imdb, "%s:%d:%d", r->imdb,
+               r->season ? r->season : 1, r->episode);
+      snprintf(d->kind, sizeof d->kind, "series");
+    } else {
+      snprintf(d->imdb, sizeof d->imdb, "%s", r->imdb);
+      snprintf(d->kind, sizeof d->kind, "movie");
+    }
+    n++;
+  }
+  n = trakt_decorate_batch(output, n);
+  if (n) printf("[disc] continue watching, local: %d\n", n);
+  return n;
+}
+
+// One candidate for the row, with what is known about WHEN it happened. `ord`
+// keeps the position its own source gave it, so items with no instant keep that
+// relative order instead of being shuffled by an unstable sort.
+typedef struct { CatItem *item; long long ms; int ord; } Cand;
+
+static int candNewestFirst(const void *a, const void *b) {
+  const Cand *x = a, *y = b;
+  if (x->ms > y->ms) return -1;
+  if (x->ms < y->ms) return 1;
+  return x->ord - y->ord;
+}
+
+static int buildResume(CatItem *output, int max) {
+  // static: two batches of 8 CatItem are over 50 KB, and this runs once, on one
+  // thread — the same reason the Decl array below is static.
+  static CatItem fromTrakt[CONT_MAX], fromAccount[CONT_MAX];
+  static Cand joined[CONT_MAX * 2];
+  int nT, nL, nJ = 0, i, j, n = 0, dropped = 0;
+
+  nT = trakt_active() ? trakt_resume(fromTrakt, CONT_MAX) : 0;
+  nL = resumeLocal(fromAccount, CONT_MAX);
+
+  for (i = 0; i < nT && nJ < CONT_MAX * 2; i++) {
+    if (!inProgress(fromTrakt[i].progress)) { dropped++; continue; }
+    joined[nJ].item = &fromTrakt[i];
+    joined[nJ].ms = fromTrakt[i].resumedMs;
+    joined[nJ].ord = nJ;
+    nJ++;
+  }
+  for (i = 0; i < nL && nJ < CONT_MAX * 2; i++) {
+    joined[nJ].item = &fromAccount[i];
+    joined[nJ].ms = fromAccount[i].resumedMs;
+    joined[nJ].ord = nJ;
+    nJ++;
+  }
+
+  if (nJ > 1) qsort(joined, (size_t)nJ, sizeof *joined, candNewestFirst);
+
+  // Deduplicate AFTER ordering, so the copy that survives is the most recent
+  // one — which is also the one whose season and episode are right for a series
+  // the person watched on two devices.
+  for (i = 0; i < nJ && n < max; i++) {
+    int repeated = 0;
+    for (j = 0; j < n; j++)
+      if (sameWork(output[j].imdb, joined[i].item->imdb)) { repeated = 1; break; }
+    if (repeated) continue;
+    output[n++] = *joined[i].item;
+  }
+  printf("[disc] continue watching: %d trakt + %d account -> %d shown"
+         " (%d outside 1-90%%)\n", nT, nL, n, dropped);
+  return n;
+}
+
 static void *build(void *u) {
   // The batch grows too: it used to be sized by CAT_MAX and so inherited the same
   // arbitrary ceiling.
@@ -1040,9 +1184,10 @@ static void *build(void *u) {
   (void)u;
   if (!lote) { searching = 0; return NULL; }
 
-  // "Continue watching" comes FIRST and from Trakt. The home uses the catalogue's
-  // first positions in that row, so the order here is what decides what appears
-  // there — and the history has to beat the recommendations.
+  // "Continue watching" comes FIRST, and from BOTH sources — Trakt and the Nuvio
+  // account's own progress. See the header on buildResume. The home uses the
+  // catalogue's first positions in that row, so the order here is what decides
+  // what appears there, and the history has to beat the recommendations.
   mark("build: start");
   // THE MANIFESTS LEAVE FIRST AND RUN UNDERNEATH THE TRAKT CALLS.
   //
@@ -1059,9 +1204,9 @@ static void *build(void *u) {
   // next, so it stays exactly where it was, next to the ordering that uses it.
   disc_targets_search_reset();
   manifestsStart();
-  nResume = trakt_resume(lote, 8);
+  nResume = buildResume(lote, 8);
   n += nResume;
-  mark("trakt continue watching");
+  mark("continue watching, both sources");
   // The official social feed is a row of its own, right after the return to what
   // was being watched. It comes early so as not to depend on the addons' manifests,
   // and it uses the same Trakt credential already loaded.
@@ -1423,6 +1568,61 @@ static void metaCacheStore(const char *id, const char *body) {
   pthread_mutex_unlock(&metaLock);
 }
 
+// THE EPISODE CARDS' IMDb SCORES.
+//
+// They do NOT come from Cinemeta, and that is the trap: `videos[].rating` is present
+// and reads "0" for a great many series — every Fallout, Game of Thrones and Stranger
+// Things episode does — so a port that reads it looks like it works and quietly shows
+// nothing. The web app tries this API FIRST and only falls back to the addon's field
+// (fetchSeriesRatingsBySeason, metaDetailsScreen.js), which is why the same Fallout
+// page shows 8.2 there and nothing here.
+//
+// <base>/api/shows/<tmdbId>/season-ratings returns a BARE ARRAY of seasons, each with
+// an `episodes` array carrying `episode_number` and `imdb_rating` (`vote_average`
+// repeats it). Checked against Fallout 106379: S1E1 "The End" = 8.2 over 23197 votes.
+//
+// It runs AFTER publishEpisodes, so the row is already on screen and the numbers
+// arrive into it — cat_set_ep_score fills them in place rather than republishing the
+// list, which would restart every thumbnail.
+#ifndef NV_IMDB_RATINGS
+#define NV_IMDB_RATINGS ""
+#endif
+static void episodeScores(long tmdb, int targetItem) {
+  char url[512], *body;
+  if (tmdb <= 0 || !NV_IMDB_RATINGS[0]) return;
+  { const char *base = NV_IMDB_RATINGS;
+    size_t n = strlen(base);
+    // The property is written with and without a trailing slash across checkouts.
+    snprintf(url, sizeof url, "%s%sapi/shows/%ld/season-ratings",
+             base, (n && base[n - 1] == '/') ? "" : "/", tmdb); }
+  body = net_download(url, 12);
+  if (!body) return;
+  { int filled = 0, seen = 0;
+    const char *season = js_root_array(body);
+    while (season) {
+      const char *sEnd = js_end(season);
+      int sn = (int)js_num(season, sEnd, "season_number", -1);
+      const char *ep = js_array(season, sEnd, "episodes");
+      while (ep) {
+        const char *eEnd = js_end(ep);
+        int en = (int)js_num(ep, eEnd, "episode_number", -1);
+        // imdb_rating is the one the badge names; vote_average carries the same
+        // number and is read only when the first is absent.
+        double v = js_num(ep, eEnd, "imdb_rating", -1.0);
+        if (v < 0.0) v = js_num(ep, eEnd, "vote_average", -1.0);
+        if (sn >= 0 && en > 0 && v > 0.0 && v <= 10.0) {
+          seen++;
+          filled += cat_set_ep_score(targetItem, sn, en, (int)(v * 10.0 + 0.5));
+        }
+        ep = js_next(eEnd);
+      }
+      season = js_next(sEnd);
+    }
+    printf("[disc] episode scores: %d of %d matched an episode on screen\n",
+           filled, seen); }
+  free(body);
+}
+
 // It publishes the critical part before any optional enrichment. That way the
 // episodes row appears after the first response, without waiting for the two TMDB
 // round trips used for the cast's photo and character.
@@ -1446,6 +1646,16 @@ static int publishEpisodes(const char *body, int targetItem, const char *title) 
       js_text(p, f, "thumbnail", e->thumb, sizeof e->thumb);
       js_text(p, f, "released", d, sizeof d);
       disc_date_long(d, e->date, sizeof e->date);
+      // THE EPISODE'S IMDb SCORE, in tenths. Cinemeta sends it as a STRING ("8.5"),
+      // under "rating" on the videos entries and "imdbRating" on the meta itself —
+      // both are read, because which one is present varies by addon.
+      { char r[16] = "";
+        js_text(p, f, "imdbRating", r, sizeof r);
+        if (!r[0]) js_text(p, f, "rating", r, sizeof r);
+        if (r[0]) {
+          double v = atof(r);
+          if (v > 0.0 && v <= 10.0) e->imdb = (int)(v * 10.0 + 0.5);
+        } }
       n++;
     }
     p = js_next(f);
@@ -1593,6 +1803,10 @@ static void *fetchEps(void *u) {
       dp = strchr(idBase, ':');
       if (dp) *(char *)dp = 0;
       photosOfCast(&edit, idBase, !strcmp(it->kind, "series")); }
+    // AFTER photosOfCast, because that is what resolves the TMDB id, and the ratings
+    // API is keyed by it. Called before this, `edit.tmdb` is still 0 and the fetch
+    // returned without a word — which is exactly how it failed the first time.
+    if (!isMovie) episodeScores(edit.tmdb, targetItem);
     cat_update_item(targetItem, &edit);
     printf("[disc] %s: %d actors, dir='%s', %d seasons\n",
            edit.title, edit.nCast, edit.directing, edit.nSeasons);

@@ -45,6 +45,11 @@ TRK=$(value TRAKT_CLIENT_ID)
 TRS=$(value TRAKT_CLIENT_SECRET)
 SMK=$(value SIMKL_CLIENT_ID)
 SMA=$(value SIMKL_APP_NAME)
+# The episode-ratings API, which is where the IMDb score on an episode card comes
+# from. The web app reads the SAME property (js/config.js:15) and calls
+# <base>/api/shows/<tmdbId>/season-ratings. Without it the cards fall back to the
+# addon's own rating, which Cinemeta reports as "0" for most series.
+IMR=$(value IMDB_RATINGS_API_BASE_URL)
 
 if [ -z "$URL" ] || [ -z "$KEY" ]; then
   # Failing silently would produce an .ipk that opens, shows the login screen
@@ -69,10 +74,11 @@ if [ "$1" = "--env-file" ]; then
     printf 'NV_TRAKT_CLIENT_SECRET=%s\n' "$TRS"
     printf 'NV_SIMKL_CLIENT_ID=%s\n' "$SMK"
     printf 'NV_SIMKL_APP=%s\n' "$SMA"
+    printf 'NV_IMDB_RATINGS=%s\n' "$IMR"
   } > "$2"
   chmod 600 "$2"
   exit 0
 fi
 
-printf -- '-DNV_SUPABASE_URL=\\"%s\\" -DNV_SUPABASE_ANON_KEY=\\"%s\\" -DNV_TV_LOGIN_BASE=\\"%s\\" -DNV_TRAKT_CLIENT_ID=\\"%s\\" -DNV_TRAKT_CLIENT_SECRET=\\"%s\\" -DNV_SIMKL_CLIENT_ID=\\"%s\\" -DNV_SIMKL_APP=\\"%s\\"' \
-  "$URL" "$KEY" "$TVB" "$TRK" "$TRS" "$SMK" "$SMA"
+printf -- '-DNV_SUPABASE_URL=\\"%s\\" -DNV_SUPABASE_ANON_KEY=\\"%s\\" -DNV_TV_LOGIN_BASE=\\"%s\\" -DNV_TRAKT_CLIENT_ID=\\"%s\\" -DNV_TRAKT_CLIENT_SECRET=\\"%s\\" -DNV_SIMKL_CLIENT_ID=\\"%s\\" -DNV_SIMKL_APP=\\"%s\\" -DNV_IMDB_RATINGS=\\"%s\\"' \
+  "$URL" "$KEY" "$TVB" "$TRK" "$TRS" "$SMK" "$SMA" "$IMR"

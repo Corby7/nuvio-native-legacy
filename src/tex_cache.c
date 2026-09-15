@@ -272,7 +272,7 @@ static int slotFree(void) {
     bytesUsed -= bytesTexture(items[best].w, items[best].h);
     if (bytesUsed < 0) bytesUsed = 0;
     memset(&items[best], 0, sizeof(Item));
-    items[best].luma = -1;   // 0 seria "preto"; o desconhecido e -1
+    items[best].luma = -1;   // 0 would mean "black"; unknown is -1
   }
   return best;
 }
@@ -952,7 +952,7 @@ static GLuint tex_get_limit_mode(const char *path, int limit, int exact) {
     // A FAILURE THAT IS ONLY THE PROMOTION'S. If a texture is still resident and it
     // already satisfies this caller, the art is NOT missing: what failed is the
     // bigger re-decode somebody else asked for. Answering 0 here would blank the card
-    // for good and, after the third attempt, caption it "Art unavailable" — over art
+    // for good and, once the attempts run out, caption it "Art unavailable" — over art
     // that is sitting on the GPU. Whoever wanted the bigger one still gets 0.
     if (items[i].tex && limit <= items[i].serves) {
       items[i].usage = ++lruClock;
@@ -961,9 +961,33 @@ static GLuint tex_get_limit_mode(const char *path, int limit, int exact) {
       return kept;
     }
     // It has already failed: it only goes back into the queue when the backoff
-    // expires, and never after the third attempt. Without this the request came
-    // back on every frame.
-    if (items[i].failures < 3 && SDL_GetTicks() >= items[i].tryIn) {
+    // expires, and at most FOUR times. Without the wait the request came back on
+    // every frame and the broken art pushed ahead of the good.
+    //
+    // THE COUNT WAS OFF BY ONE. The guard was `failures < 3` while the backoff
+    // is INSET[] = {2 s, 10 s, 60 s} indexed by `failures` BEFORE the increment
+    // (see the decode path above), so the third failure wrote tryIn 60 s ahead
+    // and the guard would never let that deadline be used: the 60 s tier was
+    // dead code and the item stayed WITHOUT ART for good, until another card
+    // reused the slot through slotFree. A burst of failures at startup — which
+    // is what a home full of posters produces — condemned those cards for the
+    // rest of the session.
+    //
+    // AND THE CEILING CANNOT SIMPLY GO. Upstream fixed this by removing it and
+    // measured that the result was worse on a Samsung set: the ceiling is also
+    // what makes the slot RECYCLABLE. slotFree() reuses an entry that has given
+    // up (`FAILED && failures >= 3`) in preference to evicting art that is on
+    // screen; with no ceiling an item that never decodes returns to PENDING for
+    // ever, never satisfies that condition, and slotFree falls through to LRU —
+    // throwing away GOOD textures to make room for art that will never arrive.
+    // Their panel recorded pend=99 and 218 evictions in a 3 s window, 54-57 FPS
+    // with janks, and the same five files reappearing every 2 s, because an
+    // eviction erases the memory of the failure along with the entry.
+    //
+    // So `< 4`, not none and not `< 3`: four attempts in total, which is what
+    // the backoff table always described, the 60 s deadline stops being dead
+    // code, and the slot still becomes recyclable.
+    if (items[i].failures < 4 && SDL_GetTicks() >= items[i].tryIn) {
       int next = (queueEnd + 1) % MAX_QUEUE;
       if (next != queueStart) {
         items[i].state = PENDING;
@@ -1137,7 +1161,13 @@ int tex_failed(const char *path) {
   SEARCH_MEASURE(i, path, h);
   // A path the cache has never seen is not a failure: it is about to be asked
   // for. Only a spent FAILED entry answers yes.
-  if (i >= 0 && items[i].state == FAILED && items[i].failures >= 3) r = 1;
+  //
+  // FOUR, to match the requeue ceiling in tex_get_limit_mode. This caption is
+  // the app telling the viewer to stop waiting, so it must not appear while a
+  // retry is still coming: at three failures there is one attempt left, and the
+  // 60 s tier that used to be dead code is exactly the one that recovers art
+  // lost to a network blip.
+  if (i >= 0 && items[i].state == FAILED && items[i].failures >= 4) r = 1;
   SDL_UnlockMutex(mtx);
   return r;
 }

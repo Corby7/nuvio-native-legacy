@@ -617,6 +617,36 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float a = mix(0.16, 1.0, fill);\n"
   "  gl_FragColor = vec4(c, a * uColor.a * m);\n"
   "}\n",
+
+  // GFX_EP_SCRIM — the episode card's copy gradient. See gfx.h for why it is a
+  // shader and not the stack of bands detail.c used to build.
+  //
+  // `v` runs from 0 at the TOP, the direction the CSS is written in, so the stops
+  // are the measured ones unchanged: nothing until 52%, 0.77 by 72%, 0.95 at the
+  // base. The two clamps are one segment each and sum to 0.95.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  float v = clamp(vUv.y, 0.0, 1.0);\n"
+  "  float a = clamp((v - 0.52) / 0.20, 0.0, 1.0) * 0.77\n"
+  "          + clamp((v - 0.72) / 0.28, 0.0, 1.0) * 0.18;\n"
+  "  if (a <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, a * uColor.a * m);\n"
+  "}\n",
+
+  // GFX_RING_INSET — a border strictly inside the quad's edge, at any radius.
+  //
+  // The band is between the edge (d = 0) and `thickness` inside it, so unlike
+  // GFX_RING no part of the stroke lies outside the quad and there is nothing for
+  // the quad to clip. Both edges are ramped: the outer against the shape itself,
+  // the inner against the offset contour.
+  "void main(){\n"
+  "  float d = sdf(vUv, uRadius, uAspect);\n"
+  "  float t = uPar.x;\n"
+  "  float m = smoothstep(uAA,-uAA, d) * smoothstep(-t - uAA, -t + uAA, d);\n"
+  "  if (m <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -637,7 +667,9 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_PROFILE_BG — a full-screen wash: no SDF, no texture */
   {0,0},   /* GFX_RING_CSS — its own radial distance, not the rect SDF */
   {1,0},   /* GFX_CW_SCRIM — a vertical ramp, clipped by the card's corner */
-  {1,0}    /* GFX_CW_BAR   — the same corner, cutting the bar's ends */
+  {1,0},   /* GFX_CW_BAR   — the same corner, cutting the bar's ends */
+  {1,0},   /* GFX_EP_SCRIM — a vertical ramp, clipped by the thumbnail's corner */
+  {1,0}    /* GFX_RING_INSET — the rect's own SDF, offset inward */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {

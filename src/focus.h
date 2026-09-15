@@ -18,7 +18,23 @@ typedef struct {
 } Focus;
 
 void focus_start(Focus *f, int nRows, const int *nColumns);
-int  focus_move(Focus *f, int dx, int dy);   // 1 se moveu
+int  focus_move(Focus *f, int dx, int dy);   // 1 if it moved
+
+// A GRID: up and down KEEP the column, with no per-row memory.
+//
+// The column memory above is right for rows of CONTENT, where each row has a
+// length of its own and the viewer holds their place in each. In a GRID it is a
+// visible defect: the search keyboard has 6 columns per row, and going down from
+// "f" (column 5) landed on column 0 of the next row, because that is where the
+// cursor had last been IN THAT ROW — on "g" instead of "l". Going down again:
+// "m". Coming back, the cursor reappears on "f". From the sofa that reads
+// exactly as the report says, "it jumps to a random letter". The library's
+// poster grid has the same defect for the same reason.
+//
+// Here the column is PRESERVED and only clamped to the end of the destination
+// row when that row is shorter (the keyboard's last row has 3 keys, not 6).
+int  focus_move_grid(Focus *f, int dx, int dy);
+
 int  focus_index(const Focus *f, int row, int column);
 
 #endif

@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
 // Allocated as it arrives, not sized by a guessed number.
 static CatItem *items;
@@ -298,8 +299,10 @@ int cat_load(const char *dirArt) {
     fclose(fx);
   }
 
-  // progress.txt: "tt1234567<TAB>positionSec<TAB>durationSec" per line, which is
-  // what THIS app recorded. It comes after extra.txt on purpose — what was
+  // progress.txt: "tt1234567<TAB>positionSec<TAB>durationSec<TAB>season<TAB>
+  // episode<TAB>lastWatchedMs" per line, which is what THIS app recorded. The
+  // scan tolerates a short line: everything from the fourth field on was added
+  // later, and a file written by an older build still loads. It comes after extra.txt on purpose — what was
   // watched here is more recent than the snapshot brought from the web app.
   snprintf(path, sizeof path, "%s/progress.txt", dirArt);
   { FILE *fp = fopen(path, "r");
@@ -308,7 +311,8 @@ int cat_load(const char *dirArt) {
       while (fgets(line, sizeof line, fp)) {
         char id[24]; double pos, duration; int i;
         int season = 0, episode = 0;
-        if (sscanf(line, "%23s %lf %lf %d %d", id, &pos, &duration, &season, &episode) < 3 || duration <= 1.0) continue;
+        long long ms = 0;
+        if (sscanf(line, "%23s %lf %lf %d %d %lld", id, &pos, &duration, &season, &episode, &ms) < 3 || duration <= 1.0) continue;
         for (i = 0; i < n; i++) {
           // The catalogue's id may carry an episode ("tt123:4:9"); compare only
           // the title's prefix, which is what identifies the work.
@@ -316,9 +320,11 @@ int cat_load(const char *dirArt) {
               (items[i].imdb[strlen(id)] == 0 || items[i].imdb[strlen(id)] == ':')) {
             items[i].progress = (int)(100.0 * pos / duration);
             items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
+            items[i].resumedMs = ms;
             if(season>0 && episode>0) {
-              if(items[i].season!=season || items[i].episode!=episode)
-                items[i].nameEpisode[0]=0;
+              if(items[i].season!=season || items[i].episode!=episode) {
+                items[i].nameEpisode[0]=0; items[i].thumbEp[0]=0;
+              }
               items[i].season=season; items[i].episode=episode;
             }
             applied++;
@@ -546,7 +552,16 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
     }
     fclose(e);
   }
-  fprintf(s, "%s\t%.0f\t%.0f\t%d\t%d\n", it->imdb, posSeg, durationSeg,season,episode);
+  // A SIXTH COLUMN: when this happened, in ms since the epoch.
+  //
+  // "Continue watching" merges this file with what Trakt reports, and merging
+  // two histories needs an instant on both sides — without it the row falls
+  // back to the order a source happened to answer in. Appending a column is
+  // backwards compatible in both directions: every reader here scans with a
+  // field count it tolerates being short, so a file written by an older build
+  // still loads and simply reports "instant unknown".
+  fprintf(s, "%s\t%.0f\t%.0f\t%d\t%d\t%lld\n", it->imdb, posSeg, durationSeg,
+          season, episode, (long long)time(NULL) * 1000);
   fclose(s);
   // Write to a temporary and rename: a power cut mid-write would leave the file
   // half-written and the app would come up with no progress at all.
@@ -555,14 +570,21 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   items[index_].progress = (int)(100.0 * posSeg / durationSeg);
   items[index_].remainingMin = (int)((durationSeg - posSeg) / 60.0 + 0.5);
   if(season>0 && episode>0) {
-    if (items[index_].season != season || items[index_].episode != episode)
+    if (items[index_].season != season || items[index_].episode != episode) {
       items[index_].nameEpisode[0] = 0;
+      items[index_].thumbEp[0] = 0;
+    }
     items[index_].season=season;
     items[index_].episode=episode;
     for (int e = 0; e < cat_n_episodes(index_); e++) {
       const CatEp *ep = cat_episode(index_, e);
       if (ep && ep->season == season && ep->episode == episode) {
         snprintf(items[index_].nameEpisode, sizeof items[index_].nameEpisode, "%s", ep->name);
+        // The still travels with the name. This is the path that feeds the
+        // "Resume now" band, which points at a CATALOGUE item and so never went
+        // through trakt.c's decorate: without this it drew the series' backdrop
+        // while the row below it, built from the same progress, drew the episode.
+        snprintf(items[index_].thumbEp, sizeof items[index_].thumbEp, "%s", ep->thumb);
         break;
       }
     }
@@ -574,6 +596,17 @@ int cat_n_episodes(int indexItem) {
   if (m < 1) return 0;
   indexItem = ((indexItem % m) + m) % m;
   return epCount[indexItem];
+}
+
+int cat_set_ep_score(int indexItem, int season, int episode, int tenths) {
+  int m = cat_n();
+  if (m < 1 || tenths <= 0) return 0;
+  indexItem = ((indexItem % m) + m) % m;
+  for (int i = 0; i < epCount[indexItem]; i++) {
+    CatEp *e = &eps[epStart[indexItem] + i];
+    if (e->season == season && e->episode == episode) { e->imdb = tenths; return 1; }
+  }
+  return 0;
 }
 
 const CatEp *cat_episode(int indexItem, int i) {
@@ -737,16 +770,19 @@ void cat_set_all(const CatItem *list, int count,
       while (fgets(line, sizeof line, fp)) {
         char id[24]; double pos, duration;
         int season = 0, episode = 0;
-        if (sscanf(line, "%23s %lf %lf %d %d", id, &pos, &duration, &season, &episode) < 3 || duration <= 1.0) continue;
+        long long ms = 0;
+        if (sscanf(line, "%23s %lf %lf %d %d %lld", id, &pos, &duration, &season, &episode, &ms) < 3 || duration <= 1.0) continue;
         for (i = 0; i < n; i++) {
           size_t L = strlen(id);
           if (!strncmp(items[i].imdb, id, L) &&
               (items[i].imdb[L] == 0 || items[i].imdb[L] == ':')) {
             items[i].progress = (int)(100.0 * pos / duration);
             items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
+            items[i].resumedMs = ms;
             if(season>0 && episode>0) {
-              if(items[i].season!=season || items[i].episode!=episode)
-                items[i].nameEpisode[0]=0;
+              if(items[i].season!=season || items[i].episode!=episode) {
+                items[i].nameEpisode[0]=0; items[i].thumbEp[0]=0;
+              }
               items[i].season=season; items[i].episode=episode;
             }
             break;
@@ -836,4 +872,60 @@ int cat_similar(int index_, int *output, int max) {
           t = output[a]; output[a] = output[b]; output[b] = t;
         } }
   return k;
+}
+
+// --- THE PROGRESS RECORDS, READ AS HISTORY ------------------------------------
+
+static int progressNewestFirst(const void *a, const void *b) {
+  const CatProgress *x = a, *y = b;
+  if (x->lastWatchedMs > y->lastWatchedMs) return -1;
+  if (x->lastWatchedMs < y->lastWatchedMs) return 1;
+  return 0;
+}
+
+int cat_progress_read(CatProgress *out, int max) {
+  char path[600], line[256];
+  FILE *fp;
+  int n = 0;
+  if (!out || max <= 0 || !dirWriting[0]) return 0;
+  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
+  fp = fopen(path, "r");
+  if (!fp) return 0;
+  while (fgets(line, sizeof line, fp) && n < max) {
+    char id[24];
+    double pos = 0.0, duration = 0.0;
+    int season = 0, episode = 0, fields;
+    long long ms = 0;
+    CatProgress *r;
+    char *colon;
+    fields = sscanf(line, "%23s %lf %lf %d %d %lld",
+                    id, &pos, &duration, &season, &episode, &ms);
+    // Three is the oldest shape this file ever had. Fewer than that is not a
+    // record, and a duration of zero would make the percentage below a division
+    // by zero rather than a number nobody can use.
+    if (fields < 3 || duration <= 1.0) continue;
+    r = &out[n];
+    memset(r, 0, sizeof *r);
+    // The id may carry an episode suffix ("tt123:4:9") because that is what the
+    // catalogue item held when the line was written. The WORK is what identifies
+    // a row in Continue watching — a series appears once — so the suffix is cut
+    // here and the season and episode come from their own columns, which is
+    // where they are reliable.
+    snprintf(r->imdb, sizeof r->imdb, "%s", id);
+    colon = strchr(r->imdb, ':');
+    if (colon) *colon = 0;
+    if (!r->imdb[0]) continue;
+    r->posSeg = pos;
+    r->durationSeg = duration;
+    r->season = season;
+    r->episode = episode;
+    r->lastWatchedMs = ms;
+    n++;
+  }
+  fclose(fp);
+  // Most recent first. Lines from before the sixth column carry 0 and therefore
+  // land at the end, which is the honest place for "instant unknown" — it is not
+  // claimed to be old, it is merely not claimed to be recent.
+  if (n > 1) qsort(out, (size_t)n, sizeof *out, progressNewestFirst);
+  return n;
 }

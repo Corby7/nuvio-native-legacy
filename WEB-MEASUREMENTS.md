@@ -139,6 +139,44 @@ the intermediate points (at 89.2% it gives 0.35 instead of 0.25), and it is the
 middle of the ramp that you actually see. Implemented with `clamp` in `gfx.c`'s
 `GFX_HERO` mode.
 
+### The hero's meta line — RE-MEASURED 2026-09-15, and the fix is the SEPARATORS
+
+The line read as clutter ("TV Show • Reality • Romance • 2005 • 31min • IMDb 4.2") and
+the cause was not the number of words. Measured on `.home-modern-hero-meta-line`:
+
+| element | value |
+|---|---|
+| tokens | 22/500, **`rgba(255,255,255,.62)`** |
+| the "•" | 22/500, **`rgba(255,255,255,.34)`** — a little over half the tokens |
+| dot spacing | 12 each side (a dot at 282..293.2, the next token at 305.2) |
+| groups | TWO, `gap: 14` — what the title IS, then its NUMBERS |
+| the score | `rgb(179,179,179)`, BRIGHTER than the tokens around it |
+| genres | **one**: "Movie • Action", never a list |
+
+The port baked the bullets into ONE string drawn at a flat `rgb(179,179,179)`, so every
+dot was exactly as loud as the words it separated and the eye had nothing to group on.
+A single `TxtLine` can only carry one colour, so the line is now a list of tokens drawn
+one at a time — and `bulletize`, which existed to build that joined string, has gone.
+
+Two traps in porting it:
+
+- **The group boundary keeps its dot.** The measured lead group ends at 370.7 and the
+  trailing group opens at 384.7 — a gap of 14 — with its own dot sitting there and the
+  usual 12 after it. Dropping the dot at the boundary, which the first attempt did,
+  reads as a missing separator rather than as a group.
+- **A token that does not fit is dropped WHOLE.** `txt_line_trim` on the joined string
+  put an ellipsis in the middle of a genre.
+
+**One deliberate divergence, at the owner's request.** The streaming service used to be
+a LOGO drawn ahead of the line by `badges_draw`; it is now the line's first token, as
+text — *"dont need logos to indicate what streaming service it is on, just text is
+enough"*. NuvioWeb shows no provider on the hero at all, so this is not a measurement.
+It appears wherever `providerName` is populated, which is the same condition the badge
+had: `discover.c` fills it from TMDB `/watch/providers` (region BR, `flatrate` only) as
+each title is fetched, so it is absent on a title whose providers have not been asked
+for yet.
+
+
 ## Home — SIGNED-IN session (measured 2026-08-31, **divergent**)
 
 With the owner's profile the home is **a different screen**, and the difference
@@ -408,6 +446,72 @@ There are no pseudo-elements: `.detail-bottom-shadow` exists in the DOM but with
 - **Weight 600 becomes Medium.** The embedded Inter only has Regular, Medium and
   Bold.
 
+### The actions row — RE-MEASURED 2026-09-15, and it replaces the device set
+
+Measured on NuvioWeb **0.3.8** at 1920×1080 (`npm run serve`), film "The Whisper
+Man", on `.series-detail-actions` and each of its buttons, **at rest and focused**.
+
+This row had been ported from the native TCL app instead (adb screencap,
+2026-09-01) and the two references disagree on nearly every line of it. The web
+wins here, by the owner's instruction that the title screen looks like NuvioWeb.
+`NV_DETWEB_*` in `detail.h` carries these; the `NV_DETW2_BTN_*`/`CIRC`/`FOCUS_*`
+set is gone rather than kept beside them.
+
+| element | web (now ported) | the device set it replaced |
+|---|---|---|
+| row | x=208, y=562.61, h=96, flex `gap: 24` | — |
+| primary | 193.3×96 for "Play", radius 64, `padding: 0 36` | 321×94, padding 54 |
+| primary font | **32/600** | 25/600 |
+| primary icon | 36×36 at x=244, then **24** to the label | 28×30, gap 21 |
+| circles | 96×96, radius 999, step 120 | 96, step 120 |
+| circle glyph | **44×44** (0.458 of the circle) | 32 (0.333) |
+| focus | `box-shadow 0 0 0 4px #fff`, **`transform: none`** | a scale of 1.114×1.147 |
+
+**The correction that most changes the screen: the primary is NOT a white pill at
+rest.** `.series-primary-btn` measures `rgb(34,34,34)` with white ink unfocused
+and `rgb(245,245,245)` with `rgb(17,17,17)` focused — the same pair the circles
+use. Ported white-in-both-states, the row read as one lit button beside three dark
+ones with nothing saying which had the focus, which is exactly why the old port
+needed a scale to show focus at all.
+
+**Checked on the device after porting** (C3, capture of the series "Lanterns"):
+pill at x=96..366, circles at 391..486 and 511..606 — gaps of 24 to the pixel —
+the focused circle 96 tall inside a ring at 728..831, and 60.0 fps / 0 janks.
+
+### The tooltips over the circular buttons
+
+`.series-circle-btn::after` with `content: attr(aria-label)`
+(components.css:17732). It exists because the circles carry no label of their own
+and a native `title` only ever fires for a mouse — the sheet shows the aria-label
+on `.focused` so a d-pad gets one too.
+
+| property | value |
+|---|---|
+| text | 24/**700**, `rgba(255,255,255,.92)` |
+| shadow | `text-shadow: 0 2px 8px rgba(0,0,0,.8)` — and **no background pill** |
+| box | `padding: 7px 16px`, `line-height: 24` → 38 tall |
+| position | box base at `calc(100% + 16px)`; centred on the button |
+| motion | `opacity` 0→1 over 140ms while `translateY(4px)` → 0 |
+
+The labels are NuvioWeb's own aria-labels: "Add to Library" / "Remove from
+Library", or the **Watchlist** wording when the library is the Trakt one — which
+on this port is the only thing it is — and "Mark Watched" / "Mark Unwatched". The
+primary button has none, because its label is already inside the pill. The
+`Sources` button has no counterpart on the web (there the stream chooser opens
+from play) and its label is this port's own.
+
+**What the port does differently, and why:** there is no blur pass for glyphs, so
+the 8px shadow is three offset black copies of the line. It is not decoration —
+the tooltip sits straight on the backdrop, and on a bright frame white-on-white
+would swallow it.
+
+**It cost 58px of the logo's gap.** The tooltip's box reaches 54 above the button,
+and `NV_DETW_LOGO_GAP` was 40 — the CSS margin. The *rendered* gap in the web is
+**97.59** (logo ends 465.02, row starts 562.61); the difference is
+`.detail-trailer-hint`, a paragraph always in the flow that only carries text
+while a trailer plays. That band is where the tooltip lives, so the port now
+carries 98 and the logo sits where the web's does.
+
 
 ## Detail — SIGNED-IN session (measured 2026-08-31, series "Silo" in progress)
 
@@ -439,6 +543,151 @@ What the signed-in session adds:
 | meta line 1 | y=889, box h=**74** (it grows because of the IMDb badge), text at y=901; year "2023-" on the right; **IMDb badge 109×60**, radius 999, logo 60×60 + score font 20.7 |
 | meta line 2 | y=**989**, box h=**59**; **`.detail-meta-badge.strong` badge** "RETURNING SERIES" 249×45 radius 8; then runtime and country |
 | content width | `.series-detail-content` = **1888** (not 1920): the usable right edge becomes 1792 |
+
+### The play glyph — why the button still read as a different app
+
+The pill's geometry matched and the button still looked wrong, and the reason was the
+**glyph**: `ic_detail_play.svg` is a triangle with all **three corners rounded** (its
+path is three cubic curves), and the port drew `GFX_PLAY`, a hard-edged triangle from
+the shader. At 36px on a 96 pill that is the whole character of the control.
+
+It is now the web's own file, rasterised at 128 with `rsvg-convert` into
+`deploy/app/art/icons/detail_play.png` and drawn through `gfx_icon`, so the colour
+still inverts with the label. The `play.png` already in the package is the same shape
+but was rasterised tighter — its ink fills 0.84 of the box against the SVG's 0.90 — so
+it lands ~2px short and stays where it is, in the player.
+
+### The season selector is a DROPDOWN — measured 2026-09-15
+
+`.series-season-row` holds ONE `.library-picker` (the same control the library screen
+uses) with `aria-haspopup="listbox"`. The row of one chip per season was the Apple TV
+app's; besides looking wrong it ran off the right of the screen on a series with eight
+seasons, with no way to reach the far end.
+
+| element | value |
+|---|---|
+| anchor | x=208, **359.8×80**, radius 64, `#222`, 1px `rgba(255,255,255,.1)`, padding 0 36 |
+| label | "Season 1" **30/600** white, then " · 8 Eps" **30/400** `rgb(179,179,179)` |
+| chevron | 32×32 `rgb(179,179,179)`, 24 after the label |
+| focused | background `rgb(48,48,48)` and an **INSET** ring: `inset 0 0 0 3px rgba(255,255,255,.96)` — not the outer ring the hero uses |
+| menu | 8 below the anchor, same width, `#222`, radius 64, 1px `rgba(255,255,255,.08)`, `0 8px 32px rgba(0,0,0,.6)`, `max-height: 540` |
+| option | **84** tall, radius 64, **28/500**, padding 20 32; focused `#f5f5f5` on `#111`, the rest transparent on white |
+
+### The episode card — RE-MEASURED 2026-09-15, and the CONTENT changed
+
+The port's card came from a device capture of a different build and carried a
+three-line synopsis and a clock + duration **inside** the thumbnail. The web has
+neither. Its card is a still with two things at the top and two at the bottom, and the
+synopsis lives **under the row**, one episode at a time, at reading size.
+
+| element | web (now ported) | what it replaced |
+|---|---|---|
+| card | 600 wide, thumbnail 600×**395** radius 24, step **648** | 640×414, step 672, radius 32 |
+| copy | padding 24 32 | pad 32 |
+| badge | "EPISODE 1", padding 10 20, radius **64 (a pill)**, 20/600, **letter-spacing 2**, `rgba(0,0,0,.42)` | 38 tall, radius 12, no tracking |
+| status | a **50×50** circle top-RIGHT, **2px dashed** `rgba(179,179,179,.9)` | nothing until Trakt answered, then a filled disc |
+| meta | 20/400 `rgb(179,179,179)`, gap 24: rating badge then the date, both left | clock + duration left, date pushed right |
+| title | **32/800**, min-height 56 | 32, no min |
+| synopsis | **not in the card** — `.series-episode-desc-row` under the row, 32/400, leading 44, 1179 wide | 3 clipped lines over the still |
+| progress | 8 tall **below** the thumbnail, in the card's own 8px | inside the thumbnail |
+| gradient | `rgba(0,0,0,0) 52%, .77 72%, .95 100%` — the top half is CLEAR | started veiling at .06 from the very top |
+| focus | **`scale(1.05)`** + a 4px white ring on the thumbnail + `0 8px 30px rgba(0,0,0,.5)` | a ring, no scale |
+
+### The episode's rating, and the season's episode count — 2026-09-15
+
+**The rating does NOT come from Cinemeta, and assuming it did was wrong.**
+
+`videos[].rating` exists and reads "0" for a great many series — every Fallout, Game of
+Thrones and Stranger Things episode does, while Breaking Bad and Friends carry real
+numbers. That is a trap: a port that reads it looks like it works and quietly shows
+nothing, and it led to the claim that "Fallout has no episode ratings", which the owner
+corrected. NuvioWeb shows 8.2 on Fallout S1E1.
+
+The chain is `fetchSeriesRatingsBySeason` (metaDetailsScreen.js):
+
+1. resolve the IMDb id to a TMDB id;
+2. **`<IMDB_RATINGS_API_BASE_URL>/api/shows/<tmdbId>/season-ratings`** — tried FIRST;
+3. TMDB `vote_average` per season, only if that returns nothing;
+4. the addon's own `rating`, last, via `mergeSeasonRatings`.
+
+The API returns a BARE ARRAY of seasons, each with an `episodes` array carrying
+`episode_number` and `imdb_rating` (`vote_average` repeats it). Checked against Fallout
+(tmdb 106379): S1E1 "The End" = 8.2 over 23197 votes.
+
+`discover.c` now calls it and `cat_set_ep_score` fills each episode in place, so the
+numbers land into a row already on screen instead of republishing the list and
+restarting every thumbnail. The base URL rides the SAME `local.properties` key the web
+reads, through `tools/env.sh` as `-DNV_IMDB_RATINGS`.
+
+**It has to run AFTER `photosOfCast`.** That function is what resolves the TMDB id
+(`d->tmdb`), and the ratings API is keyed by it. Called before — which is where it went
+first — the id is still 0 and the fetch returns without a word.
+
+**Count what LANDED, not what you parsed.** The first log line counted API entries and
+read "16 filled" while nothing appeared on screen; `cat_set_ep_score` returns whether an
+episode actually matched, and the line now reads "5 of 5 matched an episode on screen".
+
+**The season's episode count was the TOTAL across seasons.** The picker read
+"Season 1 · 16 Eps" on Fallout, whose seasons are 8 and 8, and season 2 got no count at
+all. Cinemeta's `videos` comes whole — every season in one flat list — and the count
+fell back to `cat_n_episodes`, which is that whole list. (Fallout's raw `videos` is 19:
+3 specials in season 0, which the parser drops, then 8 and 8.)
+
+**The row was showing every season's episodes too.** `.series-episode-track` on the web
+holds the chosen season and nothing else; this port drew all 16 with season 2's appended
+after season 1's, and choosing a season only moved the FOCUS to the first card of that
+season. That is the Apple TV app's single-track model. `nEpsOfSeason` / `epOfSeason` now
+map a season-relative index onto the flat list and every caller goes through them.
+
+### Two things the port had to solve that the web does not
+
+**The gradient banded, and more bands was the wrong answer.** `veilEpisode` built the
+overlay as stacked rounded rectangles, leaning on N layers of alpha d compositing to
+1-(1-d)^n. That held for the old ramp, which climbed 0.06 → 0.95 across the whole 395px
+thumbnail with bands 28px apart. The measured gradient is FLAT until 52% and does all
+its work in the last 190px, and there the same trick drew visible horizontal stripes
+across the still — worst on a bright frame. Spreading the bands over the ramp instead
+of the card narrowed the stripes without removing them; raising the count only trades
+stripes for draw calls.
+
+The fix is **GFX_EP_SCRIM**, a per-pixel mode modelled on the `GFX_CW_SCRIM` the
+Continue Watching card already had — which is the comparison that made the seams
+obvious in the first place. Two `clamp()`s, one per segment, summing to 0.95 at the
+base, clipped by the thumbnail's own corner. One quad per card instead of twenty, and
+60.0 fps / 0 janks.
+
+**The focused picker's ring came out with bites off the top and bottom.** `GFX_RING`
+strokes `abs(d) < thickness` around the SDF's zero, and that zero IS the quad's edge —
+so half the stroke always falls outside the quad and is clipped. On a pill the outline
+touches the quad at twelve and six o'clock, which is exactly where the clipping lands.
+Insetting the quad by half the stroke, which is what the first attempt did, carries the
+problem inward with it. `GFX_RING_CSS` escapes it with its own `length(p)`, but that is
+a circle and this control is a pill.
+
+**GFX_RING_INSET** draws the band at `-thickness < d < 0` — strictly inside the edge,
+so there is nothing to clip. It is what `box-shadow: inset` means, and neither existing
+ring mode could express it.
+
+**The " · 16 Eps" tail lost its space.** The web has one string in one span; the port
+splits it in two because it is two styles (600 white, 400 grey), and a leading space
+given to the tail disappears — SDL_ttf trims the line it rasterises, and the label came
+out "Season 1· 16 Eps". It is drawn as an explicit 8px gap instead.
+
+### The document coordinates all moved
+
+These ARE the scroll targets (`NV_DETP_TARGET_ROW`), so they had to be re-measured
+rather than nudged. Taken by adding `scrollTop` back onto `getBoundingClientRect` on
+"The Gentlemen":
+
+| group | was | now |
+|---|---|---|
+| `.series-season-row` | 1080 | **1080** (the picker draws at 1128, not 1160) |
+| `.series-episode-track` | 1194 | **1240** (cards at 1256, not 1286) |
+| `.series-insight-tabs` | 1680 | **1839** (labels at 1887, not 1758) |
+| tab content | 1749 | **1976** (cards at 1992, not 1817) |
+| document end | 2473 | 2471 measured — left at 2473 |
+
+The tab labels also measure **36/500**, not the 32 this file recorded. Not ported yet.
 
 ### Sections below the fold (series) — **NOT PORTED**
 

@@ -431,6 +431,24 @@ static const char *art_by_identity(int index_, int landscape) {
   return NULL;
 }
 
+// The art a CARD shows, which is not always the art the HERO shows.
+//
+// On a resume row the item's `backdrop` is the SERIES' background — the same
+// file the hero is drawing at that moment — so the card repeated the top of the
+// screen and gave no sign of which episode it resumes. When Cinemeta has the
+// episode's still, that is what the card is for. See thumbEp in catalog.h.
+//
+// The hero deliberately does NOT go through here: a still is a 1280-wide frame
+// at best and would be stretched to 1920 across the whole screen, and the
+// backdrop is the image chosen to carry text over it.
+static const char *art_of_card(KindRow kind, int index_, int landscape) {
+  if (kind == ROW_CONTINUE || kind == ROW_RETURN) {
+    const CatItem *item = cat_item_exact(index_);
+    if (item && item->thumbEp[0]) return item->thumbEp;
+  }
+  return art_by_identity(index_, landscape);
+}
+
 static int focus_can_press_long(void) {
   if (focus.row < 0 || focus.row >= nRows) return 0;
   const Row *s = &rows[focus.row];
@@ -670,6 +688,18 @@ void home_event(const SDL_Event *e) {
       }
       return;
     } else if (e->type == SDL_KEYUP && isOk) {
+      // A RELEASE WITHOUT A PRESS SEEN HERE IS NOT A CLICK — the same guard
+      // detail.c and ctxmenu.c already carry, and the one this screen lacked.
+      //
+      // The sidebar decides on the KEYDOWN (menu.c, choose()) and closes itself
+      // right there. The KEYUP of the SAME press arrives when menu_open() is
+      // already 0, so app.c's router hands it to the home — which opened the
+      // card in focus. Picking "Switch profile" made that the reported defect:
+      // the app went to the profile screen and, on returning to the home, the
+      // pending open fired and started whatever was focused, which is normally
+      // the first card of "Continue watching". It holds for every sidebar item,
+      // and equally for the OK that dismisses any sheet drawn above the home.
+      if (!okPressing) { okSince = 0; okHold = 0.0f; return; }
       if (okConsumeRelease) {
         okConsumeRelease = 0;
         okSince = 0;
@@ -1180,7 +1210,7 @@ static void warmHero(int target, int previous) {
       int c = column + steps[k];
       const char *a;
       if (c < 0 || c >= s->n) continue;
-      a = art_by_identity(s->start + c, 1);
+      a = art_of_card(s->kind, s->start + c, 1);
       if (a) tex_prefetch(a);
     }
   }
@@ -1428,24 +1458,10 @@ void home_hero_rect(float *x, float *y, float *w, float *h) {
 //
 // The spaces around the dot are normalised with it, so a "  \xc2\xb7  " from the file and
 // the "   \xe2\x80\xa2   " written here end up identical.
-static void bulletize(char *s, size_t cap) {
-  char out[352];
-  size_t o = 0;
-  const char *p = s;
-  while (*p && o + 1 < sizeof out) {
-    if ((unsigned char)p[0] == 0xC2 && (unsigned char)p[1] == 0xB7) {
-      while (o && out[o - 1] == ' ') o--;
-      if (o + 9 + 1 > sizeof out) break;
-      memcpy(out + o, "   \xe2\x80\xa2   ", 9); o += 9;
-      p += 2;
-      while (*p == ' ') p++;
-    } else {
-      out[o++] = *p++;
-    }
-  }
-  out[o] = 0;
-  snprintf(s, cap, "%s", out);
-}
+// `bulletize` lived here: it walked a joined string and swapped each "·" for a
+// spaced "•". It went with the joined string itself — the hero's meta line is now a
+// list of TOKENS, because the separators have to be drawn dimmer than the words and one
+// TxtLine can only carry one colour. See the NV_HERO_META_* block in layout.h.
 
 // `output` = 0..1 of how much the detail has already taken over the screen. Only the
 // hero's TEXT leaves (it drops and fades); the art stays put, because it is the same
@@ -1497,22 +1513,73 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
 
   // The meta line. In the web app these are tokens joined by "•"; ci->genre already
   // arrives as "Film · Horror", which is the web app's (type, first genre) pair.
-  char metaLine[288];
-  metaLine[0] = 0;
-  if (contHero && ci->season > 0) {
-    char header[64];
-    snprintf(header, sizeof header, "S%d E%d", ci->season, ci->episode);
-    snprintf(metaLine, sizeof metaLine, "%s%s%s", header,
-             (ci->genre[0] ? "  \xc2\xb7  " : ""), ci->genre);
-  } else if (ci && ci->genre[0]) {
-    snprintf(metaLine, sizeof metaLine, "%s", ci->genre);
+  // THE META LINE IS A LIST OF TOKENS, not one pre-bulleted string, because the
+  // separators have to be drawn DIMMER than the words — see NV_HERO_META_DOT. Joining
+  // them into a single TxtLine, which is what this did, forces one colour on both and
+  // is what made the line read as clutter.
+  char metaBuf[288];
+  const char *tok[NV_HERO_META_MAXTOK];
+  int nTok = 0, nLead = 0;
+  metaBuf[0] = 0;
+  { size_t o = 0;
+    // Copies into metaBuf and returns a pointer to it: the tokens have to outlive the
+    // locals they came from, and ci->genre / ci->meta are split in place.
+    #define META_PUSH(S) do { \
+        const char *s_ = (S); \
+        if (s_ && s_[0] && nTok < NV_HERO_META_MAXTOK && o + strlen(s_) + 1 < sizeof metaBuf) { \
+          tok[nTok++] = metaBuf + o; \
+          o += (size_t)snprintf(metaBuf + o, sizeof metaBuf - o, "%s", s_) + 1; \
+        } } while (0)
+
+    // THE STREAMING SERVICE, AS TEXT. It used to be a LOGO drawn ahead of the line by
+    // badges_draw, and the owner's call is that the name reads better than the mark:
+    // "dont need logos to indicate what streaming service it is on, just text is
+    // enough". It leads the group that says what the title IS.
+    //
+    // NuvioWeb shows no provider on the hero at all, so this is a deliberate
+    // divergence and not a measurement — it is information the owner asked for, in the
+    // place the line already had for it.
+    if (ci && ci->providerName[0]) META_PUSH(ci->providerName);
+    if (contHero && ci && ci->season > 0) {
+      char header[64];
+      snprintf(header, sizeof header, "S%d E%d", ci->season, ci->episode);
+      META_PUSH(header);
+    }
+    // ci->genre arrives "·"-joined as (type, genre, genre...). ONE genre, like the
+    // measured line: "Movie • Action", not "TV Show • Reality • Romance". The third
+    // token onwards is where the line stopped being scannable.
+    if (ci && ci->genre[0]) {
+      char g[128]; snprintf(g, sizeof g, "%s", ci->genre);
+      char *cur = g; int taken = 0;
+      while (cur && *cur && taken < 2) {
+        char *dot = strstr(cur, "\xc2\xb7");
+        if (dot) *dot = 0;
+        { char *e = cur + strlen(cur); while (e > cur && e[-1] == ' ') *--e = 0; }
+        while (*cur == ' ') cur++;
+        META_PUSH(cur);
+        taken++;
+        cur = dot ? dot + 2 : NULL;
+      }
+    }
+    // Everything above says what the title IS; everything below is its numbers. The
+    // boundary is drawn as a wider gap, not as another mark.
+    nLead = nTok;
+    if (ci && ci->meta[0]) {
+      char m[128]; snprintf(m, sizeof m, "%s", ci->meta);
+      char *cur = m;
+      while (cur && *cur) {
+        char *dot = strstr(cur, "\xc2\xb7");
+        if (dot) *dot = 0;
+        { char *e = cur + strlen(cur); while (e > cur && e[-1] == ' ') *--e = 0; }
+        while (*cur == ' ') cur++;
+        META_PUSH(cur);
+        cur = dot ? dot + 2 : NULL;
+      }
+    }
+    #undef META_PUSH
   }
-  if (ci && ci->meta[0]) {
-    size_t n = strlen(metaLine);
-    snprintf(metaLine + n, sizeof metaLine - n, "%s%s",
-             n ? "   \xe2\x80\xa2   " : "", ci->meta);
-  }
-  bulletize(metaLine, sizeof metaLine);
+  // The layout below only ever asked "is there a line at all".
+  char metaLine[2]; metaLine[0] = nTok ? 'x' : 0; metaLine[1] = 0;
 
   // The secondary line: the progress highlight, and nothing else. The age badge has left
   // the hero, and the IMDb score went up to the end of the meta line with it — the web
@@ -1570,7 +1637,6 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
                               : (synopsis[0] ? NV_HERO_COPY_LINE + NV_HERO_SIN_MARGIN
                                              : 0.0f))
                 - (metaLine[0] ? NV_LD_HERO_META : 0.0f);
-  float logoY = yMeta - NV_HERO_COPY_LINE - NV_LOGO_HERO_H;
   float x = settings_content_x();
 
   // The title's logo, or the name in text when there is no logo
@@ -1584,13 +1650,43 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
   GLuint tlogo = (ci && ci->logo[0])
       ? tex_get_width(ci->logo, full ? NV_LOGO_HERO_FULL_MAX_W
                                      : NV_LOGO_HERO_MAX_W) : 0;
+
+  // THE ART'S OWN HEIGHT IS WHAT THE STACK MEASURES FROM, not the box's.
+  // NV_LOGO_HERO_H is a CEILING the art is fitted into, and the art is fitted by
+  // WIDTH: any wordmark wider than maxW/NV_LOGO_HERO_H comes out SHORTER than the
+  // box, and with the art hung from the box's top (object-position: left top) the
+  // leftover was left standing as dead space between the logo and the meta line.
+  //
+  // That leftover was the whole of the inconsistency. From the one constant the gap
+  // measured 12 under a mark square enough to fill the box and ~139 under a wide
+  // one — the shape of the art, not the layout, deciding the spacing.
+  //
+  // The web does not have the problem because .home-hero-logo carries no fixed
+  // height: it is the art's own box inside the flex column (MEASURED 640x160, see
+  // layout.h), so the column's gap is all that ever sits beneath it. The fixed box
+  // is the port's, and so was the bug.
+  //
+  // Sized HERE rather than at the draw because logoY needs the height. Note that
+  // nSin above deliberately goes on reserving the full NV_LOGO_HERO_H: the art can
+  // only come out shorter than the box, never taller, so the block cannot overflow,
+  // and keeping the synopsis's line count clear of which logo happened to land is
+  // what stops it reflowing when a late one arrives.
+  float wTitle = 0.0f, hTitle = 0.0f;
   if (tlogo) {
     float ap = tex_aspect(ci->logo);
     if (ap <= 0.0f) ap = 4.0f;
-    float hTitle = NV_LOGO_HERO_H, wTitle = hTitle * ap;
     float maxW = full ? NV_LOGO_HERO_FULL_MAX_W : NV_LOGO_HERO_MAX_W;
+    hTitle = NV_LOGO_HERO_H; wTitle = hTitle * ap;
     if (wTitle > maxW) { wTitle = maxW; hTitle = wTitle / ap; }
-    // object-position: left top — a arte encosta no TOPO da caixa.
+  }
+  // With no logo the name is drawn bottom-aligned inside the full box, so there the
+  // box IS the row. Either way it is the row's BASE the gap hangs from.
+  float hLogo = tlogo ? hTitle : NV_LOGO_HERO_H;
+  float logoY = yMeta - NV_HERO_LOGO_GAP - hLogo;
+
+  if (tlogo) {
+    // object-position: left top — the art sits at the TOP of its box, which is now
+    // the art's own height, so that edge is also its base.
     GfxRect rl = { x, logoY, wTitle, hTitle };
     gfx_tex_aspect_current = 0.0f;
     // A dark logo becomes white. The same rule as the detail screen's: TMDB does not
@@ -1627,65 +1723,87 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
     // keeps just the art, which is enough, and the text appears when the data arrives.
     if (ci && ci->title[0]) {
       TxtLine title = txt_line(TXT_TITLE1, ci->title, 255, 255, 255, 255);
-      txt_draw_alpha(title, x, logoY + NV_LOGO_HERO_H - (float)title.h,
+      txt_draw_alpha(title, x, logoY + hLogo - (float)title.h,
                          alpha);
     }
   }
 
   if (metaLine[0]) {
-    float badgeW=ci?badges_draw(badges_provider(ci->providerName),x,yMeta,150,24,alpha):0;
-    // THE IMDb SCORE IS THIS LINE'S LAST TOKEN, straight after the runtime. The web app
-    // sends it down to the secondary line only when that line already has something on
-    // it (showImdbSecondary) — with the age badge gone, keeping the rule would have
-    // parked the score on a line of its own, away from the numbers it reads with.
+    // TOKEN BY TOKEN, with the separators DIMMER than the words. That is the whole
+    // difference between this line and the one that read as clutter: the web draws the
+    // tokens at rgba(255,255,255,.62) and every dot at .34, so the eye groups the words
+    // and the dots fall back to punctuation. Drawn as one string — which is what this
+    // did — both are forced to the same flat grey and every dot competes.
     //
-    // The "•" goes INSIDE the string, so its spacing is the font's own and
-    // matches the separator between the genres and the year. Only the gap to the yellow
-    // chip is a number here: the chip is a box, not a glyph, and three spaces of Inter
-    // left it sitting too far out.
-    TxtLine ls = { 0, 0, 0 }, ln = { 0, 0, 0 };
-    float imdbW = 0.0f;
-    if (score[0]) {
-      size_t n = strlen(metaLine);
-      ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
-      ln = txt_line(TXT_HERO_META, score, 179, 179, 179, 255);
-      imdbW = NV_HERO_IMDB_GAP + NV_HERO_IMDB_W + 10.0f + (float)ln.w;
-      snprintf(metaLine + n, sizeof metaLine - n, "   \xe2\x80\xa2");
-    }
+    // THE PROVIDER LOGO HAS GONE WITH IT. badges_draw used to paint a service mark
+    // ahead of the line; the name is now the line's first token.
+    //
     // WIDTH: to the safe right edge, NOT to the synopsis's 640. In the web app only
     // .home-hero-description carries a width; the meta line has none. Sharing the
     // description's cap left "Film • Comedy • Drama • 2026 • 107 min" ellipsised
-    // mid-line — 640 has to hold the provider badge and the score as well, and with a
-    // badge in front there were barely 400 left for the text.
+    // mid-line.
     //
-    // The score is still subtracted: it is drawn AFTER the line ends, so without it in
-    // the budget a long enough genre list would run under the chip.
-    float metaW = NV_SCREEN_W - x - NV_HOME_SAFE_RIGHT - badgeW - imdbW;
-    TxtLine lm = txt_line_trim(TXT_HERO_META, metaLine, 179, 179, 179, 255, metaW);
-    // THE META AND THE SYNOPSIS NOW FADE WITH THE ART, and they did not use to.
-    //
-    // The measurement said they swapped opaque, and the reason given for keeping
-    // it was sound: with the rasteriser doing 2 lines per frame, fading text that
-    // is STILL SETTLING is the worst possible case. What changed is the settling.
-    // txt_block no longer rasterises a texture for every word-prefix it measures
-    // (see widthOf in text.c), so the block is ready in two frames instead of
-    // fifteen, and heroCopy holds the whole thing back until it is. Fading it is
-    // safe now, and the alternative — text cutting over an art that is still
-    // crossfading — is what prompted this.
-    txt_draw_alpha(lm, x+badgeW, yMeta, alpha);
+    // The score is subtracted from the budget because it is drawn AFTER the tokens end:
+    // without it there, a long enough genre would run under the chip.
+    TxtLine ls = { 0, 0, 0 }, ln = { 0, 0, 0 };
+    float imdbW = 0.0f;
     if (score[0]) {
-      // .home-hero-imdb: the 40px yellow badge and the score just after it, with 10
-      // of breathing room. The IMDb SVG is not packaged here; the yellow rectangle
-      // with black letters reads the same at this scale.
-      float cx = x + badgeW + (float)lm.w + NV_HERO_IMDB_GAP;
+      ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
+      ln = txt_line(TXT_HERO_META, score, 179, 179, 179, 255);
+      imdbW = NV_HERO_IMDB_GAP + NV_HERO_IMDB_W + 10.0f + (float)ln.w;
+    }
+    float limit = NV_SCREEN_W - NV_HOME_SAFE_RIGHT - imdbW;
+    int ink  = (int)(255.0f * NV_HERO_META_INK  + 0.5f);
+    int dim  = (int)(255.0f * NV_HERO_META_DOT  + 0.5f);
+    float cx = x, hLine = 0.0f;
+    int drawn = 0;
+    for (int i = 0; i < nTok; i++) {
+      TxtLine lt = txt_line(TXT_HERO_META, tok[i], ink, ink, ink, 255);
+      float sep = 0.0f, lead = 0.0f;
+      TxtLine ld = { 0, 0, 0 };
+      if (drawn) {
+        // The group boundary KEEPS ITS DOT and widens the space BEFORE it. Measured:
+        // the lead group ends at 370.7, the trailing group opens at 384.7 (a gap of 14)
+        // and its first dot sits there, with the usual 12 after it. Dropping the dot
+        // entirely — which is what the first attempt did — reads as a missing separator,
+        // not as a group.
+        lead = (i == nLead) ? NV_HERO_META_GROUP : NV_HERO_META_SEP;
+        ld = txt_line(TXT_HERO_META, "\xe2\x80\xa2", dim, dim, dim, 255);
+        sep = lead + (float)ld.w + NV_HERO_META_SEP;
+      }
+      // A token that does not fit is dropped WHOLE, with its separator. Trimming it
+      // mid-word, which txt_line_trim did to the joined string, left an ellipsis in the
+      // middle of a genre.
+      if (cx + sep + (float)lt.w > limit) break;
+      if (drawn) {
+        txt_draw_alpha(ld, cx + lead,
+                       yMeta + ((float)lt.h - (float)ld.h) * 0.5f, alpha);
+        cx += sep;
+      }
+      txt_draw_alpha(lt, cx, yMeta, alpha);
+      cx += (float)lt.w;
+      if ((float)lt.h > hLine) hLine = (float)lt.h;
+      drawn++;
+    }
+    if (score[0] && drawn) {
+      // .home-hero-imdb: the 40px yellow badge and the score just after it, with 10 of
+      // breathing room. The IMDb SVG is not packaged here; the yellow rectangle with
+      // black letters reads the same at this scale. The score stays at 179 grey —
+      // measured BRIGHTER than the tokens around it, because it is the one number on the
+      // line anyone looks for.
+      float bx = cx + NV_HERO_META_SEP * 2.0f;
+      { TxtLine ld = txt_line(TXT_HERO_META, "\xe2\x80\xa2", dim, dim, dim, 255);
+        txt_draw_alpha(ld, cx + NV_HERO_META_SEP,
+                       yMeta + (hLine - (float)ld.h) * 0.5f, alpha);
+        bx = cx + NV_HERO_META_SEP * 2.0f + (float)ld.w + NV_HERO_IMDB_GAP; }
       float sh = (float)ls.h + 6.0f;
-      float sy = yMeta + ((float)lm.h - sh) * 0.5f;
+      float sy = yMeta + (hLine - sh) * 0.5f;
       // Invisible is not submitted — see the note on the logo above.
       if (alpha > 0.004f)
-        gfx_color((GfxRect){ cx, sy, NV_HERO_IMDB_W, sh },
+        gfx_color((GfxRect){ bx, sy, NV_HERO_IMDB_W, sh },
                 0.12f, 0.96f, 0.78f, 0.06f, alpha);
-      txt_draw_alpha(ls, cx + (NV_HERO_IMDB_W - ls.w) * 0.5f, sy + 3.0f, alpha);
-      txt_draw_alpha(ln, cx + NV_HERO_IMDB_W + 10.0f, yMeta, alpha);
+      txt_draw_alpha(ls, bx + (NV_HERO_IMDB_W - ls.w) * 0.5f, sy + 3.0f, alpha);
+      txt_draw_alpha(ln, bx + NV_HERO_IMDB_W + 10.0f, yMeta, alpha);
     }
   }
 
@@ -2136,7 +2254,14 @@ static void drawShortcuts(int r, float y) {
         w + 2*NV_RING_FOCUS, h + 2*NV_RING_FOCUS},
         (radius * smaller + NV_RING_FOCUS) / (smaller + 2*NV_RING_FOCUS), .96f, .97f, .98f, f);
     }
-    gfx_color(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G, NV_COLOR_SKELETON_B, 1);
+    // The SAME surface the poster rows sit on, and for the same reason: in the web
+    // a collection card is `home-content-card home-poster-card home-collection-card`
+    // (homeScreen.js:2547), so `.home-poster-card .content-poster` applies to it and
+    // it gets `linear-gradient(180deg, #1c1c1c, #111)` like every other card. This
+    // drew the flat #2C2C2C of NV_COLOR_SKELETON instead — lighter than its
+    // neighbours and with no ramp, which is what made the Discover row read as a
+    // strip of grey slabs next to the posters.
+    drawArtSkeleton(card, radius, 1.0f);
     const ColFolder *folder=col_folder(rows[r].folders[c]);
     if (folder) {
       const char *art = folder->cover;
@@ -2491,7 +2616,11 @@ void home_draw(Uint32 now) {
           // Open, the card shows the LANDSCAPE art: that is what it opens for.
           // The swap happens halfway, once the frame is 16:9 wide and the portrait
           // would start being cropped badly.
-          path = art_by_identity(idxCat, openAmt > 0.5f ||
+          // A resume card shows the EPISODE (art_of_card), and it keeps showing
+          // it while the card opens: the art is landscape in both states here,
+          // so there is nothing to swap halfway, and swapping would cost the
+          // re-decode the note on wAsk below is about.
+          path = art_of_card(kind, idxCat, openAmt > 0.5f ||
                                         kind == ROW_CONTINUE ||
                                         kind == ROW_RETURN || landscape);
 

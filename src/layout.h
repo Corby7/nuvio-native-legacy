@@ -112,6 +112,22 @@
 #define NV_HERO_COPY_LINE      12.0f   // the flex column's gap
 #define NV_HERO_SIN_MARGIN      4.0f   // .home-hero-description's margin-top
 
+// THE GAP UNDER THE TITLE'S LOGO, which is the one space in the block that is NOT
+// the flex column's 12. A DELIBERATE DIVERGENCE, asked for by the owner looking at
+// the homescreen: "visually looks a bit too close sometimes".
+//
+// It only became a divergence worth making once the logo stopped reserving a fixed
+// box (home.c). Before that the 12 was reached by a mark square enough to fill
+// NV_LOGO_HERO_H and by nothing else — every wider wordmark inherited the box's
+// leftover on top of it, up to ~139. Fixing that hands EVERY logo the 12 that used
+// to be the tight end of the range, so the constant has to come up with it or the
+// fix reads as the whole hero tightening.
+//
+// 24 is not measured, unlike the rest of this block: the web's own number is 12, and
+// the web does not need more because its logos are the art's own box with no
+// padding of their own to fall inside. Tune against the panel, not against the CSS.
+#define NV_HERO_LOGO_GAP       24.0f   // logo -> meta line; web parity would be 12
+
 // THE HEIGHT OF THE COPY BOX, which is what decides how many lines of synopsis are
 // drawn. 518.4 of card minus its 48 of padding top and bottom = 422.4, and the box
 // is fixed: the flex column does not grow with the text, the text is fitted to it.
@@ -265,6 +281,25 @@
 // away from the text, so it is tighter here on purpose.
 #define NV_HERO_IMDB_W   40.0f
 #define NV_HERO_IMDB_GAP 12.0f
+// --- THE HERO'S META LINE, RE-MEASURED 2026-09-15 in NuvioWeb -----------------
+//
+// The line read as clutter and the cause was not the number of words: it was that the
+// SEPARATORS were as bright as them. Measured on `.home-modern-hero-meta-line`, the
+// web draws the tokens at rgba(255,255,255,.62) and every "•" at
+// rgba(255,255,255,.34) — a little over half. The eye then groups the words and the
+// dots recede to punctuation. The port baked the bullets into ONE string drawn at a
+// flat rgb(179,179,179), so every dot competed with the text around it.
+//
+// It also carries ONE genre, not a list: the measured line is "Movie • Action • 1h 51m
+// • September 4, 2026 • IMDb 6.9" — five tokens where the port had six or seven.
+#define NV_HERO_META_INK   0.62f   // the tokens
+#define NV_HERO_META_DOT   0.34f   // the separators, and this is the whole trick
+#define NV_HERO_META_SEP  12.0f    // the space each side of a dot (282 -> 305.2)
+// The line is TWO groups with 14 between them: what the title IS (provider, type,
+// genre) and then its NUMBERS (year, runtime, score). The gap is a second, quieter
+// readability device — it splits the line without adding a mark.
+#define NV_HERO_META_GROUP 14.0f
+#define NV_HERO_META_MAXTOK  10
 // MEASURED in the web app (getBoundingClientRect at 1920x1080, modern layout,
 // 2026-09-07): `.home-modern-rows-viewport` is a block pinned to the bottom of the
 // screen, 52% of its height — y=518.4, h=561.6 — and the rows scroll INSIDE it.
@@ -564,6 +599,23 @@
 #define NV_FT_DET_META   25   // .series-detail-support and .detail-meta-row
 #define NV_FT_DET_SIN    26   // .series-detail-description
 #define NV_FT_DET_META2  23   // .detail-meta-row.secondary
+// The ACTIONS ROW, re-measured in NuvioWeb 0.3.8 on 2026-09-15 (see the
+// NV_DETWEB_* block in detail.h). The label is 32, not the 25 NV_FT_DET_BUTTON
+// carries: that 25 came from an older measurement of the same button and is still
+// right for profile.c, which is the only other caller — so the detail screen gets
+// a size of its own rather than dragging an unrelated screen along with it.
+#define NV_FT_DETWEB_BTN 32   // .series-primary-btn (weight 600)
+// The tooltip over a focused circular button: 24 at weight 700 exactly, which is
+// the one place on this screen where Bold is a MEASUREMENT and not the optical
+// choice text.c makes for 600.
+#define NV_FT_DETWEB_TIP 24   // .series-circle-btn::after (weight 700)
+// The SEASON PICKER and the EPISODE CARD, same session, same method.
+#define NV_FT_DETWEB_SEA  30   // .library-picker-value (600) and its " · N Eps" (400)
+#define NV_FT_DETWEB_OPT  28   // .library-picker-option (500)
+#define NV_FT_DETWEB_EPB  20   // .series-episode-badge (600, letter-spacing 2)
+#define NV_FT_DETWEB_EPM  20   // .series-episode-meta (400)
+#define NV_FT_DETWEB_EPT  32   // .series-episode-title (800)
+#define NV_FT_DETWEB_EPD  32   // .series-episode-desc-row (400), leading 44
 #define NV_FT_PLR_TITLE 56   // .player-title
 #define NV_FT_PLR_BODY  32   // .player-subtitle and .player-time-label
 // The player's top corner. The clock and the "Ends at" come from the ATV block
@@ -853,7 +905,17 @@
 // A DELIBERATE DIVERGENCE from the web app's measurement, and not an oversight.
 #define NV_DETW_LOGO_H    200.0f
 #define NV_DETW_LOGO_MAXW 1000.0f
-#define NV_DETW_LOGO_GAP   40.0f   // the logo's base to the top of the actions row
+// THE LOGO'S BASE TO THE TOP OF THE ACTIONS ROW, and the 40 it used to be was the
+// CSS margin rather than the rendered gap. Measured in NuvioWeb on 2026-09-15 at
+// 1920x1080: the logo ends at 465.02 and the row starts at 562.61 — 97.59. The
+// difference is `.detail-trailer-hint`, a paragraph that is in the flow at all times
+// and only carries text while a trailer plays, so it opens 57.6px of empty band that
+// the sheet's margin does not mention.
+//
+// It is NOT slack to be trimmed: that band is where the focused circular button's
+// tooltip lives (see NV_DETWEB_TIP_* in detail.h). The label's box reaches 54px above
+// the button, so at the old 40 it would have been drawn over the logo.
+#define NV_DETW_LOGO_GAP   98.0f
 #define NV_DETW_ACTIONS_H   108.0f   // includes the focus ring's 6px of padding
 #define NV_DETW_BTN_H      96.0f
 #define NV_DETW_BTN_PADX   48.0f

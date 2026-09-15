@@ -245,7 +245,7 @@ void library_event(const SDL_Event *e) {
     if (k == SDLK_RIGHT && pickSel == 0) { pickSel = 1; focus.column = 1; return; }
     if (k == SDLK_LEFT  && pickSel == 1) { pickSel = 0; focus.column = 0; return; }
     if (k == SDLK_UP)   { focus.row = LIB_FILTER_MODE; focus.column = mode; return; }
-    if (k == SDLK_DOWN) { if (nFilter) focus_move(&focus, 0, 1); return; }
+    if (k == SDLK_DOWN) { if (nFilter) focus_move_grid(&focus, 0, 1); return; }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
       if (pickSel == 0) kind = (kind + 1) % LIB_N_KINDS;
       else              order = (order + 1) % LIB_N_ORDER;
@@ -260,12 +260,15 @@ void library_event(const SDL_Event *e) {
     if (i >= 0 && i < nFilter) request = filter[i];
     return;
   }
-  if (k == SDLK_RIGHT)     focus_move(&focus, 1, 0);
-  else if (k == SDLK_LEFT) focus_move(&focus, -1, 0);
-  else if (k == SDLK_DOWN) focus_move(&focus, 0, 1);
+  // THE POSTER GRID, and a grid is what it is: see focus_move_grid. Dropping a
+  // row here used to land on whichever column the focus had last held in that
+  // row, which in a grid of equal-length rows is simply the wrong poster.
+  if (k == SDLK_RIGHT)     focus_move_grid(&focus, 1, 0);
+  else if (k == SDLK_LEFT) focus_move_grid(&focus, -1, 0);
+  else if (k == SDLK_DOWN) focus_move_grid(&focus, 0, 1);
   else if (k == SDLK_UP) {
     if (focus.row == LIB_FILTER_GRID) { focus.row = LIB_FILTER_PICK; focus.column = pickSel; }
-    else focus_move(&focus, 0, -1);
+    else focus_move_grid(&focus, 0, -1);
   }
 }
 

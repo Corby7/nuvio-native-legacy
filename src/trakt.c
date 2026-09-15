@@ -1,6 +1,8 @@
 #include "trakt.h"
 #include "net.h"
 #include "js.h"
+#include "watchedep.h"
+#include "jsw.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -52,6 +54,32 @@ int trakt_operation_state(int kind) {
 
 int trakt_active(void) { return on; }
 
+// THE CREDENTIAL WAS REFUSED (HTTP 401).
+//
+// The 401 used to reach the log and nowhere else: the screen carried on saying
+// "connected" and the owner only found out when "Continue watching" stopped
+// arriving. The network layer is what tells us (net_notify_401), because the
+// 401 can come back from any call — resume, history, extras. traktauth_step is
+// what ACTS: it renews from the stored refresh token and, if the refresh has
+// died too, drops the state to invalid so the screen finally says so.
+//
+// Written on a NETWORK thread and read on the UI thread, so it is only ever a
+// flag — never a place to make a request from.
+static volatile int credRefused;
+
+static void warn401(const char *url) {
+  // /oauth/* answers 401 for a bad APPLICATION credential, which is the
+  // package's problem and not this person's session.
+  if (!url || !strstr(url, "api.trakt.tv") || strstr(url, "/oauth/")) return;
+  if (on && !credRefused) {
+    credRefused = 1;
+    printf("[trakt] HTTP 401: credential refused — renewal pending\n");
+    fflush(stdout);
+  }
+}
+
+int trakt_refused(void) { return credRefused; }
+
 void trakt_forget(void) {
   token[0] = 0;
   client[0] = 0;
@@ -64,6 +92,12 @@ int trakt_set(const char *tk, const char *cli) {
   snprintf(token, sizeof token, "%s", tk);
   if (cli && *cli) snprintf(client, sizeof client, "%s", cli);
   on = token[0] && client[0];
+  // A NEW token clears the refusal mark — this is the same door the renewal
+  // (traktauth) and a fresh pairing both come through. Registering the listener
+  // here rather than at startup means it is armed exactly when there is a
+  // credential that can be refused.
+  credRefused = 0;
+  net_notify_401(warn401);
   printf("[trakt] credential from the account: %s\n",
          on ? "active" : "no application client id (see tools/env.sh)");
   return on;
@@ -129,6 +163,33 @@ static int decorate(CatItem *d, const char *kind) {
   // the Library — the rows the hero sits above. See cat_backdrop_shrink.
   cat_backdrop_shrink(d->backdrop, sizeof d->backdrop);
   if (!d->backdrop[0]) snprintf(d->backdrop, sizeof d->backdrop, "%s", d->poster);
+  // THE EPISODE'S STILL, FOR THE CONTINUE WATCHING CARD, AT NO EXTRA REQUEST.
+  //
+  // The body already in hand carries `videos`, one entry per episode, each with
+  // its own `thumbnail` — the same array publishEpisodes reads in discover.c.
+  // Reading it here is what separates the card from the hero: both resolved to
+  // this item's `backdrop`, so the row drew the picture already filling the top
+  // of the screen and said nothing about the episode it resumes.
+  //
+  // The url is scanned for on the season and number the caller already put on
+  // the item: trakt_resume takes them from the `episode` block of
+  // /sync/playback, resumeLocal from progress.txt. A film leaves both at 0 and
+  // never enters here.
+  if (d->season > 0 && d->episode > 0) {
+    const char *v = js_array(body, NULL, "videos");
+    while (v) {
+      const char *fv = js_end(v);
+      if ((int)js_num(v, fv, "season",  -1) == d->season &&
+          (int)js_num(v, fv, "episode", -1) == d->episode) {
+        js_text(v, fv, "thumbnail", d->thumbEp, sizeof d->thumbEp);
+        break;
+      }
+      v = js_next(fv);
+    }
+    // Same rewrite the backdrop gets, and for the same reason: a still served
+    // from TMDB's /original is a decode this card has no use for.
+    cat_backdrop_shrink(d->thumbEp, sizeof d->thumbEp);
+  }
   { char r[24] = "", year[24] = "";
     js_text(body, NULL, "runtime", r, sizeof r);
     js_text(body, NULL, "releaseInfo", year, sizeof year);
@@ -178,6 +239,130 @@ static void *threadDecorate(void *u) {
     pthread_mutex_unlock(&decorateLock);
     decorateTasks[mine].ok = decorate(decorateTasks[mine].d, decorateTasks[mine].kind);
   }
+}
+
+// DECORATE `n` items across TK_THREADS threads, and only then compact:
+// `decorate` fails for an item Cinemeta does not know, and the compaction is
+// what removes those, preserving the order of whatever was handed in.
+//
+// PUBLIC because there is now a SECOND producer of bare items that need art and
+// a synopsis: the local "Continue watching" list, built in discover.c out of
+// progress.txt, which knows an id and a position and nothing else. It used to be
+// the tail of trakt_resume; leaving it there would have meant a second copy of
+// the thread pool and the compaction, and the compaction is precisely the step
+// whose subtlety cost us `resumedMs` travelling on the item.
+//
+// It is NOT reentrant — the task queue is file-static, for the same reason the
+// rest of this module's batches are — so the callers hold discover.c's lock.
+int trakt_decorate_batch(CatItem *output, int n) {
+  if (n <= 0) return 0;
+  decorateTasks = calloc((size_t)n, sizeof(TaskDecorate));
+  if (decorateTasks) {
+    pthread_t threads[TK_THREADS];
+    int created = 0, q, r, w;
+    for (q = 0; q < n; q++) {
+      decorateTasks[q].d = &output[q];
+      snprintf(decorateTasks[q].kind, sizeof decorateTasks[q].kind, "%s", output[q].kind);
+    }
+    decorateN = n; decorateNext = 0;
+    for (q = 0; q < TK_THREADS; q++)
+      if (pthread_create(&threads[created], NULL, threadDecorate, NULL) == 0) created++;
+    if (!created) threadDecorate(NULL);      // no threads: in series, same result
+    for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
+
+    for (r = 0, w = 0; r < n; r++)
+      if (decorateTasks[r].ok) { if (w != r) output[w] = output[r]; w++; }
+    n = w;
+    free(decorateTasks); decorateTasks = NULL; decorateN = 0;
+  } else {
+    // No memory for the queue: in series, on this very thread.
+    int r, w;
+    for (r = 0, w = 0; r < n; r++)
+      if (decorate(&output[r], output[r].kind)) { if (w != r) output[w] = output[r]; w++; }
+    n = w;
+  }
+  return n;
+}
+
+// MARKS OR UNMARKS A BATCH OF EPISODES ON TRAKT.
+//
+// ONE POST, not one per episode: /sync/history and /sync/history/remove accept
+// shows[{ids:{imdb}, seasons:[{number, episodes:[{number}]}]}], and it is that
+// shape which makes "up to here" and "the whole season" a single request.
+// Marking 20 episodes one at a time would be 20 round trips and 20 chances of
+// finishing half done.
+//
+// SYNCHRONOUS, on the caller's thread. The screen has already applied the local
+// effect before reaching here (watchedep_mark_batch), so what is expected here
+// is the confirmation, not the drawing. A caller on the draw thread has to hand
+// this to a thread of its own.
+//
+// The batch arrives ordered by season, but that is not assumed: the loop groups
+// by looking each season up once, which for the handful of episodes in a gesture
+// costs less than sorting.
+int trakt_mark_episodes(const char *imdb, const WatchedPair *pairs, int count,
+                        int watched) {
+  const char *header[4];
+  char auth[200], keyHeader[140], id[24], url[64];
+  Jsw w;
+  char *r;
+  int i, j, st = 0, ok;
+  char done[64];
+  if (!on || !imdb || imdb[0] != 't' || !pairs || count < 1) return 0;
+  if (count > (int)sizeof done) count = (int)sizeof done;
+  for (i = 0; imdb[i] && imdb[i] != ':' && i < (int)sizeof id - 1; i++) id[i] = imdb[i];
+  id[i] = 0;
+  if (!id[0]) return 0;
+  memset(done, 0, sizeof done);
+
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_key(&w, "shows");
+  jsw_arr_start(&w);
+  jsw_obj_start(&w);
+  jsw_key(&w, "ids");
+  jsw_obj_start(&w);
+  jsw_cs(&w, "imdb", id);
+  jsw_obj_end(&w);
+  jsw_key(&w, "seasons");
+  jsw_arr_start(&w);
+  for (i = 0; i < count; i++) {
+    if (done[i]) continue;
+    jsw_obj_start(&w);
+    jsw_ci(&w, "number", pairs[i].season);
+    jsw_key(&w, "episodes");
+    jsw_arr_start(&w);
+    for (j = i; j < count; j++) {
+      if (done[j] || pairs[j].season != pairs[i].season) continue;
+      done[j] = 1;
+      jsw_obj_start(&w);
+      jsw_ci(&w, "number", pairs[j].episode);
+      jsw_obj_end(&w);
+    }
+    jsw_arr_end(&w);
+    jsw_obj_end(&w);
+  }
+  jsw_arr_end(&w);
+  jsw_obj_end(&w);
+  jsw_arr_end(&w);
+  jsw_obj_end(&w);
+
+  snprintf(auth, sizeof auth, "Authorization: Bearer %s", token);
+  snprintf(keyHeader, sizeof keyHeader, "trakt-api-key: %s", client);
+  header[0] = auth;
+  header[1] = "trakt-api-version: 2";
+  header[2] = keyHeader;
+  header[3] = NULL;
+  snprintf(url, sizeof url, "https://api.trakt.tv/sync/history%s",
+           watched ? "" : "/remove");
+  r = net_post_st(url, 20, header, jsw_text_final(&w), &st);
+  jsw_free(&w);
+  ok = st >= 200 && st < 300;
+  free(r);
+  printf("[trakt] %s %d episode(s) of %s -> %s (HTTP %d)\n",
+         watched ? "mark" : "unmark", count, id, ok ? "ok" : "failed", st);
+  fflush(stdout);
+  return ok;
 }
 
 // The resume bar comes from /sync/playback and does not say whether the title
@@ -248,6 +433,22 @@ int trakt_resume(CatItem *output, int max) {
       char imdb[24] = "";
       memset(d, 0, sizeof *d);
       d->progress = (int)js_num(p, f, "progress", 0.0);
+      // THE 1%-TO-90% WINDOW, WHICH THIS PATH NEVER APPLIED. The local path
+      // always did, and /sync/playback is a much dirtier source: it keeps every
+      // resume point any Trakt client ever recorded, which is where the reports
+      // of "films and series I never watched" in Continue watching came from —
+      // entries sitting at 0% that were opened once by something else, and
+      // entries at 98% that are simply finished. Below 1% it was not started,
+      // from 90% on it is over, and "continue" is neither.
+      if (d->progress < 1 || d->progress >= 90) { p = js_next(f); continue; }
+      // WHEN it was paused. Without it every Trakt item entered with an unknown
+      // instant and the row fell back to the order the API answered in, so a
+      // title watched last month could sit in front of one watched an hour ago.
+      // It is stamped on the ITEM because the batch gets compacted after
+      // decorating — see resumedMs in catalog.h.
+      { char pausedAt[40] = "";
+        js_text(p, f, "paused_at", pausedAt, sizeof pausedAt);
+        d->resumedMs = js_ms_iso(pausedAt); }
       // The "movie"/"show" block holds the title and the ids; the "episode" one
       // carries the season and number. Looking for "imdb" across the whole range
       // would pick the episode's, which the addons also accept but which does
@@ -281,38 +482,7 @@ int trakt_resume(CatItem *output, int max) {
   free(body);
   loadHistoryReal(header);
 
-  // DECORATE the n items across TK_THREADS threads, and only then compact:
-  // `decorate` fails for an item Cinemeta does not know, and before, the
-  // `if (decorate(...)) n++` simply did not count it — now the item is already
-  // in place, so the failures are removed by compaction, preserving the
-  // history's order.
-  if (n > 0) {
-    decorateTasks = calloc((size_t)n, sizeof(TaskDecorate));
-    if (decorateTasks) {
-      pthread_t threads[TK_THREADS];
-      int created = 0, q, r, w;
-      for (q = 0; q < n; q++) {
-        decorateTasks[q].d = &output[q];
-        snprintf(decorateTasks[q].kind, sizeof decorateTasks[q].kind, "%s", output[q].kind);
-      }
-      decorateN = n; decorateNext = 0;
-      for (q = 0; q < TK_THREADS; q++)
-        if (pthread_create(&threads[created], NULL, threadDecorate, NULL) == 0) created++;
-      if (!created) threadDecorate(NULL);      // no threads: in series, same result
-      for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
-
-      for (r = 0, w = 0; r < n; r++)
-        if (decorateTasks[r].ok) { if (w != r) output[w] = output[r]; w++; }
-      n = w;
-      free(decorateTasks); decorateTasks = NULL; decorateN = 0;
-    } else {
-      // No memory for the queue: in series, on this very thread.
-      int r, w;
-      for (r = 0, w = 0; r < n; r++)
-        if (decorate(&output[r], output[r].kind)) { if (w != r) output[w] = output[r]; w++; }
-      n = w;
-    }
-  }
+  n = trakt_decorate_batch(output, n);
 
   printf("[trakt] %d in progress\n", n);
   fflush(stdout);
@@ -531,10 +701,11 @@ int trakt_profile(ProfileData *d) {
         {int re=(int)js_num(be,fe,"runtime",0);if(re>0)runtime=re;} d->episodes++;}
       else d->movies++;
       d->plays++; if (runtime > 0) d->minutes += runtime;
-      { int y,m,day,h,mi,s;
-        if(sscanf(watched,"%d-%d-%dT%d:%d:%d",&y,&m,&day,&h,&mi,&s)==6){
-          struct tm wt={0},local;wt.tm_year=y-1900;wt.tm_mon=m-1;wt.tm_mday=day;
-          wt.tm_hour=h;wt.tm_min=mi;wt.tm_sec=s;time_t stamp=timegm(&wt);
+      // js_ms_iso and not a parse of its own: this was the third copy of the
+      // same ISO reading in the app. See the note on it in js.h.
+      { long long wms = js_ms_iso(watched);
+        if (wms) {
+          struct tm local; time_t stamp = (time_t)(wms / 1000);
           localtime_r(&stamp,&local);
           if(local.tm_year==tmv.tm_year&&local.tm_mon==tmv.tm_mon&&local.tm_mday>=1&&local.tm_mday<=31)
             d->activity[local.tm_mday-1]++;

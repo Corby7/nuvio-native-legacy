@@ -1,4 +1,5 @@
 #include "sync.h"
+#include "watchedep.h"
 #include "session.h"
 #include "cloud.h"
 #include "profiles.h"
@@ -789,6 +790,9 @@ void sync_forget_user(void) {
   addons_forget();
   trakt_forget();
   profiles_forget();
+  // Which episodes were watched belongs to the account that is leaving: kept,
+  // it would tell the next person which episodes of their series are done.
+  watchedep_forget();
   data_erase(FILE_PROGRESS);
 
   // The boxes the thread fills too: a cycle that finished just before the

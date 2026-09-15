@@ -46,6 +46,16 @@ const char *js_root_array(const char *body);
 // It exists for `credential_json`: the app passes that object on to the server
 // uninterpreted, and rebuilding it field by field would lose everything this
 // version of the app does not know about. 1 if found and it fitted.
+// An ISO-8601 instant in MILLISECONDS since the epoch, 0 when unreadable.
+// Reads "2026-09-14T22:31:07.000Z", the same without the fraction, and a bare
+// date. Always UTC.
+//
+// It is HERE, and not private to a caller, because the app had three separate
+// copies of this parse and a fourth was about to appear for the Trakt
+// `paused_at`. Two copies of a date parser diverge in silence: the symptom is a
+// row ordered wrongly, not an error.
+long long js_ms_iso(const char *s);
+
 int js_raw(const char *start, const char *end, const char *key,
              char *dst, size_t size);
 

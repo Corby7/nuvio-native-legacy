@@ -37,6 +37,7 @@
 #include "anim.h"
 #include "layout.h"
 #include "catalog.h"
+#include "trakt.h"   // trakt_active(), for the library tooltip's wording
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -95,6 +96,14 @@ static int  ratTemp;
 #define PES_PER_LINE  6
 
 static int  button = 0;      // the focused button on the hero
+// The most buttons the row ever has: the primary plus three circles, which is what a
+// FILM shows (see nButtons).
+#define N_BUTTONS 4
+// The tooltip's `transition: opacity 140ms` — one value per button, because moving
+// the focus CROSSFADES: the label you are leaving fades out while the new one fades
+// in, and a single shared opacity would make it blink to zero and back instead.
+// Index 0 is the primary, which never has a tooltip, and is simply never raised.
+static float tipA[N_BUTTONS];
 static int  reqPlay = 0, reqMark = 0, reqSources = 0;
 // Mark as WATCHED. Separate from reqMark, which is "add to the list".
 static int  reqWatched = 0;
@@ -106,6 +115,15 @@ static float animFocus[N_SECTIONS][N_ITEMS];
 static float scrollSec[N_SECTIONS];    // each row's HORIZONTAL scroll
 static float scrollY = 0.0f;         // the document's VERTICAL scroll
 static int season = 0;            // the CHOSEN season (not the focused one)
+// The season picker's dropdown. `seasonMenuOpen` is the listbox being expanded and
+// `seasonMenuFocus` the row inside it — which is NOT `season`: the list opens on the
+// chosen one and moving through it changes nothing until OK.
+static int seasonMenuOpen = 0;
+static int seasonMenuFocus = 0;
+// Where the anchor landed this frame. The list is drawn in a pass of its own after
+// every section, because it hangs over the episode row below it — drawn in place it
+// would be painted over by the very cards it covers.
+static GfxRect seasonMenuAt;
 // The focus's rest period over the season row, so the season changes when it STOPS
 // on a pill rather than on every pill it passes through.
 static int    tempPending = 0;
@@ -128,6 +146,15 @@ typedef enum { SEC_SEASONS, SEC_EPISODES, SEC_TABS_INFO, SEC_CAST,
 static int isSeries(void);
 static float heightHeaderComments(void);
 static int seasonIn(int c);
+// sectionN answers 1 for the season row (it is one dropdown); this is the number of
+// SEASONS behind it, and sectionN itself has to ask.
+static int nSeasonsOf(void);
+// The catalogue keeps every season's episodes in ONE flat list. These map a
+// season-relative index onto it, and they are declared here because sectionN, the event
+// handler and detail_ep_focus — all above their definitions — index episodes.
+static int nEpsOfSeason(int s2);
+static const CatEp *epOfSeason(int s2, int i);
+static int seasonNow(void);
 static float baseOfTabActive(void);
 // The comments row is defined next to the drawing of it, further down, but the
 // column count and the item width — which live up here — need to ask how many pills
@@ -181,21 +208,13 @@ static const char *headerOf(int r) {
 // season's FIRST episode. There is no reload, no network, no rebuild — the delay on
 // changing tab stops existing because the change stops happening.
 static void goToSeason(int c) {
-  int target = seasonIn(c), n = cat_n_episodes(idx), i;
-  if (target <= 0 || n < 1) return;
-  for (i = 0; i < n; i++) {
-    const CatEp *e = cat_episode(idx, i);
-    if (e && e->season == target) {
-      // Move the FOCUS and not just the scroll: the episode row already has the rule
-      // that brings the focused card up against the left margin, and reusing it keeps
-      // the tab and the D-pad agreeing about where the owner is.
-      if (i < focus.nColumns[SEC_EPISODES]) {
-        focus.row = SEC_EPISODES;
-        focus.column = i;
-      }
-      return;
-    }
-  }
+  // The row now HOLDS one season, so choosing a season does not hunt for an offset
+  // inside a flat list any more — it starts that season's row at its first card. It
+  // used to walk every episode of every season looking for the first with a matching
+  // number, which is what a single continuous track needs and this no longer is.
+  (void)c;
+  scrollSec[SEC_EPISODES] = 0.0f;
+  if (focus.row == SEC_EPISODES) focus.column = 0;
 }
 
 // A film with no cast yet, with the meta in flight. It is the only case where an
@@ -443,7 +462,7 @@ void detail_open(const HomeItem *it) {
   // series whose first loaded episode is from season 4 opened with "Season 1" lit —
   // the label contradicted the list just below it.
   season = 0;
-  { const CatEp *e0 = cat_episode(idx, 0);
+  { const CatEp *e0 = epOfSeason(seasonNow(), 0);
     const CatItem *ci0 = cat_item(idx);
     if (e0 && ci0) {
       int k;
@@ -454,6 +473,7 @@ void detail_open(const HomeItem *it) {
   int cols[N_SECTIONS]; for (int i = 0; i < N_SECTIONS; i++) cols[i] = sectionColumns(i);
   focus_start(&focus, N_SECTIONS, cols);
   memset(animFocus, 0, sizeof animFocus);
+  memset(tipA, 0, sizeof tipA);
   memset(scrollSec, 0, sizeof scrollSec);
 }
 
@@ -493,7 +513,7 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
   const CatEp *ep = NULL;
   if (origin) *origin = 0;
 
-  if (focus.row == SEC_EPISODES) ep = cat_episode(idx, focus.column);
+  if (focus.row == SEC_EPISODES) ep = epOfSeason(seasonNow(), focus.column);
   if (ep) {
     if (temp) *temp = ep->season;
     if (eps) *eps = ep->episode;
@@ -531,7 +551,7 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
         }
       }
     } }
-  ep = cat_episode(idx, 0);
+  ep = epOfSeason(seasonNow(), 0);
   if (!ep) return 0;
   if (temp) *temp = ep->season;
   if (eps) *eps = ep->episode;
@@ -647,8 +667,13 @@ static int nLinesDetail(void) {
 // middle of the drawing, and a new section silently inherited the cast's height.
 static float heightSection(int r) {
   switch (r) {
-    case SEC_SEASONS: return NV_DETP_TEMP_H;
-    case SEC_EPISODES:  return NV_DETP_EP_H;
+    case SEC_SEASONS: return NV_DETWEB_SEA_H;
+    // The card PLUS the block of copy underneath it: the synopsis came out of the
+    // thumbnail and now lives below the row, so it is part of this section's height.
+    // Leaving it out stacked the tabs on top of the text.
+    case SEC_EPISODES:  return NV_DETWEB_EP_H + NV_DETWEB_EPD_Y
+                             + NV_DETWEB_EPD_LINES * NV_DETWEB_EPD_LD
+                             + NV_DETWEB_EPD_PAD_END;
     case SEC_TABS_INFO:  return NV_DETP_TAB_H;
     case SEC_CAST:     return NV_DETF_EL_HEIGHT;
     case SEC_TRAILERS:     return NV_DETF_TR_HEIGHT;
@@ -664,16 +689,19 @@ static float heightSection(int r) {
 static int sectionN(int r) {
   const CatItem *ci = cat_item(idx);
   switch (r) {
+    // ONE COLUMN, because the row is now a single DROPDOWN and not a chip per season.
+    // The seasons themselves are counted by nSeasonsOf(); this is what the D-pad walks,
+    // and with the old per-season count RIGHT from the picker stepped onto invisible
+    // siblings before it reached the episode row.
     case SEC_SEASONS:
-      // A film has no seasons: the row DISAPPEARS instead of showing tabs that lead
+      // A film has no seasons: the row DISAPPEARS instead of a control that leads
       // nowhere. It is what the web app does — `.series-season-row` only exists in
       // the series layout.
       if (!isSeries()) return 0;
-      if (ci && ci->nSeasons > 0)
-        return ci->nSeasons < N_ITEMS ? ci->nSeasons : N_ITEMS;
-      return 0;
+      return nSeasonsOf() > 0 ? 1 : 0;
+    // ONE SEASON'S episodes, not every season's. See nEpsOfSeason.
     case SEC_EPISODES: {
-      int q = cat_n_episodes(idx);
+      int q = nEpsOfSeason(seasonNow());
       if (q <= 0) return 0;
       return q < N_ITEMS ? q : N_ITEMS;
     }
@@ -795,6 +823,35 @@ void detail_event(const SDL_Event *e) {
   // `if (personIs_open)` requiring `!personIs_open`, that is, they never ran. That is
   // why you could neither move nor open anything in the recommendations: the code was
   // written and was unreachable.
+  // THE SEASON LIST eats the events while it is expanded, the same way the person's
+  // card does. It is a listbox over the page: letting the arrows reach the page
+  // underneath would scroll the document behind an open menu.
+  if (seasonMenuOpen) {
+    if (e->type != SDL_KEYDOWN) return;
+    { int n = nSeasonsOf();
+      switch (e->key.keysym.sym) {
+        case SDLK_UP:   if (seasonMenuFocus > 0) seasonMenuFocus--; return;
+        case SDLK_DOWN: if (seasonMenuFocus + 1 < n) seasonMenuFocus++; return;
+        case SDLK_ESCAPE:
+        case SDLK_AC_BACK:
+        case SDLK_BACKSPACE:
+        case SDLK_DELETE:
+          // Closing WITHOUT choosing leaves `season` alone. That is the point of
+          // keeping the menu's focus separate from it.
+          seasonMenuOpen = 0; return;
+        case SDLK_RETURN:
+        case SDLK_KP_ENTER:
+          seasonMenuOpen = 0;
+          if (seasonMenuFocus != season) {
+            season = seasonMenuFocus;
+            tempPending = season; tempSince = 0;
+            goToSeason(season);
+          }
+          return;
+        default: return;
+      } }
+  }
+
   if (personIs_open) {
     if (e->type != SDL_KEYDOWN) return;
     { int n = person_n_credits();
@@ -931,11 +988,11 @@ void detail_event(const SDL_Event *e) {
       if (target >= 0) reqOpen = target;
       else if (id[0]) disc_request_title(id);
     } else if (focus.row == SEC_SEASONS) {
-      // Changing tab FETCHES the season. Before it only moved the highlight and the
-      // list stayed the same, which made the tab look broken.
-      season = focus.column;
-      tempPending = season; tempSince = 0;
-      goToSeason(season);
+      // OK EXPANDS THE LIST; it no longer switches season on its own, because there is
+      // no longer one control per season to switch to. The list opens with its focus on
+      // the season already chosen, which is how the web shows you where you are.
+      seasonMenuOpen = 1;
+      seasonMenuFocus = season;
     } else if (focus.row == SEC_CAST && tabIdOf(tabInfo) == TAB_CAST) {
       // OK on a face opens the person's FILMOGRAPHY. It is the web app's
       // `openCastDetail` (metaDetailsScreen.js:6165); here OK on the cast did nothing.
@@ -1000,7 +1057,7 @@ void detail_event(const SDL_Event *e) {
 static float widthItem(int r, int c) {
   switch (r) {
     case SEC_SEASONS:  return widthSeason(c);
-    case SEC_EPISODES:   return NV_DETP_EP_W;
+    case SEC_EPISODES:   return NV_DETWEB_EP_W;
     case SEC_TABS_INFO:   return widthTabInfo(c);
     case SEC_TRAILERS:     return NV_DETF_TR_W;
     case SEC_RELATED: return REL_CARD_W;
@@ -1017,7 +1074,7 @@ static float widthItem(int r, int c) {
 static float xItem(int r, int c) {
   float x = NV_DETP_X;
   for (int k = 0; k < c; k++) {
-    if (r == SEC_EPISODES) { x += NV_DETP_EP_STEP; continue; }
+    if (r == SEC_EPISODES) { x += NV_DETWEB_EP_STEP; continue; }
     if (r == SEC_CAST)    { x += NV_DETP_EL_STEP; continue; }
     if (r == SEC_TRAILERS)  { x += NV_DETF_TR_STEP;  continue; }
     if (r == SEC_RELATED) { x += REL_CARD_W + REL_CARD_GAP; continue; }
@@ -1032,7 +1089,7 @@ static float xItem(int r, int c) {
       continue;
     }
     if (r == SEC_DETAILS)  { continue; }   // a single column: always at NV_DETP_X
-    if (r == SEC_SEASONS) x += widthSeason(k) + NV_DETP_TEMP_GAP;
+    if (r == SEC_SEASONS) continue;   // one column: the picker is the row
     else x += widthTabInfo(k) + NV_DETP_TAB_SEP * 2 + 9.0f;  // 9 = the "|"'s width
   }
   return x;
@@ -1146,6 +1203,16 @@ void detail_update(float dt, Uint32 now) {
                                  target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
+  // The hero tooltip's fade. It is a RAMP and not a spring because the sheet gives it
+  // a duration (140ms, linear-ish) and not a settle — the same reason the menu's veil
+  // uses one. Only the hero shows tooltips, so everything below level 0 targets zero
+  // and the labels are gone by the time the page scrolls.
+  { int n = nButtons();
+    for (int k = 0; k < N_BUTTONS; k++) {
+      float target = (level == 0 && k > 0 && k < n && button == k) ? 1.0f : 0.0f;
+      tipA[k] = anim_ramp(tipA[k], target, dt, NV_DETWEB_TIP_MS);
+    } }
+
   // --- the focused row's HORIZONTAL scroll ---------------------------------
   // Two rules, both from the web app's source (`getHorizontalTrackScrollLeft`): the
   // episode row BRINGS the focused card up against the left margin; the others scroll
@@ -1201,45 +1268,57 @@ static int progressOf(int i) {
   return c ? c->progress : 0;
 }
 
+// The resting fill and the focused fill, the only two colours in this row. They are
+// the SAME pair for the pill and for the circles — see the NV_DETWEB_* block.
+static float btnFill(int focused) {
+  return focused ? NV_DETWEB_FOCUS : NV_DETWEB_REST;
+}
+static float btnInk(int focused) {
+  return focused ? NV_DETWEB_FOCUS_INK : NV_DETWEB_REST_INK;
+}
+
+// The `box-shadow 0 0 0 4px #fff` every focused control in this row carries. It is a
+// white plate NV_DETW_RING larger drawn BEHIND the button, not a GFX_RING: the ring
+// has to be flush with the border box and fully opaque, which is what a box-shadow at
+// blur 0 is. The button's own fill then covers the middle, so nothing shows through.
+//
+// Against a focused #f5f5f5 fill the white reads as a 4px halo rather than an
+// outline — and that is exactly what the web renders, checked on the element:
+// `rgb(255,255,255) 0px 0px 0px 4px` over `rgb(245,245,245)`.
+static void drawRing(GfxRect r, float a) {
+  GfxRect ring = { r.x - NV_DETW_RING, r.y - NV_DETW_RING,
+                   r.w + NV_DETW_RING * 2, r.h + NV_DETW_RING * 2 };
+  gfx_color(ring, NV_RADIUS_PILL, 1, 1, 1, a);
+}
+
 static void drawButton(GfxRect r, const char *rot, int icon, int focused, float a) {
-  // FOCUS IS SIZE, NOT A RING.
+  // FOCUS IS A RING AND A COLOUR SWAP. THE BUTTON DOES NOT MOVE.
   //
-  // There used to be two focus marks stacked here and both failed on the primary
-  // button: first a gfx_color 8px larger — which FILLS, it does not outline — and right
-  // after it the GFX_RING. On a button that is already white the filled pill merges
-  // with it and the result is a white button 8px larger, which does not read as
-  // "selected" but as "the button changed shape". That was the reported defect.
+  // This used to scale: the focused pill grew 1.114x1.147 and the circle 96 -> 110,
+  // from captures of the native TCL app, with no ring anywhere. NuvioWeb does the
+  // opposite and it was measured on the running app on 2026-09-15 — `transform: none`
+  // on the focused element as well as the resting ones, and a 4px #fff box-shadow.
   //
-  // The device solves it by scale: the focused item grows with its centre still, the
-  // factors are in NV_DETW2_FOCUS_*, and there is no ring in any capture.
-  // On the circular one the scale comes with the colour inversion, which already existed.
+  // The scale was there to solve a real defect: a white pill cannot show a white
+  // ring. That defect is gone with the fill, not with the size — at rest the pill is
+  // #222 like the circles, so the ring lands on dark in the only state that matters,
+  // and the focused button separates itself by turning light.
   int circular = (rot == NULL);
-  if (focused) {
-    float sx = circular ? NV_DETW2_FOCUS_SY : NV_DETW2_FOCUS_SX;
-    float sy = NV_DETW2_FOCUS_SY;
-    float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-    r.w *= sx; r.h *= sy;
-    r.x = cx - r.w * 0.5f; r.y = cy - r.h * 0.5f;
-  }
+  if (focused) drawRing(r, a);
+  float fill = btnFill(focused), ink = btnInk(focused);
+  gfx_color(r, NV_RADIUS_PILL, fill, fill, fill, a);
+
   if (circular) {
-    float luma = focused ? 0.961f : 0.133f;   // #f5f5f5 / #222
-    gfx_color(r, NV_RADIUS_PILL, luma, luma, luma, a);
-    // The web app's three glyphs: library (+), watched (eye) and trailer (the YouTube
-    // plate). They are SVG there and do not exist in the embedded family, so they come
-    // from the shader — see GFX_EYE and GFX_SOURCES. They used to be a "+" and two
-    // "...", which said nothing about what the buttons did.
-    float ic = focused ? 0.067f : 1.0f;      // #111 with focus, white without
     float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
     // REAL ICONS, from art/icons (the web app's SVGs rasterised). Each glyph used to be
     // drawn by hand in the shader — a "+" of two rectangles, an eye of two discs, three
     // bars — and each was an approximation of the original. Now it is the file, and the
     // colour comes from here through GFX_BRAND.
     //
-    // The glyph/circle proportion MEASURED on the device: the "+" is 32 inside the 96
-    // circle at rest and 36 inside the focused 110 — 0.333 in both. It was 0.45, from a
-    // loose capture, and the glyph nearly touched the edge.
-    // It comes from `r` (already scaled) so the icon grows along with the button.
-    float g = r.w * NV_DETW2_CIRC_GLYPH;
+    // 44 inside a 96 circle, measured on `.series-btn-svg` in NuvioWeb (x=451.3 in a
+    // circle at 425.3, so 26 of slack on each side). The device set had 0.333, which
+    // is a glyph 12px smaller on the same button.
+    float g = r.w * NV_DETWEB_CIRC_GLYPH;
     GfxRect ig = { cx - g * 0.5f, cy - g * 0.5f, g, g };
     if (icon == 1) {
       // The button SHOWS THE STATE: with the title already on the watchlist the "+"
@@ -1247,80 +1326,115 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
       // what is already there. The state comes from ci->inList, which discovery fills
       // from Trakt's real list.
       const CatItem *ci = cat_item(idx);
-      gfx_icon(ig, (ci && ci->inList) ? "watched" : "more", ic, ic, ic, a);
+      gfx_icon(ig, (ci && ci->inList) ? "watched" : "more", ink, ink, ink, a);
     } else if (icon == 2) {
       // WATCHED: an open eye once seen, a struck-through eye when not. The icon used to
       // be always the same and said no state at all — it was just decoration the owner
       // could not read ("tell me what's been watched").
-      gfx_icon(ig, progressOf(idx) >= 90 ? "watched" : "unwatched", ic, ic, ic, a);
+      gfx_icon(ig, progressOf(idx) >= 90 ? "watched" : "unwatched", ink, ink, ink, a);
     } else {
-      gfx_icon(ig, "sources", ic, ic, ic, a);
+      gfx_icon(ig, "sources", ink, ink, ink, a);
     }
     return;
   }
-  // Primary: white with black text in BOTH states. Checked against the two captures
-  // from the device — the middle measures (255,255,255) focused and at rest, and what
-  // changes between them is only the size (321x94 -> 357.6x107.8), already applied to
-  // `r` above.
-  // A CLEAN WHITE PILL. Here the WHOLE button was the progress bar: the part still to
-  // be watched got a 30% black veil, clipped at the progress point. The intention was
-  // good and the clip was right, but the result read as a DISABLED BUTTON — a white pill
-  // with two thirds dimmed looks like an inactive control, not "16% watched". It is what
-  // the owner saw: "that resume looks awful, it doesn't even look like the same app".
-  //
-  // The reference does not do this: the button is clean white and the progress lives on
-  // the TEXT LINE just above, which this file already draws ("Resume available  16%
-  // Episode S2E1"). The veil was redundant as well as ugly — it said with ink what the
-  // line already says in words.
-  gfx_color(r, NV_RADIUS_PILL, 1, 1, 1, a);
 
-  // A 28x30 triangle and a gap of 21 to the label's ink, measured on the device
-  // (x=150..177 with the label at 200, inside the pill 96..417).
+  // THE PRIMARY PILL, laid out the way the flex row lays it out: padding 36, a 36px
+  // icon box, the row's 24px gap, then the label, then padding 36 again. Measured on
+  // "Play" — the svg sits at x=244 in a pill at x=208 (36), the pill is 193.3 wide and
+  // the label's ink 61.3, and 36+36+24+61.3+36 = 193.3 to the pixel.
   //
-  // The icon+label group is CENTRED in the pill rather than anchored to the left
-  // padding: focused, the pill grows and the label does not — SDL_ttf rasterises at a
-  // fixed size and there is no 28pt style in text.c's table, which is another agent's
-  // file. Anchored left, the text would be visibly off centre in the focused state;
-  // centred, the slack is the same on both sides.
-  { float s = r.h / NV_DETW2_BTN_H;
-    float iw = NV_DETW2_BTN_ICON_W * s, ih = NV_DETW2_BTN_ICON_H * s;
-    TxtLine l = txt_line(TXT_DET_BUTTON, rot, 0, 0, 0, 255);
-    float group = iw + NV_DETW2_BTN_GAPI * s + l.w;
-    float x = r.x + (r.w - group) * 0.5f;
-    GfxRect tri = { x, r.y + (r.h - ih) * 0.5f, iw, ih };
-    gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 0, 0, 0, a);
-    txt_draw_alpha(l, x + iw + NV_DETW2_BTN_GAPI * s,
+  // It is ANCHORED LEFT, not centred. Centring was needed only while focus was a
+  // scale, because the pill grew and the rasterised label did not; with the size
+  // fixed, left is both simpler and what the flex does.
+  //
+  // A CLEAN PILL. The whole button used to double as a progress bar, with the unwatched
+  // part under a 30% black veil. The intention was good but it read as a DISABLED
+  // control, not as "16% watched" — "that resume looks awful, it doesn't even look like
+  // the same app". The progress lives on the text line just above, in words.
+  { int c = (int)(ink * 255.0f + 0.5f);
+    float ix = r.x + NV_DETWEB_BTN_PADX;
+    TxtLine l = txt_line(TXT_DETWEB_BTN, rot, c, c, c, 255);
+    GfxRect tri = { ix, r.y + (r.h - NV_DETWEB_BTN_ICON) * 0.5f,
+                    NV_DETWEB_BTN_ICON, NV_DETWEB_BTN_ICON };
+    // THE GLYPH IS THE WEB'S FILE, NOT GFX_PLAY'S SHARP TRIANGLE. That is what was
+    // still making this button read as another app's: `ic_detail_play.svg` is a
+    // triangle with all THREE corners rounded (its path is three cubic curves), and
+    // the shader primitive draws a hard-edged one. At 36px on a 96 pill the difference
+    // is the whole character of the button.
+    //
+    // `detail_play.png` is that SVG rasterised at 128 with rsvg-convert, viewBox and
+    // all, so the ink keeps the web's proportion inside the 36 box (the existing
+    // play.png is the same shape but was rasterised tighter, and lands ~2px short).
+    // gfx_icon draws it through GFX_BRAND, so the colour still comes from `ink` and
+    // inverts with the label.
+    gfx_icon(tri, "detail_play", ink, ink, ink, a);
+    txt_draw_alpha(l, ix + NV_DETWEB_BTN_ICON + NV_DETWEB_BTN_GAPI,
                        r.y + (r.h - l.h) * 0.5f, a); }
 }
 
-// The secondary button: 345x96, radius 64, background #222 and white text; focused,
-// background #f5f5f5 and text #111, with the same 4px ring. It has no icon — in the web
-// app it is only the label, which is why its width comes from `text + 2 x 34` and not
-// from the primary's arithmetic.
-static void drawSecondary(GfxRect r, const char *rot, int focused, float a) {
-  if (focused) {
-    GfxRect ring = { r.x - NV_DETW_RING, r.y - NV_DETW_RING,
-                     r.w + NV_DETW_RING * 2, r.h + NV_DETW_RING * 2 };
-    gfx_color(ring, NV_RADIUS_PILL, 1, 1, 1, a);
-  }
-  float luma = focused ? 0.961f : 0.133f;
-  gfx_color(r, NV_RADIUS_PILL, luma, luma, luma, a);
-  int color = focused ? 17 : 255;
-  TxtLine l = txt_line(TXT_DET_BUTTON, rot, color, color, color, 255);
-  txt_draw_alpha(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a);
+// THE TOOLTIP over a focused circular button, `.series-circle-btn::after`.
+//
+// It exists because the circles carry no label: the sheet pulls `attr(aria-label)`
+// into a pseudo-element and shows it on `.focused`, since a native `title` only ever
+// fires for a mouse and this screen is driven by a d-pad. Without it the three
+// circles are three glyphs the owner has to already know.
+//
+// `opacity` is the transition's own 0..1, kept per button by the caller so that
+// moving the focus crossfades the way the CSS does; it also carries the 4px rise.
+static void drawTooltip(GfxRect btn, const char *label, float opacity, float a) {
+  if (!label || !label[0] || opacity <= 0.01f) return;
+  float al = a * opacity * NV_DETWEB_TIP_ALPHA;
+  TxtLine l = txt_line(TXT_DETWEB_TIP, label, 255, 255, 255, 255);
+  // The box bottom sits at `calc(100% + 16px)` — 16 above the button's top edge — and
+  // the line is centred in a box of PADY + 24 + PADY. What is positioned is the BOX,
+  // so the ink is placed from the box's top plus the padding, and the line's own
+  // height is recentred inside the 24px line-box.
+  float boxTop = btn.y - NV_DETWEB_TIP_GAP - NV_DETWEB_TIP_H;
+  float y = boxTop + NV_DETWEB_TIP_PADY + (NV_DETWEB_TIP_LH - l.h) * 0.5f;
+  y += (1.0f - opacity) * NV_DETWEB_TIP_RISE;          // translateY(4px) -> 0
+  float x = btn.x + (btn.w - l.w) * 0.5f;              // left:50% + translateX(-50%)
+  // `text-shadow: 0 2px 8px rgba(0,0,0,.8)` APPROXIMATED, and it matters: the tooltip
+  // has no background pill and sits straight on the backdrop, so on a bright frame
+  // white-on-white would swallow it. There is no blur pass for glyphs here, so the
+  // shadow is three offset black copies — the 2px drop plus one either side, which
+  // spreads the ink enough to stand in for the 8px blur at this body size.
+  txt_draw_alpha(txt_line(TXT_DETWEB_TIP, label, 0, 0, 0, 255), x, y + 2.0f, al * 0.80f);
+  txt_draw_alpha(txt_line(TXT_DETWEB_TIP, label, 0, 0, 0, 255), x - 1.0f, y + 3.0f, al * 0.40f);
+  txt_draw_alpha(txt_line(TXT_DETWEB_TIP, label, 0, 0, 0, 255), x + 1.0f, y + 3.0f, al * 0.40f);
+  txt_draw_alpha(l, x, y, al);
 }
 
-// The primary button's width: padding 54 + icon 28 + gap 21 + text. The arithmetic is
-// the device's and matches the measurement: with "Watch S1:E1" (ink 162) it gives 319
-// against the 321 read from the capture. A longer label grows the pill instead of
-// spilling out from under the text.
+// The primary button's width: padding 36 + icon 36 + gap 24 + text + padding 36.
+// It is the flex row's own arithmetic and it checks out to the pixel against
+// NuvioWeb: "Play" has an ink of 61.3 and the pill measures 193.3. A longer label
+// grows the pill instead of spilling out from under the text.
 static float widthPrimary(const char *rot) {
-  TxtLine l = txt_line(TXT_DET_BUTTON, rot, 0, 0, 0, 255);
-  return NV_DETW2_BTN_PADX * 2 + NV_DETW2_BTN_ICON_W + NV_DETW2_BTN_GAPI + l.w;
+  TxtLine l = txt_line(TXT_DETWEB_BTN, rot, 0, 0, 0, 255);
+  return NV_DETWEB_BTN_PADX * 2 + NV_DETWEB_BTN_ICON + NV_DETWEB_BTN_GAPI + l.w;
 }
-static float widthSecondary(const char *rot) {
-  TxtLine l = txt_line(TXT_DET_BUTTON, rot, 255, 255, 255, 255);
-  return NV_DETW_BTN2_PADX * 2 + l.w;
+
+// The tooltip each circular button shows while focused. The strings are NuvioWeb's
+// own aria-labels (metaDetailsScreen.js:2343-2363), including the rule that the
+// library button says "Watchlist" when the library IS the Trakt watchlist — which,
+// on this port, is the only thing it is: `inList` is filled from Trakt's real list.
+//
+// The PRIMARY has none, and that is the reference's behaviour too: it carries no
+// aria-label because its label is already inside the pill.
+static const char *tooltipOf(int action) {
+  const CatItem *ci = cat_item(idx);
+  switch (action) {
+    case ACTION_LIST:
+      if (trakt_active())
+        return (ci && ci->inList) ? "Remove from Watchlist" : "Add to Watchlist";
+      return (ci && ci->inList) ? "Remove from Library" : "Add to Library";
+    case ACTION_WATCHED:
+      return progressOf(idx) >= 90 ? "Mark Unwatched" : "Mark Watched";
+    // NuvioWeb has no sources button on the hero — there the stream chooser opens
+    // from the play button. This port keeps it, so the label is this port's, written
+    // to the same shape as the others.
+    case ACTION_SOURCES: return "Sources";
+  }
+  return NULL;
 }
 
 // The year taken out of the `meta` field ("2025 · 1 h 54 min" -> "2025" and "1 h 54 min").
@@ -1483,7 +1597,7 @@ static void heroWeb(float a, float offset) {
   float yMeta1 = yMeta2 - NV_DETW2_META_GAP - NV_DETW2_M1_H;
   float ySin   = yMeta1 - NV_DETW2_GAP_SIN - hSin;
   float ySup   = sup[0] ? ySin - NV_DETW2_GAP_SUP : ySin;
-  float yActions = ySup - NV_DETW2_GAP_ACTIONS - NV_DETW2_BTN_H;
+  float yActions = ySup - NV_DETW2_GAP_ACTIONS - NV_DETWEB_BTN_H;
   // The resume line explains the BUTTON, so it sits right against it — just above.
   float yResume = yActions - NV_DETW_GAP_RESUME - NV_DETW_RESUME_H;
 
@@ -1576,7 +1690,7 @@ static void heroWeb(float a, float offset) {
     else if (ci && ci->progress > 0) snprintf(rot, sizeof rot, "Resume");
     else snprintf(rot, sizeof rot, "Play"); }
 
-  { float cyBtn = yActions + NV_DETW2_BTN_H * 0.5f;
+  { float cyBtn = yActions + NV_DETWEB_BTN_H * 0.5f;
     int nb = 0, n = nButtons();
     // Changing title with the focus on the last circular button of a FILM and landing
     // on a series would leave `button` = 3 in a row of 3 buttons: none would appear
@@ -1584,15 +1698,25 @@ static void heroWeb(float a, float offset) {
     // what every frame goes through.
     if (button >= n) button = n - 1;
     float bx = NV_DETW2_X;
-    GfxRect rp = { bx, yActions, widthPrimary(rot), NV_DETW2_BTN_H };
+    GfxRect rp = { bx, yActions, widthPrimary(rot), NV_DETWEB_BTN_H };
     drawButton(rp, rot, 0, level == 0 && button == nb, a);
-    bx += rp.w + NV_DETW2_BTN_GAP; nb++;
+    bx += rp.w + NV_DETWEB_BTN_GAP; nb++;
+    // The circles are drawn first and the TOOLTIPS after, in a second pass. They
+    // overhang the button above them by 54px, and a tooltip drawn inside the loop
+    // would be painted over by the next circle's ring — which is what a z-index of 10
+    // buys the pseudo-element in the sheet.
+    GfxRect rc[N_BUTTONS];
+    int nc = 0;
     for (; nb < n; nb++) {
-      GfxRect rc = { bx, cyBtn - NV_DETW2_CIRC * 0.5f,
-                     NV_DETW2_CIRC, NV_DETW2_CIRC };
-      drawButton(rc, NULL, actionIn(nb), level == 0 && button == nb, a);
-      bx += NV_DETW2_CIRC + NV_DETW2_BTN_GAP;
-    } }
+      GfxRect r = { bx, cyBtn - NV_DETWEB_CIRC * 0.5f,
+                    NV_DETWEB_CIRC, NV_DETWEB_CIRC };
+      drawButton(r, NULL, actionIn(nb), level == 0 && button == nb, a);
+      rc[nc++] = r;
+      bx += NV_DETWEB_CIRC + NV_DETWEB_BTN_GAP;
+    }
+    for (int k = 0; k < nc; k++)
+      drawTooltip(rc[k], tooltipOf(actionIn(k + 1)), tipA[k + 1], a);
+  }
 
   // --- the resume line ------------------------------------------------------
   if (ci && ci->progress > 0) {
@@ -1757,120 +1881,273 @@ static void heroWeb(float a, float offset) {
 // The REAL season number at position `c`. A series that starts at 2 (which happens when
 // Cinemeta does not have season 1) showed "Season 1" pointing at 2, and the list below
 // did not match the label.
+// HOW MANY SEASONS, which sectionN no longer answers: that returns 1, the picker.
+static int nSeasonsOf(void) {
+  const CatItem *ci = cat_item(idx);
+  if (!isSeries()) return 0;
+  if (ci && ci->nSeasons > 0)
+    return ci->nSeasons < N_ITEMS ? ci->nSeasons : N_ITEMS;
+  return 0;
+}
+
 static int seasonIn(int c) {
   const CatItem *ci = cat_item(idx);
   if (ci && ci->nSeasons > 0)
     return (c >= 0 && c < ci->nSeasons) ? ci->seasons[c] : ci->seasons[0];
   return c + 1;
 }
+// THE EPISODES OF ONE SEASON. The catalogue holds EVERY season's episodes in one flat
+// list — Cinemeta's `videos` comes whole — and the row used to draw all of them: on
+// Fallout that is 16 cards under a picker that said "Season 1", with season 2's episodes
+// appended after season 1's. Switching season only moved the FOCUS to the first card of
+// that season (goToSeason), which is the Apple TV app's single-track model and not the
+// web's: `.series-episode-track` there holds the chosen season and nothing else.
+//
+// These two map a season-relative index onto that flat list, and every caller that used
+// to index it directly now goes through them.
+static int nEpsOfSeason(int s2) {
+  int q = cat_n_episodes(idx), n = 0;
+  for (int i = 0; i < q; i++) {
+    const CatEp *e = cat_episode(idx, i);
+    if (e && e->season == s2) n++;
+  }
+  return n;
+}
+static const CatEp *epOfSeason(int s2, int i) {
+  int q = cat_n_episodes(idx), n = 0;
+  for (int k = 0; k < q; k++) {
+    const CatEp *e = cat_episode(idx, k);
+    if (e && e->season == s2 && n++ == i) return e;
+  }
+  return NULL;
+}
+// The season on stage, as a REAL season number.
+static int seasonNow(void) { return seasonIn(season); }
+
 static void labelSeason(int c, char *dst, size_t n) {
   int s = seasonIn(c);
   if (s == 0) snprintf(dst, n, "Specials");
   else snprintf(dst, n, "Season %d", s);
 }
+// How many episodes the season at `c` has. The picker's label carries it (" · 8 Eps")
+// and it is the only place on this screen that says how long a season is.
+static int epsInSeason(int c) {
+  int s2 = seasonIn(c);
+  // THE CATALOGUE FIRST, because it is the list actually on screen. It used to fall
+  // back to cat_n_episodes(idx), which is every season's episodes added together: on
+  // Fallout the picker read "Season 1 · 16 Eps" for a season of 8, and season 2 got no
+  // count at all because the fallback only applied to the chosen one.
+  int n = nEpsOfSeason(s2);
+  if (n > 0) return n;
+  // Trakt's season list, for a season whose episodes have not been fetched yet.
+  for (int t = 0; t < extras_n_seasons(); t++)
+    if (extras_season_number(t) == s2) return extras_n_eps(t);
+  return 0;
+}
+
+// "Season 3" and, separately, " · 8 Eps". They are two styles on one line — 600 white
+// and 400 grey — so the caller draws them in two passes and this only builds the text.
+static void labelSeasonEps(int c, char *tail, size_t n) {
+  int q = epsInSeason(c);
+  if (q > 0) snprintf(tail, n, "· %d Eps", q);
+  else       tail[0] = 0;
+}
+
+// The picker's width: padding + the label + the gap + the chevron + padding. It is the
+// WIDEST season's, not the chosen one's, so the control does not resize as you scroll
+// the list — the web's is a flex item over a fixed set of options and does the same.
 static float widthSeason(int c) {
-  char rot[32]; labelSeason(c, rot, sizeof rot);
-  TxtLine l = txt_line(TXT_PLR_BODY, rot, 255, 255, 255, 255);
-  return l.w + NV_DETP_TEMP_PADX * 2;
+  (void)c;
+  float widest = 0.0f;
+  int n = nSeasonsOf();
+  for (int i = 0; i < n; i++) {
+    char rot[32], tail[24];
+    labelSeason(i, rot, sizeof rot);
+    labelSeasonEps(i, tail, sizeof tail);
+    TxtLine l  = txt_line(TXT_DETWEB_SEA, rot, 255, 255, 255, 255);
+    TxtLine lt = tail[0] ? txt_line(TXT_DETWEB_SEA_EPS, tail, 179, 179, 179, 255)
+                         : (TxtLine){0};
+    float w = l.w + (lt.w > 0.0f ? NV_DETWEB_SEA_TAIL + lt.w : 0.0f);
+    if (w > widest) widest = w;
+  }
+  return NV_DETWEB_SEA_PADX * 2 + widest + NV_DETWEB_SEA_GAP + NV_DETWEB_SEA_CHEV;
 }
 static float widthTabInfo(int i) {
   TxtLine l = txt_line(TXT_PLR_BODY, TAB_LABEL[tabIdOf(i)], 255, 255, 255, 255);
   return l.w;
 }
 
-// A season tab: 80 tall, radius 40 (a pill), a 1px rgba(255,255,255,0.16) border.
-// Three states MEASURED, and not two:
-//   normal    #222     text rgb(179,179,179)
-//   chosen    #2d2d2d  white text
-//   focused   #f5f5f5  text #111, no border
-// Without the middle state, the user loses sight of which season they are on as soon as
-// the focus moves down to the list.
+// THE SEASON PICKER — a DROPDOWN, which is what NuvioWeb has.
+//
+// It was a row of one pill per season, from the Apple TV app. Two things were wrong
+// with that beyond the look: the web's `.series-season-row` holds a single
+// `.library-picker` with `aria-haspopup="listbox"`, and a series with eight seasons
+// pushed the row off the right of the screen with no way to see the far end.
+//
+// The anchor at rest: 80 tall, a full pill, #222 with a 1px rgba(255,255,255,.1) hair
+// line, the season 30/600 white and the " · N Eps" tail 30/400 grey, then a 32px
+// chevron in the same grey.
+//
+// FOCUSED it does NOT ring outwards like the hero's buttons: the background lifts to
+// rgb(48,48,48) and the ring is INSET — `box-shadow: inset 0 0 0 3px rgba(255,255,255,
+// .96)`. Measured in both the closed and the open state, and it is the same in both.
 static void drawSeason(GfxRect r, int c, float f, float a) {
-  char rot[32]; labelSeason(c, rot, sizeof rot);
-  int sel = (c == season);
-  float radius = NV_RADIUS_PILL;
-  // EVERY season is a CHIP, chosen or not. Before, only the chosen one had a container
-  // and the others were loose text on the background — they did not read as a group of
-  // buttons, and there was no way to guess they were clickable.
-  //
-  // MEASURED against the reference: #2D2D2D chips of 285x83; the CHOSEN one is
-  // distinguished by its white TEXT (the background stays #2D2D2D), and the FOCUSED one
-  // INVERTS — a near-white background, dark text, NO ring.
-  //
-  // What was here put a white ring around it and left the middle at #2D2D2D with grey
-  // 170 text: the focused item became the MOST MUTED of the row, read on a TV as
-  // "disabled". The inversion is the same focus language as the hero's circular
-  // buttons, measured against the same reference — focus and "chosen" stop colliding
-  // without needing two shades of grey that nobody can tell apart at 3 metres.
-  { float base = sel ? 0.21f : 0.133f;
-    float luma  = base + (0.961f - base) * f;   // -> #F5F5F5 on focus
-    gfx_color(r, radius, luma, luma, luma, a); }
-  if (sel && f < 0.99f)
-    gfx_rect(r, 0, GFX_RING, 0, 1.5f / r.h, 0, radius,
-             0.76f, 0.77f, 0.79f, 0.5f * (1 - f) * a);
-  // Text: grey when it merely exists, white when chosen, DARK when focused.
-  // Interpolated by `f` to follow the spring instead of snapping.
-  { float light = sel ? 255.0f : 179.0f;
-    float v = light + (17.0f - light) * f;     // -> #111 on focus
-    int color = (int)(v + 0.5f);
-    TxtLine l = txt_line(TXT_PLR_BODY, rot, color, color, color, 255);
-    // A weight of 500 on Inter Regular: a second pass half a pixel to the right.
-    txt_weight(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f, a, 0.5f); }
+  (void)c;
+  char rot[32], tail[24];
+  labelSeason(season, rot, sizeof rot);
+  labelSeasonEps(season, tail, sizeof tail);
+
+  { float luma = NV_DETWEB_REST + (NV_DETWEB_SEA_FOCUS_BG - NV_DETWEB_REST) * f;
+    gfx_color(r, NV_RADIUS_PILL, luma, luma, luma, a); }
+  // The hair line at rest, which the inset focus ring replaces rather than sits on.
+  if (f < 0.99f)
+    gfx_rect(r, 0, GFX_RING, 0, NV_DETWEB_SEA_BORDER / r.h, 0, NV_RADIUS_PILL,
+             1, 1, 1, 0.10f * (1.0f - f) * a);
+  if (f > 0.01f) {
+    // INSET, and it needs a mode of its own. GFX_RING strokes ACROSS the quad's edge,
+    // so on a pill — whose outline touches the quad at twelve and six o'clock — the
+    // outer half of the stroke is clipped exactly there and the ring comes out with
+    // flat bites off the top and bottom. Insetting the quad by half the stroke, which
+    // is what this did, just carries the problem inward. GFX_RING_INSET keeps the whole
+    // band inside the edge, where there is nothing to clip.
+    gfx_rect(r, 0, GFX_RING_INSET, 0, NV_DETWEB_SEA_RING / r.h, 0,
+             NV_RADIUS_PILL, 1, 1, 1, 0.96f * f * a);
+  }
+
+  { float x = r.x + NV_DETWEB_SEA_PADX;
+    TxtLine l = txt_line(TXT_DETWEB_SEA, rot, 255, 255, 255, 255);
+    txt_weight(l, x, r.y + (r.h - l.h) * 0.5f, a, 1.0f);
+    x += l.w + NV_DETWEB_SEA_TAIL;
+    if (tail[0]) {
+      TxtLine lt = txt_line(TXT_DETWEB_SEA_EPS, tail, 179, 179, 179, 255);
+      txt_draw_alpha(lt, x, r.y + (r.h - lt.h) * 0.5f, a);
+    } }
+  // The chevron is the web's own SVG rasterised; it points DOWN closed and the web does
+  // not flip it when open, so neither does this.
+  { GfxRect ch = { r.x + r.w - NV_DETWEB_SEA_PADX - NV_DETWEB_SEA_CHEV,
+                   r.y + (r.h - NV_DETWEB_SEA_CHEV) * 0.5f,
+                   NV_DETWEB_SEA_CHEV, NV_DETWEB_SEA_CHEV };
+    gfx_icon(ch, "chevron_down", 0.702f, 0.702f, 0.702f, a); }
 }
 
-// The `.series-episode-overlay` gradient: a vertical linear from rgba(0,0,0,0.06) to
-// 0.95, with stops at 22% (0.18), 52% (0.62) and 82% (0.86). The shader has no mode for
-// it — gfx.c is another agent's file — and the GFX_VEIL that exists darkens the LEFT
-// too, which here would wipe out half the card.
+// The OPEN list. It is drawn LAST of everything on the page, over the episode row it
+// covers — the web gives it `z-index` and a shadow for exactly that reason.
 //
-// It comes out as bands anchored to the BASE: each band is a rounded rectangle running
-// from a given height to the bottom of the thumbnail, with the same absolute radius.
-// That way the bottom corners follow the thumbnail (a band with square corners would
-// put two dark teeth outside the rounding) and the stacking reproduces the ramp,
-// because compositing N layers of alpha `d` gives 1-(1-d)^n.
-static void veilEpisode(GfxRect th, float a) {
-  static const float STOPPED[5] = { 0.00f, 0.22f, 0.52f, 0.82f, 1.00f };
-  static const float ALFA[5]   = { 0.06f, 0.18f, 0.62f, 0.86f, 0.95f };
-  const int STEPS = 14;
-  float accum = 0.0f;
-  for (int i = 0; i <= STEPS; i++) {
-    float u = (float)i / STEPS;
-    // The target interpolated piecewise linearly, like the `linear-gradient`.
-    float target = ALFA[4];
-    for (int k = 0; k < 4; k++)
-      if (u <= STOPPED[k + 1]) {
-        float d = STOPPED[k + 1] - STOPPED[k];
-        target = ALFA[k] + (ALFA[k + 1] - ALFA[k]) * (d > 0 ? (u - STOPPED[k]) / d : 0);
-        break;
-      }
-    // How much THIS band has to add for the accumulated value to hit the target.
-    float d = (target - accum) / (1.0f - accum);
-    if (d <= 0.001f) continue;
-    accum = target;
-    float top = th.y + th.h * u;
-    GfxRect track = { th.x, top, th.w, th.y + th.h - top };
-    if (track.h < 2.0f) continue;
-    float radius = NV_DETP_EP_RADIUS / track.h;
-    if (radius > 0.5f) radius = 0.5f;
-    gfx_color(track, radius, 0, 0, 0, d * a);
+// It hangs 8 below the anchor, matches its width, and scrolls when the seasons run past
+// six rows (the web caps the menu at 540px, which is 6.4 rows of 84).
+static void drawSeasonMenu(GfxRect anchor, float a) {
+  int n = nSeasonsOf();
+  if (n <= 0) return;
+  int vis = n < NV_DETWEB_SEA_OPT_VIS ? n : NV_DETWEB_SEA_OPT_VIS;
+  float h = NV_DETWEB_SEA_MENU_PADY * 2 + vis * NV_DETWEB_SEA_OPT_H;
+  GfxRect box = { anchor.x, anchor.y + anchor.h + NV_DETWEB_SEA_MENU_GAP,
+                  anchor.w, h };
+  // The radius is 64 CSS px on a box ~182 tall, and gfx normalises the radius to the
+  // HEIGHT — so it is 64/h here and NOT NV_RADIUS_PILL. On the anchor and the options
+  // the pill constant IS right, because CSS clamps a 64 radius to half of an 80- or
+  // 84-tall box; on a box this tall it does not, and 0.5 would round the menu into a
+  // lozenge.
+  float radius = 64.0f / box.h;
+  // The drop shadow first, then the plate: `0 8px 32px rgba(0,0,0,.6)` under a menu
+  // that sits on a still, without which the #222 plate and a dark thumbnail merge.
+  //
+  // GFX_SHADOW multiplies by uFOCUS, not just by the colour's alpha (gfx.c:146). Passed
+  // the 0 that every other mode here takes for `focus`, the blot comes out completely
+  // invisible — profile.c is the only other caller and it passes its focus value.
+  { GfxRect sh = { box.x, box.y + 8.0f, box.w, box.h };
+    gfx_rect(sh, 0, GFX_SHADOW, 1.0f, 0, 0, radius, 0, 0, 0, 0.6f * a); }
+  gfx_color(box, radius, NV_DETWEB_REST, NV_DETWEB_REST, NV_DETWEB_REST, a);
+  gfx_rect(box, 0, GFX_RING, 0, 1.0f / box.h, 0, radius, 1, 1, 1, 0.08f * a);
+
+  // Which six. The focused option is kept in view by scrolling the window, not by
+  // moving the menu.
+  int first = seasonMenuFocus - vis + 1;
+  if (first < 0) first = 0;
+  if (first > n - vis) first = n - vis;
+  if (seasonMenuFocus < first) first = seasonMenuFocus;
+
+  for (int i = 0; i < vis; i++) {
+    int c = first + i;
+    char rot[32], tail[24];
+    labelSeason(c, rot, sizeof rot);
+    labelSeasonEps(c, tail, sizeof tail);
+    GfxRect op = { box.x + NV_DETWEB_SEA_MENU_PADX,
+                   box.y + NV_DETWEB_SEA_MENU_PADY + i * NV_DETWEB_SEA_OPT_H,
+                   box.w - NV_DETWEB_SEA_MENU_PADX * 2, NV_DETWEB_SEA_OPT_H };
+    int on = (c == seasonMenuFocus);
+    // The focused row inverts to #f5f5f5 with #111 ink; the rest are transparent with
+    // white. The SELECTED season gets no mark of its own — the list opens with the
+    // focus already on it, which is how the web shows which one you are on.
+    if (on) gfx_color(op, NV_RADIUS_PILL, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS,
+                      NV_DETWEB_FOCUS, a);
+    { int ink = on ? 17 : 255;
+      int grey = on ? 90 : 179;
+      float x = op.x + NV_DETWEB_SEA_OPT_PADX;
+      TxtLine l = txt_line(TXT_DETWEB_OPT, rot, ink, ink, ink, 255);
+      txt_draw_alpha(l, x, op.y + (op.h - l.h) * 0.5f, a);
+      x += l.w + NV_DETWEB_SEA_TAIL;
+      if (tail[0]) {
+        TxtLine lt = txt_line(TXT_DETWEB_OPT, tail, grey, grey, grey, 255);
+        txt_draw_alpha(lt, x, op.y + (op.h - lt.h) * 0.5f, a);
+      } }
   }
 }
 
-// The episode card: 640x422, with the 640x414 thumbnail and ALL the text inside it,
-// over the gradient. It is the structural difference from what was here before (the
-// thumbnail on top, the text below, which is the Apple TV app's).
+// The `.series-episode-overlay` gradient, RE-MEASURED 2026-09-15 in NuvioWeb:
+// `linear-gradient(rgba(0,0,0,0) 52%, rgba(0,0,0,.77) 72%, rgba(0,0,0,.95))`. The top
+// HALF of the thumbnail is completely clear — the old ramp started veiling at 0.06
+// from the very top, which greyed the still under the "EPISODE n" badge.
+//
+// IT IS ONE QUAD, NOT A STACK OF BANDS. This function used to build the ramp out of
+// rounded rectangles running from a height to the thumbnail's base, leaning on
+// compositing N layers of alpha d giving 1-(1-d)^n. That was fine for the gentle old
+// ramp, whose bands sat 28px apart; this one does all its work in the last 190px and
+// the same trick drew visible horizontal stripes across the still. Raising the band
+// count only narrows the stripes and multiplies the draw calls.
+//
+// GFX_EP_SCRIM evaluates the stops per pixel, the way GFX_CW_SCRIM already did for the
+// Continue Watching card — which is the comparison that made the seams obvious.
+static void veilEpisode(GfxRect th, float a) {
+  gfx_rect(th, 0, GFX_EP_SCRIM, 0, 0, 0,
+           NV_DETWEB_EP_RADIUS / th.h, 0, 0, 0, a);
+}
+
+// THE EPISODE CARD, rebuilt against NuvioWeb on 2026-09-15.
+//
+// What changed is the CARD'S CONTENT, not just its measurements. The port carried a
+// three-line synopsis and a clock + duration inside the thumbnail, from a capture of a
+// different build; the web has NEITHER. Its card is a still with two things at the top
+// (the "EPISODE n" pill and a watched marker at the right) and two at the bottom (a
+// meta line, then the title) — and the SYNOPSIS lives under the row, in one block that
+// follows the focus. That is what `drawEpisodeCopy` draws.
+//
+// 600x395 thumbnail, radius 24, step 648. Focus is `scale(1.05)` on the card with a 4px
+// white ring on the thumbnail, which is a third focus language on this screen and is
+// measured: the hero rings without scaling, the tabs scale without ringing, the episode
+// does both.
 static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
   (void)now;
-  const CatEp *ep = cat_episode(idx, c);
-  GfxRect th = { r.x, r.y, r.w, NV_DETP_EP_THUMB_H };
-  float radiusTh = NV_DETP_EP_RADIUS / NV_DETP_EP_THUMB_H;
+  const CatEp *ep = epOfSeason(seasonNow(), c);
 
-  // The focus ring: in the web app it is a box-shadow on the THUMBNAIL, not on the
-  // card, and there is no scaling at all (`transform: none`).
+  // The scale grows the card about its CENTRE, and the row's step does not change —
+  // neighbours slide under it, they are not pushed. `f` is the focus spring, so the
+  // growth follows it instead of snapping.
+  { float k = 1.0f + (NV_DETWEB_EP_FOCUS - 1.0f) * f;
+    float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
+    r.w *= k; r.h *= k;
+    r.x = cx - r.w * 0.5f; r.y = cy - r.h * 0.5f; }
+
+  float k = r.w / NV_DETWEB_EP_W;                 // everything inside scales with it
+  GfxRect th = { r.x, r.y, r.w, NV_DETWEB_EP_THUMB * k };
+  float radiusTh = (NV_DETWEB_EP_RADIUS * k) / th.h;
+
+  // The ring is on the THUMBNAIL, not the card: the card is 8px taller than the
+  // thumbnail and those 8 belong to the progress bar, which the web leaves outside the
+  // ring.
   if (f > 0.01f) {
-    GfxRect ring = { th.x - NV_DETP_RING, th.y - NV_DETP_RING,
-                     th.w + NV_DETP_RING * 2, th.h + NV_DETP_RING * 2 };
-    gfx_color(ring, radiusTh, 1, 1, 1, f * a);
+    float ring = NV_DETWEB_EP_RING * k;
+    GfxRect ro = { th.x - ring, th.y - ring, th.w + ring * 2, th.h + ring * 2 };
+    gfx_color(ro, (NV_DETWEB_EP_RADIUS * k + ring) / ro.h, 1, 1, 1, f * a);
   }
 
   const CatItem *series = cat_item(idx);
@@ -1884,153 +2161,212 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
   } else gfx_color(th, radiusTh, 0.133f, 0.133f, 0.133f, a);
   veilEpisode(th, a);
 
-  // AN EPISODE ALREADY WATCHED, according to Trakt: a dark mask over the thumbnail and
-  // a tick in the corner. The owner's request, and it answers a question the list did
-  // not — where they stopped.
-  //
-  // The mask comes AFTER the text veil on purpose: it has to cover the whole thumbnail,
-  // including the part already darkened, otherwise the watched and unwatched cards look
-  // alike precisely over the text.
-  if (ep && extras_ep_watched(ep->season, ep->episode)) {
-    float d = 36.0f;
-    GfxRect badge = { th.x + th.w - d - 16.0f, th.y + 16.0f, d, d };
-    gfx_color(th, radiusTh, 0.0f, 0.0f, 0.0f, 0.22f * a);
-    gfx_color(badge, 0.5f, 1, 1, 1, 0.92f * a);
-    // The tick is made of two strokes; with no rotation in gfx, two thin rectangles in
-    // steps read the same at a badge's size.
-    { float cx2 = badge.x + d * 0.5f, cy2 = badge.y + d * 0.5f;
-      int k;
-      for (k = 0; k < 4; k++)
-        gfx_color((GfxRect){ cx2 - 9.0f + k * 2.0f, cy2 - 1.0f + k * 2.0f, 3, 3 },
-                0.4f, 0.05f, 0.05f, 0.05f, a);
-      for (k = 0; k < 6; k++)
-        gfx_color((GfxRect){ cx2 - 1.0f + k * 2.0f, cy2 + 5.0f - k * 2.0f, 3, 3 },
-                0.4f, 0.05f, 0.05f, 0.05f, a); }
-  }
-
-  // NO INVENTED FALLBACK. Here the four lines fell back to a demo table (the name,
-  // duration, date and synopsis of "Shrinking"), so an episode with no data did not
-  // appear empty: it appeared with ANOTHER SERIES' TEXT, indistinguishable from real
-  // information. A missing field now stays missing, and the drawing below already omits
-  // each piece that comes back empty.
-  const char *epName = (ep && ep->name[0])    ? ep->name    : NULL;
-  const char *epDuration  = (ep && ep->duration[0]) ? ep->duration : NULL;
-  const char *epDate = (ep && ep->date[0])    ? ep->date    : NULL;
-  const char *epSin  = (ep && ep->synopsis[0]) ? ep->synopsis : NULL;
+  // NO INVENTED FALLBACK. Here the lines fell back to a demo table (the name, duration,
+  // date and synopsis of "Shrinking"), so an episode with no data did not appear empty:
+  // it appeared with ANOTHER SERIES' TEXT, indistinguishable from real information. A
+  // missing field stays missing, and each piece below omits itself when it is empty.
+  const char *epName = (ep && ep->name[0]) ? ep->name : NULL;
+  const char *epDate = (ep && ep->date[0]) ? ep->date : NULL;
   int epNum = ep ? ep->episode : c + 1;
+  int watched = ep && extras_ep_watched(ep->season, ep->episode);
 
-  float tx = r.x + NV_DETP_EP_PAD;
+  float padx = NV_DETWEB_EP_PADX * k, pady = NV_DETWEB_EP_PADY * k;
+  float tx = th.x + padx;
 
-  // The absence of a tick does not assert that the history has arrived. It avoids an
-  // invented "unwatched" badge while Trakt is still being queried.
-
-  // The "EPISODE n" badge: a box 43 tall, radius 12, translucent dark background,
-  // text in capitals.
-  //
-  // It went back to "EPISODE n" and not "S2E4". The short form came in from an old
-  // capture of the owner's, but the reference on the device writes "EPISODE 1" in full —
-  // and the argument that the short form "says which season it is" does not hold: the
-  // card only appears inside the chosen season's tab, which is drawn just above it.
+  // --- the top row: the badge on the left, the status on the right -----------
   { char header[24];
     snprintf(header, sizeof header, "EPISODE %d", epNum);
-    TxtLine l = txt_line(TXT_CAPTION2, header, 255, 255, 255, 255);
-    float w = l.w + NV_DETP_EP_BADGE_PADX * 2;
-    GfxRect s = { tx, r.y + NV_DETP_EP_BADGE_Y, w, NV_DETP_EP_BADGE_H };
-    gfx_color(s, 12.0f / NV_DETP_EP_BADGE_H, 0.05f, 0.05f, 0.06f, 0.78f * a);
-    txt_weight(l, s.x + NV_DETP_EP_BADGE_PADX,
-             s.y + (NV_DETP_EP_BADGE_H - l.h) * 0.5f, a, 1.0f); }
+    // Tracked out by 2px. It is not decoration: at 20px in capitals the letters close
+    // up, and the web's `letter-spacing: 2px` is what makes the pill read as a label
+    // rather than a smudge.
+    float ls = NV_DETWEB_EP_BADGE_LS * k;
+    float wInk = txt_tracking(TXT_DETWEB_EP_BADGE, header, 255, 255, 255,
+                              -1.0f, 0.0f, 0.0f, ls);   // x = -1: measure only
+    float bh = NV_DETWEB_EP_BADGE_H * k;
+    GfxRect s2 = { tx, th.y + pady, wInk + NV_DETWEB_EP_BADGE_PADX * k * 2, bh };
+    // radius 64 on a 48-tall pill is fully round, which is NV_RADIUS_PILL here. The
+    // port had 12 — a rounded rectangle, not a pill.
+    gfx_color(s2, NV_RADIUS_PILL, 0, 0, 0, 0.42f * a);
+    { TxtLine l = txt_line(TXT_DETWEB_EP_BADGE, header, 255, 255, 255, 255);
+      txt_tracking(TXT_DETWEB_EP_BADGE, header, 255, 255, 255,
+                   s2.x + NV_DETWEB_EP_BADGE_PADX * k,
+                   s2.y + (bh - l.h) * 0.5f, a, ls); } }
 
-  // The title: 32/800. The 800 does not exist in the embedded family and the 32 only
-  // exists in Regular in the style table, so it comes from three passes.
-  // With no episode name, "Episode N" — which is a TRUE label, deduced from the number,
-  // and not another series' title.
-  { char fallback[32];
-    const char *name = epName;
-    if (!name) { snprintf(fallback, sizeof fallback, "Episode %d", epNum);
-                 name = fallback; }
-    TxtLine l = txt_line_trim(TXT_PLR_BODY, name, 255, 255, 255, 255,
-                                 NV_DETP_EP_TEXT_W);
-    txt_weight(l, tx, r.y + NV_DETP_EP_TITLE_Y, a, 1.4f); }
+  // THE WATCHED MARKER, a 50px circle at the top right, and it has THREE states, not
+  // two — `isWatched ? complete : progressRatio < 0.02 ? idle : ""`
+  // (metaDetailsScreen.js:2954). An episode that is part-watched shows NOTHING: the
+  // progress bar under the thumbnail is already saying it, and a dashed "not started"
+  // ring over a bar that is a third full contradicts itself.
+  { float d = NV_DETWEB_EP_STATUS * k;
+    GfxRect st = { th.x + th.w - padx - d, th.y + pady, d, d };
+    int progress = 0;
+    { const CatItem *ci2 = cat_item(idx);
+      if (ci2 && ci2->progress > 0 && ep && ci2->season == ep->season &&
+          ci2->episode == ep->episode) progress = ci2->progress; }
+    if (watched) {
+      // THE TICK IS THE WEB'S FILE. It was built here out of ten stepped rectangles,
+      // because gfx has no rotation — the same "approximate it with quads" instinct
+      // that produced the banded gradient and the clipped focus ring, and it read as a
+      // staircase at this size.
+      //
+      // `ic_detail_series_watched.svg` is a filled disc with the check KNOCKED OUT of
+      // it, and the CSS composites it in `--on-secondary` over a `--secondary-color`
+      // circle. So: the light circle first, then the glyph over it in #111 at the same
+      // 50px, and the check shows through in #f5f5f5. Two draws, and the curve of the
+      // tick is the designer's.
+      gfx_color(st, 0.5f, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, a);
+      gfx_icon(st, "ep_watched", NV_DETWEB_FOCUS_INK, NV_DETWEB_FOCUS_INK,
+               NV_DETWEB_FOCUS_INK, a);
+    } else if (progress < 2) {
+      // 12 dashes: GFX_RING's `pary` is the dash count, and 12 around a 50px circle
+      // gives the same dash-to-gap the 2px CSS border does.
+      gfx_rect(st, 0, GFX_RING, 0, (2.0f * k) / d, 12.0f, 0.5f,
+               0.702f, 0.702f, 0.702f, 0.9f * a);
+    } }
 
-  // The synopsis: three lines, like the reference, with the block truncated.
-  // With no synopsis the space stays empty: better a card with less text than a card
-  // with the wrong text.
-  if (epSin)
-    txt_block(TXT_DET_SIN, epSin, 255, 255, 255, tx, r.y + NV_DETP_EP_SIN_Y,
-              NV_DETP_EP_TEXT_W, NV_DETP_EP_LD_SIN, a * 0.9f, 3);
+  // --- the bottom block: the meta line, then the title -----------------------
+  // Its BASE is 24 above the thumbnail's, and it grows upwards: meta (28) + gap (8) +
+  // title (56) = 92, which is what `.series-episode-content-container` measures.
+  float baseCopy = th.y + th.h - pady;
+  float yTitle = baseCopy - NV_DETWEB_EP_TITLE_H * k;
+  float yMeta  = yTitle - NV_DETWEB_EP_META_H * k - 8.0f * k;
+  float textW  = th.w - padx * 2;
 
-  // Meta: a clock + duration + date, 20/400 rgb(179,179,179), with 38 of slack between
-  // the two blocks.
-  { float x = tx, y = r.y + NV_DETP_EP_META_Y;
-    // A 28x28 clock. The web app's glyph is a FILLED disc in rgb(179,179,179) with the
-    // hands KNOCKED OUT — the SVG's `path` cuts the hand's L out of the disc. Here the
-    // knockout comes out by painting the hands black over it: at that point of the
-    // thumbnail the veil is already at 0.95, so what would be behind the cut-out is
-    // practically black. Drawing the hands in the SAME colour as the disc, as it used
-    // to, makes them disappear and leaves only a grey blob.
-    // The clock only comes in WITH the duration beside it. On its own it is not an
-    // icon, it is a label with no value: a loose grey disc in the card's corner, which
-    // reads as a drawing fault.
-    if (epDuration) {
-      float cx = x + NV_DETP_EP_ICON * 0.5f, cy = y + NV_DETP_EP_ICON * 0.5f;
-      GfxRect aro = { x, y, NV_DETP_EP_ICON, NV_DETP_EP_ICON };
-      GfxRect pv = { cx - 1.5f, cy - 8, 3, 9.5f };
-      GfxRect ph = { cx - 1.5f, cy - 1.5f, 8, 3 };
-      gfx_rect(aro, 0, GFX_RING, 0, 2.0f / NV_DETP_EP_ICON, 0, 0.5f,
-               0.76f, 0.77f, 0.79f, a);
-      gfx_color(pv, 0.0f, 0.76f, 0.77f, 0.79f, a);
-      gfx_color(ph, 0.0f, 0.76f, 0.77f, 0.79f, a);
-      x += NV_DETP_EP_ICON + 8.0f;
-      { TxtLine ld = txt_line(TXT_CAPTION2, epDuration, 179, 179, 179, 255);
-        txt_draw_alpha(ld, x, y, a); x += ld.w + 16; }
-    }
-    // Extras supplies a Trakt rating per episode, not IMDb. Never use the series' score
-    // or another provider's badge in this footer.
-    int score = 0;
-    if (ep) for (int st = 0; st < extras_n_seasons(); st++) {
-      if (extras_season_number(st) != ep->season) continue;
-      for (int ei = 0; ei < extras_n_eps(st); ei++)
-        if (extras_ep_number(st, ei) == ep->episode) {
-          score = extras_ep_score(st, ei); break;
-        }
-      break;
+  { float x = tx, yc = yMeta + NV_DETWEB_EP_META_H * k * 0.5f;
+    // THE IMDb SCORE, which is what the web puts here — `episode.imdbRating`
+    // (metaDetailsScreen.js:496). This drew a Trakt score in a Trakt-red badge, because
+    // CatEp carried no IMDb field and borrowing the IMDb mark for another provider's
+    // number would have been worse than the shapes not matching. CatEp carries one now:
+    // it comes off the SAME Cinemeta `videos` entry as the name and the still, so the
+    // card costs no extra request.
+    //
+    // THE BADGE IS OMITTED WHEN THE SCORE IS 0, and that is a deliberate divergence.
+    // Cinemeta answers `"rating": "0"` for a great many series — every Fallout and
+    // Gentlemen episode does — and the web's guard is `rating != null`, so "0" passes
+    // it and every card in the reference reads a meaningless "IMDb 0.0". Drawing that
+    // faithfully would be porting a defect.
+    // WHICH SCORE, and it is not always IMDb's. Cinemeta answers `"rating": "0"` for a
+    // great many series — every Fallout, Game of Thrones and Stranger Things episode
+    // does, while Breaking Bad and Friends carry real numbers. The web's guard is
+    // `rating != null`, so "0" passes it and every card in the reference reads a
+    // meaningless "IMDb 0.0".
+    //
+    // Neither extreme is right: drawing 0.0 ports a defect, and omitting the row
+    // entirely leaves the card with no rating at all on the very titles the owner is
+    // looking at. So IMDb's number when there is one, and otherwise the TRAKT score
+    // extras already fetched — with the Trakt mark on it, because a red badge saying
+    // TRAKT over a Trakt number is the one thing that cannot mislead.
+    int score = ep ? ep->imdb : 0;
+    int fromImdb = score > 0;
+    if (!fromImdb && ep) {
+      for (int st2 = 0; st2 < extras_n_seasons(); st2++) {
+        if (extras_season_number(st2) != ep->season) continue;
+        for (int ei = 0; ei < extras_n_eps(st2); ei++)
+          if (extras_ep_number(st2, ei) == ep->episode) {
+            score = extras_ep_score(st2, ei); break;
+          }
+        break;
+      }
     }
     if (score > 0) {
-      char value[32]; snprintf(value, sizeof value, "Trakt %d.%d", score / 10, score % 10);
-      TxtLine ln = txt_line(TXT_CAPTION2, value, 229, 231, 236, 255);
-      GfxRect badge = { x, y - 3, ln.w + 16, NV_DETP_EP_ICON + 6 };
-      gfx_color(badge, 0.18f, 0.15f, 0.15f, 0.17f, 0.94f * a);
-      txt_draw_alpha(ln, x + 8, y, a);
-      x += badge.w + 16;
+      char value[8];
+      snprintf(value, sizeof value, "%d.%d", score / 10, score % 10);
+      // The mark is DRAWN (a yellow plate with black letters) and not rasterised: the
+      // same decision the hero's badge records — the IMDb SVG is not packaged, and at
+      // 20px the plate reads the same. Measured on `.series-imdb-badge img`: 20 tall,
+      // the width following the art, then 10 to the score.
+      float mh = NV_DETWEB_EP_IMDB_H * k;
+      TxtLine lm = txt_line(TXT_MINI, fromImdb ? "IMDb" : "TRAKT", 10, 10, 10, 255);
+      GfxRect brand = { x, yc - mh * 0.5f, lm.w + 12.0f * k, mh };
+      if (fromImdb) gfx_color(brand, 4.0f / NV_DETWEB_EP_IMDB_H, 0.965f, 0.780f, 0.0f, a);
+      else          gfx_color(brand, 4.0f / NV_DETWEB_EP_IMDB_H, 0.929f, 0.239f, 0.239f, a);
+      txt_weight(lm, brand.x + (brand.w - lm.w) * 0.5f,
+                 brand.y + (brand.h - lm.h) * 0.5f, a, 1.0f);
+      x += brand.w + NV_DETWEB_EP_IMDB_GAP * k;
+      // THE SCORE IS YELLOW, the mark's own rgb(245,197,24), not the grey the rest of
+      // the line uses. Measured on the span beside `.series-imdb-badge`; this drew it
+      // at 179 grey, which is the DATE's colour.
+      { TxtLine ls2 = txt_line(TXT_DETWEB_EP_META, value,
+                               NV_DETWEB_EP_SCORE_R, NV_DETWEB_EP_SCORE_G,
+                               NV_DETWEB_EP_SCORE_B, 255);
+        txt_draw_alpha(ls2, x, yc - ls2.h * 0.5f, a);
+        x += ls2.w; }
+      // A DOT before the date. The web separates them with its 24px flex gap alone; the
+      // owner asked for a mark, and it is the dim one the home's meta line uses, so it
+      // reads as punctuation rather than as another item.
+      if (epDate) {
+        int dim = (int)(255.0f * NV_HERO_META_DOT + 0.5f);
+        TxtLine ld = txt_line(TXT_DETWEB_EP_META, "\xe2\x80\xa2", dim, dim, dim, 255);
+        txt_draw_alpha(ld, x + NV_DETWEB_EP_DOT_SEP * k, yc - ld.h * 0.5f, a);
+        x += NV_DETWEB_EP_DOT_SEP * k * 2.0f + ld.w;
+      }
     }
-    // THE DATE goes to the right of the card, as in the reference: the left keeps only
-    // the duration, and the two stop competing for the same running line.
+    // The date SPELLED OUT ("March 7, 2024"), or the year alone when the setting says
+    // so. It follows the score on the SAME line, left-aligned — the port pushed it to
+    // the card's right edge, which the web does not do.
     if (epDate) {
       const char *date = epDate;
       size_t nDate = strlen(epDate);
       if (!settings_date_full() && nDate >= 4) date = epDate + nDate - 4;
-      float available = r.x + r.w - NV_DETP_EP_PAD - x;
-      if (available > 48) {
-        TxtLine lf = txt_line_trim(TXT_CAPTION2, date, 179, 179, 179, 255, available);
-        txt_draw_alpha(lf, r.x + r.w - NV_DETP_EP_PAD - lf.w, y, a);
+      float available = th.x + th.w - padx - x;
+      if (available > 40) {
+        TxtLine lf = txt_line_trim(TXT_DETWEB_EP_META, date, 179, 179, 179, 255, available);
+        txt_draw_alpha(lf, x, yc - lf.h * 0.5f, a);
       }
     } }
 
-  // The progress bar: 576x8 at 16px from the thumbnail's base, track rgba(0,0,0,0.45)
-  // and fill rgb(158,158,158). It only appears between 2% and 98% — the same range as
-  // the web app's, and it is what stops a just-started episode getting a bar of zero
-  // width.
+  // The title: 32/800. The 800 does not exist in the embedded family, so it comes from
+  // a heavier second pass. With no episode name, "Episode N" — a TRUE label deduced
+  // from the number, and not another series' title.
+  { char fallback[32];
+    const char *name = epName;
+    if (!name) { snprintf(fallback, sizeof fallback, "Episode %d", epNum);
+                 name = fallback; }
+    TxtLine l = txt_line_trim(TXT_DETWEB_EP_TITLE, name, 255, 255, 255, 255, textW);
+    txt_weight(l, tx, yTitle + (NV_DETWEB_EP_TITLE_H * k - l.h) * 0.5f, a, 1.4f); }
+
+  // The progress bar: 8 tall, in the card's own 8px below the thumbnail — not inside
+  // it, which is where the port drew it. Track rgba(0,0,0,.45), fill rgb(158,158,158),
+  // and it only appears between 2% and 98%, the same range as the web's: that is what
+  // stops a just-started episode getting a bar of zero width.
   { int progress = 0;
     const CatItem *ci = cat_item(idx);
     if (ci && ci->progress > 0 && ep && ci->season == ep->season &&
         ci->episode == ep->episode) progress = ci->progress;
+    // The same 2% the status circle tests, from the other side: under it the episode
+    // counts as not started and the marker says so instead.
     if (progress > 2 && progress < 98) {
-      GfxRect tr = { tx, r.y + NV_DETP_EP_BAR_Y, NV_DETP_EP_TEXT_W,
-                     NV_DETP_EP_BAR_H };
-      GfxRect at = { tr.x, tr.y, tr.w * (progress / 100.0f), tr.h };
-      gfx_color(tr, 0.5f, 0, 0, 0, 0.45f * a);
-      gfx_color(at, 0.5f, 0.62f, 0.62f, 0.62f, a);
+      // THE CONTINUE WATCHING CARD'S BAR, which is what the owner asked for. It was two
+      // rounded rectangles laid under the thumbnail, and that reads as a loose rail
+      // beneath a detached card — its ends sit outside the 24px corner instead of
+      // following it.
+      //
+      // GFX_CW_BAR takes the THUMBNAIL's rect and radius and cuts the band with the
+      // same SDF the artwork is cut with, so the bar is full-bleed against the base and
+      // both ends round exactly as the corner does. See the note in gfx.h for why a
+      // plain rectangle cannot do this.
+      float band = NV_CW_BAR_H * k / th.h;
+      float fill = anim_clamp(progress / 100.0f, 0.0f, 1.0f);
+      float min  = NV_CW_BAR_MINW * k / th.w;
+      if (fill < min) fill = min;
+      gfx_rect(th, 0, GFX_CW_BAR, 0, band, fill, radiusTh, 1, 1, 1, a);
     } }
+}
+
+// THE SYNOPSIS OF THE FOCUSED EPISODE, under the row.
+//
+// `.series-episode-desc-row` — 32/400 white, leading 44, 1179 wide from the gutter. It
+// is the other half of taking the synopsis OUT of the card: the web shows one episode's
+// text at a time, at reading size, instead of three clipped lines over a still.
+//
+// It follows the FOCUSED column while the row has the focus, and otherwise shows the
+// one the season opened on, so the block does not blink empty when the focus moves away.
+static void drawEpisodeCopy(float y, float a) {
+  int c = (focus.row == SEC_EPISODES) ? focus.column : 0;
+  const CatEp *ep = epOfSeason(seasonNow(), c);
+  if (!ep || !ep->synopsis[0]) return;
+  txt_block(TXT_DETWEB_EPD, ep->synopsis, 255, 255, 255, NV_DETP_X, y,
+            NV_DETWEB_EPD_W, NV_DETWEB_EPD_LD, a, NV_DETWEB_EPD_LINES);
 }
 
 // Information tabs: plain text, with no pill. The chosen one (or the focused one) in
@@ -2768,12 +3104,17 @@ static void drawSection(int r, float a, Uint32 now) {
     if (x > NV_SCREEN_W || x + w < -w) continue;
     switch (r) {
       case SEC_SEASONS: {
-        GfxRect b = { x, y, w, NV_DETP_TEMP_H };
-        drawSeason(b, c, f, a); break;
+        GfxRect b = { x, y, w, NV_DETWEB_SEA_H };
+        drawSeason(b, c, f, a);
+        // The expanded list is remembered, not drawn here: it hangs over the episode
+        // row below and has to be painted after every section. See seasonMenuRect.
+        if (seasonMenuOpen) seasonMenuAt = b;
+        break;
       }
       case SEC_EPISODES: {
-        GfxRect b = { x, y, NV_DETP_EP_W, NV_DETP_EP_H };
-        drawEpisode(b, c, f, a, now); break;
+        GfxRect b = { x, y, NV_DETWEB_EP_W, NV_DETWEB_EP_H };
+        drawEpisode(b, c, f, a, now);
+        break;
       }
       case SEC_TABS_INFO: {
         drawTabInfo(x, y, c, f, a);
@@ -2794,6 +3135,11 @@ static void drawSection(int r, float a, Uint32 now) {
     }
   }
 
+  // The synopsis under the episode row. OUTSIDE the column loop: it belongs to the row,
+  // and inside the loop it would have ridden on card 0 and disappeared with it the
+  // moment the row scrolled far enough right.
+  if (r == SEC_EPISODES)
+    drawEpisodeCopy(y + NV_DETWEB_EP_H + NV_DETWEB_EPD_Y, a);
 }
 
 // The page's structure appears while Cinemeta answers. It does not go into sectionN():
@@ -2808,30 +3154,31 @@ static void drawSkeletonEpisodes(float a) {
   yt = NV_DETP_TEMP_Y - scrollY;
   ye = NV_DETP_EP_Y - scrollY;
 
-  if (yt < NV_SCREEN_H && yt + NV_DETP_TEMP_H > 0) {
-    for (c = 0; c < 3; c++) {
-      float w = c == 0 ? 238.0f : 214.0f;
-      GfxRect p = { NV_DETP_X + c * 276.0f, yt, w, NV_DETP_TEMP_H };
-      gfx_color(p, 0.5f, 0.17f, 0.18f, 0.20f, a * 0.62f);
-    }
+  // ONE block for the picker, not three for a row of chips: the skeleton has to occupy
+  // the FINAL coordinates, and the final shape here is a single dropdown. Its width is
+  // widthSeason's own arithmetic on a placeholder label, so the answer arriving does
+  // not resize the block under the remote.
+  if (yt < NV_SCREEN_H && yt + NV_DETWEB_SEA_H > 0) {
+    GfxRect p = { NV_DETP_X, yt, 360.0f, NV_DETWEB_SEA_H };
+    gfx_color(p, NV_RADIUS_PILL, 0.17f, 0.18f, 0.20f, a * 0.62f);
   }
-  if (ye < NV_SCREEN_H && ye + NV_DETP_EP_H > 0) {
+  if (ye < NV_SCREEN_H && ye + NV_DETWEB_EP_H > 0) {
     for (c = 0; c < 3; c++) {
-      float x = NV_DETP_X + c * NV_DETP_EP_STEP;
-      GfxRect card = { x, ye, NV_DETP_EP_W, NV_DETP_EP_H };
-      GfxRect badge = { x + NV_DETP_EP_PAD, ye + NV_DETP_EP_BADGE_Y,
-                       108.0f, NV_DETP_EP_BADGE_H };
-      GfxRect title = { x + NV_DETP_EP_PAD, ye + NV_DETP_EP_TITLE_Y,
-                         292.0f, 25.0f };
-      GfxRect sin1 = { x + NV_DETP_EP_PAD, ye + NV_DETP_EP_SIN_Y,
-                       NV_DETP_EP_TEXT_W, 18.0f };
-      GfxRect sin2 = { sin1.x, sin1.y + NV_DETP_EP_LD_SIN, 420.0f, 18.0f };
-      gfx_color(card, NV_DETP_EP_RADIUS / NV_DETP_EP_H,
+      float x = NV_DETP_X + c * NV_DETWEB_EP_STEP;
+      GfxRect card = { x, ye, NV_DETWEB_EP_W, NV_DETWEB_EP_THUMB };
+      GfxRect badge = { x + NV_DETWEB_EP_PADX, ye + NV_DETWEB_EP_PADY,
+                        156.0f, NV_DETWEB_EP_BADGE_H };
+      // The two lines at the BASE, which is where the card's copy now is: the meta
+      // line and then the title. The three synopsis lines went with the synopsis.
+      float baseCopy = ye + NV_DETWEB_EP_THUMB - NV_DETWEB_EP_PADY;
+      GfxRect title = { x + NV_DETWEB_EP_PADX,
+                        baseCopy - NV_DETWEB_EP_TITLE_H + 14.0f, 292.0f, 28.0f };
+      GfxRect meta  = { title.x, title.y - NV_DETWEB_EP_META_H - 8.0f, 210.0f, 18.0f };
+      gfx_color(card, NV_DETWEB_EP_RADIUS / NV_DETWEB_EP_THUMB,
               0.105f, 0.11f, 0.12f, a * 0.82f);
-      gfx_color(badge, 0.48f, 0.19f, 0.20f, 0.22f, a * 0.70f);
+      gfx_color(badge, NV_RADIUS_PILL, 0.19f, 0.20f, 0.22f, a * 0.70f);
+      gfx_color(meta,  0.5f, 0.20f, 0.21f, 0.23f, a * 0.52f);
       gfx_color(title, 0.5f, 0.25f, 0.26f, 0.28f, a * 0.62f);
-      gfx_color(sin1, 0.5f, 0.20f, 0.21f, 0.23f, a * 0.52f);
-      gfx_color(sin2, 0.5f, 0.20f, 0.21f, 0.23f, a * 0.52f);
     }
   }
 }
@@ -3041,6 +3388,9 @@ void detail_draw(Uint32 now) {
   drawSkeletonEpisodes(pg);
   drawSkeletonCast(pg);
   for (int r = 0; r < N_SECTIONS; r++) drawSection(r, pg, now);
+  // The expanded season list, over every section: it hangs 8px below its anchor and
+  // covers the episode row, which is drawn after it in the loop above.
+  if (seasonMenuOpen) drawSeasonMenu(seasonMenuAt, pg);
   // ABOVE everything: the card is another screen, not a section of this one.
   if (personIs_open) drawPerson(s);
 }

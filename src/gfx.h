@@ -176,7 +176,43 @@ typedef enum {
   // draws no bar at all rather than an empty rail. The mode still supports the
   // track-only state — it is the caller's policy, not the shader's.
   GFX_CW_BAR = 26,
-  GFX_NMODES = 27
+  // GFX_EP_SCRIM — the episode card's copy gradient, and it exists for the reason
+  // GFX_CW_SCRIM does: a ramp has to be evaluated PER PIXEL.
+  //
+  // It was built in detail.c as a stack of rounded bands, each running from a
+  // height to the card's base, because compositing N layers of alpha d gives
+  // 1-(1-d)^n. That works when the ramp is gentle — the old one climbed 0.06 to
+  // 0.95 across the whole 395px thumbnail and its bands were 28px apart. The
+  // MEASURED gradient is flat for the first 52% and does all its work in the last
+  // 190px, and there the same trick draws visible horizontal stripes across the
+  // still. Widening the band count only makes the stripes narrower and the draw
+  // call count higher; the answer is not more bands, it is no bands.
+  //
+  // Measured on `.series-episode-overlay`:
+  //   linear-gradient(rgba(0,0,0,0) 52%, rgba(0,0,0,.77) 72%, rgba(0,0,0,.95))
+  //
+  // `v` runs from 0 at the TOP, which is how the CSS is written, so the two
+  // clamps below read straight off the stylesheet and sum to 0.95 at the base.
+  // One expression, no branches, clipped by the thumbnail's own corner.
+  GFX_EP_SCRIM = 27,
+  // GFX_RING_INSET — a border drawn ENTIRELY INSIDE the quad, at any corner
+  // radius. It is `box-shadow: inset 0 0 0 Npx`, which neither ring mode could do.
+  //
+  // GFX_RING strokes abs(d) < thickness around the SDF's zero, and that zero IS
+  // the quad's edge — so half the stroke always falls outside the quad and is
+  // clipped. On a pill (radius 0.5) the outline touches the quad at twelve and six
+  // o'clock, so the clipping lands exactly there and the ring comes out with flat
+  // bites taken off the top and bottom. Insetting the quad by half the stroke does
+  // not help: it moves the whole problem inward with it.
+  //
+  // GFX_RING_CSS escapes it by using its own `length(p)` — but that is a CIRCLE,
+  // and this control is a pill.
+  //
+  // Here the band is `-thickness < d < 0`: strictly inside the edge, so there is
+  // nothing to clip. Pass the thickness in `parx`, normalised to the height like
+  // the radius.
+  GFX_RING_INSET = 28,
+  GFX_NMODES = 29
 } GfxMode;
 
 typedef struct {

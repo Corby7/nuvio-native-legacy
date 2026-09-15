@@ -46,11 +46,12 @@ static int fieldInside(const char *start, const char *end, const char *key,
   p = strstr(start, search);
   return p && p < end && js_text(p, end, key, dst, size);
 }
+// The parse itself lives in js.c (js_ms_iso): the app had three copies of it,
+// and two copies of a date parser diverge in silence. This wrapper keeps the
+// (time_t)-1 sentinel the callers below already test for.
 static time_t isoToTime(const char *iso) {
-  int y, m, d, h, mi, s; struct tm t;
-  if (!iso || sscanf(iso, "%d-%d-%dT%d:%d:%d", &y, &m, &d, &h, &mi, &s) != 6) return (time_t)-1;
-  memset(&t, 0, sizeof t); t.tm_year=y-1900; t.tm_mon=m-1; t.tm_mday=d;
-  t.tm_hour=h; t.tm_min=mi; t.tm_sec=s; return timegm(&t);
+  long long ms = js_ms_iso(iso);
+  return ms ? (time_t)(ms / 1000) : (time_t)-1;
 }
 static void timeLocal(const char *iso, char *dst, size_t size) {
   time_t stamp=isoToTime(iso); struct tm local;

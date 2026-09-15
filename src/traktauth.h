@@ -24,9 +24,9 @@
 
 typedef enum {
   TRA_STOPPED = 0,
-  TRA_REQUESTING,     // buscando o codigo
+  TRA_REQUESTING,     // fetching the code
   TRA_WAITING,  // code on screen, waiting for the person to authorise
-  TRA_ON,      // token obtido
+  TRA_ON,      // token obtained
   TRA_ERROR
 } TraState;
 
@@ -39,7 +39,7 @@ void traktauth_begin(void);
 void traktauth_step(unsigned nowMs);
 
 TraState   traktauth_state(void);
-const char *traktauth_code(void);    // user_code, para exibir
+const char *traktauth_code(void);    // user_code, for display
 const char *traktauth_url(void);       // verification_url
 const char *traktauth_error(void);
 
