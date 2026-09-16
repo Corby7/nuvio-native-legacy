@@ -54,7 +54,7 @@ typedef enum {
   // Playback
   SETTING_QUALITY, SETTING_DV, SETTING_ATMOS,
   // Layout da Home
-  SETTING_LANDSCAPE, SETTING_HERO_FULL,
+  SETTING_LANDSCAPE, SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
   // Conteudo da Home
   SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_RAIL_BLUR, SETTING_HERO, SETTING_HERO_CATALOGS,
   SETTING_DISCOVER, SETTING_LABELS, SETTING_NAME_ADDON, SETTING_SUFFIX_KIND,
@@ -96,6 +96,12 @@ static const char *V_DISCOVER[] = { "Show in Search", "In the sidebar", "Off" };
 // `homeImdbRatingsVisibility` — normalizeHomeImdbRatingsVisibility so aceita
 // SHOW_ALL e HIDE_ALL.
 static const char *V_SCORES[]     = { "Show", "Hide" };
+// Where a full-screen backdrop is DRAWN. Local to this port: the web app has the
+// backdrop either banded or full-screen and nothing in between, so there is no
+// key of its own to match and the account blob never touches it.
+// "Top band" is the third state of ONE picture — it only means anything with
+// "Full-screen backdrop" on, which is why it sits directly under it.
+static const char *V_HERO_AREA[] = { "Whole screen", "Top band" };
 
 // The row's nature.
 // OP_ACTION responds to OK, not to left/right. It is NOT read-only: a row that
@@ -124,6 +130,12 @@ static const Option OPTIONS[SETTING_N] = {
 
   ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
   ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
+  ESC("Backdrop area",               V_HERO_AREA, 2), // heroBackdropArea (local)
+  // heroBackdropScale (local). A percentage of the SCREEN'S WIDTH, and it is a row
+  // rather than a constant because it is judged by eye from the sofa: every value
+  // tried in the source costs an ARM build and a deploy. Steps of 5 — 1% of 1920
+  // is 19px and nobody is choosing between 1536 and 1555.
+  NUM("Backdrop size",               50, 100, 5, "%"),  // heroBackdropScale
 
   ESC("Sidebar",              V_RAIL, 2),   // collapseSidebar
   ESC("Modern sidebar",      V_ON, 2),   // modernSidebar
@@ -189,6 +201,7 @@ static const Option OPTIONS[SETTING_N] = {
 static const char *KEY[] = {
   "quality", "dolbyVision", "dolbyAtmos",
   "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
+  "heroBackdropArea", "heroBackdropScale",
   "collapseSidebar", "modernSidebar", "modernSidebarBlur",
   "heroSectionEnabled", "-heroCatalogKeys",
   "discoverLocation", "posterLabelsEnabled", "catalogAddonNameEnabled",
@@ -227,7 +240,7 @@ typedef char checked_one_key_per_option[
 // on them, as on the device. The titles are the web app's.
 static const struct { const char *title; int start, n; } SECTIONS[] = {
   { "Playback",                     SETTING_QUALITY,           3 },
-  { "Home layout",                    SETTING_LANDSCAPE,           2 },
+  { "Home layout",                    SETTING_LANDSCAPE,           4 },
   { "Home content",               SETTING_RAIL,               13 },
   { "Continue watching",           SETTING_CW_ON,           7 },
   { "Detail page",             SETTING_DET_BLUR_NOT_WATCHED, 4 },
@@ -250,6 +263,8 @@ static int value[SETTING_N] = {
 
   0,                /* landscape posters: ON (the owner's profile; factory: off) */
   0,                /* full-screen backdrop: ON (profile; factory: off) */
+  0,                /* backdrop area: the whole screen, which is what it did before */
+  NV_HERO_FIT_PCT_DEFAULT, /* backdrop size, % of the screen's width */
 
   0,                /* sidebar: collapsed (profile; factory: fixed) */
   1,                /* modern sidebar: off */
@@ -324,6 +339,17 @@ int settings_rail_collapsed(void)      { return settings_rail_modern() ? 0 : on(
 int settings_rail_modern_blur(void)   { return on(SETTING_RAIL_BLUR); }
 int settings_hero_on(void)         { return on(SETTING_HERO); }
 int settings_hero_full(void)          { return on(SETTING_HERO_FULL); }
+// Only ever true WITH the full-screen backdrop on: it is that backdrop's shape,
+// not a third layout. With the banded hero the row has nothing to say, and
+// answering 1 there would shrink a band that is already a band.
+int settings_hero_top_band(void) {
+  return settings_hero_full() && value[SETTING_HERO_AREA] == 1;
+}
+// The band's width as a fraction of the screen's. The height follows the ART'S
+// aspect, so this one number is the whole size.
+float settings_hero_band_scale(void) {
+  return (float)value[SETTING_HERO_BAND] / 100.0f;
+}
 int settings_posters_landscape(void)   { return on(SETTING_LANDSCAPE); }
 int settings_social_row(void)          { return on(SETTING_SOCIAL); }
 int settings_gradient_focus_classic(void) { return on(SETTING_GRADIENT_CLASSIC); }

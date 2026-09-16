@@ -54,6 +54,63 @@
 // discarded at no cost, and if a firmware ever returns the whole surface the art
 // will cover it by itself.
 #define NV_HERO_FULL_H        1080.0f
+
+// THE SAME HERO, NOT STRETCHED OVER THE SCREEN (`heroBackdropArea` = "Top band").
+//
+// A full-screen backdrop is 1920x1080 and the rows start at NV_SHELF_TOP with
+// their first card at 615, so the bottom of the picture is paid for and never
+// seen — and worse, GFX_HERO_FULL's horizontal ramp darkens the left 1248px of
+// it to make ground for the copy. Between the two, most of the art is gone.
+//
+// The band draws the SAME image smaller, at its own aspect, hung from the
+// TOP-RIGHT corner, with the background showing below and to the left: the whole
+// picture lands in the part of the screen the rows leave alone, and the ramp that
+// makes the copy's ground is proportionally narrower, so much more of the art
+// survives it.
+//
+// THE SIZE IS A PREFERENCE, not a constant: `heroBackdropScale`, a percentage of
+// the SCREEN'S WIDTH, with the height following the art's own aspect. It is a
+// setting and not a number here because it is tuned by eye from the sofa, and
+// every value tried otherwise costs a full ARM build and a deploy.
+//
+// 80 is the factory value: 1536x864 for a 16:9 backdrop, which reads as very
+// nearly full width — the 384px left of it are where the copy sits, and the ramp
+// would have darkened them anyway.
+#define NV_HERO_FIT_PCT_DEFAULT  80
+
+// WHERE THE RAMPS ARE, and they are given in SCREEN coordinates, converted to the
+// band's own 0..1 at the draw (heroFitPar in home.c) and handed to the shader in
+// uPar. The band's width is a preference, and a stop written as a fraction of it
+// would slide across the copy as the size moved: at 50% it would clear to the left
+// of the text, at 100% far to the right of it. What has to hold still is the screen
+// x the ramp clears at and the screen y the art starts going at.
+//
+// BOTH NUMBERS ARE GFX_HERO_FULL'S OWN, read off the stops recorded in gfx.c:
+// its horizontal ramp covers the left 65% of 1920 (= 1248) and its vertical one
+// opens at 64% of 1080 (= 691). They are measurements of the web app making ground
+// for THIS copy — the same typeface at the same size in the same place — so there
+// is nothing better to choose, and it means the band at 100% is the full-screen
+// hero exactly, which is what makes the preference read as one continuous size.
+#define NV_HERO_FIT_CLEAR_X  1248.0f
+#define NV_HERO_FIT_FADE_Y    691.0f
+// The bounds those two are held to, in 0..1 of the band. The minimum edge exists
+// for the SMALL sizes, where the band starts to the right of where the ramp would
+// clear: it is then not making ground for anything, but the left edge still has to
+// dissolve instead of being cut.
+#define NV_HERO_FIT_EDGE_MIN   0.18f
+#define NV_HERO_FIT_EDGE_MAX   0.70f
+#define NV_HERO_FIT_FADE_MIN   0.40f
+#define NV_HERO_FIT_FADE_MAX   0.92f
+
+// The aspect the band is built at before the art has decoded, and the range a
+// decoded one is held to. tex_aspect answers 0 until the image lands, and a band
+// that changed shape when it did would read as the hero resizing itself; the
+// clamp keeps a stray square or panoramic file from making a band that is taller
+// than the screen or thinner than the copy beside it.
+#define NV_HERO_FIT_ASP      (16.0f / 9.0f)
+#define NV_HERO_FIT_ASP_MIN  1.20f
+#define NV_HERO_FIT_ASP_MAX  2.40f
+
 #define NV_HERO_FULL_COPY_Y     40.0f
 // With the hero FULL-SCREEN the text block moves up: the web app puts the logo at
 // y=65 and the meta line at 257, against 135 and 327 for the banded hero. MEASURED
@@ -242,9 +299,30 @@
 // coming to rest just before the row's header.
 #define NV_COLLECTION_HERO_GROUP_Y      182.0f
 #define NV_COLLECTION_HERO_LOGO_Y       258.0f
-#define NV_COLLECTION_HERO_LOGO_MAX_W   520.0f
-#define NV_COLLECTION_HERO_LOGO_MAX_H   150.0f
-#define NV_COLLECTION_HERO_CAPTION_Y    448.0f
+// THE BOX IS THE WEB APP'S: `.home-layout-modern .home-hero-logo` is 440x200 with
+// `object-fit: contain` and `object-position: bottom center` (components.css:7122, the
+// --modern-hero-logo-max-* pair). That base rule is the one THIS TV runs under. The two
+// overrides of it do not apply here and both were read as though they did: 440x120 at
+// :19436 is `.legacy-webos`, which app.js:187 sets only for webOS 6 AND BELOW — a C3 is
+// webOS 8 — and the 440x200 at :19862 sits inside `@supports not (font-size: clamp())`,
+// a fallback for browsers this one is not.
+//
+// THE HEIGHT IS WHAT EVENS THEM OUT, and it is why 520x150 looked so uneven. Under
+// `contain` the binding dimension decides: in a box of aspect 2.2 the near-square marks
+// (HBO at 1.38, Disney at 1.83) are HEIGHT-bound and grow to fill it, while the wide
+// ones (Netflix at 3.71) are width-bound — so they land on a similar amount of ink.
+// 520x150 is aspect 3.47: it capped the square marks at 150 tall while letting Netflix
+// run to 520 wide, which is the spread that was complained about. Measured against
+// nuvio-assets/logos, 440x200 draws HBO at 276x200 and Netflix at 440x119 — 55k against
+// 52k of area. 520x150 drew 207x150 against 520x140 — 31k against 73k.
+#define NV_COLLECTION_HERO_LOGO_MAX_W   440.0f
+#define NV_COLLECTION_HERO_LOGO_MAX_H   200.0f
+// The shared BASELINE. The web bottom-aligns inside that box, so a short wordmark
+// hangs from the same line as a tall one instead of floating above it — and the line
+// does not move when a late logo replaces the name standing in for it.
+#define NV_COLLECTION_HERO_LOGO_BASE \
+  (NV_COLLECTION_HERO_LOGO_Y + NV_COLLECTION_HERO_LOGO_MAX_H)
+// There is no caption token: the hero's "N lists · OK to explore" line was removed.
 
 // THE COLLECTION TILE'S FOCUS ANIMATION. Two shapes feed the same loop in
 // home.c's drawShortcuts:
@@ -452,13 +530,29 @@
 // the shader crops (cover) instead of stretching; without that the image deforms,
 // which was exactly the defect that showed up on the first attempt.
 #define NV_HIGHLIGHT_W    419.0f
-// The badge's own inset. It is NOT the copy's — see NV_CW_COPY_X below — and it
-// is deliberately the port's 18 rather than the web's 16: the remaining-time pill
-// is the one part of this card the owner asked to keep as it is.
+// THE REMAINING TIME, WITH NO CONTAINER. There is no pill, no chip and no plate:
+// the corner of the artwork is shaded and the type sits on it. The card had a
+// container here through three attempts — the port's flat rectangle, the web's
+// `.home-continue-badge` glass, a frosted plate — and the objection each time was
+// the same one, that a box in the corner reads as a control. The time left is a
+// label, so it is set like one.
+//
+// The scrim reaches this far across the card from the TOP-RIGHT corner, as a
+// fraction of each side, and goes on at this depth in the corner itself. Both are
+// bigger than they look written down: the ramp is a dome (GFX_CORNER_SCRIM), so
+// the depth quoted here is reached only at the very corner and half of it is gone
+// by the middle of the label.
+#define NV_CW_TIME_W        0.58f
+#define NV_CW_TIME_H        0.58f
+#define NV_CW_TIME_INK      0.78f
+// The label's own inset from the top and the right edge. It is the badge's, not
+// the copy's — see NV_CW_COPY_X below.
 #define NV_CW_PAD          18.0f
-#define NV_CW_BADGE_PAD_X  14.0f
-#define NV_CW_BADGE_PAD_Y   8.0f
-#define NV_CW_BADGE_RADIUS  7.0f
+// The type sits high in its rasterised box (SDL_ttf gives every line the font's
+// full height, ascenders and descenders included), so hanging the box off the
+// inset puts the LETTERS further down than the number says. This is that
+// difference, measured on the capture rather than derived from the metrics.
+#define NV_CW_TIME_RISE     5.0f
 
 // THE COPY AND THE BAR, read off `.home-screen-shell.home-layout-modern
 // .home-continue-*` (components.css:7709-7754) with the base block at 5892-6103.
@@ -498,6 +592,10 @@
 // not the web's "always paint a 12px stub" state.
 #define NV_CW_BAR_H         6.0f
 #define NV_CW_BAR_MINW     12.0f   // .home-continue-progress span { min-width }
+// Below this the title counts as NOT STARTED and gets no bar at all. The same 2
+// the detail screen's episode card has always used, where under it the dashed
+// "not started" ring is drawn instead. See the long note in resume.c.
+#define NV_CW_BAR_MIN_PCT     2
 #define NV_HIGHLIGHT_H    236.0f   // continue watching: 419 x 236
                                   //  compared side by side on the TV)
 // The hero carousel: the time on each piece of art and the crossfade's duration.
@@ -543,6 +641,18 @@
 // of its own. Below this the two come in together, which is the common case with
 // the art cached.
 #define NV_HERO_LOGO_WAIT_MS  400
+// HOW LONG THE HERO HOLDS THE PICTURE OF THE ROW KIND JUST LEFT before crossing to
+// the new one without waiting for its art.
+//
+// Going from a poster row to a collection row (or to the social row) exchanges one
+// whole hero drawing for another, and the arriving one's art may be a CDN cover that
+// lands seconds later. Holding the standing picture until then is right — it is the
+// same gate the swap along a row already applies — but only up to a point: past it
+// the viewer has moved and the hero is still showing the row they left, which reads
+// as the screen having stopped responding. Same trade-off as the logo's wait above,
+// and the same number: below it the change is a single clean dissolve, and art that
+// never lands costs 400 ms, not the session.
+#define NV_HERO_FAMILY_WAIT_MS  400
 #define NV_HERO_DOT           9.0f
 #define NV_HERO_DOT_GAP      14.0f
 
@@ -941,11 +1051,9 @@
 #define NV_DETW_LD_SIN     39.0f   // the synopsis's line-height
 #define NV_DETW_SIN_LINES    3    // 117 / 39
 #define NV_DETW_META_GAP   26.0f   // gap 16 + the second line's margin-top 10
-// The resume line, only when the title has progress. MEASURED in the signed-in
-// session (Silo, 45%): 1720x37 at (72,633), font 22.66/400 rgba(255,255,255,0.82),
-// between the actions row and the support line.
-#define NV_DETW_RESUME_H    37.0f
-#define NV_DETW_GAP_RESUME  22.0f   // actions -> resume (633 - 611)
+// The resume line the web app draws between the actions row and the support line
+// (MEASURED, signed in: 1720x37 at (72,633)) has NO token here: the native screen does
+// not draw it, because that band is where the action tooltips come out. See detail.c.
 #define NV_DETW_LD_META    35.0f
 #define NV_DETW_LD_META2   31.0f
 #define NV_DETW_META_SEP   24.0f   // gap do flex, dos dois lados do ponto

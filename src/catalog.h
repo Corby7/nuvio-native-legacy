@@ -267,6 +267,24 @@ typedef struct {
 // history.
 int cat_progress_read(CatProgress *out, int max);
 
+// The percentage a recorded position REPORTS, and the one place that decides it.
+//
+// It used to be an inline `(int)(100.0 * pos / duration)` at each of the three
+// sites that apply progress.txt, and the truncation made "started" mean something
+// different for every runtime: 1% of a 110-minute film is 66 seconds, 1% of a
+// 22-minute episode is 13, so a film someone had genuinely sat down to reported 0
+// and looked untouched while a mis-tapped episode reported 1 and looked started.
+//
+// A position that is recorded at all is a position: the web app's rule is
+// `positionMs > 0` (hasWatchProgressStarted in domain/model/watchProgress.js) and
+// nothing about the runtime. So anything above zero reports at least 1, which is
+// what keeps every `progress > 0` test in this port — the Resume button, the
+// player's resume point, the hero's "N MINUTES LEFT" — agreeing with the app they
+// were ported from. The card's bar is NOT affected: it opens at
+// NV_CW_BAR_MIN_PCT (2), deliberately, so a title a few seconds in still draws no
+// stub. See the note in resume.c.
+int cat_pct(double posSeg, double durationSeg);
+
 // Episodes of title `indexItem`. A film returns 0 — which is what the screen uses
 // to decide whether to show the episodes section.
 // Replaces the whole catalogue with what came from the network. The art paths

@@ -647,6 +647,76 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  if (m <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uColor.rgb, uColor.a * m);\n"
   "}\n",
+
+  // GFX_CORNER_SCRIM — a soft dark corner. See gfx.h for what it is for.
+  //
+  // `q` is the distance from the TOP-RIGHT corner with each axis divided by how
+  // far the scrim is meant to reach on that axis, so one length() gives an ellipse
+  // rather than a circle and the two extents can differ.
+  //
+  // The first THIRD of the dome is FLAT — the ramp starts at 0.35, not at 0. The
+  // type sits in exactly that region, and a falloff that starts falling at the
+  // corner itself is well down its depth by the time it reaches the label's far
+  // end: MEASURED on the capture, the ground under "13m left" went from L50 at the
+  // right of the line to L89 at its left, and the first word was visibly thinner on
+  // the ground than the last. Widening the whole dome would fix that too, at the
+  // price of shading more of the frame; moving the plateau out costs nothing.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  vec2 q = vec2((1.0 - vUv.x) / max(uPar.x, 0.001),\n"
+  "                vUv.y        / max(uPar.y, 0.001));\n"
+  "  float a = uColor.a * (1.0 - smoothstep(0.35, 1.0, length(q)));\n"
+  "  if (a <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uColor.rgb, a * m);\n"
+  "}\n",
+
+  // GFX_HERO_FIT — the whole backdrop in a band at the top-right, dissolved into
+  // the background on the two edges that are not a screen edge.
+  //
+  // THE TWO RAMPS ARE PARAMETERS, and that is the difference from GFX_HERO and
+  // GFX_HERO_FULL. Those two draw a rectangle the layout fixes, so their stops are
+  // written in as fractions of it; this band's size is a PREFERENCE, and a stop
+  // fixed at a fraction of the band would slide across the copy as the size moved.
+  // The caller works out where the ramps have to be on the SCREEN and hands them
+  // over in the band's own 0..1 (heroFitPar in home.c):
+  //
+  //   uPar.x  the x the horizontal ramp clears at — the copy's right edge plus air
+  //   uPar.y  the y the vertical one starts at    — the first row's title
+  //
+  // The horizontal SHAPE is GFX_HERO_FULL's, stop for stop (0.12/0.12/0.38/0.38
+  // over 0.22/0.24/0.30/0.24), because it is making the same thing: ground for the
+  // same copy, in the same typeface, at the same size. Only its width moves.
+  //
+  // The vertical one is written as fractions of what is LEFT below uPar.y, so the
+  // ramp always lands exactly on the band's base whatever the start.
+  //
+  // Both are piecewise linear, for the reason GFX_HERO records: a smoothstep does
+  // not pass through the intermediate points, and the middle of the ramp is
+  // exactly what the eye reads.
+  //
+  // The two are combined with `a + b - a*b` and not by adding: at the bottom-left
+  // CORNER both are near 1 and a sum overshoots, which shows up as a hard step
+  // where the two ramps meet.
+  "void main(){\n"
+  "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
+  "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
+  "  float s = clamp(uPar.y, 0.05, 0.98);\n"
+  "  float d = 1.0 - s;\n"
+  "  float y = vUv.y;\n"
+  "  float av = clamp((y-s)/(d*0.34),0.0,1.0)*0.30\n"
+  "           + clamp((y-(s+d*0.34))/(d*0.30),0.0,1.0)*0.40\n"
+  "           + clamp((y-(s+d*0.64))/(d*0.36),0.0,1.0)*0.30;\n"
+  "  float cx = max(uPar.x, 0.02);\n"
+  "  float t = vUv.x/cx;\n"
+  "  float ah = 1.0 - clamp(t/0.22,0.0,1.0)*0.12\n"
+  "                 - clamp((t-0.22)/0.24,0.0,1.0)*0.12\n"
+  "                 - clamp((t-0.46)/0.30,0.0,1.0)*0.38\n"
+  "                 - clamp((t-0.76)/0.24,0.0,1.0)*0.38;\n"
+  "  ah *= step(vUv.x, cx);\n"
+  "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
+  "  gl_FragColor = vec4(c, uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -669,7 +739,9 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,0},   /* GFX_CW_SCRIM — a vertical ramp, clipped by the card's corner */
   {1,0},   /* GFX_CW_BAR   — the same corner, cutting the bar's ends */
   {1,0},   /* GFX_EP_SCRIM — a vertical ramp, clipped by the thumbnail's corner */
-  {1,0}    /* GFX_RING_INSET — the rect's own SDF, offset inward */
+  {1,0},   /* GFX_RING_INSET — the rect's own SDF, offset inward */
+  {1,0},   /* GFX_CORNER_SCRIM — a dome, clipped by the host's own corner */
+  {0,1}    /* GFX_HERO_FIT — the art in cover; the band is the quad, no SDF */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -879,6 +951,7 @@ void gfx_hole(GfxRect r) {
 void gfx_texture(GfxRect r, GLuint tex) {
   gfx_rect(r, tex, GFX_CARD, 0, 0, 0, 0.0f, 0, 0, 0, 1);
 }
+
 
 int gfx_snap_start(int w, int h) {
   snapW = w; snapH = h;

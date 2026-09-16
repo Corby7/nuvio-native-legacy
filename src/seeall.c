@@ -341,14 +341,27 @@ static void themeHeader(float a,float x0) {
   // A director collection's wordmark may contain a head or composed lettering.
   // In the filmography header, the textual name and the clean portrait keep the
   // identity legible without duplicating the same visual information.
-  GLuint logo=!isDirector&&collection&&!collection->editorial&&collection->logo[0]
-             ?tex_get_width(collection->logo,560):0;
-  float aspect=logo?tex_aspect(collection->logo):0;
+  // TEX_GET_EXACT: the header wordmark is furniture at a size this layout already
+  // knows, and tex_get_width would leave the texture 1.25x-1.6x the drawn size, on
+  // either side of GL_LINEAR_MIPMAP_NEAREST's 1.414 snap — undersampled below it,
+  // halved and magnified above it. See the measured note in home.c's collection hero,
+  // which is the same wordmark drawn from the same file.
+  //
+  // The two screens never overlap (app.c skips home_draw while seeall_is_open), so the
+  // two exact widths cost one re-decode when the screen changes and nothing after.
+  //
+  // So the ASPECT first and the request second: before anything has decoded tex_aspect
+  // answers 0 and the box is asked for at its full width, and the frame it lands the
+  // width becomes the real one.
+  int hasLogo=!isDirector&&collection&&!collection->editorial&&collection->logo[0];
+  float aspect=hasLogo?tex_aspect(collection->logo):0;
+  // The official wordmark, large enough to read at a distance. The
+  // transparent PNG is imported at up to 800px, so 560px neither interpolates
+  // upwards nor loses the brand's original silhouette.
+  float w=560.0f,h=0.0f;
+  if(aspect>0){h=w/aspect;if(h>108){h=108;w=h*aspect;}}
+  GLuint logo=hasLogo?tex_get_exact(collection->logo,w):0;
   if(logo&&aspect>0) {
-    // The official wordmark, large enough to read at a distance. The
-    // transparent PNG is imported at up to 800px, so 560px neither interpolates
-    // upwards nor loses the brand's original silhouette.
-    float w=560.0f,h=w/aspect;if(h>108){h=108;w=h*aspect;}
     gfx_rect((GfxRect){x0,83,w,h},logo,tex_brand_dark(collection->logo)?GFX_BRAND:GFX_TEXT,0,0,0,0,.96f,.97f,.98f,a);
   } else {TxtLine line=txt_line_trim(TXT_TITLE1,title,242,243,247,255,940);txt_draw_alpha(line,x0,80,a);}
   char caption[180];int n=nItems();

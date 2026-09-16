@@ -39,6 +39,14 @@ int   settings_rail_modern(void);       // modernSidebar
 int   settings_rail_modern_blur(void);  // modernSidebarBlur
 int   settings_hero_on(void);        // heroSectionEnabled
 int   settings_hero_full(void);         // modernHeroFullScreenBackdropEnabled
+// heroBackdropArea: with the full-screen backdrop on, whether it covers the whole
+// screen (0) or is drawn whole, at its own aspect, in a band at the top-right (1).
+// Local to this port — the web app has no equivalent key, so the account blob
+// never touches it. Answers 0 whenever the full-screen backdrop is off.
+int   settings_hero_top_band(void);     // heroBackdropArea == "Top band"
+// heroBackdropScale / 100: the band's width as a fraction of the screen's. The
+// height comes from the art's own aspect, so this is the whole of its size.
+float settings_hero_band_scale(void);   // heroBackdropScale
 int   settings_posters_landscape(void);  // modernLandscapePostersEnabled
 int   settings_gradient_focus_classic(void); // classicFocusGradientEnabled
 // socialRowEnabled: the "Among friends" row on Home. Local to this port — the

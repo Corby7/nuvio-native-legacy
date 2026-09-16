@@ -256,6 +256,118 @@ static const char *colHeroArt(const ColFolder *f) {
   return NULL;
 }
 
+// THE HERO'S FAMILY, and the fade BETWEEN families.
+//
+// drawHero is not one drawing, it is three: the social row's, the collection rows' and
+// the poster rows'. Each already crossfades ALONG ITS OWN ROW — heroExits for the
+// posters, colHeroFade for the collections — but WHICH of the three runs was decided
+// fresh every frame from rows[focus.row].kind, so going DOWN from a poster row onto a
+// collection row exchanged one whole drawing for another between two frames. The owner
+// reported exactly that: horizontal has the fade with the logos and the backdrops,
+// vertical does not. Nothing was missing from either fade; neither had any hold over
+// the boundary BETWEEN the two drawings.
+//
+// `famFade` is the alpha of the picture being LEFT, on the same clock and at the same
+// NV_HERO_FADE_MS rate as the other two, and the arriving family's art AND copy come up
+// on 1-famFade. So every move on the home now dissolves: along a row, across rows, and
+// across the three kinds of row.
+typedef enum { FAM_POSTER, FAM_COLLECTION, FAM_SOCIAL } HeroFamily;
+// What the focused family had on screen LAST FRAME — just the art, so the family it
+// hands over to can go on drawing it while it fades. The COPY is deliberately not here:
+// the poster path already documents why two hero texts must not overlap (they are
+// anchored to a base and stack upward, so the outgoing and incoming blocks sit at
+// different heights and read as doubled text, not as a dissolve). Across families they
+// are not even the same shape of text. So the copy keeps the shape it has within a row
+// — gone at the handover, faded in by the family arriving — and only the art crossfades.
+typedef struct {
+  int     valid;
+  int     social;         // the GFX_SOCIAL ambience belongs under it
+  char    art[512];
+  GfxRect rect;
+  GfxMode mode;
+  float   aspect;         // 0 = leave gfx_tex_aspect_current alone
+} HeroShot;
+static HeroShot   heroShot, heroLeaving;
+static HeroFamily heroFamily = FAM_POSTER;
+static int        heroFamilyKnown = 0;
+static float      famFade = 0.0f;
+// The fade WAITS for the arriving family to have something to show, which is the same
+// gate heroWanted and colHeroCurrent already apply within a row. Without it, stepping
+// onto a collection whose cover is still on the CDN (see the note in collections.h)
+// would fade the standing picture out into an empty rectangle for the length of the
+// download — the blank hero that lag was introduced to get rid of, back one layer.
+static int        famHold = 0;
+static Uint32     famHoldIn = 0;
+
+// The three drawings, by the kind of row the focus is on. Every kind that is not the
+// social row or a collection row is a title on a poster row, whatever the card's shape,
+// and they all share one hero.
+static HeroFamily familyOfRow(int r) {
+  if (r < 0 || r >= nRows) return FAM_POSTER;
+  if (rows[r].kind == ROW_SOCIAL)   return FAM_SOCIAL;
+  if (rows[r].kind == ROW_CATALOGS) return FAM_COLLECTION;
+  return FAM_POSTER;
+}
+
+static void heroShotArt(const char *art, GfxRect rect, GfxMode mode,
+                        float aspect, int social) {
+  heroShot.social = social;
+  heroShot.valid  = social || (art && art[0]);
+  heroShot.rect   = rect;
+  heroShot.mode   = mode;
+  heroShot.aspect = aspect;
+  if (art && art[0]) snprintf(heroShot.art, sizeof heroShot.art, "%s", art);
+  else               heroShot.art[0] = '\0';
+}
+
+// THE BAND'S TWO GRADIENTS, in the band's own 0..1, worked out from where the band
+// LANDS ON THE SCREEN. They are passed in uPar rather than written into the shader
+// because the band's size is a preference: a ramp fixed at a fraction of the band
+// would slide across the copy as the size moved, clearing to the left of the text
+// at one setting and to the right of it at another. What has to hold still is the
+// SCREEN x the ramp clears at, and the SCREEN y the art is gone by.
+//
+// See the note on NV_HERO_FIT_CLEAR_X in layout.h for the two anchors: they are
+// GFX_HERO_FULL's own measured stops, so the band at 100% IS the full-screen hero.
+static void heroFitPar(GfxRect r, float *px, float *py) {
+  float cover = r.w > 1.0f ? (NV_HERO_FIT_CLEAR_X - r.x) / r.w
+                           : NV_HERO_FIT_EDGE_MIN;
+  float fade  = r.h > 1.0f ? NV_HERO_FIT_FADE_Y / r.h : NV_HERO_FIT_FADE_MAX;
+  if (cover < NV_HERO_FIT_EDGE_MIN) cover = NV_HERO_FIT_EDGE_MIN;
+  if (cover > NV_HERO_FIT_EDGE_MAX) cover = NV_HERO_FIT_EDGE_MAX;
+  if (fade  < NV_HERO_FIT_FADE_MIN) fade  = NV_HERO_FIT_FADE_MIN;
+  if (fade  > NV_HERO_FIT_FADE_MAX) fade  = NV_HERO_FIT_FADE_MAX;
+  *px = cover; *py = fade;
+}
+
+// One draw of the hero's art. It exists so that the band's uPar is filled in at
+// EVERY call site: the mode is chosen once in drawHero and reaches five different
+// gfx_rect calls, and a band drawn with uPar at zero comes out with its ramps
+// collapsed against the left edge.
+static void heroArtDraw(GfxRect r, GLuint tex, GfxMode mode, float alpha) {
+  float px = 0.0f, py = 0.0f;
+  if (mode == GFX_HERO_FIT) heroFitPar(r, &px, &py);
+  gfx_rect(r, tex, mode, 0, px, py, 0, 0, 0, 0, alpha);
+}
+
+// The picture the family we have just left had up, still standing while it goes.
+// Requested only WHILE the blend runs, for the reason the poster path documents: asking
+// on every frame would drag an evicted 1920 texture back through the decoder purely so
+// as not to draw it, and push the visible posters out of the cache's budget.
+static void drawHeroLeaving(float alpha) {
+  GLuint t;
+  if (!heroLeaving.valid || alpha <= 0.004f) return;
+  if (heroLeaving.social)
+    gfx_rect((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H}, 0, GFX_SOCIAL,
+             0, 0, 0, 0, 1, 1, 1, alpha);
+  if (!heroLeaving.art[0]) return;
+  t = tex_get_hero(heroLeaving.art);
+  if (!t) return;
+  if (heroLeaving.aspect > 0.0f) gfx_tex_aspect_current = heroLeaving.aspect;
+  heroArtDraw(heroLeaving.rect, t, heroLeaving.mode, alpha);
+  gfx_tex_aspect_current = 0.0f;
+}
+
 static void loadsDir(const char *dir, char destination[][512], int *n, const char *sub) {
   char path[512];
   if (sub) snprintf(path, sizeof path, "%s/%s", dir, sub);
@@ -326,14 +438,26 @@ static int drawArtHero(GfxRect r, GfxMode mode, const CatItem *item,
   tex = tex_get_hero(art);
   if (!tex) return 0;
   gfx_tex_aspect_current = tex_aspect(art);
+  // RECORDED HERE and not at the call, because the contained-poster case below picks a
+  // rectangle and a mode of its own: the family that inherits this picture has to go on
+  // drawing it exactly where it was, not where the caller asked for it. The poster path
+  // calls this twice a frame, the outgoing art first and the incoming one second, so the
+  // last write is what is actually on screen — including the frames where the incoming
+  // art has not decoded and the outgoing one is still the whole picture.
+  //
+  // Only when it is visible: during a hold the arriving family draws at alpha 0 purely
+  // to queue the decode, and a shot of that would hand the NEXT family a picture to fade
+  // out that was never faded in.
   if (!isPoster) {
-    gfx_rect(r, tex, mode, 0, 0, 0, 0, 0, 0, 0, alpha);
+    heroArtDraw(r, tex, mode, alpha);
+    if (alpha > 0.004f) heroShotArt(art, r, mode, gfx_tex_aspect_current, 0);
   } else {
     float ap = gfx_tex_aspect_current > 0.05f ? gfx_tex_aspect_current : (2.0f / 3.0f);
     float h = r.h, w = h * ap, limit = r.w * 0.42f;
     if (w > limit) { w = limit; h = w / ap; }
     GfxRect poster = { r.x + r.w - w, r.y + (r.h - h) * 0.5f, w, h };
     gfx_rect(poster, tex, GFX_HERO, 0, 0, 0, 0, 0, 0, 0, alpha);
+    if (alpha > 0.004f) heroShotArt(art, poster, GFX_HERO, gfx_tex_aspect_current, 0);
   }
   gfx_tex_aspect_current = 0.0f;
   return 1;
@@ -762,6 +886,10 @@ void home_event(const SDL_Event *e) {
   // second. The whole decision — open, "See all" or the poster's menu — lives in the
   // KEYUP above, which is the only point that knows the DURATION.
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) return;
+  // ANY OTHER KEY ENDS THE HOLD. An arrow pressed while OK is down already voids the
+  // gesture inside ctxmenu (holdCancelled), but the home did not hear about it: the
+  // rail went on filling, and on a card that was no longer the one being pressed.
+  okPressing = 0; okSince = 0; okHold = 0.0f; okLongFired = 0;
   if (k == SDLK_RIGHT) {
     // The `&&` here was a short-circuit with a side effect: written as
     // `if (row == 0 && !focus_move(...))`, focus_move was only called ON THE HERO —
@@ -1227,9 +1355,20 @@ void home_update(float dt, Uint32 now) {
   syncRows();
 
   const int motionReduced = settings_animations_reduced();
-  if (okPressing && focus_can_press_long())
-    okHold = anim_clamp((now - okSince) / NV_HOLD_FEEDBACK_MS, 0.0f, 1.0f);
-  else if (!okPressing)
+  // NV_HOLD_FEEDBACK_MS IS THE SILENCE BEFORE THE BAR, NOT THE WHOLE GESTURE.
+  // Dividing by it filled the rail — and fired ctx_open right below — after 110ms,
+  // which is INSIDE an ordinary tap on a remote: a deliberate press of OK lasts
+  // 100-200ms, so most taps opened the modal instead of the title, and the ones that
+  // did not were simply the fastest. The threshold is NV_HOLD_MS, the same 500ms
+  // detail.c and episodes.c measure on their own KEYUP; the bar appears once the
+  // press is clearly not a tap and fills over what is left of the 500.
+  if (okPressing && focus_can_press_long()) {
+    Uint32 held = now - okSince;
+    okHold = held <= NV_HOLD_FEEDBACK_MS
+               ? 0.0f
+               : anim_clamp((held - NV_HOLD_FEEDBACK_MS) /
+                              (NV_HOLD_MS - NV_HOLD_FEEDBACK_MS), 0.0f, 1.0f);
+  } else if (!okPressing)
     okHold = 0.0f;
   if (okPressing && okHold >= 1.0f && !okLongFired) {
     okLongFired = 1;
@@ -1247,6 +1386,37 @@ void home_update(float dt, Uint32 now) {
     if (heroCurrent < 0 || heroCurrent >= total) heroCurrent = 0;
     if (heroPrevious < 0 || heroPrevious >= total) heroPrevious = heroCurrent;
     if (heroPending < 0 || heroPending >= total) heroPending = heroCurrent;
+  }
+
+  // THE CHANGE OF ROW KIND, detected HERE and not in the drawing, because this is the
+  // one pass that runs once a frame and runs BEFORE anything is drawn: heroShot still
+  // holds what the family being left had on screen, and the poster candidate below can
+  // be brought forward in the same pass.
+  int famChanged = 0;
+  { HeroFamily fam = familyOfRow(focus.row);
+    if (!heroFamilyKnown) { heroFamily = fam; heroFamilyKnown = 1; }
+    else if (fam != heroFamily) {
+      famChanged = 1;
+      heroFamily  = fam;
+      heroLeaving = heroShot;
+      famFade = motionReduced ? 0.0f : 1.0f;
+      // Nothing to hold on to — the family being left was drawing no art — so there is
+      // nothing to wait for either: the arriving one simply comes up over the
+      // background, which still beats appearing between two frames.
+      famHold   = (!motionReduced && heroLeaving.valid) ? 1 : 0;
+      famHoldIn = now;
+      // THE COLLECTION HERO'S LAG IS MEASURED AGAINST THE FOLDER IT LAST SHOWED, and
+      // arriving from another family that folder is one the viewer left behind — very
+      // likely on a different row. Kept, it would fade the family in on a stale cover
+      // and then run colHeroFade a second time to reach the focused one: two dissolves
+      // for one keypress. Dropped, the only fade is the family's, which is the one the
+      // movement actually was.
+      if (fam == FAM_COLLECTION) {
+        colHeroCurrent = colHeroPrevious = -1;
+        colHeroFade = 0.0f;
+        colWarmFor = -1;
+      }
+    }
   }
 
   // THE HERO FOLLOWS THE FOCUS. The owner's request, and a DELIBERATE DIVERGENCE
@@ -1297,6 +1467,17 @@ void home_update(float dt, Uint32 now) {
       // keypress, not once per frame.
       warmHero(target, previous);
     }
+    // ARRIVING FROM ANOTHER KIND OF ROW, THE REST PERIOD DOES NOT APPLY.
+    //
+    // NV_HERO_IDLE_MS exists so that CROSSING a row does not change the hero at every
+    // step. Coming down onto a poster row is not that: it is one move, and the picture
+    // being replaced belongs to a different drawing altogether. Waiting it out would
+    // dissolve to whatever backdrop the poster hero happened to be left on and then,
+    // 220 ms later, dissolve AGAIN to the focused title — two fades where the viewer
+    // made one movement. Back-dating the clock lets the family's own fade carry the
+    // right art in, once. A vertical walk still cannot thrash: every step changes the
+    // row, so the candidate changes and this runs once per step, not once per frame.
+    if (famChanged && target >= 0) heroPendingIn = now - NV_HERO_IDLE_MS;
     if (target >= 0 && heroPending != heroCurrent &&
         now - heroPendingIn >= NV_HERO_IDLE_MS) {
       // It only ANNOUNCES the wish. What carries out the swap is the drawing, once
@@ -1343,6 +1524,15 @@ void home_update(float dt, Uint32 now) {
   if (colHeroFade > 0.0f) {
     colHeroFade -= dt * (1000.0f / NV_HERO_FADE_MS);
     if (colHeroFade < 0.0f) colHeroFade = 0.0f;
+  }
+  // The hold is released by the DRAWING, which is the only place that knows whether the
+  // arriving family has its art — and bounded here, because art that never lands must
+  // not leave the hero of a row the viewer has already walked away from standing for
+  // the rest of the session. See NV_HERO_FAMILY_WAIT_MS.
+  if (famHold && now - famHoldIn >= NV_HERO_FAMILY_WAIT_MS) famHold = 0;
+  if (famFade > 0.0f && !famHold) {
+    famFade -= dt * (1000.0f / NV_HERO_FADE_MS);
+    if (famFade < 0.0f) famFade = 0.0f;
   }
 
   // THE COPY'S FADE, on the art's clock and at the art's duration.
@@ -1839,6 +2029,34 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
   return missed;
 }
 
+// THE RECTANGLE THE HERO'S ART IS DRAWN IN, for the art the hero is showing.
+//
+// Three states, and the third is the only one that needs the art itself: a band
+// at the top-right holds the WHOLE image, so its width is the height times the
+// image's own aspect and not a constant. `art` may be NULL or still decoding —
+// tex_aspect answers 0 until it lands — and the fallback is 16:9, which every
+// backdrop the app receives already is; the clamp is for the odd file that is not.
+//
+// The height gives way if a wide image would run past the left of the screen, so
+// the band is never cropped by the viewport it exists to fit inside.
+static GfxRect heroRectFor(const char *art) {
+  if (!settings_hero_full())
+    return (GfxRect){ NV_HERO_ART_X, 0, NV_HERO_ART_W, NV_HERO_ART_H };
+  if (!settings_hero_top_band())
+    return (GfxRect){ 0, 0, NV_SCREEN_W, NV_HERO_FULL_H };
+  { float ap = art ? tex_aspect(art) : 0.0f;
+    float w = NV_SCREEN_W * settings_hero_band_scale(), h;
+    if (ap <= 0.0f) ap = NV_HERO_FIT_ASP;
+    if (ap < NV_HERO_FIT_ASP_MIN) ap = NV_HERO_FIT_ASP_MIN;
+    if (ap > NV_HERO_FIT_ASP_MAX) ap = NV_HERO_FIT_ASP_MAX;
+    h = w / ap;
+    // A tall aspect at a large size would run past the bottom of the screen. The
+    // WIDTH gives way there, not the height: a band that overflowed downward would
+    // put art under the rows again, which is the thing this mode exists to stop.
+    if (h > NV_SCREEN_H) { h = NV_SCREEN_H; w = h * ap; }
+    return (GfxRect){ NV_SCREEN_W - w, 0, w, h }; }
+}
+
 static void drawHero(Uint32 now, float output) {
   (void)now;
   const int motionReduced = settings_animations_reduced();
@@ -1849,27 +2067,55 @@ static void drawHero(Uint32 now, float output) {
   // A band or full screen, according to `modernHeroFullScreenBackdropEnabled`. They
   // are the two states of the SAME screen, not two layouts — and each has its own
   // gradient ramp, measured separately (see GFX_HERO and GFX_HERO_FULL in gfx.c).
+  //
+  // And the full-screen state has a SHAPE of its own (`heroBackdropArea`): the
+  // whole screen, or the whole image at its own aspect in a band at the top-right
+  // with the background showing below it. The copy does not move between the two —
+  // it is the same hero, laid out full-screen, with the art occupying less of it.
   int full = settings_hero_full();
   // Full screen, the block moves up 70px (see layout.h).
-  GfxMode modeHero = full ? GFX_HERO_FULL : GFX_HERO;
-  GfxRect r = full ? (GfxRect){ 0, 0, NV_SCREEN_W, NV_HERO_FULL_H }
-                    : (GfxRect){ NV_HERO_ART_X, 0, NV_HERO_ART_W, NV_HERO_ART_H };
+  GfxMode modeHero = settings_hero_top_band() ? GFX_HERO_FIT
+                    : full ? GFX_HERO_FULL : GFX_HERO;
+  // Rebuilt below for each branch once the art it will draw is known: only the
+  // band depends on it, but the rect has to be the one the art is drawn in.
+  GfxRect r = heroRectFor(NULL);
+
+  // THE FADE ACROSS THE THREE DRAWINGS. See the note at famFade.
+  //
+  // `famIn` multiplies EVERYTHING the arriving family draws — art and copy alike — so
+  // each branch below needs no knowledge of the handover: it draws what it always drew,
+  // and the whole of it comes up together. The picture being left goes out first, under
+  // all of it, so the two overlap the way two backdrops crossfading do.
+  float famIn = anim_smooth(1.0f - famFade);
+  aArt *= famIn;
+  drawHeroLeaving(anim_smooth(famFade));
+  // Cleared every frame and filled in by whichever branch draws: a family that puts no
+  // art on screen this frame leaves it empty, and the next handover then correctly has
+  // nothing to hold.
+  heroShot.valid = 0; heroShot.social = 0; heroShot.art[0] = '\0';
 
   if(focus.row>=0 && focus.row<nRows && rows[focus.row].kind==ROW_SOCIAL) {
-    float x=settings_content_x(),a=1-output;
-    gfx_rect((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,GFX_SOCIAL,0,0,0,0,1,1,1,1);
+    float x=settings_content_x(),a=(1-output)*famIn;
+    // The ambience is part of this hero, not a backdrop to all of them: it comes up
+    // with the rest of the family and the shot below carries it out again.
+    gfx_rect((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,GFX_SOCIAL,0,0,0,0,1,1,1,famIn);
     const Row *s=&rows[focus.row];
     const CatItem *p=(s->start>=0&&focus.column<s->n)
                     ?cat_item_exact(s->start+focus.column):NULL;
     if(p) {
       const char *art=art_by_format(p, 1);
       GLuint ta=art?tex_get_hero(art):0;
+      r=heroRectFor(art);
       // The activity carries on with a discreet ambience, but once Trakt has brought
       // real art it becomes the hero's subject. The person stays only on the social
       // card, where the avatar has context and does not compete with the title.
       if(ta){gfx_tex_aspect_current=tex_aspect(art);
-        gfx_rect(r,ta,modeHero,0,0,0,0,0,0,0,aArt);gfx_tex_aspect_current=0;}
-      else if (!art) drawArtMissing(r, 0.0f, p, aArt);
+        heroArtDraw(r,ta,modeHero,aArt);gfx_tex_aspect_current=0;
+        heroShotArt(art,r,modeHero,tex_aspect(art),1);famHold=0;}
+      else if (!art) { drawArtMissing(r, 0.0f, p, aArt);
+        // No art is an arrival too: the ambience and the attribution are the hero here,
+        // and there is nothing further to wait for.
+        heroShotArt(NULL,r,modeHero,0.0f,1);famHold=0; }
 
       const char *name=p->socialName[0]&&strcmp(p->socialName,"Friend")?p->socialName:NULL;
       char authorship[240];
@@ -1894,6 +2140,10 @@ static void drawHero(Uint32 now, float output) {
       if(p->synopsis[0])
         txt_block(TXT_HERO_SIN,p->synopsis,229,231,237,x,402,700,31,a,2);
     } else {
+      // The empty state is the ambience and the invitation, with no art behind it: it
+      // is ready the moment the focus lands, so the family's fade has nothing to wait
+      // for and the ambience is what the next family will carry out.
+      heroShotArt(NULL,r,modeHero,0.0f,1);famHold=0;
       const char *brand=extras_path_brand_name("trakt_wordmark");
       GLuint logo=tex_get(brand);
       float brandAspect=logo?tex_aspect(brand):2.66f;
@@ -1924,16 +2174,27 @@ static void drawHero(Uint32 now, float output) {
       const Row *s = &rows[focus.row];
       int k;
       colWarmFor = want;
+      // THE WANTED FOLDER'S LOGO, asked for HERE and not at the draw. The hero only
+      // adopts a folder once its art has decoded, and the drawing is what asks for the
+      // logo — so the logo's download did not even start until the art's had finished,
+      // and the title band stood empty for the length of it. Asked for at the moment
+      // the focus lands, the two run together and the logo is usually resident by the
+      // time the art gate opens. A wordmark is a few KB against a 1920 backdrop.
+      { const ColFolder *fw = col_folder(want);
+        if (fw && fw->logo[0]) tex_prefetch(fw->logo); }
       // Both sides, the right-hand one last so the lane serves it first. A
       // collection row is walked in one direction far more often than a poster
       // row is, but there is no cheap way to tell which — and a folder cover is
       // a fraction of a backdrop.
       for (k = 0; k < 2; k++) {
         int c = focus.column + (k ? 1 : -1);
+        const ColFolder *fn;
         const char *a;
         if (c < 0 || c >= s->n) continue;
-        a = colHeroArt(col_folder(s->folders[c]));
+        fn = col_folder(s->folders[c]);
+        a = colHeroArt(fn);
         if (a) tex_prefetch(a);
+        if (fn && fn->logo[0]) tex_prefetch(fn->logo);
       }
     }
     if (want >= 0 && want != colHeroCurrent) {
@@ -1957,7 +2218,7 @@ static void drawHero(Uint32 now, float output) {
       if(folder->editorial) {
         /* Art is authored for this rectangle, not cropped as a movie backdrop.
            The neutral canvas continues below it; no art behind the shelves. */
-        float x=settings_content_x(),a=1-output;
+        float x=settings_content_x(),a=(1-output)*famIn;
         GLuint art=tex_get_hero(folder->hero);
         GfxRect header={0,0,1920,500};
         if(leaving&&leaving->hero[0]) {
@@ -1965,14 +2226,20 @@ static void drawHero(Uint32 now, float output) {
           if(out)gfx_rect(header,out,GFX_TEXT,0,0,0,0,1,1,1,fadeOut*a);
         }
         if(art)gfx_rect(header,art,GFX_TEXT,0,0,0,0,1,1,1,fadeIn*a);
+        // The authored banner draws with no aspect override, so the shot carries none:
+        // whatever family inherits it puts it back in this same rectangle.
+        if(art){heroShotArt(folder->hero,header,GFX_TEXT,0.0f,0);famHold=0;}
+        else if(!folder->hero[0])famHold=0;
         heroArtRect=header;
         int director=!strcasecmp(folder->group,"Directors");
         txt_draw_alpha(txt_line(TXT_HERO_META,director?"DIRECTORS":"COLLECTIONS",190,193,200,255),x,122,a);
         txt_block(TXT_TITLE1,folder->title,244,243,247,x,183,860,72,a,2);
-        char caption[160];
-        snprintf(caption,sizeof caption,"%s  ·  %d %s",director?"Filmography":"A selection of film and series",folder->nSources,folder->nSources==1?"list":"lists");
-        txt_draw_alpha(txt_line_trim(TXT_HERO_META,caption,190,193,200,255,860),x,358,a);
-        txt_draw_alpha(txt_line(TXT_HERO_META,"OK to explore",224,225,230,255),x,406,a);
+        // NO LIST COUNT AND NO "OK to explore": how many lists the folder happens to
+        // hold is bookkeeping, and the hint states what the row already teaches on the
+        // first press. What is left is what the folder IS.
+        txt_draw_alpha(txt_line_trim(TXT_HERO_META,
+                                     director?"Filmography":"A selection of film and series",
+                                     190,193,200,255,860),x,358,a);
         return;
       }
       int isDirector=!strcasecmp(folder->group,"Directors");
@@ -1982,6 +2249,7 @@ static void drawHero(Uint32 now, float output) {
       // and never as a known film's backdrop.
       const char *art=folder->hero[0]?folder->hero:folder->cover;
       GLuint t=0;
+      r=heroRectFor(art);
       if (isDirector) director_request(folder->title);
       if (!t && art[0]) t=tex_get_hero(art);
       // The art being LEFT stays up underneath while it fades, so the swap never goes
@@ -1991,22 +2259,32 @@ static void drawHero(Uint32 now, float output) {
       { const char *outArt = colHeroArt(leaving);
         GLuint outT = outArt ? tex_get_hero(outArt) : 0;
         if(outT){gfx_tex_aspect_current=tex_aspect(outArt);
-          gfx_rect(r,outT,modeHero,0,0,0,0,0,0,0,fadeOut*aArt);
+          heroArtDraw(r,outT,modeHero,fadeOut*aArt);
           gfx_tex_aspect_current=0;} }
-      if(t){gfx_tex_aspect_current=tex_aspect(art);gfx_rect(r,t,modeHero,0,0,0,0,0,0,0,fadeIn*aArt);gfx_tex_aspect_current=0;}
+      if(t){gfx_tex_aspect_current=tex_aspect(art);heroArtDraw(r,t,modeHero,fadeIn*aArt);gfx_tex_aspect_current=0;}
+      // THE COVER IS WHAT THE FAMILY'S FADE WAITS FOR. These are CDN urls that land
+      // seconds after the focus arrives, and until one does the picture of the row just
+      // left is the only thing there is to show. A folder that names no art at all is
+      // ready by definition — the group, the title and the wordmark are its hero.
+      if(t){heroShotArt(art,r,modeHero,tex_aspect(art),0);famHold=0;}
+      else if(!art[0])famHold=0;
       heroArtRect=r;
-      float x=settings_content_x(),a=1-output;
+      float x=settings_content_x(),a=(1-output)*famIn;
       TxtLine group=txt_line(TXT_HERO_META,folder->group,201,206,218,255);
       txt_draw_alpha(group,x,NV_COLLECTION_HERO_GROUP_Y,a);
       if (isDirector) {
         const char *photo=director_photo(folder->title);
+        // THE PORTRAIT IS ART, so it follows the BACKDROP'S extent and not the copy's
+        // layout: with the band on, a portrait falling to 1120 would stand over the
+        // rows while the backdrop beside it stops at 615.
+        int tallArt=full&&!settings_hero_top_band();
         GLuint portrait=photo[0]
-          ?tex_get_width(photo,full?1280.0f:1100.0f):0;
+          ?tex_get_width(photo,tallArt?1280.0f:1100.0f):0;
         if (portrait) {
           // The shader preserves the vertical proportion and dissolves all four edges.
           // The width is deliberately generous so the head has the same visual
           // presence as the approved example, without looking like a squashed photo.
-          GfxRect pr=full ? (GfxRect){840.0f,-20.0f,1080.0f,1120.0f}
+          GfxRect pr=tallArt ? (GfxRect){840.0f,-20.0f,1080.0f,1120.0f}
                            : (GfxRect){980.0f,-15.0f,940.0f,700.0f};
           gfx_tex_aspect_current=tex_aspect(photo);
           gfx_rect(pr,portrait,GFX_PORTRAIT,0,0,0,0,0,0,0,aArt);
@@ -2025,35 +2303,63 @@ static void drawHero(Uint32 now, float output) {
           txt_draw_alpha(txt_line_trim(TXT_HERO_META,line,220,224,233,255,780),
                              x,NV_COLLECTION_HERO_LOGO_Y+136.0f,a);
         }
-        char caption[96];
-        snprintf(caption, sizeof caption, "%d %s · OK to explore",
-                 folder->nSources, folder->nSources == 1 ? "list" : "lists");
-        txt_draw_alpha(txt_line_trim(TXT_HERO_SIN, caption,
-                                           205, 210, 221, 255, 780),
-                           x, NV_COLLECTION_HERO_CAPTION_Y, a);
         return;
       }
-      // Collection logos are art, not rasterised text. The decode ceiling sits above
-      // the drawn size to preserve sharpness when the logo's aspect ratio calls for
-      // the maximum height.
-      GLuint logo=(!isDirector && folder->logo[0])
-        ?tex_get_width(folder->logo,NV_COLLECTION_HERO_LOGO_MAX_W+40.0f):0;
-      float ap=logo?tex_aspect(folder->logo):0;
-      float endTitle=NV_COLLECTION_HERO_LOGO_Y+NV_COLLECTION_HERO_LOGO_MAX_H;
-      if(logo&&ap>0){
-        float w=NV_COLLECTION_HERO_LOGO_MAX_W,h=w/ap;
+      // TEX_GET_EXACT, NOT TEX_GET_WIDTH — this is UI furniture at a size the layout
+      // already knows, which is the case that function exists for.
+      //
+      // tex_get_width asks for NV_TEX_SLACK (1.25) more than the drawing width and
+      // rounds up to a multiple of 32, so the texture always lands between 1.25x and
+      // 1.6x the size it is drawn at. GL_LINEAR_MIPMAP_NEAREST SNAPS at 1.414: just
+      // under it the GPU samples level 0 and undersamples (jagged), just over it takes
+      // level 1 — HALF the resolution — and magnifies it back (chunky). Both sides of
+      // that snap were on screen at once, which is why two services looked worse than
+      // the rest while HBO and Paramount looked fine:
+      //
+      //   Apple TV   797 wide, decoded 608, drawn 398  ->  1.528   level 1, magnified
+      //   Prime      880 wide, decoded 608, drawn 440  ->  1.382   level 0, aliased
+      //   HBO max    553 wide, decoded 553, drawn 276  ->  2.004   level 1, 1:1
+      //
+      // The web app has no such step: the browser reduces the source once, straight to
+      // the drawn size. tex_get_exact does the same thing here — the decode thread's
+      // box filter (premultiplied, tex_cache.c) reduces the source to the drawn width
+      // in one pass, the upload carries no mipmap chain, and what reaches the panel is
+      // a 1:1 blit with nothing left for a filter to get wrong.
+      //
+      // So the ASPECT comes first and the request second, which is the order
+      // tex_get_exact documents: before anything has decoded tex_aspect answers 0 and
+      // the box is asked for at its full width; the frame the aspect lands, the width
+      // becomes the real one and the entry re-decodes ONCE. tex_aspect is the source
+      // file's aspect, not the decoded texture's, so it does not move under us.
+      int hasLogo=!isDirector&&folder->logo[0];
+      float ap=hasLogo?tex_aspect(folder->logo):0.0f;
+      // CONTAIN, then hung from the baseline — the web's `object-fit: contain` with
+      // `object-position: bottom`.
+      float w=NV_COLLECTION_HERO_LOGO_MAX_W,h=0.0f;
+      if(ap>0){
+        h=w/ap;
         if(h>NV_COLLECTION_HERO_LOGO_MAX_H){h=NV_COLLECTION_HERO_LOGO_MAX_H;w=h*ap;}
-        gfx_rect((GfxRect){x,NV_COLLECTION_HERO_LOGO_Y,w,h},logo,
+      }
+      GLuint logo=hasLogo?tex_get_exact(folder->logo,w):0;
+      float endTitle=NV_COLLECTION_HERO_LOGO_BASE;
+      if(logo&&ap>0){
+        gfx_rect((GfxRect){x,NV_COLLECTION_HERO_LOGO_BASE-h,w,h},logo,
                  tex_brand_dark(folder->logo)?GFX_BRAND:GFX_TEXT,
                  0,0,0,0,.96f,.97f,.98f,a);
-        endTitle=NV_COLLECTION_HERO_LOGO_Y+h;
-      } else {
+      } else if(!hasLogo||tex_failed(folder->logo)){
+        // THE NAME ONLY WHEN THERE IS NO LOGO TO COME. A logo is a CDN download that
+        // lands a few frames after the folder is adopted, and drawing the name in the
+        // meantime meant every streaming service came up as type and then flicked over
+        // to its wordmark. The web has never done that: `.home-hero-title-text` carries
+        // `is-hidden` whenever there is a titleLogoUrl and is only unhidden by the
+        // img's own onerror (homeScreen.js's getLogoErrorHandler). tex_failed is that
+        // onerror — it answers 0 while a retry is still scheduled, so the name appears
+        // for a DEAD url and not for a slow one.
         TxtLine name=txt_line_trim(TXT_TITLE1,folder->title,241,243,247,255,700);
-        txt_draw_alpha(name,x,NV_COLLECTION_HERO_LOGO_Y,a);
-        endTitle=NV_COLLECTION_HERO_LOGO_Y+name.h;
+        txt_draw_alpha(name,x,NV_COLLECTION_HERO_LOGO_BASE-name.h,a);
       }
-      char caption[96];snprintf(caption,sizeof caption,"%d %s · OK to explore",folder->nSources,folder->nSources==1?"list":"lists");
-      float yCap=NV_COLLECTION_HERO_CAPTION_Y;
+      // Nothing is drawn while the logo is still on its way: the band keeps its height
+      // either way, so whatever sits below it does not move when the logo lands.
       if(isDirector) {
         // The TMDB record below the name: who they are, when and where they were born,
         // three lines of biography and the titles they are known for. It arrives in the
@@ -2065,16 +2371,16 @@ static void drawHero(Uint32 now, float output) {
           // Width 780: it stops short of the cover card (which starts at 1096).
           float yy=endTitle+30,cap=NV_SHELF_TOP-30,width=780;
           const char *meta=director_meta(folder->title),*bio=director_bio(folder->title),*con=director_known(folder->title);
-        float fixed=(meta[0]?38:0)+(con[0]?38:0)+34;   // meta + known for + caption
+        float fixed=(meta[0]?38:0)+(con[0]?38:0);   // meta + known for
           int lines=(int)((cap-yy-fixed-12)/31);if(lines>3)lines=3;
           if(meta[0]){txt_draw_alpha(txt_line_trim(TXT_HERO_META,meta,201,206,218,255,width),x,yy,a);yy+=38;}
           if(bio[0]&&lines>0){yy+=txt_block(TXT_HERO_SIN,bio,222,225,232,x,yy,width,31,a,lines)+12;}
           if(con[0]){char l[300];snprintf(l,sizeof l,"Known for  %s",con);
             txt_draw_alpha(txt_line_trim(TXT_HERO_META,l,236,232,244,255,width),x,yy,a);yy+=38;}
-          yCap=yy;
         }
       }
-      TxtLine sub=txt_line(TXT_HERO_SIN,caption,205,210,221,255);txt_draw_alpha(sub,x,yCap,a);
+      // The "N lists · OK to explore" caption that used to close this block is gone:
+      // the count is bookkeeping and the hint repeats what OK on the row already does.
       return;
     }
   }
@@ -2092,11 +2398,18 @@ static void drawHero(Uint32 now, float output) {
     // can come in without first erasing the previous hero.
     int artReady = !artD || tex_get_hero(artD);
     if (artReady) {
+      // ARRIVING FROM ANOTHER KIND OF ROW, THE CROSSFADE THAT MATTERS IS THE FAMILY'S.
+      // The picture being replaced is not the previous poster's — it is the collection's
+      // or the social row's, and it is already going out on famFade. Running heroExits
+      // as well would dissolve a backdrop nobody can see (it is behind the family's own
+      // fade, at alpha 0) against one that is itself still coming up, which reads as the
+      // new art arriving at half strength.
+      int cross = !famHold;
       heroPrevious = heroCurrent;
       heroCurrent = heroWanted;
       heroWanted = -1;
-      heroExits = (motionReduced || !artD) ? 0.0f : 1.0f;
-      heroEnters = (motionReduced || !artD) ? 1.0f : 0.0f;
+      heroExits = (motionReduced || !artD || !cross) ? 0.0f : 1.0f;
+      heroEnters = (motionReduced || !artD || !cross) ? 1.0f : 0.0f;
       heroSwapIn = SDL_GetTicks() + NV_HERO_INTERVAL_MS;
       // The copy changes HERE, with the art: the old one stops being drawn on this
       // very frame and the new one starts at zero and waits for its lines. It is
@@ -2116,6 +2429,12 @@ static void drawHero(Uint32 now, float output) {
   const char *artA = art_by_identity(heroCurrent, 1);
   const CatItem *cAnt = cat_item_exact(heroPrevious);
   const char *artB = art_by_identity(heroPrevious, 1);
+  // THE INCOMING ART DECIDES THE BAND, including for the one on its way out. The
+  // two are crossfading in the same rectangle — that is what makes them read as one
+  // image dissolving — and a band that changed shape halfway through the fade would
+  // turn the dissolve into a resize. The outgoing image is cover-cropped to the new
+  // shape for those frames, which is invisible between two 16:9 backdrops.
+  r = heroRectFor(artA);
 
   // A ceiling of 1920: the hero fills the screen and at 960 it came out stretched to
   // double.
@@ -2143,9 +2462,23 @@ static void drawHero(Uint32 now, float output) {
     drawPlaceholderHero(r, ci,
                            aArt * (heroEnters > 0.0f ? 1.0f : heroEnters));
   }
+  // THE FAMILY'S FADE WAITS FOR THE ART OF THE TITLE THAT IS ACTUALLY FOCUSED, not for
+  // whatever this hero happened to be showing when it was last on screen. heroPending is
+  // that title (home_update back-dates its clock on the change of row kind, so there is
+  // no rest period to sit through), and while it has not been adopted the swap above is
+  // still waiting on a decode. Releasing the hold here would cross to the old backdrop
+  // and then cross again to the right one.
+  //
+  // A dead url would hold for ever; NV_HERO_FAMILY_WAIT_MS in home_update is the bound.
+  if (famHold && heroWanted < 0 && heroPending == heroCurrent &&
+      (tCurrent || !artA || tex_failed(artA))) famHold = 0;
   gfx_tex_aspect_current = 0.0f;
   heroArtRect = r;
 
+  // NOT scaled by famIn here: the early return below would then skip drawHeroCopy for
+  // the whole of a hold, and that call is what ASKS text.c for the block's lines (see
+  // the note on it). The family's alpha goes on at the call instead, so the block still
+  // rasterises during the wait and is ready on the frame the fade starts.
   float aText = 1.0f - output;
   float slideDownCopy = output * NV_SCREEN_H * 0.06f;
   if (aText <= 0.004f) return;
@@ -2162,7 +2495,7 @@ static void drawHero(Uint32 now, float output) {
   //
   // Drawn even at alpha 0: this is the call that ASKS text.c for the lines, and
   // without it the block could never become ready.
-  (void)drawHeroCopy(ci, anim_smooth(heroCopy) * aText, slideDownCopy, full, 0);
+  (void)drawHeroCopy(ci, anim_smooth(heroCopy) * aText * famIn, slideDownCopy, full, 0);
 
   // THE NEXT TITLE'S COPY IS LAID OUT NOW, while this one is still up.
   //

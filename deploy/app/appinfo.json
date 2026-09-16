@@ -6,7 +6,7 @@
   "main": "nuvio-proto",
   "title": "Nuvio Legacy Native (BUILD)",
   "icon": "icon.png",
-  "largeIcon": "icon.png",
+  "largeIcon": "largeIcon.png",
   "resolution": "1920x1080",
   "bgColor": "#141416",
   "iconColor": "#141416",

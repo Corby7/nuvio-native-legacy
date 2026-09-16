@@ -253,19 +253,12 @@ void ctx_draw(Uint32 now) {
   float a = anim, height, x, y;
   int i, nStates = 1;
   (void)now;
-  if (!is_open && holdActive) {
-    float p = (float)(SDL_GetTicks() - holdSince) / (float)NV_HOLD_MS;
-    TxtLine t;
-    if (p > 1.0f) p = 1.0f;
-    t = txt_line(TXT_CAPTION2,
-                  p >= 1.0f ? "Release to open options" : "Hold OK for options",
-                  220, 224, 232, 255);
-    txt_draw_alpha(t, (NV_SCREEN_W - t.w) * 0.5f, NV_SCREEN_H - 124.0f, 0.94f);
-    gfx_color((GfxRect){ (NV_SCREEN_W - 420.0f) * 0.5f, NV_SCREEN_H - 82.0f,
-                       420.0f, 8.0f }, 4.0f, 0.18f, 0.2f, 0.23f, 0.96f);
-    gfx_color((GfxRect){ (NV_SCREEN_W - 420.0f) * 0.5f, NV_SCREEN_H - 82.0f,
-                       420.0f * p, 8.0f }, 4.0f, 0.78f, 0.84f, 0.96f, 0.98f);
-  }
+  // THE HINT USED TO BE DRAWN HERE TOO, centred at the bottom of the screen. ctx_draw
+  // runs on EVERY screen, and this observer sees OK on every screen, so "Hold OK for
+  // options" appeared over the detail and the episode list — where holding OK picks a
+  // source and marks an episode watched, not this modal — and, on the home, next to
+  // the card's own rail, the two bars filling at different rates. The home's rail is
+  // the one that names the thing it acts on, so it is the only one left.
   if (a < 0.01f) return;
   ci = indexCurrent() >= 0 ? cat_item(indexCurrent()) : NULL;
   if (!ci) return;

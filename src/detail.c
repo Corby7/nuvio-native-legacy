@@ -142,10 +142,6 @@ static int seasonMenuFocus = 0;
 // every section, because it hangs over the episode row below it — drawn in place it
 // would be painted over by the very cards it covers.
 static GfxRect seasonMenuAt;
-// The focus's rest period over the season row, so the season changes when it STOPS
-// on a pill rather than on every pill it passes through.
-static int    tempPending = 0;
-static Uint32 tempSince = 0;
 // Comments: 0 = the SERIES', 1 = the EPISODE's. It is the selector the reference
 // puts under "Trakt ratings". On a film it does not exist and it stays at 0.
 static int commentEp = 0;
@@ -487,7 +483,6 @@ void detail_open(const HomeItem *it) {
       for (k = 0; k < ci0->nSeasons; k++)
         if (ci0->seasons[k] == e0->season) { season = k; break; }
     } }
-  tempPending = season; tempSince = 0;
   int cols[N_SECTIONS]; for (int i = 0; i < N_SECTIONS; i++) cols[i] = sectionColumns(i);
   focus_start(&focus, N_SECTIONS, cols);
   memset(animFocus, 0, sizeof animFocus);
@@ -862,7 +857,6 @@ void detail_event(const SDL_Event *e) {
           seasonMenuOpen = 0;
           if (seasonMenuFocus != season) {
             season = seasonMenuFocus;
-            tempPending = season; tempSince = 0;
             goToSeason(season);
           }
           return;
@@ -1167,28 +1161,17 @@ void detail_update(float dt, Uint32 now) {
   // in flight.
   disc_episodes_pending();
 
-  // THE SEASON CHANGES ON THE FOCUS MOVING, not on OK.
+  // THE SEASON IS CHOSEN IN THE DROPDOWN, and nowhere else.
   //
-  // The season row is a SELECTOR in the reference: moving with the D-pad already swaps
-  // the episode list. Here the swap only happened inside OK, and the owner, passing
-  // through the pills, saw the list NOT change — which they described as "it takes ages
-  // to update when you change season". It was not taking ages: it was not happening.
+  // There used to be a rest period here: the season row was a PILL PER SEASON, the
+  // focus resting on a pill for NV_HERO_IDLE_MS committed that pill's column as the
+  // season, and that is how walking the row swapped the episode list.
   //
-  // With a REST PERIOD, for the same reason as the hero's (NV_HERO_IDLE_MS): sweeping
-  // four seasons end to end would fire four queries of which only the last matters. It
-  // waits for the focus to stop and only then swaps.
-  if (level >= 1 && focus.row == SEC_SEASONS) {
-    if (focus.column != tempPending) { tempPending = focus.column; tempSince = now; }
-    else if (tempPending != season && tempSince &&
-             now - tempSince >= NV_HERO_IDLE_MS) {
-      season = tempPending;
-      goToSeason(season);
-      tempSince = 0;
-    }
-  } else {
-    tempPending = season;
-    tempSince = 0;
-  }
+  // The row became a SINGLE DROPDOWN (sectionN returns 1 column for SEC_SEASONS), so
+  // `focus.column` there is ALWAYS 0 — and this block went on reading it as a season
+  // index. Choosing season 2 from the list set `season` to 1, the focus stayed on the
+  // dropdown where it had been, the rest period expired against column 0, and the
+  // screen dropped straight back to season 1. Committing on OK is the whole of it now.
 
   // THE COMMENTS SELECTOR, by the same rule: moving the focus already swaps the source.
   // With no rest period — there are two pills, and the series' one is already in
@@ -1643,7 +1626,28 @@ static void heroWeb(float a, float offset) {
     if (aspect <= 0.0f) aspect = 2.5f;
     float h = NV_DETW_LOGO_H, w = h * aspect;
     if (w > NV_DETW_LOGO_MAXW) { w = NV_DETW_LOGO_MAXW; h = w / aspect; }
-    { GLuint sharp = tex_get_width(fileLogo, w);
+    // TEX_GET_EXACT ONCE THE PAGE OWNS THE SCREEN, tex_get_width while it does not.
+    //
+    // Exact is what this wants: tex_get_width leaves the texture 1.25x-1.6x the drawn
+    // size and GL_LINEAR_MIPMAP_NEAREST snaps at 1.414, so the largest type on the
+    // screen lands either undersampled or halved-and-magnified depending on which side
+    // of that the title's aspect puts it. The collection hero had the same defect —
+    // see the note in home.c, which measures it.
+    //
+    // THE GATE IS NOT TIMIDITY. `ci->logo` is asked for by FOUR places (this, the home
+    // hero, the open card, the player) and an exact entry re-decodes when the width
+    // moves in EITHER direction, while every other caller promotes it back up. While
+    // the detail is opening, home_draw still runs underneath (app.c only skips it once
+    // detail_covers_screen) and the home hero is usually showing THIS title — so the
+    // two would take turns re-decoding the same PNG for the length of the animation,
+    // which is the per-frame decode tex_get_exact's header warns about. Once the page
+    // covers the screen it is the only caller left and the swap is safe; on the way out
+    // the gate opens again before home returns. Two decodes per visit, not dozens.
+    //
+    // A hero that never covers (a banded one, or the detail opened from search) keeps
+    // the tex_get_width path for its whole life, which is exactly what it draws today.
+    { GLuint sharp = detail_covers_screen() ? tex_get_exact(fileLogo, w)
+                                            : tex_get_width(fileLogo, w);
       if (sharp) texLogo = sharp; }
     // The logo settles above the actions row.
     float baseLogo = yActions - NV_DETW_LOGO_GAP;

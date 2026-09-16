@@ -212,7 +212,46 @@ typedef enum {
   // nothing to clip. Pass the thickness in `parx`, normalised to the height like
   // the radius.
   GFX_RING_INSET = 28,
-  GFX_NMODES = 29
+  // GFX_CORNER_SCRIM — a soft dark corner, clipped by the host's own rounded
+  // corner. It is the counterpart of GFX_CW_SCRIM: that one darkens the BASE of
+  // the Continue Watching card so the copy can be read, this one darkens the
+  // TOP-RIGHT so the time can be, and the two leave the middle of the frame alone.
+  //
+  // It exists to delete an object rather than add one. Every other treatment this
+  // badge has had — the flat chip, the web's glass pill, a frosted plate — puts a
+  // CONTAINER on the artwork, and a container reads as a control: something that
+  // could be pressed. The time left is a label. With the ground under it shaded
+  // instead, the type floats on the frame and the card carries one less shape.
+  //
+  // The falloff is RADIAL from the corner and scaled per axis, so it is a smooth
+  // dome rather than a band: a linear ramp on one axis leaves a visible line where
+  // it ends, which is exactly the defect the owner's reference render showed.
+  //
+  //   uPar.x = how far the scrim reaches along the width, in 0..1 of the host
+  //   uPar.y = the same along the height
+  //   uColor = the ink and, in its alpha, the depth at the corner itself
+  GFX_CORNER_SCRIM = 29,
+  // GFX_HERO_FIT — the hero when the backdrop is NOT stretched over the screen:
+  // the whole image, at its own aspect, hung from the TOP-RIGHT corner of a band
+  // that ends where the first row's cards begin (NV_HERO_FIT_H). Below and to the
+  // left of it the screen is the background colour, which is the point — the
+  // bottom of a full-screen backdrop is covered by the rows anyway, and trading
+  // it for a smaller picture that is entirely visible shows MORE of the art, not
+  // less.
+  //
+  // Its ramps dissolve only the two edges that do not land on a screen edge — the
+  // left and the base — which is what stops the band reading as a photograph
+  // pasted on a black wall. Both are PARAMETERS and not stops written into the
+  // shader, because the band's size is a preference and the ramps have to stay
+  // where the COPY is, not where a fraction of the band happens to fall:
+  //
+  //   parx  the x the horizontal ramp clears at, in 0..1 of the band
+  //   pary  the y the vertical ramp starts at, in 0..1 of the band
+  //
+  // home.c's heroFitPar works both out from where the band lands on the screen;
+  // nothing else should be calling this mode.
+  GFX_HERO_FIT = 30,
+  GFX_NMODES = 31
 } GfxMode;
 
 typedef struct {
@@ -390,6 +429,7 @@ void gfx_new_frame(void);
 void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
               float parx, float pary, float radius,
               float cr, float cg, float cb, float ca);
+
 
 // Atalhos legiveis para os casos comuns.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);

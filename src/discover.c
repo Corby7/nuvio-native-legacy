@@ -1059,9 +1059,27 @@ static int manifestsJoin(Decl *output, int max) {
 // the honest placement: unknown is not the same as old.
 #define CONT_MAX 8
 
-// The window the local path always had and the Trakt one never did. Below 1% it
-// was not started; from 90% on it is finished. "Continue" is neither.
+// The window for TRAKT's half. /sync/playback keeps every resume point any Trakt
+// client ever recorded, including entries sitting at 0% that something else
+// opened once, and it reports a percentage with no position behind it — so the
+// only floor available on that side is the percentage, and it stays.
+//
+// THE LOCAL HALF NO LONGER SHARES IT. A line in progress.txt exists because
+// playback happened on a Nuvio device; there is no junk there to filter, and the
+// 1% floor was making the local source pay for the Trakt source's dirt. Worse, a
+// percentage floor asks a different thing of every runtime: 1% of a 110-minute
+// film is 66 seconds and 1% of a 22-minute episode is 13, so a film someone sat
+// down to and left after a minute was dropped while a mis-tapped episode was
+// kept. The web app applies no such floor — shouldTreatAsInProgressForContinue-
+// Watching falls through to hasWatchProgressStarted, which is `positionMs > 0`
+// (js/domain/model/watchProgress.js) — so neither does this now. See
+// startedLocal below; the 90% ceiling is the only cut both halves still share.
 static int inProgress(int pct) { return pct >= 1 && pct < 90; }
+
+// The local half's rule: a position was recorded and the title is not finished.
+// cat_pct reports at least 1 for any position above zero, so this is the port of
+// the web app's fall-through, not a second threshold.
+static int startedLocal(int pct) { return pct >= 1 && pct < 90; }
 
 // 1 when the two items are the SAME WORK. Only the part before the ':' counts:
 // "tt123:4:9" and "tt123:1:2" are two episodes of one series, and the row shows
@@ -1089,8 +1107,8 @@ static int resumeLocal(CatItem *output, int max) {
     CatItem *d;
     int pct, j, repeated = 0;
     if (r->durationSeg < 60.0) continue;
-    pct = (int)(100.0 * r->posSeg / r->durationSeg);
-    if (!inProgress(pct)) continue;
+    pct = cat_pct(r->posSeg, r->durationSeg);
+    if (!startedLocal(pct)) continue;
     // A series with several episodes recorded enters ONCE, at the most recent —
     // and the list is already ordered, so the first one seen is that one.
     for (j = 0; j < n; j++)
@@ -1170,7 +1188,7 @@ static int buildResume(CatItem *output, int max) {
     output[n++] = *joined[i].item;
   }
   printf("[disc] continue watching: %d trakt + %d account -> %d shown"
-         " (%d outside 1-90%%)\n", nT, nL, n, dropped);
+         " (%d trakt outside 1-90%%)\n", nT, nL, n, dropped);
   return n;
 }
 

@@ -318,7 +318,7 @@ int cat_load(const char *dirArt) {
           // the title's prefix, which is what identifies the work.
           if (!strncmp(items[i].imdb, id, strlen(id)) &&
               (items[i].imdb[strlen(id)] == 0 || items[i].imdb[strlen(id)] == ':')) {
-            items[i].progress = (int)(100.0 * pos / duration);
+            items[i].progress = cat_pct(pos, duration);
             items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
             items[i].resumedMs = ms;
             if(season>0 && episode>0) {
@@ -511,6 +511,14 @@ void cat_dir_writing(const char *dir) {
   if (dir && *dir) snprintf(dirWriting, sizeof dirWriting, "%s", dir);
 }
 
+// See the note on the declaration in catalog.h.
+int cat_pct(double posSeg, double durationSeg) {
+  int pct;
+  if (durationSeg <= 1.0 || posSeg <= 0.0) return 0;
+  pct = (int)(100.0 * posSeg / durationSeg);
+  return pct < 1 ? 1 : pct;
+}
+
 int cat_index_by_imdb(const char *imdb) {
   int i;
   if (!imdb || !imdb[0]) return -1;
@@ -567,7 +575,7 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   // half-written and the app would come up with no progress at all.
   rename(tmp, path);
 
-  items[index_].progress = (int)(100.0 * posSeg / durationSeg);
+  items[index_].progress = cat_pct(posSeg, durationSeg);
   items[index_].remainingMin = (int)((durationSeg - posSeg) / 60.0 + 0.5);
   if(season>0 && episode>0) {
     if (items[index_].season != season || items[index_].episode != episode) {
@@ -776,7 +784,7 @@ void cat_set_all(const CatItem *list, int count,
           size_t L = strlen(id);
           if (!strncmp(items[i].imdb, id, L) &&
               (items[i].imdb[L] == 0 || items[i].imdb[L] == ':')) {
-            items[i].progress = (int)(100.0 * pos / duration);
+            items[i].progress = cat_pct(pos, duration);
             items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
             items[i].resumedMs = ms;
             if(season>0 && episode>0) {

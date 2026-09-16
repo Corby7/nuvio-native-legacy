@@ -44,13 +44,23 @@ void resume_draw(const CatItem *ci, GfxRect r) {
   // on GFX_CW_SCRIM in gfx.h for the stops.
   gfx_rect(r, 0, GFX_CW_SCRIM, 0, 0, 0, radius, 0, 0, 0, 1.0f);
 
-  // THE REMAINING-TIME PILL IS DELIBERATELY NOT THE WEB'S. The rest of this card
-  // was brought to `.home-continue-*`; this one badge stays as the port drew it —
-  // a compact dark rectangle at 18px in from the corner, not the web's glass pill
-  // with its clock icon — because that is what the owner asked to keep. Do not
-  // "finish the job" here without asking.
+  // THE REMAINING TIME: A SCRIM AND THE TYPE, WITH NOTHING AROUND IT.
   //
-  // Never invent a premiere status: with no time known, no badge.
+  // This corner has now been drawn four ways — the port's flat dark rectangle, the
+  // web's `.home-continue-badge` glass pill, a flat pill, and a frosted plate that
+  // blurred the artwork behind it — and the owner turned down all four. Reading
+  // the notes back, the objection was never the material: it was that ALL FOUR PUT
+  // A BOX THERE. A box on artwork reads as a control, something that could be
+  // pressed. What is being shown is a label.
+  //
+  // So the container is gone and the GROUND does its job: the top-right corner of
+  // the card is shaded by a dome (GFX_CORNER_SCRIM) and the type floats on it. The
+  // card is left with one shape fewer, and the two scrims — this one and the copy's
+  // at the base — darken opposite corners and leave the middle of the frame clear.
+  //
+  // Do not put a plate back here without asking. It has been asked four times.
+  //
+  // Never invent a premiere status: with no time known, no scrim and no label.
   if (ci->remainingMin > 0) {
     char badge[48];
     int h = ci->remainingMin / 60, m = ci->remainingMin % 60;
@@ -58,13 +68,19 @@ void resume_draw(const CatItem *ci, GfxRect r) {
     else if (h) snprintf(badge, sizeof badge, "%dh left", h);
     else snprintf(badge, sizeof badge, "%dm left", m);
     float pad = NV_CW_PAD * scale;
-    float px = NV_CW_BADGE_PAD_X * scale, py = NV_CW_BADGE_PAD_Y * scale;
-    TxtLine l = txt_line_trim(TXT_CW_BADGE, badge, 242, 243, 247, 255,
-                              r.w - pad * 2 - 2 * px);
+    TxtLine l = txt_line_trim(TXT_CW_BADGE, badge, 255, 255, 255, 255,
+                              r.w * NV_CW_TIME_W - pad);
     if (l.tex) {
-      GfxRect b = {r.x + r.w - pad - l.w - 2*px, r.y + pad, l.w + 2*px, l.h + 2*py};
-      gfx_color(b, NV_CW_BADGE_RADIUS * scale / b.h, .055f, .055f, .065f, .84f);
-      txt_draw_alpha(l, b.x + px, b.y + py, 1);
+      // The scrim takes the CARD's rect and the CARD's radius, for the reason
+      // GFX_CW_BAR does: the dome has to be cut by the same corner the artwork is,
+      // or it squares off the card's top-right.
+      gfx_rect(r, 0, GFX_CORNER_SCRIM, 0, NV_CW_TIME_W, NV_CW_TIME_H, radius,
+               0.0313f, 0.0313f, 0.0392f, NV_CW_TIME_INK);
+      // Full white and full strength. On a plate the label could be held back to
+      // 92% so it did not out-shout the title; floating on artwork there is nothing
+      // to spare — every point of contrast here is doing work.
+      txt_draw_alpha(l, r.x + r.w - pad - l.w,
+                        r.y + pad - NV_CW_TIME_RISE * scale, 1.0f);
     }
   }
 
@@ -133,9 +149,20 @@ void resume_draw(const CatItem *ci, GfxRect r) {
   // So there is no track-only state: no progress, no bar at all. Do not "restore
   // the web's behaviour" here without asking.
   //
+  // AND THE LINE IS 2%, NOT 1. It was `progress > 0`, and the sources round the
+  // wrong way for that: trakt.c TRUNCATES /sync/playback's float and discover.c's
+  // window opens at 1, so anything from 1.0% up arrived as a started title. A
+  // fifty-minute episode is 1% thirty seconds in — a play pressed and thought
+  // better of — and because the fill is floored at NV_CW_BAR_MINW it came up as a
+  // deliberate 12px stub, which is exactly the "you are a little way in" claim the
+  // note above refuses to make for 0%. The detail screen has drawn that line at 2
+  // since it was written ("under it the episode counts as not started", detail.c's
+  // episode card, which puts a dashed not-started ring there instead), so the two
+  // screens now agree about what STARTED means.
+  //
   // GFX_CW_BAR takes the CARD's rect so the ends round with the corner; see the
   // note in gfx.h for why a plain rectangle cannot.
-  if (ci->progress > 0) {
+  if (ci->progress > NV_CW_BAR_MIN_PCT) {
     float band = NV_CW_BAR_H * scale / r.h;
     float fill = anim_clamp(ci->progress / 100.f, 0, 1);
     float min  = NV_CW_BAR_MINW * scale / r.w;

@@ -196,7 +196,12 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 24, WEIGHT_BOLD },                // episode/source inside the list
   { 28, WEIGHT_MEDIUM },              // title on the Continue Watching card
   { 23, WEIGHT_REGULAR },             // season and episode name
-  { 20, WEIGHT_MEDIUM },              // time remaining in the card's badge
+  // The remaining time on the Continue Watching card. It goes BOLD now that it has
+  // no container under it (see resume.c): Medium was right on a plate, where the
+  // plate carried the contrast; floating on shaded artwork the same weight reads
+  // as thin, and thin white type on a frame is the first thing to disappear at the
+  // distance a TV is watched from.
+  { 20, WEIGHT_BOLD },                // time remaining on the card
   { 110, WEIGHT_BOLD },               // the real position in the ranking
   { 20, WEIGHT_REGULAR }, { 24, WEIGHT_REGULAR }, { 28, WEIGHT_REGULAR },
   { 32, WEIGHT_REGULAR }, { 36, WEIGHT_REGULAR }, { 40, WEIGHT_REGULAR },
