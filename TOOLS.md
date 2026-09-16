@@ -256,6 +256,29 @@ bash /tmp/shot.sh 6          # build + deploy + capture + download + convert
 > to exist — on the TV ssh cannot delete the app's own file out of a sticky
 > `/tmp`, so waiting for existence hands back the PREVIOUS capture.
 
+## 2a. tools/dev.sh — all of the below, in the repo
+
+```bash
+tools/dev.sh run                 # build, relaunch, WAIT for ready (~6s total)
+tools/dev.sh goto tt12637874     # open that title's detail
+tools/dev.sh where               # which screen, from the log — no capture
+tools/dev.sh rects               # the named regions of the current screen
+tools/dev.sh key down down ok    # inject keys
+tools/dev.sh shot name episodes  # capture, CROPPED to a named region
+```
+
+It is versioned deliberately. Its two predecessors lived in `/tmp`, went with a
+reboot, and left this file naming scripts that did not exist — which is how the
+protocol below came to be reconstructed from `main.c`.
+
+`run` waits for the first `[nav]` line instead of sleeping a guess. Measured: the
+app is ready about **1s** after launch and a full rebuild is **4s**, so the 12s
+sleep it replaces cost three times the build it followed.
+
+`shot <name> <region>` asks the app where that region IS this frame and crops to
+it. Cropping by guesswork costs twice — the crop misses, then the full frame gets
+read anyway to find out where the thing was.
+
 ## 2b. Goto and where — the two that pay for themselves
 
 Added 2026-09-15, after a session porting the detail screen in which MOST of the
@@ -278,7 +301,12 @@ grep '^\[nav\]' /tmp/nuvio.log | tail -1   # where the interface IS
   episode. A screenshot costs a megapixel to answer what one line of text
   answers.
 
-Both go through `app_goto_detail` / `app_where` in app.h.
+- **`regions`** written to `/tmp/nuvio-key` is not a key: it makes the screen
+  print the rect of each of its named parts, AS DRAWN this frame — after the
+  scroll, after the focus scale. It rides the key channel so the tools need no
+  fourth request file and the per-frame `stat()` probe stays at three.
+
+All three go through `app_goto_detail` / `app_where` / `app_regions` in app.h.
 
 ## 3. Key injection
 

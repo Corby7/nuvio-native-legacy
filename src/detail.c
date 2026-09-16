@@ -96,6 +96,24 @@ static int  ratTemp;
 #define PES_PER_LINE  6
 
 static int  button = 0;      // the focused button on the hero
+// --- the region recorder, see detail.h --------------------------------------
+#define NV_REG_MAX 10
+static struct { const char *name; GfxRect r; } regions[NV_REG_MAX];
+static int nRegions;
+static void regionReset(void) { nRegions = 0; }
+static void regionAdd(const char *name, GfxRect r) {
+  if (nRegions < NV_REG_MAX) { regions[nRegions].name = name;
+                               regions[nRegions].r = r; nRegions++; }
+}
+void detail_regions(void) {
+  if (!is_open) { printf("[rect] the detail screen is not open\n"); fflush(stdout); return; }
+  for (int i = 0; i < nRegions; i++) {
+    GfxRect r = regions[i].r;
+    printf("[rect] %-9s %d,%d %dx%d\n", regions[i].name,
+           (int)(r.x + 0.5f), (int)(r.y + 0.5f), (int)(r.w + 0.5f), (int)(r.h + 0.5f));
+  }
+  fflush(stdout);
+}
 // The most buttons the row ever has: the primary plus three circles, which is what a
 // FILM shows (see nButtons).
 #define N_BUTTONS 4
@@ -1588,7 +1606,6 @@ static void heroWeb(float a, float offset) {
   // lines — one with genres alone, another with the year and duration — and the IMDb
   // badge sat by itself against the screen's right edge, half a metre from the text
   // block it belongs to.
-  float hasResume = (ci && ci->progress > 0) ? 1.0f : 0.0f;
   float hSin = 0.0f;
   if (sin) hSin = txt_block(TXT_DET_SIN, sin, 255, 255, 255, -1.0f, 0.0f,
                             NV_DETW2_TEXT_W, NV_DETW2_LD_SIN, 0.0f,
@@ -1598,14 +1615,12 @@ static void heroWeb(float a, float offset) {
   float ySin   = yMeta1 - NV_DETW2_GAP_SIN - hSin;
   float ySup   = sup[0] ? ySin - NV_DETW2_GAP_SUP : ySin;
   float yActions = ySup - NV_DETW2_GAP_ACTIONS - NV_DETWEB_BTN_H;
-  // The resume line explains the BUTTON, so it sits right against it — just above.
-  float yResume = yActions - NV_DETW_GAP_RESUME - NV_DETW_RESUME_H;
 
   // It rises a few pixels as it comes in: it continues the art's movement instead of
   // appearing ready in place. `offset` is the document's scroll.
   float rises = (1.0f - a) * 26.0f + offset;
   yMeta2 += rises; yMeta1 += rises; ySin += rises; ySup += rises;
-  yResume += rises; yActions += rises;
+  yActions += rises;
 
   // --- logo -----------------------------------------------------------------
   const char *fileLogo = logoOf(idx);
@@ -1630,9 +1645,8 @@ static void heroWeb(float a, float offset) {
     if (w > NV_DETW_LOGO_MAXW) { w = NV_DETW_LOGO_MAXW; h = w / aspect; }
     { GLuint sharp = tex_get_width(fileLogo, w);
       if (sharp) texLogo = sharp; }
-      // The logo settles above whichever comes first: the resume line when there is
-    // progress, otherwise the actions row itself.
-    float baseLogo = (hasResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
+    // The logo settles above the actions row.
+    float baseLogo = yActions - NV_DETW_LOGO_GAP;
     GfxRect r = { NV_DETW2_X, baseLogo - h, w, h };
     gfx_tex_aspect_current = 0.0f;   // the logo already comes at the right aspect ratio
     // A BLACK LOGO BECOMES WHITE. TMDB serves the same mark in a light and a dark
@@ -1658,10 +1672,10 @@ static void heroWeb(float a, float offset) {
     if (name) {
       TxtLine t2 = txt_line_trim(TXT_TITLE1, name, 255, 255, 255, 255,
                                     NV_DETW_LOGO_MAXW);
-      // The same anchor as the logo: above the resume line when there is one, otherwise
-      // above the actions. The BOX's height is still the logo's, so the actions row
-      // does not jump between a title with a logo and one without.
-      float baseLogo = (hasResume ? yResume : yActions) - NV_DETW_LOGO_GAP;
+      // The same anchor as the logo: above the actions. The BOX's height is still
+      // the logo's, so the actions row does not jump between a title with a logo and
+      // one without.
+      float baseLogo = yActions - NV_DETW_LOGO_GAP;
       txt_draw_alpha(t2, NV_DETW2_X,
                          baseLogo - NV_DETW_LOGO_H
                                   + (NV_DETW_LOGO_H - t2.h) * 0.5f, a);
@@ -1716,20 +1730,18 @@ static void heroWeb(float a, float offset) {
     }
     for (int k = 0; k < nc; k++)
       drawTooltip(rc[k], tooltipOf(actionIn(k + 1)), tipA[k + 1], a);
+    regionAdd("actions", (GfxRect){ NV_DETW2_X, yActions,
+                                    bx - NV_DETWEB_BTN_GAP - NV_DETW2_X,
+                                    NV_DETWEB_BTN_H });
   }
 
-  // --- the resume line ------------------------------------------------------
-  if (ci && ci->progress > 0) {
-    char ln[160];
-    if (ci->season > 0)
-      snprintf(ln, sizeof ln, "Resume available   %d%%   Episode S%dE%d",
-               ci->progress, ci->season, ci->episode);
-    else
-      snprintf(ln, sizeof ln, "Resume available   %d%%", ci->progress);
-    TxtLine l = txt_line(TXT_CAPTION, ln, 255, 255, 255, 255);
-    txt_draw_alpha(l, NV_DETW2_X, yResume + (NV_DETW_RESUME_H - l.h) * 0.5f,
-                       a * 0.82f);
-  }
+  // --- the resume line: NOT DRAWN --------------------------------------------
+  // The web app writes "Resume available · 45% · Episode S2E3" in the band between the
+  // actions row and the support line. Here that band is where the circular buttons'
+  // TOOLTIPS come out — they sit 16px above the button's top edge — so the two pieces of
+  // ink landed on top of each other whenever a focused action had a tooltip. The line is
+  // dropped rather than moved: the primary button already reads "Resume S1E1", which is
+  // the same fact in the place the eye is already on.
 
   // --- "Writer: ..." / "Director: ..." ---------------------------------------
   // The same BODY SIZE as the synopsis, and not a smaller one: in the reference the "W"
@@ -3105,6 +3117,7 @@ static void drawSection(int r, float a, Uint32 now) {
     switch (r) {
       case SEC_SEASONS: {
         GfxRect b = { x, y, w, NV_DETWEB_SEA_H };
+        regionAdd("picker", b);
         drawSeason(b, c, f, a);
         // The expanded list is remembered, not drawn here: it hangs over the episode
         // row below and has to be painted after every section. See seasonMenuRect.
@@ -3113,10 +3126,14 @@ static void drawSection(int r, float a, Uint32 now) {
       }
       case SEC_EPISODES: {
         GfxRect b = { x, y, NV_DETWEB_EP_W, NV_DETWEB_EP_H };
+        // The ROW, not each card: one entry that spans what is visible of it.
+        if (c == 0) regionAdd("episodes",
+                              (GfxRect){ b.x, b.y, NV_SCREEN_W - b.x, b.h });
         drawEpisode(b, c, f, a, now);
         break;
       }
       case SEC_TABS_INFO: {
+        if (c == 0) regionAdd("tabs", (GfxRect){ x, y, NV_SCREEN_W - x, NV_DETP_TAB_H });
         drawTabInfo(x, y, c, f, a);
         if (c + 1 < n) {
           TxtLine d = txt_line(TXT_PLR_BODY, "|", 128, 128, 128, 255);
@@ -3138,8 +3155,12 @@ static void drawSection(int r, float a, Uint32 now) {
   // The synopsis under the episode row. OUTSIDE the column loop: it belongs to the row,
   // and inside the loop it would have ridden on card 0 and disappeared with it the
   // moment the row scrolled far enough right.
-  if (r == SEC_EPISODES)
-    drawEpisodeCopy(y + NV_DETWEB_EP_H + NV_DETWEB_EPD_Y, a);
+  if (r == SEC_EPISODES) {
+    float yc = y + NV_DETWEB_EP_H + NV_DETWEB_EPD_Y;
+    regionAdd("epcopy", (GfxRect){ NV_DETP_X, yc, NV_DETWEB_EPD_W,
+                                   NV_DETWEB_EPD_LINES * NV_DETWEB_EPD_LD });
+    drawEpisodeCopy(yc, a);
+  }
 }
 
 // The page's structure appears while Cinemeta answers. It does not go into sectionN():
@@ -3385,6 +3406,7 @@ void detail_draw(Uint32 now) {
     if (personIs_open) drawPerson(s);
     return;
   }
+  regionReset();
   drawSkeletonEpisodes(pg);
   drawSkeletonCast(pg);
   for (int r = 0; r < N_SECTIONS; r++) drawSection(r, pg, now);

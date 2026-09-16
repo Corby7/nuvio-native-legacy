@@ -143,6 +143,10 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
     char *dp = strchr(line, ':');
     if (dp && !strcmp(dp + 1, "hold")) { *dp = 0; hold = 1; }
 
+    // "regions" is not a key: it rides this channel so the dev tools need no
+    // fourth request file, and the per-frame stat() probe stays at three.
+    if (!strcmp(line, "regions")) { app_regions(); continue; }
+
     SDL_Keycode k = codeOfKey(line);
     if (!k) continue;
     SDL_Event e; SDL_zero(e);

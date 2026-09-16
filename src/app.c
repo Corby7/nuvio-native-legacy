@@ -811,6 +811,12 @@ void app_where(char *out, size_t n) {
   snprintf(out, n, "%s", base);
 }
 
+void app_regions(void) {
+  if (detail_is_open()) { detail_regions(); return; }
+  printf("[rect] no regions for this screen yet\n");
+  fflush(stdout);
+}
+
 int app_wants_exit(void) { return wantsExit; }
 
 void app_shutdown(void) {

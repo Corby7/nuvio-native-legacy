@@ -49,5 +49,8 @@ int  app_goto_detail(const char *imdb);
 // only when it differs from the last — which turns "where am I" from a screenshot
 // into a grep.
 void app_where(char *out, size_t n);
+// Prints the named regions of whatever is on screen, so a capture can be cropped
+// to one of them instead of by guesswork. See detail_regions in detail.h.
+void app_regions(void);
 
 #endif

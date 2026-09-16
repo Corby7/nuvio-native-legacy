@@ -515,6 +515,18 @@ int  detail_requested_do_start(void);
 #define NV_DETF_DET_KEY_W   254.0f   // 24.4% of NV_DETF_DET_W (the Mac's proportion)
 #define NV_DETF_DET_MAXL          6    // Status, Release, Duration, Rating, Country
 
+// --- THE REGION RECORDER, for the dev channel -------------------------------
+//
+// Prints the ON-SCREEN rect of each named part of this screen, as drawn THIS
+// frame — after the scroll, after the focus scale, after everything.
+//
+// It exists because cropping a capture by guesswork is expensive twice over: the
+// crop misses, and then the full frame gets read anyway to find out where the
+// thing actually was. Eight crops missed that way while porting this screen. The
+// numbers are recorded BY the drawing rather than recomputed beside it, so they
+// cannot drift from what is on the glass.
+void detail_regions(void);
+
 void detail_event(const SDL_Event *e);
 void detail_update(float dt, Uint32 now);
 void detail_draw(Uint32 now);   // desenhe DEPOIS da home: ele cobre
