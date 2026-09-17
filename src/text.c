@@ -188,10 +188,18 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_DETWEB_EPD, WEIGHT_REGULAR },
   { NV_FT_HERO_META, WEIGHT_MEDIUM  },   // .home-modern-hero-meta-line (21/500)
   { NV_FT_HERO_SIN,  WEIGHT_REGULAR },   // .home-hero-description (24/400)
-  { NV_FT_PG_CLOCK, WEIGHT_MEDIUM  },  // .player-clock (26/600)
+  // BOLD, not Medium. The sheet says 600, and the optical rule at the top of this
+  // table resolves a 600 on a DARK ground upwards: this is white type sitting on
+  // whatever frame the film happens to be showing. It was Medium at 26px, which is
+  // the one place in the table the rule was written and then not applied.
+  { NV_FT_PG_CLOCK, WEIGHT_BOLD    },  // .player-clock (36/600)
   { NV_FT_PG_END,     WEIGHT_REGULAR },  // .player-ends-at (20/400)
   { NV_FT_PG_LABEL,  WEIGHT_MEDIUM  },  // .player-parental-label (22/600)
-  { NV_FT_PG_SEV,    WEIGHT_REGULAR },  // .player-parental-severity (22/400)
+  // MEDIUM now, not Regular. It grew to 24 with the category beside it, and at
+  // that size Regular white-on-video is the weight that disappears first — the same
+  // optical rule the top of this table states, applied to the quieter half of the
+  // pair rather than the loud one.
+  { NV_FT_PG_SEV,    WEIGHT_MEDIUM  },  // .player-parental-severity / separator
   { 36, WEIGHT_REGULAR },             // headers of the official player's panels
   { 24, WEIGHT_BOLD },                // episode/source inside the list
   { 28, WEIGHT_MEDIUM },              // title on the Continue Watching card
@@ -239,6 +247,31 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 30, WEIGHT_BOLD    },   // TXT_CWC_TITLE  .home-continue-title    30 / 600
   { 17, WEIGHT_BOLD    },   // TXT_CWC_KICKER .home-continue-kicker   17 / 600
   { 21, WEIGHT_REGULAR },   // TXT_CWC_SUB    .home-continue-subtitle 21 / 400
+  // The transport row. The tooltip's sheet says `font-weight: bold` outright, so
+  // this 700 is not a 600 being resolved and goes straight to Bold - the same
+  // exception already recorded above for TXT_DETWEB_TIP, which is the same rule in
+  // the detail screen.
+  { 20, WEIGHT_BOLD    },   // TXT_PLR_TIP   .player-control-btn::after   20 / bold
+  // The time readout's 600 goes BOLD by the optical rule at the top of this table:
+  // it is light type floating on shaded video, where Medium reads a weight thin.
+  { NV_FT_PLR_TIME, WEIGHT_BOLD },  // TXT_PLR_TIME  .player-time-label, elapsed
+  // Both 500s are Medium outright — 500 IS Medium, there is nothing to resolve.
+  { NV_FT_PLR_ENDS,  WEIGHT_MEDIUM },  // TXT_PLR_ENDS   .player-ends-at
+  { NV_FT_PLR_META3, WEIGHT_MEDIUM },  // TXT_PLR_META3  .player-meta-tertiary
+  // The readout's tail. Medium against the elapsed time's Bold: one step of weight
+  // is the whole separation, so it has to be a real step and not 600 against 700.
+  { NV_FT_PLR_TIME,  WEIGHT_MEDIUM },  // TXT_PLR_TIME_T .player-time-label tail
+  // 700 outright, like the tooltip: the sheet says `font-weight: 700` for the pill,
+  // it is not a 600 being resolved by the optical rule.
+  { NV_FT_PLR_DELTA, WEIGHT_BOLD   },  // TXT_PLR_DELTA  .player-seek-delta
+  // The stats panel. The value is Medium and the label a size down from it — the
+  // sheet separates them by colour alone (60% against 92%), which on a plate over
+  // moving picture is not enough on its own to tell a heading from a reading.
+  { NV_FT_PLR_STAT,  WEIGHT_MEDIUM },  // TXT_PLR_STAT   .player-stats-value
+  { NV_FT_PLR_STATL, WEIGHT_MEDIUM },  // TXT_PLR_STATL  .player-stats-label
+  { NV_FT_PLR_BADGE, WEIGHT_BOLD   },  // TXT_PLR_BADGE  .player-stats-quality
+  // The guide's category. 600 on a dark ground goes BOLD by the optical rule.
+  { NV_FT_PLR_PG_CAT, WEIGHT_BOLD  },  // TXT_PLR_PG_CAT .player-parental-label
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
@@ -820,6 +853,32 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   cache[slot].frameUsage = frameTxt;
   SDL_FreeSurface(cv);
   return cache[slot].line;
+}
+
+// --- WHERE THE INK SITS INSIDE A LINE ----------------------------------------
+//
+// See the note in text.h. Both answers are pure face metrics, so they are asked
+// for once per style and kept: TTF_GlyphMetrics walks the outline.
+static float capInset[TXT_NFONTS], baseline[TXT_NFONTS];
+static char  inkKnown[TXT_NFONTS];
+static void inkOf(TxtStyle style) {
+  TTF_Font *f;
+  int minx, maxx, miny, maxy, adv;
+  if (style < 0 || style >= TXT_NFONTS || inkKnown[style]) return;
+  f = fontOf(style, "H");
+  if (!f) return;               // not open yet: ask again next frame
+  inkKnown[style] = 1;
+  baseline[style] = (float)TTF_FontAscent(f) / scaleTxt;
+  if (TTF_GlyphMetrics(f, 'H', &minx, &maxx, &miny, &maxy, &adv) == 0)
+    capInset[style] = (float)(TTF_FontAscent(f) - maxy) / scaleTxt;
+}
+float txt_cap_inset(TxtStyle style) {
+  if (style < 0 || style >= TXT_NFONTS) return 0.0f;
+  inkOf(style); return capInset[style];
+}
+float txt_baseline(TxtStyle style) {
+  if (style < 0 || style >= TXT_NFONTS) return 0.0f;
+  inkOf(style); return baseline[style];
 }
 
 // --- MEASURING WITHOUT RASTERISING -------------------------------------------

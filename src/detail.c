@@ -29,7 +29,6 @@
 #include "person.h"
 #include "streams.h"
 #include "discover.h"
-#include "director.h"
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
@@ -74,6 +73,22 @@ static float t = 0.0f;               // 0 = the card on the home, 1 = full scree
 // intermediate "the card becomes full screen" only made sense while there was a
 // card; in the web app the screen is born full.
 static int  level = 0;
+// THE THREE PLACEHOLDERS on the hero, one per field that arrives late and has
+// something to its right. 0 = the bar is showing, 1 = the real thing is. They
+// crossfade IN PLACE, because the slot was already the right size. See the
+// NV_DETW2_SKEL_* block in detail.h for why these three and not the others.
+static float skelProv, skelSup, skelStat;
+// When the current title's clock started, which NV_DETW2_SKEL_MS counts against.
+static Uint32 skelSince;
+// Declared here because detail_update drives the crossfades and sits above the
+// drawing that defines them. They are one question asked from two places — "will
+// there be something here, and is it worth holding the space" — and a second copy of
+// the answer in the update would be the kind that drifts from the one in the draw.
+static const char *statusWord(void);
+static int pendingMeta(void);
+static int pendingExtras(void);
+static int holdFor(int have, int pending);
+
 // A person's card over the title screen. It is not one more `level` because it is
 // not a state of the SAME page: it is another screen, which appears and leaves whole.
 static int  personIs_open;
@@ -132,6 +147,22 @@ static Focus focus;
 static float animFocus[N_SECTIONS][N_ITEMS];
 static float scrollSec[N_SECTIONS];    // each row's HORIZONTAL scroll
 static float scrollY = 0.0f;         // the document's VERTICAL scroll
+// THE VELOCITY OF BOTH SCROLLS, because anim_spring2 keeps position AND velocity.
+//
+// This page scrolled on the FIRST-ORDER spring while the home rows were moved to the
+// second-order one (home.c, scrollX/velX). anim.h spells out why that shape is wrong
+// for a track that slides: the first-order spring leaves at MAXIMUM speed and only
+// decelerates, so every press of RIGHT snapped the row to full speed from wherever it
+// had got to. Holding the key — which is how anyone walks an episode list — made that
+// a velocity discontinuity per repeat, and a row that lurches once per keypress is
+// exactly the "jittery" the owner saw. The frame was never the problem: measured on
+// the device mid-scroll, 60fps, janks=0, text=0.0ms/0.
+//
+// The second-order spring starts at zero velocity, accelerates, and decays with the
+// tail that was measured on the reference — and it retargets mid-flight without a
+// discontinuity, which is the whole point when the key is held down.
+static float velSec[N_SECTIONS];
+static float velY = 0.0f;
 static int season = 0;            // the CHOSEN season (not the focused one)
 // The season picker's dropdown. `seasonMenuOpen` is the listbox being expanded and
 // `seasonMenuFocus` the row inside it — which is NOT `season`: the list opens on the
@@ -195,7 +226,17 @@ static float heightSection(int r);
 // `contentSec`, and it is THAT which the scrolling targets — the web app aims at the
 // TRACK's top, not the group's (focusInList, metaDetailsScreen.js:7936).
 static float topSec[N_SECTIONS], contentSec[N_SECTIONS], targetSec[N_SECTIONS];
-static float docEnd = NV_DETP_END;
+// WHERE THE FOCUSED ROW PARKS THE DOCUMENT, absolute, or -1 to fall back on
+// targetSec's fraction.
+//
+// It is what makes the episode page a page, and it exists because the fraction cannot
+// express it: "put 1080 at the top of the screen" for a group whose top is 1320 is not
+// a percentage of anything. A series sets it on the four groups that live on pages 2
+// and 3 (see detail.h); a film leaves it at -1 throughout and keeps the 33% rule,
+// because a film's sections are a stack whose heights come from the content and there
+// are no pages to snap to.
+static float snapSec[N_SECTIONS];
+static float docEnd = NV_DETP_P3 + NV_SCREEN_H;
 
 // A section header: only a film has one. On a series the "Seasons" label is drawn by
 // the old path, and "Cast" would be repeating the "Creator and cast" tab just above
@@ -227,7 +268,7 @@ static void goToSeason(int c) {
   // used to walk every episode of every season looking for the first with a matching
   // number, which is what a single continuous track needs and this no longer is.
   (void)c;
-  scrollSec[SEC_EPISODES] = 0.0f;
+  scrollSec[SEC_EPISODES] = 0.0f; velSec[SEC_EPISODES] = 0.0f;
   if (focus.row == SEC_EPISODES) focus.column = 0;
 }
 
@@ -252,8 +293,25 @@ static void recomputeLayout(void) {
       topSec[r] = contentSec[r] = G[r];
       targetSec[r] = (r == SEC_TABS_INFO) ? NV_DETP_TARGET_TABS
                                         : NV_DETP_TARGET_ROW;
+      snapSec[r] = -1.0f;
     }
-    docEnd = NV_DETP_END;
+    // The two pages. Both groups on a page share its top, so moving the focus from the
+    // picker to a card, or from the tab strip to the cast, does not move the document
+    // at all — only the focus travels, which is what makes them read as one screen
+    // rather than as two rows that happen to be near each other.
+    snapSec[SEC_SEASONS]   = snapSec[SEC_EPISODES] = NV_DETP_P2;
+    snapSec[SEC_TABS_INFO] = snapSec[SEC_CAST]     = NV_DETP_P3;
+    // A page model needs a whole page to scroll INTO: the ceiling below is
+    // docEnd - NV_SCREEN_H, so a document that stopped at the cast would clamp the
+    // last snap short of its own page and the tab strip would never reach the top.
+    //
+    // A SERIES WITH NO EPISODES (the catalogue answered with nothing, and is not still
+    // loading) therefore has an empty page 2 and DOWN from Play travels 2160 to reach
+    // page 3. Collapsing the pages for that case would mean the tab and cast DRAWING
+    // coordinates stop being constants — NV_DETP_EL_Y feeds eight call sites through
+    // baseOfTabActive — and it is not worth that to tidy up a title that is already
+    // broken. While the episodes are in flight drawSkeletonEpisodes fills the page.
+    docEnd = NV_DETP_P3 + NV_SCREEN_H;
     // THE TRAKT SECTION ON A SERIES: stacked below the cast, as in the reference.
     // It was the "the trakt section is missing on series" — it existed only on films.
     //
@@ -278,6 +336,7 @@ static void recomputeLayout(void) {
       float h;
       topSec[r] = contentSec[r] = y;
       targetSec[r] = NV_DETP_TARGET_ROW;
+      snapSec[r] = -1.0f;
       // A missing section takes up no height — except the CAST while the film's meta
       // is loading: the row reserves its place and gets the skeleton, so the page does
       // not jump when the actors arrive.
@@ -464,8 +523,13 @@ void detail_open(const HomeItem *it) {
   mark("detail_open");
   item = *it;
   is_open = 1; exiting = 0; level = 0; button = 0;
-  t = 0.0f; pg = 0.0f; scrollY = 0.0f; tabInfo = 0; personIs_open = 0;
+  t = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; personIs_open = 0;
   relFocus = 0; reqOpen = -1; ratTemp = 0;
+  // Every held slot starts closed for the new title, and the clock on them starts
+  // HERE rather than at the first draw — a title opened from another title would
+  // otherwise inherit a wait the previous one had already served.
+  skelProv = skelSup = skelStat = 0.0f;
+  skelSince = SDL_GetTicks();
   idx = it->index_;
   // The Trakt score, comments and related titles. Requested on OPENING and not while
   // drawing: the tabs only appear once the data arrives, and requesting while drawing
@@ -488,6 +552,9 @@ void detail_open(const HomeItem *it) {
   memset(animFocus, 0, sizeof animFocus);
   memset(tipA, 0, sizeof tipA);
   memset(scrollSec, 0, sizeof scrollSec);
+  // The velocity goes with it: a position reset that leaves the spring still moving
+  // carries the old row's momentum into the new one.
+  memset(velSec, 0, sizeof velSec);
 }
 
 int detail_is_open(void) { return is_open; }
@@ -1214,6 +1281,28 @@ void detail_update(float dt, Uint32 now) {
       tipA[k] = anim_ramp(tipA[k], target, dt, NV_DETWEB_TIP_MS);
     } }
 
+  // The three placeholders' crossfades. Each is independent, because the two threads
+  // that fill them answer at different moments and there is no reason to make the
+  // provider wait on the status. They only ever run forward: once a field is in, an
+  // eviction or a reset elsewhere must not fade it back out under the viewer.
+  { const CatItem *ciS = cat_item(idx);
+    int haveProv = ciS && badges_provider(ciS->providerName) != 0;
+    int haveSup  = ciS && ciS->directing[0] != 0;
+    int haveStat = statusWord() != NULL;
+    // Reduced motion SNAPS: the crossfade is the only thing moving here, so honouring
+    // the setting means arriving rather than fading.
+    int reduced = settings_animations_reduced();
+    float ms = NV_DETW2_SKEL_FADE_MS;
+    if (haveProv) skelProv = reduced ? 1.0f : anim_ramp(skelProv, 1.0f, dt, ms);
+    if (haveSup)  skelSup  = reduced ? 1.0f : anim_ramp(skelSup,  1.0f, dt, ms);
+    if (haveStat) skelStat = reduced ? 1.0f : anim_ramp(skelStat, 1.0f, dt, ms);
+    // A slot whose source has FINISHED without producing anything closes too, or the
+    // bar would sit there for the rest of the visit on a title that simply is not on
+    // streaming here — which is an honest empty, not a slow one.
+    if (!haveProv && !holdFor(0, pendingMeta()))                  skelProv = 1.0f;
+    if (!haveSup  && !holdFor(0, pendingMeta()))                  skelSup  = 1.0f;
+    if (!haveStat && !holdFor(0, isSeries() && pendingExtras()))  skelStat = 1.0f; }
+
   // --- the focused row's HORIZONTAL scroll ---------------------------------
   // Two rules, both from the web app's source (`getHorizontalTrackScrollLeft`): the
   // episode row BRINGS the focused card up against the left margin; the others scroll
@@ -1236,23 +1325,38 @@ void detail_update(float dt, Uint32 now) {
         else if (x < target + 24.0f)             target = x - 24.0f;
       }
       if (target < 0.0f) target = 0.0f;
-      scrollSec[r] = anim_spring(scrollSec[r], target, dt, NV_SPRING_SCROLL);
+      scrollSec[r] = anim_spring2_reduced(&velSec[r], scrollSec[r], target, dt,
+                                          NV_SPRING2_SCROLL,
+                                          settings_animations_reduced());
     } }
 
   // --- VERTICAL scroll ------------------------------------------------------
-  // The focused group's top goes to 33% of the usable height (40% on the tabs). It is
-  // the web app's rule, and not a "scroll as much as needed": checked on all four groups.
+  // TWO RULES, and which one applies is the section's own business (snapSec).
+  //
+  // A SERIES SNAPS TO A PAGE: the focused group's page goes to the top of the screen,
+  // so the episode page shows the episode page and nothing else. That is the owner's
+  // rule for this screen and the reason the fraction below is no longer used there —
+  // 33% always keeps the end of the block above and the start of the one below in
+  // frame, which from Play meant the hero's synopsis and the insight tabs at once.
+  //
+  // A FILM KEEPS THE FRACTION: the focused group's top goes to 33% of the usable
+  // height (40% on the tabs), the web app's rule, checked on all four groups. A film's
+  // sections are stacked from their content's height and have no pages to snap to. So
+  // does a series' Trakt section, for the same reason.
   float targetY = 0.0f;
   if (level >= 1 && focus.row >= 0 && focus.row < N_SECTIONS) {
     // Aim at the top of the CONTENT (the track), not the group's: the section header
     // sits above and comes on screen with it, for free. It is what focusInList does in
     // the web app — `target.closest(".movie-cast-track, ...")`.
     float maxY = docEnd - NV_SCREEN_H;
-    targetY = contentSec[focus.row] - NV_SCREEN_H * targetSec[focus.row];
+    targetY = (snapSec[focus.row] >= 0.0f)
+            ? snapSec[focus.row]
+            : contentSec[focus.row] - NV_SCREEN_H * targetSec[focus.row];
     if (targetY > maxY) targetY = maxY;
     if (targetY < 0.0f) targetY = 0.0f;
   }
-  scrollY = anim_spring(scrollY, targetY, dt, NV_SPRING_SCROLL);
+  scrollY = anim_spring2_reduced(&velY, scrollY, targetY, dt, NV_SPRING2_SCROLL,
+                                settings_animations_reduced());
 }
 
 // ---------------------------------------------------------------------------
@@ -1322,19 +1426,67 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
     float g = r.w * NV_DETWEB_CIRC_GLYPH;
     GfxRect ig = { cx - g * 0.5f, cy - g * 0.5f, g, g };
     if (icon == 1) {
-      // The button SHOWS THE STATE: with the title already on the watchlist the "+"
-      // disappears and the open eye comes in — there is no point inviting you to add
-      // what is already there. The state comes from ci->inList, which discovery fills
-      // from Trakt's real list.
+      // THE LIST: NuvioWeb's pair, `renderLibraryGlyph`, from
+      // ic_detail_library_add.svg and ic_detail_library_saved{,_filled}.svg.
+      //
+      // An EYE used to stand for "already on the watchlist", which meant the two
+      // circles side by side were both eyes the moment a title was saved — the same
+      // glyph for "it is in your library" and for "you have watched it", on adjacent
+      // buttons. The web has no eye here at all: saved draws a FOLDER WITH A MINUS,
+      // which is the action `tooltipOf` already names ("Remove from Watchlist").
+      //
+      // The "+" moves to the web's file too. It is a heavier plus than more.png (a
+      // 12px stroke painted under the fill, so the strokes are thicker and the caps
+      // square), and at 44px on a 96 circle the thin one read as a different set
+      // from the folder next to it.
+      //
+      // Only the SAVED half has a focused twin, and that is the sheet's doing rather
+      // than an omission here: `--series-icon-focused` is set on saved and not on
+      // add, because a plus has no solid form to fill into.
       const CatItem *ci = cat_item(idx);
-      gfx_icon(ig, (ci && ci->inList) ? "watched" : "more", ink, ink, ink, a);
+      int saved = (ci && ci->inList);
+      gfx_icon(ig, saved ? (focused ? "detail_library_saved_filled"
+                                    : "detail_library_saved")
+                         : "detail_library_add",
+               ink, ink, ink, a);
     } else if (icon == 2) {
-      // WATCHED: an open eye once seen, a struck-through eye when not. The icon used to
-      // be always the same and said no state at all — it was just decoration the owner
-      // could not read ("tell me what's been watched").
-      gfx_icon(ig, progressOf(idx) >= 90 ? "watched" : "unwatched", ink, ink, ink, a);
+      // WATCHED: NuvioWeb's own pair of glyphs, `renderWatchedGlyph` in
+      // metaDetailsScreen.js, rasterised from ic_detail_watched{,_off}{,_filled}.svg.
+      //
+      // THE GLYPH IS THE ACTION, NOT THE STATE, and that is the part this port had
+      // backwards. Here the open eye meant "seen" — so on a title already watched the
+      // icon said EYE while the tooltip 16px above it said "Mark Unwatched", and the
+      // two halves of the same button disagreed. `tooltipOf` has always read the web's
+      // way; it is the icon that moves. Watched now offers the struck-through eye
+      // ("unwatch this"), unwatched the open one ("mark this watched").
+      //
+      // AND THE PAIR FILLS ON FOCUS — `--series-icon-focused` in the sheet. The
+      // outline is the resting glyph and the solid twin comes in with the focus, on
+      // top of the ink inversion the button already does.
+      //
+      // With the list button moved over too, nothing calls more.png, watched.png or
+      // unwatched.png any more — a different, thinner set that predates the web's.
+      // The files stay in art/icons; they are 3KB each and removing a shipped asset
+      // is not this change.
+      int seen = progressOf(idx) >= 90;
+      gfx_icon(ig, seen ? (focused ? "detail_watched_off_filled" : "detail_watched_off")
+                        : (focused ? "detail_watched_filled"     : "detail_watched"),
+               ink, ink, ink, a);
     } else {
-      gfx_icon(ig, "sources", ink, ink, ink, a);
+      // SOURCES: a CLOUD, which is the shape this button has always had here — what
+      // was wrong with the old one was the DRAWING, not the idea. sources.png comes
+      // from neither of the sets the rest of the row uses; put beside the eye its
+      // stroke is half again as heavy and the shape is a different cloud altogether.
+      //
+      // This is Phosphor's "cloud" and "cloud-fill", the same family as the eye and
+      // the folder (the web's ic_detail_* are all Phosphor, 256 viewBox and all), so
+      // the four circles finally read as one set. And the pack ships the filled twin,
+      // so it fills on focus with the others.
+      //
+      // sources.png stays where it is: the PLAYER's source button still draws it, at
+      // 44px over video, where it is not sitting next to these.
+      gfx_icon(ig, focused ? "detail_source_filled" : "detail_source",
+               ink, ink, ink, a);
     }
     return;
   }
@@ -1453,30 +1605,36 @@ static void fromMeta(const char *meta, char *year, size_t na, char *rest, size_t
   snprintf(rest, nr, "%s", r);
 }
 
-// The IMDb badge: 60x30, radius 4, yellow #f6c700 with a black "IMDb" inside; the score
-// comes 8px later, in rgb(179,179,179) — the SAME colour as the rest of the line, and
-// not white. Measured on the two captures from the device (the badge at x=628..687 on
-// the series and 714..773 on the film, always y=938..967).
+// The IMDb badge: the real mark 60 wide with its height following the file, the score
+// 8px later in rgb(179,179,179) — the SAME colour as the rest of the line, and not
+// white. Measured on the two captures from the device (the badge at x=628..687 on the
+// series and 714..773 on the film, always y=938..967).
 //
 // It is NOT the 109x60 this file carried over from the web app: there the logo is 60
 // TALL and here the whole badge is 30. With the web app's value the badge was twice the
 // height of the line it lives on.
 //
-// The mark is still DRAWN (a rectangle + text) and not rasterised from the SVG: the app
-// does not package SVG and the file cannot go in without reinstalling the ipk. It is
-// the only part of the badge that is not 1:1.
+// The mark used to be DRAWN here (a yellow rectangle with "IMDb" in it) because the app
+// packages no SVG. art/icons/imdb_logo.png is the same mark as a PNG, so every screen
+// that shows an IMDb score now rasterises it — this line, the episode cards below, and
+// the home hero. See NV_IMDB_MARK_TEX_W for why they all ask for one width.
 static float drawBadgeImdb(float x, float yCenter, int score, float a) {
   if (score <= 0) return 0.0f;
   char txt[8];
   snprintf(txt, sizeof txt, "%d.%d", score / 10, score % 10);
   TxtLine l = txt_line(TXT_DET_SIN, txt, 179, 179, 179, 255);
-  GfxRect brand = { x, yCenter - NV_DETW2_IMDB_H * 0.5f,
-                    NV_DETW2_IMDB_W, NV_DETW2_IMDB_H };
-  gfx_color(brand, NV_DETW2_IMDB_R / NV_DETW2_IMDB_H,
-          0.965f, 0.780f, 0.0f, a);                       // #f6c700
-  TxtLine lm = txt_line(TXT_MINI, "IMDb", 10, 10, 10, 255);
-  txt_weight(lm, brand.x + (brand.w - lm.w) * 0.5f,
-           brand.y + (brand.h - lm.h) * 0.5f, a, 0.8f);
+  // THE HEIGHT FOLLOWS THE FILE, not a constant: the mark is 575x289.83 and forcing
+  // it into a fixed 60x30 would stretch it by whatever the rounding left over. The
+  // aspect is 0 until the first decode lands, and NV_DETW2_IMDB_H stands in for that
+  // one frame — the same two-step the hero logo does, for the same reason.
+  const char *file = gfx_icon_path("imdb_logo");
+  float ar = tex_aspect(file);
+  float h = ar > 0 ? NV_DETW2_IMDB_W / ar : NV_DETW2_IMDB_H;
+  GLuint mark = tex_get_exact(file, NV_DETW2_IMDB_W);
+  GfxRect brand = { x, yCenter - h * 0.5f, NV_DETW2_IMDB_W, h };
+  // GFX_TEXT keeps the texture's RGB *and* its alpha, which is the only mode that
+  // can draw black letters on a yellow plate. gfx_icon would take the alpha alone.
+  if (mark) gfx_rect(brand, mark, GFX_TEXT, 0, 0, 0, 0.0f, 1, 1, 1, a);
   txt_draw_alpha(l, x + NV_DETW2_IMDB_W + NV_DETW2_IMDB_GAP,
                      yCenter - l.h * 0.5f, a);
   return NV_DETW2_IMDB_W + NV_DETW2_IMDB_GAP + l.w;
@@ -1522,14 +1680,81 @@ static float drawBadgeMeta(float x, float y, const char *left, const char *dir,
   return w;
 }
 
-// The separator dot: a 6 disc, and not the web app's 1x14 bar. There are two uses with
-// the SAME shape and different colours, and the difference in colour is what groups the
-// line: between genres it is rgb(179,179,179) (the text's own colour, because there it
-// is a "•" of the sentence) and between GROUPS it is rgb(128,128,128), more muted.
-static void drawDot(float x, float yCenter, float luma, float a) {
+// The separator: THE WEB APP'S BAR, `.detail-meta-dot`. It was a 6px disc here, and
+// the disc is what made this line read as a bulleted list rather than as one sentence
+// with its parts fenced off — three discs of the same weight as the type, at three
+// different spacings, with the IMDb plate and the tomato among them.
+//
+// A 2x18 rule has no weight of its own: it divides and disappears, which is the whole
+// job. There are two uses with the SAME shape and different colours, and the colour is
+// what groups the line: between genres rgb(179,179,179) (the text's own colour) and
+// between GROUPS rgb(128,128,128), more muted.
+//
+// Squared off, not rounded: `gfx_color`'s first argument is the corner radius and a
+// 2px bar with any radius at all turns back into a lozenge.
+static void drawSep(float x, float yCenter, float luma, float a) {
+  GfxRect bar = { x, yCenter - NV_DETW2_BAR_H * 0.5f,
+                  NV_DETW2_BAR_W, NV_DETW2_BAR_H };
+  gfx_color(bar, 0.0f, luma, luma, luma, a);
+}
+
+// BETWEEN GENRES, where the separator is punctuation and not a fence: a 6px disc in
+// the text's own rgb(179,179,179), which is the " • " the web joins that run with.
+//
+// The bar was tried here too and it was wrong: it gave "Drama / Fantasy" the same
+// weight of division as "genres / year", so a list of two genres read as two
+// unrelated fields. The line has one change of subject per bar and the dots sit
+// inside those groups.
+static void drawDot(float x, float yCenter, float a) {
   GfxRect pt = { x, yCenter - NV_DETW2_DOT_D * 0.5f,
                  NV_DETW2_DOT_D, NV_DETW2_DOT_D };
-  gfx_color(pt, 0.5f, luma, luma, luma, a);
+  gfx_color(pt, 0.5f, 0.702f, 0.702f, 0.702f, a);
+}
+
+// The production status as the meta line prints it, or NULL when there is none to
+// print. Factored out because the SKELETON has to ask the same question the drawing
+// does — "will there be a badge here?" — and two copies of this mapping would drift.
+static const char *statusWord(void) {
+  const char *raw = extras_profile_status();
+  if (!isSeries()) return NULL;          // a film never carries one
+  if (!strcmp(raw, "canceled") || !strcmp(raw, "Canceled")) return "CANCELLED";
+  if (!strcmp(raw, "ended")    || !strcmp(raw, "Ended"))    return "ENDED";
+  if (!strcmp(raw, "returning series"))                     return "NOW SHOWING";
+  if (!strcmp(raw, "renewed"))                              return "RENEWED";
+  return NULL;
+}
+
+// IS A LATE FIELD STILL COMING? Two threads fill this block and they are asked
+// separately: discover.c's /meta call carries the provider lockup, the "Director:"
+// credit and the country (photosOfCast, which fetches the watch providers, runs on
+// that same thread — see discover.c), and extras.c's TMDB sheet carries the status.
+static int pendingMeta(void)   { return disc_episodes_loading(idx); }
+static int pendingExtras(void) { return !extras_settled(); }
+
+// THE CEILING ON WAITING. Past it the held slots close and the line settles once.
+// Without it, a title that is simply not on streaming here — which is an honest
+// empty, not a slow one — would hold an empty box for the whole visit.
+static int skelDone(void) { return SDL_GetTicks() - skelSince > NV_DETW2_SKEL_MS; }
+
+// Hold a place when the field is absent, its source is still working, and the clock
+// has not run out. All three, or the slot closes.
+static int holdFor(int have, int pending) {
+  return !have && pending && !skelDone();
+}
+
+// THE PLACEHOLDER: a dim pill where the real thing will be, with the shine crossing
+// it — the same greys as the skeletons below the fold (drawSkeletonEpisodes,
+// drawSkeletonCast), luma around 0.2 at roughly 0.6 alpha.
+//
+// A PULSE was tried here before and dropped, and the reason it was dropped is the
+// reason the shine works: a pulse is per block, so two bars breathing on the hero
+// while the season picker below sat still read as two interfaces rather than one
+// screen filling in. GFX_SKELETON's band travels across the SCREEN, so these bars
+// and the blocks below the fold are lit by one light passing over the page — they
+// cannot fall out of step, because there is only one of it. See NV_SKEL_SHINE_W.
+static void drawSkel(float x, float yCenter, float w, float h, float a) {
+  gfx_skeleton((GfxRect){ x, yCenter - h * 0.5f, w, h },
+               NV_RADIUS_PILL, 0.20f, 0.21f, 0.23f, a * 0.60f);
 }
 
 static void heroWeb(float a, float offset) {
@@ -1538,6 +1763,37 @@ static void heroWeb(float a, float offset) {
 
   char year[32], duration[64];
   fromMeta(profileOf(idx), year, sizeof year, duration, sizeof duration);
+
+  // THE SECOND SOURCE FOR THE YEAR AND THE RUNTIME, and the reason the line used to
+  // show different amounts of information on different titles.
+  //
+  // `meta` is built in discover.c from the addon's `releaseInfo` and `runtime`
+  // fields, and NOT EVERY ADDON SENDS THEM — where Cinemeta answers "2015 · 2h 0min"
+  // the TMDB catalogue can answer nothing at all, and then both halves of the line
+  // vanish at once. Mad Max: Fury Road came out with no year and no runtime while
+  // Practical Magic, two rows away in the same catalogue, had both.
+  //
+  // TMDB's fact sheet has carried them the whole time: extras.c already parses
+  // release_date and runtime out of the /movie/<id> body it fetches for the
+  // collection, and this screen already made that request. Nothing new goes over the
+  // network — the values were being fetched and dropped.
+  //
+  // This is NOT the invented "14" age rating that discover.c warns about. A fallback
+  // VALUE would be a constant pretending to be data; this is the same fact from the
+  // other source that already has it, and when TMDB has not answered either the
+  // fields stay empty and the groups stay off the line.
+  if (!year[0]) {
+    const char *rel = extras_profile_release();       // "2015-05-13"
+    if (rel && strlen(rel) >= 4 && rel[0] >= '0' && rel[0] <= '9')
+      snprintf(year, sizeof year, "%.4s", rel);
+  }
+  if (!duration[0] && !isSeries()) {
+    int m = extras_profile_duration();
+    // The addons' own spelling, so the fallback is indistinguishable from the field
+    // it stands in for: "1h44min" over the hour, "44min" under it.
+    if (m >= 60)     snprintf(duration, sizeof duration, "%dh%02dmin", m / 60, m % 60);
+    else if (m > 0)  snprintf(duration, sizeof duration, "%dmin", m);
+  }
 
   // On a series the web app writes "Writer:"/"Creator:"; on a film, "Director:".
   char sup[192] = "";
@@ -1596,7 +1852,14 @@ static void heroWeb(float a, float offset) {
   float yMeta2 = NV_DETW2_BASE - NV_DETW2_BADGE_H;
   float yMeta1 = yMeta2 - NV_DETW2_META_GAP - NV_DETW2_M1_H;
   float ySin   = yMeta1 - NV_DETW2_GAP_SIN - hSin;
-  float ySup   = sup[0] ? ySin - NV_DETW2_GAP_SUP : ySin;
+  // THE CREDIT'S ROW IS RESERVED WHILE IT COULD STILL ARRIVE, and this one `if` is
+  // why: the stack is anchored at the base and grows upward, so it decides where the
+  // ACTION ROW lands. "Director:" coming in on discover.c's thread used to open its
+  // row underneath the buttons and shove the pill and the three circles 62px up, under
+  // a hand already reaching for them. Held open, the credit fades into a space that
+  // was always there and nothing moves.
+  int supSlot  = sup[0] || holdFor(0, pendingMeta());
+  float ySup   = supSlot ? ySin - NV_DETW2_GAP_SUP : ySin;
   float yActions = ySup - NV_DETW2_GAP_ACTIONS - NV_DETWEB_BTN_H;
 
   // It rises a few pixels as it comes in: it continues the art's movement instead of
@@ -1752,33 +2015,69 @@ static void heroWeb(float a, float offset) {
   // of "Writer" and the "C" of the synopsis measure the same 20 of cap height. It was
   // on TXT_DET_META (25) against TXT_DET_SIN (26) because of a web app measurement,
   // where the two lines really do differ.
-  if (sup[0]) {
-    TxtLine l = txt_line_trim(TXT_DET_SIN, sup, 179, 179, 179, 255,
-                                 NV_DETW2_TEXT_W);
-    txt_draw_alpha(l, NV_DETW2_X, ySup, a);
+  if (sup[0] || supSlot) {
+    // Both are drawn while the crossfade runs, at complementary alphas, in the same
+    // place — skelSup is 0 on the bar's side and 1 on the text's.
+    if (skelSup < 0.999f)
+      drawSkel(NV_DETW2_X, ySup + NV_DETW2_SKEL_H * 0.5f + 4.0f,
+               NV_DETW2_SKEL_SUP, NV_DETW2_SKEL_H, a * (1.0f - skelSup));
+    if (sup[0] && skelSup > 0.001f) {
+      TxtLine l = txt_line_trim(TXT_DET_SIN, sup, 179, 179, 179, 255,
+                                   NV_DETW2_TEXT_W);
+      txt_draw_alpha(l, NV_DETW2_X, ySup, a * skelSup);
+    }
   }
 
   // --- sinopse --------------------------------------------------------------
   if (sin) txt_block(TXT_DET_SIN, sin, 255, 255, 255, NV_DETW2_X, ySin,
                      NV_DETW2_TEXT_W, NV_DETW2_LD_SIN, a, NV_DETW2_SIN_LINES);
 
-  // --- meta line 1: genres • genres  ·  year  ·  [IMDb] score ---------------
+  // --- meta line 1: genres | genres  |  year  |  [IMDb] score ----------------
   //
   // A single line, in the device's order. The IMDb badge goes HERE, at the end of the
   // groups, and not up against the screen's right edge: it was orphaned, more than
   // 1000px from the text it belongs to, because the inherited value was NV_DETW_DIR.
   //
-  // Two different separator dots, and the difference in colour is what groups the line
-  // — see drawDot.
+  // Two shapes of separator: a BAR between groups, a DOT inside one — see drawSep
+  // and drawDot.
   {
     float x = NV_DETW2_X, yc = yMeta1 + NV_DETW2_M1_H * 0.5f;
     const CatItem *badgeItem=cat_item(idx);
-    if(badgeItem)x+=badges_draw(badges_provider(badgeItem->providerName),x,yc-14,150,28,a);
     int something = 0;
+    // THE PROVIDER IS A GROUP OF ITS OWN, so it gets the group bar like every other
+    // boundary on this line. It used to run straight into the genres on the row's own
+    // 14px of slack — which is the gap BETWEEN two marks, not between the lockup and
+    // the next subject, so "HBOmax" and "Drama" read as one run.
+    //
+    // `something` is what puts the bar there: setting it makes the first genre take
+    // the group separator instead of opening the line. NV_BADGE_GAP comes back off
+    // first — badges_draw's width ends one gap past the last mark, and leaving it in
+    // would centre the bar 14px to the right of where the other four sit.
+    // THE LOCKUP OPENS THE LINE, so it is the one whose lateness moves everything —
+    // genres, year, score and all. Its slot is held while discover's /meta call could
+    // still name a provider, and the mark fades into it when it does.
+    {
+      uint64_t provMask = badgeItem ? badges_provider(badgeItem->providerName) : 0;
+      int provHold = holdFor(provMask != 0, pendingMeta());
+      float wProv = 0.0f;
+      if (provMask && skelProv > 0.001f)
+        wProv = badges_draw_sharp(provMask, x, yc - NV_DETW2_PROV_H * 0.5f,
+                                  NV_DETW2_PROV_MAXW, NV_DETW2_PROV_H, a * skelProv);
+      if (provHold || (provMask && skelProv < 0.999f))
+        drawSkel(x, yc, NV_DETW2_SKEL_PROV, NV_DETW2_SKEL_H, a * (1.0f - skelProv));
+      // The slot keeps the RESERVED width until the mark is fully in: advancing by the
+      // real width halfway through the crossfade would step the line sideways, which is
+      // the one thing the reservation exists to stop.
+      if (wProv > 0.0f && skelProv >= 0.999f) { x += wProv - NV_BADGE_GAP; something = 1; }
+      else if (provHold || wProv > 0.0f)      { x += NV_DETW2_SKEL_PROV;   something = 1; }
+    }
     // GENRES without the first field. `genre` comes from the catalogue as
     // "TV Show · Action · Adventure" and the first piece is always the TYPE
     // (see catalog.c:539) — the reference does not show it on the meta line, only the
-    // genres. Each one becomes a piece of its own with a "•" between them.
+    // genres. They are one GROUP: a bar in front of the first, dots between the rest.
+    // `nGenre` is what tells those two cases apart — `something` cannot, because by
+    // the first genre it may already be set by the provider lockup.
+    int nGenre = 0;
     const char *g = genreOf(idx);
     if (g) {
       const char *p = strstr(g, "\xc2\xb7");
@@ -1790,13 +2089,16 @@ static void heroWeb(float a, float offset) {
         while (n && p[n-1] == ' ') n--;
         if (n && n < sizeof term) {
           memcpy(term, p, n); term[n] = 0;
-          if (something) {
-            drawDot(x + NV_DETW2_BULLET_SEP, yc, 0.702f, a);   // 179
+          if (nGenre) {                    // inside the group: punctuation
+            drawDot(x + NV_DETW2_BULLET_SEP, yc, a);
             x += NV_DETW2_BULLET_SEP * 2 + NV_DETW2_DOT_D;
+          } else if (something) {          // provider | genres: a change of subject
+            drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);
+            x += NV_DETW2_SEP * 2 + NV_DETW2_BAR_W;
           }
           TxtLine lt = txt_line(TXT_DET_SIN, term, 179, 179, 179, 255);
           txt_draw_alpha(lt, x, yc - lt.h * 0.5f, a);
-          x += lt.w; something = 1;
+          x += lt.w; something = 1; nGenre++;
         }
         p = end;
       }
@@ -1806,16 +2108,17 @@ static void heroWeb(float a, float offset) {
     // dash on purpose), so the year is what comes out. Empty when the metadata has not
     // arrived — and then the whole group disappears, with no fallback value.
     if (year[0]) {
-      if (something) { drawDot(x + NV_DETW2_SEP, yc, 0.502f, a);    // 128
-                  x += NV_DETW2_SEP * 2 + NV_DETW2_DOT_D; }
+      if (something) { drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);    // 128
+                  x += NV_DETW2_SEP * 2 + NV_DETW2_BAR_W; }
       TxtLine la = txt_line(TXT_DET_SIN, year, 179, 179, 179, 255);
       txt_draw_alpha(la, x, yc - la.h * 0.5f, a);
       x += la.w; something = 1;
     }
     if (ci && ci->score > 0) {
-      if (something) { drawDot(x + NV_DETW2_SEP, yc, 0.502f, a);
-                  x += NV_DETW2_SEP * 2 + NV_DETW2_DOT_D; }
+      if (something) { drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);
+                  x += NV_DETW2_SEP * 2 + NV_DETW2_BAR_W; }
       x += drawBadgeImdb(x, yc, ci->score, a);
+      something = 1;
     }
     const int sources[] = { EX_TOMATOES, EX_TRAKT };
     for(int i=0;i<2;i++) {
@@ -1832,8 +2135,15 @@ static void heroWeb(float a, float offset) {
       TxtLine lv=txt_line(TXT_DET_META2,value,220,220,225,255);
       float mh=sources[i]==EX_TRAKT?22.0f:32.0f,mw=mh;
       if(logo){float ap=tex_aspect(brand);if(ap>0)mw=mh*ap;if(mw>110)mw=110;}
-      if(x+24+mw+10+lv.w>NV_DETW2_X+NV_DETW2_RATE_W)break;
-      x+=24;
+      // FENCED LIKE EVERY OTHER GROUP ON THE LINE. These two used to join on a bare
+      // 24px gap, so the line ran "IMDb 4.3   trakt 46%" — the one join with nothing
+      // between it, and at 24 it read as a wide word space rather than as a new group.
+      // The budget is checked BEFORE the bar is drawn, or a rating that does not fit
+      // would leave its separator behind pointing at nothing.
+      float adv = something ? NV_DETW2_SEP * 2 + NV_DETW2_BAR_W : 0.0f;
+      if(x+adv+mw+10+lv.w>NV_DETW2_X+NV_DETW2_RATE_W)break;
+      if(something) drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);
+      x+=adv; something=1;
       // GFX_TEXT and not GFX_SNAP: SNAP ignores the texture's alpha and the tomato came
       // out with a dark square around it. TEXT preserves the RGB and uses the alpha.
       // The Trakt wordmark is dark: it goes through GFX_BRAND, which tints the alpha.
@@ -1845,7 +2155,7 @@ static void heroWeb(float a, float offset) {
     }
   }
 
-  // --- meta line 2: [status]  ·  duration  ·  country ---------------------
+  // --- meta line 2: [status]  |  duration  |  country ----------------------
   //
   // The outline badge used to carry the age rating, with the production's status beside
   // it behind a divider ("TV-MA | RENEWED"). The rating has gone from the app: a
@@ -1863,27 +2173,31 @@ static void heroWeb(float a, float offset) {
   {
     float x = NV_DETW2_X, yc = yMeta2 + NV_DETW2_BADGE_H * 0.5f;
     int something = 0;
-    const char *status=NULL,*raw=extras_profile_status();
-    if(isSeries()) {
-      if(!strcmp(raw,"canceled")||!strcmp(raw,"Canceled"))status="CANCELLED";
-      else if(!strcmp(raw,"ended")||!strcmp(raw,"Ended"))status="ENDED";
-      else if(!strcmp(raw,"returning series"))status="NOW SHOWING";
-      else if(!strcmp(raw,"renewed"))status="RENEWED";
+    // The status badge opens line 2 the way the lockup opens line 1 — the duration and
+    // the country sit to its right — so it gets a held slot on the same terms. On a
+    // FILM there is never a badge, and statusWord answers that without waiting.
+    const char *status = statusWord();
+    int statHold = holdFor(status != NULL, isSeries() && pendingExtras());
+    int statBusy = statHold || (status && skelStat < 0.999f);
+    if (status && skelStat > 0.001f) {
+      float wStat = drawBadgeMeta(x, yMeta2, status, NULL, a * skelStat);
+      if (skelStat >= 0.999f) { x += wStat; something = 1; }
     }
-    if (status) {
-      x += drawBadgeMeta(x, yMeta2, status, NULL, a);
-      something = 1;
+    if (statBusy) {
+      drawSkel(x, yc, NV_DETW2_SKEL_STAT, NV_DETW2_BADGE_H * 0.62f,
+               a * (1.0f - skelStat));
+      x += NV_DETW2_SKEL_STAT; something = 1;
     }
     if (!isSeries() && duration[0]) {
-      if (something) { drawDot(x + NV_DETW2_SEP, yc, 0.502f, a);
-                  x += NV_DETW2_SEP * 2 + NV_DETW2_DOT_D; }
+      if (something) { drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);
+                  x += NV_DETW2_SEP * 2 + NV_DETW2_BAR_W; }
       TxtLine ld = txt_line(TXT_DET_META2, duration, 255, 255, 255, 255);
       txt_draw_alpha(ld, x, yc - ld.h * 0.5f, a);
       x += ld.w; something = 1;
     }
     if (ci && ci->country[0]) {
-      if (something) { drawDot(x + NV_DETW2_SEP, yc, 0.502f, a);
-                  x += NV_DETW2_SEP * 2 + NV_DETW2_DOT_D; }
+      if (something) { drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);
+                  x += NV_DETW2_SEP * 2 + NV_DETW2_BAR_W; }
       TxtLine lp = txt_line(TXT_DET_META2, ci->country, 255, 255, 255, 255);
       txt_draw_alpha(lp, x, yc - lp.h * 0.5f, a);
     }
@@ -2169,7 +2483,19 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
   const CatItem *series = cat_item(idx);
   const char *art = (ep && ep->thumb[0]) ? ep->thumb
                      : (series && series->backdrop[0] ? series->backdrop : NULL);
-  GLuint t2 = art ? tex_get_width(art, th.w) : 0;
+  // NV_DETWEB_EP_W AND NOT th.w: the focus scale must not move the decode ceiling.
+  //
+  // th.w carries `k`, so landing on a card asked for 630 where it had been asking for
+  // 600. tex_get_width rounds the ceiling to a multiple of 32, 600 and 630 fall either
+  // side of one, and the bigger request PROMOTES the entry — which sends it back to
+  // PENDING, and a pending promotion answers 0 to everyone whose request the resident
+  // texture no longer covers. So the thumbnail blanked to the grey placeholder below
+  // for the length of the decode, on every card the focus landed on.
+  //
+  // home.c has the same line with the same comment (the `lw` in the collection rows);
+  // this row never got it. The 1.25 slack in tex_get_width exists precisely to absorb
+  // a focus scale — passing the scaled width is what defeats it.
+  GLuint t2 = art ? tex_get_width(art, NV_DETWEB_EP_W) : 0;
   if (t2) {
     gfx_tex_aspect_current = tex_aspect(art);
     gfx_rect(th, t2, GFX_CARD, 0, 0, 0, radiusTh, 0, 0, 0, a);
@@ -2230,9 +2556,15 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
       // circle. So: the light circle first, then the glyph over it in #111 at the same
       // 50px, and the check shows through in #f5f5f5. Two draws, and the curve of the
       // tick is the designer's.
+      //
+      // DECODED AT THE RESTING 50, not at `d`. `d` carries the card's focus scale, and
+      // an exact request that moves re-decodes and answers 0 while it does — so the
+      // tick disappeared for the length of the focus spring and left this bare white
+      // disc behind it. See gfx_icon_at.
       gfx_color(st, 0.5f, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, a);
-      gfx_icon(st, "ep_watched", NV_DETWEB_FOCUS_INK, NV_DETWEB_FOCUS_INK,
-               NV_DETWEB_FOCUS_INK, a);
+      gfx_icon_at(st, "ep_watched", NV_DETWEB_EP_STATUS,
+                  NV_DETWEB_FOCUS_INK, NV_DETWEB_FOCUS_INK,
+                  NV_DETWEB_FOCUS_INK, a);
     } else if (progress < 2) {
       // 12 dashes: GFX_RING's `pary` is the dash count, and 12 around a 50px circle
       // gives the same dash-to-gap the 2px CSS border does.
@@ -2287,17 +2619,35 @@ static void drawEpisode(GfxRect r, int c, float f, float a, Uint32 now) {
     if (score > 0) {
       char value[8];
       snprintf(value, sizeof value, "%d.%d", score / 10, score % 10);
-      // The mark is DRAWN (a yellow plate with black letters) and not rasterised: the
-      // same decision the hero's badge records — the IMDb SVG is not packaged, and at
-      // 20px the plate reads the same. Measured on `.series-imdb-badge img`: 20 tall,
-      // the width following the art, then 10 to the score.
+      // THE REAL MARK, art/icons/imdb_logo.png — the same file the meta line above
+      // draws and the one NuvioWeb serves. It used to be a hand-built plate here too (a
+      // yellow rectangle with "IMDb" in TXT_MINI), on the grounds that the SVG is not
+      // packaged; the PNG is. Measured on `.series-imdb-badge img`: 20 tall, the width
+      // FOLLOWING THE ART, then 10 to the score.
+      //
+      // It asks for NV_IMDB_MARK_TEX_W and not for its own width: the meta line is on
+      // screen at the same time as these cards, and two widths for one file is a decode
+      // on every frame — see the note on that constant.
+      //
+      // The TRAKT fallback keeps the plate. There is no Trakt mark at this size in
+      // art/, and the red plate is what tells the eye the number is not IMDb's.
       float mh = NV_DETWEB_EP_IMDB_H * k;
-      TxtLine lm = txt_line(TXT_MINI, fromImdb ? "IMDb" : "TRAKT", 10, 10, 10, 255);
-      GfxRect brand = { x, yc - mh * 0.5f, lm.w + 12.0f * k, mh };
-      if (fromImdb) gfx_color(brand, 4.0f / NV_DETWEB_EP_IMDB_H, 0.965f, 0.780f, 0.0f, a);
-      else          gfx_color(brand, 4.0f / NV_DETWEB_EP_IMDB_H, 0.929f, 0.239f, 0.239f, a);
-      txt_weight(lm, brand.x + (brand.w - lm.w) * 0.5f,
-                 brand.y + (brand.h - lm.h) * 0.5f, a, 1.0f);
+      GfxRect brand = { x, yc - mh * 0.5f, 0.0f, mh };
+      if (fromImdb) {
+        const char *fileMark = gfx_icon_path("imdb_logo");
+        float arMark = tex_aspect(fileMark);
+        GLuint markImdb = tex_get_exact(fileMark, NV_IMDB_MARK_TEX_W);
+        brand.w = mh * (arMark > 0.0f ? arMark : NV_IMDB_MARK_AR);
+        // GFX_TEXT and not gfx_icon: the mark is yellow with black letters, and
+        // GFX_BRAND takes only the alpha and would flatten both into one tint.
+        if (markImdb) gfx_rect(brand, markImdb, GFX_TEXT, 0, 0, 0, 0.0f, 1, 1, 1, a);
+      } else {
+        TxtLine lm = txt_line(TXT_MINI, "TRAKT", 10, 10, 10, 255);
+        brand.w = lm.w + 12.0f * k;
+        gfx_color(brand, 4.0f / NV_DETWEB_EP_IMDB_H, 0.929f, 0.239f, 0.239f, a);
+        txt_weight(lm, brand.x + (brand.w - lm.w) * 0.5f,
+                   brand.y + (brand.h - lm.h) * 0.5f, a, 1.0f);
+      }
       x += brand.w + NV_DETWEB_EP_IMDB_GAP * k;
       // THE SCORE IS YELLOW, the mark's own rgb(245,197,24), not the grey the rest of
       // the line uses. Measured on the span beside `.series-imdb-badge`; this drew it
@@ -3185,7 +3535,7 @@ static void drawSkeletonEpisodes(float a) {
   // not resize the block under the remote.
   if (yt < NV_SCREEN_H && yt + NV_DETWEB_SEA_H > 0) {
     GfxRect p = { NV_DETP_X, yt, 360.0f, NV_DETWEB_SEA_H };
-    gfx_color(p, NV_RADIUS_PILL, 0.17f, 0.18f, 0.20f, a * 0.62f);
+    gfx_skeleton(p, NV_RADIUS_PILL, 0.17f, 0.18f, 0.20f, a * 0.62f);
   }
   if (ye < NV_SCREEN_H && ye + NV_DETWEB_EP_H > 0) {
     for (c = 0; c < 3; c++) {
@@ -3199,11 +3549,14 @@ static void drawSkeletonEpisodes(float a) {
       GfxRect title = { x + NV_DETWEB_EP_PADX,
                         baseCopy - NV_DETWEB_EP_TITLE_H + 14.0f, 292.0f, 28.0f };
       GfxRect meta  = { title.x, title.y - NV_DETWEB_EP_META_H - 8.0f, 210.0f, 18.0f };
-      gfx_color(card, NV_DETWEB_EP_RADIUS / NV_DETWEB_EP_THUMB,
+      // All four through gfx_skeleton: the card and the three bars on it are lit
+      // by the one screen-space band, so the light crosses the whole card as a
+      // piece instead of each bar lighting on its own.
+      gfx_skeleton(card, NV_DETWEB_EP_RADIUS / NV_DETWEB_EP_THUMB,
               0.105f, 0.11f, 0.12f, a * 0.82f);
-      gfx_color(badge, NV_RADIUS_PILL, 0.19f, 0.20f, 0.22f, a * 0.70f);
-      gfx_color(meta,  0.5f, 0.20f, 0.21f, 0.23f, a * 0.52f);
-      gfx_color(title, 0.5f, 0.25f, 0.26f, 0.28f, a * 0.62f);
+      gfx_skeleton(badge, NV_RADIUS_PILL, 0.19f, 0.20f, 0.22f, a * 0.70f);
+      gfx_skeleton(meta,  0.5f, 0.20f, 0.21f, 0.23f, a * 0.52f);
+      gfx_skeleton(title, 0.5f, 0.25f, 0.26f, 0.28f, a * 0.62f);
     }
   }
 }
@@ -3222,9 +3575,9 @@ static void drawSkeletonCast(float a) {
     GfxRect name = { x, y + NV_DETP_EL_AVATAR + NV_DETP_EL_NAME_DY + 4.0f,
                      c % 2 ? 150.0f : 184.0f, 20.0f };
     GfxRect role = { x, name.y + NV_DETP_EL_ROLE_DY, 110.0f, 16.0f };
-    gfx_color(av, 0.5f, 0.17f, 0.18f, 0.20f, a * 0.62f);
-    gfx_color(name, 0.5f, 0.22f, 0.23f, 0.25f, a * 0.55f);
-    gfx_color(role, 0.5f, 0.20f, 0.21f, 0.23f, a * 0.45f);
+    gfx_skeleton(av, 0.5f, 0.17f, 0.18f, 0.20f, a * 0.62f);
+    gfx_skeleton(name, 0.5f, 0.22f, 0.23f, 0.25f, a * 0.55f);
+    gfx_skeleton(role, 0.5f, 0.20f, 0.21f, 0.23f, a * 0.45f);
   }
 }
 
@@ -3306,32 +3659,17 @@ static void drawPerson(float a) {
     } }
 }
 
-// The director's portrait belongs to the detail screen, not to the home's hero. The
-// TMDB photo comes in over the backdrop with the same editorial treatment as the
-// renderer and recedes when the document scrolls; the horizontal art is still the base.
-static void drawDirectorDetail(const CatItem *ci, float a, float pg) {
-  const char *photo;
-  GLuint tex;
-  GfxRect r;
-  if (!ci || isSeries() || !ci->directing[0] || a <= 0.005f) return;
-  director_request(ci->directing);
-  photo = director_photo(ci->directing);
-  if (!photo[0]) return;
-  // The portrait takes up less than a full-bleed hero, but it is shown large on the TV.
-  // Asking by the column's size avoids enlarging a blurred w500 without reserving the
-  // ~2K of a horizontal cover.
-  tex = tex_get_width(photo, 960.0f);
-  if (!tex) return;
-  // A real vertical box: the photo's aspect ratio is the GFX_PORTRAIT shader's
-  // responsibility, and it anchors the image to the right and dissolves the edges.
-  // The taller box lets the face breathe and avoids the look of a portrait squashed
-  // inside a wide banner.
-  r = (GfxRect){ 1080.0f, 0.0f, 840.0f, 930.0f };
-  gfx_tex_aspect_current = tex_aspect(photo);
-  gfx_rect(r, tex, GFX_PORTRAIT, 0, 0, 0, 0, 0, 0, 0,
-           a * (1.0f - 0.82f * pg));
-  gfx_tex_aspect_current = 0.0f;
-}
+// THE DIRECTOR'S PORTRAIT IS NOT DRAWN HERE, and that is deliberate.
+//
+// A TMDB headshot used to come in over the backdrop on every film, an 840x930 box
+// anchored to the right of the hero. The owner's call is that a person's face has no
+// business as an overlay on a title screen: the art is the film's, and a portrait
+// laid over it competes with the thing the screen is about. The credit is already in
+// words, on the support line — "Director: Griffin Dunne" — which is the same fact
+// without taking the picture away.
+//
+// director.c stays: the HOME still uses it for the director folders, where the
+// portrait IS the subject (home.c). What is gone is only this screen's overlay.
 
 void detail_draw(Uint32 now) {
   if (!is_open) return;
@@ -3395,7 +3733,6 @@ void detail_draw(Uint32 now) {
   drawArtDetail(target, tex, art, artPoster,
                      tex ? aEntry * (1.0f - 0.85f * pg) : 1.0f, pg);
 
-  drawDirectorDetail(cat_item(idx), aEntry, pg);
 
   // The hero SCROLLS with the document: it does not disappear and is not replaced by a
   // fixed header. That was what made the port's page look like another screen instead

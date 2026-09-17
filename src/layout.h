@@ -297,8 +297,37 @@
 // a second large cover on the right. The positions follow the Awards screen's
 // reference: the group at the top, the list's real logo centre-left and the action
 // coming to rest just before the row's header.
-#define NV_COLLECTION_HERO_GROUP_Y      182.0f
-#define NV_COLLECTION_HERO_LOGO_Y       258.0f
+// ONE LINE FOR EVERY COLLECTION HERO — the top of the title's INK, whether that ink
+// is a wordmark's art or the capital of a name. Streaming sat 100px above Discover
+// and Genres before it: a mark was hung from this line while a name still hung from
+// the baseline under it, so walking DOWN the home moved the whole block up and back
+// again. Now only the air UNDER the title changes.
+//
+// 326 is where the two ends meet, and it is pinned from BELOW: MAX_H is 172, so the
+// tallest mark reaches 498 and the rows' viewport opens at NV_SHELF_TOP (518). The
+// two numbers move together — every time the marks are asked to grow, this line comes
+// up by the same amount. It should not rise much further: a name pinned near the
+// box's original 282 left a quarter of the screen empty before the first row.
+#define NV_COLLECTION_HERO_LOGO_Y       326.0f
+// THE GROUP LABEL SITS A FIXED GAP ABOVE THE TOP OF THE LOGO BOX (LOGO_Y), so it is
+// on the same line for every folder in the row.
+//
+// It has been in all three places: at an absolute 182, where it came apart from a
+// short wordmark by up to 180px and stopped reading as one block; then measured from
+// the top of the MARK, which held the pair together but gave the label a different
+// height for every folder — a wide wordmark `contain`-ed to 119 tall against a mark
+// filling the box — so it jumped as the focus travelled the row, and again on the
+// frame each mark decoded. Anchoring it to the BOX keeps it still, and the mark is
+// now hung from that same top edge (see NV_COLLECTION_HERO_LOGO_BASE), so the gap
+// below it is the same on every card as well as on every frame.
+//
+// 16 is what the EYE gets: the label's BASELINE to the top of the title's ink — the
+// capital's own top, or the wordmark's. It is not a gap between line boxes. Measured
+// that way the first attempt at this came out at 38, because a TxtLine is the height
+// of the FACE and hides some 22px of air above a 76px capital plus 5 below a 21px
+// baseline (see txt_cap_inset in text.h) — which is why the pair still read as
+// detached after the boxes had been put 14 apart.
+#define NV_COLLECTION_HERO_GROUP_GAP     32.0f
 // THE BOX IS THE WEB APP'S: `.home-layout-modern .home-hero-logo` is 440x200 with
 // `object-fit: contain` and `object-position: bottom center` (components.css:7122, the
 // --modern-hero-logo-max-* pair). That base rule is the one THIS TV runs under. The two
@@ -307,19 +336,49 @@
 // webOS 8 — and the 440x200 at :19862 sits inside `@supports not (font-size: clamp())`,
 // a fallback for browsers this one is not.
 //
-// THE HEIGHT IS WHAT EVENS THEM OUT, and it is why 520x150 looked so uneven. Under
-// `contain` the binding dimension decides: in a box of aspect 2.2 the near-square marks
-// (HBO at 1.38, Disney at 1.83) are HEIGHT-bound and grow to fill it, while the wide
-// ones (Netflix at 3.71) are width-bound — so they land on a similar amount of ink.
-// 520x150 is aspect 3.47: it capped the square marks at 150 tall while letting Netflix
-// run to 520 wide, which is the spread that was complained about. Measured against
-// nuvio-assets/logos, 440x200 draws HBO at 276x200 and Netflix at 440x119 — 55k against
-// 52k of area. 520x150 drew 207x150 against 520x140 — 31k against 73k.
-#define NV_COLLECTION_HERO_LOGO_MAX_W   440.0f
-#define NV_COLLECTION_HERO_LOGO_MAX_H   200.0f
-// The shared BASELINE. The web bottom-aligns inside that box, so a short wordmark
-// hangs from the same line as a tall one instead of floating above it — and the line
-// does not move when a late logo replaces the name standing in for it.
+// THE HEIGHT IS NOT A FLAT CEILING, and that is the third try at this. Under a plain
+// `contain` the binding dimension decides, and the two obvious boxes are the two ends
+// of the same pendulum — measured on the nine services actually installed here:
+//
+//   440x200 (aspect 2.2)   HBO 276x200, Netflix 440x119 — equal INK (55k vs 52k), but
+//                          the drawn heights run 71..200, a 2.8x spread the eye reads
+//                          as "some logos are twice the size of others".
+//   520x150 (aspect 3.47)  equal HEIGHTS, but HBO falls to 207x150 against Netflix's
+//                          520x140 — 31k against 73k of ink, which is the version that
+//                          was complained about before.
+//
+// So neither dimension is held constant: the target height FALLS WITH THE ASPECT, but
+// only by its fourth root, which lands halfway between "equal height" (no fall) and
+// "equal area" (a square-root fall). H_REF is that curve's height at aspect 1 —
+// h = H_REF / aspect^0.25 — capped by MAX_H for a near-square mark and by MAX_W for a
+// long one. Measured over the nine installed here: 172, 165, 160, 157, 141, 139, 139,
+// 134 and (the one outlier, at aspect 6.2) 84. Heights within 1.3x where the flat box
+// put them within 2.8x.
+//
+// MAX_H is also what keeps the band clear of the rows: LOGO_Y + MAX_H is 498, and the
+// rows' viewport opens at 518. The two numbers move together.
+//
+// MAX_W is 520 and no longer the web's 440. The 440 was kept on the grounds that it
+// held the wordmark clear of the hero art, which starts at x=555 with the banded
+// backdrop — but the hero's own synopsis is NV_HERO_SIN_W (760) wide from the same
+// x=104 in that very mode, so it runs to 864 and crosses the art already. What 440
+// actually did was cap the five WIDEST marks below the curve's height while the
+// compact ones grew freely, which is the spread that kept coming back: Netflix was
+// held at 118 tall while HBO reached 157. At 520 only Crunchyroll (aspect 6.2) is
+// still bound by width.
+//
+#define NV_COLLECTION_HERO_LOGO_MAX_W   520.0f
+#define NV_COLLECTION_HERO_LOGO_H_REF   186.0f
+#define NV_COLLECTION_HERO_LOGO_MAX_H   172.0f
+// The band's BOTTOM — the floor the tallest mark reaches, and nothing is drawn from
+// it any more. It WAS the anchor: the web bottom-aligns inside the logo box, and the
+// name standing in for a missing wordmark hung from it too. The cost only became
+// visible once the group label was tightened onto the title. The label has to sit a
+// fixed distance above the title's ink; a mark's height varies with its aspect and a
+// name's with the face; so anchoring the bottom moved the label on every card of the
+// row AND put a name 80px below a wordmark. Anchoring the TOP (LOGO_Y) fixes every
+// line at once, and what varies instead is the air under the title — where there is
+// nothing but the rows.
 #define NV_COLLECTION_HERO_LOGO_BASE \
   (NV_COLLECTION_HERO_LOGO_Y + NV_COLLECTION_HERO_LOGO_MAX_H)
 // There is no caption token: the hero's "N lists · OK to explore" line was removed.
@@ -352,13 +411,29 @@
 #define NV_LD_HERO_SIN   35
 #define NV_LD_HERO_META  26
 #define NV_LD_HERO_SEC   24
-// The IMDb chip at the end of the hero's meta line. NV_HERO_IMDB_W is the plate the
-// "IMDb" letters sit in — the web app's 40px badge, kept because the SVG is not
-// packaged. NV_HERO_IMDB_GAP is the space between the "•" and that plate: the line's
+// The IMDb chip at the end of the hero's meta line. NV_HERO_IMDB_W is the width the
+// mark is DRAWN at — the web app's 40px badge — with its height following the file's
+// own aspect. NV_HERO_IMDB_GAP is the space between the "•" and that mark: the line's
 // own separator is three spaces of Inter (~16), which left a box-shaped token floating
 // away from the text, so it is tighter here on purpose.
 #define NV_HERO_IMDB_W   40.0f
 #define NV_HERO_IMDB_GAP 12.0f
+// THE ONE WIDTH THE IMDb MARK IS EVER DECODED AT, for every screen that draws it.
+//
+// tex_get_exact re-decodes whenever the requested width MOVES — in either direction,
+// unlike the promotion tex_get_width relies on — so two screens asking for the same
+// file at two sizes re-decode it on every frame they are both alive. That is the trap
+// detail.c's hero logo already documents, and it is a real one here: the home hero and
+// the title screen both draw for the length of a transition, and the title screen draws
+// the mark TWICE itself (the meta line and every episode card). So all three call sites
+// ask for this one width and scale the draw to their own box.
+//
+// 60 is the largest of the three (the title screen's meta badge), so no call site is
+// ever magnified past 1:1.
+#define NV_IMDB_MARK_TEX_W 60.0f
+// The file's own aspect (art/icons/imdb_logo.png, 256x130). tex_aspect answers 0 until
+// the decode lands, and this stands in for that one frame.
+#define NV_IMDB_MARK_AR    1.969f
 // --- THE HERO'S META LINE, RE-MEASURED 2026-09-15 in NuvioWeb -----------------
 //
 // The line read as clutter and the cause was not the number of words: it was that the
@@ -728,13 +803,47 @@
 #define NV_FT_DETWEB_EPD  32   // .series-episode-desc-row (400), leading 44
 #define NV_FT_PLR_TITLE 56   // .player-title
 #define NV_FT_PLR_BODY  32   // .player-subtitle and .player-time-label
-// The player's top corner. The clock and the "Ends at" come from the ATV block
-// (components.css:15282), already converted to the 1920 canvas; the parental guide
-// is not redone there and keeps the base rule's 22.
-#define NV_FT_PG_CLOCK 26   // .player-clock
-#define NV_FT_PG_END     20   // .player-ends-at
-#define NV_FT_PG_LABEL  22   // .player-parental-label
-#define NV_FT_PG_SEV    22   // .player-parental-severity
+// The player's top corner, RE-MEASURED 2026-09-17 against the transport block at
+// the end of components.css, which supersedes the ATV block these came from. The
+// corner was sized 26/20 there and is 36/24 now — the sheet's own note says the
+// clock "keeps the larger size it gained ... the size difference is what separates
+// the two lines now that the hairline divider is gone". At 26/20 the two lines were
+// close enough in weight to read as one smudge from the sofa.
+//
+// The parental guide is not redone in that block and keeps the base rule's 22.
+// 32, not the sheet's 36. The web app's value is sized for a browser window you
+// sit close to; on a 65" panel at sofa distance the owner read 36 as shouting
+// ("the clock font is a bit too big"). 32 keeps the size STEP over the 24 below it,
+// which is what the sheet says the pairing depends on now that the divider is gone,
+// without the corner competing with the title.
+#define NV_FT_PG_CLOCK 32   // .player-clock       36 / 600 in the sheet
+#define NV_FT_PLR_ENDS  24   // .player-ends-at     24 / 500, white 55%
+// .player-controls-overlay .player-meta-tertiary — the third line of the title
+// block, which is where the stream's own facts belong.
+#define NV_FT_PLR_META3 22
+// .player-controls-row .player-time-label — both halves are the same body; only
+// the weight separates them.
+#define NV_FT_PLR_TIME  30
+// .player-controls-row .player-seek-delta — the signed jump, in its own pill.
+#define NV_FT_PLR_DELTA 24
+// The stats panel. The label is the quieter half of the pair, and the quality
+// badge is 0.75em of the value in the sheet (.player-stats-quality).
+#define NV_FT_PLR_STAT   22
+#define NV_FT_PLR_STATL  20
+#define NV_FT_PLR_BADGE  16
+#define NV_FT_PG_END     20   // shared: episode lists, sources, tracks
+#define NV_FT_PG_LABEL  22   // shared: episode list, tracks panel
+// The parental guide, brought up onto the same scale as the rest of the transport.
+// The sheet puts all three of its parts at 22, and at 22 the guide was the smallest
+// type in a player whose every other line had grown — the clock to 32, "Ends at"
+// and the seek pill to 24, the stream facts to 22. It read as a leftover from
+// another screen rather than the opening warning it is.
+//
+// The CATEGORY cannot borrow NV_FT_PG_LABEL to get there: that one is shared with
+// the episode list and the tracks panel, and resizing it for this corner would
+// resize two other screens. Same trap as NV_FT_PG_END, one line up.
+#define NV_FT_PLR_PG_CAT 24  // .player-parental-label     24 / 600
+#define NV_FT_PG_SEV    24   // .player-parental-severity  24 / 400, player-only
 // The OFFICIAL leading of each style. Using the height SDL_ttf returns is not the
 // same thing: it varies with the line's accents, so a paragraph ends up with
 // irregular spacing line by line.
@@ -830,6 +939,39 @@
 #define NV_COLOR_SKELETON_R 0.173f
 #define NV_COLOR_SKELETON_G 0.173f
 #define NV_COLOR_SKELETON_B 0.173f
+
+// --- THE SKELETON'S SHINE ----------------------------------------------------
+//
+// The travelling highlight that says a still grey block is WAITING and not
+// broken. GFX_SKELETON draws it; these are its numbers.
+//
+// IT SWEEPS ACROSS THE SCREEN, NOT ACROSS EACH BLOCK, and that is the whole
+// design of it. Give every block its own 0..1 phase and a row of three episode
+// cards pulses in unison, three lights blinking together — which reads as three
+// separate controls, not as one page filling in. In screen space there is ONE
+// light passing over the page: the picker catches it, then the first card, then
+// the second. The caller converts the sweep's screen x into the block's own
+// coordinates (gfx_skeleton), so a block does not need to know where it is.
+//
+// The same reasoning is what killed the PULSE this replaces (see drawSkel in
+// detail.c): two bars breathing on the hero while the blocks below sat still read
+// as two interfaces. One sweep, one clock, every skeleton in the app on it.
+#define NV_SKEL_SHINE_W     440.0f   // the band's width on screen
+// HOW BRIGHT THE BAND IS AND HOW FAR IT LEANS are in the shader (GFX_SKELETON in
+// gfx.c) and deliberately not here: nothing in C computes with them, and a second
+// copy in this file could only ever drift from the one the GPU reads. What does
+// live here is what the CALLER needs — the band's width, to convert the sweep into
+// a block's own coordinates, and the clock.
+// ONE PASS EVERY 1800ms, of which the band is crossing for 1200 and parked off
+// the right-hand edge for the remaining 600.
+//
+// The dwell is not idle time to be tightened up. Without it the passes run
+// back-to-back and the page strobes: the eye reads a repeating light as a
+// progress indicator and starts timing it, and 1.5s of continuous sweeping on a
+// screen that is merely waiting for one HTTP answer is busier than the thing it
+// is standing in for. With the gap it is a slow glance across the page.
+#define NV_SKEL_SHINE_MS       1800
+#define NV_SKEL_SHINE_SWEEP_MS 1200
 
 // POSTER SURFACE WITH NO ART. On the home the web does not use the flat
 // #2C2C2C above: `.content-poster` — the element that IS the image, and the

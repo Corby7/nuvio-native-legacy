@@ -128,6 +128,7 @@ void video_window_source(int sx,int sy,int sw,int sh,int dx,int dy,int dw,int dh
   (void)sx;(void)sy;(void)sw;(void)sh;(void)dx;(void)dy;(void)dw;(void)dh;
 }
 double video_pos(void) { return 0; }
+const char *video_engine(void) { return "none (Mac preview)"; }
 double video_duration(void) { return 0; }
 double video_buffer_end(void) { return 0; }
 void video_set_dv(int dv) { (void)dv; }
@@ -783,13 +784,24 @@ static void *readMkv(void *arg) {
   // started at 42, 40, 41, 32...), and matching by position would swap the
   // languages around — worse than having no language at all.
   for (i = 0; i < nSub; i++) {
-    if (trackSub[i].language[0]) continue;
+    // NO `continue` on a track that already has a language. That guard was correct
+    // when the language was the only thing this loop harvested; the CodecID is
+    // wanted for EVERY subtitle, including the ones the pipeline had already
+    // labelled, so the skip now lives on the language write itself just below.
+    int haveLang = trackSub[i].language[0] != 0;
     for (j = 0; j < n; j++) {
       if (fx[j].number != trackSub[i].number) continue;
-      if (fx[j].language[0] && strcmp(fx[j].language, "und")) {
+      // The CodecID, carried over on the same pass and by the same trackNum match.
+      // It is free here — the header has already been downloaded and walked for the
+      // languages — and it is the only place it can come from, the pipeline having
+      // no field for it.
+      if (fx[j].codec[0])
+        snprintf(trackSub[i].codec, sizeof trackSub[i].codec, "%s", fx[j].codec);
+      if (!haveLang && fx[j].language[0] && strcmp(fx[j].language, "und")) {
         snprintf(trackSub[i].language, sizeof trackSub[i].language, "%s", fx[j].language);
         matched++;
       }
+      if (haveLang) break;   // the label below is already the pipeline's; leave it
       // The track's NAME ("Forced", "SDH", "Full") is what separates two subtitles
       // in the SAME language. Without it the owner sees "Portuguese" three times
       // and chooses in the dark — and that is precisely the list they complained about.
@@ -1158,6 +1170,7 @@ int  video_has_dolby_vision(void) {
 // The pipeline's raw hdrType, so the screen can say "HDR10" when it is HDR10
 // instead of staying quiet. "none" when the stream is SDR or it is not known yet.
 const char *video_hdr(void)       { return vidHdr; }
+const char *video_engine(void) { return video_active() ? "webOS uMS" : "--"; }
 int  video_width(void)          { return vidW; }
 int  video_height(void)           { return vidH; }
 

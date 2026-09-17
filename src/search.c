@@ -632,7 +632,7 @@ static void drawResults(Uint32 now) {
           // A VISIBLE skeleton, the same as the home's: #2C2C2C. See the note
             // there — a placeholder in the background's tone reads as a broken
             // card, not as loading.
-            gfx_color(poster, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
+            gfx_skeleton(poster, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
                   NV_COLOR_SKELETON_B, 1.0f);
         }
 

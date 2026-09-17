@@ -63,13 +63,46 @@ void badges_load(const char *dir) {
     for(size_t i=0;i<NB;i++)if(!strcmp(ids[i],id)){snprintf(art[i].image,sizeof art[i].image,"%s/badges/%s",dir,file);snprintf(art[i].name,sizeof art[i].name,"%s",name);}
   }
 }
-float badges_draw(uint64_t mask,float x,float y,float maxW,float h,float a) {
+// OPTICAL SIZE, per mark, and it is not a fudge — it is the one thing fitting
+// logos to a common box cannot do on its own.
+//
+// Every file here is the same shape: a lockup centred in a ~2:1 frame with a
+// uniform 14% margin. Fitting them all to one HEIGHT therefore gives them all the
+// same ink height, and for NETFLIX or HBOmax — one line of caps that fills its
+// frame — that is right. Apple TV+ and Prime Video are built differently: "tv+" is
+// lowercase beside a tall apple glyph, and "prime video" sits above a swoosh. In
+// both the frame is filled by something OTHER than the letters, so at a matched
+// box the words come out at roughly two thirds the size of NETFLIX's, which is the
+// "these two look small" the owner could see and the measurements could not.
+//
+// The numbers bring the LETTERS to a common size, which is what the eye compares.
+// Anything not named here is 1.0, and the marks that fill their own frame stay
+// exactly where they were.
+static float optical(size_t i) {
+  if (!strcmp(ids[i], "p-appletv")) return 1.28f;   // lowercase "tv+" beside the glyph
+  if (!strcmp(ids[i], "p-prime"))   return 1.34f;   // wordmark stacked over the swoosh
+  return 1.0f;
+}
+
+static float draw(uint64_t mask,float x,float y,float maxW,float h,float a,int sharp) {
   float start=x;
   for(size_t i=0;i<NB;i++)if((mask&(UINT64_C(1)<<i))&&art[i].image[0]) {
-    GLuint t=tex_get_width(art[i].image,128);float aspect=tex_aspect(art[i].image),w=aspect>0?h*aspect:80;
+    float hi=h*optical(i);
+    float aspect=tex_aspect(art[i].image),w=aspect>0?hi*aspect:80;
     if(w>144)w=144;if(x+w>start+maxW)break;
+    // The aspect is only known once SOMETHING has been decoded, so the first request
+    // goes out at the 80px fallback and the real width follows on the next frame.
+    // tex_get_exact re-decodes once when it moves and then settles; see tex_cache.h.
+    GLuint t=sharp?tex_get_exact(art[i].image,w):tex_get_width(art[i].image,128);
     if(t&&aspect>0){float height=w/aspect;gfx_rect((GfxRect){x,y+(h-height)*.5f,w,height},t,GFX_TEXT,0,0,0,0,1,1,1,a);}
     else {TxtLine l=txt_line_trim(TXT_MINI,art[i].name,225,228,235,255,w);txt_draw_alpha(l,x,y+(h-l.h)*.5f,a);}
-    x+=w+14;
+    x+=w+NV_BADGE_GAP;
   }return x-start;
+}
+
+float badges_draw(uint64_t mask,float x,float y,float maxW,float h,float a) {
+  return draw(mask,x,y,maxW,h,a,0);
+}
+float badges_draw_sharp(uint64_t mask,float x,float y,float maxW,float h,float a) {
+  return draw(mask,x,y,maxW,h,a,1);
 }

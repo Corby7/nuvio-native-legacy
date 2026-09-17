@@ -137,7 +137,26 @@ static const char *FS_BODY[GFX_NMODES] = {
   // past the edge, and mapping first would let a neighbouring cell of the sprite
   // sheet bleed in instead of the edge pixel repeating.
   "  uv = uCell.xy + uv * uCell.zw;\n"
-  "  gl_FragColor = vec4(texture2D(uTex, uv).rgb, m * uColor.a);\n"
+  // AND THE TEXTURE'S OWN ALPHA IS KEPT, which it was not.
+  //
+  // This read `vec4(texture2D(...).rgb, m * uColor.a)`: it threw t.a away and
+  // painted whatever RGB sat under a transparent pixel at FULL opacity. The decode
+  // writes ZERO there — tex_cache.c's box filter divides the colour back out by the
+  // alpha sum and deliberately "keeps the colour channels at zero" for a block that
+  // is entirely transparent — so every transparent region of a cover arrived on
+  // screen as OPAQUE BLACK, laid straight over the #1c1c1c->#111 surface that
+  // drawArtSkeleton had just drawn underneath it.
+  //
+  // That is the whole of "the collection card is black in legacy and charcoal in the
+  // web". Both draw the SAME coverImageUrl — the web's <img> simply composites it
+  // over .content-poster's identical gradient instead of flattening it onto black.
+  //
+  // STRAIGHT alpha, not premultiplied: the box filter un-premultiplies (q[0] = r/a),
+  // and the blend is GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA. For opaque art t.a is 1,
+  // so every poster, backdrop, still and logo in the app renders bit-identically to
+  // before — only art that actually carries transparency changes, which is the point.
+  "  vec4 t = texture2D(uTex, uv);\n"
+  "  gl_FragColor = vec4(t.rgb, t.a * m * uColor.a);\n"
   "}\n",
 
   // GFX_SHADOW — a soft blot behind the focused item
@@ -717,6 +736,70 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
   "  gl_FragColor = vec4(c, uColor.a);\n"
   "}\n",
+
+  // GFX_SKELETON — the loading block, with the light passing over it.
+  //
+  // THE NUMBERS LIVE HERE and not in layout.h, because nothing outside this
+  // shader uses them: 0.075 of added light and a tilt of 0.36 (tan 20 degrees).
+  // What layout.h keeps is the band's WIDTH and the clock, which the caller needs
+  // to place the band at all (NV_SKEL_SHINE_W).
+  //
+  // `u` is the fragment's position along the band's axis. The tilt term converts
+  // an offset in the quad's y into the quad's x AT A CONSTANT SCREEN ANGLE —
+  // dy_px = (vUv.y-0.5)*h, dx_px = dy_px*tan, and dx in the quad's own x is
+  // dx_px/w = (vUv.y-0.5)*tan/uAspect, since uAspect is w/h. Without that
+  // division the same tilt lies almost flat across a 420x22 bar and steeply
+  // across a 600x395 card.
+  //
+  // The falloff is a SQUARED smoothstep, for the reason GFX_VEIL_BOTTOM records:
+  // a plain smoothstep still leaves a perceptible line where the ramp begins,
+  // because the eye reads the second derivative. Squared, the band has no edge at
+  // all — it is a light, and a light with a rim is a shape.
+  //
+  // The shine is ADDED to uColor.rgb rather than mixed towards white: every
+  // skeleton in the app keeps its own grey and catches the same light. It is not
+  // clamped, because no caller passes a grey anywhere near 1 — these are all
+  // placeholders around a luma of 0.2.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  float u = vUv.x + (vUv.y - 0.5) * 0.36 / max(uAspect, 0.001);\n"
+  "  float t = abs(u - uPar.x) / max(uPar.y, 0.001);\n"
+  "  float s = 1.0 - smoothstep(0.0, 1.0, t);\n"
+  "  gl_FragColor = vec4(uColor.rgb + s * s * 0.075, uColor.a * m);\n"
+  "}\n",
+
+  // GFX_VEIL_PLAYER — the transport scrim, piecewise-linear through the web app's
+  // five stops. See the note in gfx.h for why GFX_VEIL_BOTTOM could not be reused.
+  //
+  // uColor.a scales the whole ramp, so the caller still fades it with the controls.
+  "void main(){\n"
+  "  float t = clamp(vUv.y, 0.0, 1.0);\n"
+  "  float g;\n"
+  "  if (t < 0.30)      g = mix(0.00, 0.18, t / 0.30);\n"
+  "  else if (t < 0.58) g = mix(0.18, 0.48, (t - 0.30) / 0.28);\n"
+  "  else if (t < 0.78) g = mix(0.48, 0.74, (t - 0.58) / 0.20);\n"
+  "  else               g = mix(0.74, 0.88, (t - 0.78) / 0.22);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a);\n"
+  "}\n",
+
+  // GFX_VEIL_POOL — an elliptical pool hung from the quad's TOP-RIGHT corner.
+  //
+  // The ellipse's radii ARE the quad's two sides, so `d` is already the normalised
+  // distance the CSS measures its stops along: 0 at the corner, 1 where the
+  // gradient reaches zero. Anything past 1 is outside the pool and discarded, which
+  // is what keeps the rest of the top of the frame completely untouched.
+  "void main(){\n"
+  "  vec2 p = vec2(1.0 - vUv.x, vUv.y);\n"
+  "  float d = length(p);\n"
+  "  if (d >= 1.0) discard;\n"
+  "  float g;\n"
+  "  if (d < 0.30)      g = mix(0.62, 0.50, d / 0.30);\n"
+  "  else if (d < 0.56) g = mix(0.50, 0.28, (d - 0.30) / 0.26);\n"
+  "  else if (d < 0.78) g = mix(0.28, 0.10, (d - 0.56) / 0.22);\n"
+  "  else               g = mix(0.10, 0.00, (d - 0.78) / 0.22);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -741,7 +824,10 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,0},   /* GFX_EP_SCRIM — a vertical ramp, clipped by the thumbnail's corner */
   {1,0},   /* GFX_RING_INSET — the rect's own SDF, offset inward */
   {1,0},   /* GFX_CORNER_SCRIM — a dome, clipped by the host's own corner */
-  {0,1}    /* GFX_HERO_FIT — the art in cover; the band is the quad, no SDF */
+  {0,1},   /* GFX_HERO_FIT — the art in cover; the band is the quad, no SDF */
+  {1,0},   /* GFX_SKELETON — the block's own SDF; the shine is untextured */
+  {0,0},   /* GFX_VEIL_PLAYER — a full-bleed vertical ramp: no SDF, no texture */
+  {0,0}    /* GFX_VEIL_POOL   — its own radial distance, not the rect SDF */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -840,7 +926,18 @@ double gfx_ms_rect = 0.0, gfx_ms_others = 0.0;
 double gfx_fill = 0.0;
 int    gfx_n_full = 0;   // draws covering >= 50% of the screen
 static double gfxFreqMs = 0.0;
-void gfx_new_frame(void) {
+// WHERE THE SKELETONS' LIGHT IS THIS FRAME, in screen pixels: the centre of the
+// band. Advanced once per frame by gfx_new_frame, read by every gfx_skeleton.
+static float skelSweep = 0.0f;
+
+void gfx_new_frame(unsigned now) {
+  // The band's centre crosses from just off the left edge to just off the right over
+  // NV_SKEL_SHINE_SWEEP_MS, then PARKS there for the rest of the period. The travel
+  // is exactly the screen plus one band, so the highlight is at precisely zero as it
+  // enters and as it leaves — no light appears or vanishes at a screen edge.
+  float p = (float)(now % NV_SKEL_SHINE_MS) / (float)NV_SKEL_SHINE_SWEEP_MS;
+  if (p > 1.0f) p = 1.0f;
+  skelSweep = -NV_SKEL_SHINE_W * 0.5f + p * (NV_SCREEN_W + NV_SKEL_SHINE_W);
   gfx_n_rect = gfx_n_progress = gfx_n_bind = gfx_n_others = 0;
   gfx_ms_rect = gfx_ms_others = 0.0;
   gfx_fill = 0.0; gfx_n_full = 0;
@@ -930,6 +1027,23 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
 #ifdef NV_PERF_FINE
   gfx_ms_rect += (double)(SDL_GetPerformanceCounter() - t0) * gfxFreqMs;
 #endif
+}
+
+// A LOADING PLACEHOLDER WITH THE SHINE. See gfx.h, and NV_SKEL_SHINE_W for why the
+// sweep is in screen space rather than per block.
+//
+// All this does is put the band — whose screen position gfx_new_frame already
+// worked out — into THIS quad's own coordinates. That conversion is the whole trick:
+// one light in screen space, expressed in the local x of every block it crosses, so
+// a 360px picker and a 600px card catch the same pass at the same moment.
+void gfx_skeleton(GfxRect r, float radius,
+                  float cr, float cg, float cb, float ca) {
+  float half = NV_SKEL_SHINE_W * 0.5f;
+  if (r.w <= 0.0f || r.h <= 0.0f) return;
+  gfx_rect(r, 0, GFX_SKELETON, 0.0f,
+           (skelSweep - r.x) / r.w,   /* the band's centre, in the quad's x */
+           half / r.w,                /* its half-width, likewise */
+           radius, cr, cg, cb, ca);
 }
 
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) {
@@ -1026,7 +1140,8 @@ const char *gfx_icon_path(const char *name) {
   return cam;
 }
 
-void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca) {
+void gfx_icon_at(GfxRect r, const char *name, float wRequest,
+                 float cr, float cg, float cb, float ca) {
   char cam[600];
   GLuint t;
   if (!name || !name[0] || !dirIcons[0]) return;
@@ -1036,10 +1151,17 @@ void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float c
   // GPU has to minify — and the mipmap filter snaps to the half-resolution level
   // once that minification passes 1.414x. The rail's wordmark sat at 1.4147 and was
   // being drawn from an 80px copy of a 221px file. See tex_get_exact.
-  t = tex_get_exact(cam, r.w);
+  //
+  // `wRequest` is the size to DECODE at, which is r.w for everything that does not
+  // move and the RESTING size for anything that does. See the header.
+  t = tex_get_exact(cam, wRequest > 0.0f ? wRequest : r.w);
   if (!t) return;
   gfx_tex_aspect_current = 0.0f;   // the file is already square
   gfx_rect(r, t, GFX_BRAND, 0, 0, 0, 0.0f, cr, cg, cb, ca);
+}
+
+void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca) {
+  gfx_icon_at(r, name, r.w, cr, cg, cb, ca);
 }
 
 void gfx_crop(float x, float y, float w, float h) {

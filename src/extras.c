@@ -48,6 +48,7 @@ int extras_source_percentual(int source) {
 void extras_set_key(const char *key) {
   if (!key || !*key) return;
   snprintf(mdbKey, sizeof mdbKey, "%s", key);
+  extras_keys_changed();
   printf("[extras] mdblist: key from the account\n");
   fflush(stdout);
 }
@@ -138,6 +139,10 @@ static long tmdbInProgress;
 
 static char idRequest[24], idInProgress[24];
 static int  seriesInProgress, seriesRequest, threadAlive;
+// Which generation of the ACCOUNT KEYS a fetch was made under. See extras_request:
+// the TMDB block of a fetch made before the key arrived comes back empty, and
+// without this the emptiness would last the whole session.
+static int  keyGen, fetchedGen = -1;
 static long tmdbRequest;
 static pthread_t thread;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -678,6 +683,23 @@ static void *fetch(void *arg) {
   return NULL;
 }
 
+// A key the fetch depends on has arrived. It does not refetch anything by itself —
+// it only stops extras_request turning away the next request for a title that was
+// already fetched WITHOUT that key. See the long note there.
+int extras_settled(void) {
+  int busy;
+  pthread_mutex_lock(&lock);
+  busy = threadAlive;
+  pthread_mutex_unlock(&lock);
+  return !busy;
+}
+
+void extras_keys_changed(void) {
+  pthread_mutex_lock(&lock);
+  keyGen++;
+  pthread_mutex_unlock(&lock);
+}
+
 void extras_request(const char *imdb, int series, long tmdbId) {
   char id[24];
   const char *dp;
@@ -692,7 +714,33 @@ void extras_request(const char *imdb, int series, long tmdbId) {
   else snprintf(id, sizeof id, "%s", imdb);
   imdb = id;
   pthread_mutex_lock(&lock);
-  if (!strcmp(idRequest, imdb)) { pthread_mutex_unlock(&lock); return; }
+  // THE SAME TITLE IS WORTH ASKING FOR TWICE WHEN THE KEYS HAVE CHANGED UNDER IT.
+  //
+  // Half of what this module returns is gated on disc_key_tmdb() being set at the
+  // MOMENT of the fetch: the collection, and with it the status, the runtime, the
+  // release date, the countries and the certification — the whole TMDB block is
+  // inside `if (key && key[0])`. That key does not exist at launch; it arrives from
+  // the account a second or two later (sync.c, "[disc] tmdb: key from the account").
+  //
+  // A title opened in that window got NOTHING from TMDB, and this guard then made it
+  // permanent: reopening the same title in the same session returned here and never
+  // refetched. That is what "sometimes it shows more information than other times"
+  // was — not a race that settles, but a race that STICKS, and whose outcome depends
+  // on whether the owner reached a title before the account answered.
+  //
+  // `keyGen` moves when a key lands; a title fetched under an older generation is
+  // allowed through once more.
+  if (!strcmp(idRequest, imdb) && fetchedGen == keyGen) {
+    pthread_mutex_unlock(&lock); return;
+  }
+  // A refetch of the title ALREADY IN FLIGHT cannot be started from here — the
+  // thread below would not be spawned and finishSearch has nothing to resume to,
+  // since idRequest would be unchanged. Leaving `fetchedGen` stale is what makes the
+  // next detail_open try again, which is the cheapest correct thing to do.
+  if (!strcmp(idRequest, imdb) && threadAlive) {
+    pthread_mutex_unlock(&lock); return;
+  }
+  fetchedGen = keyGen;
   snprintf(idRequest, sizeof idRequest, "%s", imdb);
   seriesRequest = series;
   tmdbRequest = tmdbId;

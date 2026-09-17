@@ -478,7 +478,7 @@ void library_draw(Uint32 now) {
           // A VISIBLE skeleton, the same as the home's: #2C2C2C. See the note
           // there — a placeholder in the background's tone reads as a broken
           // card, not as loading.
-            gfx_color(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
+            gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
                   NV_COLOR_SKELETON_B, a);
         }
         // The web app's focus border is 4px ON THE INSIDE of the poster (the card

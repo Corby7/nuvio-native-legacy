@@ -81,6 +81,29 @@ typedef enum {
   TXT_CWC_TITLE,     // .home-continue-title    30 / 600
   TXT_CWC_KICKER,    // .home-continue-kicker   17 / 600, uppercase, ls 0.14em
   TXT_CWC_SUB,       // .home-continue-subtitle 21 / 400
+  // The player's TRANSPORT ROW, re-measured in NuvioWeb on 2026-09-17 against the
+  // "Transport - clock, title block, scrubber" block, which is the last one in the
+  // sheet and supersedes the ATV port these styles were first taken from.
+  //
+  // APPENDED, for the reason given three times above: STYLES in text.c is indexed
+  // by this order and an insertion in the middle shifts every following style.
+  TXT_PLR_TIP,       // .player-control-btn::after     20 / bold
+  TXT_PLR_TIME,      // .player-controls-row .player-time-label 30 / 600
+  // The "Ends at" under the clock. It cannot reuse TXT_PG_END any more: that one
+  // is shared with the episode list, the sources sheet and the tracks panel, so
+  // resizing it for this corner would resize four other screens.
+  TXT_PLR_ENDS,      // .player-ends-at                24 / 500
+  TXT_PLR_META3,     // .player-meta-tertiary          22 / 500
+  // The " / total" half of the time readout. The sheet sets the whole label at
+  // 600, but on the device the elapsed time is the number you are actually
+  // reading and the duration is the thing it is measured against — so the two
+  // are split here and the tail carries less weight. See the note at the draw.
+  TXT_PLR_TIME_T,    // .player-time-label, tail       30 / 500
+  TXT_PLR_DELTA,     // .player-seek-delta             24 / 700
+  TXT_PLR_STAT,      // .player-stats-value            22 / 500
+  TXT_PLR_STATL,     // .player-stats-label            20 / 500
+  TXT_PLR_BADGE,     // .player-stats-quality          16 / 700
+  TXT_PLR_PG_CAT,    // .player-parental-label         24 / 600
   TXT_NFONTS
 } TxtStyle;
 
@@ -148,6 +171,20 @@ TxtLine txt_line_trim(TxtStyle style, const char *s, int r, int g, int b,
                          int a, float maxW);
 TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
                                  int b, int a, float maxW, TxtFamily family);
+
+// WHERE THE INK IS INSIDE A LINE. A TxtLine is a box the height of the FONT
+// (ascent + descent), so its top edge is not where the letters start: a 76px
+// Inter line has some 22px of air above a capital and 18 below a baseline. Two
+// lines of different sizes stacked box-to-box therefore look far further apart
+// than the numbers say — which is what made the collection hero's group label
+// read as detached from the title it belongs to.
+//
+// txt_cap_inset is the distance from the line's TOP to the top of a CAPITAL,
+// txt_baseline the distance from the top to the BASELINE. Measured off the face
+// itself (the ascent against 'H''s own extent), in LAYOUT units like TxtLine.w/h,
+// so they stay right if the interface is ever scaled.
+float txt_cap_inset(TxtStyle style);
+float txt_baseline(TxtStyle style);
 
 // Draws at the top-left corner (x,y).
 void txt_draw(TxtLine l, float x, float y);

@@ -175,6 +175,20 @@ static int decorate(CatItem *d, const char *kind) {
   // the item: trakt_resume takes them from the `episode` block of
   // /sync/playback, resumeLocal from progress.txt. A film leaves both at 0 and
   // never enters here.
+  //
+  // AND THE EPISODE'S NAME COMES OFF THE SAME ENTRY, which is what the local
+  // half of Continue watching was missing. `videos` carries `name` beside
+  // `thumbnail` (publishEpisodes in discover.c reads exactly that field), so
+  // this costs nothing — the body is already in hand. Without it the card built
+  // from progress.txt drew the still and the "S1 E4" kicker and then a blank
+  // where the title goes, because resumeLocal knows an id, a position and a
+  // season/episode and nothing else: the ONLY producer that ever filled
+  // nameEpisode was trakt_resume, out of /sync/playback's `episode.title`. A
+  // series watched on a Nuvio device therefore had a name on the web app and
+  // none here.
+  //
+  // Only when it is still EMPTY: Trakt's own title arrived with the item and is
+  // the person's own language, so Cinemeta does not get to overwrite it.
   if (d->season > 0 && d->episode > 0) {
     const char *v = js_array(body, NULL, "videos");
     while (v) {
@@ -182,6 +196,8 @@ static int decorate(CatItem *d, const char *kind) {
       if ((int)js_num(v, fv, "season",  -1) == d->season &&
           (int)js_num(v, fv, "episode", -1) == d->episode) {
         js_text(v, fv, "thumbnail", d->thumbEp, sizeof d->thumbEp);
+        if (!d->nameEpisode[0])
+          js_text(v, fv, "name", d->nameEpisode, sizeof d->nameEpisode);
         break;
       }
       v = js_next(fv);

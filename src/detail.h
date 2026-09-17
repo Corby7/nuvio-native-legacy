@@ -65,17 +65,19 @@ int  detail_requested_do_start(void);
 // sections sit at ABSOLUTE document coordinates, and scrolling is just subtracting
 // scrollY.
 #define NV_DETP_X             96.0f   // the rows' gutter (--tv-safe-gutter-wide)
-// The end of the scrollable document. It is NOT where the cast ends (2024): it is
-// the scrollable height the web app has, because below the cast it still builds
-// the comments and production-company sections, which this port does not have.
+// THE DOCUMENT'S END IS NOW ARITHMETIC, and NV_DETP_END (2473) has gone with it.
 //
-// The number comes from the measurement, not from arithmetic: with the cast
-// focused the web app stops at scrollTop 1393, and for the group's top (1749) to
-// land at 33% of the screen (356) the document has to be at least 1393 + 1080 =
-// 2473. With the 2144 of the "cast + padding" arithmetic the scrolling hit its
-// ceiling at 1064 and the cast row sat at y=693 instead of y=364 — half a screen
-// out of place, and that is how it appeared in the first capture from the device.
-#define NV_DETP_END         2473.0f
+// 2473 was the WEB APP's scrollable height, measured: with the cast focused the web
+// app stops at scrollTop 1393, and 1393 + 1080 = 2473. Every word of that is still
+// true of the web app and none of it is true here any more — the below-fold document
+// is now THREE PAGES of this screen's own (NV_DETP_P2 / NV_DETP_P3), so its end is
+// NV_DETP_P3 + NV_SCREEN_H and recomputeLayout computes it.
+//
+// The note that stood here warned against deducing the end from a SUM OF HEIGHTS,
+// because the "cast + padding" arithmetic (2144) clipped the scroll at 1064 and left
+// the cast row half a screen out of place. That warning still holds for a sum of
+// CONTENT heights. A page model is not one: where the last page ends does not depend
+// on how tall the cast happens to be.
 // The web app's scrolling rule, found in the source and checked against four
 // measurements: the top of the focused GROUP goes to 33% of the usable height (40%
 // on the tabs). The DETAIL_ROW_FOCUS_TARGET / DETAIL_TAB_FOCUS_TARGET constants of
@@ -88,27 +90,59 @@ int  detail_requested_do_start(void);
 // badge->duration, duration->country, country->language. You measure, you do not read.
 #define NV_DETP_SEP           38.0f
 
-// The top of each focusable GROUP, in document coordinates.
-// RE-MEASURED 2026-09-15 in NuvioWeb 0.3.8 on the series "The Gentlemen", by adding
-// the scroll offset back onto getBoundingClientRect. The season row moved 0, but
-// everything below it moved: the picker is shorter than the pill row was, the episode
-// card lost 11px of height and gained a block of copy under the row, and the tab strip
-// grew. Leaving these where they were would have scrolled to the wrong place on every
-// group — the numbers ARE the scroll targets (NV_DETP_TARGET_ROW).
+// --- THE BELOW-FOLD DOCUMENT IS THREE PAGES ---------------------------------
 //
-//   .series-season-row      1080  h 176
-//   .series-episode-track   1240  h 467
-//   .series-insight-tabs    1839  h 136.6
-//   tab content (cards)     1991.6
-#define NV_DETP_G_TEMP      1080.0f
-#define NV_DETP_G_EP        1240.0f
-#define NV_DETP_G_TABS      1839.0f
-#define NV_DETP_G_CAST      1976.0f   // where the tab strip's box ends
+// THE OWNER'S RULE, and it is the reason the numbers below are no longer NuvioWeb's:
+// DOWN from Play shows the season dropdown, the episode rail and the episode
+// description AND NOTHING ELSE; DOWN from there shows the rest of the information.
+//
+// The fraction rule cannot do that. Taking the focused group's top to 33% of the
+// screen (NV_DETP_TARGET_ROW) always leaves the tail of the block above and the head
+// of the block below in frame: from Play it parked at scrollY 724, so the top third
+// was still the hero's synopsis and the insight tabs were already sitting at y=759
+// under the episode copy. It is not a number that was wrong, it is the rule.
+//
+// So each page is ONE SCREEN and a group scrolls its page's top to the top of the
+// screen — see snapSec in detail.c. The pages are:
+//
+//   PAGE 1  hero          0 .. 1080
+//   PAGE 2  episodes   1080 .. 2160   picker, rail, description
+//   PAGE 3  information 2160 .. 3240  tab strip, cast, and Trakt below it
+//
+// NuvioWeb has itself moved halfway here and the port had not followed: focusInList
+// now scrolls .series-season-row to focus target 0 and .series-episode-track to
+// seasonMountHeight / clientHeight (metaDetailsScreen.js:6072-6079) — the picker
+// pinned at the top of the viewport with the rail directly under it. The 0.33 this
+// screen was carrying for those two groups was measured against a build that no
+// longer behaves that way.
+#define NV_DETP_P2          1080.0f   // the episode page's top (== the hero's end)
+#define NV_DETP_P3          2160.0f   // the information page's top
+// A page's TOP INSET. It is NV_DETP_X, the gutter, used vertically: the page's inset
+// is then one number in both axes instead of two that have to be kept in step.
+#define NV_DETP_PAD_TOP       96.0f
 
-// WHERE THE SEASON PICKER IS DRAWN. The row's box opens at 1080 and carries 48 of
-// padding, so the control itself sits at 1128. Its size and look are NV_DETWEB_SEA_*;
-// the old NV_DETP_TEMP_H/PADX/GAP described a row of chips that no longer exists.
-#define NV_DETP_TEMP_Y      1128.0f
+// The top of each focusable GROUP, in document coordinates. They are what snapSec and
+// the culling read; what the drawing reads is the NV_DETP_*_Y set below, and on a
+// series the two are DELIBERATELY separate numbers (see drawSection).
+//
+// These were re-measured in NuvioWeb 0.3.8 on "The Gentlemen" as long as they were
+// scroll targets for the fraction rule (season row 1080 h176, episode track 1240 h467,
+// insight tabs 1839 h136.6, tab content 1991.6). They are page anchors now, so the
+// measurement no longer sets them — the page does. The episode group loses the 16px it
+// sat above its own drawing y, which existed only to feed the fraction, and the tabs
+// and the cast share page 3's top so that moving the focus between them does not
+// retarget the page under a hand that is already on the d-pad.
+#define NV_DETP_G_TEMP      NV_DETP_P2
+#define NV_DETP_G_EP        1320.0f   // == NV_DETP_EP_Y
+#define NV_DETP_G_TABS      NV_DETP_P3
+#define NV_DETP_G_CAST      NV_DETP_P3
+
+// WHERE THE SEASON PICKER IS DRAWN, and it is the first thing on page 2: the page's
+// top plus the page's inset. It was 1080 + 48 of the web row's padding = 1128, and 48
+// from the top edge of a television is not an inset — it read as the control being
+// clipped by the bezel. Its size and look are NV_DETWEB_SEA_*; the old
+// NV_DETP_TEMP_H/PADX/GAP described a row of chips that no longer exists.
+#define NV_DETP_TEMP_Y      (NV_DETP_P2 + NV_DETP_PAD_TOP)   /* 1176 */
 
 // WHERE THE EPISODE ROW IS DRAWN. Everything about the card itself — its size, its
 // parts and its focus — now lives in the NV_DETWEB_EP_* block further down, measured
@@ -119,7 +153,10 @@ int  detail_requested_do_start(void);
 // thumbnail, from a device capture of a different build. The web's card has neither,
 // and keeping a dead set of constants beside a live one is how this row came to be
 // ported twice from two references in the first place.
-#define NV_DETP_EP_Y        1256.0f
+// The picker's base (1256) plus 64 of air. 64 and not the web's 24: with the page to
+// itself the rail is no longer squeezed under the control, and the card grows 5% on
+// focus (NV_DETWEB_EP_FOCUS), which eats 10 of whatever gap it is given.
+#define NV_DETP_EP_Y        1320.0f
 // The focus ring, 4px, and it is now a MEASUREMENT on both places rather than a
 // rounding: `.series-episode-card.focused .series-episode-thumb` reads
 // `box-shadow: rgb(255,255,255) 0 0 0 4px` at 1920, same as the hero's buttons. The
@@ -131,14 +168,17 @@ int  detail_requested_do_start(void);
 // The tabs "Creator and cast | Ratings | More like this | Trailer": font 32/500,
 // the selected one white, the others #808080; the "|" divider is 32/700 #808080,
 // with 20 of slack on each side.
-#define NV_DETP_TAB_Y       1887.0f
+#define NV_DETP_TAB_Y       (NV_DETP_P3 + NV_DETP_PAD_TOP)   /* 2256 */
 #define NV_DETP_TAB_H         51.0f
 #define NV_DETP_TAB_SEP       20.0f
 
 // Cast: a card 220 wide, step 270; a 140x140 avatar ALIGNED LEFT in the card (not
 // centred); the name 26/500 rgb(179,179,179) and the role 21/400 rgb(128,128,128)
 // below.
-#define NV_DETP_EL_Y        1992.0f
+// The tab strip's base plus the 54 that separated the two when both were measured
+// (1992 - 1887 - 51). Every tab body and the Trakt section below stack off this one
+// number (baseOfTabActive), so page 3 restacks from here.
+#define NV_DETP_EL_Y        (NV_DETP_TAB_Y + NV_DETP_TAB_H + 54.0f)   /* 2361 */
 #define NV_DETP_EL_W         220.0f
 #define NV_DETP_EL_STEP     270.0f
 #define NV_DETP_EL_AVATAR    140.0f
@@ -374,7 +414,11 @@ int  detail_requested_do_start(void);
 #define NV_DETWEB_EPD_Y       48.0f
 #define NV_DETWEB_EPD_W     1179.0f
 #define NV_DETWEB_EPD_LD      44.0f
-#define NV_DETWEB_EPD_LINES      2
+// FOUR lines, not the web's two. Two lines at 32/44 over 1179px truncates most
+// episode synopses mid-sentence, and with the block on a page of its own there is room
+// for the text to be read rather than teased. Four is also what the Compose app
+// settled on for this same copy (EpisodesSection.kt, descriptionMaxLines = 4).
+#define NV_DETWEB_EPD_LINES      4
 #define NV_DETWEB_EPD_PAD_END 32.0f
 
 // THE TEXT STACK. Both captures give the same absolute coordinates for what is
@@ -385,11 +429,19 @@ int  detail_requested_do_start(void);
 #define NV_DETW2_LD_SIN       40.0f   // the step between synopsis lines (measured)
 #define NV_DETW2_SIN_LINES       5   // the most seen in the reference
 #define NV_DETW2_TEXT_W    1040.0f   // the synopsis and the support line (96..1136)
-// Where the ratings row (Rotten Tomatoes, Trakt) stops adding sources: 96 + 640.
-// It used to reach for the HOME hero's NV_HERO_SIN_W to get that 640 — a constant
-// from another screen, so widening the hero's synopsis silently widened this row.
-// Same number it has always drawn at, under a name of its own.
-#define NV_DETW2_RATE_W     640.0f
+// Where the ratings row (Rotten Tomatoes, Trakt) stops adding sources.
+//
+// THE SAME RIGHT EDGE AS THE SYNOPSIS, because it is the same column. It used to be
+// 640, which was never measured for this line: it came from the HOME hero's
+// NV_HERO_SIN_W — a constant from another screen — and was then frozen under a name
+// of its own, which made it look deliberate.
+//
+// 640 was narrow enough to CLIP, and that is what "sometimes it shows different
+// information" was. The budget is tested against the running x, so whether Trakt
+// appeared depended on how long the GENRE NAMES were: "Romance" left room and
+// "Adventure | Sci-Fi" did not, on the same build, seconds apart. The score was
+// there the whole time — the line simply ran out of allowance before reaching it.
+#define NV_DETW2_RATE_W    NV_DETW2_TEXT_W
 // The distance between the BOX TOPS of neighbouring lines, with the font's metrics
 // already discounted: between the ink the reference gives 62 from the top of the
 // "W" of "Writer" to the top of the "C" of the synopsis, and both lines use the
@@ -405,19 +457,90 @@ int  detail_requested_do_start(void);
 // META LINE 1: genres, date and the IMDb badge, all in rgb(179,179,179).
 // The line's height is the badge's (30), which is the tallest item on it.
 #define NV_DETW2_M1_H         30.0f
+// THE PROVIDER LOCKUP that opens the line (Netflix, HBO Max, Apple TV+ ...). The
+// box it is fitted into, height-first: the width follows the file's aspect.
+//
+// 32 and not the 28 it was drawn at. Every badge file carries a uniform 14%
+// transparent margin top and bottom (measured: the ink fills 72% of all ten), so a
+// 28 box was only ever putting 20px of ink on a line whose type is 26 — the logo
+// came out smaller than the words next to it. The box is allowed to overhang
+// NV_DETW2_M1_H: there is 33 above the line and 31 below it, and the lockup is the
+// one thing here that is a picture rather than a word.
+#define NV_DETW2_PROV_H       32.0f
+#define NV_DETW2_PROV_MAXW   150.0f
+
+// --- THE SKELETON, and where it is and is not worth having -------------------
+//
+// Three of this block's fields come off a network thread and land after the screen
+// is up: the provider lockup and the "Director:" credit (discover.c's /meta call)
+// and the production status (extras.c's TMDB sheet). Drawn as they arrive, each one
+// APPEARS AND PUSHES what is already there — and the credit is the worst of the
+// three, because the stack is anchored at the base, so its row landing shoves the
+// whole action row 62px up under a hand that is already reaching for it.
+//
+// A placeholder holds the space so nothing moves, then crossfades in place.
+//
+// IT IS ONLY WORTH IT WHERE SOMETHING SITS TO THE RIGHT, and that is the whole
+// design rule here. The provider opens meta line 1 and the status opens meta line 2,
+// so a late arrival there moves everything after it; the credit owns a whole row.
+// The Trakt and Tomatoes scores CLOSE line 1 and the country closes line 2 — nothing
+// follows them, so they can simply fade in where they land and no skeleton is needed.
+// Reserving a slot for them would only add a box that has to be guessed and then
+// taken away again.
+//
+// The reserved width for the lockup: the marks run 64 (Apple TV+) to 132 (HBO Max)
+// at NV_DETW2_PROV_H, and 108 is the middle of that — near enough that the settle
+// when the real mark lands is a few pixels, and the eye does not catch it.
+#define NV_DETW2_SKEL_PROV   108.0f
+// The credit line's bar. "Director: " plus a name, at the synopsis's size.
+#define NV_DETW2_SKEL_SUP    420.0f
+// The status badge holds its own outline shape, so the bar matches the box it will
+// become: NV_DETW2_BADGE_H tall and the width of a typical word plus the padding.
+#define NV_DETW2_SKEL_STAT   190.0f
+#define NV_DETW2_SKEL_H       22.0f   // the bar's height on the two meta lines
+// HOW LONG A PLACE IS HELD. After this the slot closes and the line settles — ONE
+// reflow, at a moment that has passed, instead of one per field as each answers.
+// Without a ceiling a title that genuinely has no provider (not on streaming here,
+// which is the honest empty case) would hold an empty box for the whole visit.
+#define NV_DETW2_SKEL_MS      1400
+// The crossfade from the bar to the real thing, in place. Short: nothing moves, so
+// this only has to cover the swap.
+#define NV_DETW2_SKEL_FADE_MS  180
 #define NV_DETW2_META_GAP     31.0f   // 999 - 968
-// The IMDb badge: a 60x30 yellow #f6c700 rectangle, radius ~4, with a black "IMDb"
-// inside; the score comes 8px later, in the same grey as the rest of the line. It
-// is NOT the web app's 109x60 — this one is smaller and the mark fills the whole badge.
+// The IMDb badge: THE REAL MARK, imdb_logo_2016.svg — the file NuvioWeb serves
+// from `renderImdbBadge`, drawn 60 wide with its own height following the file's
+// aspect (575:289.83, so ~30). The sheet gives it a 60x60 box with
+// `object-fit: contain`, which is the same 60x30 once the aspect is honoured.
+//
+// It used to be a HAND-BUILT PLATE: a 60x30 yellow rectangle with the word "IMDb"
+// set in TXT_MINI and centred in it. TXT_MINI is the age-rating size, so the type
+// came out far smaller than the box and the badge read as mostly yellow — the
+// padding the owner saw. The real mark has the letters running edge to edge, which
+// is the whole design of it, and no amount of nudging a font size reproduces that.
+//
+// It is drawn with GFX_TEXT and not gfx_icon: the mark is yellow with black
+// letters, and gfx_icon's GFX_BRAND takes only the alpha and would flatten both
+// into one tint. Same reasoning as the brand lockup — see gfx.h.
 #define NV_DETW2_IMDB_W       60.0f
-#define NV_DETW2_IMDB_H       30.0f
-#define NV_DETW2_IMDB_R        4.0f
+#define NV_DETW2_IMDB_H       30.0f   // the fallback, until the file's aspect is known
 #define NV_DETW2_IMDB_GAP      8.0f
-// The separator dot. There are TWO different dots and the difference is only the
-// colour: between genres it is rgb(179,179,179) with 11 of slack on each side, and
-// between GROUPS (genres | date | score) it is rgb(128,128,128) with 30. Both
-// measure 6x7.
-#define NV_DETW2_DOT_D       6.0f
+// TWO SEPARATORS, and they are deliberately different shapes — which is exactly
+// what NuvioWeb does, and what one shape for both got wrong.
+//
+// BETWEEN GROUPS (genres | date | score) it is a VERTICAL BAR: `.detail-meta-dot`,
+// `width: 1px; height: 14px`. The sheet sizes that against a 20.7px meta row
+// (--tv-secondary-text at 1920); this line runs at 26 and meta line 2 at 23, so the
+// same proportion lands on 2x18 for both.
+//
+// BETWEEN GENRES it is a DISC, because there the separator is part of a sentence
+// rather than a fence: the web builds that line as ONE text run joined with " • ",
+// so what falls between two genres is a bullet glyph. Drawing a bar there made the
+// genres read as separate fields — the same weight of division between "Drama" and
+// "Fantasy" as between the genres and the year, when one is a list and the other is
+// a change of subject.
+#define NV_DETW2_BAR_W        2.0f
+#define NV_DETW2_BAR_H       18.0f
+#define NV_DETW2_DOT_D        6.0f
 #define NV_DETW2_SEP          30.0f
 #define NV_DETW2_BULLET_SEP   11.0f
 

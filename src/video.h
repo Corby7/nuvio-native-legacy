@@ -96,6 +96,16 @@ typedef struct {
   char label[48];   // "English · Atmos 5.1" or "Subtitle 3"
   char language[8];    // "en"; empty when the file does not tag it
   int  number;       // index selectTrack expects
+  // The Matroska CodecID, when the header read got one: "S_TEXT/UTF8",
+  // "S_HDMV/PGS", "S_VOBSUB". The PIPELINE does not report this — subtitleTrackInfo
+  // carries trackNum, language, type and periodStart and nothing else (see mkv.h) —
+  // so it is filled by the same header read that supplies the languages, and stays
+  // empty on anything that is not an MKV.
+  //
+  // It is the only way to tell a TEXT subtitle from a BITMAP one, which is not a
+  // detail: a PGS track cannot be restyled, repositioned or resized, so "why does
+  // this subtitle ignore my settings" has its answer here.
+  char codec[24];
 } VideoTrack;
 
 int  video_n_audio(void);
@@ -165,6 +175,11 @@ const char *video_hdr(void);   // hdrType cru: "none", "HDR10", "DolbyVision"...
 // the player's zoom modes use.
 int  video_width(void);
 int  video_height(void);
+// What is decoding. "webOS uMS" on the device, and said plainly on the Mac, where
+// there is no pipeline at all — the stats panel shows this, and a panel that
+// invented an engine name on the preview build would be the one screen in the app
+// you cannot trust to tell you what is actually happening.
+const char *video_engine(void);
 
 void video_shutdown(void);
 

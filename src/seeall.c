@@ -461,8 +461,9 @@ void seeall_draw(Uint32 now) {
         gfx_rect(r, t, GFX_CARD, sel ? 1.0f : 0.0f, 0, 0, radius, 0, 0, 0, a);
         gfx_tex_aspect_current = 0.0f;
       } else {
-        // A skeleton while the art has not arrived — the same colour as the rest of the app.
-        gfx_color(r, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
+        // A skeleton while the art has not arrived — the same colour as the rest of
+        // the app, and on the same sweep of light (gfx_skeleton).
+        gfx_skeleton(r, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
                 NV_COLOR_SKELETON_B, a);
       } }
     { int c = sel ? 255 : 214;

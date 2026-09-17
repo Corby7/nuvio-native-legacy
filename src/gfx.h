@@ -251,7 +251,64 @@ typedef enum {
   // home.c's heroFitPar works both out from where the band lands on the screen;
   // nothing else should be calling this mode.
   GFX_HERO_FIT = 30,
-  GFX_NMODES = 31
+  // GFX_SKELETON — a loading placeholder with the travelling highlight on it.
+  //
+  // The FILL is the caller's colour, and the shine is ADDED to it: every skeleton
+  // in the app keeps the grey it already had (#2C2C2C card art, the hero's bars,
+  // the episode card's darker plate) and gains the same light passing over it.
+  // Mixing towards white instead would flatten all of them onto one tone.
+  //
+  // THE BAND IS POSITIONED IN SCREEN SPACE, handed over in the quad's own x:
+  //
+  //   uPar.x = the band's CENTRE,     in 0..1 of this quad's width (may be <0 or >1)
+  //   uPar.y = the band's HALF-WIDTH, likewise
+  //
+  // so a block narrower than the band gets uPar.y > 0.5 and simply brightens as a
+  // whole, while a 600px card gets a band that crosses it. gfx_skeleton does that
+  // conversion; see the note at NV_SKEL_SHINE_W for why the sweep cannot be per
+  // block.
+  //
+  // The tilt is corrected by uAspect, so the angle is constant on screen whatever
+  // the quad's proportions — without it the band lies almost flat across a wide
+  // bar and steeply across a tall card, and a row containing both reads as two
+  // different lights.
+  GFX_SKELETON = 31,
+  // GFX_VEIL_PLAYER — the player transport's bottom scrim, with the web app's OWN
+  // stops rather than a curve chosen to look about right:
+  //
+  //   0%  0.00   30%  0.18   58%  0.48   78%  0.74   100%  0.88
+  //
+  // It exists because GFX_VEIL_BOTTOM could not express that shape. That one is a
+  // SQUARED smoothstep, deliberately so — the note on it explains that squaring
+  // removes the visible line where a plain ramp begins. The cost is that it is
+  // heavily back-loaded: at the height the scrubber sits it has only reached ~0.22
+  // of its strength, against ~0.60 for the ramp above. That is the whole reason the
+  // transport read as if it had no scrim behind it at all — the bar looked
+  // transparent and the buttons looked like they were sitting on raw picture,
+  // because very nearly they were.
+  //
+  // Piecewise-linear between the five stops, like the CSS. It does not need the
+  // squaring trick: the first stop IS zero and the segments are shallow, so there
+  // is no edge for the eye to find.
+  GFX_VEIL_PLAYER = 32,
+  // GFX_VEIL_POOL — a radial scrim anchored at the TOP-RIGHT corner, the web app's
+  // --player-top-scrim:
+  //
+  //   radial-gradient(ellipse 600px 360px at 100% 0,
+  //                   0.62 0%, 0.5 30%, 0.28 56%, 0.1 78%, 0 100%)
+  //
+  // WHY A POOL AND NOT A BAND. As a full-width band the top scrim shades the whole
+  // top of the frame, and almost none of that strip has anything drawn on it — so
+  // it was dimming picture for free. The corner cluster (clock, "Ends at") is all
+  // it exists for, so it covers that and stops. The web app's own comment says
+  // exactly this.
+  //
+  // The ellipse's radii are the QUAD's width and height, so the caller sizes the
+  // quad to 600x360 and anchors it at the corner; the falloff is measured in that
+  // quad's own normalised space, which makes the ellipse fall out of the geometry
+  // instead of needing two more uniforms.
+  GFX_VEIL_POOL = 33,
+  GFX_NMODES = 34
 } GfxMode;
 
 typedef struct {
@@ -308,11 +365,25 @@ void gfx_crop(float x, float y, float w, float h);
 // `name` is the basename without the extension. It must match a file in
 // deploy/app/art/icons/ EXACTLY: gfx_icon builds "<dir>/<name>.png" with no
 // mapping, and a name with no file loads nothing and draws nothing, with no
-// error. The set is: "more", "watched", "unwatched", "sources", "play",
-// "pause", "subtitles", "audio", "aspect", "forward", "episodes", "trailer",
-// the side menu's "menu_home" / "menu_library" / "menu_profile" / "menu_search" /
-// "menu_settings", each with a "_fill" twin for the row the user is on, and
-// "brand_wordmark".
+// error. The set is: the PLAYER's "play", "pause", "sources", "subtitles",
+// "audio", "aspect", "forward", "episodes"; the title page's "chevron_down",
+// "ep_watched" and "detail_play"; the side menu's "menu_home" / "menu_library" /
+// "menu_profile" / "menu_search" / "menu_settings", each with a "_fill" twin for
+// the row the user is on; "brand_wordmark"; and the title screen's three circular
+// buttons — "detail_library_add" / "detail_library_saved", "detail_watched" /
+// "detail_watched_off" and "detail_source" — each with a "_filled" twin for the
+// FOCUSED state, which is NuvioWeb's `--series-icon-focused`. The plus is the one
+// exception and it is the sheet's: it has no solid form to fill into.
+//
+// THE FOLDER HOLDS NOTHING THAT IS NOT LOADED. "more", "watched", "unwatched" and
+// "trailer" were dropped once the title screen moved to the web's files and the
+// trailer button was removed; they went on being packaged and shipped to the TV
+// long after the last call site for them was gone. If a name here stops being
+// drawn, delete the file with the call — an unreferenced PNG in this folder is
+// invisible, because gfx_icon fails silently and nothing ever reports it missing.
+//
+// "brand_lockup" and "brand_mark" also live here and do NOT go through gfx_icon
+// (see below); "imdb_logo" is fetched by path too, for the same reason.
 //
 // "brand_mark" also lives there but does NOT go through gfx_icon: it is a colour
 // gradient, and this function's GFX_BRAND would flatten it to one tint. Fetch its
@@ -320,6 +391,25 @@ void gfx_crop(float x, float y, float w, float h);
 // texture's RGB and its alpha at the same time.
 void gfx_icons_dir(const char *dirArt);
 void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca);
+
+// FOR AN ICON WHOSE RECT MOVES: decode at `wRequest` and draw at `r`.
+//
+// gfx_icon asks tex_get_exact for r.w, and tex_cache.h is explicit that an exact
+// request whose width ANIMATES re-decodes as it moves. Worse than the cost is what
+// the caller gets back meanwhile: a re-decode to a LARGER width leaves the entry
+// PENDING with `limit > serves`, and tex_get_limit_mode answers 0 — so the icon is
+// not drawn at all until the decode lands.
+//
+// That is what ailed the episode card's watched tick. The card scales by
+// NV_DETWEB_EP_FOCUS (1.05) as it takes focus, so the 50px marker asked for 50, then
+// 52.5 — past the 2px deadband — and VANISHED for the length of the focus spring,
+// leaving the bare white disc it is drawn over. It read as a broken icon because it
+// was a missing one.
+//
+// Pass the RESTING size here and let the quad do the scaling: 5% of magnification on
+// a 50px glyph is invisible, and one decode serves every frame of the animation.
+void gfx_icon_at(GfxRect r, const char *name, float wRequest,
+                 float cr, float cg, float cb, float ca);
 // The file gfx_icon would load, for the callers that need something gfx_icon does
 // not do: the icon's own aspect ratio (tex_aspect), or a mode other than
 // GFX_BRAND — the brand mark is a colour gradient and the tinting mode would
@@ -424,7 +514,14 @@ extern int    gfx_n_others;  // clip/FBO/blur calls
 extern double gfx_ms_others; // ms of CPU at those GL points
 extern double gfx_fill;      // area submitted this frame, in full screens
 extern int    gfx_n_full;   // draws covering >= 50% of the screen
-void gfx_new_frame(void);
+// Opens the frame: zeroes the telemetry above AND advances the skeletons' shine.
+//
+// `now` is the frame's clock, read once in main.c's loop. The sweep is worked out
+// here, once, rather than in each gfx_skeleton call: there is ONE light crossing the
+// screen, so there is one place to compute where it is. It also means a screen
+// drawing a placeholder needs no clock of its own — which is what keeps the sweep
+// identical on the hero, on the page below it and on another screen entirely.
+void gfx_new_frame(unsigned now);
 
 void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
               float parx, float pary, float radius,
@@ -433,6 +530,16 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
 
 // Atalhos legiveis para os casos comuns.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
+// A LOADING PLACEHOLDER, with the shine on it. A DROP-IN for the gfx_color call
+// that drew the flat block: same rect, same radius, same colour, and no clock —
+// the sweep's position for this frame was set by gfx_new_frame.
+//
+// That is deliberate: a screen should not have to hold a clock to draw a
+// placeholder. The alternative, passing `now` in, had every screen keeping its own
+// copy of the frame time, which is five chances for one of them to fall a frame
+// behind the others and break the single-light illusion this is built on.
+void gfx_skeleton(GfxRect r, float radius,
+                  float cr, float cg, float cb, float ca);
 // Zeroes the rectangle's colour AND alpha, with blending off, opening the
 // surface to the video plane behind it. See video.h.
 void gfx_hole(GfxRect r);

@@ -702,7 +702,11 @@ void sync_step(unsigned nowMs) {
     if (trakt_set(traktToken, cloud_trakt_client()) && !wasOn) disc_rebuild();
     hasTraktRemote = 0;
   }
-  if (hasTmdb)      { disc_tmdb_set(tmdbKey);   hasTmdb = 0; }
+  // extras.c fetches the TMDB fact sheet with disc_key_tmdb(), so this key landing
+  // changes what a fetch can return — and that module caches per title id. Without
+  // the notice, any title opened in the second before the account answered kept an
+  // empty status, runtime, release date and country list until the app restarted.
+  if (hasTmdb)      { disc_tmdb_set(tmdbKey); extras_keys_changed(); hasTmdb = 0; }
   if (hasMdb)       { extras_set_key(mdbKey); hasMdb = 0; }
   if (hasSettingsBlob && settingsBlob) {
     settings_apply_blob(settingsBlob);

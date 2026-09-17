@@ -41,6 +41,23 @@ void extras_load(const char *dirArt);
 // the key of whoever built it.
 void extras_set_key(const char *key);
 
+// Tell this module that a key it fetches with has changed. extras.c refuses to
+// fetch the same title twice, and the TMDB half of a fetch is silently skipped when
+// disc_key_tmdb() is still empty — so a title opened before the account answered
+// kept its missing status/runtime/release/countries for the rest of the session.
+// Call it whenever a credential lands; the next request for that title goes out
+// again. See the note on keyGen in extras.c.
+void extras_keys_changed(void);
+
+// 1 when nothing is in flight: whatever this module is going to say about the current
+// title, it has already said. 0 while the fetch thread is running.
+//
+// The title screen uses it to know whether a group that is MISSING is missing because
+// the title has no such value, or because the answer has not landed yet — which is the
+// difference between drawing nothing and holding a place for it.
+int extras_settled(void);
+
+
 // The source's score, RAW multiplied by 10 (imdb comes with one decimal place
 // and has to fit in an integer). 0 = there is none. Divide by 10 and use
 // extras_source_percentual() to know whether the result is "6.2" or "66%".

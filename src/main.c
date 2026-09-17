@@ -785,7 +785,7 @@ int main(int argc, char **argv) {
     // checks — and the symptom would be precisely a band with stale content, hard
     // to trace to its cause. One call per frame.
     t0 = NV_T0();
-    gfx_new_frame();
+    gfx_new_frame(now);
     tex_new_frame();
     gfx_no_crop();
     glClearColor(NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);

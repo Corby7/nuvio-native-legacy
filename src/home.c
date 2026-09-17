@@ -401,7 +401,14 @@ static float widthOf(KindRow t) {
     // the web has no top-10 row to measure, so it follows the poster.
     case ROW_TOP10: return NV_CARD_W;
     case ROW_RETURN: return 680.0f;
-    case ROW_CATALOGS: return 360.0f;
+    // MEASURED in the web app's modern layout, where this card is a
+    // `.home-collection-card.is-collection-landscape`: its width is
+    // `--home-landscape-poster-width`, which is `--home-poster-width * 1.5`
+    // (components.css:6674) and that base is 212 in the modern block — so 318, not
+    // the 360 that stood here. The card is a COMPOSED BITMAP (the catalogue's name
+    // and its item count are lettering baked into the cover the account serves), so
+    // 13% of extra width was 13% of extra enlargement applied to type.
+    case ROW_CATALOGS: return 318.0f;
     default:               return settings_posters_landscape() ? NV_CARD_LAND_W
                                                               : NV_CARD_W;
   }
@@ -490,8 +497,26 @@ static void drawPlaceholderHero(GfxRect r, const CatItem *item, float alpha) {
 // colour, then black rolled down to the bottom stop — because the shader has no
 // two-colour ramp and adding one for an 11-level range is not worth a mode.
 // See NV_POSTER_BG_*.
-static void drawArtSkeleton(GfxRect r, float radius, float alpha) {
+//
+// THE TOP COLOUR CARRIES THE SHINE (gfx_skeleton), so a row of cards still
+// downloading is crossed by the same light as every other placeholder in the app —
+// one sweep, set by gfx_new_frame, with no clock needed here. The darkening pass
+// stays ON TOP of it, which is the right order: the gradient is what the card looks
+// like and the shine is a light moving over it, so the base of the card dims the
+// light exactly as it dims the colour.
+// THE CARD'S SURFACE AT REST: the gradient, with nothing moving on it.
+//
+// Split out of drawArtSkeleton because the two say different things. This one is
+// what a card IS; the skeleton is this plus the travelling shine, and the shine
+// means WAITING. Anything that has already arrived must be drawn on this one.
+static void drawArtSurface(GfxRect r, float radius, float alpha) {
   gfx_color(r, radius, NV_POSTER_BG_R, NV_POSTER_BG_G, NV_POSTER_BG_B, alpha);
+  gfx_rect(r, 0, GFX_VEIL_BOTTOM, 0, 0, 0, radius,
+           0, 0, 0, NV_POSTER_BG_FADE * alpha);
+}
+
+static void drawArtSkeleton(GfxRect r, float radius, float alpha) {
+  gfx_skeleton(r, radius, NV_POSTER_BG_R, NV_POSTER_BG_G, NV_POSTER_BG_B, alpha);
   gfx_rect(r, 0, GFX_VEIL_BOTTOM, 0, 0, 0, radius,
            0, 0, 0, NV_POSTER_BG_FADE * alpha);
 }
@@ -592,7 +617,9 @@ static float heightOf(KindRow t) {
     case ROW_SOCIAL: return 240.0f;
     case ROW_RETURN: return 178.0f;
     case ROW_TOP10: return NV_CARD_H;
-    case ROW_CATALOGS: return 203.0f;
+    // 318 * 0.5625, the 16:9 the web derives it at
+    // (`--home-landscape-poster-height`, components.css:6675). Was 203.
+    case ROW_CATALOGS: return 178.875f;
     default:               return settings_posters_landscape() ? NV_CARD_LAND_H
                                                               : NV_CARD_H;
   }
@@ -1935,10 +1962,9 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
     //
     // The score is subtracted from the budget because it is drawn AFTER the tokens end:
     // without it there, a long enough genre would run under the chip.
-    TxtLine ls = { 0, 0, 0 }, ln = { 0, 0, 0 };
+    TxtLine ln = { 0, 0, 0 };
     float imdbW = 0.0f;
     if (score[0]) {
-      ls = txt_line(TXT_MINI, "IMDb", 8, 8, 8, 255);
       ln = txt_line(TXT_HERO_META, score, 179, 179, 179, 255);
       imdbW = NV_HERO_IMDB_GAP + NV_HERO_IMDB_W + 10.0f + (float)ln.w;
     }
@@ -1976,23 +2002,37 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
       drawn++;
     }
     if (score[0] && drawn) {
-      // .home-hero-imdb: the 40px yellow badge and the score just after it, with 10 of
-      // breathing room. The IMDb SVG is not packaged here; the yellow rectangle with
-      // black letters reads the same at this scale. The score stays at 179 grey —
-      // measured BRIGHTER than the tokens around it, because it is the one number on the
-      // line anyone looks for.
+      // .home-hero-imdb: the 40px mark and the score just after it, with 10 of breathing
+      // room. THE REAL MARK, art/icons/imdb_logo.png — the same file the title screen's
+      // meta line draws, and the one NuvioWeb serves from `renderImdbBadge`.
+      //
+      // It used to be a HAND-BUILT PLATE: a 40px yellow rectangle with "IMDb" set in
+      // TXT_MINI and centred in it, on the grounds that the SVG is not packaged. The
+      // PNG is, and the letters of the real mark run edge to edge — which is the whole
+      // design of it, and no amount of nudging a font size reproduces that.
+      //
+      // The score stays at 179 grey — measured BRIGHTER than the tokens around it,
+      // because it is the one number on the line anyone looks for.
       float bx = cx + NV_HERO_META_SEP * 2.0f;
       { TxtLine ld = txt_line(TXT_HERO_META, "\xe2\x80\xa2", dim, dim, dim, 255);
         txt_draw_alpha(ld, cx + NV_HERO_META_SEP,
                        yMeta + (hLine - (float)ld.h) * 0.5f, alpha);
         bx = cx + NV_HERO_META_SEP * 2.0f + (float)ld.w + NV_HERO_IMDB_GAP; }
-      float sh = (float)ls.h + 6.0f;
+      // THE HEIGHT FOLLOWS THE FILE, not a constant: forcing the mark into a fixed box
+      // would stretch it by whatever the rounding left over. NV_IMDB_MARK_AR stands in
+      // for the one frame before the decode lands — the same two-step the hero logo does.
+      const char *fileMark = gfx_icon_path("imdb_logo");
+      float arMark = tex_aspect(fileMark);
+      float sh = NV_HERO_IMDB_W / (arMark > 0.0f ? arMark : NV_IMDB_MARK_AR);
       float sy = yMeta + (hLine - sh) * 0.5f;
       // Invisible is not submitted — see the note on the logo above.
-      if (alpha > 0.004f)
-        gfx_color((GfxRect){ bx, sy, NV_HERO_IMDB_W, sh },
-                0.12f, 0.96f, 0.78f, 0.06f, alpha);
-      txt_draw_alpha(ls, bx + (NV_HERO_IMDB_W - ls.w) * 0.5f, sy + 3.0f, alpha);
+      // GFX_TEXT keeps the texture's RGB *and* its alpha, the only mode that can draw
+      // black letters on a yellow plate; gfx_icon's GFX_BRAND would take the alpha alone
+      // and flatten both into one tint.
+      GLuint markImdb = tex_get_exact(fileMark, NV_IMDB_MARK_TEX_W);
+      if (markImdb && alpha > 0.004f)
+        gfx_rect((GfxRect){ bx, sy, NV_HERO_IMDB_W, sh }, markImdb, GFX_TEXT,
+                 0, 0, 0, 0.0f, 1, 1, 1, alpha);
       txt_draw_alpha(ln, bx + NV_HERO_IMDB_W + 10.0f, yMeta, alpha);
     }
   }
@@ -2232,7 +2272,10 @@ static void drawHero(Uint32 now, float output) {
         else if(!folder->hero[0])famHold=0;
         heroArtRect=header;
         int director=!strcasecmp(folder->group,"Directors");
-        txt_draw_alpha(txt_line(TXT_HERO_META,director?"DIRECTORS":"COLLECTIONS",190,193,200,255),x,122,a);
+        txt_draw_alpha(txt_line(TXT_HERO_META,director?"DIRECTORS":"COLLECTIONS",
+                                190,193,200,255),
+                       x,183+txt_cap_inset(TXT_TITLE1)-NV_COLLECTION_HERO_GROUP_GAP
+                          -txt_baseline(TXT_HERO_META),a);
         txt_block(TXT_TITLE1,folder->title,244,243,247,x,183,860,72,a,2);
         // NO LIST COUNT AND NO "OK to explore": how many lists the folder happens to
         // hold is bookkeeping, and the hint states what the row already teaches on the
@@ -2270,8 +2313,9 @@ static void drawHero(Uint32 now, float output) {
       else if(!art[0])famHold=0;
       heroArtRect=r;
       float x=settings_content_x(),a=(1-output)*famIn;
+      // The label is DRAWN by each branch below, once that branch knows where the top
+      // of its title is: see NV_COLLECTION_HERO_GROUP_GAP.
       TxtLine group=txt_line(TXT_HERO_META,folder->group,201,206,218,255);
-      txt_draw_alpha(group,x,NV_COLLECTION_HERO_GROUP_Y,a);
       if (isDirector) {
         const char *photo=director_photo(folder->title);
         // THE PORTRAIT IS ART, so it follows the BACKDROP'S extent and not the copy's
@@ -2291,17 +2335,24 @@ static void drawHero(Uint32 now, float output) {
           gfx_tex_aspect_current=0.0f;
         }
         TxtLine name=txt_line_trim(TXT_TITLE1,folder->title,244,243,247,255,780);
-        txt_draw_alpha(name,x,NV_COLLECTION_HERO_LOGO_Y,a);
+        // The CAPITAL sits on the shared line, so the name lines up with a wordmark
+        // one row over; the two lines under it keep their distance from the name's
+        // own box, not from the line.
+        float topName=NV_COLLECTION_HERO_LOGO_Y-txt_cap_inset(TXT_TITLE1);
+        txt_draw_alpha(group,x,NV_COLLECTION_HERO_LOGO_Y
+                              -NV_COLLECTION_HERO_GROUP_GAP
+                              -txt_baseline(TXT_HERO_META),a);
+        txt_draw_alpha(name,x,topName,a);
         const char *meta=director_meta(folder->title);
         if (meta[0])
           txt_draw_alpha(txt_line_trim(TXT_HERO_META,meta,201,206,218,255,780),
-                             x,NV_COLLECTION_HERO_LOGO_Y+92.0f,a);
+                             x,topName+92.0f,a);
         const char *con=director_known(folder->title);
         if (con[0]) {
           char line[300];
           snprintf(line,sizeof line,"Known for  %s",con);
           txt_draw_alpha(txt_line_trim(TXT_HERO_META,line,220,224,233,255,780),
-                             x,NV_COLLECTION_HERO_LOGO_Y+136.0f,a);
+                             x,topName+136.0f,a);
         }
         return;
       }
@@ -2333,20 +2384,42 @@ static void drawHero(Uint32 now, float output) {
       // file's aspect, not the decoded texture's, so it does not move under us.
       int hasLogo=!isDirector&&folder->logo[0];
       float ap=hasLogo?tex_aspect(folder->logo):0.0f;
-      // CONTAIN, then hung from the baseline — the web's `object-fit: contain` with
-      // `object-position: bottom`.
+      // THE HEIGHT COMES FROM THE ASPECT, the width from the height, and the width cap
+      // has the last word — NV_COLLECTION_HERO_LOGO_H_REF says why the fall is a fourth
+      // root and not the flat ceiling this had. Still `contain`: nothing is cropped or
+      // stretched, it is the box the mark is contained IN that changes shape with it.
       float w=NV_COLLECTION_HERO_LOGO_MAX_W,h=0.0f;
       if(ap>0){
-        h=w/ap;
-        if(h>NV_COLLECTION_HERO_LOGO_MAX_H){h=NV_COLLECTION_HERO_LOGO_MAX_H;w=h*ap;}
+        h=NV_COLLECTION_HERO_LOGO_H_REF/sqrtf(sqrtf(ap));
+        if(h>NV_COLLECTION_HERO_LOGO_MAX_H)h=NV_COLLECTION_HERO_LOGO_MAX_H;
+        w=h*ap;
+        if(w>NV_COLLECTION_HERO_LOGO_MAX_W){w=NV_COLLECTION_HERO_LOGO_MAX_W;h=w/ap;}
       }
       GLuint logo=hasLogo?tex_get_exact(folder->logo,w):0;
       float endTitle=NV_COLLECTION_HERO_LOGO_BASE;
+      // The name stands in only for a logo that will never arrive — the branch below
+      // says why.
+      int showName=!hasLogo||tex_failed(folder->logo);
+      TxtLine name=showName?txt_line_trim(TXT_TITLE1,folder->title,241,243,247,255,700)
+                           :(TxtLine){0,0,0};
+      // ONE LINE, AND IT NEVER MOVES: the label sits a fixed gap above LOGO_Y and the
+      // title's ink starts ON it, whether that ink is a wordmark's art or a capital.
+      // Nothing here depends on the mark's height, so the pair does not shift between
+      // the folders of a row, on the frame a mark decodes, or between a row of
+      // wordmarks and a row of names — which is what put Streaming 100px above
+      // Discover and Genres.
+      //
+      // The gap is measured on the INK at both ends (label BASELINE to title CAP), so
+      // 24 is 24 wherever it is read. A TxtLine's own box would hide some 22px of air
+      // above a 76px capital and 5 below a 21px baseline, and that is what made an
+      // earlier "14" arrive on screen as 38.
+      txt_draw_alpha(group,x,NV_COLLECTION_HERO_LOGO_Y-NV_COLLECTION_HERO_GROUP_GAP
+                             -txt_baseline(TXT_HERO_META),a);
       if(logo&&ap>0){
-        gfx_rect((GfxRect){x,NV_COLLECTION_HERO_LOGO_BASE-h,w,h},logo,
+        gfx_rect((GfxRect){x,NV_COLLECTION_HERO_LOGO_Y,w,h},logo,
                  tex_brand_dark(folder->logo)?GFX_BRAND:GFX_TEXT,
                  0,0,0,0,.96f,.97f,.98f,a);
-      } else if(!hasLogo||tex_failed(folder->logo)){
+      } else if(showName){
         // THE NAME ONLY WHEN THERE IS NO LOGO TO COME. A logo is a CDN download that
         // lands a few frames after the folder is adopted, and drawing the name in the
         // meantime meant every streaming service came up as type and then flicked over
@@ -2355,8 +2428,7 @@ static void drawHero(Uint32 now, float output) {
         // img's own onerror (homeScreen.js's getLogoErrorHandler). tex_failed is that
         // onerror — it answers 0 while a retry is still scheduled, so the name appears
         // for a DEAD url and not for a slow one.
-        TxtLine name=txt_line_trim(TXT_TITLE1,folder->title,241,243,247,255,700);
-        txt_draw_alpha(name,x,NV_COLLECTION_HERO_LOGO_BASE-name.h,a);
+        txt_draw_alpha(name,x,NV_COLLECTION_HERO_LOGO_Y-txt_cap_inset(TXT_TITLE1),a);
       }
       // Nothing is drawn while the logo is still on its way: the band keeps its height
       // either way, so whatever sits below it does not move when the logo lands.
@@ -2594,14 +2666,69 @@ static void drawShortcuts(int r, float y) {
     // drew the flat #2C2C2C of NV_COLOR_SKELETON instead — lighter than its
     // neighbours and with no ramp, which is what made the Discover row read as a
     // strip of grey slabs next to the posters.
-    drawArtSkeleton(card, radius, 1.0f);
+    // AT REST, NOT THE SKELETON. This drew the shine as well, and the shine was
+    // invisible only by accident: the cover was blitted over it opaquely, so nothing
+    // behind it reached the screen. Now that GFX_CARD keeps the cover's alpha, the
+    // surface under a transparent region is genuinely on screen — and the sweep came
+    // with it, a light crossing the Discover and Genres cards every 1800ms for ever
+    // on a shelf that had finished loading. The shine is put back below, for the one
+    // case that means it: a cover still in flight.
+    drawArtSurface(card, radius, 1.0f);
     const ColFolder *folder=col_folder(rows[r].folders[c]);
     if (folder) {
       const char *art = folder->cover;
-      // `lw` and not `w`: the focus scale must not move the decode ceiling, or the
-      // cover is re-decoded the moment the card is landed on and the card blinks
-      // back to its skeleton. Same reasoning as the poster rows below.
-      GLuint tex = art && art[0] ? tex_get_width(art, lw) : 0;
+      // THE WIDTH THE COVER IS REALLY DRAWN AT, which is not the card's width.
+      //
+      // GFX_CARD is a COVER fit: art that is WIDER in proportion than the 360x203
+      // card is fitted by HEIGHT and cropped across, so it reaches the screen at
+      // lh * aspect and not at lw. These covers are composed CARDS — the
+      // catalogue's name, its item count and a ranked poster baked into one bitmap
+      // by whoever publishes the collection — and they are wide: the packaged
+      // editorial art is 3840x1000, or 3.84:1 against the card's 1.77:1. Asking by
+      // `lw` decoded that at 480 and the GPU then ENLARGED it to fill a box over
+      // 700 wide. A magnified copy of an image that had already been thrown away
+      // once is why the lettering inside these cards was the softest thing on the
+      // shelf, while the row titles beside them — real text — stayed crisp.
+      //
+      // STILL NOT `w`: the original note here is right that the focus scale must
+      // not move the ceiling, or the cover re-decodes the moment the card is landed
+      // on and blinks back to its skeleton. `1 + scaleOf` is the scale at FULL
+      // focus, a constant, so the ceiling covers the growth without following it.
+      //
+      // AND tex_get_width, NOT tex_get_exact. The width comes from tex_aspect,
+      // which answers 0 until the first decode lands, so this request moves once —
+      // and tex_get_width only ever promotes UPWARD, settling after that one
+      // re-decode (the same pattern detail.c uses for its logo). An exact entry
+      // moves in both directions, and would also fight tex_get_hero: colHeroArt
+      // falls back to this very cover at 1920 when the collection has no hero.
+      float coverW = lw;
+      { float asp = art && art[0] ? tex_aspect(art) : 0.0f;
+        if (asp > 0.0f && asp * lh > coverW) coverW = asp * lh; }
+      coverW *= 1.0f + scaleOf(ROW_CATALOGS);
+      // AND EXACT, whenever the collection has a hero of its own.
+      //
+      // MEASURED on this row and this is the whole of it: a 360-wide card asked by
+      // tex_get_width decodes at 480 (1.25 slack, rounded to a multiple of 32) and
+      // draws at 360 — a ratio of 1.333, which sits JUST UNDER
+      // GL_LINEAR_MIPMAP_NEAREST's 1.414 snap. The GPU therefore minifies off level
+      // 0 with a four-texel tap and throws a third of the source away. These covers
+      // are composed CARDS — the catalogue's name and its item count are lettering
+      // baked into the bitmap — and aliasing lands hardest on lettering, which is
+      // why the text inside the card read as soft while the row title beside it,
+      // drawn as real text, stayed sharp. tex_get_exact box-filters to the drawn
+      // width on the decode thread and uploads no mipmap chain: one clean
+      // reduction, then a 1:1 blit.
+      //
+      // THE GUARD IS colHeroArt. It falls back to this very cover when a collection
+      // has no hero, and the hero asks at 1920 — an exact entry moves in both
+      // directions while tex_get_hero only promotes upward, so a cover wanted by
+      // both would re-decode every frame, for ever. With a hero present the cover
+      // is provably never asked for at 1920, which is the same condition the poster
+      // cards below use.
+      GLuint tex = art && art[0]
+                 ? (folder->hero[0] ? tex_get_exact(art, coverW)
+                                    : tex_get_width(art, coverW))
+                 : 0;
       // The aspect the art is CROPPED to. It follows `tex` — when a frame of the
       // focus animation replaces the cover below, the aspect has to become the
       // frame's or the shader would crop the animation to the cover's shape.
@@ -2653,12 +2780,31 @@ static void drawShortcuts(int r, float y) {
         }
       }
       if (tex) {
-        gfx_tex_aspect_current = texAspect;
+        // FILL, NOT COVER — and the aspect of 0 is how this shader is told so.
+        //
+        // `.home-collection-card .content-poster` and its focus overlay both carry
+        // `object-fit: fill` (components.css:7586), i.e. the cover is STRETCHED to
+        // the card's box. GFX_CARD defaults to a cover-fit CROP, which on art whose
+        // aspect does not match the card magnified it further and cut content off
+        // the edge — visible as the ranked poster sitting harder against the card's
+        // right edge here than it does in the browser.
+        //
+        // Passing 0 is the documented way to ask for the stretch (tex_cache.h: an
+        // unknown aspect and "the shader would stretch the art"). It applies to the
+        // focus sheet too, deliberately: the web gives `.home-poster-focus-gif` the
+        // same `object-fit: fill` in that very rule.
+        (void)texAspect;
+        gfx_tex_aspect_current = 0;
         gfx_tex_cell_current = cell;
         gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1);
         gfx_tex_cell_current = (GfxRect){0.0f, 0.0f, 1.0f, 1.0f};
         gfx_tex_aspect_current = 0;
       } else if (folder->title[0]) {
+        // AND HERE THE SWEEP IS RIGHT: this branch is reached only while `tex` is 0,
+        // which for a folder that HAS a cover means the file is still on its way.
+        // Gated on `art` so a collection with no cover at all — nothing to wait for —
+        // keeps the still surface and just shows its name.
+        if (art && art[0]) drawArtSkeleton(card, radius, 1.0f);
         // NO ART YET, so the name stands in for it. The packaged collections' covers
         // are local files and appear on the first frame; the ACCOUNT's are CDN URLs
         // and arrive seconds later. Until now the card was a mute grey rectangle —
@@ -2865,13 +3011,47 @@ void home_draw(Uint32 now) {
 
           const int idxCat = rows[r].start + c;
           if(kind==ROW_TOP10 && rows[r].stackN) {
-            // No backing plate: the stacked posters already form the card.
+            // THE CARD'S SURFACE. What stood here was "no backing plate: the stacked
+            // posters already form the card". That is true of the posters' OWN
+            // footprint and false of the box around them: the plate is 680 wide and
+            // six posters at a step of 78 cover about 410 of it, so the remaining
+            // third showed the page's own #0D0D0D and the card read as a hole cut in
+            // the shelf rather than as a card. In the web this one is a
+            // `.home-content-card` like every other, so it carries the same
+            // `linear-gradient(180deg, #1c1c1c, #111)` — NV_POSTER_BG_* here.
+            //
+            // NOT drawArtSkeleton, which is that gradient PLUS the travelling shine:
+            // the shine says WAITING, and this card never waits for anything as a
+            // whole. Its posters arrive one by one and each already draws its own
+            // skeleton below. The plate is what the card looks like at rest.
+            drawArtSurface((GfxRect){px, py, w, h}, radiusOf(w, h), 1.0f);
             int count=rows[r].stackN<6?rows[r].stackN:6;
+            // THE WIDTH THE POSTER IS REALLY DRAWN AT, which is not the 178 of its
+            // box. GFX_CARD with gfx_tex_aspect_current set is a COVER fit, and the
+            // box (178 x 275 at rest) is TALLER in proportion than a 2:3 poster, so
+            // the texture is fitted by HEIGHT and its width is cropped: 275 * 2/3 =
+            // 183 of texture across a 178 window. Asking for 178 would leave the
+            // decode UNDER the drawn size and hand the magnify filter the difference.
+            //
+            // At FULL FOCUS, for the same reason wAsk is: only the height carries the
+            // scale here (the 178 is literal), so the drawn width grows to ~195 when
+            // the card is landed on. A ceiling that moved with it would re-decode
+            // every frame of the animation, which is the one thing tex_get_exact
+            // cannot take. At rest the texture is then minified by 1.06 — inside the
+            // margin where a four-texel tap is still clean, and nowhere near the
+            // 1.414 snap that started all this.
+            float stackW = (artH * (1.0f + scaleOf(kind)) - 72.0f) * (2.0f / 3.0f);
+            if (stackW < 178.0f) stackW = 178.0f;
             for(int k=0;k<count;k++) {
               const CatItem *it=cat_item_exact(idxCat+k);if(!it)continue;
               GfxRect pr={px+20+k*78,py+18,178,h-72};
               const char *pa=art_by_format(it,0);
-              GLuint tx=pa?tex_get_width(pa,178):0;
+              // EXACT, on the same terms as wAsk below: a poster whose item has a
+              // backdrop is provably never asked for at 1920 by either hero, so the
+              // two cannot fight over the entry's size.
+              int sharpK = it->backdrop[0] && pa == it->poster;
+              GLuint tx=pa?(sharpK?tex_get_exact(pa,stackW)
+                                  :tex_get_width(pa,stackW)):0;
               if(tx){gfx_tex_aspect_current=tex_aspect(pa);gfx_rect(pr,tx,GFX_CARD,0,0,0,.055f,1,1,1,1);gfx_tex_aspect_current=0;}
               else drawArtAbsent(pr,.055f,pa,it,1);
             }
@@ -2986,10 +3166,43 @@ void home_draw(Uint32 now) {
           // decode; it can only do that job if the ceiling STANDS STILL while the
           // scale moves. Open, the art is the landscape one — a different entry —
           // and its width is asked for whole, for the same reason.
-          float wAsk = openAmt > 0.5f
-                     ? artH * (1.0f + scaleOf(kind)) * NV_EXP_ASPECT
-                     : lw;
-          GLuint t = path ? tex_get_width(path, wAsk) : 0;
+          //
+          // AND THE WIDTH IS THE ARTWORK'S, NOT THE CARD'S. The art is drawn into
+          // frameOf(card, NV_CARD_PAD * scale), so a framed card's picture is 8px
+          // narrower than its box; asking by the box overstated every poster by that
+          // much on top of everything else.
+          float scaleMax = 1.0f + scaleOf(kind);
+          float boxMax = openAmt > 0.5f ? artH * scaleMax * NV_EXP_ASPECT
+                                        : lw * scaleMax;
+          float wAsk = posterFrame(kind) ? boxMax - 2.0f * NV_CARD_PAD * scaleMax
+                                         : boxMax;
+          // EXACT FOR THE PORTRAIT POSTER, tex_get_width for everything else.
+          //
+          // tex_get_width lands the texture between 1.25x and 1.6x the drawn size
+          // (NV_TEX_SLACK, then rounded up to a multiple of 32) and card textures
+          // carry GL_LINEAR_MIPMAP_NEAREST, which SNAPS at 1.414. A 229 card decoded
+          // at 288 draws its art at 221: a ratio of 1.303, just under the snap, so
+          // the GPU minifies off level 0 with a four-texel tap and throws away a
+          // third of the source. That is the "pixelated" look — it is aliasing, not
+          // a small texture. The same arithmetic is what home.c's collection hero
+          // records for the wordmarks, and tex_get_exact is the fix it already uses:
+          // the decode thread box-filters to the drawn width in one pass and the
+          // upload carries no mipmap chain, so what reaches the panel is a 1:1 blit.
+          // Asked for at scaleMax the ceiling STANDS STILL while the focus scale
+          // moves, which is the one thing tex_get_exact cannot tolerate.
+          //
+          // ONLY WHEN THE ITEM HAS A BACKDROP, and that condition is load-bearing.
+          // An exact entry re-decodes when the request moves in EITHER direction,
+          // while tex_get_hero's 1920 only ever promotes upward — so a path wanted by
+          // both would decode every frame, for ever. Both heroes that could want a
+          // poster take it only as a fallback (`artOfItem` here, `artOf` in detail.c,
+          // each gated on an empty backdrop), so a poster whose item HAS a backdrop
+          // is provably never asked for at 1920. Smaller non-exact callers (the
+          // social panel's 96) cannot start the fight: they promote upward or not at
+          // all. The landscape/open art IS the backdrop, so it keeps tex_get_width.
+          int sharp = cItem && path == cItem->poster && cItem->backdrop[0];
+          GLuint t = path ? (sharp ? tex_get_exact(path, wAsk)
+                                   : tex_get_width(path, wAsk)) : 0;
           float radius = radiusOf(w, h);
           GfxRect card = { px, py, w, h };
           // Continue watching keeps the old geometry, and that is the reference

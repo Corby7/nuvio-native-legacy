@@ -37,6 +37,8 @@ static int   operation, intent, stateOperation;
 static int   mirrorApplied;
 static char  operationImdb[16];
 static volatile int holdActive, holdCancelled, holdReady;
+// OK was still physically down when the modal opened — see the guard in ctx_event.
+static volatile int swallowOk;
 static Uint32 holdSince;
 
 static int keyOk(SDL_Keycode k) {
@@ -66,6 +68,7 @@ static int observeHold(void *u, SDL_Event *e) {
     if (holdActive && !holdCancelled && SDL_GetTicks() - holdSince >= NV_HOLD_MS)
       holdReady = 1;
     holdActive = 0;
+    swallowOk = 0;
   }
   return 0;
 }
@@ -134,6 +137,7 @@ void ctx_open(int index_) {
   // sentinel here stops the following KEYUP being reused as a selection inside
   // the modal.
   holdReady = 0;
+  swallowOk = holdActive;
   idx = index_; focus = 0; is_open = 1; reqDetails = -1;
   operation = CTX_OP_NONE; intent = 0; stateOperation = 0;
   mirrorApplied = 0;
@@ -188,6 +192,14 @@ void ctx_event(const SDL_Event *e) {
   if (!is_open) return;
   if (e->type != SDL_KEYDOWN) return;
   k = e->key.keysym.sym;
+  // OK IS STILL DOWN FROM THE GESTURE THAT OPENED THIS MODAL. It opens at the 500ms
+  // mark, with the button not yet released, and the remote goes on sending repeats
+  // of that same press — which arrived here and reached apply(), firing "Details".
+  // A long press therefore landed on the detail screen, the very place a TAP lands,
+  // with the modal flashing on the way through: the two gestures looked identical
+  // and neither seemed to do what it said. The first OK this modal accepts is the
+  // first one PRESSED after it opened.
+  if (keyOk(k) && (e->key.repeat || swallowOk)) return;
   if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
       e->key.keysym.scancode == NV_SCANCODE_BACK) { is_open = 0; return; }
       // While the request is in flight, OK does not repeat the write. Focus

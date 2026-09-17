@@ -64,62 +64,136 @@
 // The geometry of the controls block, from the bottom up. Everything anchored to
 // the BOTTOM of the screen: it is what does not move when the block slides in.
 // ---------------------------------------------------------------------------
-// THE WEB APP'S PLAYER MEASUREMENTS
+// THE WEB APP'S TRANSPORT, RE-MEASURED 2026-09-17
 //
-// This screen no longer follows the Apple app's player: it follows our web app,
-// which is this legacy variant's reference. The values are the CSS's resolved at
-// 1920x1080, which is where the app runs — in the file they are min(Xvw, Ypx) and
-// the TV always hits the ceiling. Each one's origin is recorded so it can be checked.
+// The numbers below no longer come from the ATV port near the top of the player
+// section in components.css. They come from the block that ends that section —
+// "Transport - clock, title block, scrubber" (css/components.css:15768) — which
+// says in its own header that it deliberately sits last and supersedes the port,
+// "which sized the transport for a phone-sized preview rather than a 1080p screen
+// viewed from a couch". Reading the port and stopping there is how this file ended
+// up half a size out on the bar and a third out on the button spacing.
 //
-//   #playerUiRoot        --player-controls-x/y      64 / 48
-//   .player-control-btn  --player-control-size      96   (gap 4px)
-//   .player-progress-track  height 6 -> 10 with focus, radius 3
-//   .player-progress-shell  margin-top 12
-//   .player-controls-row    margin-top 16
-//   .player-controls-gradient-top/bottom   150 / 200
+// Resolved at 1920x1080, which is where this app runs — in the sheet they are
+// min(Xvw, Ypx) and the TV always hits the ceiling:
 //
-// BUT THOSE ARE THE BASE VALUES, AND NOT THIS SCREEN'S. The `#playerUiRoot` block
-// (components.css:15251) is the port of the Android TV player and redoes almost all
-// of them with the x2 conversion the repository uses for the 1920 canvas ("ATV 6dp
-// -> 12px"). What was here was half the right size on almost everything — the bar,
-// the buttons' gap, the row's breathing room and both gradients. The ones the ATV
-// block does NOT redo (padding 64/48, the bar's margin-top 12) stay as they are.
-//
-//   .player-progress-track  12 -> 20 with focus, radius 6
-//   .player-control-buttons gap 8
-//   .player-controls-row    margin-top 32
-//   .player-control-icon    48
-//   gradients               300 (top) / 400 (base)
+//   --player-controls-x            64    .player-controls-overlay padding, BOTH axes
+//   --player-scrub-height           8    resting track   (the port said 12)
+//   --player-scrub-height-focused  12    focused track   (the port said 20)
+//   --player-scrub-knob            30    the playhead, scale(0) until focus
+//   --player-transport-gap         40    title block -> bar
+//   --player-transport-row-gap     36    bar -> button row
+//   --player-control-size          90    the focus circle (the port said 96)
+//   .player-control-buttons gap    14    (the port said 8)
+//   --player-control-icon          48    the glyph inside the circle
+//   .player-control-btn::after     the label, 16 below the circle, 20/bold
 #define PLR_PAD_X         64.0f
 #define PLR_PAD_Y         48.0f
-// The side margin of the footer's CONTENT (title, buttons, clock). The bar's track
-// still runs 0..width; only the content is inset, so as not to fall in the zone the
-// TV cuts by overscan. The same value as the title page's gutter.
+// The transport's own bottom inset. It is --player-controls-x (64) and not
+// PLR_PAD_Y: the web app's overlay pads BOTH axes with -x, and the focused
+// button's label hangs 16px below the circle, so at 48 the label landed 8px from
+// the panel's edge — inside the strip the TV eats by overscan.
+#define PLR_PAD_BOTTOM    64.0f
+// The side margin of the footer's CONTENT — title, bar, buttons and clock, which
+// in the web app all share one left edge (the overlay's padding box). 96 is this
+// app's measured safe gutter, wider than the web's 64 because the TV cuts more
+// than a browser does; what matters for the LOOK is that the bar starts exactly
+// where the play button's circle starts, and that is what this shares.
 #define PLR_MARGIN        96.0f
-#define PLR_BTN_D         76.0f
-#define PLR_BTN_GAP        8.0f
-// 12px at rest, 20px with focus — both from the ATV block. The bar HAS STARTED
-// taking focus (UP from the button row); before, only the buttons did, and that is
-// why there was no way to seek through the film with the bar.
-// A MINIMAL BAR, EDGE TO EDGE. It was 12px tall with a 64px margin on each side and
-// radius 6 — and the radius was the defect: in this API it is a FRACTION of the
-// smaller side (see gfx.h), at most 0.5, so 6.0 degenerated the SDF. The effect was
-// the initial fill becoming a bubble instead of a bar growing, and only "appearing"
-// after many minutes of film, once it was wide enough for the shape to resolve. It
-// is what the owner described: "it takes ages to show it filling, it isn't well
-// calibrated".
+#define PLR_BTN_D         90.0f
+#define PLR_BTN_GAP       14.0f
+// The label under the FOCUSED button: `top: calc(100% + 16px)` on
+// .player-control-btn::after, so 16px below the circle's bottom edge.
+#define PLR_BTN_TIP       16.0f
+// THE SCRUBBER. 8px at rest, 12px focused, and a full pill at both — not the
+// square-cornered hairline that was here.
 //
-// Now it is a straight hairline with square corners (radius 0), flush with the
-// screen's edges. With no radius there is no SDF to degenerate and the first pixel
-// of progress appears at once.
-#define PLR_RAIL_H       4.0f
-// 20px with focus (`min(1.04vw, 20px)` in .player-progress-shell.focused).
-#define PLR_RAIL_H_FOCUS  8.0f
-#define PLR_RAIL_R       0.0f   // a square corner: see the note above
-#define PLR_GAP_BAR     12.0f   // meta -> bar
-#define PLR_GAP_ROW       32.0f   // bar -> button row
-#define PLR_GRADIENT_BOTTOM   400.0f
-#define PLR_GRADIENT_TOP    300.0f
+// The square corner was a workaround for a real bug, and the workaround outlived
+// it: `radius` in this API is a fraction measured in the rect's HEIGHT (see the
+// SDF in gfx.c — `b = vec2(0.5*asp, 0.5) - r`), so the 6.0 that was once passed
+// here was not "6px", it was twelve times the whole rect, and the SDF degenerated.
+// 0.5 is the correct spelling of a pill. The one case that still needs care is the
+// FILL while it is narrower than it is tall, where 0.5 drives b.x negative — see
+// railRadius below, which is the same correction parental_guide already applies to
+// its vertical bar.
+#define PLR_RAIL_H         8.0f
+#define PLR_RAIL_H_FOCUS  12.0f
+// The playhead. "Wants to be ~2.5x the focused bar. Closer than that and it reads
+// as a bump in the bar rather than a playhead you are holding" — the sheet's own
+// note. Hidden at rest (transform: scale(0)) so the resting bar stays a hairline.
+#define PLR_RAIL_KNOB     30.0f
+// .player-meta is a flex column with `gap: min(0.42vw, 8px)` — the air BETWEEN the
+// title, the episode line and the stream facts. It was a bare 6 for the one gap
+// that existed.
+#define PLR_META_GAP       8.0f
+// THE SEEK DELTA (.player-seek-delta), the pill that says how far this burst of
+// presses has moved you. In the web app it lives at the right end of the controls
+// row, immediately after the time it qualifies.
+//
+//   min-width 116, padding 6/16, radius 999, background rgba(255,255,255,0.14)
+//   font 24/700 in the row (.player-controls-row .player-seek-delta)
+//
+// The flex `gap: clamp(24px, 1.8vw, 36px)` between the readout and the pill.
+#define PLR_PILL_MINW    116.0f
+#define PLR_PILL_PADX     16.0f
+#define PLR_PILL_PADY      6.0f
+#define PLR_ROW_GAP       34.0f
+// A HELD SEEK IS ONE GESTURE, not N seeks.
+//
+// Each press used to commit immediately — posSeg += 10 and video_fetch(). That is
+// the bug behind "when holding seek too long it seems to reset": player_update
+// overwrites posSeg from video_pos() every frame, and the pipeline is still
+// somewhere behind the target when the next frame arrives, so the bar leapt forward
+// and snapped back, repeatedly, and a long hold landed wherever the decoder had got
+// to rather than where you aimed. It was also firing one seek per key repeat at the
+// pipeline, which is what made it lag further behind the longer you held.
+//
+// The web app's answer, ported: a PREVIEW. Presses move a target, the bar draws the
+// target, playback carries on untouched underneath, and ONE seek is issued 1000ms
+// after the last press (scheduleSeekPreviewCommit).
+// The stats panel's corner. The web app hangs it at left ~38 / top 24; this keeps
+// a little more edge than that because the TV's overscan really does eat the strip
+// the browser never loses — but it is a CORNER now, not the 96/64 content gutter
+// the rest of the overlay uses, which had it floating in the middle of the frame.
+#define PLR_STATS_X         48.0f
+#define PLR_STATS_Y         40.0f
+#define PLR_SEEK_COMMIT_MS  1000u
+// The pill's fade once the seek is committed. The web app simply clears the text;
+// 200ms of fade costs nothing and stops it popping out of existence.
+#define PLR_DELTA_FADE_MS    200u
+// AFTER committing, video_pos() still reports the OLD position until the pipeline
+// lands. Believing it there would re-introduce exactly the snap-back this preview
+// exists to remove, so posSeg holds the target until the decoder arrives within
+// PLR_SEEK_LAND_S of it — or until PLR_SEEK_SETTLE_MS is up, because a seek that
+// never lands (a dead link, a source that refuses) must not freeze the readout
+// forever.
+#define PLR_SEEK_LAND_S      2.0f
+#define PLR_SEEK_SETTLE_MS  6000u
+// The step escalates with the repeat count, exactly as the web app's does:
+// >=18 -> 120s, >=12 -> 60s, >=7 -> 30s, >=3 -> 20s, else 10s. Holding the key is
+// how you cross an hour of film without 360 presses.
+static float seekStepFor(int repeats) {
+  return repeats >= 18 ? 120.0f : repeats >= 12 ? 60.0f
+       : repeats >=  7 ?  30.0f : repeats >=  3 ? 20.0f : 10.0f;
+}
+#define PLR_GAP_BAR       40.0f   // --player-transport-gap:     title -> bar
+#define PLR_GAP_ROW       36.0f   // --player-transport-row-gap: bar -> buttons
+// THE TWO SCRIMS, now the web app's own.
+//
+//   .player-controls-gradient-bottom  min(31.25vw, 600px)  -> 600
+//   --player-top-scrim                ellipse 600 x 360 at the top-right corner
+//
+// The bottom one was 400 tall AND drawn with GFX_VEIL_BOTTOM's squared smoothstep,
+// which between them put only about a fifth of its density at the height the
+// scrubber sits. Six hundred tall with the sheet's own stops (GFX_VEIL_PLAYER)
+// roughly triples it there, which is what the bar and the buttons were missing.
+//
+// The top one is no longer a band. As a full-width strip it shaded the whole top of
+// the frame for the sake of two short lines in one corner; now it is a pool anchored
+// to that corner and the rest of the top is untouched picture.
+#define PLR_GRADIENT_BOTTOM   600.0f
+#define PLR_POOL_W          600.0f
+#define PLR_POOL_H          360.0f
 // #f5f5f5 = --secondary-color, which is what fills the bar in the web app.
 #define PLR_FILL_C      (245.0f / 255.0f)
 
@@ -138,15 +212,29 @@
 #define PG_SEG_TOTAL       7.0f
 #define PG_SEG_OUTPUT       0.8f
 #define PG_LIST_PADX     20.0f
-#define PG_LINE_H        36.0f
+#define PG_LINE_H        42.0f
 #define PG_LINE_GAP       4.0f
-// The veil became the web app's two gradients (PLR_GRADIENT_TOP/BOTTOM). It exists
-// so the text reads over the image — without it, a bright scene wipes out the
-// title's name.
+// The veil became the web app's two scrims — GFX_VEIL_PLAYER along the base and
+// GFX_VEIL_POOL in the clock's corner. They exist so the text reads over the image:
+// without them a bright scene wipes out the title's name.
 
-// Compact transport. The jumps are still reachable through the arrows on the bar.
-enum { PLR_PLAY, PLR_ASPECT, PLR_CC, PLR_AUDIO,
-       PLR_SOURCES, PLR_EPISODES, PLR_NBTNS };
+// THE ROW'S ORDER, from getControlDefinitions() in playerScreen.js: play, then
+// subtitles, then audio, then episodes (only for a series), and the rest last.
+//
+// Aspect and Sources were second and fifth here, which is nobody's order. In the
+// web app they are not even in the resting row: they live behind the "More
+// Actions" button, which swaps the tail of the row for source/aspect/stats/speed.
+// That collapse has NOT been ported — a menu that hides two of six actions is a
+// behaviour change, not a visual one, and with six buttons the row still reads in
+// one glance. What is ported is where each one SITS, so the hand finds subtitles
+// and audio in the first three, as it does in the web app.
+//
+// The order is also why the row is no longer walked with a bare index: episodes
+// only exists for a series, and it is no longer the last entry, so the old
+// `PLR_NBTNS - (epT > 0 ? 0 : 1)` (which only ever worked because episodes
+// happened to be last) is gone in favour of the visible list below.
+enum { PLR_PLAY, PLR_CC, PLR_AUDIO, PLR_EPISODES,
+       PLR_SOURCES, PLR_ASPECT, PLR_STATS, PLR_NBTNS };
 
 static int   is_open = 0, exiting = 0, requestedExit = 0;
 static int   idx = 0;
@@ -162,6 +250,22 @@ static int   barFocus = 0;
 static int   visible = 0;          // the controls' target (1 = up)
 static float anim = 0.0f;          // 0..1 following `visible`, by spring
 static float focusB[PLR_NBTNS];     // each button's focus spring
+// The BAR's focus spring. It used to have none: `barFocus` was a bare int and the
+// track jumped between its two heights in one frame. The web app's track carries
+// `transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1)` and the playhead the
+// same curve on its scale, so a hard switch is visibly not the same control.
+static float focusBarAnim = 0.0f;
+// The accumulated jump of the CURRENT burst, and when it last grew. Zeroed when
+// the burst ends, when the bar loses focus, and when the screen closes.
+// The seek PREVIEW. `seekActive` says a burst is in flight; `seekPreview` is where
+// it is aiming; `seekAt` is the last press. After the commit, `settleAt` guards the
+// window in which video_pos() is not yet to be believed.
+static int    seekActive = 0, seekDir = 0, seekRepeats = 0;
+static float  seekPreview = 0.0f;
+static Uint32 seekAt = 0, seekEndAt = 0;
+static Uint32 settleAt = 0;
+static float  settleTarget = 0.0f;
+static int    statsOpen = 0;   // the stream stats panel (#playerStatsOverlay)
 static float entry = 0.0f;       // 0..1 the screen's opening/closing fade
 static Uint32 lastInput = 0;
 // The instant the PICTURE started (not the screen's opening: between the two there
@@ -626,10 +730,74 @@ void player_shutdown(void) {
   }
   if (hasVideo) video_stop();
   hasVideo = 0; waitingSource = 0; is_open = 0; exiting = 0; requestedExit = 0;
+  statsOpen = 0;
+  seekActive = 0; seekRepeats = 0; seekDir = 0;
+  seekAt = seekEndAt = settleAt = 0;
   startImage = 0;
   episodes_close();
   intro_off(); introIdx=introT=introE=-1;
   subtitle_off();
+}
+
+// THE VISIBLE ROW. Episodes only exists for a series, and it sits in the middle of
+// the order rather than at the end, so "which buttons are on screen" can no longer
+// be expressed as a count. Everything that walks the row — the draw, LEFT/RIGHT,
+// and the label — goes through this, so there is one answer and not three.
+static int rowButtons(int *out) {
+  int n = 0;
+  out[n++] = PLR_PLAY;
+  out[n++] = PLR_CC;
+  out[n++] = PLR_AUDIO;
+  if (epT > 0) out[n++] = PLR_EPISODES;
+  out[n++] = PLR_SOURCES;
+  out[n++] = PLR_ASPECT;
+  out[n++] = PLR_STATS;
+  return n;
+}
+
+// Where the focused action sits in that row. -1 cannot happen from the row's own
+// navigation, but it can from a title changing under the screen (a series episode
+// followed by a film), and the callers clamp on it rather than indexing past the end.
+static int rowSlot(const int *row, int n, int action) {
+  for (int i = 0; i < n; i++) if (row[i] == action) return i;
+  return -1;
+}
+
+// THE STREAM'S OWN FACTS, as ONE line: "4K · Dolby Vision · Dolby Atmos".
+//
+// They come from the STREAM and not from a constant: the two used to be hard-coded
+// and announced Dolby Vision on an HDR10 file and Atmos on a stereo track. A badge
+// that lies is worse than no badge, because it is what the owner trusts to know
+// whether they got the good version.
+//
+// "Dolby Vision" only when the PIPELINE returned DolbyVision in the videoInfo —
+// video_has_dolby_vision no longer reads the addon's claim. MEASURED on this TV,
+// from the log while playing an MKV the addon advertised as Dolby Vision:
+//   [video] pipeline HDR: HDR10 (source claimed DV=1)
+// When the pipeline says HDR10 the line says HDR10; staying quiet would hide half
+// the answer.
+//
+// ONE line, not one TxtLine per fact. That is what killed the stagger these used to
+// need: three separate lines hit the rasteriser's TXT_PER_FRAME budget (text.c:40)
+// and arrived over three frames, which read as a defect, and the fix at the time
+// was to OWN the staggering with a curve. A single line has nothing to stagger —
+// it rasterises once and is then a cache hit for the rest of the playback.
+static int streamFacts(char *dst, size_t n) {
+  const char *f[3];
+  int nf = 0;
+  char res[16] = "";
+  if (video_width() >= 3840)      snprintf(res, sizeof res, "4K");
+  else if (video_width() >= 1920) snprintf(res, sizeof res, "HD");
+  if (res[0]) f[nf++] = res;
+  if (video_has_dolby_vision())               f[nf++] = "Dolby Vision";
+  else if (!strcasecmp(video_hdr(), "HDR10")) f[nf++] = "HDR10";
+  if (video_has_atmos())                      f[nf++] = "Dolby Atmos";
+  dst[0] = 0;
+  for (int i = 0; i < nf; i++) {
+    if (i) strncat(dst, " \xc2\xb7 ", n - strlen(dst) - 1);
+    strncat(dst, f[i], n - strlen(dst) - 1);
+  }
+  return nf;
 }
 
 static int offerNext(void) {
@@ -647,15 +815,50 @@ static void wake(void) { visible = 1; lastInput = SDL_GetTicks(); }
 static void togglePlaying(void) {
   playing = !playing;
   if (hasVideo) video_pause(!playing);
+  // THE FOCUS FOLLOWS THE THING THAT ANSWERED. Play/pause is reachable three ways
+  // that are not the play button — OK with the controls hidden, OK while the bar
+  // has focus, and OK on the button itself — and only the third left the puck
+  // anywhere near the glyph that had just changed. Pausing from the bar, or from a
+  // clean frame with the row last parked on Subtitles, raised the controls with a
+  // white circle sitting on a button that had done nothing.
+  //
+  // It is also the answer to "what do I press to undo that": the puck is already on
+  // it, so resuming is one press of OK rather than a hunt along the row.
+  button = PLR_PLAY;
+  barFocus = 0;
 }
 
 // A 10s jump with a limit. It only counts with the controls up: blind, an arrow
 // would be an invisible jump — with the buttons, whoever presses is looking at a
 // button that says «10 / 10».
+// Moves the TARGET. Nothing is sent to the pipeline here — see commitSeek.
 static void jump(int dir) {
-  posSeg += dir * PLR_JUMP_SEG;
-  posSeg = anim_clamp(posSeg, 0.0f, durationSeg);
-  if (hasVideo) video_fetch(posSeg);
+  if (!seekActive) {
+    seekActive = 1;
+    seekPreview = posSeg;
+    seekRepeats = 0;
+    seekDir = 0;
+  }
+  // A change of direction restarts the ramp, like the web app's
+  // `direction !== this.seekPreviewDirection` — reversing is a correction, and
+  // correcting at 120s a press would be unusable.
+  if (dir != seekDir) seekRepeats = 0;
+  seekDir = dir;
+  seekRepeats++;
+  seekPreview = anim_clamp(seekPreview + dir * seekStepFor(seekRepeats),
+                              0.0f, durationSeg);
+  seekAt = SDL_GetTicks();
+}
+
+// Sends the burst's target to the pipeline, once.
+static void commitSeek(void) {
+  if (!seekActive) return;
+  seekActive = 0; seekRepeats = 0; seekDir = 0;
+  seekEndAt = SDL_GetTicks();
+  posSeg = seekPreview;
+  settleTarget = seekPreview;
+  settleAt = seekEndAt;
+  if (hasVideo) video_fetch(seekPreview);
 }
 
 void player_event(const SDL_Event *e) {
@@ -694,7 +897,10 @@ void player_event(const SDL_Event *e) {
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
     // On the bar, OK pauses/resumes: it is what is left that is useful, since the bar
     // has no action of its own in the web app.
-    if (barFocus) { togglePlaying(); wake(); return; }
+    // On the bar, OK ends a seek in flight instead of pausing: you have been
+    // aiming with left/right and OK is "go there". Pausing at that moment would
+    // throw the aim away. With nothing in flight it pauses, as before.
+    if (barFocus) { if (seekActive) commitSeek(); else togglePlaying(); wake(); return; }
     switch (button) {
       case PLR_PLAY:    togglePlaying(); break;
       case PLR_ASPECT: player_aspect_cycle(); break;
@@ -703,7 +909,8 @@ void player_event(const SDL_Event *e) {
       case PLR_CC:      reqTracks = 2;     break;   // 2 = the subtitle column
       case PLR_SOURCES:  reqSources = 1; break;
       case PLR_EPISODES: if (epT > 0) episodes_open(idx, epT, epE); break;
-      default:          reqTracks = 1;     break;   // 1 = the audio column
+      case PLR_STATS:    statsOpen = !statsOpen; break;
+      default:          reqTracks = 1;     break;   // PLR_AUDIO, 1 = the audio column
     }
     wake();
     return;
@@ -728,7 +935,7 @@ void player_event(const SDL_Event *e) {
     // On the bar, LEFT and RIGHT seek through the film instead of changing button.
     if (k == SDLK_LEFT)       jump(-1);
     else if (k == SDLK_RIGHT) jump(1);
-    else if (k == SDLK_DOWN)  barFocus = 0;
+    else if (k == SDLK_DOWN) { commitSeek(); barFocus = 0; }
     wake();
     return;
   }
@@ -743,8 +950,13 @@ void player_event(const SDL_Event *e) {
   }
   // No wrap-around at the ends: the row is short and fits in a single glance; going
   // round at the end reads as an error, not as a shortcut.
-  if (k == SDLK_LEFT  && button > 0)          button--;
-  else if (k == SDLK_RIGHT && button < PLR_NBTNS - (epT > 0 ? 1 : 2)) button++;
+  //
+  // It steps through the VISIBLE row, not through the enum: with episodes no longer
+  // last, walking the enum would stop on a button that is not drawn for a film.
+  { int row[PLR_NBTNS], n = rowButtons(row), slot = rowSlot(row, n, button);
+    if (slot < 0) slot = 0;
+    if (k == SDLK_LEFT  && slot > 0)     button = row[slot - 1];
+    else if (k == SDLK_RIGHT && slot < n - 1) button = row[slot + 1]; }
   wake();
 }
 
@@ -773,9 +985,21 @@ void player_update(float dt, Uint32 now) {
     if (lw != lastWidth || lh != lastHeight) { lastWidth = lw; lastHeight = lh; applyAspect(); }
   }
 
+  // The burst is over once the presses stop. ONE seek goes out, here.
+  if (seekActive && now - seekAt > PLR_SEEK_COMMIT_MS) commitSeek();
+
   if (hasVideo && video_active()) {
     double d = video_duration();
-    posSeg = (float)video_pos();
+    double vp = video_pos();
+    // WHILE SETTLING, video_pos() is still reporting where the decoder WAS. Taking
+    // it would snap the bar back to the pre-seek position for as long as the
+    // pipeline takes to land — which is the whole defect this preview replaced.
+    // Hold the target until it arrives, or until the settle window expires.
+    if (settleAt) {
+      if (fabs(vp - (double)settleTarget) <= (double)PLR_SEEK_LAND_S ||
+          now - settleAt > PLR_SEEK_SETTLE_MS) settleAt = 0;
+    }
+    posSeg = settleAt ? settleTarget : (float)vp;
     if (d > 1.0) durationSeg = (float)d;
     if (!resumeApplied && video_ready() && d>1.0) {
       resumeApplied=1;
@@ -795,11 +1019,18 @@ void player_update(float dt, Uint32 now) {
 
   anim = anim_spring(anim, visible ? 1.0f : 0.0f, dt,
                    visible ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  // `barFocus` counts here now. The resting button has NO circle any more (the web
+  // app's is `background: transparent` until focus), so this spring is the only
+  // thing drawing it — and without the guard, moving UP to the bar left the button's
+  // white puck lit behind a bar that also claimed to have focus.
   for (int i = 0; i < PLR_NBTNS; i++) {
-    float target = (visible && button == i) ? 1.0f : 0.0f;
+    float target = (visible && !barFocus && button == i) ? 1.0f : 0.0f;
     focusB[i] = anim_spring(focusB[i], target, dt,
                          target > focusB[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
+  { float target = (visible && barFocus) ? 1.0f : 0.0f;
+    focusBarAnim = anim_spring(focusBarAnim, target, dt,
+                         target > focusBarAnim ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
 }
 
 // hh:mm:ss only when it passes an hour — "0:03:12" on a short episode reads as a
@@ -829,29 +1060,55 @@ static void iconFile(float cx, float cy, float a, float luma,
   gfx_icon(r, name, luma, luma, luma, a * 0.94f);
 }
 
+// The glyphs are drawn at --player-control-icon (48) flat. They were at
+// PLR_ICON_H * 1.15 = 55, which is the size the ATV port gives the PRIMARY button
+// alone; every other button in the web app is 48, and at 55 the row's five
+// secondaries were each a size larger than the sheet says.
 static void iconPlayPause(float cx, float cy, float a, int pause, float luma) {
-  iconFile(cx, cy, a, luma, pause ? "pause" : "play", PLR_ICON_H * 1.15f);
+  iconFile(cx, cy, a, luma, pause ? "pause" : "play", PLR_ICON_H);
 }
 
 static void iconSubtitles(float cx, float cy, float a, float luma) {
-  iconFile(cx, cy, a, luma, "subtitles", PLR_ICON_H * 1.15f);
+  iconFile(cx, cy, a, luma, "subtitles", PLR_ICON_H);
 }
 
 static void iconAudio(float cx, float cy, float a, float luma) {
-  iconFile(cx, cy, a, luma, "audio", PLR_ICON_H * 1.15f);
+  iconFile(cx, cy, a, luma, "audio", PLR_ICON_H);
 }
 
 static void iconAspect(float cx, float cy, float a, float luma) {
-  iconFile(cx, cy, a, luma, "aspect", PLR_ICON_H * 1.15f);
+  iconFile(cx, cy, a, luma, "aspect", PLR_ICON_H);
 }
 
-// A round transport button: translucent when idle, white when focused, and the glyph
-// always with the right contrast against its background.
-static void buttonCircle(float cx, float cy, float f, float a, int sel) {
-  float d = PLR_BTN_D * (1.0f + 0.09f * f);
-  GfxRect r = { cx - d * 0.5f, cy - d * 0.5f, d, d };
-  if (sel) gfx_color(r, 0.5f, 0.97f, 0.97f, 0.98f, 0.96f * a);
-  else     gfx_color(r, 0.5f, 0.05f, 0.05f, 0.06f, 0.42f * a);
+// THE FOCUS PUCK, and nothing else.
+//
+// The resting button used to carry a dark translucent circle of its own, so the row
+// read as six grey coins laid on the picture whether or not anything was focused.
+// The web app's is `background: transparent` at rest and `background: #ffffff` on
+// focus, with a 180ms colour transition and NO change of size — the circle is not a
+// button's body, it is the focus itself arriving. `f` is that transition.
+//
+// Dropping the 1.09 scale with it is deliberate: the web app has none, and a puck
+// that both appears and grows reads as two cues for one event.
+static void buttonCircle(float cx, float cy, float f, float a) {
+  GfxRect r = { cx - PLR_BTN_D * 0.5f, cy - PLR_BTN_D * 0.5f, PLR_BTN_D, PLR_BTN_D };
+  if (f > 0.004f) gfx_color(r, 0.5f, 1.0f, 1.0f, 1.0f, f * a);
+}
+
+// A PILL, spelled correctly for this API. `radius` is a fraction measured in the
+// rect's HEIGHT (gfx.c's sdf: `b = vec2(0.5*asp, 0.5) - r`), so 0.5 is a full pill
+// only while the rect is at least as wide as it is tall. The fill starts a frame
+// after the film does, when it is two pixels wide and twelve tall, and there 0.5
+// drives the SDF's b.x negative and the shape collapses — which is the bubble the
+// owner saw at the start of every film, misdiagnosed once as "the radius is too
+// big" and answered by squaring the corners off entirely.
+//
+// Scaling by w/h on that side is the same correction the parental guide already
+// applies to its vertical bar, and it keeps the ends round all the way down to the
+// first pixel of progress.
+static float railRadius(float w, float h) {
+  if (h <= 0.0f) return 0.0f;
+  return 0.5f * (w < h ? w / h : 1.0f);
 }
 
 static void colorSubtitle(int i,int *r,int *g,int *b){
@@ -877,7 +1134,12 @@ static void drawSubtitleExternal(void){
   }
   if(!n)return;
   float total=0;for(int i=0;i<n;i++)total+=color[i].h+(i?5:0);
-  float base=visible?760.f:1000.f;
+  // The lift the subtitle takes when the controls come up. 760 was the clearance
+  // over the OLD transport; the ported one is ~66px taller (a 64 bottom inset
+  // instead of 48, and the web app's 40/36 gaps instead of 12/32), which left the
+  // cue a dozen pixels under the title. 700 restores roughly the clearance that
+  // value was chosen for.
+  float base=visible?700.f:1000.f;
   if(offerNext())base=690.f;
   base-=(subStyle.position-3)*48.f;
   float y=base-total;
@@ -890,6 +1152,173 @@ static void drawSubtitleExternal(void){
     }
     txt_draw_alpha(l,x,y,alpha);y+=l.h+5;
   }
+}
+
+// --- THE STREAM STATS PANEL (#playerStatsOverlay) ----------------------------
+// A label/value list on a dark plate, hung in the top-left CORNER.
+//
+// WHAT IT DOES NOT SHOW, and why. The web app's list is read off
+// PlayerController.getPlaybackStats(), which includes a dropped-frames counter this
+// pipeline has no equivalent of. There is no Dropped frames row rather than one
+// reading "--" forever or, worse, filled from somewhere else — the app's own render
+// telemetry (main.c's FPS/janks) is NOT the decoder's dropped frames, and putting it
+// under that label would be the same lie the format badges used to tell.
+//
+// The bitrate IS derivable and honest: the chosen stream carries sizeMB, so
+// size/duration is a genuine AVERAGE for the file. It is labelled "(avg)" for
+// exactly the reason the web app labels its own estimate that way — it is not the
+// instantaneous rate, and at a tense moment in a VBR encode the real figure is well
+// above it. The quality badge rates it against the web's own thresholds, which
+// scale with the picture's height: 15 Mbps is thin for 2160p and lavish for 480p.
+
+// The CodecID, shortened for reading. `bitmap` comes back 1 for the formats that
+// are PICTURES rather than text — which is not trivia: a PGS track cannot be
+// restyled, repositioned or resized, so every subtitle setting in this app silently
+// does nothing on one. Seeing "PGS" here is the answer to why.
+static const char *subKind(const char *codec, int *bitmap) {
+  if (bitmap) *bitmap = 0;
+  if (!codec || !codec[0]) return NULL;
+  if (strstr(codec, "PGS"))    { if (bitmap) *bitmap = 1; return "PGS"; }
+  if (strstr(codec, "VOBSUB")) { if (bitmap) *bitmap = 1; return "VobSub"; }
+  if (strstr(codec, "DVBSUB")) { if (bitmap) *bitmap = 1; return "DVB"; }
+  if (strstr(codec, "WEBVTT")) return "WebVTT";
+  if (strstr(codec, "ASS"))    return "ASS";
+  if (strstr(codec, "SSA"))    return "SSA";
+  if (strstr(codec, "UTF8"))   return "SRT";
+  return codec;
+}
+
+// The web app's getBitrateQualityRating, thresholds and all. Returns NULL when
+// there is nothing to rate — no bitrate, or no height to rate it against.
+static const char *bitrateBadge(double mbps, int height, float *r, float *g, float *b) {
+  double good;
+  if (mbps <= 0.0 || height <= 0) return NULL;
+  good = height <= 480 ? 1.5 : height <= 720 ? 3.0
+       : height <= 1080 ? 5.0 : height <= 1440 ? 9.0 : 15.0;
+  if (mbps >= good * 2.0) { *r = 125/255.0f; *g = 211/255.0f; *b = 252/255.0f; return "EXCELLENT"; }
+  if (mbps >= good)       { *r = 134/255.0f; *g = 239/255.0f; *b = 172/255.0f; return "GOOD"; }
+  *r = 252/255.0f; *g = 165/255.0f; *b = 165/255.0f; return "LOW";
+}
+
+static void drawStats(float alpha) {
+  const char *labels[7];
+  char values[7][72];
+  const char *badge = NULL;
+  float br = 0, bg = 0, bb = 0;
+  int n = 0, i;
+  float lw = 0.0f, vw = 0.0f, lineH = 0.0f, badgeW = 0.0f;
+  TxtLine lb = (TxtLine){0};
+
+  { const Stream *st = stream_n() > 0 ? stream_item(stream_current()) : NULL;
+    double dur = durationSeg > 1.0f ? durationSeg : 0.0;
+    double mbps = (st && st->sizeMB > 0 && dur > 0.0)
+                ? (double)st->sizeMB * 8.0 / dur : 0.0;
+    labels[n] = "Bitrate";
+    if (mbps > 0.0) snprintf(values[n], sizeof values[n], "%.1f Mbps (avg)", mbps);
+    else            snprintf(values[n], sizeof values[n], "--");
+    badge = bitrateBadge(mbps, video_height(), &br, &bg, &bb);
+    n++;
+    labels[n] = "Engine";
+    snprintf(values[n], sizeof values[n], "%s", video_engine());
+    n++;
+    labels[n] = "Source";
+    snprintf(values[n], sizeof values[n], "%s%s",
+             st && st->provider[0] ? st->provider : "--",
+             st ? (st->mp4 ? " \xc2\xb7 MP4" : " \xc2\xb7 HLS") : "");
+    n++; }
+
+  labels[n] = "Resolution";
+  if (video_width() > 0 && video_height() > 0)
+    snprintf(values[n], sizeof values[n], "%dx%d (%s)", video_width(), video_height(),
+             video_height() >= 2160 ? "4K" : video_height() >= 1080 ? "1080p"
+             : video_height() >= 720 ? "720p" : "SD");
+  else snprintf(values[n], sizeof values[n], "--");
+  n++;
+
+  labels[n] = "HDR";
+  { const char *h = video_hdr();
+    snprintf(values[n], sizeof values[n], "%s",
+             h && h[0] && strcasecmp(h, "none") ? h : "SDR"); }
+  n++;
+
+  labels[n] = "Audio";
+  // Atmos or SILENCE about the codec. video.h answers exactly one question about
+  // this track — video_has_atmos() — and filling the gap with "PCM/other" asserts a
+  // codec nothing here knows: the stream is as likely EAC3 or DTS. The track count
+  // IS known, so that is what the row says.
+  if (video_has_atmos())
+    snprintf(values[n], sizeof values[n], "Dolby Atmos \xc2\xb7 %d track%s",
+             video_n_audio(), video_n_audio() == 1 ? "" : "s");
+  else
+    snprintf(values[n], sizeof values[n], "%d track%s",
+             video_n_audio(), video_n_audio() == 1 ? "" : "s");
+  n++;
+
+  // WHAT SUBTITLES THE FILE HOLDS, by kind. The kinds come from the MKV header read
+  // (video.h's VideoTrack.codec) and not from the pipeline, which reports no codec
+  // at all — so on anything that is not an MKV this degrades to the bare count,
+  // which is still the truth.
+  labels[n] = "Subtitles";
+  { const char *kinds[6]; int counts[6], nk = 0, bmp[6], k, total = video_n_subtitle();
+    for (i = 0; i < total; i++) {
+      const VideoTrack *t = video_subtitle(i);
+      int isBmp = 0;
+      const char *kind = t ? subKind(t->codec, &isBmp) : NULL;
+      if (!kind) continue;
+      for (k = 0; k < nk; k++) if (!strcmp(kinds[k], kind)) { counts[k]++; break; }
+      if (k == nk && nk < 6) { kinds[nk] = kind; counts[nk] = 1; bmp[nk] = isBmp; nk++; }
+    }
+    if (!total) snprintf(values[n], sizeof values[n], "none");
+    else if (!nk) snprintf(values[n], sizeof values[n], "%d track%s",
+                            total, total == 1 ? "" : "s");
+    else {
+      int off = snprintf(values[n], sizeof values[n], "%d \xc2\xb7 ", total);
+      for (k = 0; k < nk && off < (int)sizeof values[n] - 1; k++)
+        off += snprintf(values[n] + off, sizeof values[n] - off, "%s%s %d%s",
+                        k ? ", " : "", kinds[k], counts[k], bmp[k] ? "*" : "");
+    } }
+  n++;
+
+  // Measured first, drawn second: the value column is right-aligned against the
+  // widest of the two, so the readings line up whatever the labels say.
+  for (i = 0; i < n; i++) {
+    TxtLine l = txt_line(TXT_PLR_STATL, labels[i], 255, 255, 255, 255);
+    TxtLine v = txt_line(TXT_PLR_STAT,  values[i], 255, 255, 255, 255);
+    if (l.w > lw) lw = (float)l.w;
+    if (v.w > vw) vw = (float)v.w;
+    if (v.h > lineH) lineH = (float)v.h;
+  }
+  if (badge) {
+    lb = txt_line(TXT_PLR_BADGE, badge, 255, 255, 255, 255);
+    badgeW = (float)lb.w + 20.0f + 10.0f;   // pill padding + the gap to the value
+  }
+  { float gap = 40.0f, rowGap = 12.0f, padX = 28.0f, padY = 24.0f;
+    float w = padX * 2.0f + lw + gap + vw + badgeW;
+    float h = padY * 2.0f + n * lineH + (n - 1) * rowGap;
+    float x = PLR_STATS_X, y = PLR_STATS_Y;
+    float rad = 16.0f / (w < h ? w : h);
+    GfxRect r = { x, y, w, h };
+    gfx_color(r, rad, 9 / 255.0f, 13 / 255.0f, 20 / 255.0f, 0.72f * alpha);
+    gfx_rect(r, 0, GFX_RING, 0, 0.0035f, 0, rad, 1, 1, 1, 0.10f * alpha);
+    for (i = 0; i < n; i++) {
+      float ry = y + padY + i * (lineH + rowGap);
+      TxtLine l = txt_line(TXT_PLR_STATL, labels[i], 255, 255, 255, 255);
+      TxtLine v = txt_line(TXT_PLR_STAT,  values[i], 255, 255, 255, 255);
+      float vright = x + w - padX;
+      // The badge rides at the right end of the row it rates, and the reading sits
+      // to its left — the web app's `margin-left: 8px` inside the value span.
+      if (i == 0 && badge) {
+        float pw = (float)lb.w + 20.0f, ph = (float)lb.h + 8.0f;
+        GfxRect p = { vright - pw, ry + (lineH - ph) * 0.5f, pw, ph };
+        gfx_color(p, 0.5f, br, bg, bb, 0.18f * alpha);
+        txt_draw_alpha(txt_line(TXT_PLR_BADGE, badge,
+                                (int)(br * 255), (int)(bg * 255), (int)(bb * 255), 255),
+                       p.x + 10.0f, p.y + (ph - (float)lb.h) * 0.5f, alpha);
+        vright -= pw + 10.0f;
+      }
+      txt_draw_alpha(l, x + padX, ry + (lineH - (float)l.h) * 0.5f, alpha * 0.55f);
+      txt_draw_alpha(v, vright - v.w, ry, alpha * 0.95f);
+    } }
 }
 
 static void drawActionsEpisode(void){
@@ -1025,6 +1454,11 @@ void player_draw(Uint32 now) {
   /* They stay when the controls disappear: they are content, not player chrome. */
   drawSubtitleExternal();
   drawActionsEpisode();
+  // The stats panel is DELIBERATELY outside the controls' alpha. You open it to
+  // watch a number move — the buffer draining, the bitrate on a new source — and
+  // tying it to a bar that hides itself after four seconds would mean holding the
+  // remote down to keep reading it. It closes the way it opened: the button.
+  if (statsOpen) drawStats(entry);
 
   float a = anim * entry;
   if (a <= 0.005f) return;   // playing clean: nothing over the image
@@ -1035,12 +1469,13 @@ void player_draw(Uint32 now) {
   // sit up there and without it they would disappear over a bright scene. Both follow
   // the controls' animation: fixed, they would leave a permanent shadow over every scene.
   GfxRect veil = { 0, NV_SCREEN_H - PLR_GRADIENT_BOTTOM, NV_SCREEN_W, PLR_GRADIENT_BOTTOM };
-  // GFX_VEIL_BOTTOM and not GFX_VEIL: that one darkens the LEFT too (made for the
-  // home's hero) and left this rectangle's top-left corner dark with its right
-  // transparent — the boundary between the two read as a plate.
-  gfx_rect(veil, 0, GFX_VEIL_BOTTOM, 0, 0, 0, 0.0f, 0, 0, 0, 0.86f * a);
-  { GfxRect top = { 0, 0, NV_SCREEN_W, PLR_GRADIENT_TOP };
-    gfx_rect(top, 0, GFX_VEIL_TOP, 0, 0, 0, 0.0f, 0, 0, 0, 0.70f * a); }
+  // GFX_VEIL_PLAYER carries the sheet's five stops itself, so the alpha here is 1
+  // and not a density multiplier: scaling it would flatten the curve the mode
+  // exists to reproduce. It still fades with the controls through `a`.
+  gfx_rect(veil, 0, GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, a);
+  // The pool, hung from the top-right corner where the clock is.
+  { GfxRect pool = { NV_SCREEN_W - PLR_POOL_W, 0, PLR_POOL_W, PLR_POOL_H };
+    gfx_rect(pool, 0, GFX_VEIL_POOL, 0, 0, 0, 0.0f, 0, 0, 0, a); }
 
   // The whole block slides together: title, bar and icons are ONE object that rises.
   // Animating each line on its own produces a staggering the device does not have.
@@ -1059,66 +1494,126 @@ void player_draw(Uint32 now) {
 
   // Anchored from the bottom up, in the order of the web app's
   // .player-controls-bottom column read backwards: the button row rests against the
-  // bottom margin, the bar sits 16px above it and the meta 12px above the bar. The
-  // margin is --player-controls-y (48), not the app's general margin.
-  float yRowTop = NV_SCREEN_H - PLR_PAD_Y - PLR_BTN_D + slideDown;
+  // bottom inset, the bar --player-transport-row-gap (36) above it and the title
+  // block --player-transport-gap (40) above the bar.
+  //
+  // The bar's baseline is fixed at its RESTING height and the focused track grows
+  // downwards from it, into the gap. Centring the growth would move the title with
+  // it, which is anchored above; growing upwards would do the same. Only the 4px it
+  // gains eat into a 36px gap, so the row never crowds.
+  float yRowTop = NV_SCREEN_H - PLR_PAD_BOTTOM - PLR_BTN_D + slideDown;
   float cyButtons = yRowTop + PLR_BTN_D * 0.5f;
   float yBar   = yRowTop - PLR_GAP_ROW - PLR_RAIL_H;
 
-  // --- the progress bar ---
-  // The bar occupies the whole usable width, between the player's margins. With no
-  // head marker: the web app has none — the bar thickens from 6 to 10px when it takes
-  // focus, and that is what says it is operable. Here the focus moves only along the
-  // buttons, so it stays at 6.
-  // EDGE TO EDGE: it touches both edges of the screen. With a margin it read as a
-  // component floating in the middle of the footer; flush, it is the video's edge.
-  float bx = 0.0f, bw = NV_SCREEN_W;
-  // A SAFE MARGIN for the CONTENT (title, meta, buttons, clock).
+  // --- the SCRUBBER ---------------------------------------------------------
+  // .player-progress-shell, from the transport block at the end of components.css.
   //
-  // The track still runs edge to edge on purpose — flush, it reads as the video's
-  // edge. What must not touch the edge is the TEXT: at x=0 it falls in the zone the
-  // TV cuts by overscan, and the owner saw the title and the time cut off at both
-  // edges. They are two different roles that were sharing the same x only because
-  // they were born together.
+  // It was edge to edge, square-cornered, 4px, and its left end lined up with
+  // nothing. In the web app it is an item of the overlay's padding box like
+  // everything else in the block: it starts exactly where the play button's circle
+  // starts and ends where the time readout ends, and that shared left edge is most
+  // of what makes the footer read as ONE control rather than a bar with a row of
+  // coins beneath it. Flush to the screen it read as the video's edge — which is a
+  // defensible thing for a bar to be, but it is not this app's bar.
+  float bx = 0.0f, bw = NV_SCREEN_W;
+  // A SAFE MARGIN for everything in the footer — title, bar, buttons and clock.
   //
   // 96 is the same side margin as the title page's (NV_DETP_X, the web app's
-  // --tv-safe-gutter-width), so the player stops being the only place in the app with
-  // an edge rule of its own. It stays a local constant because player.c does not
-  // include detail.h — and should not, just for one number.
+  // --tv-safe-gutter-width), so the player stops being the only place in the app
+  // with an edge rule of its own. It stays a local constant because player.c does
+  // not include detail.h — and should not, just for one number.
   float cx = bx + PLR_MARGIN;
   float cw = bw - PLR_MARGIN * 2.0f;
-  float frac = durationSeg > 0.0f ? anim_clamp(posSeg / durationSeg, 0.0f, 1.0f) : 0.0f;
-  // With focus the track thickens from 6 to 10 and lightens from 0.30 to 0.45, and it
-  // grows DOWNWARDS from the same baseline — growing upwards would move the meta and
-  // the title too, which are anchored to it.
-  // The track grows DOWNWARDS from the same baseline — growing upwards would move the
-  // title too, which is anchored to it.
-  float hRail = barFocus ? PLR_RAIL_H_FOCUS : PLR_RAIL_H;
-  GfxRect rail = { bx, yBar, bw, hRail };
-  GfxRect traveled = { bx, yBar, bw * frac, hRail };
-  gfx_color(rail, PLR_RAIL_R, 1, 1, 1, (barFocus ? 0.34f : 0.22f) * a);
-  // The pipeline's buffer, between what has been played and the end: it is what shows
-  // the video is ahead of the clock. With no data from the pipeline the segment does
-  // not exist — inventing "almost all loaded" would be worse than the plain bar. In
-  // the web app it is the SAME colour as the fill at 0.35 (.player-progress-buffered).
+  // While a burst is in flight the bar draws the TARGET, not playback — playback
+  // carries on underneath and gets its own tick below (.player-seek-origin). It is
+  // the web app's split exactly: `effectiveProgressSeconds` for the fill,
+  // `current` for the origin.
+  float shown = seekActive ? seekPreview : posSeg;
+  float frac = durationSeg > 0.0f ? anim_clamp(shown / durationSeg, 0.0f, 1.0f) : 0.0f;
+  // Focus is a spring now, not a switch: the track eases between 8 and 12 and the
+  // ground between 0.18 and 0.26, which is the sheet's
+  // `transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1)`.
+  float fBar  = focusBarAnim;
+  float hRail = PLR_RAIL_H + (PLR_RAIL_H_FOCUS - PLR_RAIL_H) * fBar;
+  // 0.26 -> 0.34, above the sheet's 0.18 -> 0.26. The web app's track is read
+  // through a browser's own compositing over an <video> element; here it sits on a
+  // hardware plane the GL surface only punches a hole in, and the same white at the
+  // same alpha came back visibly thinner — "the progress bar almost seems
+  // transparent". The scrim fix under it does most of the work; this closes the
+  // rest, and the focused step keeps the same 0.08 span so the two states stay as
+  // far apart as the sheet has them.
+  float aRail = 0.26f + (0.34f - 0.26f) * fBar;
+  GfxRect rail = { cx, yBar, cw, hRail };
+  gfx_color(rail, railRadius(cw, hRail), 1, 1, 1, aRail * a);
+  // The pipeline's buffer: what is decoded ahead of the playhead. In the web app
+  // (.player-progress-buffered) it is WHITE at 0.3 and it runs from ZERO, under the
+  // fill — not a segment starting where the fill ends, which is what was here. The
+  // difference shows the moment the buffer falls BEHIND the playhead on a stalling
+  // source: as a segment it simply vanished; as a layer the fill overruns it, which
+  // is the thing you want to be able to see.
   { float bufFrac = durationSeg > 0.0f ? anim_clamp(video_buffer_end() / durationSeg, 0.0f, 1.0f) : 0.0f;
-    if (bufFrac > frac + 0.004f) {
-      GfxRect buf = { bx + bw * frac, yBar, bw * (bufFrac - frac), hRail };
-      gfx_color(buf, PLR_RAIL_R, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, 0.35f * a);
-    } }
+    float bwid = cw * bufFrac;
+    if (bwid > 0.5f)
+      gfx_color((GfxRect){ cx, yBar, bwid, hRail }, railRadius(bwid, hRail),
+                1, 1, 1, 0.30f * a); }
   // Half a pixel already counts: with the test at 1.0 the start of the film drew
   // nothing, and the bar seemed only to start moving after a while.
-  if (traveled.w > 0.5f)
-    gfx_color(traveled, PLR_RAIL_R, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, a);
+  { float fwid = cw * frac;
+    if (fwid > 0.5f)
+      gfx_color((GfxRect){ cx, yBar, fwid, hRail }, railRadius(fwid, hRail),
+                PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, a);
+    // THE PLAYHEAD. `transform: scale(0)` at rest and `scale(1)` when the shell has
+    // focus, so the resting bar stays a hairline and the knob is what says the bar
+    // is now the thing LEFT and RIGHT are driving. Centred on the track's middle,
+    // which moves as the track grows.
+    { float d = PLR_RAIL_KNOB * fBar;
+      if (d > 0.5f)
+        gfx_color((GfxRect){ cx + fwid - d * 0.5f, yBar + hRail * 0.5f - d * 0.5f, d, d },
+                  0.5f, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, a); } }
+  // WHERE PLAYBACK STILL IS (.player-seek-origin): a 4px tick at the position the
+  // film is actually at while you aim somewhere else. Without it a long hold gives
+  // you a bar full of numbers and no way to tell how far you have strayed from
+  // where you were — which is the question you are answering when you decide
+  // whether to commit or press back the other way.
+  if (seekActive && durationSeg > 0.0f) {
+    float of = anim_clamp(posSeg / durationSeg, 0.0f, 1.0f);
+    float oh = 22.0f, ow = 4.0f;
+    GfxRect t = { cx + cw * of - ow * 0.5f, yBar + hRail * 0.5f - oh * 0.5f, ow, oh };
+    gfx_color(t, 0.5f, 1, 1, 1, 0.85f * a);
+  }
 
   // A film: the name only. A series: the name followed by S/E and the episode's title.
   // The file and the provider belong to the sources sheet, not to the transport.
   float yMetaBase = yBar - PLR_GAP_BAR;
+  // THE STREAM'S FACTS, as the title block's third line.
+  //
+  // They used to be stacked under the clock in the opposite corner, which is the
+  // one place in the frame they had nothing to do with: the clock says what time it
+  // is, and "4K · Dolby Vision" says what you are watching. In the web app that
+  // corner holds the clock and nothing else, and the line under the title —
+  // .player-meta-tertiary, 22/500 at 50% white — is exactly the slot for a
+  // qualifier of the title above it. Moving them there costs nothing and puts the
+  // stream's facts next to the name of the thing they describe.
+  //
+  // Bottom of the stack because the web app's column runs title, subtitle,
+  // tertiary, and this block is built upwards from the bar.
+  { char facts[80];
+    if (streamFacts(facts, sizeof facts) > 0) {
+      TxtLine lf = txt_line_trim(TXT_PLR_META3, facts, 255, 255, 255, 255, cw * .67f);
+      yMetaBase -= lf.h;
+      // 0.72, not the sheet's 0.50. .player-meta-tertiary is styled for a line of
+      // soft context (a year, a genre); this line is the opposite — it is the one
+      // thing on screen the owner reads to know whether they got the good version
+      // of the file, and at half white over a dark frame it was too faint to be
+      // trusted at a glance. It still sits under the title in the hierarchy.
+      txt_draw_alpha(lf, cx, yMetaBase, a * 0.72f);
+      yMetaBase -= PLR_META_GAP;
+    } }
   if (lineEp[0]) {
     TxtLine le=txt_line_trim(TXT_PLR_BODY,lineEp,218,220,224,255,cw*.67f);
     yMetaBase-=le.h;
     txt_draw_alpha(le,cx,yMetaBase,a);
-    yMetaBase-=6;
+    yMetaBase-=PLR_META_GAP;
   }
 
   // THE FILM'S NAME, IN TEXT. Here the player used to prefer the title's LOGO when
@@ -1139,126 +1634,168 @@ void player_draw(Uint32 now) {
     txt_draw_alpha(lt, cx, yTitle, a); }
 
   // --- the BUTTON row: the device's transport ------------------------------
-  // No redundant jump buttons. The focus runs only through the visible actions.
+  // .player-controls-row is space-between: the group of buttons on the LEFT, 14px
+  // apart, and the time readout pushed to the right end by margin-left:auto. It is
+  // not the Apple app's centred transport, and there are no redundant jump buttons
+  // — the arrows on the bar are what seeks.
   {
-    // .player-controls-row is space-between: the group of buttons on the LEFT, with a
-    // 4px gap between them, and the time label pushed to the right by
-    // margin-left:auto. It is not the Apple app's centred transport.
+    int row[PLR_NBTNS], n = rowButtons(row);
     float step = PLR_BTN_D + PLR_BTN_GAP;
-    float x0    = cx + PLR_BTN_D * 0.5f;
-    float cxs[PLR_NBTNS];
-    for (int i=0;i<PLR_NBTNS;i++) cxs[i]=x0+i*step;
-    for (int i = 0; i < PLR_NBTNS - (epT > 0 ? 0 : 1); i++) {
-      float f = focusB[i];
-      int sel = (button == i && !barFocus);
-      buttonCircle(cxs[i], cyButtons, f, a, sel);
-      float luma = sel ? 0.13f : 0.94f;
-      switch (i) {
-        case PLR_PLAY:    iconPlayPause(cxs[i], cyButtons, a, playing, luma); break;
-        case PLR_CC:      iconSubtitles(cxs[i], cyButtons, a, luma); break;
-        case PLR_ASPECT: iconAspect(cxs[i], cyButtons, a, luma); break;
-        case PLR_SOURCES: iconFile(cxs[i],cyButtons,a,luma,"sources",44); break;
-        case PLR_EPISODES: iconFile(cxs[i],cyButtons,a,luma,"episodes",44); break;
-        default:          iconAudio(cxs[i], cyButtons, a, luma); break;
+    // The row's left edge is the BAR's left edge; the first circle is centred half
+    // a diameter in from it, so its rim and the bar's end line up.
+    float x0   = cx + PLR_BTN_D * 0.5f;
+    for (int i = 0; i < n; i++) {
+      int act = row[i];
+      float bcx = x0 + i * step;
+      float f = focusB[act];
+      // The glyph crosses with the puck under it: white on the picture, black on
+      // the white circle, both on the same 180ms the circle fades in on. Switching
+      // it on a boolean left one frame of white-on-white at the crossing.
+      float luma = 0.94f + (0.13f - 0.94f) * f;
+      buttonCircle(bcx, cyButtons, f, a);
+      switch (act) {
+        case PLR_PLAY:     iconPlayPause(bcx, cyButtons, a, playing, luma); break;
+        case PLR_CC:       iconSubtitles(bcx, cyButtons, a, luma); break;
+        case PLR_AUDIO:    iconAudio(bcx, cyButtons, a, luma); break;
+        case PLR_EPISODES: iconFile(bcx, cyButtons, a, luma, "episodes", PLR_ICON_H); break;
+        case PLR_SOURCES:  iconFile(bcx, cyButtons, a, luma, "sources", PLR_ICON_H); break;
+        case PLR_STATS:    iconFile(bcx, cyButtons, a, luma, "stats", PLR_ICON_H); break;
+        default:           iconAspect(bcx, cyButtons, a, luma); break;   // PLR_ASPECT
       }
     }
-    if (!barFocus) {
-      const char *labels[]={"Play / pause","Aspect ratio","Subtitles","Audio","Sources","Episodes"};
-      TxtLine label=txt_line(TXT_PG_END,labels[button],210,212,218,255);
-      txt_draw_alpha(label,cxs[button]-label.w*.5f,cyButtons+PLR_BTN_D*.5f+10,a);
-    }
-  }
-
-  // --- the time label, at the right-hand end of the same row -----------------
-  // A single label, "elapsed / total", like the web app's #playerTimeLabel. Here there
-  // were TWO — elapsed to the left of the bar and a NEGATIVE remainder to the right —
-  // which is the Apple app's convention, not ours. Vertically centred with the circles
-  // because in the web app it is an item of a flex row with align-items:center.
-  {
-    char t1[24], t2[24], all[52];
-    fmtTime(t1, sizeof t1, posSeg, 0);
-    fmtTime(t2, sizeof t2, durationSeg, 0);
-    snprintf(all, sizeof all, "%s / %s", t1, t2);
-    { TxtLine l = txt_line(TXT_PLR_BODY, all, 255, 255, 255, 230);
-      txt_draw_alpha(l, cx + cw - l.w,
-                         cyButtons - (float)l.h * 0.5f, a * 0.9f); }
-  }
-
-  // Format badges at the top right. They come from the STREAM, not from a constant:
-  // the two used to be hard-coded and announced Dolby Vision on an HDR10 file and
-  // Atmos on a stereo track. A badge that lies is worse than no badge, because it is
-  // what the owner trusts to know whether they got the good version.
-  {
-    const char *badges[3];
-    int nBadges = 0;
-    char res[16] = "";
-    if (video_width() >= 3840)      snprintf(res, sizeof res, "4K");
-    else if (video_width() >= 1920) snprintf(res, sizeof res, "HD");
-    if (res[0]) badges[nBadges++] = res;
-    // MEASURED on this TV, a line from the log itself while playing an MKV the addon
-    // advertised as Dolby Vision:
-    //   [video] pipeline HDR: HDR10 (source claimed DV=1)
-    // That was exactly the case where the badge lied.
+    // The label under the focused button (.player-control-btn::after): 20/bold at
+    // 92% white, 16px below the circle, and it FADES with the focus rather than
+    // appearing the instant the index changes — the sheet transitions its opacity
+    // and its 4px rise together, and stepping it read as a caption flicking between
+    // buttons while the puck slid.
     //
-    // "Dolby Vision" only when the PIPELINE returned DolbyVision in the videoInfo —
-    // video_has_dolby_vision no longer reads the addon's claim. It is MEASURED that on
-    // this TV an MKV advertised as DV comes back HDR10; the badge said Dolby Vision
-    // over an HDR10 stream, and the owner trusts it precisely to know whether they got
-    // the good version. When the pipeline says HDR10, the badge says HDR10 — staying
-    // quiet would hide half the answer.
-    if (video_has_dolby_vision())                  badges[nBadges++] = "Dolby Vision";
-    else if (!strcasecmp(video_hdr(), "HDR10"))    badges[nBadges++] = "HDR10";
-    if (video_has_atmos())        badges[nBadges++] = "Dolby Atmos";
-
-    // THE CLOCK and "Ends at", which are what the web app puts in this corner
-    // (.player-controls-top, playerScreen.js:5846). The quality badges are the port's
-    // addition and now sit BELOW them, not in their place.
-    //
-    //   .player-clock    26/600 white 96%
-    //   .player-ends-at  20/400 white 78%, just below
-    float yRel = PLR_PAD_Y + slideDown;
-    {
-      time_t nowT = time(NULL);
-      struct tm lt;
-      char hora[8], end[32];
-      localtime_r(&nowT, &lt);
-      strftime(hora, sizeof hora, "%H:%M", &lt);
-      { double missing = durationSeg - posSeg;
-        time_t t2 = nowT + (time_t)(missing > 0.0 ? missing : 0.0);
-        struct tm lf; char h2[8];
-        localtime_r(&t2, &lf);
-        strftime(h2, sizeof h2, "%H:%M", &lf);
-        snprintf(end, sizeof end, "Ends at %s", h2); }
-      TxtLine lh = txt_line(TXT_PG_CLOCK, hora, 255, 255, 255, 255);
-      TxtLine lf = txt_line(TXT_PG_END, end, 255, 255, 255, 255);
-      txt_draw_alpha(lh, NV_SCREEN_W - PLR_PAD_X - lh.w, yRel, a * 0.96f);
-      txt_draw_alpha(lf, NV_SCREEN_W - PLR_PAD_X - lf.w, yRel + lh.h + 2.0f,
-                         a * 0.78f);
-      yRel += lh.h + 2.0f + lf.h;
-    }
-
-    { float sy = yRel + 16.0f;
-      int i;
-      // A STAGGERED ENTRANCE. These badges already appeared one by one, but by
-      // accident: the text rasteriser does at most TXT_PER_FRAME lines per frame
-      // (text.c:40, and there is a measured reason for that), so the third badge
-      // arrived two frames after the first. Read on a TV that is a defect — "they come
-      // in showing one at a time", in the owner's words.
-      //
-      // The fix is not to hurry the rasteriser: it is to OWN the staggering and give
-      // it a curve. Each badge comes in 90 ms after the previous one, rising 10px and
-      // gaining opacity. What was an artefact becomes a cadence, and the raster's delay
-      // hides inside the animation itself.
-      float t0 = (float)(now - lastInput) / 1000.0f;
-      for (i = 0; i < nBadges; i++) {
-        float ts = anim_clamp((t0 - i * 0.09f) / 0.26f, 0.0f, 1.0f);
-        float e  = 1.0f - (1.0f - ts) * (1.0f - ts);   // desaceleracao
-        TxtLine l = txt_line(TXT_MINI, badges[i], 236, 237, 242, 255);
-        if (e > 0.004f)
-          txt_draw_alpha(l, NV_SCREEN_W - PLR_PAD_X - l.w,
-                             sy + (1.0f - e) * 10.0f, a * 0.85f * e);
-        sy += l.h + 6.0f;
+    // Its wording follows the web app's `title`, which is the play button's live
+    // state and not a slash-joined pair: "Pause" while it plays, "Play" when it
+    // does not.
+    { int slot = rowSlot(row, n, button);
+      float f = slot >= 0 ? focusB[button] : 0.0f;
+      if (f > 0.004f) {
+        static const char *NAMES[PLR_NBTNS] = {
+          "Play", "Subtitles", "Audio", "Episodes", "Sources", "Aspect Ratio",
+          "Stream stats" };
+        const char *name = button == PLR_PLAY ? (playing ? "Pause" : "Play")
+                                              : NAMES[button];
+        TxtLine label = txt_line(TXT_PLR_TIP, name, 255, 255, 255, 255);
+        float lx = x0 + slot * step - label.w * 0.5f;
+        float ly = cyButtons + PLR_BTN_D * 0.5f + PLR_BTN_TIP + (1.0f - f) * 4.0f;
+        // `text-shadow: 0 2px 8px rgba(0,0,0,0.8)`. A blur is not available here,
+        // so it is a black copy 2px down at the sheet's own 0.8 — the same way the
+        // subtitle overlay fakes its outline a few functions up. It earns its place
+        // even over the bottom scrim: the label is the ONE piece of the transport
+        // that hangs below the gradient's densest part, where a bright frame edge
+        // can still take a 20px word with it.
+        { TxtLine sh = txt_line(TXT_PLR_TIP, name, 0, 0, 0, 255);
+          txt_draw_alpha(sh, lx, ly + 2.0f, a * 0.80f * f); }
+        txt_draw_alpha(label, lx, ly, a * 0.92f * f);
       } }
+
+    // --- the time readout, at the right-hand end of the same row -------------
+    // "3:00 / 2:22:33", like the web app's #playerTimeLabel — but in TWO weights.
+    //
+    // The sheet sets the whole label at 600. On the device that is one grey block
+    // of digits: the elapsed time is the number you actually read, and the
+    // duration is only the thing it is measured against, so they are split here —
+    // Bold for the elapsed, Medium at a lower alpha for the " / total" tail. One
+    // step of weight AND one of opacity, because at this size on a shaded frame
+    // either alone is too subtle to register from the sofa.
+    //
+    // Both halves are drawn from ONE baseline (the elapsed line's), not centred
+    // independently: the two rasters can differ by a pixel in height, and centring
+    // each on its own would sit the tail a pixel off the number it follows.
+    {
+      char t1[24], t2[24], tail[32], pill[24];
+      float right = cx + cw;
+      float ty;
+      TxtLine le, lt;
+      // The elapsed half reads the TARGET while aiming — the web app's
+      // `formatTime(effectiveProgressSeconds)`. The number under your thumb has to
+      // be the one you are moving, or the pill is the only feedback you get.
+      fmtTime(t1, sizeof t1, seekActive ? seekPreview : posSeg, 0);
+      fmtTime(t2, sizeof t2, durationSeg, 0);
+      snprintf(tail, sizeof tail, " / %s", t2);
+
+      // THE SEEK PILL, drawn first because it owns the right edge and the readout
+      // is laid out to its left — the same order as the web app's flex row, where
+      // .player-time-label's margin-left:auto pushes the pair over together.
+      //
+      // WHAT IT SHOWS is the burst's accumulated jump, formatted like the web's
+      // formatSeekDelta: a sign, then the same m:ss the rest of the transport uses.
+      // The sign is U+2212 MINUS and not a hyphen, which is what that function
+      // emits — a hyphen next to tabular digits reads as a dash in the text.
+      pill[0] = 0;
+      { float delta = seekPreview - posSeg;
+        float pa = seekActive ? 1.0f
+                 : (seekEndAt && now - seekEndAt < PLR_DELTA_FADE_MS)
+                   ? 1.0f - (float)(now - seekEndAt) / (float)PLR_DELTA_FADE_MS
+                   : 0.0f;
+        int rounded = (int)(delta >= 0.0f ? delta + 0.5f : delta - 0.5f);
+        // Empty at zero, like formatSeekDelta: seeking ten seconds forward and ten
+        // back has moved you nowhere, and "+0:00" is a worse answer than silence.
+        if (pa > 0.004f && rounded != 0) {
+          char mag[24];
+          fmtTime(mag, sizeof mag, (float)(rounded < 0 ? -rounded : rounded), 0);
+          snprintf(pill, sizeof pill, "%s%s",
+                   rounded > 0 ? "+" : "\xe2\x88\x92", mag);
+          { TxtLine lp = txt_line(TXT_PLR_DELTA, pill, 255, 255, 255, 255);
+            float pw = (float)lp.w + PLR_PILL_PADX * 2.0f;
+            float ph = (float)lp.h + PLR_PILL_PADY * 2.0f;
+            if (pw < PLR_PILL_MINW) pw = PLR_PILL_MINW;
+            { GfxRect r = { right - pw, cyButtons - ph * 0.5f, pw, ph };
+              gfx_color(r, 0.5f, 1, 1, 1, 0.14f * a * pa);
+              txt_draw_alpha(lp, r.x + (pw - (float)lp.w) * 0.5f,
+                                 r.y + (ph - (float)lp.h) * 0.5f, a * pa); }
+            right -= pw + PLR_ROW_GAP; }
+        }
+      }
+
+      le = txt_line(TXT_PLR_TIME,   t1,   255, 255, 255, 255);
+      lt = txt_line(TXT_PLR_TIME_T, tail, 255, 255, 255, 255);
+      ty = cyButtons - (float)le.h * 0.5f;
+      txt_draw_alpha(lt, right - lt.w,        ty, a * 0.60f);
+      txt_draw_alpha(le, right - lt.w - le.w, ty, a * 0.96f);
+    }
+  }
+
+  // --- the CLOCK cluster, top right ----------------------------------------
+  // .player-controls-top: a right-aligned column, clock over "Ends at", 8px apart.
+  //
+  //   .player-clock    36 / 600, full white
+  //   .player-ends-at  24 / 500, white 55%
+  //
+  // The sheet's own note explains the pairing: the clock "keeps the larger size it
+  // gained ... the size difference is what separates the two lines now that the
+  // hairline divider is gone". At the old 26/20 with a 2px gap the two sat too
+  // close in both size and weight to separate at all — they read as one grey smudge
+  // in the corner, which is what "out of line" meant.
+  //
+  // ALIGNED WITH THE FOOTER, not with the screen. This cluster was the one thing in
+  // the overlay still measured from PLR_PAD_X (64) while the title, the bar and the
+  // time readout all sit at PLR_MARGIN (96) — so its right edge overhung theirs by
+  // 32px, and the corner looked knocked out of true against the time directly below
+  // it. One margin for everything in the overlay; the web app has exactly one too.
+  {
+    time_t nowT = time(NULL);
+    struct tm lt;
+    char hora[8], end[32];
+    float yRel = PLR_PAD_BOTTOM + slideDown;
+    float right = NV_SCREEN_W - PLR_MARGIN;
+    localtime_r(&nowT, &lt);
+    strftime(hora, sizeof hora, "%H:%M", &lt);
+    { double missing = durationSeg - posSeg;
+      time_t t2 = nowT + (time_t)(missing > 0.0 ? missing : 0.0);
+      struct tm lf; char h2[8];
+      localtime_r(&t2, &lf);
+      strftime(h2, sizeof h2, "%H:%M", &lf);
+      snprintf(end, sizeof end, "Ends at %s", h2); }
+    { TxtLine lh = txt_line(TXT_PG_CLOCK, hora, 255, 255, 255, 255);
+      TxtLine lf = txt_line(TXT_PLR_ENDS, end, 255, 255, 255, 255);
+      txt_draw_alpha(lh, right - lh.w, yRel, a);
+      txt_draw_alpha(lf, right - lf.w, yRel + lh.h + PLR_META_GAP, a * 0.55f); }
   }
 
   // There used to be an age-rating badge here with the title's GENRE beside it, which
@@ -1309,14 +1846,14 @@ void player_draw(Uint32 now) {
         TxtLine lr, ls, lg;
         float cy, x;
         if (ag <= 0.004f) continue;
-        lr = txt_line(TXT_PG_LABEL, parental_label(i), 255, 255, 255, 255);
+        lr = txt_line(TXT_PLR_PG_CAT, parental_label(i), 255, 255, 255, 255);
         ls = txt_line(TXT_PG_SEV, "\xc2\xb7", 255, 255, 255, 255);
         lg = txt_line(TXT_PG_SEV, parental_severity(i), 255, 255, 255, 255);
         cy = yl + (lin - lr.h) * 0.5f;
         x  = xt - dx;
-        txt_draw_alpha(lr, x, cy, ag * 0.85f);  x += lr.w;
-        txt_draw_alpha(ls, x, yl + (lin - ls.h) * 0.5f, ag * 0.40f); x += ls.w;
-        txt_draw_alpha(lg, x, yl + (lin - lg.h) * 0.5f, ag * 0.50f);
+        txt_draw_alpha(lr, x, cy, ag * 0.94f);  x += lr.w;
+        txt_draw_alpha(ls, x, yl + (lin - ls.h) * 0.5f, ag * 0.35f); x += ls.w;
+        txt_draw_alpha(lg, x, yl + (lin - lg.h) * 0.5f, ag * 0.62f);
       }
     }
   }

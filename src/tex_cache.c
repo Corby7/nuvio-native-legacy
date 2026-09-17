@@ -389,6 +389,102 @@ static void nameOfCache(const char *url, char *dst, size_t size) {
   snprintf(dst, size, "%s/%08lx%s", dirCache, h, ext);
 }
 
+// --- THE iCCP CHUNK, and why it is cut out ---------------------------------
+//
+// "libpng warning: iCCP: known incorrect sRGB profile", 7777 times in one session
+// and ~450 KB of a log that has real things in it. It is not a false alarm: a great
+// many PNGs on the web carry a colour profile written by an old Photoshop whose
+// header libpng checks and rejects. The image decodes correctly either way — libpng
+// falls back to sRGB, which is what these files are — so the only product of the
+// chunk is the warning.
+//
+// It cannot be silenced at the decode: the message comes from libpng's default
+// warning handler, and replacing that needs the png_struct, which is SDL_image's and
+// never ours. stderr is process-wide and already the log, so redirecting it around
+// IMG_Load would race every other thread that prints.
+//
+// So the chunk goes at the CACHE BOUNDARY instead, which is the one place the bytes
+// are ours: once per file, on the decode thread, instead of once per decode forever.
+//
+// Removing a chunk is safe by construction — PNG has no global checksum, each chunk
+// carries its own CRC, and iCCP is ancillary (lower-case first letter: a decoder that
+// does not understand it must skip it).
+//
+// Returns the new length, or `n` unchanged when there was nothing to cut.
+static long pngStripIccp(unsigned char *b, long n) {
+  long i = 8;                                  // past the signature
+  if (n < 16 || b[0] != 0x89 || b[1] != 0x50 || b[2] != 0x4E || b[3] != 0x47)
+    return n;
+  while (i + 12 <= n) {
+    unsigned long len = ((unsigned long)b[i] << 24) | ((unsigned long)b[i+1] << 16) |
+                        ((unsigned long)b[i+2] << 8) | (unsigned long)b[i+3];
+    long whole;
+    // A length that runs past the buffer means a truncated or hostile file; stop
+    // rather than walk off the end.
+    if (len > (unsigned long)(n - i - 12)) return n;
+    whole = (long)len + 12;
+    // iCCP must come before the image data, so the walk stops at the first IDAT
+    // rather than scanning megabytes of pixels for a chunk that cannot be there.
+    if (!memcmp(b + i + 4, "IDAT", 4)) return n;
+    if (!memcmp(b + i + 4, "iCCP", 4)) {
+      memmove(b + i, b + i + whole, (size_t)(n - i - whole));
+      return n - whole;
+    }
+    i += whole;
+  }
+  return n;
+}
+
+// THE FILES ALREADY IN THE CACHE, which is most of them: on the owner's TV, 200 of
+// the 1098 cached files are PNG and every one was written before this existed.
+// Stripping only on download would leave them warning until each happened to be
+// re-fetched, which for a cache that never expires is never.
+//
+// The cost is paid ONCE per file and then never again — after the rewrite the header
+// scan finds no iCCP and returns. The 4KB probe rides on a hit that is about to read
+// the whole file to decode it anyway, so it is not new I/O so much as earlier I/O.
+//
+// Every failure here is silent and harmless: this is a cosmetic repair of a file that
+// already works, and a cache entry must never be lost to it. On any error the
+// original is left exactly as it was.
+static void sanitizeCached(const char *path, long n) {
+  unsigned char head[4096], *body;
+  long got, out;
+  FILE *f;
+  const char *dot = strrchr(path, '.');
+  if (!dot || strcmp(dot, ".png")) return;        // the chunk is a PNG's alone
+  if (n <= 0 || n > 64L * 1024 * 1024) return;
+  f = fopen(path, "rb");
+  if (!f) return;
+  got = (long)fread(head, 1, sizeof head, f);
+  fclose(f);
+  // The cheap test first: if the header carries no iCCP there is nothing to do, and
+  // that is the answer on every hit after the first.
+  if (pngStripIccp(head, got) == got) return;
+
+  body = (unsigned char *)malloc((size_t)n);
+  if (!body) return;
+  f = fopen(path, "rb");
+  if (!f) { free(body); return; }
+  got = (long)fread(body, 1, (size_t)n, f);
+  fclose(f);
+  out = got > 0 ? pngStripIccp(body, got) : 0;
+  if (out > 0 && out < got) {
+    // Through a temporary and a rename, for the same reason the download does it:
+    // another thread may be decoding this very file, and a half-written PNG would be
+    // cached as a broken image for good.
+    char tmp[600];
+    snprintf(tmp, sizeof tmp, "%s.%lu.iccp", path, (unsigned long)SDL_ThreadID());
+    f = fopen(tmp, "wb");
+    if (f) {
+      int ok = fwrite(body, 1, (size_t)out, f) == (size_t)out;
+      fclose(f);
+      if (ok) rename(tmp, path); else remove(tmp);
+    }
+  }
+  free(body);
+}
+
 // Downloads the URL into the cache, if it is not already there. Returns 1 if there
 // is a usable file at the end. It runs on the decode thread, so blocking here costs
 // no frames.
@@ -403,7 +499,8 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
   if (!dirCache[0]) return 0;
   nameOfCache(url, dst, size);
   f = fopen(dst, "rb");
-  if (f) { fseek(f, 0, SEEK_END); n = ftell(f); fclose(f); if (n > 512) return 1; }
+  if (f) { fseek(f, 0, SEEK_END); n = ftell(f); fclose(f);
+           if (n > 512) { sanitizeCached(dst, n); return 1; } }
   // 8 s and not 25: this is an IMAGE. At 25 s, two dead URLs held both decode
   // threads for almost a minute and the whole screen stopped receiving art —
   // repeatedly, because nothing stores the failure.
@@ -455,6 +552,9 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
     // grey card.
     if (!f) { printf("[tex] could not write %.80s\n", tmp); fflush(stdout);
               free(body); return 0; }
+    // The chunk goes before the bytes ever reach the disk, so this file never warns
+    // and sanitizeCached never has to touch it. See pngStripIccp.
+    n = pngStripIccp((unsigned char *)body, n);
     fwrite(body, 1, (size_t)n, f);
     fclose(f);
     rename(tmp, dst);
