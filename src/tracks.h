@@ -18,6 +18,14 @@
 // starts.
 void tracks_reset(void);
 
+// AUTOMATIC SELECTION, once per playback, from the Settings row "Subtitles".
+// Called every frame by the player while a title is on screen: the two lists it
+// chooses from arrive at different moments (the file's tracks with the pipeline,
+// the addon's seconds later over the network), so there is no single instant
+// that could be "the" moment to decide. It settles on the first frame where
+// there is something to choose, or gives up at the deadline.
+void tracks_auto(Uint32 now);
+
 void tracks_open(void);
 // Opens with focus ALREADY on the requested column: 0 = audio, 1 = subtitles.
 // The player has an icon for each, and always opening on audio made the two

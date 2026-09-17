@@ -29,6 +29,10 @@ void settings_shutdown(void);
 int settings_animations_reduced(void);
 int settings_dolby_vision(void);
 int settings_dolby_atmos(void);
+// Which subtitle the player turns on by itself: 0 off, 1 automatic (Portuguese
+// then English, the order the addon search already returns), 2 Portuguese only,
+// 3 English only. Read by tracks.c, which owns the selection.
+int settings_subtitle_pref(void);
 // "Automatic", "4K", "1080p" or "720p" — the displayed label, so whatever picks
 // the video source shows exactly what the user chose.
 const char *settings_quality(void);

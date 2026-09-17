@@ -126,9 +126,17 @@ int addons_set_list(const AddonRemote *new, int n) {
     // and querying them all at startup would cost one round trip per addon.
     // Assuming it supplies everything costs at most one extra empty query per
     // title — the opposite (assuming it does not) would hide real sources.
+    //
+    // `subtitle` used to be the one field this paragraph did not apply to: it was
+    // born 0 here while source and catalog were born 1, and the only thing that
+    // could raise it was the fifth column of art/addons.txt — a file the .ipk
+    // strips on purpose (tools/arm.sh, PERSONAL_FILES). On every package built
+    // since the login, then, fetchSubtitles skipped EVERY addon and the
+    // OpenSubtitles half of the subtitle sheet was empty by construction, on
+    // every title. It follows the same rule as the other two now.
     addon[accepted].source = 1;
     addon[accepted].catalog = 1;
-    addon[accepted].subtitle = 0;
+    addon[accepted].subtitle = 1;
     accepted++;
   }
   if (accepted == 0) {
@@ -286,6 +294,15 @@ int addons_n_subtitles(void) {
   pthread_mutex_lock(&subLock); n = nSubs; pthread_mutex_unlock(&subLock);
   return n;
 }
+// 1 while the search is still out. addons_n_subtitles() answers 0 both for "none
+// found" and for "not back yet", and the auto-selection has to tell them apart:
+// giving up on the first frame would skip a list that arrives a second later.
+int addons_subtitles_busy(void) {
+  int busy;
+  pthread_mutex_lock(&subLock); busy = threadSubAlive; pthread_mutex_unlock(&subLock);
+  return busy;
+}
+
 const Subtitle *addons_subtitle(int i) {
   const Subtitle *r = NULL;
   pthread_mutex_lock(&subLock);
@@ -314,6 +331,14 @@ static int groupLanguage(const char *l) {
   for (i = 0; i < sizeof LANGUAGES_EN / sizeof *LANGUAGES_EN; i++)
     if (!strcasecmp(l, LANGUAGES_EN[i])) return 1;
   return -1;
+}
+
+// The same answer, for whoever is OUTSIDE this file. The auto-selection in
+// tracks.c has to group an EMBEDDED track's language ("por", "eng", read from
+// the MKV header) by the same rule as an addon's, and copying the tables there
+// would give two rules that drift apart on the first regional variant added.
+int addons_language_group(const char *code) {
+  return code && *code ? groupLanguage(code) : -1;
 }
 
 static const char *nameLanguage(const char *c) {

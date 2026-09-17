@@ -1011,6 +1011,13 @@ void player_update(float dt, Uint32 now) {
     if (posSeg >= durationSeg) { posSeg = durationSeg; playing = 0; }
   }
 
+  // THE SUBTITLE CHOOSES ITSELF, once per playback, from the Settings row. Held
+  // back until the first frame with a picture: before that the pipeline has no
+  // mediaId, and selecting one of the FILE's tracks would be dropped without a
+  // word. With no pipeline at all (the Mac) there is no frame to wait for, and
+  // the addon's subtitle is drawn by our own overlay anyway.
+  if (!waitingSource && !errorSource && (startImage || !hasVideo)) tracks_auto(now);
+
   // Paused, the controls stay. Making them disappear would leave the user in front of
   // a still frame with no clue that it was they who paused.
   if (visible && playing && !player_loading() && !episodes_is_open() &&

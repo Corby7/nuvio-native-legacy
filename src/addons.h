@@ -86,6 +86,15 @@ typedef struct {
 void addons_fetch_subtitles(const char *imdb, const char *kind);
 int  addons_n_subtitles(void);
 const Subtitle *addons_subtitle(int i);
+// 1 while the search is still running. Needed to tell "found none" from "not back
+// yet": addons_n_subtitles() answers 0 to both, and the player's auto-selection
+// would otherwise give up before the list arrived.
+int  addons_subtitles_busy(void);
+// The language GROUP of a code ("pob", "pt-br", "eng"...): 0 Portuguese, 1
+// English, -1 anything else — the same filter the search applies. Public because
+// the auto-selection also has to group the languages of the file's OWN tracks,
+// and a second copy of the tables would drift from this one.
+int  addons_language_group(const char *code);
 
 AddState addons_state(void);
 void addons_shutdown(void);

@@ -52,7 +52,7 @@
 // MIDDLE is safe: the file is keyed, not positional (see settings_dir).
 typedef enum {
   // Playback
-  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS,
+  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_SUBS,
   // Layout da Home
   SETTING_LANDSCAPE, SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
   // Conteudo da Home
@@ -82,6 +82,13 @@ typedef enum {
 } OptionId;
 
 static const char *V_QUALITY[] = { "Automatic", "4K", "1080p", "720p" };
+// Which subtitle the player turns on BY ITSELF when a title starts. "Automatic"
+// is the order the search already applies — Portuguese first, English after —
+// and the two named values pin it to one group with no fallback: whoever asks
+// for English and is given Portuguese has been answered a question they did not
+// ask. The groups are the ones addons.c filters by; there is no third, because
+// there is no third in the search either.
+static const char *V_SUBS[] = { "Off", "Automatic", "Portuguese", "English" };
 static const char *V_ON[]      = { "On", "Off" };
 static const char *V_ANIM[]      = { "Full", "Reduced" };
 // `collapseSidebar`: collapsed = the rail disappears and the content starts at 104.
@@ -127,6 +134,7 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Maximum quality",           V_QUALITY, 4),
   ESC("Dolby Vision",               V_ON, 2),
   ESC("Dolby Atmos",                V_ON, 2),
+  ESC("Subtitles",                  V_SUBS, 4),
 
   ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
   ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
@@ -200,6 +208,12 @@ static const Option OPTIONS[SETTING_N] = {
 // counterpart.
 static const char *KEY[] = {
   "quality", "dolbyVision", "dolbyAtmos",
+  // NOT "subtitleLanguage": that name exists in the web app's blob with values of
+  // its own ("off", "eng", "system"), and sharing the name would have the account
+  // feed a string this row cannot read on every sync. A name of this port's own
+  // never matches in the blob, which is what keeps the row local — and, unlike a
+  // "-" key, it is still written to settings.txt.
+  "subtitlePreferredGroup",
   "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
   "heroBackdropArea", "heroBackdropScale",
   "collapseSidebar", "modernSidebar", "modernSidebarBlur",
@@ -239,7 +253,7 @@ typedef char checked_one_key_per_option[
 // grouping, not a navigation level: up/down crosses the headers without stopping
 // on them, as on the device. The titles are the web app's.
 static const struct { const char *title; int start, n; } SECTIONS[] = {
-  { "Playback",                     SETTING_QUALITY,           3 },
+  { "Playback",                     SETTING_QUALITY,           4 },
   { "Home layout",                    SETTING_LANDSCAPE,           4 },
   { "Home content",               SETTING_RAIL,               13 },
   { "Continue watching",           SETTING_CW_ON,           7 },
@@ -260,6 +274,11 @@ static const struct { const char *title; int start, n; } SECTIONS[] = {
 // today. All of them are changeable here, which was the point.
 static int value[SETTING_N] = {
   0, 0, 0,          /* quality, DV, Atmos */
+  // AUTOMATIC and not "Off". Off is what the app did before this row existed —
+  // nothing ever selected a subtitle, on any title — and it is the behaviour the
+  // owner reported as "subtitles are not really a thing here". A default of Off
+  // would ship the same complaint with a switch next to it.
+  1,                /* subtitles: automatic (Portuguese, then English) */
 
   0,                /* landscape posters: ON (the owner's profile; factory: off) */
   0,                /* full-screen backdrop: ON (profile; factory: off) */
@@ -330,6 +349,7 @@ static int on(int op)  { return value[op] == 0; }
 int settings_animations_reduced(void) { return value[SETTING_ANIM] == 1; }
 int settings_dolby_vision(void)        { return on(SETTING_DV); }
 int settings_dolby_atmos(void)         { return on(SETTING_ATMOS); }
+int settings_subtitle_pref(void)       { return value[SETTING_SUBS]; }
 
 // `collapseSidebar: modernSidebar ? false : Boolean(collapseSidebar)` — the modern
 // bar TURNS OFF the collapsing, and not the other way round. Copied from

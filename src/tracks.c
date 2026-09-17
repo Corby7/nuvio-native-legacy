@@ -7,6 +7,7 @@
 #include "anim.h"
 #include "layout.h"
 #include "subtitle.h"
+#include "settings.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -43,10 +44,106 @@ static float anim;
 // played, only the sheet lied about which it was.
 static int subExternal = -1;
 
+// The automatic selection's state, declared here because tracks_reset (just
+// below) clears it. See the block that follows for what it does.
+#define TRK_AUTO_MS 8000
+static int autoDone;
+static Uint32 autoSince;
+
 // Called when a new playback session starts: the external subtitle belongs to
 // the session, not to the device. Without this the next title would open the
 // sheet marking as active a subtitle that was not chosen for it.
-void tracks_reset(void) { subExternal = -1; is_open = 0; subtitle_off(); }
+void tracks_reset(void) {
+  subExternal = -1; is_open = 0; subtitle_off();
+  autoDone = 0; autoSince = 0;
+}
+
+// --- AUTOMATIC SELECTION -----------------------------------------------------
+//
+// Until this existed NOTHING ever selected a subtitle: apply(), below, was the
+// only caller of video_choose_subtitle and subtitle_load in the whole app, and it
+// only runs when someone walks into this sheet and presses OK. Every title on
+// every start played with the subtitles off, which is what "subtitles are not
+// really a thing on legacy" meant.
+//
+// TWO LISTS, ARRIVING AT DIFFERENT TIMES. The file's own tracks come with
+// sourceInfo, and their CODEC — the only thing that says whether a track is text
+// or a picture — comes later still, from the MKV header read. The addon's come
+// from the network, seconds after that. So this runs every frame and decides on
+// the first one where there is something worth deciding, or gives up at the
+// deadline; deciding at a fixed instant would mean deciding with half the
+// information on half the titles.
+// A track that is a PICTURE cannot be turned into text on this TV: no style, no
+// position, no size, and on a file whose only subtitles are PGS the choice shows
+// nothing at all. An UNKNOWN codec (not an MKV, or the header read failed) is
+// treated the same way — selecting it blind is how one ends up with a subtitle
+// that silently does nothing, which is the defect this whole path is fixing. The
+// addon's subtitle, which is text by definition, is the better answer in both
+// cases.
+static int embeddedText(const VideoTrack *t) {
+  if (!t || !t->codec[0]) return 0;
+  return !strstr(t->codec, "PGS") && !strstr(t->codec, "VOBSUB") &&
+         !strstr(t->codec, "DVBSUB");
+}
+
+void tracks_auto(Uint32 now) {
+  // 0 off, 1 automatic, 2 Portuguese, 3 English.
+  int pref = settings_subtitle_pref();
+  int want = pref == 2 ? 0 : pref == 3 ? 1 : -1;
+  int embedded = video_n_subtitle(), pass, i;
+
+  if (autoDone || pref == 0) return;
+  if (!autoSince) autoSince = now ? now : 1;
+  { int expired = now - autoSince >= TRK_AUTO_MS;
+    // The addon search is still out: its result is the one that works on a file
+    // with only PGS inside, so it is worth the wait.
+    if (!expired && addons_subtitles_busy()) return;
+    // The file HAS subtitles and no codec has been read yet — the MKV probe is
+    // still running. Choosing now would either skip a perfectly good text track
+    // or pick a PGS one; both are answered by waiting a moment.
+    if (!expired && embedded > 0) {
+      int known = 0;
+      for (i = 0; i < embedded; i++)
+        if (video_subtitle(i) && video_subtitle(i)->codec[0]) { known = 1; break; }
+      if (!known) return;
+    } }
+
+  for (pass = 0; pass < 2; pass++) {
+    int group = want >= 0 ? want : pass;
+    // THE FILE'S OWN FIRST. It needs no download, and the pipeline keeps it in
+    // sync with its own clock — our overlay syncs against a position the pipeline
+    // reports, which is the same thing one step removed.
+    for (i = 0; i < embedded; i++) {
+      const VideoTrack *t = video_subtitle(i);
+      if (!t || addons_language_group(t->language) != group) continue;
+      if (!embeddedText(t)) continue;
+      video_choose_subtitle(i); subtitle_off(); subExternal = -1;
+      printf("[subtitle] auto: embedded %d (%s)\n", i, t->label);
+      fflush(stdout);
+      autoDone = 1; return;
+    }
+    for (i = 0; i < addons_n_subtitles(); i++) {
+      const Subtitle *l = addons_subtitle(i);
+      if (!l || addons_language_group(l->language) != group) continue;
+      video_choose_subtitle(-1); subtitle_load(l->url);
+      subExternal = embedded + i;
+      printf("[subtitle] auto: addon %d (%s)\n", i, l->label);
+      fflush(stdout);
+      autoDone = 1; return;
+    }
+    // A named language does not fall back to the other one: being given
+    // Portuguese after asking for English is an answer to a question nobody put.
+    if (want >= 0) break;
+  }
+
+  // Nothing yet. Keep looking until the deadline — the addon list can still land
+  // — and then stop, so the search does not run for the whole film.
+  if (now - autoSince >= TRK_AUTO_MS) {
+    autoDone = 1;
+    printf("[subtitle] auto: nothing to select\n");
+    fflush(stdout);
+  }
+}
 
 // SEPARATE SHEETS: 0 = AUDIO only, 1 = SUBTITLE (list + style).
 //
@@ -177,6 +274,10 @@ static const char *labelSubtitle(int i, const char **brand) {
 }
 
 static void apply(void) {
+  // A choice made by hand ENDS the automatic one for this playback, "None"
+  // included: turning the subtitle off and having it come back a frame later is
+  // the app arguing with the person using it.
+  autoDone = 1;
   if (column == 0) {
     video_choose_audio(focus[0]);
   } else {
