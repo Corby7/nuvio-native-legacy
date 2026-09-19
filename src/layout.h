@@ -1278,47 +1278,114 @@
 #define NV_DETW_META_SEP   24.0f   // gap do flex, dos dois lados do ponto
 
 // ---------------------------------------------------------------------------
-// The SEARCH screen — MEASURED in the running web app (the owner's profile, 1920x1080).
+// The SEARCH screen — READ OFF NuvioWeb's css/components.css (2026-09-19).
 //
-// The port had a 6x7 GRID KEYBOARD on the left and a grid of results on the right.
-// The web app has no keyboard at all: it has a wide text field at the top (the TV's
-// system opens its keyboard) and the results come in horizontal ROWS, one per addon
-// catalogue, with a title and the origin below it.
+// THE NUMBERS THAT WERE HERE BEFORE ARE GONE, and it is worth saying why rather
+// than leaving a diff to explain it. They were measured live on 2026-09-01 and
+// were right then. Since then the sheet was rewritten, and `.search-content`
+// now appears TWICE in components.css: a short block at ~2659 and the real one
+// at ~2760. The last matching rule wins, so the first block is dead — porting
+// from it reproduces the SUPERSEDED screen, which is exactly the trap this
+// checkout has fallen into before.
 //
-//   .search-header        y=22  h=110, padding 0 104
-//     .search-discover-btn 110x110 at (104,22)  bg #222, 1px #333 border, radius 22
-//     .search-voice-btn    110x110 at (262,22)  -> step 158 (gap 48)
-//     .search-input-field  1396x110 at (420,22) bg #222, radius 22, 34/500,
-//                          padding 0 32; focused: border #f5f5f5 and
-//                          box-shadow 0 0 0 2px rgba(245,245,245,.22)
-//   .search-empty-state   y=148 h=400, centred: a 136 icon at y=220.5,
-//                          the title 56/600 at y=378.5, support 24/400 at y=446.7
-//   .search-results-row   title 48/600 lh 51.84; subtitle 20/400 rgb(179)
-//                          with margin-top 4; the track 88.3 below the title
-//     .search-result-card  248 wide, poster 248x372 radius 22 border 2px
-//                          name 28/500 lh 33.6 (margin-top 8)
-//                          date 20/400 rgb(179) (margin-top 4)
-//                          horizontal step 280 (248 + 32)
-//   step between rows 562.4
-#define NV_SEARCH_HEAD_Y     22.0f
-#define NV_SEARCH_HEAD_H    110.0f
-#define NV_SEARCH_BTN       110.0f
-#define NV_SEARCH_BTN_GAP    48.0f
-#define NV_SEARCH_BTN_ICON  54.0f
-#define NV_SEARCH_RADIUS       22.0f
-#define NV_SEARCH_FIELD_PADX 32.0f
-#define NV_SEARCH_EMPTY_Y   148.0f
-#define NV_SEARCH_EMPTY_ICO 136.0f
-#define NV_SEARCH_EMPTY_TITLE 378.5f
-#define NV_SEARCH_EMPTY_SUB 446.7f
-#define NV_SEARCH_ROW_SUB    55.8f   // topo do titulo -> topo do subtitulo
-#define NV_SEARCH_ROW_RAIL 92.3f   // topo do titulo -> topo dos cards
-#define NV_SEARCH_ROW_STEP 562.4f
-#define NV_SEARCH_CARD_W    248.0f
-#define NV_SEARCH_CARD_STEP 280.0f
-#define NV_SEARCH_POSTER_H  372.0f
-#define NV_SEARCH_NAME_GAP    8.0f
-#define NV_SEARCH_DATE_GAP    4.0f
+// WHAT MOVED, old block -> live block:
+//   content inset       104                -> 64   (padding: 48px 0 48px 64px)
+//   header              y=22, h=110        -> under a "Search" page title, h=100
+//   field and buttons   radius 22          -> radius 64, i.e. a full pill
+//   field text          34/500, padding 32 -> 28/500, padding 88 (icon inside it)
+//   focus ring          outer 2px halo     -> INSET 3px white
+//   row title           48/600             -> 28/600
+//   card name           28/500, gap 8      -> 24/500, gap 16
+//   card focus          none               -> scale 1.05, transform-origin top
+//   horizontal step     280                -> 272 (248 + a 24 gap)
+//   row step            562.4              -> 586.8
+//   empty state         icon + two lines   -> "Recent searches" chips, or "No Results"
+//   end of a row        nothing            -> a 100px round "See All" button
+//
+// DERIVED, NOT MEASURED, and the difference matters to whoever checks this
+// next: every value below comes from the stylesheet, which is exact for all of
+// them but one — `line-height: normal` on the two 20px lines. That resolves
+// through the FONT's metrics, and for Inter (unitsPerEm 2048, hhea ascender
+// 1984, descender -494, lineGap 0) it is 2478/2048 = 1.21. So a 20px line
+// occupies 24.2 and a browser measurement should agree to within a pixel. If a
+// future measurement disagrees by more than that, the font changed, not this.
+#define NV_SEARCH_X           64.0f   // .search-content padding-left
+#define NV_SEARCH_TOP         48.0f   // .search-content padding-top
+// The right edge. .search-content has padding-right 0 and it is .search-header
+// that insets itself by 64; the RESULT TRACK really does run to 1920 and is
+// clipped by the screen, which is how the web app makes a row read as
+// continuing past the edge. The field stops at 1856.
+#define NV_SEARCH_RIGHT       (NV_SCREEN_W - 64.0f)     // 1856
+#define NV_SEARCH_TITLE_H     48.0f   // .library-page-title 48/600, line-height 1
+#define NV_SEARCH_TITLE_LS     1.0f   // its letter-spacing
+#define NV_SEARCH_TITLE_GAP   32.0f   // .library-page-header margin-bottom
+#define NV_SEARCH_HEAD_Y      (NV_SEARCH_TOP + NV_SEARCH_TITLE_H + NV_SEARCH_TITLE_GAP)  // 128
+#define NV_SEARCH_HEAD_H     100.0f   // .search-input-field, and the two buttons
+#define NV_SEARCH_HEAD_GAP    64.0f   // .search-header margin-bottom
+#define NV_SEARCH_BODY_Y      (NV_SEARCH_HEAD_Y + NV_SEARCH_HEAD_H + NV_SEARCH_HEAD_GAP) // 292
+// A PILL, not a rounded rectangle. The sheet says `border-radius: 64px` on a box
+// 100 tall, and a radius over half the height clamps to half — so the correct
+// value for this gfx (where the radius is a fraction OF THE HEIGHT) is 0.5.
+// Writing 64/100 here would draw a shape the browser never draws.
+#define NV_SEARCH_PILL         0.5f
+#define NV_SEARCH_FIELD_PADX  88.0f   // .search-input-field padding, both sides
+#define NV_SEARCH_ICON        36.0f   // .search-input-icon svg
+#define NV_SEARCH_ICON_X      36.0f   // .search-input-icon left
+#define NV_SEARCH_CLEAR       32.0f   // .search-clear-btn svg
+#define NV_SEARCH_CLEAR_X     32.0f   // .search-clear-btn right
+// box-shadow: inset 0 0 0 3px rgb(255 255 255 / .96) on the focused field.
+// INSET is the whole point: the old outer halo washed the field out (see the
+// note in search.c), and an inset band cannot be clipped by a neighbour either.
+#define NV_SEARCH_RING         3.0f
+#define NV_SEARCH_BTN        100.0f   // .search-discover-btn / .search-voice-btn
+#define NV_SEARCH_BTN_GAP     24.0f   // .search-header gap
+#define NV_SEARCH_BTN_ICON    48.0f   // their svg
+// One row: the title, the origin under it, then the track.
+//   title      28/600, line-height 1.2                       -> 33.6
+//   subtitle   margin-top 4, 20/400, line-height normal      -> 4 + 24.2
+//   track      padding 16px 64px 32px 16px, gap 24
+#define NV_SEARCH_ROW_SUB     37.6f   // row top -> the origin line (33.6 + 4)
+#define NV_SEARCH_ROW_RAIL    77.8f   // row top -> the cards (33.6 + 4 + 24.2 + 16)
+#define NV_SEARCH_TRACK_X     16.0f   // .search-results-track padding-left
+#define NV_SEARCH_CARD_W     248.0f
+#define NV_SEARCH_CARD_STEP  272.0f   // 248 + the track's 24 gap
+#define NV_SEARCH_POSTER_H   372.0f
+#define NV_SEARCH_POSTER_R    22.0f   // calc(var(--home-poster-radius,24px) - 2px)
+#define NV_SEARCH_NAME_GAP    16.0f   // .search-result-name margin-top
+#define NV_SEARCH_DATE_GAP     4.0f   // .search-result-date margin-top
+// 372 + 16 + 28.8 (24 x 1.2) + 4 + 24.2 (20 x normal)
+#define NV_SEARCH_CARD_H     445.0f
+// The card scales on FOCUS now — it did not in the old sheet, and search.c still
+// carried a comment saying so. `transform-origin: top`, so the poster's top edge
+// stays put and the growth goes downwards.
+#define NV_SEARCH_CARD_FOCUS  1.05f
+// 77.8 + 445.0 + 32 (track padding-bottom) + 32 (.search-results-row margin-bottom)
+#define NV_SEARCH_ROW_STEP   586.8f
+// The "See All" button at the end of a track: 100x100, round, `align-self:
+// center` with `margin: 0 0 80px 32px`. Centring acts on the MARGIN box, so the
+// 80 below pushes the circle up: (445.0 - 180) / 2 = 132.5 from the top of the
+// track's content, which puts its centre within 4px of the posters'.
+#define NV_SEARCH_SEEALL     100.0f
+#define NV_SEARCH_SEEALL_GAP  32.0f
+#define NV_SEARCH_SEEALL_Y   132.5f
+#define NV_SEARCH_SEEALL_ICO  48.0f
+// The idle state: "Recent searches" and the chips under it.
+#define NV_SEARCH_HIST_GAP    32.0f   // .search-history-label margin-bottom
+#define NV_SEARCH_HIST_LS      1.0f   // its letter-spacing, and it is uppercase
+#define NV_SEARCH_CHIP_H      60.0f   // 14 + 28 (line-height 1) + 14 + 2x2 border
+#define NV_SEARCH_CHIP_PADX   28.0f
+#define NV_SEARCH_CHIP_GAP    24.0f   // .search-history-chips gap, both axes
+#define NV_SEARCH_CHIP_ICON   28.0f
+#define NV_SEARCH_CHIP_ICOGAP 16.0f
+#define NV_SEARCH_CHIP_BORDER  2.0f
+#define NV_SEARCH_CHIP_FOCUS  1.06f
+#define NV_SEARCH_HIST_MAX       6    // SEARCH_HISTORY_MAX in searchScreen.js
+// The "No Results" state. .search-empty-state-results reserves 420 and the block
+// is centred HORIZONTALLY only (justify-content: center on a flex container),
+// with its own two lines left-aligned inside it.
+#define NV_SEARCH_EMPTY_H    420.0f
+#define NV_SEARCH_EMPTY_TOP   22.0f   // .search-empty-state h2 margin-top
+#define NV_SEARCH_EMPTY_GAP   10.0f   // its margin-bottom
 
 // ---------------------------------------------------------------------------
 // The LIBRARY screen — MEASURED in the running web app.
@@ -1373,6 +1440,101 @@
 // — it is the ONLY focus scale left on any screen of this app, and it is the web
 // app's: the others came from tvOS's Top Shelf tables and were removed.
 #define NV_LIB_FOCUS_SCALE  0.02f
+
+// ---------------------------------------------------------------------------
+// The DISCOVER screen — READ OFF NuvioWeb's css/components.css (2026-09-19).
+//
+// It is the Library's furniture with a different data source: the same picker
+// row and the same poster grid, over a catalogue chosen by hand instead of the
+// owner's saved list. So almost nothing here is new geometry — it is the
+// Library's, re-measured at Discover's own inset.
+//
+// THE `.discover-card-*` BLOCK IN THE SHEET IS DEAD, and it is worth saying so
+// because it is the obvious thing to port from: it describes a 372-tall poster
+// with a 12px radius. discoverScreen.js renders `library-grid-card`, so the
+// LIBRARY's rules are the ones that apply. This is the same superseded-block
+// trap already recorded against the search screen.
+#define NV_DSC_X            64.0f   // .discover-main padding
+#define NV_DSC_Y            48.0f
+#define NV_DSC_W           (NV_SCREEN_W - 2 * NV_DSC_X)    // 1792
+// The page header: the title, and the context label right-aligned against it.
+#define NV_DSC_TITLE_H      48.0f   // .library-page-title 48/600, line-height 1
+#define NV_DSC_TITLE_LS      1.0f
+#define NV_DSC_HEAD_GAP     36.0f   // .library-page-header margin-bottom 32 + 4
+// Three pickers sharing the width, `flex: 1 1 0` with a 12 gap.
+#define NV_DSC_PICK_Y       (NV_DSC_Y + NV_DSC_TITLE_H + NV_DSC_HEAD_GAP)   // 132
+#define NV_DSC_PICK_GAP     12.0f   // .discover-picker-row gap
+#define NV_DSC_PICK_N          3
+#define NV_DSC_PICK_W       ((NV_DSC_W - (NV_DSC_PICK_N - 1) * NV_DSC_PICK_GAP) / NV_DSC_PICK_N)
+#define NV_DSC_PICK_STEP    (NV_DSC_PICK_W + NV_DSC_PICK_GAP)
+#define NV_DSC_PICK_H      100.0f   // min(5.21vw, 100px)
+#define NV_DSC_PICK_PADX    36.0f   // .library-picker-anchor padding
+// A PILL, like the search field: border-radius 64 on a box 100 tall clamps to
+// half the height. The radius here is a fraction OF THE HEIGHT, so 0.5.
+#define NV_DSC_PICK_PILL     0.5f
+#define NV_DSC_PICK_RING     3.0f   // box-shadow: inset 0 0 0 3px, focused
+#define NV_DSC_PICK_LABEL_H 24.0f   // .library-picker-title line-height
+#define NV_DSC_PICK_COPY_GAP 4.0f   // .library-picker-copy gap
+// The DROPDOWN a picker opens. It is the detail screen's season picker, and
+// deliberately so — that control already taught this app how a list behaves on
+// a D-pad, and a second idiom for the same job would be a worse answer twice.
+// The numbers are its numbers (NV_DETWEB_SEA_MENU_* in detail.h), restated here
+// so the Discover screen does not include the detail screen's header for five
+// constants and inherit its whole vocabulary.
+#define NV_DSC_CHEV         32.0f   // the chevron, right-aligned in the anchor
+#define NV_DSC_MENU_GAP      8.0f   // anchor base -> the menu's top
+#define NV_DSC_MENU_PADY     4.0f
+#define NV_DSC_MENU_PADX    10.0f
+#define NV_DSC_OPT_H        84.0f
+#define NV_DSC_OPT_PADX     32.0f
+// Six rows, then it scrolls. The web caps its menu at 540px, which is 6.4 of
+// these — and six is also what the season picker settled on.
+#define NV_DSC_OPT_VIS         6
+// The grid. The web says `repeat(auto-fill, minmax(252px, 252px))` with
+// `gap: 48px 24px` — FIXED 252 columns, which at this width fits six and leaves
+// 160px of the row empty on the right.
+//
+// THE COLUMNS ARE NOT FIXED HERE, and that is a deliberate divergence. A browser
+// window is any width and auto-fill has to cope; a television is exactly 1920,
+// and 160px of dead margin on the right of every row is not a layout, it is the
+// remainder. Six columns SHARE the width instead: 278.67 each, which is 10%
+// more poster for nothing. Everything else — the gaps, the radius, the 4px
+// inside border, the 1.05 focus — is the sheet's.
+// The picker row's 64 of clearance (.library-picker-groups margin-bottom).
+#define NV_DSC_GRID_Y       (NV_DSC_PICK_Y + NV_DSC_PICK_H + 64.0f)   // 296
+#define NV_DSC_COLUMNS         6
+#define NV_DSC_CARD_GAP     24.0f
+#define NV_DSC_CARD_W      ((NV_DSC_W - (NV_DSC_COLUMNS - 1) * NV_DSC_CARD_GAP) / NV_DSC_COLUMNS)
+#define NV_DSC_CARD_STEP    (NV_DSC_CARD_W + NV_DSC_CARD_GAP)
+#define NV_DSC_POSTER_H     (NV_DSC_CARD_W * 1.5f)     // 2:3, like every poster here
+#define NV_DSC_POSTER_R     24.0f   // --library-poster-radius
+#define NV_DSC_BORDER        4.0f   // the focus border, on the INSIDE
+#define NV_DSC_TITLE_GAP    16.0f   // .library-grid-card gap
+#define NV_DSC_ROW_GAP      48.0f   // the grid's row gap
+// .library-grid-title is 24/500 with line-height 1.18 -> 28.3.
+#define NV_DSC_LD_TITLE     28.3f
+#define NV_DSC_LINE_STEP    (NV_DSC_POSTER_H + NV_DSC_TITLE_GAP + NV_DSC_LD_TITLE + NV_DSC_ROW_GAP)
+#define NV_DSC_FOCUS_SCALE  0.05f   // .library-grid-card.focused, origin top
+// WHERE THE GRID MAY DRAW. To the bottom of the SCREEN, not to NV_MARGIN_Y above
+// it: the web app's scroller clips at its border box and the 48px of padding is
+// inside the scrollport, so a card really does run to the last pixel. Stopping
+// 60 short was cutting cards off with screen still left under them.
+#define NV_DSC_GRID_BOTTOM  NV_SCREEN_H
+// The line the grid is clipped at. IT SITS INSIDE THE ROW GAP, 24 above the
+// posters, and not up under the pickers — the 24 is what makes it immune to the
+// font's exact metrics.
+//
+// MEASURED: with the clip at 248 (pickers + 16) a THREE-PIXEL sliver of the
+// previous row's titles survived at y 250-252. The arithmetic says it should
+// not: a snapped scroll puts row N's posters at NV_DSC_GRID_Y, which leaves row
+// N-1's title ending exactly NV_DSC_ROW_GAP higher, at 248. But NV_DSC_LD_TITLE
+// is the CSS line box (24 x 1.18 = 28.3) and SDL_ttf's box for the same face is
+// nearer 30, so the descenders ran a couple of pixels past where the sheet says
+// the line ends. That sliver is what read as the odd cut at the top.
+//
+// Clipping 24 lower costs nothing — the band is empty gap either way — and no
+// plausible disagreement between a CSS line box and a rasteriser's is 24px.
+#define NV_DSC_CLIP_TOP     (NV_DSC_GRID_Y - 24.0f)
 
 #define NV_DET_MARGIN_X  120.0f
 #define NV_DET_MARGIN_Y   38.0f
@@ -1767,5 +1929,21 @@
 #define NV_FT_ERAIL_CTITLE 24      // .player-episode-card-title      24 / 600
 #define NV_LD_ERAIL_OVER   31.0f   // 22 x line-height 1.4
 #define NV_ERAIL_META_TRACK 1.32f  // 0.06em at 22px
+
+// The SEARCH screen's own sizes. Three, and none of them borrows a neighbour:
+//   .search-result-name      24 / 500  — and .search-history-label at the same
+//                                        24 / 500, uppercase and tracked
+//   .search-results-subtitle 20 / 400  — the same as .search-result-date
+//   .search-empty-state p    24 / 400
+// The 20/400 could have taken NV_FT_PG_END and the 24/400 NV_FT_HERO_SIN, and
+// both were refused for the reason already written beside those two: they are
+// shared, and resizing one there would resize a screen nobody was looking at.
+#define NV_FT_SRCH_NAME   24      // .search-result-name / .search-history-label
+#define NV_FT_SRCH_META   20      // .search-results-subtitle / .search-result-date
+#define NV_FT_SRCH_EMPTY  24      // .search-empty-state p
+// 24 x line-height 1.2, the card's name box.
+#define NV_LD_SRCH_NAME   28.8f
+// 20 x Inter's `normal` (1.21), the origin line and the year.
+#define NV_LD_SRCH_META   24.2f
 
 #endif

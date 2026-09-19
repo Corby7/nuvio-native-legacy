@@ -312,6 +312,90 @@ static int  generation;            // goes up with every new term
 static int  nextTarget;        // the work queue: the next index to query
 static int  threadsAlive;
 
+// --- the genres a catalogue declares ----------------------------------------
+// See the note in discover.h. The table is keyed by (base, kind, id); `base` is
+// a POINTER, like Decl's, because the addon bases outlive every manifest sweep
+// and copying 300 bytes per catalogue to say the same thing would be waste.
+#define GENRE_CATS   48
+#define GENRE_PER_CAT 32
+#define GENRE_LABEL   40
+
+static struct {
+  const char *base;
+  char kind[8];
+  char id[96];
+  char label[GENRE_PER_CAT][GENRE_LABEL];
+  int  n;
+} genreCat[GENRE_CATS];
+static int nGenreCat;
+
+static int genreSlot(const char *base, const char *kind, const char *id, int create) {
+  int i;
+  if (!base || !kind || !id) return -1;
+  for (i = 0; i < nGenreCat; i++)
+    if (genreCat[i].base == base && !strcmp(genreCat[i].kind, kind) &&
+        !strcmp(genreCat[i].id, id)) return i;
+  // The pointer compare above is the fast path and it is enough while the sweep
+  // hands back the same `base` every time; fall back to the text so a second
+  // sweep with a freshly built list still finds the entry instead of filling
+  // the table with duplicates.
+  for (i = 0; i < nGenreCat; i++)
+    if (genreCat[i].base && base && !strcmp(genreCat[i].base, base) &&
+        !strcmp(genreCat[i].kind, kind) && !strcmp(genreCat[i].id, id)) return i;
+  if (!create || nGenreCat >= GENRE_CATS) return -1;
+  i = nGenreCat++;
+  memset(&genreCat[i], 0, sizeof genreCat[i]);
+  genreCat[i].base = base;
+  snprintf(genreCat[i].kind, sizeof genreCat[i].kind, "%s", kind);
+  snprintf(genreCat[i].id,   sizeof genreCat[i].id,   "%s", id);
+  return i;
+}
+
+void disc_catalog_genres(const char *base, const char *kind, const char *id,
+                         const char *options, const char *end) {
+  const char *p = options;
+  int slot;
+  if (!options || !end) return;
+  slot = genreSlot(base, kind, id, 1);
+  if (slot < 0) return;
+  pthread_mutex_lock(&searchLock);
+  genreCat[slot].n = 0;
+  // A JSON array of BARE STRINGS, which js.h has no reader for: js_text wants a
+  // key and js_end wants a brace or a bracket. Walking it here is six lines and
+  // keeps a one-off shape out of the shared parser.
+  while (p < end && genreCat[slot].n < GENRE_PER_CAT) {
+    const char *q;
+    int k = 0;
+    while (p < end && *p != '"') { if (*p == ']') { p = end; break; } p++; }
+    if (p >= end) break;
+    q = ++p;
+    while (q < end && *q != '"' && k + 1 < GENRE_LABEL) {
+      if (*q == '\\' && q + 1 < end) q++;   // an escaped quote is not the end
+      genreCat[slot].label[genreCat[slot].n][k++] = *q++;
+    }
+    genreCat[slot].label[genreCat[slot].n][k] = 0;
+    if (k) genreCat[slot].n++;
+    while (q < end && *q != '"') q++;        // skip whatever did not fit
+    p = q + 1;
+  }
+  pthread_mutex_unlock(&searchLock);
+}
+
+int disc_genres_n(const char *base, const char *kind, const char *id) {
+  int slot, n = 0;
+  pthread_mutex_lock(&searchLock);
+  slot = genreSlot(base, kind, id, 0);
+  if (slot >= 0) n = genreCat[slot].n;
+  pthread_mutex_unlock(&searchLock);
+  return n;
+}
+
+const char *disc_genre_at(const char *base, const char *kind, const char *id, int i) {
+  int slot = genreSlot(base, kind, id, 0);
+  if (slot < 0 || i < 0 || i >= genreCat[slot].n) return "";
+  return genreCat[slot].label[i];
+}
+
 void disc_targets_search_reset(void) {
   pthread_mutex_lock(&searchLock);
   // Cinemeta goes in ALWAYS and first: it is the only source that depends on no
@@ -459,6 +543,15 @@ const char *disc_search_target_title(int target) {
 }
 const char *disc_search_target_addon(int target) {
   return (target >= 0 && target < nTargets) ? targets[target].addon : "";
+}
+const char *disc_search_target_base(int target) {
+  return (target >= 0 && target < nTargets) ? targets[target].base : "";
+}
+const char *disc_search_target_kind(int target) {
+  return (target >= 0 && target < nTargets) ? targets[target].kind : "";
+}
+const char *disc_search_target_id(int target) {
+  return (target >= 0 && target < nTargets) ? targets[target].id : "";
 }
 
 int disc_search_target_item(int target, int i, CatItem *dst) {
@@ -850,6 +943,25 @@ static int readManifest(const char *base, Decl *output, int max) {
           if (sc && sc < f) d->searchable = 1;
         }
         if (strcmp(kind, "movie") && strcmp(kind, "series")) d->searchable = 0;
+        // GENRES, from the same `extra` block and while it is still in hand.
+        // The shape is `[{"name":"genre","options":["Action",...]}, ...]`, so
+        // walk the entries and take the options of the one that says genre.
+        // `isRequired` is ignored on purpose: a catalogue that INSISTS on a
+        // genre still lists the ones it accepts, and the picker is what the
+        // owner uses to satisfy it.
+        if (ex && ex < f) {
+          const char *entry = js_array(ex, f, "extra");
+          for (; entry && entry < f; entry = js_next(js_end(entry))) {
+            const char *stop = js_end(entry);
+            char nameExtra[24] = "";
+            if (!stop || stop > f) break;
+            js_text(entry, stop, "name", nameExtra, sizeof nameExtra);
+            if (strcmp(nameExtra, "genre")) continue;
+            { const char *opt = js_array(entry, stop, "options");
+              if (opt) disc_catalog_genres(base, kind, id, opt, stop); }
+            break;
+          }
+        }
         // Register HERE, and not afterwards by sweeping the Decl array.
         //
         // Xperience declares 605 catalogues and puts its two SEARCH ones in the

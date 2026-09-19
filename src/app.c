@@ -28,6 +28,7 @@
 #include "detail.h"
 #include "menu.h"
 #include "search.h"
+#include "discoverui.h"
 #include "library.h"
 #include "profile.h"
 #include "social.h"
@@ -179,6 +180,7 @@ static void swapScreen(Screen new) {
   // with the text from two navigations ago would be rubbish, not useful memory.
   switch (screen) {
     case SCREEN_SEARCH:      search_start();      break;
+    case SCREEN_DISCOVER:   dui_start();         break;
     case SCREEN_LIBRARY: library_start(); break;
     case SCREEN_PROFILE:     profile_open(); requestProfile(); break;
     case SCREEN_SETTINGS:    settings_start();    break;
@@ -273,6 +275,7 @@ void app_event(const SDL_Event *e) {
 
   switch (screen) {
     case SCREEN_SEARCH:      search_event(e);      break;
+    case SCREEN_DISCOVER:   dui_event(e);         break;
     case SCREEN_LIBRARY: library_event(e); break;
     case SCREEN_PROFILE:     profile_event(e);     break;
     case SCREEN_SOCIAL:     social_event(e);     break;
@@ -436,6 +439,26 @@ void app_update(float dt, Uint32 now) {
   if (screen==SCREEN_HOME && home_requested_social()) {
     swapScreen(SCREEN_SETTINGS);menu_set_destination(MENU_SETTINGS);
   }
+  // The compass in the search header. It is the only way into Discover, so the
+  // request is read here and nowhere else.
+  //
+  // dui_start() ANSWERS, and the answer is obeyed: with no addon catalogues
+  // loaded there is nothing to browse, and swapping to a screen that can only
+  // show an empty grid and a picker with no options would be worse than the
+  // press doing nothing. swapScreen would call dui_start a second time, so the
+  // check is made here and the screen set directly.
+  if (screen == SCREEN_SEARCH && search_requested_discover()) {
+    if (dui_start()) screen = SCREEN_DISCOVER;
+  }
+
+  // Back out of Discover returns to the SEARCH screen, not to the home: it is
+  // the reverse of the press that opened it, and the home is two steps away.
+  // Hence a line of its own, before the generic close below.
+  if (screen == SCREEN_DISCOVER && dui_wants_exit()) {
+    swapScreen(SCREEN_SEARCH);
+    menu_set_destination(MENU_FETCH);
+  }
+
   // Outside the home, Back has somewhere to go: the home. Only there does it close the app.
   if (screen != SCREEN_HOME) {
     int shouldClose = (screen == SCREEN_SEARCH      && search_wants_exit())
@@ -475,6 +498,8 @@ void app_update(float dt, Uint32 now) {
       if (home_item_focused(&it)) openTitle(&it);
     } else if (screen == SCREEN_SEARCH && search_requested_open(&idx)) {
       if (search_item_focused(&it)) openTitle(&it); else openByIndex(idx);
+    } else if (screen == SCREEN_DISCOVER && dui_requested_open(&idx)) {
+      if (dui_item_focused(&it)) openTitle(&it); else openByIndex(idx);
     } else if (screen == SCREEN_LIBRARY && library_requested_open(&idx)) {
       openByIndex(idx);
     } else if (screen == SCREEN_PROFILE) {
@@ -656,7 +681,7 @@ void app_update(float dt, Uint32 now) {
   menu_update(dt, now);
   seeall_update(dt, now);
   ctx_update(dt, now);
-  { int i = ctx_requested_details();
+  { int i = ctx_requested_details();   /* opens over any screen: no hero to fly from */
     if (i >= 0) {
       const CatItem *ci = cat_item(i);
       HomeItem it;
@@ -690,6 +715,7 @@ void app_update(float dt, Uint32 now) {
     } }
   switch (screen) {
     case SCREEN_SEARCH:      search_update(dt, now);      break;
+    case SCREEN_DISCOVER:   dui_update(dt, now);         break;
     case SCREEN_LIBRARY: library_update(dt, now); break;
     case SCREEN_PROFILE:     break;
     case SCREEN_SETTINGS:    settings_update(dt, now);    break;
@@ -735,6 +761,7 @@ void app_draw(Uint32 now) {
     if (!detail_covers_screen() && !seeall_covers_screen()) {
       switch (screen) {
         case SCREEN_SEARCH:      search_draw(now);      break;
+        case SCREEN_DISCOVER:   dui_draw(now);         break;
         case SCREEN_LIBRARY: library_draw(now); break;
         case SCREEN_PROFILE:     profile_draw(now);     break;
         case SCREEN_SOCIAL:     social_draw(now);     break;
@@ -812,8 +839,13 @@ int app_goto_detail(const char *imdb) {
 void app_where(char *out, size_t n) {
   static const char *NAME[] = { "login", "profile-picker", "home", "search",
                                 "library", "profile", "settings", "player",
-                                "social" };
-  const char *base = ((int)screen >= 0 && (int)screen < 9) ? NAME[screen] : "?";
+                                "social", "discover" };
+  // sizeof, not a literal. The bound was written as `< 9` and the tenth screen
+  // arrived: every capture taken from the Discover screen was labelled "?",
+  // which is the one thing a position log must never say. Counting the array
+  // cannot drift from the array.
+  const char *base = ((size_t)screen < sizeof NAME / sizeof *NAME)
+                   ? NAME[screen] : "?";
   // The OVERLAYS are what the arrow keys actually reach, and they are the part a
   // blind sequence gets wrong: the player and the detail both sit over the home.
   if (player_is_open()) { snprintf(out, n, "player"); return; }
@@ -846,5 +878,6 @@ void app_shutdown(void) {
   library_shutdown();
   profile_shutdown();
   search_shutdown();
+  dui_shutdown();
   home_shutdown();
 }

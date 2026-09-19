@@ -124,6 +124,19 @@ typedef enum {
   TXT_ERAIL_CODE,    // .player-episode-code                24 / 800
   TXT_ERAIL_PILL,    // .player-episode-current ("Playing") 20 / 800, uppercase
   TXT_ERAIL_CTITLE,  // .player-episode-card-title          24 / 600
+  // THE SEARCH SCREEN, read off the live sheet on 2026-09-19. APPENDED, like
+  // everything above it and for the same reason: STYLES in text.c is indexed by
+  // this order, so a style inserted in the middle silently shifts every one
+  // after it.
+  //
+  // Only three. The rest of the screen reuses what already exists and matches
+  // exactly — TXT_TITLE3 for the 48/600 page title, TXT_TITLE2 for the 56/600
+  // empty-state heading, TXT_ROW_TITLE for the 28/600 row title, and
+  // TXT_CALLOUT for the 28/500 shared by the input field and the history chip.
+  TXT_SRCH_NAME,     // .search-result-name        24 / 500
+                     // and .search-history-label  24 / 500, uppercase, tracked 1
+  TXT_SRCH_META,     // .search-results-subtitle and .search-result-date  20 / 400
+  TXT_SRCH_EMPTY,    // .search-empty-state p      24 / 400
   TXT_NFONTS
 } TxtStyle;
 

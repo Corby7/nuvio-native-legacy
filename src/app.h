@@ -21,7 +21,16 @@
 typedef enum {
   SCREEN_LOGIN, SCREEN_CHOICE_PROFILE,
   SCREEN_HOME, SCREEN_SEARCH, SCREEN_LIBRARY, SCREEN_PROFILE, SCREEN_SETTINGS,
-  SCREEN_PLAYER, SCREEN_SOCIAL
+  SCREEN_PLAYER, SCREEN_SOCIAL,
+  // APPENDED, not inserted. Nothing indexes this enum by position today, but
+  // the menu's destinations already learned that lesson once (see menu.h) and
+  // the cost of appending is nothing.
+  //
+  // It is not a menu destination: the side bar has no Discover entry, exactly
+  // as the web app's has none. The only way in is the compass in the search
+  // header, and Back from it returns THERE and not to the home — which is why
+  // app.c gives it a line of its own rather than the generic close.
+  SCREEN_DISCOVER
 } Screen;
 
 int  app_start(const char *dirArt);

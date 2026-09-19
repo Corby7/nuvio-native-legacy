@@ -300,6 +300,12 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_ERAIL_CODE,  WEIGHT_BOLD   }, // TXT_ERAIL_CODE   .player-episode-code
   { NV_FT_ERAIL_PILL,  WEIGHT_BOLD   }, // TXT_ERAIL_PILL   .player-episode-current
   { NV_FT_ERAIL_CTITLE,WEIGHT_BOLD   }, // TXT_ERAIL_CTITLE .player-episode-card-title
+  // The search screen. Both 500s are MEDIUM outright — 500 IS Medium, there is
+  // nothing for the optical rule at the top of this table to resolve — and the
+  // two 400s are Regular for the same reason. Nothing here is a 600.
+  { NV_FT_SRCH_NAME,  WEIGHT_MEDIUM  },  // TXT_SRCH_NAME  .search-result-name
+  { NV_FT_SRCH_META,  WEIGHT_REGULAR },  // TXT_SRCH_META  .search-results-subtitle
+  { NV_FT_SRCH_EMPTY, WEIGHT_REGULAR },  // TXT_SRCH_EMPTY .search-empty-state p
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.

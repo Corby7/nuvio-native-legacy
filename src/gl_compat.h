@@ -23,7 +23,8 @@
   #define GL_COLOR_ATTACHMENT0     GL_COLOR_ATTACHMENT0_EXT
   #define GL_FRAMEBUFFER_COMPLETE  GL_FRAMEBUFFER_COMPLETE_EXT
   // GLSL 1.20 has no precision qualifiers; declaring them breaks compilation,
-  // so they become nothing.
+  // so they become nothing. Desktop floats are single precision throughout, so
+  // NV_UV_P has nothing to ask for either.
   #define NV_GLSL_PREFIX \
     "#version 120\n" \
     "#define lowp\n#define mediump\n#define highp\n"

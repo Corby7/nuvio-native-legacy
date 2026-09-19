@@ -29,6 +29,7 @@
 #include "discover.h"
 #include "trakt.h"
 #include "player.h"
+#include "ime.h"
 #ifndef __APPLE__
 #include <dlfcn.h>
 #include <SDL2/SDL_syswm.h>
@@ -53,6 +54,14 @@ static SDL_Keycode codeOfKey(const char *name) {
   if (!strcmp(name, "right")) return SDLK_RIGHT;
   if (!strcmp(name, "ok"))    return SDLK_RETURN;
   if (!strcmp(name, "back"))  return SDLK_AC_BACK;
+  // THE SEARCH FIELD NEEDS TYPING, and until it existed nothing here did: the
+  // six above are a remote's whole keypad. Without these the only way to put a
+  // term on the search screen from a script was to drive the arrows across the
+  // drawn keyboard and press OK 5 times a word — and on the layout that uses the
+  // TV's keyboard instead, not even that.
+  if (!strcmp(name, "space"))     return SDLK_SPACE;
+  if (!strcmp(name, "backspace")) return SDLK_BACKSPACE;
+  if (name[0] && !name[1] && name[0] > 0x20 && name[0] < 0x7F) return (SDL_Keycode)name[0];
   return 0;
 }
 
@@ -147,6 +156,19 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
     // fourth request file, and the per-frame stat() probe stays at three.
     if (!strcmp(line, "regions")) { app_regions(); continue; }
 
+    // "text:<utf8>" is not a key either: it is what a SYSTEM KEYBOARD sends, and
+    // no sequence of keycodes can stand in for it. An accented letter or a
+    // non-Latin one reaches the app only as SDL_TEXTINPUT (SDL_KEYDOWN carries a
+    // keycode, not a character), so without this channel the one path the search
+    // screen now depends on could not be exercised from a script at all.
+    if (!strncmp(line, "text:", 5)) {
+      SDL_Event t; SDL_zero(t);
+      t.type = SDL_TEXTINPUT;
+      snprintf(t.text.text, sizeof t.text.text, "%s", line + 5);
+      deliver(&t);
+      continue;
+    }
+
     SDL_Keycode k = codeOfKey(line);
     if (!k) continue;
     SDL_Event e; SDL_zero(e);
@@ -156,6 +178,18 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
     // The KEYUP pair exists because part of the interface only decides when the
     // key GOES UP — the short press against the long press of OK, for example.
     // Sending only the KEYDOWN left those actions mute.
+    // A REAL KEYBOARD SENDS BOTH, and the injection has to as well or the two
+    // halves of the app disagree about what happened: SDL delivers SDL_KEYDOWN
+    // and then SDL_TEXTINPUT for one printable press, and the search field reads
+    // the second while everything else reads the first. Sending only the keycode
+    // would drive the focus and type nothing.
+    if (SDL_IsTextInputActive() && k > 0x20 && k < 0x7F) {
+      SDL_Event t; SDL_zero(t);
+      t.type = SDL_TEXTINPUT;
+      t.text.text[0] = (char)k; t.text.text[1] = 0;
+      deliver(&t);
+    }
+
     if (hold) { releaseIn = SDL_GetTicks() + NV_HOLD_MS + 120; releaseKey = k; }
     else { e.type = SDL_KEYUP; deliver(&e); }
   }
@@ -488,6 +522,11 @@ int main(int argc, char **argv) {
   // A TV app has no pointer: the cursor over the interface pollutes the reading
   // and disappears on its own on the device, but not on the Mac.
   SDL_ShowCursor(SDL_DISABLE);
+  // TEXT INPUT OFF, everywhere but the one screen that asks for it. SDL starts
+  // it by default on some backends, and left on, a backend that reports D-pad
+  // presses as text as well as keys would have every screen reacting twice to
+  // one press. ime.h owns that switch from here on.
+  ime_start(win);
 #ifndef __APPLE__
   // Declares the surface NON-opaque. By default the compositor treats the window
   // as opaque and discards the whole alpha channel — the hole from gfx_hole would
@@ -694,14 +733,21 @@ int main(int argc, char **argv) {
       }
 #ifdef __APPLE__
       // F toggles fullscreen, Mac only — the TV is already fullscreen and has
-      // no keyboard. Safe as a bare letter because the app never reads typed
-      // text: there is no SDL_TEXTINPUT handler anywhere in it.
+      // no keyboard.
+      //
+      // GUARDED BY SDL_IsTextInputActive, and it has to be. This used to say
+      // "safe as a bare letter because the app never reads typed text: there is
+      // no SDL_TEXTINPUT handler anywhere in it". That stopped being true when
+      // the search screen started taking text (see ime.h): typing "Fargo" into
+      // the field would otherwise throw the window in and out of fullscreen on
+      // the first letter and never deliver it.
       //
       // DESKTOP fullscreen, not the real thing: it keeps the display mode and
       // just fills the screen, so switching costs nothing and the bars do the
       // aspect work they already do in the window.
       if (e.type == SDL_KEYDOWN &&
-          (e.key.keysym.sym == SDLK_f || e.key.keysym.sym == SDLK_F11)) {
+          (e.key.keysym.sym == SDLK_F11 ||
+           (e.key.keysym.sym == SDLK_f && !SDL_IsTextInputActive()))) {
         Uint32 now = SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP;
         SDL_SetWindowFullscreen(win, now ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
         continue;

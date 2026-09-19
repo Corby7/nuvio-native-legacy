@@ -51,11 +51,10 @@ static GLuint borderFbo[4] = {0,0,0,0}, borderTex[4] = {0,0,0,0};
 static int borderW = 0, borderH = 0;
 
 static const char *VS =
-  NV_GLSL_PREFIX
   "attribute vec2 aPos;\n"
   "uniform vec4 uRect;\n"
   "uniform vec2 uScreen;\n"
-  "varying vec2 vUv;\n"
+  "varying NV_UV_P vec2 vUv;\n"
   "void main(){\n"
   "  vUv = aPos;\n"
   "  vec2 p = uRect.xy + aPos * uRect.zw;\n"
@@ -71,8 +70,7 @@ static const char *VS =
 // delivered ~40fps with only two full-screen layers. With one lean program per
 // mode, each draw uses only what it needs.
 static const char *FS_HEAD =
-  NV_GLSL_PREFIX
-  "varying vec2 vUv;\n"
+  "varying NV_UV_P vec2 vUv;\n"
   "uniform sampler2D uTex;\n"
   "uniform float uFocus;\n"
   "uniform vec2  uPar;\n"
@@ -85,11 +83,39 @@ static const char *FS_HEAD =
 
 // A rounded-rectangle SDF, corrected for the aspect ratio — without the
 // correction a landscape card's corner comes out oval.
+//
+// vUv AND THIS FUNCTION ARE highp, AND ON A WIDE QUAD THAT IS THE DIFFERENCE
+// BETWEEN A CLEAN CURVE AND A STAIRCASE.
+//
+// The shader's default is `precision mediump float`, which guarantees only ten
+// bits of mantissa: a varying in [0,1] then carries about 1024 distinct values,
+// and what that is worth in PIXELS depends entirely on how wide the quad is.
+//
+//   the search field   1792 wide -> ~1.75 px per representable step
+//   a Discover picker   589 wide -> ~0.58 px
+//   a poster            279 wide -> ~0.27 px
+//
+// edgeAA asks for 1.25 px of ramp in total. On the poster and the picker the
+// varying resolves far finer than that and the edge ramps properly; on the
+// search field the quantisation is WIDER THAN THE WHOLE RAMP, so the SDF jumps
+// from one side of the edge to the other with nothing in between and the cap
+// comes out visibly stepped. It was reported exactly that way: the same pill
+// shape looked sharp as a dropdown and jagged as the search bar, and the only
+// thing that differed between them was width.
+//
+// The note on edgeAA's mediump floor was circling this — "the edge starts to
+// dither instead of ramping" — but tied it to uAA being small, when the real
+// variable is the quad's aspect.
+//
+// It is the VARYING that has to change, not the arithmetic: reformulating to
+// keep the intermediates small does not help, because the error is already
+// baked into vUv before this function sees it. Both stages declare it the same
+// way or the program does not link.
 static const char *FS_SDF =
-  "float sdf(vec2 uv, float r, float asp){\n"
-  "  vec2 p = (uv - 0.5) * vec2(asp, 1.0);\n"
-  "  vec2 b = vec2(0.5*asp, 0.5) - r;\n"
-  "  vec2 q = abs(p) - b;\n"
+  "float sdf(NV_UV_P vec2 uv, float r, float asp){\n"
+  "  NV_UV_P vec2 p = (uv - 0.5) * vec2(asp, 1.0);\n"
+  "  NV_UV_P vec2 b = vec2(0.5*asp, 0.5) - r;\n"
+  "  NV_UV_P vec2 q = abs(p) - b;\n"
   "  return min(max(q.x,q.y),0.0) + length(max(q,0.0)) - r;\n"
   "}\n";
 
@@ -904,11 +930,41 @@ static GLuint compiles(GLenum kind, const char *src) {
   return s;
 }
 
+// WHICH PRECISION THE SDF'S COORDINATE GETS, decided once and given to BOTH
+// stages.
+//
+// It cannot be decided inside the shader. GL_FRAGMENT_PRECISION_HIGH is defined
+// by the compiler only in the FRAGMENT stage, so a `#ifdef` would resolve one
+// way in the vertex shader and the other in the fragment shader — and a varying
+// whose precision disagrees between the two is exactly the kind of thing that
+// links on one driver and fails on the next.
+//
+// glGetShaderPrecisionFormat answers the same question from the C side, where
+// the answer can be handed to both. `precision` comes back as the number of
+// mantissa bits and is 0 when the format is not supported at all.
+static void uvPrecision(char *dst, size_t n) {
+#ifdef __APPLE__
+  // Desktop GLSL 1.20 has no precision qualifiers and every float is single
+  // precision anyway, so the marker expands to nothing.
+  snprintf(dst, n, "#define NV_UV_P\n");
+#else
+  GLint range[2] = { 0, 0 }, bits = 0;
+  glGetShaderPrecisionFormat(GL_FRAGMENT_SHADER, GL_HIGH_FLOAT, range, &bits);
+  snprintf(dst, n, "#define NV_UV_P %s\n", bits > 0 ? "highp" : "mediump");
+  printf("[gfx] SDF coordinate precision: %s (highp mantissa bits %d)\n",
+         bits > 0 ? "highp" : "mediump", bits);
+#endif
+}
+
 int gfx_start(void) {
-  GLuint vs = compiles(GL_VERTEX_SHADER, VS);
+  char uvp[64];
+  char vsrc[1200];
+  uvPrecision(uvp, sizeof uvp);
+  snprintf(vsrc, sizeof vsrc, "%s%s%s", NV_GLSL_PREFIX, uvp, VS);
+  GLuint vs = compiles(GL_VERTEX_SHADER, vsrc);
   char source[6000];
   for (int m = 0; m < GFX_NMODES; m++) {
-    snprintf(source, sizeof source, "%s%s%s%s", FS_HEAD,
+    snprintf(source, sizeof source, "%s%s%s%s%s%s", NV_GLSL_PREFIX, uvp, FS_HEAD,
              NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "",
              FS_BODY[m]);
     GLuint p = glCreateProgram();

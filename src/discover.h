@@ -115,11 +115,35 @@ int  disc_search_item(int i, CatItem *dst);
 int  disc_search_n_targets(void);
 const char *disc_search_target_title(int target);   // "Movies", "Series"
 const char *disc_search_target_addon(int target);    // "Cinemeta", "Xperience"
+// The CATALOGUE behind a search row, for the "See All" button at the end of it.
+// The three together are what seeall_open takes; without them the button could
+// be drawn and could do nothing, which is worse than not drawing it.
+const char *disc_search_target_base(int target);
+const char *disc_search_target_kind(int target);   // "movie" | "series"
+const char *disc_search_target_id(int target);
 int  disc_search_target_n(int target, const char *term);
 int  disc_search_target_item(int target, int i, CatItem *dst);
 // Goes up with every new term. Anything that keeps a focus position between
 // frames should readjust when this number changes.
 int  disc_search_generation(void);
+
+// --- THE GENRES A CATALOGUE DECLARES --------------------------------------
+// Stremio puts them in the catalogue's own `extra` block, as
+// `{"name":"genre","options":["Action","Comedy",...]}`. Nothing read them until
+// the Discover screen needed a Genre picker: the home only ever asks a
+// catalogue for its first page, and the search asks by title.
+//
+// Registered from the manifest sweep, alongside the search targets, because
+// that is the one place in the app where a catalogue's `extra` block is already
+// in hand. Keyed by the same three fields that identify a catalogue
+// everywhere else, so the screen can ask about whichever one the picker is on.
+void disc_catalog_genres(const char *base, const char *kind, const char *id,
+                         const char *options, const char *end);
+int  disc_genres_n(const char *base, const char *kind, const char *id);
+// Option `i`, or "" out of range. The list does NOT include the "Default"
+// entry the picker shows first — that one means "no genre parameter at all",
+// which is a different request and not a genre.
+const char *disc_genre_at(const char *base, const char *kind, const char *id, int i);
 
 // Registers the targets, called by the manifest loading. `reset` puts back
 // Cinemeta only.

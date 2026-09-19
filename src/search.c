@@ -1,33 +1,48 @@
-// Search, aligned with the web app's screen (MEASURED live, on the owner's
-// profile).
+// Search, ported from NuvioWeb's screen (read off the live stylesheet,
+// 2026-09-19).
 //
 // ------------------------------------------------------------------------
 // WHAT CHANGED, AND WHY
 //
-// The port had a GRID keyboard on the left and a 4-wide GRID of posters on the
-// right. Measuring the web app's screen, neither of those matches:
+// This screen used to state, at the top of this very file, that the web app's
+// arrangement "CANNOT be ported: this app is pure SDL and there is no IME to
+// call — with no on-screen keyboard there is no way to type". That was the
+// reason a 6x7 grid of letters occupied the left third of the screen while the
+// web app put the results there.
 //
-//   1. The web app has no results grid. It has horizontal ROWS, one per addon
-//      catalogue, with the catalogue's name in 48/600 and the origin
-//      ("from Xperience") in 20/400 just below. A 248-wide card, a 248x372
-//      poster, the name in 28/500 and the year in 20/400 underneath; a step of
-//      280 between cards and 562.4 between rows.
-//   2. The web app has no keyboard at all: it has a wide <input> at the top, and
-//      what raises the keyboard is the TV's SYSTEM.
+// It is no longer true, and the whole shape of the screen follows from that.
+// SDL has a text-input API, and where the platform has a keyboard behind it —
+// which on this TV means LG's own, the one the web build already gets — the app
+// does not have to draw one. See ime.h. So:
 //
-// (1) was ported whole. (2) CANNOT be ported: this app is pure SDL and there is
-// no IME to call — with no on-screen keyboard there is no way to type, and a
-// search you cannot type into is not a search. The keyboard stayed, now BELOW
-// the header and on the left, occupying the band where the web app draws its
-// empty state; the result rows run to the right of it. It is this screen's only
-// deliberate divergence, and it is recorded here so as not to be mistaken for
-// carelessness.
+//   1. The results are now where the web app puts them: full width, starting
+//      under the field, one horizontal row per addon catalogue.
+//   2. The field is a real text field. OK on it raises the TV's keyboard, with
+//      the owner's layout, their typing history and the remote's microphone —
+//      none of which a grid drawn here could ever offer.
+//   3. The empty state is the web app's: "Recent searches" as chips, saved
+//      across sessions, or "No Results" once something has been typed.
+//   4. A row that filled up ends with the web app's round "See All" button,
+//      which opens the catalogue behind it.
 //
-// DESIGN DECISION — the keyboard is a GRID, not tvOS's single line.
-// The tvOS horizontal strip is handsome and fits in little height, but it costs
-// dearly on a D-pad: 38 keys in ONE dimension, so the average distance between
-// two letters is ~13 presses and the worst case is over 37. The 6x7 grid puts
-// the same key at 5+6 presses at most and ~5 on average.
+// CONFIRMED ON THE C3: the keyboard comes up, the typing arrives, the search
+// runs. The measurement and its evidence are at the top of ime.h.
+//
+// THE GRID IS STILL HERE ANYWAY, and deleting it would be the mistake — the
+// reason has simply changed from "we do not know yet" to "not every device is
+// this one". ime_usable() answers at RUNTIME and it can answer no in two ways:
+// the backend says it has no screen keyboard, or it says it has one and then
+// never shows it (ime.c times that out). In either case this screen falls back
+// to the grid, in the band the web app leaves empty on the left, and the
+// results move right — one branch, two numbers, and a search that still works.
+// NUVIO_NO_IME=1 is how you look at that half without owning such a device.
+//
+// DESIGN NOTE kept from the grid's own history, because it still applies to the
+// fallback: it is a GRID and not tvOS's single line. The horizontal strip is
+// handsome and fits in little height, but it costs dearly on a D-pad: 38 keys in
+// ONE dimension, so the average distance between two letters is ~13 presses and
+// the worst case is over 37. The 6x7 grid puts the same key at 5+6 presses at
+// most and ~5 on average.
 #include "search.h"
 #include "gfx.h"
 #include "text.h"
@@ -38,69 +53,96 @@
 #include "settings.h"
 #include "catalog.h"
 #include "discover.h"
+#include "seeall.h"
+#include "data.h"
+#include "ime.h"
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
-// --- Header: geometry MEASURED in the web app --------------------------------
-// .search-header y=22 h=110, side padding 104.
-//   .search-discover-btn 110x110 at (104,22)   bg #222, 1px #333 border, radius 22
-//   .search-voice-btn    110x110 at (262,22)   -> step 158 (gap 48)
-//   .search-input-field  1396x110 at (420,22)  bg #222, radius 22, 34/500,
-//                        side padding 32, placeholder "Search films and series"
-//
-// Voice and Discover do not appear as buttons: there is no audio capture and no
-// discovery action on this native screen. The field takes the full available width.
-#define SEARCH_HEAD_Y     NV_SEARCH_HEAD_Y
-#define SEARCH_HEAD_H     NV_SEARCH_HEAD_H
-#define SEARCH_DIR       (NV_SCREEN_W - NV_CONTENT_PAD)   // 1816
-
-// --- Keyboard (a deliberate divergence; see the top) -------------------------
+// --- The fallback keyboard (see the top) -------------------------------------
 #define SEARCH_KEY_W     74.0f
 #define SEARCH_KEY_GAP   12.0f
 #define SEARCH_KB_COLS      6
-#define SEARCH_KB_ROWS  7            // 6 rows of A-Z/0-9 + 1 of space/delete
+#define SEARCH_KB_ROWS      7        // 6 rows of A-Z/0-9 + 1 of space/delete/clear
 #define SEARCH_KB_STEP   (SEARCH_KEY_W + SEARCH_KEY_GAP)
 #define SEARCH_KB_W       (SEARCH_KB_COLS * SEARCH_KEY_W + (SEARCH_KB_COLS - 1) * SEARCH_KEY_GAP)
-#define SEARCH_KB_Y       NV_SEARCH_EMPTY_Y   // 148: the web app's empty-state band
-// How much the focused key grows. Smaller than the poster's on purpose: the key
-// is small and an immediate neighbour of the others, and at 14% it invades the
-// 12px gap.
+// How much the focused key grows. Smaller than a poster's on purpose: the key is
+// small and an immediate neighbour of the others, and at 14% it invades the 12px gap.
 #define SEARCH_KEY_SCALE 0.10f
-#define SEARCH_MAX_QUERY 48
 
-// --- Result rows (the web app's geometry) ------------------------------------
-#define SEARCH_RES_X       (SEARCH_KB_X + SEARCH_KB_W + 64.0f)
-#define SEARCH_RES_Y       NV_SEARCH_EMPTY_Y
-#define SEARCH_RES_AREA_H  (NV_SCREEN_H - NV_MARGIN_Y - SEARCH_RES_Y)
+#define SEARCH_MAX_QUERY 48
 #define SEARCH_MAX_ROWS FOCUS_MAX_ROWS
 #define SEARCH_MAX_PER_FILTER  12
+// The chips wrap, and six of them at 1776 usable will not need more than this.
+// It is a ceiling for the focus grid, not a layout decision.
+#define SEARCH_HIST_ROWS  3
 
-#define SEARCH_KB_X        NV_CONTENT_PAD
+#define SEARCH_HIST_FILE "search.txt"
 
-// --- Estado ------------------------------------------------------------------
+// The four places the focus can be. FIELD and KEYS are mutually exclusive — one
+// of the two exists depending on ime_usable() — and HIST and RES never both
+// carry content, because the chips ARE the empty state.
+enum { PANEL_FIELD, PANEL_KEYS, PANEL_HIST, PANEL_RES };
+
 static Focus  focusKb;
 static Focus  focusRes;
-static int   panel = 0;            // 0 = keyboard, 1 = results
+static Focus  focusHist;
+static int   panel;
+// Which of the header's two controls has the focus: 0 the field, 1 the voice
+// button. It is not a Focus because a row of two needs no column memory.
+static int   headCol;
 static char  query[SEARCH_MAX_QUERY];
 static int   nQuery = 0;
 static char queryFiltered[SEARCH_MAX_QUERY];
+
 // Results grouped by CATALOGUE, as in the web app: one row per catalogue that
-// had at least one matching title. We store indices into the global catalogue.
+// had at least one matching title. The items are indices into the global
+// catalogue.
+//
+// The strings are COPIED and not pointed at. They used to be `const char *`
+// into discover.c's target table and into the CatRow array, and the CatRow one
+// is a live hazard: cat_append_batch reallocates the catalogue, this very
+// function calls it, and any pointer taken before that call is dangling after
+// it. 22 KB of static buffer is the cheap side of that trade.
 static struct {
-  const char *title;      // the catalogue's name ("Top 100 Today - Film")
-  const char *origin;      // "from <addon>"; empty when it is not known
+  char title[96];       // the catalogue's name ("Top 100 Today - Film")
+  char origin[64];      // the addon it came from; empty when not known
+  char base[600];       // the catalogue itself, for the "See All" button …
+  char kind[8];         // … which needs all three, or it cannot be drawn
+  char catId[96];
   int items[SEARCH_MAX_PER_FILTER];
   int n;
+  int seeAll;           // 1 when the row ends with the "See All" button
 } filter[SEARCH_MAX_ROWS];
 static int nFilter = 0;
 static int wantsExit = 0;
 static int request = -1;             // the chosen catalogue index, -1 = none
+static int requestDiscover = 0;      // the compass was pressed
 static float animKey[SEARCH_KB_ROWS][SEARCH_KB_COLS];
-static float animRes[SEARCH_MAX_ROWS][SEARCH_MAX_PER_FILTER];
+// +1 column for the "See All" button at the end of the row.
+static float animRes[SEARCH_MAX_ROWS][SEARCH_MAX_PER_FILTER + 1];
+static float animField;
+static float animDiscover;
+static float animChip[NV_SEARCH_HIST_MAX];
 static float scrollY = 0.0f, scrollTarget = 0.0f;
 static float scrollX[SEARCH_MAX_ROWS];
 static HomeItem itemFocus;
 static int   hasItemFocus = 0;
+
+// The owner's recent terms, newest first — localStorage's `nuvio_search_history`
+// on the web, a file here. Saved on ENTER only, like the web app: saving on
+// every keystroke would fill the list with the prefixes of one word.
+static char hist[NV_SEARCH_HIST_MAX][SEARCH_MAX_QUERY];
+static int  nHist = 0;
+// Where each chip landed this frame. Filled by layoutChips(), read by both the
+// drawing and the focus, so the two cannot disagree about which pill is under
+// the cursor.
+static GfxRect chipRect[NV_SEARCH_HIST_MAX];
+static int     chipRow[NV_SEARCH_HIST_MAX];
+static int     chipColumn[NV_SEARCH_HIST_MAX];
+static int     chipRows = 0;
+static int     chipCols[SEARCH_HIST_ROWS];
 
 static const int KB_COLUMNS[SEARCH_KB_ROWS] = { 6, 6, 6, 6, 6, 6, 3 };
 // Lower case as on the device: the field shows what was typed, and a query in
@@ -108,11 +150,60 @@ static const int KB_COLUMNS[SEARCH_KB_ROWS] = { 6, 6, 6, 6, 6, 6, 3 };
 static const char *KEYS =
   "abcdefghijklmnopqrstuvwxyz0123456789";   // 36 = 6 rows x 6 columns
 
+// --- Where the content starts ------------------------------------------------
+// The ONE branch the fallback keyboard costs. With the TV's keyboard the screen
+// is the web app's: everything at 64. Without it, the grid takes the band the
+// web app leaves empty and the rows start to its right, one header gap away.
+static float contentX(void) {
+  if (ime_usable()) return NV_SEARCH_X;
+  return NV_SEARCH_X + SEARCH_KB_W + NV_SEARCH_HEAD_GAP;
+}
+
+// The header is a flex row: the field takes what is left, then a 24 gap, then
+// the 100x100 Discover button. `.search-voice-btn` is NOT drawn — see the note
+// on drawDiscover for which of the web app's two buttons this port carries and
+// why the other one cannot exist here.
+static GfxRect rectDiscover(void) {
+  GfxRect v = { NV_SEARCH_RIGHT - NV_SEARCH_BTN, NV_SEARCH_HEAD_Y,
+                NV_SEARCH_BTN, NV_SEARCH_BTN };
+  return v;
+}
+
+static GfxRect rectField(void) {
+  GfxRect f = { NV_SEARCH_X, NV_SEARCH_HEAD_Y,
+                NV_SEARCH_RIGHT - NV_SEARCH_X - NV_SEARCH_BTN - NV_SEARCH_BTN_GAP,
+                NV_SEARCH_HEAD_H };
+  return f;
+}
+
+// WHERE A LINE OF TEXT GOES SO THAT IT READS CENTRED IN `h`.
+//
+// Not (h - l.h) * 0.5. A TxtLine is a box the height of the FONT — ascent plus
+// descent — and its centre is not where the eye puts the middle of a word:
+// Inter carries far more descent than a lowercase word ever uses, so centring
+// the BOX pushes the ink down. MEASURED on the C3, in this very field: the
+// magnifier's ink centred on 177.5 (the field's own centre is 178.0) while the
+// x-height band of the query sat at 181.0 — three pixels of disagreement
+// between an icon and the word beside it, which is what "doesn't look properly
+// aligned" was.
+//
+// So the CAP BAND is centred instead, cap-top to baseline, which is the band
+// the eye actually reads. txt_cap_inset and txt_baseline exist for exactly this
+// and are measured off the face, so this stays right if the font is ever
+// changed. A word of pure lowercase still sits a shade low against a capital —
+// that is true of every typeface and the browser does it too — but the gap to
+// the icon closes.
+static float textCenterY(TxtStyle style, float top, float h) {
+  return top + h * 0.5f - (txt_cap_inset(style) + txt_baseline(style)) * 0.5f;
+}
+
 // --- Normalisation -----------------------------------------------------------
 // Folds an accented Latin letter (the second byte of a UTF-8 sequence starting
 // with 0xC3) onto the matching ASCII letter. Without this, searching for
-// "fundacao" does not find "Fundação" — the screen's most obvious use case,
-// since nobody types a cedilla on a D-pad keyboard.
+// "fundacao" does not find "Fundação" — and with the TV's keyboard that matters
+// MORE than it did with the grid, not less: the grid had no cedilla to press, so
+// the query was always plain; the LG keyboard has the whole layout, so now both
+// sides of the comparison can arrive accented.
 static char foldLatin(unsigned char second) {
   unsigned cp = (unsigned)second + 0x40u;
   if (cp >= 0xC0 && cp <= 0xDE && cp != 0xD7) cp += 0x20;
@@ -147,24 +238,88 @@ static void normalize(const char *s, char *destination, size_t size) {
   destination[k] = 0;
 }
 
+// --- Recent searches ---------------------------------------------------------
+// One term per line. A plain text file and not JSON because that is all the
+// shape needs, and because a half-written line is then one lost term rather than
+// a parse failure that loses the lot.
+static void historyLoad(void) {
+  char *buf = data_read(SEARCH_HIST_FILE);
+  char *p = buf;
+  nHist = 0;
+  if (!buf) return;
+  while (*p && nHist < NV_SEARCH_HIST_MAX) {
+    char *end = strchr(p, '\n');
+    size_t n = end ? (size_t)(end - p) : strlen(p);
+    if (n > 0 && n < sizeof hist[0]) {
+      memcpy(hist[nHist], p, n);
+      hist[nHist][n] = 0;
+      nHist++;
+    }
+    if (!end) break;
+    p = end + 1;
+  }
+  free(buf);
+}
+
+static void historySave(void) {
+  char buf[NV_SEARCH_HIST_MAX * SEARCH_MAX_QUERY + 8];
+  int k = 0, i;
+  buf[0] = 0;
+  for (i = 0; i < nHist; i++)
+    k += snprintf(buf + k, sizeof buf - (size_t)k, "%s\n", hist[i]);
+  data_write(SEARCH_HIST_FILE, buf);
+}
+
+// Newest first, no repeats, at most NV_SEARCH_HIST_MAX — saveSearchHistory in
+// searchScreen.js, including its "shorter than 2 characters is not a search"
+// rule, which is the same threshold the filter itself uses.
+static void historyAdd(const char *term) {
+  char norm[SEARCH_MAX_QUERY * 2], other[SEARCH_MAX_QUERY * 2];
+  int i, w;
+  if (!term || (int)strlen(term) < 2) return;
+  normalize(term, norm, sizeof norm);
+  for (i = 0, w = 0; i < nHist; i++) {
+    normalize(hist[i], other, sizeof other);
+    if (strcmp(norm, other)) {
+      if (w != i) snprintf(hist[w], sizeof hist[w], "%s", hist[i]);
+      w++;
+    }
+  }
+  nHist = w;
+  if (nHist > NV_SEARCH_HIST_MAX - 1) nHist = NV_SEARCH_HIST_MAX - 1;
+  for (i = nHist; i > 0; i--) snprintf(hist[i], sizeof hist[i], "%s", hist[i - 1]);
+  snprintf(hist[0], sizeof hist[0], "%s", term);
+  nHist++;
+  historySave();
+}
+
+// BACK TO THE HEADER, from wherever the focus was. One function because it is
+// two facts, not one: which panel, and that the landing place inside it is the
+// FIELD and never the microphone. Leaving headCol alone would drop the focus on
+// the voice button whenever the owner came back up from a poster, which is not
+// where they were when they left.
+static void toHeader(void) {
+  panel = ime_usable() ? PANEL_FIELD : PANEL_KEYS;
+  headCol = 0;
+}
+
 // --- Filter ------------------------------------------------------------------
 // One row per CATALOGUE, exactly as the web app builds `.search-results-row`.
-// This used to be a flat list of the whole collection, which lost the
-// information of WHERE each result was found — and that information is what the
-// "from <addon>" subtitle shows.
 static void refilter(void) {
   char target[SEARCH_MAX_QUERY * 2];
   int previous = -1, sameQuery = !strcmp(queryFiltered, query);
-  if (sameQuery && panel == 1 && focusRes.row < nFilter &&
+  if (sameQuery && panel == PANEL_RES && focusRes.row < nFilter &&
       focusRes.column < filter[focusRes.row].n)
     previous = filter[focusRes.row].items[focusRes.column];
   snprintf(queryFiltered, sizeof queryFiltered, "%s", query);
   normalize(query, target, sizeof target);
   nFilter = 0;
-  // Fewer than 2 characters = the empty state, like the web app ("Type at least
-  // 2 characters"). Searching with one letter returns the whole collection and
-  // does not help.
-  if ((int)strlen(target) < 2) { panel = 0; return; }
+  // Fewer than 2 characters = the empty state, like the web app. Searching with
+  // one letter returns the whole collection and does not help.
+  if ((int)strlen(target) < 2) {
+    if (panel == PANEL_RES) toHeader();
+    return;
+  }
 
   // A NETWORK SEARCH. The screen only filtered what was already in memory — the
   // first ~12 rows of each of the home's catalogues — so any title outside that
@@ -210,7 +365,7 @@ static void refilter(void) {
           filter[nFilter].items[found++] = idx;
         } else if (nNew < SEARCH_MAX_PER_FILTER) {
           new[nNew] = it;
-          posNew[nNew] = found++;   // reserva o lugar; o indice vem depois
+          posNew[nNew] = found++;   // reserve the place; the index comes later
           nNew++;
         }
       }
@@ -230,9 +385,26 @@ static void refilter(void) {
         }
       }
       if (found > 0) {
-        filter[nFilter].title = disc_search_target_title(targetIdx);
-        filter[nFilter].origin = disc_search_target_addon(targetIdx);
+        snprintf(filter[nFilter].title, sizeof filter[nFilter].title, "%s",
+                 disc_search_target_title(targetIdx));
+        snprintf(filter[nFilter].origin, sizeof filter[nFilter].origin, "%s",
+                 disc_search_target_addon(targetIdx));
+        snprintf(filter[nFilter].base, sizeof filter[nFilter].base, "%s",
+                 disc_search_target_base(targetIdx));
+        snprintf(filter[nFilter].kind, sizeof filter[nFilter].kind, "%s",
+                 disc_search_target_kind(targetIdx));
+        snprintf(filter[nFilter].catId, sizeof filter[nFilter].catId, "%s",
+                 disc_search_target_id(targetIdx));
         filter[nFilter].n = found;
+        // THE BUTTON APPEARS ONLY ON A FULL ROW, and that is a guess dressed up
+        // honestly rather than a fact. The web app knows whether there is more
+        // (`result.data.hasMore`); nothing on this side does — disc_search_*
+        // caps at SEARCH_PER_TARGET and reports the cap, not the total. A row
+        // that came back at its ceiling almost certainly has more behind it; a
+        // row of three does not. Offering "See All" on the row of three would be
+        // a button that opens a screen showing the same three.
+        filter[nFilter].seeAll = (found >= SEARCH_MAX_PER_FILTER &&
+                                  filter[nFilter].base[0] && filter[nFilter].catId[0]);
         nFilter++;
       }
     } }
@@ -250,20 +422,30 @@ static void refilter(void) {
       if (strstr(title, target)) filter[nFilter].items[found++] = cf->start + i;
     }
     if (!found) continue;
-    filter[nFilter].title = cf->title;
+    snprintf(filter[nFilter].title, sizeof filter[nFilter].title, "%s", cf->title);
     // `catalogAddonNameEnabled` decides the "from <addon>" line under the row's
     // title. The data does NOT exist on this side: `CatRow` stores the key, the
     // title, the type and the window into the array — the addon's name lives in
     // addons.c and the row does not carry it. Until discover.c passes that field
     // along, the line is not drawn; writing the TYPE ("movie") there instead would
     // be worse than its absence, because it would read as the origin.
-    filter[nFilter].origin = NULL;
+    filter[nFilter].origin[0] = 0;
+    snprintf(filter[nFilter].base,  sizeof filter[nFilter].base,  "%s", cf->base);
+    snprintf(filter[nFilter].kind,  sizeof filter[nFilter].kind,  "%s", cf->kind);
+    snprintf(filter[nFilter].catId, sizeof filter[nFilter].catId, "%s", cf->catId);
     filter[nFilter].n = found;
+    // These rows are a FILTER over what the home already holds, so `found` is
+    // bounded by what is in memory and never says anything about the catalogue's
+    // real length. The button still means what it means everywhere else — "the
+    // catalogue behind this row" — and here it is the only way to reach the rest
+    // of it, so a full row gets one for the same reason as above.
+    filter[nFilter].seeAll = (found >= SEARCH_MAX_PER_FILTER &&
+                              filter[nFilter].base[0] && filter[nFilter].catId[0]);
     nFilter++;
   }
 
   int cols[SEARCH_MAX_ROWS];
-  for (int i = 0; i < nFilter; i++) cols[i] = filter[i].n;
+  for (int i = 0; i < nFilter; i++) cols[i] = filter[i].n + filter[i].seeAll;
   focus_start(&focusRes, nFilter > 0 ? nFilter : 1, nFilter > 0 ? cols : (int[]){ 1 });
   if (previous >= 0) {
     int found = 0;
@@ -275,7 +457,7 @@ static void refilter(void) {
           found = 1; break;
         }
   }
-  if (nFilter == 0) panel = 0;
+  if (nFilter == 0 && panel == PANEL_RES) toHeader();
   memset(animRes, 0, sizeof animRes);
   if (!sameQuery) {
     memset(scrollX, 0, sizeof scrollX);
@@ -283,7 +465,7 @@ static void refilter(void) {
   }
 }
 
-// --- Teclas ------------------------------------------------------------------
+// --- Keys --------------------------------------------------------------------
 static void applyKey(void) {
   if (focusKb.row < SEARCH_KB_ROWS - 1) {
     int k = focusKb.row * SEARCH_KB_COLS + focusKb.column;
@@ -303,35 +485,104 @@ static void applyKey(void) {
 
 static GfxRect rectKey(int row, int column) {
   GfxRect r;
-  r.y = SEARCH_KB_Y + row * (SEARCH_KEY_W + SEARCH_KEY_GAP);
+  r.y = NV_SEARCH_BODY_Y + row * (SEARCH_KEY_W + SEARCH_KEY_GAP);
   r.h = SEARCH_KEY_W;
   if (row < SEARCH_KB_ROWS - 1) {
-    r.x = SEARCH_KB_X + column * SEARCH_KB_STEP;
+    r.x = NV_SEARCH_X + column * SEARCH_KB_STEP;
     r.w = SEARCH_KEY_W;
   } else {
     r.w = (SEARCH_KB_W - 2 * SEARCH_KEY_GAP) / 3;
-    r.x = SEARCH_KB_X + column * (r.w + SEARCH_KEY_GAP);
+    r.x = NV_SEARCH_X + column * (r.w + SEARCH_KEY_GAP);
   }
   return r;
+}
+
+// --- The chips ---------------------------------------------------------------
+// `display: flex; flex-wrap: wrap; gap: 24px` on a block as wide as the content.
+// Laid out once per frame into chipRect, and the focus grid is rebuilt from the
+// SAME pass — a chip the eye sees on the second line and the focus thinks is on
+// the first is the defect this avoids.
+static void layoutChips(void) {
+  float x0 = contentX();
+  float wide = NV_SEARCH_RIGHT - x0;
+  float y = NV_SEARCH_BODY_Y + NV_LD_SRCH_NAME + NV_SEARCH_HIST_GAP;
+  float x = x0;
+  int i, row = 0, column = 0;
+  chipRows = 0;
+  for (i = 0; i < SEARCH_HIST_ROWS; i++) chipCols[i] = 0;
+  for (i = 0; i < nHist; i++) {
+    TxtLine l = txt_line(TXT_CALLOUT, hist[i], 255, 255, 255, 255);
+    float w = NV_SEARCH_CHIP_PADX * 2 + NV_SEARCH_CHIP_BORDER * 2 +
+              NV_SEARCH_CHIP_ICON + NV_SEARCH_CHIP_ICOGAP + (float)l.w;
+    if (column > 0 && x + w > x0 + wide) {
+      if (row + 1 >= SEARCH_HIST_ROWS) break;
+      row++; column = 0;
+      x = x0;
+      y += NV_SEARCH_CHIP_H + NV_SEARCH_CHIP_GAP;
+    }
+    chipRect[i].x = x; chipRect[i].y = y;
+    chipRect[i].w = w; chipRect[i].h = NV_SEARCH_CHIP_H;
+    chipRow[i] = row; chipColumn[i] = column;
+    chipCols[row] = ++column;
+    x += w + NV_SEARCH_CHIP_GAP;
+    chipRows = row + 1;
+  }
+}
+
+static int chipAt(int row, int column) {
+  int i;
+  for (i = 0; i < nHist; i++)
+    if (chipRow[i] == row && chipColumn[i] == column) return i;
+  return -1;
+}
+
+// The chips are the empty state, so they only exist while there is nothing else
+// in their place.
+static int histShown(void) { return nHist > 0 && nFilter == 0 && nQuery < 2; }
+
+static void applyHistory(int i) {
+  if (i < 0 || i >= nHist) return;
+  snprintf(query, sizeof query, "%s", hist[i]);
+  nQuery = (int)strlen(query);
+  historyAdd(query);
+  refilter();
+  if (nFilter > 0) panel = PANEL_RES; else toHeader();
 }
 
 // --- Life cycle --------------------------------------------------------------
 int search_start(void) {
   focus_start(&focusKb, SEARCH_KB_ROWS, KB_COLUMNS);
-  panel = 0; wantsExit = 0; request = -1;
+  toHeader();
+  wantsExit = 0; request = -1; requestDiscover = 0;
   nQuery = 0; query[0] = 0;
   queryFiltered[0] = 0;
   scrollY = scrollTarget = 0.0f;
   hasItemFocus = 0;
+  animField = 0.0f;
+  animDiscover = 0.0f;
+  headCol = 0;
   memset(animKey, 0, sizeof animKey);
   memset(animRes, 0, sizeof animRes);
+  memset(animChip, 0, sizeof animChip);
   memset(scrollX, 0, sizeof scrollX);
+  historyLoad();
+  { int one = 1; focus_start(&focusHist, 1, &one); }
   refilter();
   return 1;
 }
 
-void search_shutdown(void) { hasItemFocus = 0; }
+void search_shutdown(void) {
+  hasItemFocus = 0;
+  // The keyboard must not outlive the screen. See ime.h: text input is global to
+  // the window, and left on, the home's D-pad presses can arrive twice.
+  ime_close();
+}
+
 int  search_wants_exit(void) { return wantsExit; }
+
+int search_requested_discover(void) {
+  int v = requestDiscover; requestDiscover = 0; return v;
+}
 
 int search_requested_open(int *indexCatalog) {
   if (request < 0) return 0;
@@ -346,23 +597,90 @@ int search_item_focused(HomeItem *out) {
   return 1;
 }
 
+// Everything Back has to undo before it is allowed to close the screen. The
+// order is the reverse of the moves that got here, which is the only order that
+// does not lose the typed text without being asked to.
+static void goBack(void) {
+  if (ime_is_open())          { ime_close(); return; }
+  if (panel == PANEL_RES)     { toHeader(); return; }
+  if (panel == PANEL_HIST)    { toHeader(); return; }
+  wantsExit = 1;
+}
+
+// ENTER on the field: the term joins the history and the focus moves to the
+// results, which is what runSearchFromInput does on the web with
+// `autoFocusResults: true`.
+static void submit(void) {
+  ime_close();
+  historyAdd(query);
+  refilter();
+  if (nFilter > 0) panel = PANEL_RES;
+}
+
 void search_event(const SDL_Event *e) {
   if (e->type == SDL_QUIT) { wantsExit = 1; return; }
+
+  // THE TV'S KEYBOARD TYPES HERE. SDL_TEXTINPUT arrives whenever text input is
+  // on, whatever raised it, and it is the ONLY path by which an accented or
+  // non-Latin character can reach the query — SDL_KEYDOWN carries a keycode,
+  // not a character. It is taken before the key handling below so a backspace
+  // from the system keyboard deletes a CHARACTER and not a byte.
+  if (ime_is_open() && ime_edit(e, query, &nQuery, SEARCH_MAX_QUERY)) {
+    refilter();
+    return;
+  }
+
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
 
-  if (k == SDLK_BACKSPACE && panel == 0) {
-    if (nQuery > 0) { query[--nQuery] = 0; refilter(); }
-    return;
-  }
-  if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE) {
-    // In the results, Back goes back to the keyboard: it is the reverse of the
-    // move that led there. Only from the keyboard does it close the screen.
-    if (panel == 1) panel = 0; else wantsExit = 1;
+  if (k == SDLK_AC_BACK || k == SDLK_ESCAPE) { goBack(); return; }
+
+  if (panel == PANEL_FIELD) {
+    switch (k) {
+      case SDLK_RETURN: case SDLK_KP_ENTER:
+        // OK on a field that is not yet taking text RAISES the keyboard; OK
+        // again, with it up, is the submit. Two meanings for one key, and they
+        // cannot be confused because only one of the two states is ever current.
+        if (headCol == 1) {
+          // The keyboard must come DOWN before another screen takes over, or it
+          // stays up over a grid that has no field in it. See ime.h.
+          ime_close();
+          requestDiscover = 1;
+        }
+        else if (!ime_is_open()) ime_open(rectField());
+        else                     submit();
+        break;
+      case SDLK_BACKSPACE:
+        // Reachable only with the keyboard DOWN — with it up, ime_edit above has
+        // already taken it.
+        if (headCol == 0 && nQuery > 0) {
+          ime_edit(e, query, &nQuery, SEARCH_MAX_QUERY); refilter();
+        }
+        break;
+      case SDLK_RIGHT:
+        if (!ime_is_open()) headCol = 1;
+        break;
+      case SDLK_LEFT:
+        if (!ime_is_open()) headCol = 0;
+        break;
+      case SDLK_DOWN:
+        if (ime_is_open()) break;          // the keyboard owns the D-pad
+        if (nFilter > 0)      panel = PANEL_RES;
+        else if (histShown()) { panel = PANEL_HIST; focusHist.row = focusHist.column = 0; }
+        break;
+      default: break;
+    }
     return;
   }
 
-  if (panel == 0) {
+  if (panel == PANEL_KEYS) {
+    if (k == SDLK_BACKSPACE) {
+      if (nQuery > 0) { query[--nQuery] = 0; refilter(); }
+      return;
+    }
+    // A REAL KEYBOARD, on the Mac preview and on anything the owner plugs in.
+    // It is not the fallback's reason for existing, but refusing it here would
+    // make the preview unusable for the one screen that takes text.
     if (!(e->key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) &&
         ((k >= SDLK_a && k <= SDLK_z) || (k >= SDLK_0 && k <= SDLK_9) || k == SDLK_SPACE)) {
       if (nQuery + 1 < SEARCH_MAX_QUERY && (k != SDLK_SPACE || nQuery)) {
@@ -370,15 +688,15 @@ void search_event(const SDL_Event *e) {
       }
       return;
     }
-    if (k == SDLK_TAB && nFilter > 0) { panel = 1; return; }
     switch (k) {
       case SDLK_LEFT:  focus_move_grid(&focusKb, -1, 0); break;
       case SDLK_RIGHT:
-        // Going past the keyboard's LAST column enters the results. It is the
-        // only bridge between the two panels, and that is why it must not fail
-        // silently: with no results at all, the focus stays where it is.
+        // Going past the keyboard's LAST column enters whatever is to the right.
+        // It is the only bridge out of the grid, and that is why it must not fail
+        // silently: with nothing over there, the focus stays where it is.
         if (focusKb.column >= KB_COLUMNS[focusKb.row] - 1) {
-          if (nFilter > 0) panel = 1;
+          if (nFilter > 0)      panel = PANEL_RES;
+          else if (histShown()) { panel = PANEL_HIST; focusHist.row = focusHist.column = 0; }
         } else focus_move_grid(&focusKb, 1, 0);
         break;
       // A GRID, not rows: see focus_move_grid. This is where "it jumps to a
@@ -393,11 +711,32 @@ void search_event(const SDL_Event *e) {
     return;
   }
 
+  if (panel == PANEL_HIST) {
+    switch (k) {
+      case SDLK_LEFT:
+        if (focusHist.column == 0 && !ime_usable()) panel = PANEL_KEYS;
+        else focus_move_grid(&focusHist, -1, 0);
+        break;
+      case SDLK_RIGHT: focus_move_grid(&focusHist, 1, 0); break;
+      case SDLK_UP:
+        if (focusHist.row == 0) toHeader();
+        else focus_move_grid(&focusHist, 0, -1);
+        break;
+      case SDLK_DOWN:  focus_move_grid(&focusHist, 0, 1); break;
+      case SDLK_RETURN: case SDLK_KP_ENTER:
+        applyHistory(chipAt(focusHist.row, focusHist.column));
+        break;
+      case SDLK_BACKSPACE: goBack(); break;
+      default: break;
+    }
+    return;
+  }
+
   switch (k) {
-    case SDLK_TAB: panel = 0; break;
     case SDLK_LEFT:
-      // Going back from the results' first column returns the focus to the keyboard.
-      if (focusRes.column == 0) panel = 0;
+      // Going back from the results' first column returns the focus to whatever
+      // is on the left — the grid, or nothing but the field above.
+      if (focusRes.column == 0) toHeader();
       else focus_move(&focusRes, -1, 0);
       break;
     case SDLK_RIGHT:
@@ -410,11 +749,22 @@ void search_event(const SDL_Event *e) {
         focus_move(&focusRes, 1, 0);
       }
       break;
-    case SDLK_UP:   focus_move(&focusRes, 0, -1); break;
+    case SDLK_UP:
+      // Off the top of the first row is the field, exactly as the web app's
+      // focus engine leaves the track upwards into the header.
+      if (focusRes.row == 0) toHeader();
+      else focus_move(&focusRes, 0, -1);
+      break;
     case SDLK_DOWN: focus_move(&focusRes, 0,  1); break;
+    case SDLK_BACKSPACE: goBack(); break;
     case SDLK_RETURN: case SDLK_KP_ENTER:
-      if (focusRes.row < nFilter && focusRes.column < filter[focusRes.row].n)
-        request = filter[focusRes.row].items[focusRes.column];
+      if (focusRes.row < nFilter) {
+        int c = focusRes.column;
+        if (c < filter[focusRes.row].n) request = filter[focusRes.row].items[c];
+        else if (filter[focusRes.row].seeAll)
+          seeall_open(filter[focusRes.row].base, filter[focusRes.row].kind,
+                      filter[focusRes.row].catId, filter[focusRes.row].title);
+      }
       break;
     default: break;
   }
@@ -422,6 +772,12 @@ void search_event(const SDL_Event *e) {
 
 void search_update(float dt, Uint32 now) {
   (void)now;
+  ime_pump();
+  // ime_pump may have just given up on a keyboard that never came (see ime.c).
+  // The field then has nothing behind it, so the focus has to move somewhere it
+  // can still type — otherwise the owner is left on a dead control.
+  if (panel == PANEL_FIELD && !ime_usable()) panel = PANEL_KEYS;
+
   // THE NETWORK RESULT ARRIVES AFTER THE KEYPRESS. refilter() only runs when the
   // owner types, so without this Cinemeta's answer arrived, sat there and NEVER
   // appeared — the screen went on showing the local filter from the moment the
@@ -436,31 +792,59 @@ void search_update(float dt, Uint32 now) {
     } else {
       lastRemote = -1;
     } }
+
+  { float wantField = (panel == PANEL_FIELD && headCol == 0) ? 1.0f : 0.0f;
+    float wantVoice  = (panel == PANEL_FIELD && headCol == 1) ? 1.0f : 0.0f;
+    animField = anim_spring(animField, wantField, dt,
+                            wantField > animField ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+    animDiscover = anim_spring(animDiscover, wantVoice, dt,
+                            wantVoice > animDiscover ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
   for (int f = 0; f < SEARCH_KB_ROWS; f++)
     for (int c = 0; c < KB_COLUMNS[f]; c++) {
-      float target = (panel == 0 && focus_index(&focusKb, f, c)) ? 1.0f : 0.0f;
+      float target = (panel == PANEL_KEYS && focus_index(&focusKb, f, c)) ? 1.0f : 0.0f;
       animKey[f][c] = anim_spring(animKey[f][c], target, dt,
                                   target > animKey[f][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
+  for (int i = 0; i < nHist; i++) {
+    float target = (panel == PANEL_HIST && chipRow[i] == focusHist.row &&
+                    chipColumn[i] == focusHist.column) ? 1.0f : 0.0f;
+    animChip[i] = anim_spring(animChip[i], target, dt,
+                              target > animChip[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
   for (int r = 0; r < SEARCH_MAX_ROWS; r++)
-    for (int c = 0; c < SEARCH_MAX_PER_FILTER; c++) {
-      float target = (panel == 1 && focus_index(&focusRes, r, c)) ? 1.0f : 0.0f;
+    for (int c = 0; c < SEARCH_MAX_PER_FILTER + 1; c++) {
+      float target = (panel == PANEL_RES && focus_index(&focusRes, r, c)) ? 1.0f : 0.0f;
       animRes[r][c] = anim_spring(animRes[r][c], target, dt,
                                 target > animRes[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
+  // The focus grid for the chips is rebuilt from the LAST laid-out frame: the
+  // wrap depends on the measured width of each term, which only the drawing
+  // knows. One frame of lag on a list that changes when the owner presses ENTER
+  // is not observable; measuring the text twice per frame would be.
+  if (chipRows > 0) {
+    int saveRow = focusHist.row, saveColumn = focusHist.column;
+    focus_start(&focusHist, chipRows, chipCols);
+    focusHist.row = saveRow < chipRows ? saveRow : chipRows - 1;
+    focusHist.column = saveColumn < chipCols[focusHist.row]
+                     ? saveColumn : chipCols[focusHist.row] - 1;
+    if (focusHist.column < 0) focusHist.column = 0;
+  }
+
   // Scrolls only as far as needed for the focused row to fit whole in the usable
   // area — scrolling in proportion to the index would hide the first row before
   // the user had got to it.
-  if (panel == 1 && nFilter > 0) {
+  float areaH = NV_SCREEN_H - NV_SEARCH_TOP - NV_SEARCH_BODY_Y;
+  if (panel == PANEL_RES && nFilter > 0) {
     float top = focusRes.row * NV_SEARCH_ROW_STEP;
-    float base = top + NV_SEARCH_ROW_RAIL + NV_SEARCH_POSTER_H + 70.0f;
-    if (top - scrollTarget < 0.0f)             scrollTarget = top;
-    if (base - scrollTarget > SEARCH_RES_AREA_H)    scrollTarget = base - SEARCH_RES_AREA_H;
+    float base = top + NV_SEARCH_ROW_RAIL + NV_SEARCH_CARD_H;
+    if (top - scrollTarget < 0.0f)          scrollTarget = top;
+    if (base - scrollTarget > areaH)        scrollTarget = base - areaH;
 
     // Horizontal scrolling of the focused row, the same rule as the home's.
     int r = focusRes.row;
-    float util = SEARCH_DIR - SEARCH_RES_X;
+    float x0 = contentX() + NV_SEARCH_TRACK_X;
+    float util = NV_SCREEN_W - x0;
     float left = focusRes.column * NV_SEARCH_CARD_STEP;
     float dir = left + NV_SEARCH_CARD_W;
     float targetX = scrollX[r];
@@ -476,43 +860,167 @@ void search_update(float dt, Uint32 now) {
 }
 
 // --- Drawing -----------------------------------------------------------------
-// The query field: no decorative button that cannot take focus.
-static void drawHeader(Uint32 now) {
-  float x = NV_CONTENT_PAD;
-  float radius = NV_SEARCH_RADIUS / (NV_SEARCH_HEAD_H * 0.5f) * 0.5f;  // 22 over 110
+// "Search", .library-page-title: 48/600 with a 1px letter-spacing. The spacing
+// is not decoration — txt_tracking exists because SDL_ttf has none, and without
+// it the title sits noticeably tighter than the same string in the web app.
+static void drawTitle(void) {
+  txt_tracking(TXT_TITLE3, "Search", 255, 255, 255,
+               NV_SEARCH_X, NV_SEARCH_TOP, 1.0f, NV_SEARCH_TITLE_LS);
+}
 
-  GfxRect field = { x, SEARCH_HEAD_Y, SEARCH_DIR - x, NV_SEARCH_HEAD_H };
-  gfx_color(field, radius, 0.133f, 0.133f, 0.133f, 1.0f);
-  // The field's outline — a RING, not a filled rectangle.
-  //
-  // There used to be a gfx_color over `field + 2px` here, and gfx_color FILLS:
-  // white at 22% washed out the whole field. The arithmetic matches what was
-  // measured on screen: 0.133 x 0.78 + 0.961 x 0.22 = 0.315, that is #505050 in
-  // place of the #222222 the line above had just painted. The field read as a
-  // DISABLED control, and the example text almost vanished inside it.
-  //
-  // GFX_RING draws only the outline (the middle stays intact), which was the
-  // intention written in the old comment.
-  { GfxRect halo = { field.x - 2.0f, field.y - 2.0f,
-                     field.w + 4.0f, field.h + 4.0f };
-    gfx_rect(halo, 0, GFX_RING, 0, 2.0f / halo.h, 0, radius,
-             0.961f, 0.961f, 0.961f, panel == 0 ? 0.55f : 0.16f); }
+// A FILLED PILL WITH A 1px EDGE OF ANOTHER COLOUR, drawn as TWO SHAPES and not
+// as a stroke.
+//
+// WHY, and it is worth the extra rect. A 1px border asked for with
+// GFX_RING_INSET is a band one pixel wide, and one pixel is not enough room to
+// antialias: the shader's ramp gets clamped to half the band (see the note on
+// GFX_RING_INSET in gfx.c) and the result still lands differently on each pixel
+// as the contour turns. MEASURED on the C3, on the unfocused voice button —
+// 51 along the straight run, 49, 42, then 37 at the 45-degree diagonal, against
+// an ideal of 51. A bright hairline that fades out four times around a circle
+// is exactly what reads as "pixelated".
+//
+// Two filled shapes have no such band. The outer one is painted in the edge
+// colour, the inner one inset by a pixel in the fill colour, and the "border"
+// is simply what is left showing between them. Each shape gets edgeAA's full
+// 1.25px ramp against its own neighbour, which is the case that shader is good
+// at. It is also what the browser does with `border: 1px solid` — the border is
+// a region, not a line.
+//
+// The cost is one extra rounded rect per control. These are the header's two
+// and the See All circle; none of them is large, and the fill-rate note in
+// gfx.c is about FULL-screen layers.
+static void pillFilled(GfxRect r, float edge, float fill, float a) {
+  gfx_color(r, NV_SEARCH_PILL, edge, edge, edge, a);
+  { GfxRect in = { r.x + 1.0f, r.y + 1.0f, r.w - 2.0f, r.h - 2.0f };
+    gfx_color(in, NV_SEARCH_PILL, fill, fill, fill, a); }
+}
 
+// The field. A PILL with the magnifier inside it, the text at 88 from the edge,
+// and a cross on the right once there is something to clear.
+static void drawField(Uint32 now) {
+  GfxRect field = rectField();
+  float f = animField;
+  (void)0;
+  float cx = field.x + NV_SEARCH_ICON_X + NV_SEARCH_ICON * 0.5f;
+  float cy = field.y + field.h * 0.5f;
   float tx = field.x + NV_SEARCH_FIELD_PADX;
+  float textW = field.w - 2 * NV_SEARCH_FIELD_PADX;
+
+  // #222 body inside a 1px #333 edge. The edge does NOT animate: on focus the
+  // 3px inset white band below is drawn over the same outer shape and covers it
+  // completely, so there is nothing to cross-fade.
+  pillFilled(field, 0.2f, 0.133f, 1.0f);   // --border-color over --card-bg
+  // The resting border is 1px #333; focused it becomes white at 10% and an INSET
+  // 3px white band takes over as the mark.
+  //
+  // INSET, and this is the correction the old screen needed. There used to be a
+  // gfx_color over `field + 2px` here, and gfx_color FILLS: white at 22% washed
+  // out the whole field. The arithmetic matches what was measured on screen:
+  // 0.133 x 0.78 + 0.961 x 0.22 = 0.315, that is #505050 in place of the #222222
+  // the line above had just painted. The field read as a DISABLED control, and
+  // the placeholder almost vanished inside it. The live sheet has since moved to
+  // `box-shadow: inset 0 0 0 3px` for the same reason.
+  //
+  // THREE pixels is wide enough for the ramp, so this one stays a stroke — it
+  // measured 246 evenly right around the cap. It is only the 1px case that has
+  // to be drawn as two shapes; see pillFilled.
+  if (f > 0.01f)
+    gfx_rect(field, 0, GFX_RING_INSET, 0, NV_SEARCH_RING / field.h, 0,
+             NV_SEARCH_PILL, 1.0f, 1.0f, 1.0f, 0.96f * f);
+
+  // --text-tertiary at rest, --text-secondary focused: the sheet transitions the
+  // icon's colour with the field's, so it is part of the same cue and not a
+  // separate ornament.
+  { float luma = anim_blend(0.502f, 0.702f, f);
+    GfxRect ic = { cx - NV_SEARCH_ICON * 0.5f, cy - NV_SEARCH_ICON * 0.5f,
+                   NV_SEARCH_ICON, NV_SEARCH_ICON };
+    gfx_icon(ic, "search_glass", luma, luma, luma, 1.0f); }
+
   if (nQuery) {
-    TxtLine l = txt_line_trim(TXT_HEADLINE, query, 245, 246, 250, 255,
-                                field.w - 2 * NV_SEARCH_FIELD_PADX - 12);
-    txt_draw(l, tx, field.y + (field.h - l.h) * 0.5f);
-    tx += l.w + 6.0f;
+    // rgb(179), not white: `.search-input-field` takes its colour from
+    // --addons-text-secondary, which resolves to --text-secondary. It looks like
+    // an oversight in the sheet and is not — the field is a readout of a term,
+    // not a heading, and the placeholder one step below it at rgb(128) needs the
+    // room underneath.
+    TxtLine l = txt_line_trim(TXT_CALLOUT, query, 179, 179, 179, 255,
+                              textW - NV_SEARCH_CLEAR - 12.0f);
+    txt_draw(l, tx, textCenterY(TXT_CALLOUT, field.y, field.h));
+    tx += (float)l.w + 6.0f;
+    // .search-clear-btn, shown by `.search-input-field.has-value`. It is drawn
+    // and NOT focusable, exactly as on the web (`tabindex="-1"`): clearing is
+    // what the keyboard's own delete does, and a target the D-pad can land on
+    // between the field and the results would be one more stop on the way down.
+    { float luma = anim_blend(0.502f, 0.702f, f);
+      GfxRect x = { field.x + field.w - NV_SEARCH_CLEAR_X - NV_SEARCH_CLEAR,
+                    cy - NV_SEARCH_CLEAR * 0.5f, NV_SEARCH_CLEAR, NV_SEARCH_CLEAR };
+      gfx_icon(x, "search_clear", luma, luma, luma, 1.0f); }
   } else {
-    // The same text as the web app's placeholder.
-    TxtLine l = txt_line(TXT_HEADLINE, "Search films and series", 255, 255, 255, 255);
-    txt_draw_alpha(l, tx, field.y + (field.h - l.h) * 0.5f, 0.40f);
+    // The web app's placeholder, verbatim, at --text-tertiary.
+    TxtLine l = txt_line(TXT_CALLOUT, "Search movies & series", 128, 128, 128, 255);
+    txt_draw(l, tx, textCenterY(TXT_CALLOUT, field.y, field.h));
   }
-  // The blinking cursor is the only sign that the field is active.
-  if (panel == 0 && (now / 500) % 2 == 0) {
-    GfxRect cur = { tx, field.y + 24.0f, 3.0f, field.h - 48.0f };
+
+  // The caret. It blinks only while the field HAS the focus and the system
+  // keyboard is up — a caret in a field nothing is typing into is a lie about
+  // where the next key will go, and on the fallback layout the next key goes to
+  // the grid.
+  if (panel == PANEL_FIELD && headCol == 0 && ime_is_open() && (now / 500) % 2 == 0) {
+    GfxRect cur = { tx, field.y + 26.0f, 3.0f, field.h - 52.0f };
     gfx_color(cur, 0.0f, 1.0f, 1.0f, 1.0f, 0.85f);
+  }
+}
+
+// THE DISCOVER BUTTON. `.search-discover-btn`, the compass beside the field: it
+// opens the Discover screen, where a catalogue is browsed by hand instead of
+// searched by name. See discoverui.h.
+//
+// IT IS THE ONE OF THE WEB APP'S TWO HEADER BUTTONS THAT THIS PORT CAN CARRY.
+// The other is the microphone, and it is gone on purpose. It drives
+// window.SpeechRecognition, which LG really does implement — libcbe.so carries
+// their own webos_speech_recognition_manager.cc — but every route to it is shut
+// to us. MEASURED, from inside this app:
+//
+//     {"returnValue":false,"errorCode":-1,
+//      "errorText":"Not permitted to send to com.webos.service.voiceconductor."}
+//
+// and the reason is in the hub's own configuration:
+//
+//     com.webos.service.voiceconductor.groups.json
+//       "voiceconductor.operation": [ "oem" ]
+//       "voiceconductor.query":     [ "oem" ]
+//
+// Those groups go to LG's own first-party clients and nowhere else — only
+// com.webos.app.buddy, their assistant, holds them. Developer mode does not
+// help: its certificate grants ["ares.webos.cli", "public"]. It is the same
+// wall recorded in video.h and plane.h for com.webos.service.tv.display.
+//
+// NOR DOES IT WORK IN NUVIOWEB, which is the obvious objection. That code runs
+// inside WebAppMgr, and WebAppMgr is granted twelve LS2 groups, none of them
+// voice — it would hit the same refusal. What does work there, and works here
+// too, is the SYSTEM microphone: the one on the Magic Remote and on the LG
+// keyboard, performed by the IME (trustLevel "oem") and inserted into whatever
+// text field has focus. With the keyboard up, this screen's field IS that
+// field, and the words arrive as SDL_TEXTINPUT like any other typing. A drawn
+// microphone button would have added nothing to that and implied a great deal.
+static void drawDiscover(void) {
+  GfxRect v = rectDiscover();
+  float f = animDiscover;
+  float ink = anim_blend(1.0f, 0.055f, f);
+  GfxRect ic = { v.x + (v.w - NV_SEARCH_BTN_ICON) * 0.5f,
+                 v.y + (v.h - NV_SEARCH_BTN_ICON) * 0.5f,
+                 NV_SEARCH_BTN_ICON, NV_SEARCH_BTN_ICON };
+  // The same pair of states as the field: #222 with a 1px #333 edge at rest,
+  // going to a filled white disc on focus. The edge travels WITH the fill so
+  // there is never a stale hairline sitting on top of the white.
+  pillFilled(v, anim_blend(0.2f, 1.0f, f), anim_blend(0.133f, 1.0f, f), 1.0f);
+  gfx_icon_at(ic, "search_discover", NV_SEARCH_BTN_ICON, ink, ink, ink, 1.0f);
+  // `.search-discover-btn::after` — the label rides ABOVE the button, 16 clear
+  // of it, and only while it has the focus.
+  if (f > 0.01f) {
+    TxtLine l = txt_line(TXT_DETWEB_TIP, "Discover", 255, 255, 255, 255);
+    txt_draw_alpha(l, v.x + (v.w - (float)l.w) * 0.5f,
+                   v.y - 16.0f - (float)l.h, 0.92f * f);
   }
 }
 
@@ -538,90 +1046,167 @@ static void drawKeyboard(void) {
       int tom = (int)anim_blend(236.0f, 26.0f, k);
       TxtStyle st = (f < SEARCH_KB_ROWS - 1) ? TXT_TITLE3 : TXT_HEADLINE;
       TxtLine l = txt_line(st, s, tom, tom, tom, 255);
-      txt_draw(l, t.x + (t.w - l.w) * 0.5f, t.y + (t.h - l.h) * 0.5f);
+      txt_draw(l, t.x + (t.w - (float)l.w) * 0.5f, t.y + (t.h - (float)l.h) * 0.5f);
     }
   }
-  float y = SEARCH_KB_Y + SEARCH_KB_ROWS * SEARCH_KB_STEP + 24;
-  TxtLine hint = txt_line_trim(TXT_CAPTION2,
+  float y = NV_SEARCH_BODY_Y + SEARCH_KB_ROWS * SEARCH_KB_STEP + 24;
+  TxtLine hint = txt_line_trim(TXT_SRCH_META,
       nFilter ? "Right: results   •   Back: menu" : "OK: type   •   Back: menu",
       179, 183, 190, 255, SEARCH_KB_W);
-  txt_draw(hint, SEARCH_KB_X, y);
+  txt_draw(hint, NV_SEARCH_X, y);
 }
 
-// The web app's empty state: a 56/600 title and 24/400 rgb(179,179,179) support
-// text. Here it sits on the RIGHT, in place of the rows, because the central band
-// is taken by the keyboard.
-static void drawEmpty(void) {
-  const char *t1 = nQuery >= 2 ? "No titles received" : "What are we watching?";
-  const char *t2 = nQuery >= 2 ? "Results from your addons appear here."
-                             : "Type at least 2 letters of a film or series.";
-  TxtLine l1 = txt_line(TXT_TITLE2, t1, 255, 255, 255, 255);
-  TxtLine l2 = txt_line(TXT_BODY, t2, 179, 179, 179, 255);
-  float cx = SEARCH_RES_X + (SEARCH_DIR - SEARCH_RES_X) * 0.5f;
-  float y = SEARCH_RES_Y + 180.0f;
-  txt_draw_alpha(l1, cx - l1.w * 0.5f, y, 0.96f);
-  txt_draw_alpha(l2, cx - l2.w * 0.5f, y + l1.h + 18.0f, 0.85f);
-  if (nQuery >= 2) {
-    TxtLine help = txt_line(TXT_CAPTION2,
-        "If they do not, check the connection or try another name.", 179, 183, 190, 255);
-    txt_draw(help, cx - help.w * 0.5f, y + l1.h + l2.h + 42);
+// "RECENT SEARCHES" and the chips. The web app's idle state, and the reason the
+// screen is worth opening with nothing typed at all.
+static void drawHistory(void) {
+  float x0 = contentX();
+  int i;
+  // 24/500, uppercase, tracked 1, --text-tertiary. Uppercasing is done here
+  // rather than in the stored term: `text-transform` is a display rule on the
+  // web too, and the chip below shows the term as it was typed.
+  { char up[SEARCH_MAX_QUERY];
+    const char *src = "Recent searches";
+    int k = 0;
+    while (src[k] && k + 1 < (int)sizeof up) { up[k] = (char)toupper((unsigned char)src[k]); k++; }
+    up[k] = 0;
+    txt_tracking(TXT_SRCH_NAME, up, 128, 128, 128,
+                 x0, NV_SEARCH_BODY_Y, 1.0f, NV_SEARCH_HIST_LS); }
+
+  for (i = 0; i < nHist; i++) {
+    float f = animChip[i];
+    GfxRect b = chipRect[i];
+    // scale 1.06 from the CENTRE (the sheet sets no transform-origin, so it is
+    // the default), which is why both axes are inset by half the growth.
+    float scale = anim_blend(1.0f, NV_SEARCH_CHIP_FOCUS, f);
+    GfxRect r = { b.x - b.w * (scale - 1.0f) * 0.5f,
+                  b.y - b.h * (scale - 1.0f) * 0.5f,
+                  b.w * scale, b.h * scale };
+    float radius = 0.5f;                       // border-radius 999
+    float luma = anim_blend(1.0f, 0.063f, f);  // #fff ink -> #10151f on white
+    float icx = r.x + NV_SEARCH_CHIP_PADX + NV_SEARCH_CHIP_BORDER;
+    gfx_color(r, radius, anim_blend(0.133f, 1.0f, f), anim_blend(0.133f, 1.0f, f),
+              anim_blend(0.133f, 1.0f, f), 1.0f);
+    gfx_rect(r, 0, GFX_RING_INSET, 0, NV_SEARCH_CHIP_BORDER / r.h, 0, radius,
+             anim_blend(0.2f, 1.0f, f), anim_blend(0.2f, 1.0f, f),
+             anim_blend(0.2f, 1.0f, f), anim_blend(1.0f, 0.4f, f));
+    { GfxRect ic = { icx, r.y + (r.h - NV_SEARCH_CHIP_ICON) * 0.5f,
+                     NV_SEARCH_CHIP_ICON, NV_SEARCH_CHIP_ICON };
+      gfx_icon_at(ic, "search_clock", NV_SEARCH_CHIP_ICON, luma, luma, luma, 1.0f); }
+    { int tom = (int)(luma * 255.0f + 0.5f);
+      TxtLine l = txt_line(TXT_CALLOUT, hist[i], tom, tom, tom, 255);
+      txt_draw(l, icx + NV_SEARCH_CHIP_ICON + NV_SEARCH_CHIP_ICOGAP,
+               r.y + (r.h - (float)l.h) * 0.5f); }
   }
+}
+
+// "No Results". The web app's `.search-empty-state-results`: a 56/600 heading
+// and a 24/400 line under it, the block centred horizontally and its own two
+// lines left-aligned inside.
+static void drawEmpty(void) {
+  const char *t1 = "No Results";
+  const char *t2 = "Try searching with different keywords";
+  TxtLine l1 = txt_line(TXT_TITLE2, t1, 255, 255, 255, 255);
+  TxtLine l2 = txt_line(TXT_SRCH_EMPTY, t2, 179, 179, 179, 255);
+  float wide = (float)(l1.w > l2.w ? l1.w : l2.w);
+  float x0 = contentX();
+  float x = x0 + ((NV_SEARCH_RIGHT - x0) - wide) * 0.5f;
+  float y = NV_SEARCH_BODY_Y + (NV_SEARCH_EMPTY_H - (float)(l1.h + l2.h)) * 0.5f;
+  txt_draw(l1, x, y + NV_SEARCH_EMPTY_TOP);
+  txt_draw(l2, x, y + NV_SEARCH_EMPTY_TOP + (float)l1.h + NV_SEARCH_EMPTY_GAP);
+}
+
+// The round "See All" at the end of a full row. The same 100px circle as the
+// header's buttons; focused it fills white and the arrow swaps to the filled
+// glyph, which is a different FILE and not the same shape recoloured.
+static void drawSeeAll(float x, float y, float f) {
+  GfxRect c = { x, y, NV_SEARCH_SEEALL, NV_SEARCH_SEEALL };
+  float ink = anim_blend(1.0f, 0.055f, f);
+  GfxRect ic = { x + (NV_SEARCH_SEEALL - NV_SEARCH_SEEALL_ICO) * 0.5f,
+                 y + (NV_SEARCH_SEEALL - NV_SEARCH_SEEALL_ICO) * 0.5f,
+                 NV_SEARCH_SEEALL_ICO, NV_SEARCH_SEEALL_ICO };
+  pillFilled(c, anim_blend(0.2f, 1.0f, f), anim_blend(0.133f, 1.0f, f), 1.0f);
+  if (f > 0.01f) {
+    GfxRect halo = { x - 3.0f, y - 3.0f, NV_SEARCH_SEEALL + 6.0f, NV_SEARCH_SEEALL + 6.0f };
+    gfx_rect(halo, 0, GFX_RING, 0, 3.0f / halo.h, 0, 0.5f, 1.0f, 1.0f, 1.0f, 0.25f * f);
+  }
+  gfx_icon_at(ic, f > 0.5f ? "search_seeall_fill" : "search_seeall",
+              NV_SEARCH_SEEALL_ICO, ink, ink, ink, 1.0f);
 }
 
 static void drawResults(Uint32 now) {
   (void)now;
+  float x0 = contentX();
+  float trackX = x0 + NV_SEARCH_TRACK_X;
   hasItemFocus = 0;
-  if (nFilter == 0) { drawEmpty(); return; }
+  if (nFilter == 0) {
+    if (histShown()) drawHistory();
+    else if (nQuery >= 2) drawEmpty();
+    return;
+  }
 
-  gfx_crop(SEARCH_RES_X - 8.0f, SEARCH_RES_Y - 30.0f,
-              (SEARCH_DIR - SEARCH_RES_X) + 16.0f, SEARCH_RES_AREA_H + 30.0f);
+  // The track really does run to the screen's edge: `.search-content` has no
+  // right padding and the row is clipped by the viewport, which is what makes a
+  // row read as continuing past the edge instead of ending there.
+  gfx_crop(x0 - 8.0f, NV_SEARCH_BODY_Y - 30.0f,
+           (NV_SCREEN_W - x0) + 8.0f,
+           (NV_SCREEN_H - NV_SEARCH_TOP) - NV_SEARCH_BODY_Y + 30.0f);
 
   for (int r = 0; r < nFilter; r++) {
-    float ry = SEARCH_RES_Y + r * NV_SEARCH_ROW_STEP - scrollY;
+    float ry = NV_SEARCH_BODY_Y + r * NV_SEARCH_ROW_STEP - scrollY;
     if (ry > NV_SCREEN_H + 100.0f || ry + NV_SEARCH_ROW_STEP < -100.0f) continue;
 
-    // The catalogue's title in 48/600 and the origin in 20/400 just below
-    // (margin-top 4).
-    TxtLine tt = txt_line_trim(TXT_TITLE3, filter[r].title, 255, 255, 255, 255,
-                                  SEARCH_DIR - SEARCH_RES_X);
-    txt_draw(tt, SEARCH_RES_X, ry);
-    if (filter[r].origin) {
+    // The catalogue's name in 28/600 and the origin in 20/400 just below.
+    TxtLine tt = txt_line_trim(TXT_ROW_TITLE, filter[r].title, 255, 255, 255, 255,
+                               NV_SEARCH_RIGHT - x0);
+    txt_draw(tt, x0, ry);
+    if (filter[r].origin[0]) {
       char org[96];
-      snprintf(org, sizeof org, "de %s", filter[r].origin);
-      TxtLine ts = txt_line_trim(TXT_CAPTION2, org, 179, 179, 179, 255,
-                                   SEARCH_DIR - SEARCH_RES_X);
-      txt_draw_alpha(ts, SEARCH_RES_X, ry + NV_SEARCH_ROW_SUB, 0.95f);
+      snprintf(org, sizeof org, "from %s", filter[r].origin);
+      TxtLine ts = txt_line_trim(TXT_SRCH_META, org, 179, 179, 179, 255,
+                                 NV_SEARCH_RIGHT - x0);
+      txt_draw(ts, x0, ry + NV_SEARCH_ROW_SUB);
     }
 
     float cardY = ry + NV_SEARCH_ROW_RAIL;
     // Two passes: the focused item has to sit ON TOP of its neighbours, otherwise
     // the poster beside it clips the focus ring.
-    for (int passe = 0; passe < 2; passe++)
+    for (int pass = 0; pass < 2; pass++) {
       for (int c = 0; c < filter[r].n; c++) {
         float f = animRes[r][c];
-        if ((passe == 1) != (f > 0.01f)) continue;
+        if ((pass == 1) != (f > 0.01f)) continue;
         const CatItem *ci = cat_item(filter[r].items[c]);
         if (!ci) continue;
 
-        float px = SEARCH_RES_X + c * NV_SEARCH_CARD_STEP - scrollX[r];
-        if (px > SEARCH_DIR || px + NV_SEARCH_CARD_W < SEARCH_RES_X - NV_SEARCH_CARD_W) continue;
-        GfxRect poster = { px, cardY, NV_SEARCH_CARD_W, NV_SEARCH_POSTER_H };
-        // The web app's card does NOT scale on focus: it marks with a 2px border,
-        // like the home.
+        float px = trackX + c * NV_SEARCH_CARD_STEP - scrollX[r];
+        if (px > NV_SCREEN_W || px + NV_SEARCH_CARD_W < trackX - NV_SEARCH_CARD_W) continue;
+        // `transform: scale(1.05)` with `transform-origin: top` on the WHOLE
+        // card — poster, name and year — so the top edge stays on the rail and
+        // the growth goes down. It did not scale in the sheet this screen was
+        // first ported from; it does now.
+        float scale = anim_blend(1.0f, NV_SEARCH_CARD_FOCUS, f);
+        float cw = NV_SEARCH_CARD_W * scale;
+        float cardX = px - (cw - NV_SEARCH_CARD_W) * 0.5f;
+        GfxRect poster = { cardX, cardY, cw, NV_SEARCH_POSTER_H * scale };
         // The SDF's radius is a fraction of the HEIGHT, not of the smaller side:
         // `p = (uv-0.5)*vec2(asp,1.0)` makes one SDF unit h pixels on both axes.
         // Dividing by the width rounded this poster half again too much. See the
         // note on radiusInset in home.c.
-        float radius = NV_SEARCH_RADIUS / NV_SEARCH_POSTER_H;
+        float radius = NV_SEARCH_POSTER_R / poster.h;
         if (f > 0.01f) {
+          // A 2px border INSIDE the wrap plus `box-shadow 0 0 0 2px` outside it:
+          // four pixels of --secondary-color in all, which is why both halves
+          // are drawn and not just the outer one.
           GfxRect b = { poster.x - 2.0f, poster.y - 2.0f,
                         poster.w + 4.0f, poster.h + 4.0f };
-          gfx_color(b, radius, 0.961f, 0.961f, 0.961f, f);
+          gfx_color(b, NV_SEARCH_POSTER_R / b.h, 0.961f, 0.961f, 0.961f, f);
         }
 
         const char *art = ci->poster[0] ? ci->poster
                          : (ci->backdrop[0] ? ci->backdrop : NULL);
-        GLuint tex = art ? tex_get_width(art, poster.w) : 0;
+        // The RESTING width, not the animated one: tex_cache re-decodes an exact
+        // request whose width moves, and a poster that re-decodes through a
+        // focus spring is a poster that is missing for the length of it.
+        GLuint tex = art ? tex_get_width(art, NV_SEARCH_CARD_W) : 0;
         if (tex) {
           // Without the aspect ratio the 2:3 art stretches; and the poster is
           // exactly where that jumps out, because they all sit side by side.
@@ -630,49 +1215,62 @@ static void drawResults(Uint32 now) {
           gfx_tex_aspect_current = 0.0f;
         } else {
           // A VISIBLE skeleton, the same as the home's: #2C2C2C. See the note
-            // there — a placeholder in the background's tone reads as a broken
-            // card, not as loading.
-            gfx_skeleton(poster, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
-                  NV_COLOR_SKELETON_B, 1.0f);
+          // there — a placeholder in the background's tone reads as a broken
+          // card, not as loading.
+          gfx_skeleton(poster, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
+                       NV_COLOR_SKELETON_B, 1.0f);
         }
+        if (f > 0.01f)
+          gfx_rect(poster, 0, GFX_RING_INSET, 0, 2.0f / poster.h, 0, radius,
+                   0.961f, 0.961f, 0.961f, f);
 
-        // The name in 28/500 white at 8 from the poster; the year in 20/400
-        // rgb(179) at 4 from the name.
-        TxtLine tn = txt_line_trim(TXT_CALLOUT, ci->title, 255, 255, 255, 255,
-                                      NV_SEARCH_CARD_W);
-        float ny = poster.y + poster.h + NV_SEARCH_NAME_GAP;
+        // The name in 24/500 at 16 from the poster; the year in 20/400 rgb(179)
+        // at 4 from the name.
+        TxtLine tn = txt_line_trim(TXT_SRCH_NAME, ci->title, 255, 255, 255, 255, cw);
+        float ny = poster.y + poster.h + NV_SEARCH_NAME_GAP * scale;
         txt_draw_alpha(tn, poster.x, ny, anim_blend(0.82f, 1.0f, f));
         if (ci->meta[0]) {
-          TxtLine td = txt_line_trim(TXT_CAPTION2, ci->meta, 179, 179, 179, 255,
-                                        NV_SEARCH_CARD_W);
-          txt_draw_alpha(td, poster.x, ny + tn.h + NV_SEARCH_DATE_GAP, 0.92f);
+          TxtLine td = txt_line_trim(TXT_SRCH_META, ci->meta, 179, 179, 179, 255, cw);
+          txt_draw_alpha(td, poster.x, ny + (float)tn.h + NV_SEARCH_DATE_GAP, 0.92f);
         }
 
-        if (panel == 1 && focus_index(&focusRes, r, c)) {
+        if (panel == PANEL_RES && focus_index(&focusRes, r, c)) {
           itemFocus.index_ = filter[r].items[c];
           itemFocus.rect   = poster;
-          itemFocus.art   = ci->backdrop[0] ? ci->backdrop : ci->poster;
-          itemFocus.title = ci->title;
-          itemFocus.genre = ci->genre;
+          itemFocus.art    = ci->backdrop[0] ? ci->backdrop : ci->poster;
+          itemFocus.title  = ci->title;
+          itemFocus.genre  = ci->genre;
           itemFocus.meta   = ci->meta;
           hasItemFocus = 1;
         }
       }
+      if (filter[r].seeAll) {
+        int c = filter[r].n;
+        float f = animRes[r][c];
+        if ((pass == 1) == (f > 0.01f)) {
+          float px = trackX + c * NV_SEARCH_CARD_STEP - scrollX[r]
+                   + (NV_SEARCH_SEEALL_GAP - (NV_SEARCH_CARD_STEP - NV_SEARCH_CARD_W));
+          drawSeeAll(px, cardY + NV_SEARCH_SEEALL_Y, f);
+        }
+      }
+    }
   }
   gfx_no_crop();
 }
 
 void search_draw(Uint32 now) {
-  // Background #0d0d0d, measured from the web app's .search-screen-shell — darker
-  // than the home's grey, and the web app uses the same tone on both.
-  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  // The screen has already been cleared with THIS VERY COLOUR by
-  // glClearColor/glClear in main.c before app_draw. Painting over it was one
-  // full-screen layer thrown away per frame — and the dominant cost on this GPU
-  // is fill rate (gfx.c records that TWO full-screen layers dropped the Mali-G71
-  // to ~40fps). Do not put it back without first changing the clear colour.
-  (void)screen;
-  drawHeader(now);
-  drawKeyboard();
+  // Background #0d0d0d, .search-screen-shell's --bg-color. The screen has
+  // already been cleared with THIS VERY COLOUR by glClearColor/glClear in main.c
+  // before app_draw. Painting over it was one full-screen layer thrown away per
+  // frame — and the dominant cost on this GPU is fill rate (gfx.c records that
+  // TWO full-screen layers dropped the Mali-G71 to ~40fps). Do not put it back
+  // without first changing the clear colour.
+  // Only when they are on screen: layoutChips measures every term, and the
+  // rasteriser has a per-frame budget that the results have first call on.
+  if (histShown()) layoutChips(); else chipRows = 0;
+  drawTitle();
+  drawField(now);
+  drawDiscover();
+  if (!ime_usable()) drawKeyboard();
   drawResults(now);
 }
