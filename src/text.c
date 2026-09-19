@@ -272,6 +272,34 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_PLR_BADGE, WEIGHT_BOLD   },  // TXT_PLR_BADGE  .player-stats-quality
   // The guide's category. 600 on a dark ground goes BOLD by the optical rule.
   { NV_FT_PLR_PG_CAT, WEIGHT_BOLD  },  // TXT_PLR_PG_CAT .player-parental-label
+  // The track menus. 800 is Bold outright — there is no heavier face here, and the
+  // panel title is the one line in it meant to be read from across the room.
+  { NV_FT_TRK_TITLE,  WEIGHT_BOLD   },  // TXT_TRK_TITLE  .player-dialog-title
+  // THE ONE STYLE IN THIS BLOCK THAT DOES NOT TAKE THE OPTICAL RULE. Every other
+  // 600 in this table goes Bold because light type on a dark ground reads a weight
+  // thin — but this label is the deliberately recessive half of a pair, set at 55%
+  // white against a value at 100%, and Bold would undo in weight exactly what the
+  // colour is doing. Medium against the value's Bold is one full step, which is
+  // the same separation TXT_PLR_TIME_T buys for the same reason.
+  { NV_FT_TRK_LABEL,  WEIGHT_MEDIUM },  // TXT_TRK_LABEL  .player-select-label
+  { NV_FT_TRK_VALUE,  WEIGHT_BOLD   },  // TXT_TRK_VALUE  .player-select-value
+  { NV_FT_TRK_OPT,    WEIGHT_BOLD   },  // TXT_TRK_OPT    .player-select-option-main
+  { NV_FT_TRK_OPTSUB, WEIGHT_MEDIUM },  // TXT_TRK_OPTSUB .player-select-option-sub
+  { NV_FT_TRK_STEP,   WEIGHT_BOLD   },  // TXT_TRK_STEP   .player-dialog-step
+  // The jump-ahead prompts. The skip label is a 500 and stays Medium: it sits on
+  // an opaque pill, not on shaded video, so the optical rule that lifts 600s to
+  // Bold elsewhere in this table has nothing to correct for here.
+  { NV_FT_SKIP,       WEIGHT_MEDIUM },  // TXT_SKIP        .player-skip-intro-label
+  { NV_FT_NEXT_KICK,  WEIGHT_BOLD   },  // TXT_NEXT_KICK   .player-next-episode-kicker
+  { NV_FT_NEXT_TITLE, WEIGHT_BOLD   },  // TXT_NEXT_TITLE  .player-next-episode-title
+  { NV_FT_NEXT_PILL,  WEIGHT_MEDIUM },  // TXT_NEXT_PILL   the card's action pills
+  // The episode rail.
+  { NV_FT_ERAIL_META,  WEIGHT_BOLD   }, // TXT_ERAIL_META   .player-episode-detail-meta
+  { NV_FT_ERAIL_TITLE, WEIGHT_BOLD   }, // TXT_ERAIL_TITLE  .player-episode-detail-title
+  { NV_FT_ERAIL_OVER,  WEIGHT_MEDIUM }, // TXT_ERAIL_OVER   .player-episode-detail-overview
+  { NV_FT_ERAIL_CODE,  WEIGHT_BOLD   }, // TXT_ERAIL_CODE   .player-episode-code
+  { NV_FT_ERAIL_PILL,  WEIGHT_BOLD   }, // TXT_ERAIL_PILL   .player-episode-current
+  { NV_FT_ERAIL_CTITLE,WEIGHT_BOLD   }, // TXT_ERAIL_CTITLE .player-episode-card-title
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.

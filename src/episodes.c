@@ -14,9 +14,24 @@
 #include <string.h>
 #include <pthread.h>
 
-#define EP_W 720.0f
-#define EP_ROW 172.0f
-#define EP_TOP 216.0f
+// THE PANEL'S OWN HEIGHT, built from the pieces below it so the sheet is exactly
+// as tall as what it holds. The measurements are in layout.h under NV_ERAIL_*.
+//
+//   72 top padding
+//  + the detail block (meta 27 + 8 + title 48 + 12 + overview 62 = 157)
+//  + 32 margin under it
+//  + the viewport (16 + card + 16)
+//  + 48 bottom padding
+#define EP_CARD_H   (NV_ERAIL_CARD_W * 9.0f / 16.0f)   /* the thumb is 16:9 */
+#define EP_CTITLE_H  42.0f                             /* 12 margin + a 24px line */
+#define EP_ITEM_H   (EP_CARD_H + EP_CTITLE_H)
+#define EP_DETAIL_H 157.0f
+#define EP_VIEW_H   (EP_ITEM_H + NV_ERAIL_VIEW_PAD * 2)
+#define EP_SEASONS_H 64.0f                             /* the season tabs row */
+#define EP_H        (NV_ERAIL_PAD_TOP + EP_SEASONS_H + EP_DETAIL_H + \
+                     NV_ERAIL_DETAIL_MB + EP_VIEW_H + NV_ERAIL_PAD_BOT)
+// The pitch one card occupies along the rail.
+#define EP_PITCH    (NV_ERAIL_CARD_W + NV_ERAIL_GAP)
 static int is_open, title, currentT, currentE, season, focus, group;
 static int requestT, requestE;
 static float anim, scroll;
@@ -244,9 +259,17 @@ void episodes_event(const SDL_Event *ev) {
     is_open = 0; return;
   }
   int nt = nSeasons(), n = nLines();
-  if (k == SDLK_UP) { if (group == 1 && focus > 0) focus--; else group--; }
-  if (k == SDLK_DOWN) { if (group < 1) group++; else if (focus < n - 1) focus++; }
-  if (group < -1) group = -1;
+  // THE RAIL IS HORIZONTAL NOW, so the two axes have swapped jobs: up/down moves
+  // between the sheet's rows (close / seasons / rail) and left/right moves WITHIN
+  // whichever row holds the focus. In the old drawer both of those were up/down on
+  // one axis, which is what a vertical list of rows wanted.
+  if (k == SDLK_UP)   { if (group > -1) group--; }
+  if (k == SDLK_DOWN) { if (group < 1) group++; }
+  // 0 is the floor now: the sheet has no header, so there is no Close row above
+  // the seasons to walk up into. BACK is the way out, as it already was.
+  if (group < 0) group = 0;
+  if (group == 1 && k == SDLK_LEFT  && focus > 0)     focus--;
+  if (group == 1 && k == SDLK_RIGHT && focus < n - 1) focus++;
   if (group == 0 && (k == SDLK_LEFT || k == SDLK_RIGHT)) {
     int new = season + (k == SDLK_RIGHT ? 1 : -1);
     if (new >= 0 && new < nt) {
@@ -256,8 +279,7 @@ void episodes_event(const SDL_Event *ev) {
     }
   }
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
-    if (group == -1) is_open = 0;
-    else if (group == 0) {
+    if (group == 0) {
       group = 1;
       if (!n) disc_episodes(title,numSeason(season));
     }
@@ -275,96 +297,183 @@ void episodes_update(float dt) {
     locateCurrent=0;
   }
   if (focus >= n) focus = n > 0 ? n - 1 : 0;
-  float area = NV_SCREEN_H - EP_TOP - 36;
-  float max = n * EP_ROW - area;
-  float target = scroll;
-  if(focus*EP_ROW<scroll) target=focus*EP_ROW;
-  if((focus+1)*EP_ROW>scroll+area) target=(focus+1)*EP_ROW-area;
-  if (target > max) target = max;
-  if (target < 0) target = 0;
-  scroll = anim_spring(scroll, target, dt, NV_SPRING_SCROLL);
+  // The rail's offset, in pixels along X. The focused card is pinned to the
+  // gutter rather than merely kept in view: on a rail of large cards the eye goes
+  // to a fixed place, and a card that sometimes sits left and sometimes right of
+  // centre makes every move feel like a different distance. The track moves, the
+  // selection does not.
+  { float max = n * EP_PITCH - NV_ERAIL_GAP - (NV_SCREEN_W - NV_ERAIL_GUTTER * 2);
+    float target = focus * EP_PITCH;
+    if (max < 0) max = 0;
+    if (target > max) target = max;
+    if (target < 0) target = 0;
+    scroll = anim_spring(scroll, target, dt, NV_SPRING_SCROLL); }
 }
+// One episode card: a 16:9 still with the code burnt into its base, the "Playing"
+// pill when it is the one on screen, and the name under it.
+static void cardDraw(int i, float x, float y, int sel, float a) {
+  const CatEp *ep = epLine(i);
+  const CatItem *ci = cat_item(title);
+  float w = NV_ERAIL_CARD_W, h = EP_CARD_H;
+  float r, cx, cy;
+  char num[40];
+  const char *art;
+  GLuint tex;
+  int current;
+
+  if (!ep) return;
+  // The selected card GROWS, about its own centre, and nothing else changes: no
+  // fill, no border on the item itself. The ring below rides on the thumbnail.
+  if (sel) {
+    float g = (NV_ERAIL_SCALE - 1.0f) * 0.5f;
+    x -= w * g; y -= h * g; w *= NV_ERAIL_SCALE; h *= NV_ERAIL_SCALE;
+  }
+  r = NV_ERAIL_THUMB_R / h;
+  snprintf(num, sizeof num, "S%dE%d", ep->season, ep->episode);
+
+  gfx_color((GfxRect){ x, y, w, h }, r, 1, 1, 1, 0.07f * a);
+  art = ep->thumb[0] ? ep->thumb : (ci ? ci->backdrop : "");
+  tex = art && art[0] ? tex_get_width(art, (int)NV_ERAIL_CARD_W) : 0;
+  if (tex) {
+    gfx_tex_aspect_current = tex_aspect(art);
+    gfx_rect((GfxRect){ x, y, w, h }, tex, GFX_CARD, 0, 0, 0, r, 0, 0, 0, a);
+    gfx_tex_aspect_current = 0;
+  }
+  // The code has to stay readable over whatever the still happens to be, so the
+  // base of the card is shaded rather than the code given a chip of its own —
+  // the same reasoning as GFX_CORNER_SCRIM: a container reads as a control.
+  gfx_rect((GfxRect){ x, y, w, h }, 0, GFX_EP_SCRIM, 0, 0, 0, r, 0, 0, 0, a);
+
+  if (sel) {
+    // A 4px white border INSIDE the thumbnail's edge. Inset because the ring
+    // belongs to the picture — outside it would collide with the neighbouring
+    // card across the 24px gap once this one is scaled up.
+    gfx_rect((GfxRect){ x, y, w, h }, 0, GFX_RING_INSET, 0,
+             NV_ERAIL_RING / h, 0, r, 1, 1, 1, 0.98f * a);
+  }
+
+  cx = x + 12.0f; cy = y + h - 12.0f;
+  { TxtLine c = txt_line(TXT_ERAIL_CODE, num, 255, 255, 255, 255);
+    txt_draw_alpha(c, cx, cy - (float)c.h, a); }
+
+  current = ep->season == currentT && ep->episode == currentE;
+  if (current) {
+    TxtLine p = txt_line(TXT_ERAIL_PILL, "PLAYING", 11, 13, 16, 255);
+    float pw = (float)p.w + 24.0f, ph = (float)p.h + 12.0f;
+    GfxRect pr = { x + w - 12.0f - pw, y + 12.0f, pw, ph };
+    gfx_color(pr, 8.0f / ph, 0.961f, 0.961f, 0.961f, a);
+    txt_draw_alpha(p, pr.x + 12.0f, pr.y + 6.0f, a);
+  }
+
+  { int c = sel ? 255 : 153;   /* rgba(255,255,255,0.6) resting */
+    txt_draw_alpha(txt_line_trim(TXT_ERAIL_CTITLE, ep->name[0] ? ep->name : num,
+                                 c, c, c, 255, w),
+                   x, y + h + 12.0f, a); }
+}
+
 void episodes_draw(void) {
   if (anim < .005f) return;
-  float x = NV_SCREEN_W - EP_W + (1 - anim) * EP_W;
-  gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,.02f,.02f,.025f,.35f*anim);
-  gfx_color((GfxRect){x,0,EP_W,NV_SCREEN_H},.025f,.095f,.095f,.10f,anim);
-  txt_draw_alpha(txt_line(TXT_PANEL_TITLE,"Episodes",240,241,243,255),x+40,44,anim);
-  gfx_color((GfxRect){x+EP_W-146,44,110,50},.3f,group==-1?.94f:.14f,group==-1?.94f:.14f,group==-1?.95f:.15f,anim);
-  int color = group == -1 ? 25 : 230;
-  txt_draw_alpha(txt_line(TXT_PG_LABEL,"Close",color,color,color,255),x+EP_W-130,55,anim);
-  gfx_crop(x+36,120,EP_W-72,64);
-  int first = season > 1 ? season - 1 : 0;
-  for (int i = first; i < nSeasons() && i < first+3; i++) {
-    float tx = x+40+(i-first)*212;
-    int sel = i == season;
-    gfx_color((GfxRect){tx,126,196,52},.5f,sel?.94f:.14f,sel?.94f:.14f,sel?.95f:.15f,anim);
-    char s[48]; snprintf(s,sizeof s,"Season %d",numSeason(i));
-    int b=sel?24:210;
-    TxtLine l=txt_line(TXT_PG_LABEL,s,b,b,b,255);
-    txt_draw_alpha(l,tx+(196-l.w)*.5f,138,anim);
-    if (sel && group==0) gfx_color((GfxRect){tx+30,184,136,2},0,.94f,.94f,.95f,anim);
+  int n = nLines(), i;
+  // The sheet slides UP and fades, the counterpart of the right-hand menus'
+  // sideways travel. 14% of its own height, as the web app has it.
+  float top = NV_SCREEN_H - EP_H + (1 - anim) * EP_H * 0.14f;
+  float y = top + NV_ERAIL_PAD_TOP;
+  float railY, trackX;
+
+  // The panel supplies its OWN gradient, so the full-screen scrim behind it only
+  // has to take the edge off the exposed frame rather than dim the whole picture.
+  gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,.02f,.02f,.025f,.18f*anim);
+  gfx_rect((GfxRect){ 0, top, NV_SCREEN_W, EP_H }, 0, GFX_ERAIL_SCRIM,
+           0, 0, 0, 0, 0.0314f, 0.0392f, 0.0510f, anim);
+
+  // --- the season tabs ------------------------------------------------------
+  { int first = season > 1 ? season - 1 : 0;
+    for (i = first; i < nSeasons() && i < first + 4; i++) {
+      float tx = NV_ERAIL_GUTTER + (i - first) * 212.0f;
+      int sel = i == season, b = sel ? 24 : 210;
+      char s[48];
+      TxtLine l;
+      gfx_color((GfxRect){ tx, y, 196, 52 }, .5f,
+                sel ? .94f : .14f, sel ? .94f : .14f, sel ? .95f : .15f, anim);
+      snprintf(s, sizeof s, "Season %d", numSeason(i));
+      l = txt_line(TXT_PG_LABEL, s, b, b, b, 255);
+      txt_draw_alpha(l, tx + (196 - l.w) * .5f, y + 12, anim);
+      if (sel && group == 0)
+        gfx_color((GfxRect){ tx + 30, y + 58, 136, 2 }, 0, .94f, .94f, .95f, anim);
+    } }
+  y += EP_SEASONS_H;
+
+  // --- the selected episode's detail, ABOVE the rail ------------------------
+  // This is the whole reason the picker stopped being a list of rows: the title
+  // and synopsis get room to be read once, here, instead of being clamped into
+  // every row of a column 400px wide.
+  { const CatEp *ep = n ? epLine(focus) : NULL;
+    char meta[96];
+    const CatItem *cim = cat_item(title);
+    int watched = 0, mapped;
+    if (ep) {
+      mapped = cim ? watchedep_state(cim->imdb, ep->season, ep->episode) : -1;
+      watched = mapped >= 0 ? mapped : extras_ep_watched(ep->season, ep->episode);
+      snprintf(meta, sizeof meta, "S%dE%d%s%s%s%s", ep->season, ep->episode,
+               ep->duration[0] ? " · " : "", ep->duration,
+               watched ? " · " : "", watched ? "WATCHED" : "");
+      txt_tracking(TXT_ERAIL_META, meta, 245, 245, 245,
+                   NV_ERAIL_GUTTER, y, anim, NV_ERAIL_META_TRACK);
+      txt_draw_alpha(txt_line_trim(TXT_ERAIL_TITLE,
+                                   ep->name[0] ? ep->name : meta,
+                                   255, 255, 255, 255, NV_ERAIL_DETAIL_W),
+                     NV_ERAIL_GUTTER, y + 35.0f, anim);
+      txt_block(TXT_ERAIL_OVER, ep->synopsis, 158, 159, 162,
+                NV_ERAIL_GUTTER, y + 95.0f, NV_ERAIL_DETAIL_W,
+                NV_LD_ERAIL_OVER, anim, 2);
+    } else {
+      txt_block(TXT_ERAIL_OVER, disc_episodes_loading(title)
+                  ? "Loading episodes…"
+                  : "Episodes unavailable. Select the season and press OK to try again.",
+                196, 198, 204, NV_ERAIL_GUTTER, y + 35.0f,
+                NV_ERAIL_DETAIL_W, NV_LD_ERAIL_OVER, anim, 2);
+    } }
+  y += EP_DETAIL_H + NV_ERAIL_DETAIL_MB;
+
+  // --- the rail -------------------------------------------------------------
+  railY = y + NV_ERAIL_VIEW_PAD;
+  trackX = NV_ERAIL_GUTTER - scroll;
+  // Cropped to the sheet, then FEATHERED at both ends: cards should run past the
+  // edge rather than stop dead, and the part-visible card on the left should
+  // dissolve instead of being sliced down its middle.
+  gfx_crop(0, y, NV_SCREEN_W, EP_VIEW_H);
+  for (i = 0; i < n; i++) {
+    float cx = trackX + i * EP_PITCH;
+    if (cx + NV_ERAIL_CARD_W < -40 || cx > NV_SCREEN_W + 40) continue;
+    cardDraw(i, cx, railY, group == 1 && i == focus, anim);
   }
   gfx_no_crop();
-  gfx_crop(x+36,EP_TOP,EP_W-72,NV_SCREEN_H-EP_TOP-32);
-  int n=nLines();
-  for (int i=0;i<n;i++) {
-    float y=EP_TOP+i*EP_ROW-scroll;
-    if (y+EP_ROW<EP_TOP || y>NV_SCREEN_H-32) continue;
-    const CatEp *ep=epLine(i);
-    int sel=group==1 && i==focus;
-    GfxRect r={x+40,y,EP_W-80,EP_ROW-14};
-    if(sel) gfx_color(r,.13f,.94f,.94f,.95f,anim);
-    r.x+=2; r.y+=2; r.w-=4; r.h-=4;
-    gfx_color(r,.12f,.135f,.135f,.14f,anim);
-    const CatItem *ci=cat_item(title);
-    const char *art=ep->thumb[0]?ep->thumb:(ci?ci->backdrop:"");
-    GLuint tex=tex_get_width(art,184);
-    GfxRect tr={x+54,y+14,184,130};
-    gfx_color(tr,.10f,.19f,.19f,.20f,anim);
-    if(tex){gfx_tex_aspect_current=tex_aspect(art);gfx_rect(tr,tex,GFX_CARD,0,0,0,.10f,0,0,0,anim);gfx_tex_aspect_current=0;}
-    char num[40];snprintf(num,sizeof num,"S%dE%d",ep->season,ep->episode);
-    gfx_color((GfxRect){tr.x+8,tr.y+92,72,30},.15f,.025f,.025f,.03f,.9f*anim);
-    txt_draw_alpha(txt_line(TXT_MINI,num,240,240,242,255),tr.x+15,tr.y+97,anim);
-    float tx=x+260, w=EP_W-310;
-    txt_draw_alpha(txt_line_trim(TXT_PANEL_ITEM,ep->name[0]?ep->name:num,242,243,245,255,w),tx,y+16,anim);
-    int current=ep->season==currentT && ep->episode==currentE;
-    // THE SESSION MAP FIRST, the per-title grid second. extras.c's grid is
-    // bounded at 20 seasons by 40 episodes and silently loses a mark past
-    // either edge — a long-running series showed unwatched episodes it had
-    // every right to tick. watchedep has no ceiling and answers -1 only when
-    // nothing is known about the series, which is exactly when the old grid's
-    // zero was a guess anyway.
-    const CatItem *cim=cat_item(title);
-    int mapped=cim?watchedep_state(cim->imdb,ep->season,ep->episode):-1;
-    int watched=mapped>=0?mapped:extras_ep_watched(ep->season,ep->episode);
-    char state[96];
-    if(current) snprintf(state,sizeof state,"Now playing");
-    else if(watched) snprintf(state,sizeof state,"✓ Watched%s%s",ep->duration[0]?" · ":"",ep->duration);
-    else snprintf(state,sizeof state,"%s%s%s",ep->date,ep->date[0]&&ep->duration[0]?" · ":"",ep->duration);
-    txt_draw_alpha(txt_line_trim(TXT_PG_END,state,current?236:180,current?237:182,current?240:188,255,w),tx,y+48,anim);
-    txt_block(TXT_PG_END,ep->synopsis,186,188,194,tx,y+78,w,25,anim,3);
-  }
-  if(!n) txt_block(TXT_PG_END,disc_episodes_loading(title)?
-    "Loading episodes…":"Episodes unavailable. Select the season and press OK to try again.",
-    196,198,204,x+56,EP_TOP+40,EP_W-112,28,anim,4);
-  gfx_no_crop();
-  if(n) {
-    char counter[48];snprintf(counter,sizeof counter,"%d of %d episodes",focus+1,n);
-    txt_draw_alpha(txt_line(TXT_MINI,counter,166,168,174,255),x+40,NV_SCREEN_H-26,anim);
+  { float ink = 0.0314f, g = 0.0392f, b = 0.0510f;
+    // The rail's ground at this height is the panel gradient's own value there —
+    // 0.96 of the ink — so the feather dissolves into the sheet, not onto video.
+    gfx_rect((GfxRect){ 0, y, NV_ERAIL_GUTTER, EP_VIEW_H }, 0, GFX_MENU_FEATHER,
+             0, 1.0f, 1.0f, 0, ink, g, b, 0.96f * anim);
+    gfx_rect((GfxRect){ NV_SCREEN_W - 120.0f, y, 120.0f, EP_VIEW_H }, 0,
+             GFX_MENU_FEATHER, 0, 1.0f, 0.0f, 0, ink, g, b, 0.96f * anim); }
+
+  if (n) {
+    char counter[48];
+    snprintf(counter, sizeof counter, "%d of %d episodes", focus + 1, n);
+    txt_draw_alpha(txt_line(TXT_MINI, counter, 166, 168, 174, 255),
+                   NV_ERAIL_GUTTER, NV_SCREEN_H - 30, anim);
     // THE HINT, because a long press is invisible otherwise. The gesture is the
     // only way to reach the marking menu, and an unhinted gesture is a feature
     // nobody finds.
-    if(!wmOpen) {
-      TxtLine h=txt_line(TXT_MINI,"Hold OK to mark as watched",150,152,158,255);
-      txt_draw_alpha(h,x+EP_W-40-h.w,NV_SCREEN_H-26,anim);
+    if (!wmOpen) {
+      TxtLine h = txt_line(TXT_MINI, "Hold OK to mark as watched", 150, 152, 158, 255);
+      txt_draw_alpha(h, NV_SCREEN_W - NV_ERAIL_GUTTER - h.w, NV_SCREEN_H - 30, anim);
     }
   }
 
   // THE MARKING MENU, drawn LAST so it sits above the list it belongs to.
   if(wmOpen) {
     int opts=wmOptions();
-    float mw=560, mh=112+opts*74, mx=x+(EP_W-mw)*.5f, my=(NV_SCREEN_H-mh)*.5f;
+    float mw=560, mh=112+opts*74, mx=(NV_SCREEN_W-mw)*.5f, my=(NV_SCREEN_H-mh)*.5f;
     char head[200];
     gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,.02f,.02f,.025f,.55f*anim);
     gfx_color((GfxRect){mx,my,mw,mh},.03f,.115f,.115f,.125f,anim);

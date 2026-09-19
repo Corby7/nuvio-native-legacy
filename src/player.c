@@ -35,6 +35,7 @@
 #include "anim.h"
 #include "layout.h"
 #include "catalog.h"
+#include "discover.h"
 #include "trakt.h"
 #include "sync.h"
 #include "parental.h"
@@ -247,6 +248,12 @@ static int   button = PLR_PLAY;
 // buttons' enum because it is not a button — OK on it 'presses' nothing, and
 // LEFT/RIGHT change meaning (seeking, rather than moving focus).
 static int   barFocus = 0;
+// THE CARD ABOVE THE BAR IS A FOCUS TARGET TOO, when there is one. The transport
+// is a ladder — buttons, bar, then whatever is floating above it — and UP walks it
+// to the top and then puts the whole thing away. Without this rung the card was
+// only reachable with the controls DOWN, which meant the one moment you could not
+// take the offer was while you were looking at the controls.
+static int   cardFocus = 0;
 static int   visible = 0;          // the controls' target (1 = up)
 static float anim = 0.0f;          // 0..1 following `visible`, by spring
 static float focusB[PLR_NBTNS];     // each button's focus spring
@@ -284,6 +291,33 @@ static char lineEp[220];          // "T1, E1 · <sinopse curta>", montada na abe
 
 static const CatItem *item(void) { return cat_item(idx); }
 static int epT, epE, reqSources, errorSource, reqNextT, reqNextE;
+// THE CARD CAN BE SENT AWAY. It is offered for the last two minutes of an episode,
+// or for the whole of the credits, and that is a long time to keep a panel in the
+// corner of a frame somebody is still watching.
+//
+// The flag belongs to THIS PLAYBACK, not to the session: it is cleared in the same
+// reset that clears reqNext* when a title opens, so dismissing the offer on one
+// episode does not silently suppress it on the next.
+static int nextDismissed;
+// Which of the card's two pills has the focus: 0 = Dismiss, 1 = Play. Play is the
+// primary of the pair and is where it starts — the same reasoning as the track
+// menu's steppers starting on the plus.
+static int nextFocus = 1;
+
+// THE SKIP BUTTON HIDES ITSELF after ten seconds — the web app's
+// SKIP_INTRO_COUNTDOWN_MS. An intro can run two minutes and the offer is answered
+// in the first few; left up for the whole of it, it is a panel parked over the
+// picture long after the moment it belonged to. The bar across the button's base
+// is that countdown made visible, so the disappearance is announced rather than
+// just happening.
+//
+// It is PAUSED while the transport is up, not reset: somebody reading the scrubber
+// is not ignoring the offer, and a countdown that ran underneath the controls
+// would eat the ten seconds while nobody could see it.
+#define PLR_SKIP_MS 10000.0f
+static float  skipElapsed;
+static double skipChunkEnd;   // which chunk the count belongs to
+static int    skipAutoHidden;
 static int introIdx=-1, introT=-1, introE=-1;
 static int resumeApplied, resumePct;
 int player_index(void) { return idx; }
@@ -660,6 +694,8 @@ void player_open(int indexCatalog, const char *url) {
     if (ci && ci->imdb[0]) parental_request(ci->imdb); }
   playing = 1; visible = 1; anim = 0.0f; entry = 0.0f;
   reqSources = errorSource = reqTracks = reqNextT = reqNextE = 0; startImage = 0;
+  nextDismissed = 0; nextFocus = 1;
+  skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0;
   resumeApplied=0;
   button = PLR_PLAY;
   memset(focusB, 0, sizeof focusB);
@@ -727,6 +763,23 @@ void player_shutdown(void) {
       // every user turns Trakt on, and the official app's progress comes from the account.
       sync_dirty_progress();
     }
+    // AND THE HOME IS ASKED TO REBUILD, which is what makes the row agree with
+    // what has just happened.
+    //
+    // "Continue watching" is assembled once, on the discovery thread, and
+    // nothing ever reconsidered it: closing the player updated this item's
+    // progress bar in place and left the ROW in the order and the membership it
+    // had at launch. So the series just watched stayed wherever it was, and the
+    // episode just finished stayed on the card instead of giving way to the
+    // next one — both only corrected themselves on the following launch.
+    //
+    // A rebuild and not a partial refresh: the row is a WINDOW into the
+    // catalogue array (start and count), so changing what is in it means
+    // rebuilding that array, and disc_rebuild is the path that already does it
+    // safely. It is not the flicker it would have been either — partialAllowed
+    // is false once a complete catalogue is on screen, so the rebuild publishes
+    // once, at the end, as a single swap.
+    disc_rebuild();
   }
   if (hasVideo) video_stop();
   hasVideo = 0; waitingSource = 0; is_open = 0; exiting = 0; requestedExit = 0;
@@ -807,6 +860,94 @@ static int offerNext(void) {
   return durationSeg-posSeg<=120.0f;
 }
 
+// Is the card actually on screen? offerNext() alone is not that question any more,
+// and the difference matters to more than the drawing: the subtitle line is lifted
+// to clear this card, and a dismissed card must not go on pushing it up.
+// NOTHING IS OFFERED BEFORE THERE IS A PICTURE. startImage is stamped on the first
+// frame that actually has one (see player_update), so it is the honest answer to
+// "has this episode started". The web app gates its own skip button the same way,
+// on isSkipIntroPlaybackReady.
+//
+// Without it both prompts were decided from posSeg while posSeg was still 0: an
+// intro chunk beginning at 0 made the skip button appear over the loading spinner,
+// before the show it was offering to skip had drawn a frame.
+static int playbackReady(void) { return startImage != 0 || !hasVideo; }
+
+static int nextCardUp(void) {
+  if (!playbackReady()) return 0;
+  return offerNext() && !nextDismissed && player_next_episode() != NULL;
+}
+
+// Is there a skip offer, and has it not already timed out? The card outranks it,
+// so this answers only for the state in which the skip button is the thing on
+// screen — which is also the state in which OK belongs to it.
+static int skipUp(double *end, int *kind) {
+  double e; int k;
+  if (!playbackReady()) return 0;
+  if (nextCardUp()) return 0;
+  if (!intro_active(posSeg, &e, &k) || k == INTRO_CREDITS) return 0;
+  if (skipAutoHidden) return 0;
+  if (end) *end = e;
+  if (kind) *kind = k;
+  return 1;
+}
+
+// Is there anything floating above the bar to focus? Either prompt counts — they
+// occupy the same corner and only one is ever up at a time.
+static int cardPresent(void) { return nextCardUp() || skipUp(NULL, NULL); }
+
+// Does the card read as focused? With the controls DOWN it is what OK acts on, so
+// it is focused by default; with them up it is focused only once UP has walked the
+// ladder onto it.
+static int cardHot(void) { return !visible || cardFocus; }
+
+// OK on whichever prompt is up. It is reached from two places — the controls-down
+// path, where the card is what OK means by default, and the top rung of the
+// ladder with the controls up — so it lives here rather than being written twice
+// and drifting.
+static int activateCard(void) {
+  double end; int kind;
+  if (nextCardUp()) {
+    const CatEp *p;
+    if (!nextFocus) { nextDismissed = 1; return 1; }
+    p = player_next_episode();
+    if (p) { reqNextT = p->season; reqNextE = p->episode; }
+    return 1;
+  }
+  if (skipUp(&end, &kind)) {
+    posSeg = (float)end + .25f;
+    if (hasVideo) video_fetch(posSeg);
+    return 1;
+  }
+  return 0;
+}
+
+// Advances the countdown. Called once a frame from player_update.
+static void skipTick(float dt) {
+  double end; int kind;
+  if (!intro_active(posSeg, &end, &kind) || kind == INTRO_CREDITS) {
+    skipChunkEnd = 0; skipElapsed = 0; skipAutoHidden = 0;
+    return;
+  }
+  // A DIFFERENT CHUNK IS A DIFFERENT OFFER. Without this the recap later in the
+  // episode would inherit the intro's spent countdown and never appear at all.
+  if (end != skipChunkEnd) {
+    skipChunkEnd = end; skipElapsed = 0; skipAutoHidden = 0;
+  }
+  if (visible || skipAutoHidden || !playbackReady()) return;
+  skipElapsed += dt * 1000.0f;
+  if (skipElapsed >= PLR_SKIP_MS) {
+    skipAutoHidden = 1;
+    // The countdown is a ten-second animation on a button nobody can photograph:
+    // the plane cannot be captured and neither can a moment. One line at the end
+    // of it is the only way to tell "the timer ran" from "the timer never
+    // started", which is exactly the pair that looked identical on screen while
+    // the bar was drawing white on white.
+    printf("[player] skip offer timed out after %.1fs\n", skipElapsed / 1000.0f);
+    fflush(stdout);
+  }
+}
+
 // Every key wakes the controls, including one that has already carried out an
 // action: on the device there is no command that happens with the bar hidden without
 // bringing the bar along — the user needs to see the effect of what they pressed.
@@ -882,10 +1023,16 @@ void player_event(const SDL_Event *e) {
   if (k == SDLK_0 || k == SDLK_KP_0) { player_aspect_cycle(); return; }
 
   if (!visible) {
+    // THE CARD'S TWO PILLS ARE REAL TARGETS while the transport is down, so
+    // left/right belong to them rather than to waking the bar. This is the only
+    // state in which the card is what OK acts on, which is why the interception
+    // lives here and not above the `visible` test.
+    if (nextCardUp() && (k == SDLK_LEFT || k == SDLK_RIGHT)) {
+      nextFocus = (k == SDLK_RIGHT);
+      return;
+    }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
-      if(offerNext()) { const CatEp*p=player_next_episode();reqNextT=p->season;reqNextE=p->episode;return; }
-      { double end;int kind;if(intro_active(posSeg,&end,&kind)&&kind!=INTRO_CREDITS){
-          posSeg=(float)end+.25f;if(hasVideo)video_fetch(posSeg);return; } }
+      if (activateCard()) return;
       togglePlaying(); wake(); return;
     }
     if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT)
@@ -900,6 +1047,15 @@ void player_event(const SDL_Event *e) {
     // On the bar, OK ends a seek in flight instead of pausing: you have been
     // aiming with left/right and OK is "go there". Pausing at that moment would
     // throw the aim away. With nothing in flight it pauses, as before.
+    if (cardFocus) {
+      // Whatever the prompt did, it is done with: taking the offer plays or skips,
+      // refusing it removes the card. Either way the rung is gone, so the focus
+      // steps back down to the bar rather than being left on nothing.
+      activateCard();
+      cardFocus = 0; barFocus = 1;
+      wake();
+      return;
+    }
     if (barFocus) { if (seekActive) commitSeek(); else togglePlaying(); wake(); return; }
     switch (button) {
       case PLR_PLAY:    togglePlaying(); break;
@@ -925,9 +1081,33 @@ void player_event(const SDL_Event *e) {
   // the gesture for another (one more button, a menu) would be worse: on a device
   // "up reveals subtitles and audio" is what the hand already knows.
   if (k == SDLK_UP) {
-    // Through the UP gesture the sheet opens on AUDIO, which is the column the hand
-    // looks for most.
-    if (!barFocus) barFocus = 1; else reqTracks = 1;
+    // UP WALKS THE LADDER AND THEN PUTS IT AWAY: buttons -> bar -> the card above
+    // it, if one is up -> controls hidden.
+    //
+    // It used to open the tracks sheet on audio at the top, on the grounds that
+    // "up reveals subtitles and audio is what the hand already knows". That was
+    // written when the sheet had no button of its own; it has TWO now, PLR_CC and
+    // PLR_AUDIO, one row down. So the gesture was a second invisible door into a
+    // panel already reachable, and it fired exactly when you reached for the
+    // scrubber and pressed up once more out of habit.
+    //
+    // Hiding at the top does NOT call wake() — the same reasoning as DOWN from the
+    // button row: waking in the very event that hid the bar makes the command look
+    // broken.
+    if (!barFocus && !cardFocus) { barFocus = 1; wake(); return; }
+    if (barFocus && cardPresent()) { barFocus = 0; cardFocus = 1; wake(); return; }
+    barFocus = 0; cardFocus = 0; visible = 0;
+    lastInput = SDL_GetTicks();
+    return;
+  }
+  // --- on the card, one rung above the bar ---------------------------------
+  if (cardFocus) {
+    if (k == SDLK_DOWN) { cardFocus = 0; barFocus = 1; wake(); return; }
+    if (nextCardUp() && (k == SDLK_LEFT || k == SDLK_RIGHT)) {
+      nextFocus = (k == SDLK_RIGHT);
+      wake();
+      return;
+    }
     wake();
     return;
   }
@@ -944,6 +1124,7 @@ void player_event(const SDL_Event *e) {
     // It does not call wake(): that would put the bar back in the same event and make
     // the command look broken. The next directional press reveals it again.
     barFocus = 0;
+    cardFocus = 0;
     visible = 0;
     lastInput = SDL_GetTicks();
     return;
@@ -961,6 +1142,12 @@ void player_event(const SDL_Event *e) {
 }
 
 void player_update(float dt, Uint32 now) {
+  skipTick(dt);
+  // THE RUNG CAN DISAPPEAR UNDER THE FOCUS: the skip offer times out on its own,
+  // and the next-episode card goes when the episode does. Leaving cardFocus set
+  // would strand the cursor on nothing — every key would land on a card that is no
+  // longer drawn — so it steps back down to the bar the frame the prompt leaves.
+  if (cardFocus && !cardPresent()) { cardFocus = 0; barFocus = 1; }
   if (!is_open) return;
 
   entry = anim_spring(entry, exiting ? 0.0f : 1.0f, dt, NV_SPRING_SCREEN);
@@ -1147,7 +1334,7 @@ static void drawSubtitleExternal(void){
   // cue a dozen pixels under the title. 700 restores roughly the clearance that
   // value was chosen for.
   float base=visible?700.f:1000.f;
-  if(offerNext())base=690.f;
+  if(nextCardUp())base=690.f;
   base-=(subStyle.position-3)*48.f;
   float y=base-total;
   for(int i=0;i<n;i++){
@@ -1328,25 +1515,159 @@ static void drawStats(float alpha) {
     } }
 }
 
+// THE TWO JUMP-AHEAD PROMPTS. Both hang off the SAME corner at the SAME two
+// heights — see the note at NV_PJ_RIGHT for why that is the design and not an
+// accident. This returns the bottom edge either one should sit on.
+//
+// `visible` is the transport. While it is down these prompts are what OK acts on
+// (see the !visible branch in the key handler), so they are drawn in their
+// FOCUSED state then and in their resting state when the controls are up and OK
+// belongs to the button row instead. That is the honest reading of the web app's
+// focus classes on a player that has no cursor.
+static float jumpBottom(void) {
+  return NV_SCREEN_H - (visible ? NV_PJ_BOTTOM_UP : NV_PJ_BOTTOM);
+}
+
+static void drawSkipIntro(int kind) {
+  const char *rot = kind == INTRO_SUMMARY ? "Skip recap" : "Skip intro";
+  int hot = cardHot();
+  // Focused: --secondary-color #F5F5F5 with dark ink. Resting: rgba(30,30,30,.85).
+  int ink = hot ? 11 : 255;
+  TxtLine t = txt_line(TXT_SKIP, rot, ink, ink, ink, 255);
+  // The box is twice the ink (see NV_SKIP_ICON), so the layout counts the INK and
+  // the box is hung centred on it — otherwise the transparent quarter either side
+  // opens a gap the eye reads as extra spacing.
+  float h = NV_SKIP_PADY * 2 + (float)t.h;
+  float w = NV_SKIP_PADX * 2 + NV_SKIP_ICON_INK + NV_SKIP_GAP + (float)t.w;
+  float x = NV_SCREEN_W - NV_PJ_RIGHT - w, y = jumpBottom() - h;
+  float c = hot ? 0.961f : NV_SKIP_BG, a = hot ? 1.0f : NV_SKIP_BG_A;
+  float pad = (NV_SKIP_ICON - NV_SKIP_ICON_INK) * 0.5f;
+  gfx_color((GfxRect){ x, y, w, h }, NV_SKIP_R / h, c, c, c, a * entry);
+  { float g = ink / 255.0f;
+    gfx_icon((GfxRect){ x + NV_SKIP_PADX - pad, y + (h - NV_SKIP_ICON) * 0.5f,
+                        NV_SKIP_ICON, NV_SKIP_ICON }, "forward", g, g, g, entry); }
+  txt_draw_alpha(t, x + NV_SKIP_PADX + NV_SKIP_ICON_INK + NV_SKIP_GAP,
+                 y + (h - (float)t.h) * 0.5f, entry);
+
+  // THE COUNTDOWN, across the button's base — and it is the SAME BAR the Continue
+  // Watching card carries, GFX_CW_BAR: a rgba(255,255,255,0.16) track with a
+  // #F5F5F5 fill over it, full-bleed against the bottom edge.
+  //
+  // Using the mode rather than two rectangles is what makes it fit. The mode cuts
+  // the band with the HOST'S OWN corner SDF, so both ends round exactly as the
+  // button's 24px radius does. Drawn as plain rects it had to be inset by half the
+  // radius to keep its square corners from poking out through the pill, which left
+  // a bar visibly narrower than the thing it measures.
+  // IT INVERTS WITH THE BUTTON. The countdown only runs while the transport is
+  // down, which is exactly when this button is focused and therefore white — so
+  // the bar's own white-on-white was invisible in the one state it is ever
+  // animating in. It read as a bar that never moved, when it was moving the whole
+  // time. Tinted to the ink on a light button, left at the card's own colours on
+  // the dark one.
+  { float p = skipElapsed / PLR_SKIP_MS;
+    float br = hot ? NV_TRK_INK_R : 1.0f;
+    float bg = hot ? NV_TRK_INK_G : 1.0f;
+    float bb = hot ? NV_TRK_INK_B : 1.0f;
+    if (p < 0.0f) p = 0.0f;
+    if (p > 1.0f) p = 1.0f;
+    gfx_rect((GfxRect){ x, y, w, h }, 0, GFX_CW_BAR, 0,
+             NV_SKIP_BAR / h, p, NV_SKIP_R / h, br, bg, bb, entry); }
+}
+
+static void drawNextCard(const CatEp *next) {
+  float w = NV_NEXT_THUMB_W + NV_NEXT_GAP + NV_NEXT_COPY_W + NV_NEXT_PADR;
+  float h = NV_NEXT_THUMB_H;
+  float x = NV_SCREEN_W - NV_PJ_RIGHT - w, y = jumpBottom() - h;
+  float cx = x + NV_NEXT_THUMB_W + NV_NEXT_GAP;
+  float cw = NV_NEXT_COPY_W;
+  int hot = cardHot();
+
+  gfx_color((GfxRect){ x, y, w, h }, NV_NEXT_R / h,
+            NV_TRK_INK_R, NV_TRK_INK_G, NV_TRK_INK_B, 0.97f * entry);
+
+  // The thumbnail fills the card's left end. Only the PLACEHOLDER carries a fill:
+  // tinting the wrapper put a visible box behind every real still, which is the
+  // nested-surface look the player's panels were rebuilt to be rid of.
+  // ONLY THE LEFT CORNERS ARE ROUND — `border-radius: 24px 0 0 24px`. The quad is
+  // drawn one radius WIDER than the thumbnail and clipped back to it, so the two
+  // right corners round outside the crop and never appear. Rounding all four
+  // instead leaves a pair of dark notches where the still meets the copy column,
+  // which is the card's own fill showing through its own picture.
+  { GfxRect tr = { x, y, NV_NEXT_THUMB_W + NV_NEXT_R, h };
+    const char *art = next->thumb[0] ? next->thumb
+                    : (item() && item()->backdrop[0] ? item()->backdrop : NULL);
+    GLuint tx = art ? tex_get_width(art, (int)NV_NEXT_THUMB_W) : 0;
+    gfx_crop(x, y, NV_NEXT_THUMB_W, h);
+    if (tx) {
+      gfx_tex_aspect_current = tex_aspect(art);
+      gfx_rect(tr, tx, GFX_CARD, 0, 0, 0, NV_NEXT_R / h, 0, 0, 0, entry);
+      gfx_tex_aspect_current = 0;
+      // The still's own darkening at the base, so a bright frame does not end on
+      // the card's edge.
+      gfx_rect(tr, 0, GFX_EP_SCRIM, 0, 0, 0, NV_NEXT_R / h, 0, 0, 0, 0.6f * entry);
+    } else {
+      gfx_color(tr, NV_NEXT_R / h, 1, 1, 1, 0.06f * entry);
+    }
+    gfx_no_crop(); }
+
+  // The quiet caption the panels use above content — "Next episode" is that, not a
+  // heading competing with the title under it. rgba(255,255,255,0.38) over the
+  // card's ink, flattened.
+  txt_tracking(TXT_NEXT_KICK, "NEXT EPISODE", 104, 104, 106,
+               cx, y + NV_NEXT_PADY, entry, NV_NEXT_KICK_TRACK);
+
+  { char name[220];
+    snprintf(name, sizeof name, "S%dE%d · %s", next->season, next->episode, next->name);
+    txt_draw_alpha(txt_line_trim(TXT_NEXT_TITLE, name, 255, 255, 255, 255, cw),
+                   cx, y + NV_NEXT_PADY + 32.0f, entry); }
+
+  // THE PAIR. One resting fill for both — differentiating them by an alpha step is
+  // not legible as hierarchy at ten feet, it just makes the pair look like one
+  // control that failed to finish rendering. The distinction is carried by INK
+  // instead, which survives the distance: Play is the primary and takes full
+  // white, Dismiss sits at 60%.
+  //
+  // Only the selected one inverts, and only while the transport is down — that is
+  // the one state in which OK reaches this card at all.
+  { float py, px;
+    int i;
+    struct { const char *label; int icon; } pill[2] = { { "Dismiss", 0 }, { "Play", 1 } };
+    float pw[2], ph = 0;
+    TxtLine l[2];
+    for (i = 0; i < 2; i++) {
+      int sel = hot && nextFocus == i;
+      int ink = sel ? NV_TRK_FOCUS_INK : (i ? 255 : 153);
+      l[i] = txt_line(TXT_NEXT_PILL, pill[i].label, ink, ink, ink, 255);
+      pw[i] = NV_NEXT_PILL_PADX * 2 + (float)l[i].w
+            + (pill[i].icon ? NV_NEXT_PILL_INK + 8.0f : 0.0f);
+      if ((float)l[i].h + NV_NEXT_PILL_PADY * 2 > ph)
+        ph = (float)l[i].h + NV_NEXT_PILL_PADY * 2;
+    }
+    py = y + h - NV_NEXT_PADY - ph;
+    px = cx;
+    for (i = 0; i < 2; i++) {
+      int sel = hot && nextFocus == i;
+      float f = sel ? NV_TRK_FOCUS_FILL : 1.0f, fa = sel ? 1.0f : 0.10f;
+      float tx = px + NV_NEXT_PILL_PADX;
+      gfx_color((GfxRect){ px, py, pw[i], ph }, 0.5f, f, f, f, fa * entry);
+      if (pill[i].icon) {
+        float g = (sel ? NV_TRK_FOCUS_INK : 255) / 255.0f;
+        // Box centred on the ink, layout advanced by the ink — see NV_SKIP_ICON.
+        float ip = (NV_NEXT_PILL_ICON - NV_NEXT_PILL_INK) * 0.5f;
+        gfx_icon((GfxRect){ tx - ip, py + (ph - NV_NEXT_PILL_ICON) * 0.5f,
+                            NV_NEXT_PILL_ICON, NV_NEXT_PILL_ICON },
+                 "forward", g, g, g, entry);
+        tx += NV_NEXT_PILL_INK + 8.0f;
+      }
+      txt_draw_alpha(l[i], tx, py + (ph - (float)l[i].h) * 0.5f, entry);
+      px += pw[i] + 8.0f;
+    } }
+}
+
 static void drawActionsEpisode(void){
-  const CatEp *next=player_next_episode();double end;int kind=0;
-  int chunk=intro_active(posSeg,&end,&kind);
-  if(offerNext()&&next){
-    GfxRect p={420,720,1080,194};gfx_color(p,.10f,.045f,.045f,.05f,.94f*entry);
-    gfx_rect(p,0,GFX_RING,0,.008f,0,.10f,1,1,1,.20f*entry);
-    const char *art=next->thumb[0]?next->thumb:(item()&&item()->backdrop[0]?item()->backdrop:NULL);
-    if(art){GLuint tx=tex_get_width(art,288);if(tx){gfx_tex_aspect_current=tex_aspect(art);gfx_rect((GfxRect){450,738,288,158},tx,GFX_CARD,0,0,0,.08f,1,1,1,entry);gfx_tex_aspect_current=0;}}
-    TxtLine l=txt_line(TXT_PLR_BODY,"Next episode",205,207,213,255);txt_draw_alpha(l,782,752,entry);
-    char name[220];snprintf(name,sizeof name,"S%dE%d · %s",next->season,next->episode,next->name);
-    TxtLine t=txt_line_trim(TXT_PLR_TITLE,name,250,250,252,255,430);txt_draw_alpha(t,782,794,entry);
-    GfxRect bot={1240,775,220,76};gfx_color(bot,.5f,.08f,.08f,.09f,.96f*entry);gfx_rect(bot,0,GFX_RING,0,.018f,0,.5f,1,1,1,.35f*entry);
-    gfx_icon((GfxRect){1264,793,40,40},"play",1,1,1,entry);TxtLine rt=txt_line(TXT_BODY,"Play",246,246,248,255);txt_draw_alpha(rt,1310,797,entry);
-  } else if(chunk&&kind!=INTRO_CREDITS){
-    const char *rot=kind==INTRO_SUMMARY?"Skip recap":"Skip intro";
-    TxtLine t=txt_line(TXT_BODY,rot,250,250,252,255);float w=t.w+116;
-    GfxRect p={64,730,w,88};gfx_color(p,.5f,.075f,.075f,.085f,.94f*entry);
-    gfx_icon((GfxRect){88,752,44,44},"forward",1,1,1,entry);txt_draw_alpha(t,148,752,entry);
-  }
+  const CatEp *next=player_next_episode();int kind=0;
+  if(nextCardUp()&&next)      drawNextCard(next);
+  else if(skipUp(NULL,&kind)) drawSkipIntro(kind);
 }
 
 void player_draw(Uint32 now) {
@@ -1460,7 +1781,6 @@ void player_draw(Uint32 now) {
 
   /* They stay when the controls disappear: they are content, not player chrome. */
   drawSubtitleExternal();
-  drawActionsEpisode();
   // The stats panel is DELIBERATELY outside the controls' alpha. You open it to
   // watch a number move — the buffer draining, the bitrate on a new source — and
   // tying it to a bar that hides itself after four seconds would mean holding the
@@ -1468,21 +1788,34 @@ void player_draw(Uint32 now) {
   if (statsOpen) drawStats(entry);
 
   float a = anim * entry;
-  if (a <= 0.005f) return;   // playing clean: nothing over the image
 
   // Two gradients, as in the web app: .player-controls-gradient-top (150px, 0.7 -> 0)
   // and .player-controls-gradient-bottom (200px, 0 -> 0.8). The bottom one supports
   // the title and the bar; the top one exists because the badges and the age rating
   // sit up there and without it they would disappear over a bright scene. Both follow
   // the controls' animation: fixed, they would leave a permanent shadow over every scene.
-  GfxRect veil = { 0, NV_SCREEN_H - PLR_GRADIENT_BOTTOM, NV_SCREEN_W, PLR_GRADIENT_BOTTOM };
-  // GFX_VEIL_PLAYER carries the sheet's five stops itself, so the alpha here is 1
-  // and not a density multiplier: scaling it would flatten the curve the mode
-  // exists to reproduce. It still fades with the controls through `a`.
-  gfx_rect(veil, 0, GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, a);
-  // The pool, hung from the top-right corner where the clock is.
-  { GfxRect pool = { NV_SCREEN_W - PLR_POOL_W, 0, PLR_POOL_W, PLR_POOL_H };
-    gfx_rect(pool, 0, GFX_VEIL_POOL, 0, 0, 0, 0.0f, 0, 0, 0, a); }
+  if (a > 0.005f) {
+    GfxRect veil = { 0, NV_SCREEN_H - PLR_GRADIENT_BOTTOM, NV_SCREEN_W, PLR_GRADIENT_BOTTOM };
+    // GFX_VEIL_PLAYER carries the sheet's five stops itself, so the alpha here is 1
+    // and not a density multiplier: scaling it would flatten the curve the mode
+    // exists to reproduce. It still fades with the controls through `a`.
+    gfx_rect(veil, 0, GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, a);
+    // The pool, hung from the top-right corner where the clock is.
+    { GfxRect pool = { NV_SCREEN_W - PLR_POOL_W, 0, PLR_POOL_W, PLR_POOL_H };
+      gfx_rect(pool, 0, GFX_VEIL_POOL, 0, 0, 0, 0.0f, 0, 0, 0, a); }
+  }
+
+  // THE PROMPTS GO OVER THE GRADIENT, not under it. They were drawn before the
+  // veil, which put the transport's bottom scrim across them the moment the
+  // controls came up: two opaque cards visibly dimming — they read as sitting
+  // BEHIND the picture's shading rather than on top of the frame.
+  //
+  // They are drawn here rather than back with the subtitles because they are not
+  // content: they are offers, and an offer that the chrome shades is an offer the
+  // chrome looks like it owns. The subtitle line stays where it was — it IS
+  // content, and it is lifted clear of this band anyway.
+  drawActionsEpisode();
+  if (a <= 0.005f) return;   // playing clean: nothing more over the image
 
   // The whole block slides together: title, bar and icons are ONE object that rises.
   // Animating each line on its own produces a staggering the device does not have.

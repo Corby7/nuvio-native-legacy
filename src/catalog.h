@@ -20,6 +20,12 @@
 //
 // CAT_MAX survives only as a safety ceiling against an absurd response.
 #define CAT_MAX 2000
+// How many seasons of one series the item can carry. It is a NAMED constant
+// because the number has to agree in two files — this struct's array and the loop
+// in discover.c that fills it — and when it was a bare 12 in both, the guard was
+// the only thing standing between the loop and the end of the array. See the note
+// on `seasons` below for what it cost.
+#define CAT_MAX_SEASONS 40
 
 typedef struct {
   char backdrop[512];
@@ -93,14 +99,41 @@ typedef struct {
   // The seasons the series has, in order. It comes out of Cinemeta's `videos`
   // field, fetched when the title opens. 0 = not known yet (or it is a film), and
   // the tabs fall back to the fixed 3 that used to be there.
-  int  seasons[12];
+  //
+  // IT WAS 12, and the 12 was written twice — here and as a bare literal in the
+  // loop in discover.c that fills it. South Park is 29 seasons in Cinemeta and the
+  // picker stopped at 12, having silently dropped 13-29. The array does not
+  // overflow when that happens and nothing is logged; the series simply looks
+  // shorter than it is, which is why it went unnoticed.
+  //
+  // 40 covers the realistic worst case (The Simpsons, 36). It is not free — the
+  // catalogue holds CAT_MAX of these — but at 28 extra ints it is ~224 KB across
+  // the whole array, against a CatItem that is already several KB on its own.
+  //
+  // WHOEVER CHANGES IT must check N_ITEMS in detail.c: nSeasonsOf() clamps the
+  // picker to that, so a number larger than N_ITEMS is truncated again one layer
+  // further down, with the same silence.
+  int  seasons[CAT_MAX_SEASONS];
   int  nSeasons;
   // From Trakt: 1 if it is on the owner's watchlist, 1 if it is in their
   // collection. They live on the item and not in a separate library table
   // because the catalogue is rebuilt from the network — a per-index table would
   // point at a different title after the first refresh.
   int  inList, inCollection;
-  char imdb[16];
+  // 24 AND NOT 16. The id of an item in "Continue watching" is COMPOSITE —
+  // resumeLocal and the next-up resolver in discover.c write "<work>:<season>:
+  // <episode>" here — and 16 bytes fit that only while the pieces stay short.
+  // "tt26545992:12:14" is exactly 16 characters, so it was truncated to
+  // "tt26545992:12:1" with no warning: the id then named a different episode,
+  // the file dedupe stopped matching it, and the row could resume the wrong
+  // thing. Ten-digit ids with two-digit seasons are ordinary on long-running
+  // series, so this was reachable, not theoretical.
+  //
+  // The catalogue holds CAT_MAX of these, so the 8 bytes cost ~16 KB in the
+  // worst case — against a CatItem already several KB wide. The on-disk cache
+  // stores sizeof(CatItem) in its header and REFUSES a file whose struct does
+  // not match, so an old cache is discarded rather than read crooked.
+  char imdb[24];
   char kind[8];
   // Authorship of the social feed, kept separate from the film's metadata.
   char socialName[96], socialSlug[128], socialAvatar[768], socialAction[64];
@@ -242,6 +275,25 @@ void cat_set_in_list(int i, int inList);
 void cat_save_progress(int index_, double posSeg, double durationSeg);
 void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int season, int episode);
 
+// The same, with the instant SUPPLIED rather than taken from the clock.
+//
+// It exists for the sync. `cat_save_progress_ep` stamps time(NULL) on every line
+// it writes, which is right for playback that has just happened here and wrong
+// for a record the account is replaying back at this device: the pull applies a
+// dozen rows in one pass, every one of them claimed "just now", and the whole
+// order of "Continue watching" — which is a sort by this very column — collapsed
+// into a twelve-way tie broken by qsort. Measured on the owner's TV: thirteen of
+// fourteen lines carried the identical stamp 1789764663000, so the row could not
+// put the series watched an hour ago in front of one watched last month.
+//
+// `whenMs` of 0 means "the instant is not known", and the clock answers for it.
+// `origin` says WHO the record belongs to — 1 playback on this device, 2 a row
+// replayed from the account — and goes into the file's seventh column; see
+// CatProgress.origin for the conflict it exists to settle. The two wrappers
+// above pass 0 and 1: they are only ever called for playback here.
+void cat_save_progress_at(int index_, double posSeg, double durationSeg,
+                          int season, int episode, long long whenMs, int origin);
+
 // ONE LINE of progress.txt, as it was RECORDED — not as it was applied to the
 // catalogue.
 //
@@ -258,6 +310,20 @@ typedef struct {
   // 0 on a line written before this column existed. Those lines still work
   // everywhere; they simply order after the ones that know their instant.
   long long lastWatchedMs;
+  // WHO WROTE THE LINE: 1 playback on this device, 2 a record replayed from the
+  // account, 0 a line from before this column existed.
+  //
+  // The sync needs it to decide a conflict honestly. "Do not let the account
+  // overwrite something newer" is only a sensible rule about playback that
+  // happened HERE — between two copies of the account's own record the account
+  // is simply right, and the instant a previous build stamped on its copy is not
+  // evidence of anything: it recorded the moment of the SYNC, not the moment of
+  // the watching. Without this column the TV's own corrupted stamps (all of them
+  // "now", see cat_save_progress_at) would outrank every true instant the
+  // account holds and the order could never recover. With it, a legacy line
+  // yields, the account's real instants come back, and the file heals itself on
+  // the first pull.
+  int origin;
 } CatProgress;
 
 #define CAT_PROGRESS_MAX 64

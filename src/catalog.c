@@ -534,7 +534,12 @@ void cat_save_progress(int index_, double posSeg, double durationSeg) {
 }
 
 void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int season, int episode) {
-  char path[600], tmp[600], line[256];
+  cat_save_progress_at(index_, posSeg, durationSeg, season, episode, 0, 1);
+}
+
+void cat_save_progress_at(int index_, double posSeg, double durationSeg,
+                          int season, int episode, long long whenMs, int origin) {
+  char path[600], tmp[600], line[256], work[24];
   FILE *e, *s;
   const CatItem *it;
   int i;
@@ -543,6 +548,32 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   index_ = ((index_ % i) + i) % i;
   it = &items[index_];
   if (!it->imdb[0]) return;
+
+  // THE LINE IS KEYED BY THE WORK, never by the composite id.
+  //
+  // `it->imdb` is "tt123" on an item that came from a catalogue and
+  // "tt123:4:9" on one built for "Continue watching", and both name the same
+  // series. The dedupe below used to compare the whole string, so the two
+  // spellings never matched each other and the file accumulated a second line
+  // per series — measured on the owner's TV, "tt0121955 … 12 14" and
+  // "tt0121955:12:14 … 0 0" side by side, the second written by the sync and
+  // newer, so it was the one "Continue watching" read and it carried no episode
+  // at all. Writing the work's id and dropping every line that names that work
+  // collapses both spellings onto one record and cleans up the duplicates a
+  // previous build left behind.
+  //
+  // The season and episode keep their own columns, which is where they are
+  // reliable; see cat_progress_read.
+  snprintf(work, sizeof work, "%.*s", (int)strcspn(it->imdb, ":"), it->imdb);
+  if (!work[0]) return;
+  // A caller that does not know the episode but holds a composite id knows it
+  // after all — it is in the id. This is what stops the sync, which learns
+  // season and episode only when the account bothered to send them, from
+  // writing 0/0 over an episode the id itself names.
+  if (season <= 0 && episode <= 0) {
+    const char *dp = strchr(it->imdb, ':');
+    if (dp) sscanf(dp + 1, "%d:%d", &season, &episode);
+  }
 
   // Rewrites the whole file, swapping this title's line. It is a file of a few
   // dozen lines: reading it all and writing it back costs nothing and avoids the
@@ -555,7 +586,7 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   if (e) {
     while (fgets(line, sizeof line, e)) {
       char id[24];
-      if (sscanf(line, "%23s", id) == 1 && !strcmp(id, it->imdb)) continue;
+      if (sscanf(line, "%23s", id) == 1 && sameTitle(id, work)) continue;
       fputs(line, s);
     }
     fclose(e);
@@ -568,8 +599,31 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   // backwards compatible in both directions: every reader here scans with a
   // field count it tolerates being short, so a file written by an older build
   // still loads and simply reports "instant unknown".
-  fprintf(s, "%s\t%.0f\t%.0f\t%d\t%d\t%lld\n", it->imdb, posSeg, durationSeg,
-          season, episode, (long long)time(NULL) * 1000);
+  //
+  // `whenMs` carries the instant the caller already knows — the account's
+  // `updated_at` on a synced row. Only playback that happened HERE has no
+  // instant to carry, and that is the one case the clock answers for.
+  //
+  // AND A SEVENTH: who the record belongs to. It is a parameter and not
+  // something inferred from `whenMs` being absent, because the two are genuinely
+  // independent — the account can hand over a row whose instant it never stored,
+  // and guessing "no instant means it happened here" would file that row under
+  // this device's own playback and let it outrank the account forever after.
+  //
+  // AND ONLY PLAYBACK HERE MAY FALL BACK TO THE CLOCK. A record replayed from
+  // the account with no instant of its own is written as 0 — "not known" — and
+  // not as "now". The readers have always tolerated 0 and order it after
+  // everything that knows its own instant, which is the honest placement; the
+  // clock would instead launder a guess into a fact, and the fact would then be
+  // pushed back and outrank the true dating on every other device. It is also
+  // recoverable: Trakt's half of "Continue watching" carries a real paused_at
+  // for most of these works, and the merge takes the newer of the two, so an
+  // unknown local instant simply lets the source that DOES know decide.
+  fprintf(s, "%s\t%.0f\t%.0f\t%d\t%d\t%lld\t%d\n", work, posSeg, durationSeg,
+          season, episode,
+          whenMs > 0 ? whenMs
+                     : (origin == 1 ? (long long)time(NULL) * 1000 : 0),
+          origin);
   fclose(s);
   // Write to a temporary and rename: a power cut mid-write would leave the file
   // half-written and the app would come up with no progress at all.
@@ -577,6 +631,12 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
 
   items[index_].progress = cat_pct(posSeg, durationSeg);
   items[index_].remainingMin = (int)((durationSeg - posSeg) / 60.0 + 0.5);
+  // The instant goes onto the item as well as into the file. The line just
+  // written is what the next build will read, but the item in memory is what
+  // the screen holds until then, and leaving it stale means the same record
+  // reports two different instants depending on who asks.
+  items[index_].resumedMs = whenMs > 0 ? whenMs
+                          : (origin == 1 ? (long long)time(NULL) * 1000 : 0);
   if(season>0 && episode>0) {
     if (items[index_].season != season || items[index_].episode != episode) {
       items[index_].nameEpisode[0] = 0;
@@ -902,12 +962,12 @@ int cat_progress_read(CatProgress *out, int max) {
   while (fgets(line, sizeof line, fp) && n < max) {
     char id[24];
     double pos = 0.0, duration = 0.0;
-    int season = 0, episode = 0, fields;
+    int season = 0, episode = 0, origin = 0, fields;
     long long ms = 0;
     CatProgress *r;
     char *colon;
-    fields = sscanf(line, "%23s %lf %lf %d %d %lld",
-                    id, &pos, &duration, &season, &episode, &ms);
+    fields = sscanf(line, "%23s %lf %lf %d %d %lld %d",
+                    id, &pos, &duration, &season, &episode, &ms, &origin);
     // Three is the oldest shape this file ever had. Fewer than that is not a
     // record, and a duration of zero would make the percentage below a division
     // by zero rather than a number nobody can use.
@@ -928,6 +988,7 @@ int cat_progress_read(CatProgress *out, int max) {
     r->season = season;
     r->episode = episode;
     r->lastWatchedMs = ms;
+    r->origin = origin;
     n++;
   }
   fclose(fp);

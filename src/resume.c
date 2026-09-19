@@ -61,10 +61,18 @@ void resume_draw(const CatItem *ci, GfxRect r) {
   // Do not put a plate back here without asking. It has been asked four times.
   //
   // Never invent a premiere status: with no time known, no scrim and no label.
-  if (ci->remainingMin > 0) {
+  //
+  // "NEXT UP" IS NOT A TIME, and it is the one label here that is not measured.
+  // An episode nobody has opened has its whole runtime left, so the arithmetic
+  // below would put "22m left" on a card where nothing is left of anything — the
+  // number is true and the sentence is a lie. The web says "Next Up" in that
+  // state (buildProgressStatus, homeScreen.js) and drops the clock icon with it,
+  // which is the same reasoning: it is a heading, not a measurement.
+  if (ci->remainingMin > 0 || ci->progress == 0) {
     char badge[48];
     int h = ci->remainingMin / 60, m = ci->remainingMin % 60;
-    if (h && m) snprintf(badge, sizeof badge, "%dh %dm left", h, m);
+    if (ci->progress == 0) snprintf(badge, sizeof badge, "Next Up");
+    else if (h && m) snprintf(badge, sizeof badge, "%dh %dm left", h, m);
     else if (h) snprintf(badge, sizeof badge, "%dh left", h);
     else snprintf(badge, sizeof badge, "%dm left", m);
     float pad = NV_CW_PAD * scale;

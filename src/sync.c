@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 
 #define SY_ADD_MAX   16
 #define SY_PROGRESS_MAX 240
@@ -46,7 +47,13 @@ static int  hasTraktRemote;
 static char tmdbKey[120], mdbKey[120];
 static int  hasTmdb, hasMdb;
 
-typedef struct { char imdb[40]; double pos, duration; int temp, ep; } ProgressItem;
+// `ms` is when the record was last touched, and it travels in BOTH directions:
+// out of progress.txt's sixth column on the push, and off the account's
+// `updated_at`/`last_watched` on the pull. Without it the pull stamped the clock
+// on every row it applied and the whole recency order of "Continue watching"
+// was lost — see the note on cat_save_progress_at.
+typedef struct { char imdb[40]; double pos, duration; int temp, ep; long long ms;
+                 int origin; } ProgressItem;
 static ProgressItem progressRemote[SY_PROGRESS_MAX];
 static int nProgressRemote;
 
@@ -217,6 +224,56 @@ static void pullCredentials(void) {
 
 // ---------------------------------------------------------------- progresso
 
+// 1 when the two ids name the same WORK: only the part before the ':' counts,
+// because one side may carry an episode suffix and the other may not.
+static int sameWorkId(const char *a, const char *b) {
+  if (!a || !b) return 0;
+  while (*a && *b && *a != ':' && *b != ':') { if (*a != *b) return 0; a++; b++; }
+  return (!*a || *a == ':') && (!*b || *b == ':');
+}
+
+// WHEN A REMOTE ROW WAS LAST TOUCHED, in ms since the epoch, from whichever of
+// the three spellings the server used. The web app reads exactly these, in this
+// order (mapProgressRow, watchProgressSyncService.js).
+//
+// A number below 1e12 is SECONDS — that is the same test the web makes, and the
+// reason for it is that the column has been written both ways over the life of
+// the schema. A value that is not a number at all is an ISO timestamp, and the
+// civil-date arithmetic below converts it without touching the C library: mktime
+// applies the TV's timezone and timegm is a GNU extension this build does not
+// otherwise rely on, so neither can answer this honestly.
+static long long isoToMs(const char *s) {
+  int y = 0, mo = 0, d = 0, h = 0, mi = 0, se = 0;
+  long long era, yoe, doy, doe, days;
+  int yy;
+  if (!s || sscanf(s, "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &se) < 3) return 0;
+  if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > 31) return 0;
+  // Howard Hinnant's days_from_civil: exact, branch-light and with no lookup
+  // table of month lengths to get wrong in a leap year.
+  yy = y - (mo <= 2);
+  era = (yy >= 0 ? yy : yy - 399) / 400;
+  yoe = yy - era * 400;
+  doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  days = era * 146097 + doe - 719468;
+  return ((days * 24 + h) * 60 + mi) * 60000LL + se * 1000LL;
+}
+
+static long long remoteInstantMs(const char *p, const char *f) {
+  static const char *const KEYS[] = { "updated_at", "last_watched", "lastWatched" };
+  unsigned k;
+  for (k = 0; k < sizeof KEYS / sizeof *KEYS; k++) {
+    char text[40] = "";
+    double v = js_num(p, f, KEYS[k], -1.0);
+    if (v > 0.0) return (long long)(v > 1e12 ? v : v * 1000.0);
+    if (js_text(p, f, KEYS[k], text, sizeof text) && text[0]) {
+      long long ms = isoToMs(text);
+      if (ms > 0) return ms;
+    }
+  }
+  return 0;
+}
+
 static void pullProgress(void) {
   Jsw w;
   char *r;
@@ -249,6 +306,18 @@ static void pullProgress(void) {
     if (duration <= 1.0) continue;
     temp = (int)js_num(p, f, "season", 0);
     ep   = (int)js_num(p, f, "episode", 0);
+    // A row whose season and episode columns are empty may still name the
+    // episode in `video_id`: that is where the web app puts it when the addon
+    // has no video id of its own ("__nuvio_episode__:12:14"), and reading it
+    // back is what lets a record written before the columns were filled in
+    // still resume the right episode instead of the series at large.
+    if (temp <= 0 || ep <= 0) {
+      char video[64] = "";
+      if (js_text(p, f, "video_id", video, sizeof video)) {
+        const char *tail = strstr(video, "__nuvio_episode__:");
+        if (tail) sscanf(tail + 18, "%d:%d", &temp, &ep);
+      }
+    }
     if (temp > 0 && ep > 0)
       snprintf(progressRemote[k].imdb, sizeof progressRemote[k].imdb, "%s:%d:%d", id, temp, ep);
     else
@@ -257,6 +326,7 @@ static void pullProgress(void) {
     progressRemote[k].duration = duration;
     progressRemote[k].temp = temp;
     progressRemote[k].ep = ep;
+    progressRemote[k].ms = remoteInstantMs(p, f);
     k++;
   }
   free(r);
@@ -274,13 +344,39 @@ static int readProgressLocal(ProgressItem *output, int max) {
   if (!buf) return 0;
   for (line = strtok_r(buf, "\n", &ctx); line && k < max;
        line = strtok_r(NULL, "\n", &ctx)) {
-    char id[40];
+    char id[40], *colon;
     double pos, duration;
-    if (sscanf(line, "%39s %lf %lf", id, &pos, &duration) != 3) continue;
+    int season = 0, episode = 0, origin = 0, fields;
+    long long ms = 0;
+    // ALL SIX COLUMNS, and this is the whole of the first defect.
+    //
+    // It used to read three — id, position, duration — and nothing else, so the
+    // season and episode a line carries in columns four and five never reached
+    // the push below. An episode the player had recorded correctly as
+    // "tt0121955  234  1323  12  14" therefore went up to the account as a
+    // MOVIE with a null season, came back down with no episode on it, and
+    // landed in "Continue watching" as a series that could not say which
+    // episode it was resuming — let alone which one comes next.
+    fields = sscanf(line, "%39s %lf %lf %d %d %lld %d",
+                    id, &pos, &duration, &season, &episode, &ms, &origin);
+    if (fields < 3) continue;
     if (duration <= 1.0) continue;
+    // Lines an older build wrote carry the episode in the id and not in the
+    // columns. Both spellings are read here so the push says the same thing
+    // about either, and the id is reduced to the work in both cases.
+    colon = strchr(id, ':');
+    if (colon) {
+      if (season <= 0 && episode <= 0) sscanf(colon + 1, "%d:%d", &season, &episode);
+      *colon = 0;
+    }
+    if (!id[0]) continue;
     snprintf(output[k].imdb, sizeof output[k].imdb, "%s", id);
     output[k].pos = pos;
     output[k].duration = duration;
+    output[k].temp = season > 0 ? season : 0;
+    output[k].ep   = episode > 0 ? episode : 0;
+    output[k].ms = ms;
+    output[k].origin = origin;
     k++;
   }
   free(buf);
@@ -296,6 +392,28 @@ static void pushProgress(void) {
   n = readProgressLocal(local, SY_PROGRESS_MAX);
   if (n <= 0) return;   // empty never becomes a push; deletion has its own RPC
 
+  // A LINE WHOSE INSTANT THIS DEVICE CANNOT VOUCH FOR IS NOT PUSHED.
+  //
+  // Two kinds fail that test. origin 0 is a line from before the column existed,
+  // carrying a stamp a previous build invented — the moment of the SYNC, not of
+  // the watching. And an origin-2 line with no instant at all is a row the
+  // account handed over without one, which is most of this TV's file today
+  // BECAUSE the old push never sent last_watched: the server stored null, and
+  // null is what comes back.
+  //
+  // The server resolves conflicts by last_watched, so pushing either would
+  // overwrite the account's own dating — on every device the person owns,
+  // permanently — with something this device made up. Neither has anything to
+  // tell the account that the account does not already know: both came FROM it.
+  // Playback here always qualifies, so nothing this TV actually did is lost.
+  { int r, w;
+    for (r = 0, w = 0; r < n; r++)
+      if (local[r].origin == 1 || local[r].ms > 0) { if (w != r) local[w] = local[r]; w++; }
+    if (w != n) printf("[sync] %d local progress line(s) held back:"
+                       " no instant this device can vouch for\n", n - w);
+    n = w; }
+  if (n <= 0) return;
+
   jsw_start(&w);
   jsw_obj_start(&w);
   jsw_ci(&w, "p_profile_id", profiles_active());
@@ -303,25 +421,45 @@ static void pushProgress(void) {
   jsw_key(&w, "p_entries");
   jsw_arr_start(&w);
   for (i = 0; i < n; i++) {
-    // "tt123:4:9" carries the season and episode; the server wants the three
-    // fields separately, and sending the composite id in content_id would make
-    // every episode a different title on the account.
-    char id[40];
-    int temp = 0, ep = 0;
-    char *dp;
-    snprintf(id, sizeof id, "%s", local[i].imdb);
-    dp = strchr(id, ':');
-    if (dp) { sscanf(dp + 1, "%d:%d", &temp, &ep); *dp = 0; }
+    // readProgressLocal has already reduced the id to the WORK and lifted the
+    // season and episode out of whichever place the line kept them, so there is
+    // nothing left to take apart here.
+    const char *id = local[i].imdb;
+    int temp = local[i].temp, ep = local[i].ep;
+    char key[64], video[64];
+
+    // THE TWO KEYS ARE THE WEB APP'S, byte for byte, and they have to be.
+    //
+    // The account's rows are unique on (content_id, video_id, season, episode)
+    // and on progress_key, and the web writes `<id>_s<season>e<episode>` and
+    // `__nuvio_episode__:<season>:<episode>` for an episode (toProgressKey and
+    // toRemoteVideoId, watchProgressSyncService.js). This app used to send the
+    // raw local id as progress_key and no video_id at all, so the same episode
+    // watched on the phone and on the TV became two rows that neither client
+    // could reconcile.
+    if (temp > 0 && ep > 0) {
+      snprintf(key,   sizeof key,   "%s_s%de%d", id, temp, ep);
+      snprintf(video, sizeof video, "__nuvio_episode__:%d:%d", temp, ep);
+    } else {
+      snprintf(key,   sizeof key,   "%s", id);
+      snprintf(video, sizeof video, "%s", id);
+    }
 
     jsw_obj_start(&w);
     jsw_cs(&w, "content_id", id);
     jsw_cs(&w, "content_type", (temp > 0) ? "series" : "movie");
+    jsw_cs(&w, "video_id", video);
     jsw_ci(&w, "position", (long long)(local[i].pos * 1000.0));
     jsw_ci(&w, "duration", (long long)(local[i].duration * 1000.0));
     if (temp > 0) { jsw_ci(&w, "season", temp); jsw_ci(&w, "episode", ep); }
     else          { jsw_key(&w, "season"); jsw_null(&w);
                     jsw_key(&w, "episode"); jsw_null(&w); }
-    jsw_cs(&w, "progress_key", local[i].imdb);
+    // WHEN, not "now". The server resolves a conflict between two clients by
+    // this field (rowFreshness in the web app reads last_watched), so a device
+    // that does not send it wins or loses at random.
+    jsw_ci(&w, "last_watched",
+           local[i].ms > 0 ? local[i].ms : (long long)time(NULL) * 1000);
+    jsw_cs(&w, "progress_key", key);
     jsw_obj_end(&w);
   }
   jsw_arr_end(&w);
@@ -716,19 +854,51 @@ void sync_step(unsigned nowMs) {
     applySettings = 0;   // from here on, what the person changes on the TV stays
   }
   if (nProgressRemote) {
-    int i, applied = 0;
+    static CatProgress mine[CAT_PROGRESS_MAX];
+    int nMine = cat_progress_read(mine, CAT_PROGRESS_MAX);
+    int i, applied = 0, kept = 0;
     for (i = 0; i < nProgressRemote; i++) {
-      int idx = cat_index_by_imdb(progressRemote[i].imdb);
+      int idx = cat_index_by_imdb(progressRemote[i].imdb), j;
+      long long local = 0;
+      int localOrigin = 0;
       if (idx < 0) continue;
+      // THE REMOTE ROW ONLY LOSES TO PLAYBACK THAT HAPPENED HERE, AND ONLY WHEN
+      // THAT IS NEWER.
+      //
+      // The pull repeats every few minutes and used to overwrite the local line
+      // unconditionally. That was harmless only while every line claimed the
+      // same instant anyway; now that the column means something, replaying an
+      // hour-old row from the account over an episode watched on this TV five
+      // minutes ago would push the series back down the row and resume it at
+      // the older position.
+      //
+      // `origin` is what keeps the rule honest. Between the account's record and
+      // a COPY of that record this device wrote down earlier, the account is
+      // simply right — and the copy's instant is the moment of the sync, not of
+      // the watching, so letting it win would freeze the very corruption this
+      // change exists to clear. Only origin 1, playback here, may refuse.
+      for (j = 0; j < nMine; j++)
+        if (sameWorkId(mine[j].imdb, progressRemote[i].imdb)) {
+          local = mine[j].lastWatchedMs;
+          localOrigin = mine[j].origin;
+          break;
+        }
+      if (localOrigin == 1 && local > 0 &&
+          progressRemote[i].ms > 0 && progressRemote[i].ms <= local) {
+        kept++;
+        continue;
+      }
       // This project's catalogue knows how to store progress PER EPISODE. Using
       // the version without season/episode would lose which episode the person
       // stopped on, which is the information that makes the "continue watching"
       // row worth anything on a series.
-      cat_save_progress_ep(idx, progressRemote[i].pos, progressRemote[i].duration,
-                              progressRemote[i].temp, progressRemote[i].ep);
+      cat_save_progress_at(idx, progressRemote[i].pos, progressRemote[i].duration,
+                              progressRemote[i].temp, progressRemote[i].ep,
+                              progressRemote[i].ms, 2);
       applied++;
     }
-    printf("[sync] %d of %d progress entries matched the catalog\n", applied, nProgressRemote);
+    printf("[sync] %d of %d progress entries matched the catalog"
+           " (%d older than what is here)\n", applied, nProgressRemote, kept);
     nProgressRemote = 0;
   }
   if (state == SYNC_READY) lastOk = nowMs;

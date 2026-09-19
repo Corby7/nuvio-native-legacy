@@ -634,7 +634,11 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float fill = step(vUv.x, uPar.y);\n"
   "  vec3  c = mix(vec3(1.0), vec3(0.9608), fill);\n"
   "  float a = mix(0.16, 1.0, fill);\n"
-  "  gl_FragColor = vec4(c, a * uColor.a * m);\n"
+  // TINTED BY uColor.rgb, which is a multiply and not a replacement: (1,1,1) is
+  // the Continue Watching card's own bar, unchanged, and every existing caller
+  // passes exactly that. A dark ink instead gives the same bar inverted, for a
+  // host that has itself gone light — see the skip button's countdown.
+  "  gl_FragColor = vec4(c * uColor.rgb, a * uColor.a * m);\n"
   "}\n",
 
   // GFX_EP_SCRIM — the episode card's copy gradient. See gfx.h for why it is a
@@ -800,6 +804,49 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  else               g = mix(0.10, 0.00, (d - 0.78) / 0.22);\n"
   "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a);\n"
   "}\n",
+
+  // GFX_MENU_FEATHER — the right-hand menu's surface. See gfx.h for why the stops
+  // ease rather than run straight, and why this is a mode and not a stack of bands.
+  //
+  // `t` is the distance across the feather, 0 at the panel's left edge and 1 where
+  // the ink reaches full strength; everything to the right of that is solid. The
+  // seven stops are the stylesheet's, at their own fractions of the feather.
+  "void main(){\n"
+  "  float f = max(uPar.x, 0.001);\n"
+  "  float u = uPar.y >= 0.5 ? 1.0 - vUv.x : vUv.x;\n"
+  "  float t = clamp(u / f, 0.0, 1.0);\n"
+  "  float g;\n"
+  "  if (t < 0.15)      g = mix(0.00, 0.03, t / 0.15);\n"
+  "  else if (t < 0.30) g = mix(0.03, 0.13, (t - 0.15) / 0.15);\n"
+  "  else if (t < 0.45) g = mix(0.13, 0.33, (t - 0.30) / 0.15);\n"
+  "  else if (t < 0.60) g = mix(0.33, 0.58, (t - 0.45) / 0.15);\n"
+  "  else if (t < 0.75) g = mix(0.58, 0.79, (t - 0.60) / 0.15);\n"
+  "  else if (t < 0.88) g = mix(0.79, 0.93, (t - 0.75) / 0.13);\n"
+  "  else               g = mix(0.93, 1.00, (t - 0.88) / 0.12);\n"
+  "  gl_FragColor = vec4(uColor.rgb, g * uColor.a);\n"
+  "}\n",
+
+  // GFX_MENU_SCRIM — the backdrop behind them, ramping the SAME WAY the feather
+  // does. Two linear segments is all the CSS has, and at 0.26 over a whole screen
+  // there is no steep part for a knee to show in.
+  "void main(){\n"
+  "  float t = clamp(vUv.x, 0.0, 1.0);\n"
+  "  float g = t < 0.42 ? mix(0.00, 0.10, t / 0.42)\n"
+  "                     : mix(0.10, 0.26, (t - 0.42) / 0.58);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a);\n"
+  "}\n",
+
+  // GFX_ERAIL_SCRIM — the episode rail's ground, piecewise-linear through the web
+  // app's four stops. The ink is rgba(8,10,13), carried in uColor so the caller
+  // fades the whole sheet with it on open and close.
+  "void main(){\n"
+  "  float t = clamp(vUv.y, 0.0, 1.0);\n"
+  "  float g;\n"
+  "  if (t < 0.22)      g = mix(0.00, 0.72, t / 0.22);\n"
+  "  else if (t < 0.48) g = mix(0.72, 0.94, (t - 0.22) / 0.26);\n"
+  "  else               g = mix(0.94, 0.98, (t - 0.48) / 0.52);\n"
+  "  gl_FragColor = vec4(uColor.rgb, g * uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -827,7 +874,10 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,1},   /* GFX_HERO_FIT — the art in cover; the band is the quad, no SDF */
   {1,0},   /* GFX_SKELETON — the block's own SDF; the shine is untextured */
   {0,0},   /* GFX_VEIL_PLAYER — a full-bleed vertical ramp: no SDF, no texture */
-  {0,0}    /* GFX_VEIL_POOL   — its own radial distance, not the rect SDF */
+  {0,0},   /* GFX_VEIL_POOL   — its own radial distance, not the rect SDF */
+  {0,0},   /* GFX_MENU_FEATHER — a horizontal ramp over a square-cornered panel */
+  {0,0},   /* GFX_MENU_SCRIM   — likewise, full-bleed behind it */
+  {0,0}    /* GFX_ERAIL_SCRIM  — a full-bleed vertical ramp: no SDF, no texture */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {

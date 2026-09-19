@@ -104,6 +104,26 @@ typedef enum {
   TXT_PLR_STATL,     // .player-stats-label            20 / 500
   TXT_PLR_BADGE,     // .player-stats-quality          16 / 700
   TXT_PLR_PG_CAT,    // .player-parental-label         24 / 600
+  // The track menus. APPENDED, for the reason given four times above: STYLES in
+  // text.c is indexed by this order, so an insertion in the middle shifts every
+  // style that follows it.
+  TXT_TRK_TITLE,     // .player-dialog-title           46 / 800
+  TXT_TRK_LABEL,     // .player-select-label           24 / 600
+  TXT_TRK_VALUE,     // .player-select-value           26 / 700
+  TXT_TRK_OPT,       // .player-select-option-main     24 / 600
+  TXT_TRK_OPTSUB,    // .player-select-option-sub      20 / 500
+  TXT_TRK_STEP,      // .player-dialog-step, "+" / "-" 34 / 700
+  // The two jump-ahead prompts and the episode rail. Appended, same reason.
+  TXT_SKIP,          // .player-skip-intro-label            28 / 500
+  TXT_NEXT_KICK,     // .player-next-episode-kicker         20 / 700, uppercase
+  TXT_NEXT_TITLE,    // .player-next-episode-title          32 / 700
+  TXT_NEXT_PILL,     // .player-next-episode-play/-dismiss  22 / 500
+  TXT_ERAIL_META,    // .player-episode-detail-meta         22 / 700, uppercase
+  TXT_ERAIL_TITLE,   // .player-episode-detail-title        44 / 800
+  TXT_ERAIL_OVER,    // .player-episode-detail-overview     22 / 500
+  TXT_ERAIL_CODE,    // .player-episode-code                24 / 800
+  TXT_ERAIL_PILL,    // .player-episode-current ("Playing") 20 / 800, uppercase
+  TXT_ERAIL_CTITLE,  // .player-episode-card-title          24 / 600
   TXT_NFONTS
 } TxtStyle;
 

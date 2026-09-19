@@ -844,6 +844,22 @@
 // resize two other screens. Same trap as NV_FT_PG_END, one line up.
 #define NV_FT_PLR_PG_CAT 24  // .player-parental-label     24 / 600
 #define NV_FT_PG_SEV    24   // .player-parental-severity  24 / 400, player-only
+// --- THE TRACK MENUS (audio and subtitles) -----------------------------------
+// The web app's right-hand player menus. Every size below is that stylesheet's
+// own `min(X vw, Y px)` RESOLVED AT 1920, which is the width this app draws at
+// and the point where both halves of the expression meet — so these are the
+// sheet's numbers, not an approximation of them.
+//
+// None of them can borrow the styles the sources sheet and the episode list use
+// (NV_FT_PG_END, NV_FT_PG_LABEL): those are shared three ways, and resizing one
+// for this panel resizes two other screens. That trap is recorded twice already,
+// in the two blocks immediately above; this is the third time it applies.
+#define NV_FT_TRK_TITLE  46  // .player-dialog-title        min(2.4vw,46)  / 800
+#define NV_FT_TRK_LABEL  24  // .player-select-label        min(1.25vw,24) / 600
+#define NV_FT_TRK_VALUE  26  // .player-select-value        min(1.35vw,26) / 700
+#define NV_FT_TRK_OPT    24  // .player-select-option-main  min(1.25vw,24) / 600
+#define NV_FT_TRK_OPTSUB 20  // .player-select-option-sub   min(1.04vw,20) / 500
+#define NV_FT_TRK_STEP   28  // .player-dialog-step, the +/- glyph  min(1.46vw,28)/700
 // The OFFICIAL leading of each style. Using the height SDL_ttf returns is not the
 // same thing: it varies with the line's accents, so a paragraph ends up with
 // irregular spacing line by line.
@@ -1511,5 +1527,184 @@
 // GFX_PROFILE_BG shader, because both of its layers derive from that one colour.
 #define NV_PSEL_BG_MS         520.0f
 
+// --- THE PLAYER'S TRACK MENUS -------------------------------------------------
+// The audio and subtitle panels, ported from the web app's "Track menus" block.
+// Same resolution rule as the font sizes up at NV_FT_TRK_*: each `min(X vw, Y px)`
+// is evaluated at 1920.
+//
+// THE PANEL IS DESCRIBED AS CONTENT + FEATHER, and the order matters. The feather
+// is DEAD SPACE — the panel's left third is a ramp the text never enters — so the
+// stylesheet writes the width as `calc(content + feather)` precisely so that
+// retuning the feather slides the fade without moving the text column. Written
+// the other way round (a width with the feather carved out of it) every change to
+// the ramp would silently renarrow the type.
+//
+//   panel x = 1920 - 730 = 1190      content x = 1190 + 326 = 1516
+//   content w = 730 - 326 - 64 = 340
+#define NV_TRK_FEATHER     326.0f  // --player-menu-feather  min(17vw,330)
+#define NV_TRK_PANEL_W     730.0f  // --player-subtitle-panel-width min(38vw,730)
+#define NV_TRK_PAD_TOP      80.0f  // min(4.17vw,80)
+#define NV_TRK_PAD_RIGHT    64.0f  // min(3.33vw,64)
+// The hidden state is `transform: translateX(6%)` of the panel's own width. It is
+// a SHORT travel on purpose: these menus fade as much as they slide, and a panel
+// that flies the full 730 reads as a drawer being hauled out rather than a layer
+// resolving. 6% of 730 = 43.8.
+#define NV_TRK_SLIDE        0.06f
+
+// The ink under the whole panel, rgba(11,13,16). Not black: at full strength over
+// dark video a true black is a hole, and this is the same lifted black the web app
+// uses for --player-menu-focus-ink.
+#define NV_TRK_INK_R       0.0431f
+#define NV_TRK_INK_G       0.0510f
+#define NV_TRK_INK_B       0.0627f
+
+// FOCUS IS AN INVERSION, not an outline: the row fills with white and its type
+// goes dark. The web app keeps both halves as variables specifically so the
+// treatment can be softened in one place, and the same applies here.
+#define NV_TRK_FOCUS_FILL   1.000f  // --player-menu-focus-fill #ffffff
+#define NV_TRK_FOCUS_INK      11    // --player-menu-focus-ink  #0b0d10, as 0..255
+// The sub-label on a focused row: rgba(11,13,16,0.62) over white, flattened to the
+// grey it composites to. Blending it for real would need the row's fill read back.
+#define NV_TRK_FOCUS_INK_SUB 104    // 255 - 0.62*(255-11)
+
+// The rows. A select row is label + value + caret; an option row is main + sub +
+// the selected dot.
+#define NV_TRK_ROW_H        68.0f  // 18px padding twice, over a 26px value
+#define NV_TRK_ROW_R        16.0f  // min(0.83vw,16)
+#define NV_TRK_ROW_PAD      22.0f  // min(1.15vw,22)
+#define NV_TRK_OPT_H        62.0f  // 14px padding twice, over a 24px main
+#define NV_TRK_OPT_R        12.0f  // min(0.63vw,12)
+#define NV_TRK_OPT_PAD      20.0f  // min(1.04vw,20)
+#define NV_TRK_OPT_GAP       4.0f  // min(0.21vw,4)
+#define NV_TRK_STACK_GAP    12.0f  // min(0.63vw,12)
+#define NV_TRK_TITLE_GAP    32.0f  // .player-dialog-title margin-bottom
+// The title's LINE BOX, 46 x line-height 1.05. It has to be a constant for the
+// reason the NV_LD_* block gives: the height SDL_ttf hands back depends on which
+// glyphs are in the string, and the two panels are titled "Audio" and "Subtitles"
+// — measuring the word would stand the select row at a different height in each.
+#define NV_LD_TRK_TITLE     48.0f
+// The selected marker is a DOT, not a tick: at 12px a glyph is a smudge, and the
+// row already says what it is in words.
+#define NV_TRK_DOT          12.0f  // min(0.63vw,12)
+// The caret: a 14px box stroked on two sides and turned 45 degrees, which is how
+// the sheet draws it so it inherits the row's ink on inversion.
+#define NV_TRK_CARET        14.0f  // min(0.73vw,14)
+#define NV_TRK_CARET_TH      3.0f  // min(0.16vw,3)
+
+// The style rail's steppers: 56x56 rounded to 14, on rgba(255,255,255,0.12).
+#define NV_TRK_STEP_W       56.0f
+#define NV_TRK_STEP_H       56.0f
+#define NV_TRK_STEP_R       14.0f
+#define NV_TRK_STEP_BG      0.12f
+// THE STYLE ROW IS THE ONE ROW THAT DOES NOT INVERT, and the web app's own comment
+// says why: the row is a stepper CONTAINER, not a target. Its label sits between
+// the two buttons, so filling the row white turns that label dark-on-light while
+// the buttons beside it stay light-on-dark — two focus states on one row. A quiet
+// surface marks the active row instead, and the type never changes colour.
+#define NV_TRK_STYLE_FOCUS  0.10f  // rgba(255,255,255,0.10)
+#define NV_TRK_STYLE_SUB    138    // rgba(255,255,255,0.52) over the panel's ink
+// While a select is expanded the style rail is still visible but not reachable.
+#define NV_TRK_DIM          0.35f
+
+// --- THE PLAYER'S TWO "JUMP AHEAD" PROMPTS -----------------------------------
+// Skip intro and the next-episode card. They SHARE an anchor, and that is the
+// point rather than a coincidence: both are optional "jump past this" offers over
+// the frame, so landing them in the same corner at the same height makes them read
+// as one affordance that returns to the same place, instead of two that arrive
+// from different corners. It also keeps the bottom LEFT clear, which is where the
+// title block and the transport's leading controls live.
+//
+// Legacy had them in opposite corners — skip intro bottom-left, the next card
+// centred across the middle — which is exactly the arrangement the web app moved
+// away from.
+//
+// Both sit low while the transport is down (nothing beneath them to clear) and
+// rise to 236 when it comes up, the first height that clears the button row.
+#define NV_PJ_RIGHT        64.0f   // right  min(3.33vw,64)
+#define NV_PJ_BOTTOM       60.0f   // bottom min(3.125vw,60)
+#define NV_PJ_BOTTOM_UP   236.0f   // .is-raised
+
+// Skip intro. The resting fill is rgba(30,30,30,0.85); focused it takes
+// --secondary-color, the same inversion the track menus use.
+#define NV_SKIP_R          24.0f   // min(1.25vw,24)
+#define NV_SKIP_PADX       36.0f   // min(1.875vw,36)
+#define NV_SKIP_PADY       24.0f   // min(1.25vw,24)
+#define NV_SKIP_GAP        16.0f   // min(0.83vw,16)
+// THE ICON BOX IS NOT THE ICON. forward.png carries its arrow in the middle HALF
+// of a 128px square — measured: the ink is 64x64 at (32,32), so the outer quarter
+// on every side is transparent padding. The web app's ic_player_skip_next.svg has
+// a tight viewBox, so its 24px box draws 24px of arrow; the same 24 here drew
+// TWELVE, which is what "the skip icon is too small" was. It was an asset
+// difference, not a sizing taste.
+//
+// So the BOX is twice the ink and the layout advances by the INK — the padding is
+// transparent and must not open a gap the eye reads as spacing.
+//
+// 24 against the 28px label — the web app's own ~0.85 icon-to-label ratio, and the
+// ratio the next-episode pill keeps too (18 against 22). It was briefly 28, which
+// is 1:1, and at 1:1 the arrow stops reading as the label's mark and starts
+// competing with it: the pair looked out of proportion with each other. The size
+// to fix was never this one, it was the 12px the padded asset was really drawing.
+#define NV_SKIP_ICON_INK   24.0f
+#define NV_SKIP_ICON      (NV_SKIP_ICON_INK * 2.0f)   /* forward.png is 50% ink */
+#define NV_SKIP_BG         0.1176f // rgb(30,30,30)
+#define NV_SKIP_BG_A       0.85f
+// The countdown band, the same 6px the Continue Watching card's bar uses.
+#define NV_SKIP_BAR         6.0f
+#define NV_FT_SKIP         28      // .player-skip-intro-label 28 / 500
+
+// The next-episode card. Flat panel fill at the panel radius, no blur: every
+// other surface in the player dropped backdrop-filter, which is a per-frame
+// compositor cost paid on top of video decode, and this card was the last holdout.
+#define NV_NEXT_R          24.0f   // min(1.25vw,24)
+#define NV_NEXT_GAP        24.0f   // min(1.25vw,24)
+#define NV_NEXT_THUMB_W   300.0f   // min(15.63vw,300)
+#define NV_NEXT_THUMB_H   200.0f   // min(10.42vw,200)
+// The copy column is content-sized in the web app; here it is a number, because a
+// card that changes width with the episode's title would move under the eye every
+// time the next episode changes.
+#define NV_NEXT_COPY_W    420.0f
+#define NV_NEXT_PADY       20.0f   // min(1.04vw,20)
+#define NV_NEXT_PADR       24.0f   // min(1.25vw,24)
+#define NV_NEXT_PILL_PADX  20.0f   // min(1.04vw,20)
+#define NV_NEXT_PILL_PADY  12.0f   // min(0.63vw,12)
+// The same glyph, so the same correction: the box is twice the ink it shows.
+#define NV_NEXT_PILL_INK   18.0f   // clamp(14,0.94vw,18)
+#define NV_NEXT_PILL_ICON (NV_NEXT_PILL_INK * 2.0f)
+#define NV_FT_NEXT_KICK    20      // .player-next-episode-kicker 20 / 700, ls .08em
+#define NV_FT_NEXT_TITLE   32      // .player-next-episode-title  32 / 700
+#define NV_FT_NEXT_PILL    22      // the action pills            22 / 500
+#define NV_NEXT_KICK_TRACK  1.6f   // 0.08em at 20px
+
+// --- THE PLAYER'S EPISODE RAIL -----------------------------------------------
+// It was a right-hand drawer of text rows, and the web app's own note says why it
+// stopped being one: a drawer hides the video and buries the single thing that
+// identifies an episode, its thumbnail. This is a bottom sheet — the frame stays
+// visible above it, the episodes are large 16:9 cards on a horizontal rail, and
+// the selected card's title and synopsis sit ABOVE the rail rather than being
+// clamped inside every row.
+//
+// It is also the one player menu that did NOT move to the right-hand geometry the
+// track menus and sources use, and deliberately: its content is pictures, not
+// text, and pictures need the width.
+#define NV_ERAIL_GUTTER   104.0f   // min(5.42vw,104)
+#define NV_ERAIL_CARD_W   400.0f   // min(20.8vw,400)
+#define NV_ERAIL_GAP       24.0f   // must match EPISODE_RAIL_GAP_PX in the web app
+#define NV_ERAIL_PAD_TOP   72.0f   // min(3.75vw,72)
+#define NV_ERAIL_PAD_BOT   48.0f   // min(2.5vw,48)
+#define NV_ERAIL_VIEW_PAD  16.0f   // min(0.83vw,16)
+#define NV_ERAIL_THUMB_R   16.0f   // min(0.83vw,16)
+#define NV_ERAIL_RING       4.0f   // min(0.21vw,4), the selected card's border
+#define NV_ERAIL_SCALE     1.06f   // .player-episode-item.selected
+#define NV_ERAIL_DETAIL_W 1120.0f  // min(58vw,1120)
+#define NV_ERAIL_DETAIL_MB  32.0f  // min(1.67vw,32)
+#define NV_FT_ERAIL_META   22      // .player-episode-detail-meta     22 / 700, ls .06em
+#define NV_FT_ERAIL_TITLE  44      // .player-episode-detail-title    44 / 800
+#define NV_FT_ERAIL_OVER   22      // .player-episode-detail-overview 22 / 500
+#define NV_FT_ERAIL_CODE   24      // .player-episode-code            24 / 800
+#define NV_FT_ERAIL_PILL   20      // .player-episode-current         20 / 800
+#define NV_FT_ERAIL_CTITLE 24      // .player-episode-card-title      24 / 600
+#define NV_LD_ERAIL_OVER   31.0f   // 22 x line-height 1.4
+#define NV_ERAIL_META_TRACK 1.32f  // 0.06em at 22px
 
 #endif

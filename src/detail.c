@@ -43,7 +43,17 @@
 
 // A ceiling of items per section. 24 and not 8: a season of "Silo" has 10 episodes
 // and the array of 8 hid the last two — the list looked smaller than the series is.
-#define N_ITEMS    24
+//
+// 40 AND NOT 24, for the same defect one layer up: the season picker is a section
+// too, and nSeasonsOf() clamps to this number. With CAT_MAX_SEASONS raised to 40
+// and this left at 24, South Park's 29 seasons would have come out of the
+// catalogue whole and then been cut to 24 here — the same silent truncation
+// moved, not fixed. The two have to be read together, so keep this >= that.
+//
+// It lifts the EPISODE ceiling with it, which is the original bug's own class: a
+// season of more than 24 episodes (most of anime, and the long US network runs)
+// was losing its tail exactly as "Silo" lost its last two.
+#define N_ITEMS    40
 // SIX sections, but no title uses all six: a series lights up the first four and a
 // film the last three. The ones that do not apply to the type return 0 in sectionN,
 // and focus_move SKIPS an empty row — so the enum's order already gives the right
@@ -601,7 +611,19 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
     return 1;
   }
   // In progress: the "Continue watching" item carries the season and episode.
-  if (ci && ci->progress > 0 && ci->progress < 90 && ci->season > 0 && ci->episode > 0 &&
+  //
+  // AND SO DOES A NEXT-UP ONE, at 0% — which is why the lower bound is gone. The
+  // row now offers the episode that FOLLOWS the one that finished, and the card
+  // names it ("S12 E15"); with `progress > 0` required here, opening that card
+  // fell through to extras_next_episode below and played whatever Trakt's map
+  // said was next, which is a different question with a different answer
+  // whenever Trakt has not answered yet or the person watched out of order. A
+  // card that names an episode has to play that episode.
+  //
+  // A season and an episode on the item is the discriminator: an untouched
+  // catalogue item carries 0/0, because the only writer of these fields is the
+  // progress record.
+  if (ci && ci->progress < 90 && ci->season > 0 && ci->episode > 0 &&
       !extras_ep_watched(ci->season, ci->episode)) {
     if (temp) *temp = ci->season;
     if (eps) *eps = ci->episode;

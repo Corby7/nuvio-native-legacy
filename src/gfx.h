@@ -171,6 +171,15 @@ typedef enum {
   //
   //   uPar.x = the bar's height / the card's height  (the band, from the base)
   //   uPar.y = the filled fraction of the width      (0 draws the track alone)
+  //   uColor.rgb = a TINT, multiplied into both halves. (1,1,1) is the bar as the
+  //            Continue Watching card wears it and is what every caller passed
+  //            when the colours were hardcoded. It has to be a multiply because
+  //            the two halves are not one colour: the track is white at 0.16 and
+  //            the fill #F5F5F5 at 1, and a replacement would flatten them into
+  //            each other. A dark ink gives the same bar inverted, which is what a
+  //            host that has itself gone light needs — the skip button's countdown
+  //            runs while that button is focused and therefore WHITE, and a white
+  //            bar on a white pill is a countdown nobody can see.
   //
   // resume.c never passes 0: a Continue Watching card that has not been started
   // draws no bar at all rather than an empty rail. The mode still supports the
@@ -308,7 +317,57 @@ typedef enum {
   // quad's own normalised space, which makes the ellipse fall out of the geometry
   // instead of needing two more uniforms.
   GFX_VEIL_POOL = 33,
-  GFX_NMODES = 34
+  // GFX_MENU_FEATHER — the right-hand menu's own surface, the web app's
+  // --player-menu-surface: opaque under the text and fading to nothing across the
+  // leftmost NV_TRK_FEATHER, so the panel DISSOLVES into the video instead of
+  // sitting on it as a drawer with an edge.
+  //
+  // It is a mode for the reason GFX_EP_SCRIM is one: a ramp has to be evaluated
+  // per pixel. Stacking bands is the obvious alternative and it is wrong twice
+  // over — N layers of alpha d composite to 1-(1-d)^n rather than to the ramp, and
+  // on this OLED the linear segments band visibly against dark video. More bands
+  // only makes the stripes narrower and the draw calls costlier.
+  //
+  // The stops trace a smoothstep rather than a straight line. The web app's
+  // comment records why, and it was measured there: a two-stop ramp puts 73% of
+  // the alpha range in the first 55% of the distance, which reads as an airbrushed
+  // stripe with a visible knee where the steep part ends. Eased in and out there is
+  // no knee, and no step between stops exceeds ~0.2 alpha.
+  //
+  // It resolves to a TRUE 1, not 0.97: the last 3% let bright motion ghost faintly
+  // under the text column, which is the one place the panel cannot afford it.
+  //
+  //   uPar.x = the feather's width as a fraction of the quad's
+  //   uPar.y = 0 fades in from the LEFT (a right-hand panel); >=0.5 mirrors it, so
+  //            the same mode closes the left edge of a left-to-right rail
+  //   uColor = the ink, its alpha scaling the whole panel for the open/close fade
+  GFX_MENU_FEATHER = 34,
+  // GFX_MENU_SCRIM — the backdrop behind those menus, .player-modal-backdrop
+  // .is-side-panel: rgba(0,0,0,0) -> 0.10 at 42% -> 0.26 at the right edge.
+  //
+  // CRITICALLY IT RAMPS THE SAME WAY THE FEATHER DOES. The web app had it running
+  // the other way once — 0.34 at the left edge down to 0 at the right — while the
+  // panel ramps up from ~38% across. Composited, the frame went 0.34 -> 0.19 ->
+  // 0.97 left to right: it LIGHTENED for the first 720px and only then slammed
+  // dark, so the brightest band in the picture was a vertical strip sitting
+  // immediately left of the panel, which reads as a glow behind the panel's edge
+  // rather than as a scrim. Both ramps running the same way makes the composite
+  // monotonic, which is the only property the eye needs here.
+  //
+  // The panel's feather does the separating, so this only has to take the edge off
+  // the exposed video — hence 0.26 and not the 0.88 the old full-screen sheet used.
+  GFX_MENU_SCRIM = 35,
+  // GFX_ERAIL_SCRIM — the episode rail's own ground, .player-episode-panel:
+  //
+  //   linear-gradient(180deg, rgba(8,10,13,0) 0%, 0.72 22%, 0.94 48%, 0.98 100%)
+  //
+  // It is the rail's whole separation from the frame — it supplies its own
+  // gradient so the full-screen scrim can step back and the video stays watchable
+  // above it. A flat plate here would cut the picture off on a hard line across
+  // the middle of the screen, which is the one thing a bottom sheet over video
+  // must not do.
+  GFX_ERAIL_SCRIM = 36,
+  GFX_NMODES = 37
 } GfxMode;
 
 typedef struct {
