@@ -167,15 +167,55 @@ int seeall_is_open(void) { return is_open; }
 // Everything the grid draws lives inside it, so the screen is revealed THROUGH a
 // window that opens out of the card rather than fading up over the home. The
 // background does not take part — see the note in seeall_draw.
+// THE EDGES GO FIRST. The window is an app opening out of an icon: the four sides
+// reach the screen well before the list inside has finished arriving, and the top
+// edge is what carries the mark and its label up with it.
+//
+// Front-loading it is deliberate here, and it is the one place in this app where
+// easing a spring a second time is the right answer rather than the defect the
+// detail screen's notes describe: there the composition tripled an opening that
+// was already a cut, here the spring is the quick one (NV_SPRING2_GRID) and the
+// curve is quadratic, not cubic. The edges are ~75% of the way at the spring's
+// halfway point and settled around 210ms.
+static float edgeProgress(void) {
+  float x = anim_clamp(anim, 0.0f, 1.0f);
+  if (!fromValid || !is_open) return x;   /* nothing to open out of, or closing */
+  return 1.0f - (1.0f - x) * (1.0f - x);
+}
+
+// WHERE THE MARK IS IN ITS JOURNEY. 1 = this screen's header, 0 = the home's hero.
+//
+// Opening it rides the window's edge, so the mark is pushed up by the rectangle
+// that is carrying it. Closing it WAITS: it holds at the header until the list has
+// finished fading (contentAlpha reaches 0 at 0.45) and only then comes back down,
+// over a background with nothing else happening on it.
+//
+// That ordering is the whole point of the pair — mark first then content on the
+// way in, content first then mark on the way out. Both at once is what put the
+// wordmark on top of the fade.
+static float markProgress(void) {
+  if (!is_open) return anim_clamp(anim / 0.45f, 0.0f, 1.0f);
+  return edgeProgress();
+}
+
 static GfxRect viewRect(void) {
   GfxRect all = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  // CLOSING IS A FADE AND NOTHING ELSE. Running the opening backwards means a
-  // window collapsing onto a card while a mark flies back down into a row that is
-  // itself still arriving — a lot of movement to say "go back", and it read as
-  // fussy. Going IN earns the ceremony; coming OUT does not.
+  // THE WINDOW ONLY OPENS. It does not close again, and that asymmetry is the
+  // point rather than an omission.
+  //
+  // Opening, the window IS the gesture: one rectangle growing out of the card the
+  // viewer pressed, with the list still faint inside it. Closing, the list is
+  // already there in full — a hundred posters, a header, the source tabs — and
+  // dragging a shrinking clip across all of it sets every one of those edges
+  // moving at once. Too busy to read, and it buries the one thing that should be
+  // followed: the wordmark travelling back down to the hero.
+  //
+  // So on the way out the window stays where it is and the content simply fades,
+  // leaving the marks as the only thing in motion. They still fly, on the raw
+  // curve — see seeall_owns_mark, which is true in both directions.
   if (!is_open) return all;
   if (!fromValid || anim >= 0.999f) return all;
-  { float g = anim; GfxRect r;
+  { float g = edgeProgress(); GfxRect r;
     r.x = fromCard.x + (all.x - fromCard.x) * g;
     r.y = fromCard.y + (all.y - fromCard.y) * g;
     r.w = fromCard.w + (all.w - fromCard.w) * g;
@@ -187,8 +227,18 @@ static GfxRect viewRect(void) {
 // them: laid into a card-sized rectangle they would be a page of text seen through
 // a letterbox. Nothing is lost by waiting — the window is what carries the first
 // half of the movement.
+// THE SAME DELAY AT BOTH ENDS, so the close is the open's SEQUENCE reversed and
+// not merely its direction. Coming in, the list waits until the window has opened
+// far enough to hold it; going out, it is gone again by the time the curve has
+// fallen back to that same point — which leaves the second half of the close clear
+// for the mark to travel through.
+//
+// It used to fall back to the raw curve on the close, so the list was still fading
+// while the wordmark crossed over it. A solid mark moving across a half-dissolved
+// screen is two things competing for the same pixels, and it read exactly as badly
+// as that sounds.
 static float contentAlpha(void) {
-  if (!fromValid || !is_open) return anim;
+  if (!fromValid) return anim;
   return anim_smooth((anim - 0.45f) / 0.55f);
 }
 
@@ -196,8 +246,19 @@ static float contentAlpha(void) {
 // already travelling up. Everything moving one way reads as a single screen
 // assembling; the copy fading in place under a mark that is climbing reads as two
 // unrelated things happening at once.
+// ONE FORMULA, BOTH DIRECTIONS, which is what makes the close the entrance run
+// backwards without any code that knows it is closing.
+//
+// Coming in, contentAlpha climbs and the offset falls to nothing: the list rises
+// the last NV_SEEALL_RISE into place. Going out it climbs again, so the list sinks
+// back down the way it came while it fades.
+//
+// This used to return 0 on the close and the list simply dissolved where it stood.
+// That is the part that read as odd: it had ARRIVED with a movement, and leaving
+// without one makes the screen look like it was switched off rather than left.
+// Fade paired with a short translate is the ordinary way to dismiss a full view —
+// the same pairing the entrance uses, pointed the other way.
 static float contentRise(void) {
-  if (!is_open) return 0.0f;   /* see viewRect: the close does not move */
   return (1.0f - contentAlpha()) * NV_SEEALL_RISE;
 }
 
@@ -214,10 +275,16 @@ int seeall_covers_screen(void) {
 // The folder's wordmark is the grid's while it travels, so the home stops drawing
 // its copy. Only true when there is actually a flight to carry it.
 // THE MARK IS THE GRID'S while it travels, whichever of the two it is, so the home
-// stands its own copy down. `is_open` keeps it false through the close, where there
-// is no flight and the home simply takes its mark back.
+// stands its own copy down. TRUE IN BOTH DIRECTIONS: the mark that rose into this
+// header on the way in comes back down to the hero on the way out, so the journey
+// is reversible rather than a one-way trip that ends in a fade.
+//
+// The lower bound matches seeall_draw's own early-out (a < 0.01). Below it this
+// screen draws nothing, so the home has to have its mark back by then or there
+// would be a frame or two with no wordmark anywhere. At that point the flight has
+// arrived within 1% of the hero's rect, so the handover is invisible.
 int seeall_owns_mark(void) {
-  return is_open && fromValid && anim < 0.999f;
+  return fromValid && anim >= 0.01f && anim < 0.999f;
 }
 int seeall_requested_open(void) { int v = reqOpen; reqOpen = -1; return v; }
 
@@ -483,10 +550,11 @@ static void flyingLogo(float x0) {
   if (!seeall_owns_mark()) return;
   if (!headerLogo(x0, &dst, &tex)) return;
   if (!home_collection_logo_rect(&from.x, &from.y, &from.w, &from.h)) return;
-  r.x = from.x + (dst.x - from.x) * anim;
-  r.y = from.y + (dst.y - from.y) * anim;
-  r.w = from.w + (dst.w - from.w) * anim;
-  r.h = from.h + (dst.h - from.h) * anim;
+  { float g = markProgress();
+    r.x = from.x + (dst.x - from.x) * g;
+    r.y = from.y + (dst.y - from.y) * g;
+    r.w = from.w + (dst.w - from.w) * g;
+    r.h = from.h + (dst.h - from.h) * g; }
   gfx_rect(r, tex, tex_brand_dark(collection->logo) ? GFX_BRAND : GFX_TEXT,
            0, 0, 0, 0, .96f, .97f, .98f, 1.0f);
 }
@@ -504,8 +572,9 @@ static int titleFlying(float x0, float *tx, float *ty) {
   if (!seeall_owns_mark()) return 0;
   if (headerLogo(x0, &dst, &tex)) return 0;      /* the wordmark has it */
   if (!home_collection_title_rect(&from.x, &from.y, &from.w, &from.h)) return 0;
-  *tx = from.x + (x0 - from.x) * anim;
-  *ty = from.y + (80.0f - from.y) * anim;
+  { float g = markProgress();
+    *tx = from.x + (x0 - from.x) * g;
+    *ty = from.y + (80.0f - from.y) * g; }
   return 1;
 }
 
@@ -518,8 +587,9 @@ static int groupFlying(float x0, float *tx, float *ty) {
   GfxRect from;
   if (!seeall_owns_mark()) return 0;
   if (!home_collection_group_rect(&from.x, &from.y, &from.w, &from.h)) return 0;
-  *tx = from.x + (x0 - from.x) * anim;
-  *ty = from.y + (40.0f - from.y) * anim;
+  { float g = markProgress();
+    *tx = from.x + (x0 - from.x) * g;
+    *ty = from.y + (40.0f - from.y) * g; }
   return 1;
 }
 
@@ -603,7 +673,7 @@ static void themeHeader(float a,float x0,float dy) {
       if(selected&&!f)
         gfx_color((GfxRect){pill.x+18,pill.y+pill.h-4,pill.w-36,3},.5f,
                 .84f+r*.16f,.84f+g*.16f,.84f+b*.16f,a);
-      char label[180];snprintf(label,sizeof label,"%s · %s",s->title,!strcmp(s->type,"series")?"Series":"Films");
+      char label[180];snprintf(label,sizeof label,"%s · %s",s->title,!strcmp(s->type,"series")?"Series":"Movies");
       TxtLine t=txt_line_trim(TXT_HERO_META,label,f?22:238,f?24:240,f?28:245,255,276);
       txt_draw_alpha(t,pill.x+(pill.w-t.w)*.5f,pill.y+(pill.h-t.h)*.5f,a);
     }cropBoth((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H}, gView);

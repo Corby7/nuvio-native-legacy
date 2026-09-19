@@ -272,7 +272,7 @@ static const char *headerOf(int r) {
     // the subtitle "Trakt ratings". With both, TWO stacked titles came out saying the
     // same thing.
     case SEC_COMMENTS:  return NULL;
-    case SEC_DETAILS:     return "Film Details";
+    case SEC_DETAILS:     return "Movie Details";
     default:           return NULL;
   }
 }
@@ -497,16 +497,35 @@ static int artDetailIsPoster(int i) {
 }
 
 static void drawArtDetail(GfxRect target, GLuint tex, const char *art,
-                               int poster, float alpha, float pg, float zoom) {
+                               int poster, float alpha, float pg, float zoom,
+                               GfxRect cell) {
   if (!tex) {
     gfx_color(target, 0.0f, 0.051f, 0.051f, 0.051f, alpha);
     return;
   }
   gfx_tex_aspect_current = tex_aspect(art);
+  // IT KEEPS THE VIGNETTE ALL THE WAY HOME, and that is not a compromise.
+  //
+  // Drawing the returning card through GFX_CARD took the scrim off, and the left
+  // of the picture — which this screen's gradient holds at nearly #0d0d0d — jumped
+  // to full brightness the moment the close began. The vignette IS the look: take
+  // it away and the image stops being the title screen's backdrop and becomes a
+  // photograph.
+  //
+  // Anchored to the RECT, it also does the job the missing scrim left undone. The
+  // ramp reaches #0d0d0d at the card's own left edge, and the page ground behind it
+  // is that same colour (the veil in detail_draw, which is why that veil stays on
+  // the way out), so the edge the eye would otherwise follow is drawn in the colour
+  // of the thing it sits on. The picture is pushed back down to the hero's size
+  // INSIDE its own gradient rather than against the home.
   if (!poster) {
-    // uPar.x carries the closing's zoom; see the note on the mode in gfx.c.
+    // uPar.x carries the closing's zoom, uCell the opening's framing; see the
+    // note on the mode in gfx.c. RESET after the call — the header on
+    // gfx_tex_cell_current warns that a cell left set crops everything drawn next.
+    gfx_tex_cell_current = cell;
     gfx_rect(target, tex, GFX_DETAIL, 1.0f - pg, zoom, 0, 0.0f, 0, 0, 0,
              alpha);
+    gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
   } else {
     float ap = gfx_tex_aspect_current > 0.05f ? gfx_tex_aspect_current : (2.0f / 3.0f);
     float h = target.h * 0.90f, w = h * ap, maxW = target.w * 0.42f;
@@ -582,12 +601,31 @@ void detail_open(const HomeItem *it, int shared) {
 
 int detail_is_open(void) { return is_open; }
 int detail_shared_origin(void) { return is_open && sharedOrigin; }
+int detail_is_exiting(void) { return is_open && exiting; }
 
 // 0..1 of how much the detail has already taken over the screen. The home reads this
 // to push the rows DOWN as it comes in: it is the movement the owner describes as
 // "only the posters go down". It lives here and not in a shared variable because the
 // spring that produces it is the drawing's own — two different clocks would drift.
-float detail_progress(void) { return is_open ? t : 0.0f; }
+// REMAPPED ON THE WAY OUT so it reaches 0 exactly where the screen is let go of,
+// and not at a value the home then has to snap away from.
+//
+// The home multiplies this by 8% of the screen to slide its rows down, and by the
+// hero copy's alpha. detail_update releases at NV_DETAIL_EXIT_CUT, so with the raw
+// curve the last frame handed over 0.06 — 5px of row offset and 6% of brightness
+// that vanished in one frame, on every row at once. That step is what the owner
+// saw as a flicker at the end of the close. It was harmless while the cut sat at
+// 0.006 (half a pixel) and stopped being harmless when the cut moved up to where
+// the backdrop's fade actually ends.
+//
+// Opening is untouched: `exiting` only becomes 1 once the screen is on its way
+// out, and at that moment t is ~1, where the remap is the identity anyway.
+float detail_progress(void) {
+  if (!is_open) return 0.0f;
+  if (!exiting) return t;
+  return anim_clamp((t - NV_DETAIL_EXIT_CUT) / (1.0f - NV_DETAIL_EXIT_CUT),
+                    0.0f, 1.0f);
+}
 
 // The season and episode IN FOCUS, for whoever is going to ask for a source.
 //
@@ -706,29 +744,67 @@ int detail_settled(void) {
 // (which hid the edges by deleting the transition). What is left is the honest
 // answer: do not put edges on screen on the way out. The picture pulls back
 // through the zoom instead, inside a frame that never appears.
-static void backdropRect(GfxRect *r, float *opacity, float *zoom) {
+static void backdropRect(GfxRect *r, float *opacity, float *zoom, GfxRect *cell) {
   float s = t;
   GfxRect de;
   home_hero_rect(&de.x, &de.y, &de.w, &de.h);
   // No origin, no flight: from the search, Discover, a grid or the context menu
   // there is no hero rect on screen, so the backdrop is full-bleed from the first
-  // frame and simply fades up — the same shape the closing uses.
-  if (exiting || !sharedOrigin) {
-    r->x = 0.0f; r->y = 0.0f; r->w = NV_SCREEN_W; r->h = NV_SCREEN_H;
+  // frame and simply fades up, and fades straight back down again on the way out.
+  //
+  // WITH an origin it flies BOTH WAYS. The first attempt at a returning flight was
+  // abandoned and the reasons were all fixable, which is why it is back:
+  //
+  //   - it carried GFX_DETAIL's vignette, anchored to the rect, so a hard black
+  //     edge travelled down the left of a shrinking rectangle. It now goes home as
+  //     a plain CARD, with no scrim baked in;
+  //   - it went semi-transparent early, so that scrim was seen over the home as a
+  //     dark square. It is opaque until it is nearly back on the hero;
+  //   - its corners were square, which reads as a crop rather than an object. They
+  //     round as it shrinks;
+  //   - the home was veiled to black behind it, so the rectangle was a bright shape
+  //     on a dark field instead of a card settling onto a screen that is already
+  //     there. The veil is gone on the way out.
+  GfxRect flight;
+  if (!sharedOrigin) {
+    flight = (GfxRect){ 0.0f, 0.0f, NV_SCREEN_W, NV_SCREEN_H };
   } else {
-    r->x = de.x + (0.0f - de.x) * s;
-    r->y = de.y + (0.0f - de.y) * s;
-    r->w = de.w + (NV_SCREEN_W - de.w) * s;
-    r->h = de.h + (NV_SCREEN_H - de.h) * s;
+    flight.x = de.x + (0.0f - de.x) * s;
+    flight.y = de.y + (0.0f - de.y) * s;
+    flight.w = de.w + (NV_SCREEN_W - de.w) * s;
+    flight.h = de.h + (NV_SCREEN_H - de.h) * s;
   }
+
+  // DRAWN AT THE RECT, both ways, with the identity cell.
+  //
+  // The opening was briefly drawn as a viewport-sized quad with the flight carried
+  // in uCell, so the uncovered L could be filled by the texture rather than left
+  // bare — first by clamping the edge texel across it, then by folding. Both
+  // failed for the same reason, and it was not the filling: THE HOME HAS ITS OWN
+  // EDGE THERE. On Top band the hero is 80% of the screen anchored top-right, and
+  // that band's boundary is stationary — it never grows out, it is simply covered
+  // when the backdrop turns opaque. Whatever the backdrop puts in the L, a hard
+  // line sits behind it in the layer underneath.
+  //
+  // So the fix is in home.c: the hero's art now grows on this same curve, and the
+  // two rects agree at every frame. The only edge in the frame is the one the home
+  // already has at rest, and it leaves the screen instead of being covered.
+  *r = flight;
+  if (cell) *cell = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
 
   // OPENING it comes up FAST (front-loaded, opaque at s = 0.126, ~50 ms): the art
   // underneath is the same picture, so the ramp only swaps the hero's gradient for
   // the detail's, and fading one copy in over the other dips the brightness in the
-  // middle. CLOSING there is no such copy to protect — the rect is full-bleed and
-  // has to hand the screen back — so it dissolves over NV_DETAIL_DISSOLVE, ~240 ms.
-  *opacity = exiting ? anim_clamp(s * NV_DETAIL_DISSOLVE, 0.0f, 1.0f)
-                     : anim_clamp(smooth(s) * 3.0f, 0.0f, 1.0f);
+  // middle.
+  //
+  // CLOSING it stays OPAQUE for the whole flight and dissolves only at the end,
+  // where the card is already sitting on the hero's rect drawing the same
+  // photograph the home has there. The two are aligned by then, so the dissolve is
+  // a gradient swap and not a double image — the same argument as the opening,
+  // run the other way. Clear at CUT, which is where detail_update lets go.
+  *opacity = exiting
+    ? anim_clamp((s - NV_DETAIL_EXIT_CUT) / NV_DETAIL_EXIT_FADE, 0.0f, 1.0f)
+    : anim_clamp(smooth(s) * 3.0f, 0.0f, 1.0f);
 
   // THE ZOOM is the closing's movement, and only the closing's — opening, the rect
   // is doing the moving and this stays at 1.0. Its size is not chosen here: the
@@ -741,8 +817,11 @@ static void backdropRect(GfxRect *r, float *opacity, float *zoom) {
   if (zoom) {
     float ah = de.h > 1.0f ? de.w / de.h : (NV_SCREEN_W / NV_SCREEN_H);
     float z0 = anim_clamp(ah / (NV_SCREEN_W / NV_SCREEN_H), 1.0f, 1.25f);
-    *zoom = exiting ? 1.0f + (z0 - 1.0f) * (1.0f - s) : 1.0f;
+    // Only where there is no rect to move: with an origin the flight IS the
+    // movement, and zooming the picture as well would be two of them.
+    *zoom = (exiting && !sharedOrigin) ? 1.0f + (z0 - 1.0f) * (1.0f - s) : 1.0f;
   }
+
 }
 
 int detail_covers_screen(void) {
@@ -767,14 +846,25 @@ int detail_covers_screen(void) {
   // full-bleed from the start, so what answers is the dissolve alone.
   if (!is_open) return 0;
   { GfxRect r; float opacity;
-    backdropRect(&r, &opacity, NULL);
+    backdropRect(&r, &opacity, NULL, NULL);
+    // THE HOME IS NOT SKIPPED ON THE WAY OUT, even though the page's ground is
+    // solid over it and it cannot be seen. Skipping it was added here as free fill
+    // and was not free: home_draw is what ASKS for the hero's art every frame, and
+    // with the detail holding a 1920 texture of its own the cache drops an
+    // unrequested one inside the ~200ms the ground is opaque. The home then comes
+    // back with nothing decoded and paints its placeholder for a frame or two —
+    // the black flash in the backdrop at the end of the close.
+    //
+    // The opening does not have the problem: there the home is on its way out and
+    // a frame of placeholder behind an arriving screen is never seen. Here it is
+    // the thing being arrived AT.
     if (opacity < 0.999f) return 0;
     return r.x <= 0.5f && r.y <= 0.5f &&
            r.x + r.w >= NV_SCREEN_W - 0.5f && r.y + r.h >= NV_SCREEN_H - 0.5f;
   }
 }
 
-// --- the "Film Details" table -----------------------------------------------
+// --- the "Movie Details" table ----------------------------------------------
 //
 // One row per field WITH A VALUE. An empty field does not become a row with a dash:
 // it disappears. That is the same rule drawRatings already uses for a source with no
@@ -844,7 +934,7 @@ static float heightSection(int r) {
     case SEC_CAST:     return NV_DETF_EL_HEIGHT;
     case SEC_TRAILERS:     return NV_DETF_TR_HEIGHT;
     case SEC_RELATED: return 318.0f + 46.0f;   // poster + title/year
-    // + the header: without it the next section ("Film Details") was stacked using
+    // + the header: without it the next section ("Movie Details") was stacked using
     // only the cards' height and came out ON TOP of them.
     case SEC_COMMENTS:  return heightHeaderComments() + COM_CARD_H;
     case SEC_DETAILS:     return nLinesDetail() * NV_DETF_DET_LINE;
@@ -1359,12 +1449,13 @@ void detail_update(float dt, Uint32 now) {
   // A stiffness of its own: the web app takes 0.8s to fade the backdrop out
   // (cubic-bezier .4,0,.2,1), and the NV_SPRING_SCREEN spring settles in ~330ms.
   pg = anim_spring(pg, level >= 1 ? 1.0f : 0.0f, dt, NV_SPRING_PAGE);
-  // LET GO WHEN THE FADE HAS GONE, not when the rectangle has. The threshold was
-  // 0.02 of the flight, and the ramp above is the cube of what is left: at t = 0.02
-  // the backdrop was still 18% opaque, so the screen stopped being drawn while it
-  // was plainly visible. 0.006 puts it at 5% — over the hero art the home is
-  // already drawing, in the rectangle the home already has it in.
-  if (exiting && t < 0.006f) { is_open = 0; exiting = 0; velT = 0.0f; t = 0.0f; return; }
+  // LET GO WHERE THE FADE ENDS, which is now a number the ramp itself names rather
+  // than one guessed near zero. At NV_DETAIL_EXIT_CUT the backdrop's opacity is
+  // exactly 0, so there is nothing on screen to pop — and the spring's tail below
+  // that point was 270ms of an invisible rectangle being drawn over the home.
+  if (exiting && t < NV_DETAIL_EXIT_CUT) {
+    is_open = 0; exiting = 0; velT = 0.0f; t = 0.0f; return;
+  }
 
   for (int r = 0; r < N_SECTIONS; r++)
     for (int c = 0; c < sectionN(r) && c < N_ITEMS; c++) {
@@ -2062,11 +2153,22 @@ static void heroWeb(float a, float offset) {
     { GfxRect hl;
       if (sharedOrigin && t < 0.999f &&
           home_hero_logo_rect(&hl.x, &hl.y, &hl.w, &hl.h)) {
+        // ON detail_progress, NOT ON `t`. The two are the same on the way in and
+        // differ on the way out, where detail_progress is remapped to reach 0 at
+        // NV_DETAIL_EXIT_CUT — the frame detail_update releases the screen.
+        //
+        // Driven by the raw curve this landed at 0.06 instead: on the last drawn
+        // frame the mark was still 6% of the way towards the title screen's
+        // layout, in POSITION and in SIZE, and then the home drew its own at rest.
+        // On a wide wordmark 6% is tens of pixels and a visible change of scale,
+        // arriving in one frame. That is the snap at the end of the close; the
+        // rows had the same defect and the same cause.
+        float p = detail_progress();
         GfxRect rest = { r.x, baseLogo - rises - h, r.w, r.h };
-        r.x = hl.x + (rest.x - hl.x) * t;
-        r.y = hl.y + (rest.y - hl.y) * t;
-        r.w = hl.w + (rest.w - hl.w) * t;
-        r.h = hl.h + (rest.h - hl.h) * t;
+        r.x = hl.x + (rest.x - hl.x) * p;
+        r.y = hl.y + (rest.y - hl.y) * p;
+        r.w = hl.w + (rest.w - hl.w) * p;
+        r.h = hl.h + (rest.h - hl.h) * p;
         aLogo = 1.0f;
       } }
     gfx_tex_aspect_current = 0.0f;   // the logo already comes at the right aspect ratio
@@ -2944,7 +3046,7 @@ static void drawTrailer(float x, float y, int c, float a) {
     txt_draw_alpha(lt, x, y + NV_DETF_TR_KIND_DY, a * 0.9f); }
 }
 
-// --- the "Film Details" table -----------------------------------------------
+// --- the "Movie Details" table ----------------------------------------------
 //
 // Two columns: the key in grey on the left, the value in white in a FIXED column.
 // The value's column does not follow the key's width — if it did, every row would start
@@ -3825,17 +3927,59 @@ static void drawPerson(float a) {
 // director.c stays: the HOME still uses it for the director folders, where the
 // portrait IS the subject (home.c). What is gone is only this screen's overlay.
 
-void detail_draw(Uint32 now) {
+// THE BACKDROP IS DRAWN BEFORE THE HOME, NOT OVER IT.
+//
+// It used to be part of detail_draw, which app.c calls after home_draw, so the
+// title's art was composited ON TOP of the home's shelves and copy. Its left
+// boundary then cut straight through them — a hard vertical line sweeping left
+// across "Continue watching", through a poster card, through the middle of a
+// sentence. No treatment of the art's own edge could fix that, because the edge
+// was not the problem: a picture was in front of content it should have been
+// behind. Filling the uncovered band with page ground, with a clamped edge texel
+// and with a mirror fold all left the same line in the same place, because all
+// three were changing what was on the RIGHT of it.
+//
+// app.c now calls this before the screen underneath is drawn, so the art is the
+// background it is supposed to be and the home's own copy and shelves lie over it
+// and fade on their own (home.c fades them with detail_progress).
+void detail_draw_bg(Uint32 now) {
   if (!is_open) return;
-  float s = t, a2 = phase2();
+  float s = t;
   // ONE call, at the top: the page is painted before the art and both read the
   // same arithmetic, so there is no way for the two to come off different frames.
-  GfxRect target; float aEntry, zoom;
-  backdropRect(&target, &aEntry, &zoom);
+  GfxRect target, cell; float aEntry, zoom;
+  backdropRect(&target, &aEntry, &zoom, &cell);
 
   if (!detail_covers_screen()) {
+    // IT STAYS ON THE WAY OUT, and the returning card depends on it. GFX_DETAIL's
+    // vignette takes the art to #0d0d0d at the card's left edge; this paints the
+    // rest of the screen the same #0d0d0d, so the shrinking rectangle sits on its
+    // own colour instead of on the home's lit rows. Take it away and every edge of
+    // the card is suddenly a boundary between a picture and a catalogue.
+    // THE GROUND AND THE CARD NEVER OVERLAP, in either direction.
+    //
+    // This layer sits BETWEEN the home and the card, so with the card at alpha `a`
+    // over a ground at `g` the home reaches the screen at (1-g)(1-a). Fade the two
+    // together and g = a, so the home arrives at (1-a)^2 against the card's a: at
+    // a = 0.5 that totals 0.75 and the screen dims 25% in the middle of the
+    // dissolve. Drop the ground in one frame instead and the home snaps from black
+    // to full brightness around a card still 98% the size of the screen. Both were
+    // tried; the first reads as a flicker and the second as a snap.
+    //
+    // So they take turns. OPENING, the ground rises across the flight while the
+    // card is already opaque (front-loaded, by t = 0.126) — the ground only ever
+    // affects the area OUTSIDE the card, which is why that direction has always
+    // looked clean. CLOSING is the same shape backwards: the ground fades out
+    // first, finishing at NV_DETAIL_EXIT_GROUND while the card is still solid, and
+    // only then does the card dissolve, over a home at full brightness with
+    // nothing stacked in front of it.
     GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-    gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, s);   // #0d0d0d, the web app's background
+    gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f,
+              (exiting && sharedOrigin)
+                ? anim_clamp((s - NV_DETAIL_EXIT_GROUND)
+                             / (1.0f - NV_DETAIL_EXIT_GROUND), 0.0f, 1.0f)
+                : anim_clamp((detail_progress() - NV_DETAIL_OPEN_GROUND_AT)
+                             / NV_DETAIL_OPEN_GROUND_OVER, 0.0f, 1.0f));
   }
   gfx_no_crop();
 
@@ -3889,7 +4033,13 @@ void detail_draw(Uint32 now) {
   // aEntry is 1.0 anyway, so the page still has its opaque background when the art
   // never arrives; what goes is the black rectangle during the flight.
   drawArtDetail(target, tex, art, artPoster,
-                     tex ? aEntry * (1.0f - 0.85f * pg) : aEntry, pg, zoom);
+                     tex ? aEntry * (1.0f - 0.85f * pg) : aEntry, pg, zoom, cell);
+}
+
+void detail_draw(Uint32 now) {
+  if (!is_open) return;
+  float s = t, a2 = phase2();
+  (void)s;
 
 
   // The hero SCROLLS with the document: it does not disappear and is not replaced by a

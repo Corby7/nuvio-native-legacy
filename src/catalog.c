@@ -15,14 +15,14 @@ static int nAllocated;
 // session's network. See the note in catalog.h.
 static int cameOfCache;
 
-void cat_backdrop_shrink(char *url, unsigned size) {
+void cat_backdrop_shrink(char *url, unsigned size, unsigned width) {
   char *o;
   char new[1024];
   if (!url || !*url) return;
   o = strstr(url, "/t/p/original/");
   if (!o) return;
   if (size > sizeof new) size = sizeof new;
-  snprintf(new, sizeof new, "%.*s/t/p/w1280/%s", (int)(o - url), url, o + 14);
+  snprintf(new, sizeof new, "%.*s/t/p/w%u/%s", (int)(o - url), url, width, o + 14);
   snprintf(url, size, "%s", new);
 }
 
@@ -176,8 +176,8 @@ int cat_load(const char *dirArt) {
     p = field(p, it->title, sizeof it->title);
     p = field(p, it->genre, sizeof it->genre);
     // The package's catalogue stores the genre ALREADY COMPOSED and in English
-    // ("Film  ·  Science Fiction  ·  Action"). It translates each piece between
-    // the separators; the first one ("Film"/"TV Show") passes through the table
+    // ("Movie  ·  Science Fiction  ·  Action"). It translates each piece between
+    // the separators; the first one ("Movie"/"TV Show") passes through the table
     // unchanged. Done here, on reading, because `genre` is read by several
     // screens and translating while drawing would leave each of them to work it
     // out on its own.
@@ -884,7 +884,7 @@ void cat_set_episodes(int indexItem, const CatEp *list, int count) {
 }
 
 // An item's genres, as a list of pieces separated by " · ". The first field is
-// always "Film"/"TV Show" and does not count as a genre.
+// always "Movie"/"TV Show" and does not count as a genre.
 static int sharesGenre(const CatItem *a, const CatItem *b) {
   const char *p = a->genre;
   int first = 1;

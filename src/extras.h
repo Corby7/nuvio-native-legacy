@@ -138,7 +138,7 @@ int  extras_ep_watched(int season, int episode);
 int extras_progress_ready(void);
 int extras_next_episode(int *season, int *episode);
 
-// The film's FACT SHEET, for the "Film Details" section.
+// The film's FACT SHEET, for the "Movie Details" section.
 //
 // All of it comes out of the SAME /movie/<id> call the collection already made
 // — the body has carried status, runtime, release_date and the countries all

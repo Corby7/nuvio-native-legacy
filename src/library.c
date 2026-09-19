@@ -64,7 +64,7 @@ static const char *ROT_MODE[LIB_N_MODES] = { "Saved", "Collection" };
 
 // Seletor "Tipo": os mesmos valores do web.
 enum { KIND_ALL, KIND_MOVIE, KIND_SERIES, LIB_N_KINDS };
-static const char *ROT_KIND[LIB_N_KINDS] = { "All", "Films", "Series" };
+static const char *ROT_KIND[LIB_N_KINDS] = { "All", "Movies", "Series" };
 // The "Sort" picker.
 enum { ORDER_ADDED, ORDER_TITLE, ORDER_YEAR, LIB_N_ORDER };
 static const char *ROT_ORDER[LIB_N_ORDER] = { "List order", "Title: A to Z", "Year: newest first" };
@@ -368,8 +368,8 @@ static void drawEmpty(void) {
   const char *l2 = totalMode
       ? "Under Type, choose All. Check the filters in Settings too."
       : mode == MODE_CLOUD
-        ? "The films and series in your Trakt collection are gathered in this tab."
-        : "Open a film or series and choose Add to list to keep it.";
+        ? "The movies and series in your Trakt collection are gathered in this tab."
+        : "Open a movie or series and choose Add to list to keep it.";
   TxtLine t1 = txt_line(TXT_TITLE2, l1, 255, 255, 255, 255);
   TxtLine t2 = txt_line(TXT_CALLOUT, l2, 179, 179, 179, 255);
   float cx = NV_LIB_X + NV_LIB_W * 0.5f;

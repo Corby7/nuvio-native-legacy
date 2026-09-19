@@ -282,7 +282,7 @@ static void drawLoading(Uint32 now, float a) {
 
 static void drawEmpty(float a) {
   const char *title = "No plays in this period";
-  const char *body = "Connect Trakt and watch a film or episode. Your summary uses only the history available.";
+  const char *body = "Connect Trakt and watch a movie or episode. Your summary uses only the history available.";
   if (state == PROFILE_STATE_PRIVATE) {
     title = "Private profile or history not shared";
     body = "Trakt did not release a public history for this account.";
@@ -341,7 +341,7 @@ static void drawSummary(float a) {
   trim(TXT_TITLE1,b,246,identityX,usageY,identityW,a);
   if(data.warning[0])trim(TXT_MINI,data.warning,183,identityX,PF_SUMMARY_Y+292,identityW,a);
 
-  const char *rot[4]={"PLAYS","FILMS","EPISODES","ACTIVE DAYS"};
+  const char *rot[4]={"PLAYS","MOVIES","EPISODES","ACTIVE DAYS"};
   int val[4]={data.plays,data.movies,data.episodes,data.daysActiveMonth};
   float x=PF_X+PF_W*.58f;
   for(int i=0;i<4;i++) {
@@ -360,7 +360,7 @@ static void drawSummary(float a) {
     float w=PF_W*.50f, movies=w*(float)(data.movies/total);
     gfx_color((GfxRect){PF_X,PF_SUMMARY_Y+316-scroll,w,10},.4f,.23f,.60f,.82f,a);
     if(movies>0)gfx_color((GfxRect){PF_X,PF_SUMMARY_Y+316-scroll,movies,10},.4f,.65f,.30f,.83f,a);
-    snprintf(b,sizeof(b),"Films %.0f%%  ·  Episodes %.0f%%",100*data.movies/total,100*data.episodes/total);
+    snprintf(b,sizeof(b),"Movies %.0f%%  ·  Episodes %.0f%%",100*data.movies/total,100*data.episodes/total);
     trim(TXT_CAPTION,b,201,PF_X,PF_SUMMARY_Y+340,w,a);
   }
 }

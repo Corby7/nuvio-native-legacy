@@ -73,7 +73,7 @@ void disc_tmdb_set(const char *key);
 const char *disc_key_tmdb(void);
 
 // "2026-07-29" -> "29 July 2026". It lives here because discovery already needed
-// it for the episode date; the "Film Details" table is the second consumer, and
+// it for the episode date; the "Movie Details" table is the second consumer, and
 // duplicating the month list would be asking for the two to drift apart. Input
 // outside the ISO format comes back as it arrived.
 void disc_date_long(const char *iso, char *dst, size_t size);

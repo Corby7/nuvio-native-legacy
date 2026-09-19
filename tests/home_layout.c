@@ -6,9 +6,9 @@
 
 int main(void) {
   assert(MAX_FILTER <= FOCUS_MAX_ROWS);
-  assert(profileCatalog("Oscars 2026 - Film") == ROW_COLLECTION);
+  assert(profileCatalog("Oscars 2026 - Movie") == ROW_COLLECTION);
   assert(profileCatalog("NETFLIX - Series") == ROW_SERVICE);
-  assert(profileCatalog("For You - Film") == ROW_NORMAL);
+  assert(profileCatalog("For You - Movie") == ROW_NORMAL);
   assert(widthOf(ROW_HIGHLIGHT) > widthOf(ROW_COLLECTION));
   assert(widthOf(ROW_COLLECTION) > widthOf(ROW_SERVICE));
   assert(!hasLabel(ROW_HIGHLIGHT));
@@ -27,8 +27,8 @@ int main(void) {
   }
   snprintf(filters[0].key, sizeof filters[0].key, "continue_watching");
   filters[0].base[0] = filters[0].catId[0] = 0;
-  snprintf(filters[14].title, sizeof filters[14].title, "Netflix - Film");
-  snprintf(filters[15].title, sizeof filters[15].title, "Oscar - Film");
+  snprintf(filters[14].title, sizeof filters[14].title, "Netflix - Movie");
+  snprintf(filters[15].title, sizeof filters[15].title, "Oscar - Movie");
   cat_set_all(itemsTeste, 48, filters, 16);
   syncRows();
   assert(nRows == 17);

@@ -85,7 +85,7 @@ static int parseActivities(const char *body, SocialData *d, const char *actionDf
     ep=strstr(p,"\"episode\"");
     if(ep&&ep<f){const char *eo=strchr(ep,'{'),*ef=eo?js_end(eo):NULL;int t=eo?(int)js_num(eo,ef,"season",0):0,e=eo?(int)js_num(eo,ef,"number",0):0;char name[100]="";
       if(eo&&ef)js_text(eo,ef,"title",name,sizeof name);snprintf(a->detail,sizeof a->detail,"S%dE%d%s%s",t,e,name[0]?" · ":"",name);
-    } else snprintf(a->detail,sizeof a->detail,"Film");
+    } else snprintf(a->detail,sizeof a->detail,"Movie");
     if(!imdb[0]){p=js_next(f);continue;} snprintf(a->imdb,sizeof a->imdb,"%s",imdb);
     snprintf(a->poster,sizeof a->poster,"https://images.metahub.space/poster/medium/%s/img",imdb); n++; p=js_next(f);
   }

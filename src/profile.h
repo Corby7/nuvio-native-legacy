@@ -22,7 +22,7 @@ typedef struct {
 typedef struct {
   char id[64];               // imdb/trakt/slug, returned uninterpreted
   char title[128];
-  char detail[96];          // e.g. "S2E3 · Solo" or "Film"
+  char detail[96];          // e.g. "S2E3 · Solo" or "Movie"
   char poster[768];
   char backdrop[768];
   int  plays;

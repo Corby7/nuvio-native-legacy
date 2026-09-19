@@ -758,6 +758,10 @@ void app_draw(Uint32 now) {
     // BACKGROUND the grid is arriving over — its hero is the same folder's art,
     // standing still while the treatment changes around it. Cutting it at the
     // first frame, as is_open did, left the window opening over black.
+    // THE TITLE SCREEN'S BACKDROP FIRST, under the screen it is replacing. It is
+    // the background of the transition, not a layer over it: drawn afterwards its
+    // left boundary sweeps through the home's shelves and copy as a hard line.
+    detail_draw_bg(now);
     if (!detail_covers_screen() && !seeall_covers_screen()) {
       switch (screen) {
         case SCREEN_SEARCH:      search_draw(now);      break;

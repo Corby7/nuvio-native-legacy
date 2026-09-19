@@ -334,10 +334,55 @@ static const char *FS_BODY[GFX_NMODES] = {
   // cover() never returns outside [0,1] and z is never below 1, so the window
   // stays inside the texture and no edge is ever smeared. 0 means "no zoom":
   // every other caller of this mode passes uPar = 0 and is untouched.
+  // uCell MAPS THE QUAD ONTO THE FLIGHT'S RECTANGLE, and it is what lets the
+  // opening have no edges at all.
+  //
+  // The backdrop used to be DRAWN at the flying rect. With the hero set to Top
+  // band that rect is 80% of the screen anchored top-right, so an L of bare screen
+  // — 384px down the left, 216 along the bottom — sat outside it for the whole
+  // flight, and its boundary was a hard line travelling over the home.
+  //
+  // Now the quad is the whole viewport and the FRAMING moves instead: the standard
+  // `uCell.xy + uv*uCell.zw` inverts to (uv - origin)/size, so the art lands
+  // exactly where the rect would have put it while the texcoords run outside [0,1]
+  // in the L — where the clamp below repeats the edge row and column into it.
+  // There is no rectangle on screen to have an edge. At rest the caller passes the
+  // identity cell, so the settled screen samples [0,1] and is unchanged.
+  //
+  // cover() has to keep using the RECT's aspect, not the quad's, or the framing
+  // would not match; uCell.zw carries the inverse size, so uAspect*uCell.w/uCell.z
+  // recovers it. The vignette below stays on vUv, which is now viewport space:
+  // on the opening that holds the scrim still under the copy instead of sweeping
+  // it 384px leftward. The CLOSING path passes the identity cell and draws at its
+  // own rect, so its falloff stays anchored there — which is what hides the
+  // returning card's left edge against the page ground.
+  // MIRRORED, NOT CLAMPED. Edge-clamp hides a seam a few pixels wide; across the
+  // 384px the cell mapping puts outside [0,1] it repeats one column of texels into
+  // a streak, and detail stopping dead along a line IS an edge — the same line, in
+  // the same place, moving the same way, just made of stretched image instead of
+  // page ground. A fold reflects the outer band back into the picture instead, so
+  // texture and gradient carry across the boundary.
+  //
+  // Folded HERE and not by the sampler: the coordinate is back inside [0,1] before
+  // the fetch, so GL_CLAMP_TO_EDGE on the texture cannot undo it and no wrap state
+  // has to be set per draw. mir() is the identity on [0,1], so the settled screen
+  // samples exactly what it always did.
+  "vec2 mir(vec2 u){\n"
+  "  u = mod(abs(u), 2.0);\n"
+  "  return mix(u, 2.0 - u, step(1.0, u));\n"
+  "}\n"
   "void main(){\n"
+  "  vec2 q = uCell.xy + vUv * uCell.zw;\n"
+  "  float rectAsp = uAspect * (uCell.w / uCell.z);\n"
+  "  vec2 uvz = q;\n"
+  "  if (uTexAsp > 0.0) {\n"
+  "    float ra = rectAsp / uTexAsp;\n"
+  "    if (ra > 1.0) uvz.y = (uvz.y - 0.5) / ra + 0.5;\n"
+  "    else          uvz.x = (uvz.x - 0.5) * ra + 0.5;\n"
+  "  }\n"
   "  float z = max(uPar.x, 1.0);\n"
-  "  vec2 uvz = (cover(vUv) - 0.5) / z + 0.5;\n"
-  "  vec3 c = texture2D(uTex, clamp(uvz, 0.0, 1.0)).rgb;\n"
+  "  uvz = (uvz - 0.5) / z + 0.5;\n"
+  "  vec3 c = texture2D(uTex, mir(uvz)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
   "  float x = vUv.x;\n"
   "  float a = 1.0 - clamp(x/0.0780,0.0,1.0)*0.05\n"

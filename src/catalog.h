@@ -173,16 +173,38 @@ typedef struct {
   int  imdb;
 } CatEp;
 
-// TAKES A BACKDROP OFF TMDB'S `original` AND ONTO w1280, IN PLACE.
+// TAKES A BACKDROP OFF TMDB'S `original` AND ONTO A GIVEN RUNG, IN PLACE.
 //
 // Cinemeta's `background` is often a TMDB url at /t/p/original/, which is
-// 3840x2160. The download is not the problem (268 KB against w1280's 201 KB) —
-// the DECODE is: 8.3 MP become 33 MB in RAM, plus another 33 MB in the format
-// conversion, before SDL_BlitScaled reduces it to the cache's 1920 ceiling. On a
-// weak core that is ~0.5 s of one of the two decode threads, per piece of art,
-// and on the home it lands on every hero change. At w1280 it is 3.7 MB and ~9x
-// less work; the hero is drawn at 1920, so it is enlarged 1.5x, and under the
-// gradient and the text the difference does not show. The jolt did.
+// 3840x2160. The download is not the problem — the DECODE is: 8.3 MP become 33 MB
+// in RAM, plus another 33 MB in the format conversion, before the box filter
+// reduces it to the cache's 1920 ceiling. On a weak core that is ~0.5 s of one of
+// the two decode threads, per piece of art, and on the home it lands on every hero
+// change.
+//
+// `width` IS THE RUNG, AND THE CALLER PICKS IT BY WHAT IT DRAWS AT. This used to be
+// a fixed w1280 for everyone, which was wrong in both directions:
+//
+//   - THE HERO IS DRAWN AT 1920, so w1280 was enlarged 1.5x. The note that used to
+//     be here said the gradient and the text hide it. They hide it on a hero that
+//     is mostly gradient; they do not hide it on one that is mostly picture. And
+//     the cost of being right was misjudged, because w1280 was taken as the top of
+//     the ladder: /configuration lists w300/w780/w1280/original, but the CDN also
+//     serves w1920, at exactly 1920x1080. MEASURED, same backdrop path:
+//         w780  780x439   116 KB     w1920  1920x1080   550 KB
+//         w1280 1280x720  281 KB     orig   3840x2160  1580 KB
+//     w1920 is the only rung that MEETS the ceiling: the decode lands at 1920 and
+//     `conv->w > limit` is false, so there is no resampling pass at all and no
+//     enlargement on screen. It costs 8.3 MB of texture against w1280's 3.7 MB.
+//     That is affordable, and not as a guess: TVDB's fanart/original and metahub's
+//     background/medium ARE 1920x1080 and match nothing here, so they have been
+//     going through the cache untouched, at that exact cost, the whole time.
+//     `original` remains wrong — 4x the decode to reach the same 1920 texture,
+//     since the box filter would throw the rest away.
+//
+//   - THE EPISODE STILL IS DRAWN AT 640 (NV_DETP_EP_W), so w1280 was decoded at
+//     twice the width and box-filtered straight back down. w780 is the smallest
+//     rung that still covers it.
 //
 // It lives here, and not where the url is parsed, because EVERY filler of a
 // CatItem needs it and only one of them had it: discover.c did this inline while
@@ -191,7 +213,9 @@ typedef struct {
 // paid the half second on every swap.
 //
 // A url that is not TMDB `original` is left exactly as it is.
-void cat_backdrop_shrink(char *url, unsigned size);
+#define CAT_BACKDROP_HERO_W 1920
+#define CAT_BACKDROP_THUMB_W 780
+void cat_backdrop_shrink(char *url, unsigned size, unsigned width);
 
 // Reads <dir>/catalog.txt. Returns how many items it loaded (0 = none, and the
 // caller should carry on with whatever it has).

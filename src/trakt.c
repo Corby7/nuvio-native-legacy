@@ -161,7 +161,7 @@ static int decorate(CatItem *d, const char *kind) {
   // The same rewrite discover.c does on this same field, and it was missing here:
   // these are the history and watchlist items, which fill Continue watching and
   // the Library — the rows the hero sits above. See cat_backdrop_shrink.
-  cat_backdrop_shrink(d->backdrop, sizeof d->backdrop);
+  cat_backdrop_shrink(d->backdrop, sizeof d->backdrop, CAT_BACKDROP_HERO_W);
   if (!d->backdrop[0]) snprintf(d->backdrop, sizeof d->backdrop, "%s", d->poster);
   // THE EPISODE'S STILL, FOR THE CONTINUE WATCHING CARD, AT NO EXTRA REQUEST.
   //
@@ -203,8 +203,9 @@ static int decorate(CatItem *d, const char *kind) {
       v = js_next(fv);
     }
     // Same rewrite the backdrop gets, and for the same reason: a still served
-    // from TMDB's /original is a decode this card has no use for.
-    cat_backdrop_shrink(d->thumbEp, sizeof d->thumbEp);
+    // from TMDB's /original is a decode this card has no use for. A SMALLER RUNG
+    // than the backdrop's, though — this one is drawn at 640, not 1920.
+    cat_backdrop_shrink(d->thumbEp, sizeof d->thumbEp, CAT_BACKDROP_THUMB_W);
   }
   { char r[24] = "", year[24] = "";
     js_text(body, NULL, "runtime", r, sizeof r);
@@ -224,7 +225,7 @@ static int decorate(CatItem *d, const char *kind) {
       d->remainingMin = atoi(r);
     } }
   snprintf(d->genre, sizeof d->genre, "%s",
-           strcmp(kind, "series") ? "Film" : "TV Show");
+           strcmp(kind, "series") ? "Movie" : "TV Show");
   snprintf(d->age_rating, sizeof d->age_rating, "14");
   free(body);
   return ok;
@@ -609,7 +610,7 @@ int trakt_social(CatItem *output, int max) {
       js_text(bm, fb, "title", d->title, sizeof d->title);
       js_text(bm, fb, "imdb", imdb, sizeof imdb);
       snprintf(d->kind, sizeof d->kind, "movie");
-      snprintf(d->directing, sizeof d->directing, "Film");
+      snprintf(d->directing, sizeof d->directing, "Movie");
     }
     if (!imdb[0]) { p = js_next(f); continue; }
     snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
@@ -730,7 +731,7 @@ int trakt_profile(ProfileData *d) {
       for(int i=0;i<nRanking;i++)if(imdb[0]&&!strcmp(ranking[i].id,imdb)){hi=i;break;}
       if(hi<0&&imdb[0]&&nRanking<100){hi=nRanking++;ProfileHighlight *h=&ranking[hi];
         snprintf(h->id,sizeof h->id,"%s",imdb);snprintf(h->title,sizeof h->title,"%s",title);
-        if(t>0&&e>0)snprintf(h->detail,sizeof h->detail,"S%dE%d",t,e);else snprintf(h->detail,sizeof h->detail,"Film");
+        if(t>0&&e>0)snprintf(h->detail,sizeof h->detail,"S%dE%d",t,e);else snprintf(h->detail,sizeof h->detail,"Movie");
         if(imdb[0]){snprintf(h->poster,sizeof h->poster,"https://images.metahub.space/poster/medium/%s/img",imdb);
           snprintf(h->backdrop,sizeof h->backdrop,"https://images.metahub.space/background/medium/%s/img",imdb);}}
       if(hi>=0){ranking[hi].plays++;if(runtime>0)ranking[hi].minutes+=runtime;}
@@ -824,7 +825,7 @@ int trakt_list(const char *which, CatItem *output, int max) {
           snprintf(d->logo, sizeof d->logo,
                    "https://images.metahub.space/logo/medium/%s/img", imdb);
           snprintf(d->genre, sizeof d->genre, "%s",
-                   step ? "TV Show" : "Film");
+                   step ? "TV Show" : "Movie");
           snprintf(d->age_rating, sizeof d->age_rating, "14");
           n++;
         }

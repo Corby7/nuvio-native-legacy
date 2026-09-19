@@ -18,7 +18,13 @@
 void detail_open(const HomeItem *item, int shared);
 // 1 while the screen that is open was given a shared origin. The home reads it to
 // hand its hero logo over instead of drawing a second copy of it.
+// The title screen's BACKDROP, drawn before whatever is underneath it. It is a
+// background and has to be behind the home's copy and shelves — composited over
+// them its boundary cuts through text and cards. detail_draw() draws the rest.
+void detail_draw_bg(Uint32 now);
 int  detail_shared_origin(void);
+// 1 while the screen is on its way out, for the home's return travel.
+int  detail_is_exiting(void);
 int  detail_is_open(void);
 // 0..1 of how much the detail has taken over the screen; the home uses it to push
 // the rows down.

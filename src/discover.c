@@ -402,7 +402,7 @@ void disc_targets_search_reset(void) {
   // addon, so the search goes on working on a clean installation.
   nTargets = 0;
   { int t; const char *tt[2] = { "movie", "series" };
-    const char *rot[2] = { "Films", "Series" };
+    const char *rot[2] = { "Movies", "Series" };
     for (t = 0; t < 2; t++) {
       TargetSearch *a = &targets[nTargets++];
       snprintf(a->base,  sizeof a->base,  "%s", CINEMETA);
@@ -595,18 +595,18 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
   if (!js_text(start, end, "poster", d->poster, sizeof d->poster)) return 0;
   js_text(start, end, "background", d->backdrop, sizeof d->backdrop);
   js_text(start, end, "logo", d->logo, sizeof d->logo);
-  // Off TMDB's `original` and onto w1280 — the measurement that says why, and the
-  // reason this is no longer written out here, are in catalog.h. Done by rewriting
-  // the URL and not by asking for another field because Cinemeta only returns this
-  // one; TMDB's ladder is w300/w780/w1280/original.
-  cat_backdrop_shrink(d->backdrop, sizeof d->backdrop);
+  // Off TMDB's `original` and onto the hero's rung — the measurement that says why,
+  // and the reason this is no longer written out here, are in catalog.h. Done by
+  // rewriting the URL and not by asking for another field because Cinemeta only
+  // returns this one.
+  cat_backdrop_shrink(d->backdrop, sizeof d->backdrop, CAT_BACKDROP_HERO_W);
   if (!d->backdrop[0]) snprintf(d->backdrop, sizeof d->backdrop, "%s", d->poster);
 
   if (!js_text(start, end, "imdb_id", d->imdb, sizeof d->imdb))
     js_text(start, end, "id", d->imdb, sizeof d->imdb);
   snprintf(d->kind, sizeof d->kind, "%s", kind);
 
-  { // genre: "Film · Action · Drama"
+  { // genre: "Movie · Action · Drama"
     const char *g = js_array(start, end, "genres");
     char g1[48] = "", g2[48] = "";
     if (g) {
@@ -634,7 +634,7 @@ static int ofMeta(const char *start, const char *end, const char *kind, CatItem 
         } }
     }
     snprintf(d->genre, sizeof d->genre, "%s%s%s%s%s",
-             strcmp(kind, "series") ? "Film" : "TV Show",
+             strcmp(kind, "series") ? "Movie" : "TV Show",
              g1[0] ? "  \xc2\xb7  " : "", g1,
              g2[0] ? "  \xc2\xb7  " : "", g2);
   }
@@ -855,15 +855,13 @@ static int off(const Decl *d) {
 
 // formatCatalogRowTitle (js/ui/screens/home/homeUtils.js:62): a capital first
 // letter and, if the name does NOT already end with the type's label, " - <type>".
-// That is why the home shows "For You - Film" and not "for you".
+// That is why the home shows "For You - Movie" and not "for you".
 static void formatTitle(const char *name, const char *kind, char *dst, size_t size) {
-  const char *label = strcmp(kind, "series") ? "Film" : "Series";
-  const char *raw    = strcmp(kind, "series") ? "Movie" : "Series";
-  size_t ln = strlen(name), lr = strlen(label), lc = strlen(raw);
+  const char *label = strcmp(kind, "series") ? "Movie" : "Series";
+  size_t ln = strlen(name), lr = strlen(label);
   int alreadyHas = 0;
   if (!name[0]) { snprintf(dst, size, "%s", label); return; }
   if (ln >= lr && !strcasecmp(name + ln - lr, label)) alreadyHas = 1;
-  if (ln >= lc && !strcasecmp(name + ln - lc, raw))    alreadyHas = 1;
   if (alreadyHas) snprintf(dst, size, "%s", name);
   else       snprintf(dst, size, "%s - %s", name, label);
   if (dst[0] >= 'a' && dst[0] <= 'z') dst[0] = (char)(dst[0] - 32);

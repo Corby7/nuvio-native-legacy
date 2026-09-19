@@ -1138,7 +1138,16 @@
 // viewer is meant to watch arrive, this one is a frame getting out of the way of a
 // list. 15 puts the halfway point at 1.678/w = 112ms and 95% at ~316ms.
 #define NV_SPRING2_GRID        15.0f
-#define NV_SPRING2_GRID_OUT    17.0f
+// CLOSING IS THE OPENING REVERSED, AND FASTER. 22 settles it in ~265ms against
+// the opening's ~316ms, which is the difference between a window closing and a
+// window being closed: going in is a place being entered and can take its time,
+// coming out is an instruction already given.
+//
+// What reverses is the WORDMARK AND ITS LABEL, travelling back down to the hero;
+// the window itself does not close again (see viewRect for why a shrinking clip
+// over a full list is too busy to read). The content fades under them, and this is
+// how long that takes.
+#define NV_SPRING2_GRID_OUT    22.0f
 // HOW FAR THE GRID'S COPY AND CARDS RISE into place as they come in. The folder's
 // wordmark is already travelling UP, from the home hero's 326 to this screen's 83,
 // so everything else rising with it means nothing on screen moves against anything
@@ -1149,9 +1158,19 @@
 // away to tidy a transition is the mistake the detail screen's notes record twice.
 #define NV_SEEALL_RISE          56.0f
 #define NV_SPRING2_SCREEN_OUT  14.0f
-// HOW LONG THE BACKDROP TAKES TO GIVE THE SCREEN BACK on the way out, as a
-// multiplier on the flight. 1.8 has it fully opaque down to s = 0.555 and
-// dissolving from there, about 240 ms of crossfade back to the home.
+// HOW THE BACKDROP GIVES THE SCREEN BACK on the way out: opaque down to
+// CUT+FADE, gone at CUT, and the screen let go of there.
+//
+// MEASURED IN TIME, at NV_SPRING2_SCREEN_OUT: opaque to s = 0.24 (~196ms), clear
+// at s = 0.06 (~325ms) — a crossfade of about 130ms with a hard stop after it.
+//
+// It was one multiplier (1.8) before, which put the art semi-transparent from
+// 111ms all the way to the 0.006 cut at 593ms. That is 480ms of the title's
+// picture blended over the home's, and because the closing ZOOMS the two copies
+// are at different scales for the whole of it — a soft double image, which is the
+// unease the owner reported on the backdrop. The art is the same photograph twice;
+// the longer the two are mixed the worse it looks, so the fix is to spend less
+// time there, not to ease it differently.
 //
 // The two directions are not symmetrical, and that is the shape that was settled
 // on after trying every symmetrical one. OPENING, the rect flies out of the home
@@ -1160,7 +1179,61 @@
 // the brightness in the middle. CLOSING, the rect does NOT fly: it stays
 // full-bleed and dissolves, because a rectangle shrinking back across the home
 // puts four travelling edges on screen and nothing hid them acceptably.
-#define NV_DETAIL_DISSOLVE  1.8f
+// THE SHELVES LEAVE BY SLIDING OUT OF THE VIEWPORT, so this is the whole depth of
+// that viewport and not a fraction of the screen: NV_SHELF_TOP-96 is where the
+// rows are clipped, and travelling the rest of the way past the bottom takes every
+// row out of the clip. 658px at 1080.
+//
+// They used to go 8% and then be OCCLUDED by the title screen's backdrop painting
+// over them. That backdrop is drawn behind them now (see detail_draw_bg), so it
+// cannot cover anything and a nudge left them sitting on top of it. Fading them
+// instead was tried and is not the same gesture: the cards should go DOWN and off,
+// at full strength, the way they always appeared to.
+#define NV_HOME_SHELF_EXIT  (NV_SCREEN_H - (NV_SHELF_TOP - 96.0f))
+// AND HOW MUCH OF THE FLIGHT THEY TAKE TO DO IT. The shelves are not the subject
+// of this transition, they are what is getting out of the way of it — spread over
+// the WHOLE flight they hang around in the middle of the frame long after the
+// title screen has arrived behind them, and at 40% they are gone before the eye
+// has followed them anywhere. Two thirds is the middle ground: clearly quicker
+// than the flight it sits inside, slow enough to read as cards leaving.
+#define NV_HOME_SHELF_OUT   0.65f
+// WHERE THE PAGE'S GROUND HAS FINISHED LEAVING on the way out, in the flight's
+// own units. It fades from 1 at the start of the close to 0 here, and here is
+// ABOVE NV_DETAIL_EXIT_CUT + NV_DETAIL_EXIT_FADE (0.24), where the card begins to
+// dissolve — so the ground is always gone before the card turns translucent.
+//
+// That gap is the whole design. Both at once and the home arrives at (1-g)(1-a),
+// which dips the screen 25% in the middle of a dissolve; ground vanishing in one
+// frame instead, as it did, and the home snaps from black to full brightness
+// around a card still 98% the size of the screen. Sequenced, neither happens, and
+// the opening is the same shape read backwards: there the ground rises across the
+// flight while the card is already opaque.
+// WHERE THE PAGE'S GROUND ARRIVES on the way IN, in the flight's own units: 0
+// until the backdrop is opaque, 1 shortly after.
+//
+// MEASURED PROBLEM. With the hero set to Top band the home's art is 80% of the
+// screen, anchored top-right (heroRectFor), so 20% of the height carries no art
+// at all. The backdrop flies out of that rect, so for most of the opening the
+// bottom of the screen is whatever is behind it — and the ground used to rise on
+// the flight's own curve, which left the home's ROWS lit under the art's bottom
+// edge for the first third of the transition. A bright horizontal edge travelling
+// over lit content is the most conspicuous thing in the frame.
+//
+// It cannot start any earlier than the backdrop turning opaque (t = 0.126) or the
+// two are translucent together and the home arrives at (1-g)(1-a) — the 25% dip
+// this file's exit notes describe. So it waits, then goes quickly: the art's edge
+// is against the page's own colour from ~120ms instead of ~400ms.
+#define NV_DETAIL_OPEN_GROUND_AT   0.13f
+#define NV_DETAIL_OPEN_GROUND_OVER 0.17f
+#define NV_DETAIL_EXIT_GROUND 0.30f
+// WHERE THE HOME'S HERO COPY HAS FINISHED LEAVING, in detail_progress units.
+// phase2 starts the title screen's copy at 0.45, so ending here means the two
+// blocks are never on screen together. They are the same sentence at two sizes in
+// two places, and overlapped they read as the text ghosted twice — which is the
+// defect home.c's own note predicts for two copies crossfading.
+#define NV_HOME_COPY_OUT     0.45f
+#define NV_DETAIL_EXIT_CUT   0.06f
+#define NV_DETAIL_EXIT_FADE  0.18f
 
 // WHICH WAY THE COPY TRAVELS while the screens change. One line, two readings of
 // the same moment, and the only difference between them is a sign.

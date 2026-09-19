@@ -27,6 +27,7 @@ float detail_progress(void);
 // Same reason as above. 1 only while an opening that has a hero to continue from
 // is running, which is the only time this file hands its logo over.
 int   detail_shared_origin(void);
+int   detail_is_exiting(void);
 // And the same for the collection grid, which carries the folder's MARK up into
 // its own header — the wordmark, or the title as type for a folder that has no
 // wordmark. seeall.h includes collections.h, not home.h, so this one is by hand
@@ -85,7 +86,7 @@ static char pst[MAX_ART][512];   int nPst = 0;   // posters 2:3
 // in discover.c from the catalogues the addons declare.
 static Row rows[MAX_FILTER] = {
   { "Continue watching", ROW_CONTINUE, 8, 0  },
-  { "Popular - Film",      ROW_NORMAL,   8, 8  },
+  { "Popular - Movie",     ROW_NORMAL,   8, 8  },
   { "Popular - Series",  ROW_NORMAL, 8, 16 },
   { "Trending",         ROW_NORMAL,   8, 24 },
 };
@@ -1671,7 +1672,7 @@ void home_update(float dt, Uint32 now) {
   //
   // Observed in the owner's two reference captures: with the focus on "Continue
   // watching" that title appears at the same height at which, on going down one row,
-  // "For You - Film" appears. The previous row does not rise — it stops being drawn.
+  // "For You - Movie" appears. The previous row does not rise — it stops being drawn.
   // In their words: "when you go down a line the things disappear, they don't rise".
   //
   // What was here was a CAMERA: it kept the focused row inside a viewport and scrolled
@@ -1823,7 +1824,7 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
   int contHero = (ci && ci->progress > 0 && ci->remainingMin > 0);
 
   // The meta line. In the web app these are tokens joined by "•"; ci->genre already
-  // arrives as "Film · Horror", which is the web app's (type, first genre) pair.
+  // arrives as "Movie · Horror", which is the web app's (type, first genre) pair.
   // THE META LINE IS A LIST OF TOKENS, not one pre-bulleted string, because the
   // separators have to be drawn DIMMER than the words — see NV_HERO_META_DOT. Joining
   // them into a single TxtLine, which is what this did, forces one colour on both and
@@ -2064,7 +2065,7 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
     //
     // WIDTH: to the safe right edge, NOT to the synopsis's 640. In the web app only
     // .home-hero-description carries a width; the meta line has none. Sharing the
-    // description's cap left "Film • Comedy • Drama • 2026 • 107 min" ellipsised
+    // description's cap left "Movie • Comedy • Drama • 2026 • 107 min" ellipsised
     // mid-line.
     //
     // The score is subtracted from the budget because it is drawn AFTER the tokens end:
@@ -2186,6 +2187,51 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
 //
 // The height gives way if a wide image would run past the left of the screen, so
 // the band is never cropped by the viewport it exists to fit inside.
+// THE HERO'S ART GROWS WITH THE TITLE SCREEN, on the detail's own curve.
+//
+// Without this the band's boundary stands still through the whole opening and is
+// simply covered when the backdrop goes opaque — a hard edge, in the layer BEHIND
+// the transition, that no amount of work on the backdrop can reach. Grown, the two
+// rects agree frame for frame: the backdrop lands exactly on the home's art at
+// every size, and the only edge on screen is the one the home already has at rest,
+// which now travels off the screen instead of vanishing.
+//
+// The RESTING rect is what home_hero_rect reports — the detail flies from there,
+// so feeding it the grown rect would be a loop.
+//
+// ONE KNOWN EDGE: drawArtHero records the family's shot from the rect it is HANDED
+// (see the note at it), so a hero family changing over DURING a transition would
+// record a grown rect for one frame. The focus cannot move while the title screen
+// owns the keyboard, so that needs a handover already in flight when it opens, and
+// the next resting frame re-records it.
+// HOW MUCH OF THIS SCREEN IS STILL ITS OWN, while the title screen comes up.
+//
+// 1 until the backdrop underneath is opaque, then down to 0 over the next third of
+// the flight. It cannot begin sooner: with this screen and the backdrop both
+// translucent the black behind them shows through at (1-a)(1-b) and the middle of
+// the transition dims — the arithmetic detail.c's notes describe. The backdrop's
+// ramp reaches 1 at 0.126.
+//
+// It is the SHAPE of the old exit, not a new one. The shelves used to be occluded
+// by the backdrop being painted over them, which took most of each row the instant
+// that backdrop turned opaque and left a sliver on the left to be wiped away after
+// — and the wipe was the hard vertical line through the copy. Drawn behind now, it
+// cannot cover anything, so the shelves have to leave by themselves; matching the
+// timing keeps them going when they always went.
+static float homeHandover(float p) {
+  return 1.0f - anim_clamp((p - 0.126f) / 0.324f, 0.0f, 1.0f);
+}
+
+static GfxRect heroGrown(GfxRect rest, float p) {
+  GfxRect g;
+  if (p <= 0.0f) return rest;
+  g.x = rest.x + (0.0f - rest.x) * p;
+  g.y = rest.y + (0.0f - rest.y) * p;
+  g.w = rest.w + (NV_SCREEN_W - rest.w) * p;
+  g.h = rest.h + (NV_SCREEN_H - rest.h) * p;
+  return g;
+}
+
 static GfxRect heroRectFor(const char *art) {
   if (!settings_hero_full())
     return (GfxRect){ NV_HERO_ART_X, 0, NV_HERO_ART_W, NV_HERO_ART_H };
@@ -2235,6 +2281,18 @@ static void drawHero(Uint32 now, float output) {
   // all of it, so the two overlap the way two backdrops crossfading do.
   float famIn = anim_smooth(1.0f - famFade);
   aArt *= famIn;
+  // HANDING THE BACKDROP OVER TO THE TITLE SCREEN.
+  //
+  // detail_draw_bg now paints that screen's art BEFORE this one, so the same
+  // picture is already underneath, growing on the same curve into the same rect.
+  // This copy stays up until that one is opaque and then dissolves into it, which
+  // is a swap of one gradient for another over an identical image.
+  //
+  // It cannot start any sooner. Both translucent, the black behind them shows
+  // through at (1-a)(1-b) and the screen dims in the middle — the arithmetic
+  // detail.c's notes describe. The backdrop's own ramp reaches 1 at 0.126, so that
+  // is where this one begins.
+  if (detail_shared_origin()) aArt *= homeHandover(output);
   drawHeroLeaving(anim_smooth(famFade));
   // Cleared every frame and filled in by whichever branch draws: a family that puts no
   // art on screen this frame leaves it empty, and the next handover then correctly has
@@ -2388,7 +2446,7 @@ static void drawHero(Uint32 now, float output) {
         // hold is bookkeeping, and the hint states what the row already teaches on the
         // first press. What is left is what the folder IS.
         txt_draw_alpha(txt_line_trim(TXT_HERO_META,
-                                     director?"Filmography":"A selection of film and series",
+                                     director?"Filmography":"A selection of movies and series",
                                      190,193,200,255,860),x,358,a);
         return;
       }
@@ -2650,6 +2708,7 @@ static void drawHero(Uint32 now, float output) {
   // turn the dissolve into a resize. The outgoing image is cover-cropped to the new
   // shape for those frames, which is invisible between two 16:9 backdrops.
   r = heroRectFor(artA);
+  { GfxRect rest = r; r = heroGrown(rest, output); heroArtRect = rest; }
 
   // A ceiling of 1920: the hero fills the screen and at 960 it came out stretched to
   // double.
@@ -2688,13 +2747,18 @@ static void drawHero(Uint32 now, float output) {
   if (famHold && heroWanted < 0 && heroPending == heroCurrent &&
       (tCurrent || !artA || tex_failed(artA))) famHold = 0;
   gfx_tex_aspect_current = 0.0f;
-  heroArtRect = r;
+  /* heroArtRect is the RESTING rect, set above — see heroGrown. */
 
   // NOT scaled by famIn here: the early return below would then skip drawHeroCopy for
   // the whole of a hold, and that call is what ASKS text.c for the block's lines (see
   // the note on it). The family's alpha goes on at the call instead, so the block still
   // rasterises during the wait and is ready on the frame the fade starts.
-  float aText = 1.0f - output;
+  // OUT BEFORE THE TITLE SCREEN'S COPY COMES IN, not fading against it. This was
+  // `1 - output`, so it still had half its alpha at the point phase2 starts the
+  // detail's own synopsis: the same sentence, at two sizes and two positions, both
+  // at ~50% for about 70ms. The note below on drawHeroCopy predicts exactly that
+  // — two copies do not dissolve into one another, they read as doubled text.
+  float aText = anim_clamp(1.0f - output / NV_HOME_COPY_OUT, 0.0f, 1.0f);
   float slideDownCopy = output * NV_SCREEN_H * 0.06f;
   if (aText <= 0.004f) return;
 
@@ -2997,7 +3061,12 @@ void home_draw(Uint32 now) {
   // `pd` comes from the SAME spring the detail uses to draw (detail_progress), and not
   // from a clock of its own: two clocks would drift and the home would leave early or
   // late relative to the art coming in.
-  float slideDown = pd * NV_SCREEN_H * 0.08f;
+  // OUT OF THE VIEWPORT, not a nudge — and the same distance coming back, so the
+  // cards return from below the fold rather than appearing in place. On their OWN
+  // fraction of the flight (NV_HOME_SHELF_OUT), not the whole of it: they are what
+  // is getting out of the way, so they go early and quickly.
+  float shelfOut = anim_clamp(pd / NV_HOME_SHELF_OUT, 0.0f, 1.0f);
+  float slideDown = shelfOut * NV_HOME_SHELF_EXIT;
   if (pd >= 0.996f) return;   // the detail has settled: nothing of the home shows
 
   // THE ROWS' VIEWPORT. `.home-modern-rows-viewport` (components.css:6929) is an
@@ -3014,7 +3083,12 @@ void home_draw(Uint32 now) {
   for (int r = 0; r < nRows; r++) {
     KindRow kind = rows[r].kind;
     float fade=anim_clamp((y-(NV_SHELF_TOP-80))/80,0,1);
-    gfx_opacity_group=fade*fade*(3-2*fade);
+    // THEY GO DOWN AND THEY FADE, together and on the same clock. The movement is
+    // what removes them — they clear the clip either way — and the fade is what
+    // stops the lower rows reading as a solid block sliding over the title screen's
+    // art on the way past. The viewport's own top-edge mask is the other factor
+    // here and was always there.
+    gfx_opacity_group=fade*fade*(3-2*fade)*(1.0f-shelfOut);
     float lw = rows[r].stackN ? 680.0f : widthOf(kind);
     float lh = heightOf(kind), step = lw + gapOf(kind);
     float artH = lh;
@@ -3036,7 +3110,7 @@ void home_draw(Uint32 now) {
         const char *cut = strstr(rotFilter, " - ");
         const char *last = NULL;
         while (cut) { last = cut; cut = strstr(cut + 3, " - "); }
-        if (last && (!strcmp(last + 3, "Film")
+        if (last && (!strcmp(last + 3, "Movie")
                        || !strcmp(last + 3, "Series"))) {
           size_t n = (size_t)(last - rotFilter);
           if (n >= sizeof withoutSuffix) n = sizeof withoutSuffix - 1;
@@ -3261,7 +3335,7 @@ void home_draw(Uint32 now) {
             txt_draw(action,tx,contentTop+38.0f);
             TxtLine title=txt_line_trim(TXT_CW_META,cItem->title,228,231,239,255,tw);
             txt_draw(title,tx,contentTop+92.0f);
-            TxtLine ep=txt_line_trim(TXT_MINI,cItem->season?cItem->directing:"Film",181,185,196,255,tw);
+            TxtLine ep=txt_line_trim(TXT_MINI,cItem->season?cItem->directing:"Movie",181,185,196,255,tw);
             txt_draw(ep,tx,contentTop+130.0f);
             TxtLine source=txt_line_trim(TXT_MINI,cItem->providerName[0]?cItem->providerName:"Trakt",155,161,174,255,tw);
             txt_draw(source,tx,contentBase-14.0f);
@@ -3581,7 +3655,7 @@ void home_draw(Uint32 now) {
             // another title's name and genre onto the card.
             const char *name   = (ci && ci->title[0]) ? ci->title : NULL;
             const char *genre = (ci && ci->genre[0]) ? ci->genre
-                                : ci ? (!strcmp(ci->kind, "series") ? "Series" : "Film") : NULL;
+                                : ci ? (!strcmp(ci->kind, "series") ? "Series" : "Movie") : NULL;
             TxtLine tg = genre
                         ? txt_line_trim(TXT_HERO_META, genre, 226, 228, 233, 255, ew - 64)
                         : (TxtLine){ 0, 0, 0 };
