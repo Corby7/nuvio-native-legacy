@@ -121,7 +121,18 @@ static int wantsExit = 0;
 // (the menu's case, or an index coming from outside), it falls back to the whole
 // screen.
 static void openTitle(const HomeItem *it) {
-  if (it && it->art) detail_open(it);
+  // THE SHARED-ELEMENT OPENING NEEDS SOMETHING ON SCREEN TO SHARE. It flies the
+  // backdrop out of the home hero's rectangle and carries the hero's logo into the
+  // title screen's layout, and both of those read state the HOME draws.
+  //
+  // openTitle is reached from the search and the Discover page too, and there the
+  // home is not what is behind: its hero rect and logo rect are whatever the last
+  // visit left, so the flight would start from a rectangle the viewer has never
+  // seen and carry a logo that is not on screen. A "See all" grid covers the home
+  // for the same reason, and with the hero switched off there is no rect at all.
+  // Those get the plain full-bleed fade the closing already uses.
+  int shared = screen == SCREEN_HOME && !seeall_is_open() && settings_hero_on();
+  if (it && it->art) detail_open(it, shared);
 }
 
 static void openByIndex(int i) {
@@ -657,7 +668,7 @@ void app_update(float dt, Uint32 now) {
       it.title = ci ? ci->title : NULL;
       it.genre = ci ? ci->genre : NULL;
       it.meta   = ci ? ci->meta : NULL;
-      detail_open(&it);
+      detail_open(&it, 0);
     } }
   // A title chosen in the grid: opens the detail, as though it had come from the home.
   { int idx = seeall_requested_open();
@@ -675,7 +686,7 @@ void app_update(float dt, Uint32 now) {
       it.title = ci ? ci->title : NULL;
       it.genre = ci ? ci->genre : NULL;
       it.meta   = ci ? ci->meta : NULL;
-      detail_open(&it);
+      detail_open(&it, 0);
     } }
   switch (screen) {
     case SCREEN_SEARCH:      search_update(dt, now);      break;
@@ -783,7 +794,9 @@ int app_goto_detail(const char *imdb) {
     // to find there — opening it from the settings screen would leave that drawing
     // underneath and the Back key returning to it.
     if (screen != SCREEN_HOME) swapScreen(SCREEN_HOME);
-    detail_open(&it);
+    // The home may have just been swapped in underneath and has not drawn a frame,
+    // let alone a hero for THIS title: there is nothing to continue from.
+    detail_open(&it, 0);
     printf("[goto] %s -> catalogue index %d (%s)\n",
            imdb, i, ci && ci->title[0] ? ci->title : "?");
     fflush(stdout); }

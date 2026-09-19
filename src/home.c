@@ -24,6 +24,9 @@
 // (because of HomeItem), and the cycle only fails to explode thanks to the guards.
 // A one-line function is not worth tying the two files together.
 float detail_progress(void);
+// Same reason as above. 1 only while an opening that has a hero to continue from
+// is running, which is the only time this file hands its logo over.
+int   detail_shared_origin(void);
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
@@ -1690,9 +1693,26 @@ void home_update(float dt, Uint32 now) {
 // its backdrop EXACTLY where the art already was, instead of appearing from nowhere:
 // the background is the title's own, so it should neither flash nor grow.
 static GfxRect heroArtRect = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+// WHERE THE HERO'S LOGO WAS, on the last frame that drew one. The detail screen
+// reads this to fly the SAME logo from here into its own layout instead of fading
+// one out while the other fades in — see home_hero_logo_rect.
+//
+// `valid` is about whether this title HAS a logo, not whether it was drawn this
+// frame: the rect has to survive the frames where the copy is at alpha 0 (the
+// detail is on top of it by then), and it is still the right answer there because
+// it is still the same title.
+static GfxRect heroLogoRect;
+static int     heroLogoValid = 0;
 void home_hero_rect(float *x, float *y, float *w, float *h) {
   *x = heroArtRect.x; *y = heroArtRect.y;
   *w = heroArtRect.w; *h = heroArtRect.h;
+}
+
+int home_hero_logo_rect(float *x, float *y, float *w, float *h) {
+  if (!heroLogoValid) return 0;
+  *x = heroLogoRect.x; *y = heroLogoRect.y;
+  *w = heroLogoRect.w; *h = heroLogoRect.h;
+  return 1;
 }
 
 // ONE separator dot on the hero's meta line, and it is the BULLET.
@@ -1932,6 +1952,9 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
   }
   // With no logo the name is drawn bottom-aligned inside the full box, so there the
   // box IS the row. Either way it is the row's BASE the gap hangs from.
+  // A title with NO logo must not hand the detail the previous title's rect: the
+  // flight would start from a place nothing has ever been drawn.
+  if (!tlogo && !(ci && ci->logo[0])) heroLogoValid = 0;
   float hLogo = tlogo ? hTitle : NV_LOGO_HERO_H;
   float logoY = yMeta - NV_HERO_LOGO_GAP - hLogo;
 
@@ -1939,6 +1962,9 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
     // object-position: left top — the art sits at the TOP of its box, which is now
     // the art's own height, so that edge is also its base.
     GfxRect rl = { x, logoY, wTitle, hTitle };
+    // Recorded BEFORE the slide and before any decision not to draw: what the detail
+    // wants is where this logo RESTS, not where a transition has pushed it to.
+    heroLogoRect = rl; heroLogoRect.y = rl.y - slideDownCopy; heroLogoValid = 1;
     gfx_tex_aspect_current = 0.0f;
     // A dark logo becomes white. The same rule as the detail screen's: TMDB does not
     // mark light/dark, so the decision comes from the MEASURED luminance
@@ -1960,7 +1986,14 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
       // early-out of its own, so an invisible logo still cost geometry. Two cases
       // reach it — the warm pass, which runs the whole layout at 0, and the first
       // frames of the ordinary fade, where heroCopy starts there.
+      // AND IT IS NOT DRAWN AT ALL ONCE THE DETAIL HAS IT. From the first frame of
+      // the transition the logo belongs to detail.c, which draws this very texture
+      // flying from the rect above into the title screen's layout. Left on here too
+      // there would be two of them, one sliding down and fading while the other
+      // crossed the screen — which is the "fade out, fade in" the flight exists to
+      // replace. The rest of the copy still goes down and fades, as it did.
       float aLogo = alpha * anim_smooth(heroLogo);
+      if (detail_shared_origin() && detail_progress() > 0.001f) aLogo = 0.0f;
       if (aLogo > 0.004f)
         gfx_rect(rl, tlogo, m, 0, 0, 0, 0.0f, 1, 1, 1, aLogo); }
   } else {

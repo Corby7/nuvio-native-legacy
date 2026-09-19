@@ -79,6 +79,17 @@ static HomeItem item;
 static int  is_open = 0, exiting = 0;
 static int  idx = 0;                 // the current title within the collection
 static float t = 0.0f;               // 0 = the card on the home, 1 = full screen
+// The flight's VELOCITY. The spring that drives `t` is second-order (see
+// NV_SPRING2_SCREEN in layout.h), so the position alone does not describe its
+// state — and without the velocity kept here the movement would leave at full
+// speed on its first frame, which is exactly the cut this change removes.
+static float velT = 0.0f;
+// Whether this opening has a hero on screen behind it to continue FROM. Set by the
+// router at detail_open; see the note there. It selects the whole shape of the
+// transition, not a detail of it: with an origin the backdrop flies out of the
+// hero's rect and the logo crosses the screen, without one both would start from
+// coordinates nothing has ever been drawn at.
+static int sharedOrigin = 0;
 // Two states, not three: the hero (level 0) and the scrolled page (level 1). The
 // intermediate "the card becomes full screen" only made sense while there was a
 // card; in the web app the screen is born full.
@@ -486,14 +497,15 @@ static int artDetailIsPoster(int i) {
 }
 
 static void drawArtDetail(GfxRect target, GLuint tex, const char *art,
-                               int poster, float alpha, float pg) {
+                               int poster, float alpha, float pg, float zoom) {
   if (!tex) {
     gfx_color(target, 0.0f, 0.051f, 0.051f, 0.051f, alpha);
     return;
   }
   gfx_tex_aspect_current = tex_aspect(art);
   if (!poster) {
-    gfx_rect(target, tex, GFX_DETAIL, 1.0f - pg, 0, 0, 0.0f, 0, 0, 0,
+    // uPar.x carries the closing's zoom; see the note on the mode in gfx.c.
+    gfx_rect(target, tex, GFX_DETAIL, 1.0f - pg, zoom, 0, 0.0f, 0, 0, 0,
              alpha);
   } else {
     float ap = gfx_tex_aspect_current > 0.05f ? gfx_tex_aspect_current : (2.0f / 3.0f);
@@ -529,11 +541,12 @@ static void txt_weight(TxtLine l, float x, float y, float a, float thickness) {
   if (thickness > 0.9f)  txt_draw_alpha(l, x + thickness, y, a);
 }
 
-void detail_open(const HomeItem *it) {
+void detail_open(const HomeItem *it, int shared) {
   mark("detail_open");
   item = *it;
+  sharedOrigin = shared;
   is_open = 1; exiting = 0; level = 0; button = 0;
-  t = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; personIs_open = 0;
+  t = 0.0f; velT = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; personIs_open = 0;
   relFocus = 0; reqOpen = -1; ratTemp = 0;
   // Every held slot starts closed for the new title, and the clock on them starts
   // HERE rather than at the first draw — a title opened from another title would
@@ -568,12 +581,13 @@ void detail_open(const HomeItem *it) {
 }
 
 int detail_is_open(void) { return is_open; }
+int detail_shared_origin(void) { return is_open && sharedOrigin; }
 
 // 0..1 of how much the detail has already taken over the screen. The home reads this
 // to push the rows DOWN as it comes in: it is the movement the owner describes as
 // "only the posters go down". It lives here and not in a shared variable because the
 // spring that produces it is the drawing's own — two different clocks would drift.
-float detail_progress(void) { return is_open ? smooth(t) : 0.0f; }
+float detail_progress(void) { return is_open ? t : 0.0f; }
 
 // The season and episode IN FOCUS, for whoever is going to ask for a source.
 //
@@ -672,17 +686,63 @@ int detail_settled(void) {
 // The backdrop's rectangle THIS FRAME and the opacity it comes in with. One piece of
 // arithmetic, used by detail_covers_screen and by detail_draw — if the two diverged,
 // the home would disappear one frame before the art covers it and the screen would flash.
-static void backdropRect(GfxRect *r, float *opacity) {
-  float s = smooth(t);
+// The flight's geometry and the two ramps that go with it. The two DIRECTIONS are
+// deliberately not the same shape, and that is the conclusion of trying every
+// version where they were.
+//
+// OPENING: THE RECT FLIES, born exactly on the home hero's rect and growing until
+// it is the screen. The background does not SWAP, it CONTINUES — the hero was
+// already showing this title's art — and with a full-screen hero the two rects are
+// the same, so the eye sees only the text rearranging. This is the movement to
+// keep; everything below exists so as not to spoil it.
+//
+// CLOSING: THE RECT DOES NOT FLY. It stays full-bleed and dissolves. A rectangle
+// shrinking back across the home puts four travelling edges on screen, and outside
+// them is the home's rows on flat #0d0d0d (drawBackground is a no-op) while inside
+// is a bright picture — that contrast is a frame, and the eye follows the shape.
+// Three ways of hiding it were built and rejected: an alpha feather (alpha reveals
+// the rows behind, so the boundary stayed), a perimeter ramp to the page colour
+// with the ground brought down to meet it, and removing the flight from BOTH ends
+// (which hid the edges by deleting the transition). What is left is the honest
+// answer: do not put edges on screen on the way out. The picture pulls back
+// through the zoom instead, inside a frame that never appears.
+static void backdropRect(GfxRect *r, float *opacity, float *zoom) {
+  float s = t;
   GfxRect de;
   home_hero_rect(&de.x, &de.y, &de.w, &de.h);
-  r->x = de.x + (0.0f - de.x) * s;
-  r->y = de.y + (0.0f - de.y) * s;
-  r->w = de.w + (NV_SCREEN_W - de.w) * s;
-  r->h = de.h + (NV_SCREEN_H - de.h) * s;
-  // It comes up FAST (s*3, not s): the art underneath is the same, so the ramp only
-  // swaps the hero's vignette for the detail's.
-  *opacity = anim_clamp(s * 3.0f, 0.0f, 1.0f);
+  // No origin, no flight: from the search, Discover, a grid or the context menu
+  // there is no hero rect on screen, so the backdrop is full-bleed from the first
+  // frame and simply fades up — the same shape the closing uses.
+  if (exiting || !sharedOrigin) {
+    r->x = 0.0f; r->y = 0.0f; r->w = NV_SCREEN_W; r->h = NV_SCREEN_H;
+  } else {
+    r->x = de.x + (0.0f - de.x) * s;
+    r->y = de.y + (0.0f - de.y) * s;
+    r->w = de.w + (NV_SCREEN_W - de.w) * s;
+    r->h = de.h + (NV_SCREEN_H - de.h) * s;
+  }
+
+  // OPENING it comes up FAST (front-loaded, opaque at s = 0.126, ~50 ms): the art
+  // underneath is the same picture, so the ramp only swaps the hero's gradient for
+  // the detail's, and fading one copy in over the other dips the brightness in the
+  // middle. CLOSING there is no such copy to protect — the rect is full-bleed and
+  // has to hand the screen back — so it dissolves over NV_DETAIL_DISSOLVE, ~240 ms.
+  *opacity = exiting ? anim_clamp(s * NV_DETAIL_DISSOLVE, 0.0f, 1.0f)
+                     : anim_clamp(smooth(s) * 3.0f, 0.0f, 1.0f);
+
+  // THE ZOOM is the closing's movement, and only the closing's — opening, the rect
+  // is doing the moving and this stays at 1.0. Its size is not chosen here: the
+  // home's hero cover-crops this art into ITS rect, and a wider rect crops harder,
+  // so the banded hero (1421x670, aspect 2.12) shows a 16:9 backdrop magnified by
+  // 2.12/1.78 = 1.19 against the full screen's 1.0. Pulling back to that ratio is
+  // the same content movement the flight performs in the other direction, which is
+  // why the two ends read as one gesture despite being built differently. A
+  // full-screen hero gives 1.0 and nothing moves, which is right for that layout.
+  if (zoom) {
+    float ah = de.h > 1.0f ? de.w / de.h : (NV_SCREEN_W / NV_SCREEN_H);
+    float z0 = anim_clamp(ah / (NV_SCREEN_W / NV_SCREEN_H), 1.0f, 1.25f);
+    *zoom = exiting ? 1.0f + (z0 - 1.0f) * (1.0f - s) : 1.0f;
+  }
 }
 
 int detail_covers_screen(void) {
@@ -696,14 +756,18 @@ int detail_covers_screen(void) {
   // fill, home + flat background + backdrop, three full-screen layers or more).
   //
   // Now the question is the right one: has the backdrop's rectangle already reached
+  // all four edges AND is it already opaque?
+  //
+  // Now the question is the right one: has the backdrop's rectangle already reached
   // all four edges AND is it already opaque? With the hero full screen it is born
-  // practically screen-sized, so the answer arrives at t ~ 0.13 — the home leaves six
-  // times sooner. When the origin does NOT cover (a banded hero, or the detail opened
-  // from the search), the arithmetic answers `no` and the home is still drawn: which
-  // is why this is a coverage measurement and not a new threshold on `t`.
+  // practically screen-sized, so the answer arrives at t ~ 0.13. When the origin
+  // does NOT cover (a banded hero, or the detail opened from the search) the
+  // arithmetic answers `no` and the home is still drawn: which is why this is a
+  // coverage measurement and not a threshold on `t`. CLOSING, the rect is
+  // full-bleed from the start, so what answers is the dissolve alone.
   if (!is_open) return 0;
   { GfxRect r; float opacity;
-    backdropRect(&r, &opacity);
+    backdropRect(&r, &opacity, NULL);
     if (opacity < 0.999f) return 0;
     return r.x <= 0.5f && r.y <= 0.5f &&
            r.x + r.w >= NV_SCREEN_W - 0.5f && r.y + r.h >= NV_SCREEN_H - 0.5f;
@@ -1280,11 +1344,27 @@ void detail_update(float dt, Uint32 now) {
   // previous frame's count would leave the layout one frame behind — visible as a jolt
   // when the cast or the trailers arrive.
   recomputeLayout();
-  t  = anim_spring(t,  exiting ? 0.0f : 1.0f, dt, NV_SPRING_SCREEN);
+  // THE FLIGHT. Critically damped, and the ONLY easing on it: whoever reads `t`
+  // reads a curve that is already eased, and must not ease it a second time —
+  // that composition is what turned this movement into a two-frame cut (the
+  // arithmetic is in layout.h, at NV_SPRING2_SCREEN).
+  //
+  // Closing is given its own frequency rather than its own curve: it is the same
+  // spring chasing 0 instead of 1. A Back pressed mid-opening therefore has no
+  // clock to restart and no keyframe to jump to — it turns round from wherever the
+  // rectangle had got to. (anim_spring2 drops the velocity on a reversal, on
+  // purpose: carrying the outward speed into the return is an overshoot.)
+  t  = anim_spring2(&velT, t, exiting ? 0.0f : 1.0f, dt,
+                    exiting ? NV_SPRING2_SCREEN_OUT : NV_SPRING2_SCREEN);
   // A stiffness of its own: the web app takes 0.8s to fade the backdrop out
   // (cubic-bezier .4,0,.2,1), and the NV_SPRING_SCREEN spring settles in ~330ms.
   pg = anim_spring(pg, level >= 1 ? 1.0f : 0.0f, dt, NV_SPRING_PAGE);
-  if (exiting && t < 0.02f) { is_open = 0; exiting = 0; t = 0.0f; return; }
+  // LET GO WHEN THE FADE HAS GONE, not when the rectangle has. The threshold was
+  // 0.02 of the flight, and the ramp above is the cube of what is left: at t = 0.02
+  // the backdrop was still 18% opaque, so the screen stopped being drawn while it
+  // was plainly visible. 0.006 puts it at 5% — over the hero art the home is
+  // already drawing, in the rectangle the home already has it in.
+  if (exiting && t < 0.006f) { is_open = 0; exiting = 0; velT = 0.0f; t = 0.0f; return; }
 
   for (int r = 0; r < N_SECTIONS; r++)
     for (int c = 0; c < sectionN(r) && c < N_ITEMS; c++) {
@@ -1780,7 +1860,24 @@ static void drawSkel(float x, float yCenter, float w, float h, float a) {
 }
 
 static void heroWeb(float a, float offset) {
-  if (a <= 0.005f) return;
+  // THE FLIGHT KEEPS THIS BLOCK ALIVE AT ALPHA 0, and only for the logo.
+  //
+  // Everything here comes in on phase2, which is still 0 for the first 45% of the
+  // transition — but the title's logo is crossing the screen during exactly those
+  // frames, and home.c has already stopped drawing its copy. Returning early would
+  // leave no logo anywhere for the first half of the movement and then have it
+  // appear mid-flight, which is worse than the crossfade this replaces.
+  //
+  // The test is narrow on purpose: a block laid out at alpha 0 costs geometry
+  // (gfx_rect has no alpha early-out), so it is paid only while a logo is actually
+  // in the air. A title with no logo, or a hero that never drew one, returns as
+  // before. The layout is not wasted either — it is this call that asks text.c for
+  // the lines, so they are rasterised and ready by the time phase2 lifts them.
+  if (a <= 0.005f) {
+    float hx, hy, hw, hh;
+    if (!(sharedOrigin && t < 0.999f && logoOf(idx) &&
+          home_hero_logo_rect(&hx, &hy, &hw, &hh))) return;
+  }
   const CatItem *ci = cat_item(idx);
 
   char year[32], duration[64];
@@ -1884,9 +1981,16 @@ static void heroWeb(float a, float offset) {
   float ySup   = supSlot ? ySin - NV_DETW2_GAP_SUP : ySin;
   float yActions = ySup - NV_DETW2_GAP_ACTIONS - NV_DETWEB_BTN_H;
 
-  // It rises a few pixels as it comes in: it continues the art's movement instead of
-  // appearing ready in place. `offset` is the document's scroll.
-  float rises = (1.0f - a) * 26.0f + offset;
+  // It moves a few pixels as it comes in, instead of appearing ready in place.
+  // WHICH WAY is NV_DETW_COPY_TOGETHER — up into place, against the home's copy
+  // leaving downward, or down into place alongside it. `offset` is the document's
+  // scroll and is not part of the choice.
+  // Travelling WITH the home's copy only means anything when the home's copy is
+  // the thing being replaced. Opened from anywhere else there is nothing leaving
+  // downward to keep company with, and a block descending into place on its own
+  // reads as the page dropping rather than settling — so those rise, as before.
+  float travel = (sharedOrigin && NV_DETW_COPY_TOGETHER) ? -26.0f : 26.0f;
+  float rises = (1.0f - a) * travel + offset;
   yMeta2 += rises; yMeta1 += rises; ySin += rises; ySup += rises;
   yActions += rises;
 
@@ -1937,6 +2041,34 @@ static void heroWeb(float a, float offset) {
     // The logo settles above the actions row.
     float baseLogo = yActions - NV_DETW_LOGO_GAP;
     GfxRect r = { NV_DETW2_X, baseLogo - h, w, h };
+
+    // THE LOGO IS ONE ELEMENT, NOT TWO OF THEM CROSSFADING. The home's hero and this
+    // screen draw the SAME image — `ci->logo`, the title's own mark — so there is no
+    // reason for one to fade out while the other fades in. It FLIES: from where the
+    // hero had it to where this layout puts it, on the same curve as the backdrop, so
+    // the mark the viewer was already reading is the one that ends up on the page.
+    //
+    // home.c stops drawing its copy from the first frame of the transition (see the
+    // note at its logo), so only ever one is on screen.
+    //
+    // IT TARGETS THE RESTING RECT, with `rises` taken back off. Everything else in
+    // this block comes in 26px low and rises as it fades; the logo must not do both,
+    // or it would arrive travelling upward after having just travelled across.
+    //
+    // ALPHA GOES TO 1 while it flies. The fade is for copy that has nowhere to come
+    // from; this has somewhere, and fading something that is moving only makes the
+    // movement harder to follow.
+    float aLogo = a;
+    { GfxRect hl;
+      if (sharedOrigin && t < 0.999f &&
+          home_hero_logo_rect(&hl.x, &hl.y, &hl.w, &hl.h)) {
+        GfxRect rest = { r.x, baseLogo - rises - h, r.w, r.h };
+        r.x = hl.x + (rest.x - hl.x) * t;
+        r.y = hl.y + (rest.y - hl.y) * t;
+        r.w = hl.w + (rest.w - hl.w) * t;
+        r.h = hl.h + (rest.h - hl.h) * t;
+        aLogo = 1.0f;
+      } }
     gfx_tex_aspect_current = 0.0f;   // the logo already comes at the right aspect ratio
     // A BLACK LOGO BECOMES WHITE. TMDB serves the same mark in a light and a dark
     // version and does NOT say which is which — there is no field for it, and the web
@@ -1953,7 +2085,7 @@ static void heroWeb(float a, float offset) {
     // -1 = still loading: treat it as light and do not tint. Erring on the side of not
     // touching the art is right while it is not known.
     { GfxMode m = tex_brand_dark(fileLogo) ? GFX_BRAND : GFX_TEXT;
-      gfx_rect(r, texLogo, m, 0, 0, 0, 0.0f, 1, 1, 1, a); }
+      gfx_rect(r, texLogo, m, 0, 0, 0, 0.0f, 1, 1, 1, aLogo); }
   } else {
     // With no logo, the NAME. The box's height is still the logo's, so the button row
     // does not jump between a title with a logo and one without.
@@ -3695,7 +3827,11 @@ static void drawPerson(float a) {
 
 void detail_draw(Uint32 now) {
   if (!is_open) return;
-  float s = smooth(t), a2 = phase2();
+  float s = t, a2 = phase2();
+  // ONE call, at the top: the page is painted before the art and both read the
+  // same arithmetic, so there is no way for the two to come off different frames.
+  GfxRect target; float aEntry, zoom;
+  backdropRect(&target, &aEntry, &zoom);
 
   if (!detail_covers_screen()) {
     GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
@@ -3703,29 +3839,24 @@ void detail_draw(Uint32 now) {
   }
   gfx_no_crop();
 
-  // --- full-bleed backdrop --------------------------------------------------
-  // The detail screen is a 1920x1080 image at (0,0) with the vignette over it; there is
-  // no card, no frame and no neighbouring titles.
+  // --- the backdrop ---------------------------------------------------------
+  // At rest it is a 1920x1080 image at (0,0) with the vignette over it: no card, no
+  // frame, no neighbouring titles.
   //
-  // THE BACKDROP DOES NOT GROW OUT OF THE CARD. It was the last remnant of the Apple
-  // app's flight: the rectangle started from item.rect and opened out to the screen.
-  // The owner described the right behaviour — "only the posters go down and the
-  // background stays, and the background is the selected film's art" — and flying the
-  // rectangle is the opposite of that: the art comes in small and grows, instead of
-  // already being there.
+  // IT IS BORN ON THE HOME'S HERO AND GROWS INTO THAT. The background does not
+  // SWAP, it CONTINUES — the home's hero was already showing this same title's
+  // art, so the rect starts exactly where that art was and flies from there, with
+  // no flash and no crossfade. With a full-screen hero the two rects are the same
+  // and the eye sees no movement at all, only the text rearranging; with a banded
+  // one the flight is the transition, and what would otherwise expose it — four
+  // travelling edges — is handled by the pair of gradients in backdropRect.
   //
-  // Now the art fills the screen from the first frame and only gains opacity. What
-  // moves are the home's rows, which go down (see home_draw, which reads
-  // detail_progress).
-  // THE BACKGROUND DOES NOT SWAP: it CONTINUES. The home's hero was already showing
-  // this same title's art, so the detail's backdrop is born at the exact rect it was in
-  // and grows from there to full screen, with no flash and no crossfade — with the hero
-  // full screen the two rects are practically the same and the eye sees no movement at
-  // all, only the text rearranging. Before, the art came in from zero gaining opacity
-  // over the identical art that was already there, which gave a flare in the middle of
-  // the transition.
-  GfxRect target; float aEntry;
-  backdropRect(&target, &aEntry);
+  // The art must not come in from zero opacity over the identical art already on
+  // screen: that dips the brightness in the middle, and it is why the opacity ramp
+  // is front-loaded rather than spread over the flight.
+  //
+  // The home's rows go down underneath for as long as they are visible (home_draw
+  // reads detail_progress), which is until the page's ground is opaque.
   const char *art = artOf(idx);
   int artPoster = artDetailIsPoster(idx);
   // A full-screen backdrop: it asks for the 1920 ceiling. With the common ceiling of
@@ -3752,8 +3883,13 @@ void detail_draw(Uint32 now) {
   // the scrolling, which is the pairing that was missing: the web app fades the art to
   // 15% AND removes the vignette at the same time. A fallback poster uses a contained
   // composition, with no cover crop.
+  // WITH NO TEXTURE the call above fills the rectangle with #0d0d0d, and the alpha
+  // it is handed used to be a literal 1.0 — an OPAQUE black rectangle, flying on
+  // the transition's geometry while the home was still underneath it. At rest
+  // aEntry is 1.0 anyway, so the page still has its opaque background when the art
+  // never arrives; what goes is the black rectangle during the flight.
   drawArtDetail(target, tex, art, artPoster,
-                     tex ? aEntry * (1.0f - 0.85f * pg) : 1.0f, pg);
+                     tex ? aEntry * (1.0f - 0.85f * pg) : aEntry, pg, zoom);
 
 
   // The hero SCROLLS with the document: it does not disappear and is not replaced by a
@@ -3762,7 +3898,10 @@ void detail_draw(Uint32 now) {
   // The content RISES into place as it appears, instead of merely turning up: it is the
   // counterpart of the home's text, which drops and fades. Together, it reads as one
   // block changing arrangement, which is what the owner asked for.
-  heroWeb(a2, -scrollY + (1.0f - a2) * NV_SCREEN_H * 0.05f);
+  // The same sign as the 26px above, and for the same reason: the block's two
+  // movements are one movement and must not pull against each other.
+  heroWeb(a2, -scrollY + (1.0f - a2) * NV_SCREEN_H *
+                            ((sharedOrigin && NV_DETW_COPY_TOGETHER) ? -0.05f : 0.05f));
 
 
   if (pg <= 0.01f && scrollY < 1.0f) {

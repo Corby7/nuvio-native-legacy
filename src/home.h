@@ -47,6 +47,9 @@ void home_draw(Uint32 now);
 // to be born with the backdrop in the same place — the detail's background IS
 // the focused title's art, and it should not reappear, it should continue.
 void home_hero_rect(float *x, float *y, float *w, float *h);
+// Where the hero's LOGO rests, for the detail to fly the same image into its own
+// layout. 0 when this title has none, and the detail then keeps its plain fade.
+int home_hero_logo_rect(float *x, float *y, float *w, float *h);
 void home_shutdown(void);
 // Records the interrupted title for the contextual "Resume now" band. The band
 // only exists while the progress makes sense (neither the start nor the end).

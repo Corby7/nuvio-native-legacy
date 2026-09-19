@@ -295,8 +295,23 @@ static const char *FS_BODY[GFX_NMODES] = {
   // The art comes in "cover" with CENTRAL anchoring, which is what the web app
   // does in practice: the rule is `background-position:100% 0`, but the backdrop
   // is 16:9 in a 16:9 frame and there is nothing left over to shift.
+  //
+  // uPar.x IS THE CONTENT'S ZOOM, and only the CLOSING uses it. Opening, the rect
+  // itself flies out of the home hero's rect and the cover crop does the work, so
+  // the zoom is 1.0 and this costs nothing. Closing, the rect stays full-bleed — a
+  // rectangle shrinking back across the home puts four travelling edges on screen,
+  // and hiding those was tried three ways and rejected — so the movement has to
+  // happen inside a frame that never appears. Dividing the offset from the centre
+  // by z > 1 samples less of the texture and magnifies what is left, so the
+  // picture pulls back with no edge anywhere to pull back from.
+  //
+  // cover() never returns outside [0,1] and z is never below 1, so the window
+  // stays inside the texture and no edge is ever smeared. 0 means "no zoom":
+  // every other caller of this mode passes uPar = 0 and is untouched.
   "void main(){\n"
-  "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
+  "  float z = max(uPar.x, 1.0);\n"
+  "  vec2 uvz = (cover(vUv) - 0.5) / z + 0.5;\n"
+  "  vec3 c = texture2D(uTex, clamp(uvz, 0.0, 1.0)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
   "  float x = vUv.x;\n"
   "  float a = 1.0 - clamp(x/0.0780,0.0,1.0)*0.05\n"

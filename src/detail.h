@@ -10,7 +10,15 @@
 #include <SDL2/SDL.h>
 #include "home.h"
 
-void detail_open(const HomeItem *item);
+// `shared` says the SCREEN BEHIND is the home, with its hero showing this title:
+// only then does the opening fly out of the hero's rect and carry the logo across.
+// From the search, the Discover page, a "See all" grid or the context menu there is
+// no hero on screen to continue from — the flight would start at a rectangle the
+// viewer has never seen — so those pass 0 and get a plain full-bleed fade.
+void detail_open(const HomeItem *item, int shared);
+// 1 while the screen that is open was given a shared origin. The home reads it to
+// hand its hero logo over instead of drawing a second copy of it.
+int  detail_shared_origin(void);
 int  detail_is_open(void);
 // 0..1 of how much the detail has taken over the screen; the home uses it to push
 // the rows down.

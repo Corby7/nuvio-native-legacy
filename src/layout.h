@@ -1114,6 +1114,52 @@
 // the spring was swapped.
 #define NV_SPRING2_SCROLL  11.5f
 #define NV_SPRING_SCREEN      9.0f
+// THE DETAIL'S OPENING AND CLOSING — the frequency (rad/s) of the critically
+// damped spring that drives it. `NV_SPRING_SCREEN` still names the FIRST-ORDER
+// stiffness the menu, the context menu and the episode sheet use; the detail's
+// flight left it for the reason anim.h records at anim_spring2().
+//
+// WHAT WAS WRONG. The flight ran `anim_spring(t, 1, dt, NV_SPRING_SCREEN)` and
+// then drew `smooth(t) = 1-(1-t)^3`. The two compose into a single exponential:
+// with 1-t = e^-9s, (1-t)^3 = e^-27s — an EFFECTIVE stiffness of 27, 95% of the
+// way in 111ms, leaving at maximum speed on the first frame. At the device's
+// 60Hz that is 36% of the zoom inside the FIRST frame and 59% at 30Hz: the
+// opening was not an animation, it was a cut with two frames of smear. The
+// closing, which composes the other way round, took ~460ms — so the two ends of
+// the same movement were four times apart.
+//
+// p(t) = 1-(1+wt)e^-wt starts at ZERO velocity, accelerates, and ends on an
+// e^-wt tail with no overshoot. 10.0 puts the halfway point at 1.678/w = 168ms
+// and 95% at 474ms; the closing is a little brisker, as a movement the viewer
+// has already decided on should be.
+#define NV_SPRING2_SCREEN      10.0f
+#define NV_SPRING2_SCREEN_OUT  14.0f
+// HOW LONG THE BACKDROP TAKES TO GIVE THE SCREEN BACK on the way out, as a
+// multiplier on the flight. 1.8 has it fully opaque down to s = 0.555 and
+// dissolving from there, about 240 ms of crossfade back to the home.
+//
+// The two directions are not symmetrical, and that is the shape that was settled
+// on after trying every symmetrical one. OPENING, the rect flies out of the home
+// hero's rect and the ramp only swaps one gradient for another over art that is
+// already there, so it is front-loaded and over in a blink — spreading it dips
+// the brightness in the middle. CLOSING, the rect does NOT fly: it stays
+// full-bleed and dissolves, because a rectangle shrinking back across the home
+// puts four travelling edges on screen and nothing hid them acceptably.
+#define NV_DETAIL_DISSOLVE  1.8f
+
+// WHICH WAY THE COPY TRAVELS while the screens change. One line, two readings of
+// the same moment, and the only difference between them is a sign.
+//
+//   0 — the two blocks move APART: the home's drops 6% of the screen and fades,
+//       the detail's comes up 5% + 26px into place. Opposed directions read as a
+//       SWAP — one thing leaving, a different thing arriving.
+//   1 — both travel the SAME way, downward, with the rows the detail pushes down.
+//       Nothing changes direction anywhere on screen, so it reads as ONE block
+//       re-laying out rather than two blocks trading places.
+//
+// The logo is unaffected either way: it flies between the two rects and is the one
+// element that genuinely IS shared (see the note at the detail's logo).
+#define NV_DETW_COPY_TOGETHER  1
 // The opening of the detail's sections PAGE. MEASURED in the web app's stylesheet:
 // `.series-detail-shell.detail-scrolled .series-detail-backdrop` goes to
 // `opacity: 0.15` over 0.8s cubic-bezier(0.4, 0, 0.2, 1). exp(-3.8*0.8) = 0.05,
