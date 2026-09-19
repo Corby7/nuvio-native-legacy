@@ -1020,9 +1020,26 @@ static void syncRows(void) {
   // scroll to another.
   static Row old[MAX_FILTER];
   float oldX[MAX_FILTER];
+  // THE FOCUS ANIMATION TRAVELS WITH THE ROW TOO. It was zeroed below and nothing
+  // ever put it back, and discovery republishes the catalogue once per row that
+  // lands from the network: the card under the focus dropped to its resting size and
+  // sprang back ~20 times in the first seconds of the home. That is the flicker the
+  // owner sees at startup — not a redraw, the same spring restarted over and over.
+  // Saved and restored by the row's KEY, exactly like the horizontal scroll.
+  static float oldFocusAnim[MAX_FILTER][MAX_CARDS];
+  float oldVelX[MAX_FILTER];
+  // The expansion's row, by key for the same reason: its index moves between
+  // publications, so it cannot be carried as a number.
+  char keyExp[192];
+  int colExp = expColumn;
   int nOld = nRows;
+  keyExp[0] = 0;
+  if (expRow >= 0 && expRow < nRows)
+    snprintf(keyExp, sizeof keyExp, "%s", rows[expRow].key);
   memcpy(old, rows, sizeof old);
   memcpy(oldX, scrollX, sizeof oldX);
+  memcpy(oldFocusAnim, animFocus, sizeof oldFocusAnim);
+  memcpy(oldVelX, velX, sizeof oldVelX);
   int hasHighlight = 0;
   for (r = 0; r < nCat && destination < MAX_FILTER - 1; r++) {
     const CatRow *cf = cat_row(r);
@@ -1287,9 +1304,26 @@ static void syncRows(void) {
           rows[r].n=rows[r].stackN<10?rows[r].stackN:10;
           rows[r].stackN=0;rows[r].seeAll=1;
         }
-        scrollX[r] = oldX[a]; break;
+        scrollX[r] = oldX[a];
+        velX[r] = oldVelX[a];
+        // The whole row of springs, not just the focused card: the neighbours are
+        // mid-way out of focus and restarting them shows as the same flicker.
+        memcpy(animFocus[r], oldFocusAnim[a], sizeof animFocus[r]);
+        break;
       }
-  expRow = expColumn = -1; expOpen = 0.0f;
+  // The expansion survives a rebuild that KEPT its row. Closing it unconditionally
+  // also restarted the delay in home_update, so on a home that publishes twenty
+  // times an open card slammed shut twenty times.
+  expRow = -1;
+  if (keyExp[0])
+    for (r = 0; r < nRows; r++)
+      if (!strcmp(rows[r].key, keyExp)) { expRow = r; break; }
+  if (expRow < 0 || colExp < 0 ||
+      colExp >= rows[expRow].n + (rows[expRow].seeAll ? 1 : 0)) {
+    expRow = expColumn = -1; expOpen = 0.0f;
+  } else {
+    expColumn = colExp;
+  }
   if (nRows < 1) return;
   {
     int cols[MAX_FILTER], k;
