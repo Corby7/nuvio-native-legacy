@@ -726,7 +726,13 @@ void app_draw(Uint32 now) {
     // "See all" covers the screen behind it completely (an opaque background), so
     // the home need not be drawn underneath — the same arithmetic as
     // detail_covers_screen.
-    if (!detail_covers_screen() && !seeall_is_open()) {
+    //
+    // COVERS, not IS_OPEN. A collection opens by growing a window out of the card
+    // that was pressed, and while that window is opening the home is the
+    // BACKGROUND the grid is arriving over — its hero is the same folder's art,
+    // standing still while the treatment changes around it. Cutting it at the
+    // first frame, as is_open did, left the window opening over black.
+    if (!detail_covers_screen() && !seeall_covers_screen()) {
       switch (screen) {
         case SCREEN_SEARCH:      search_draw(now);      break;
         case SCREEN_LIBRARY: library_draw(now); break;

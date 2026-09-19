@@ -27,6 +27,11 @@ float detail_progress(void);
 // Same reason as above. 1 only while an opening that has a hero to continue from
 // is running, which is the only time this file hands its logo over.
 int   detail_shared_origin(void);
+// And the same for the collection grid, which carries the folder's MARK up into
+// its own header — the wordmark, or the title as type for a folder that has no
+// wordmark. seeall.h includes collections.h, not home.h, so this one is by hand
+// only to keep the three declarations together.
+int   seeall_owns_mark(void);
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
@@ -1703,6 +1708,13 @@ static GfxRect heroArtRect = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
 // it is still the same title.
 static GfxRect heroLogoRect;
 static int     heroLogoValid = 0;
+// THE SAME TWO QUESTIONS, for a COLLECTION row. Opening one goes to the grid
+// (seeall), not to the detail, and that screen grows its view out of the CARD and
+// carries the folder's wordmark up into its header — so it needs where both of
+// them were, for the same reason and with the same staleness rule.
+static GfxRect collCardRect,  collLogoRect,  collTitleRect,  collGroupRect;
+static int     collCardValid = 0, collLogoValid = 0, collTitleValid = 0,
+               collGroupValid = 0;
 void home_hero_rect(float *x, float *y, float *w, float *h) {
   *x = heroArtRect.x; *y = heroArtRect.y;
   *w = heroArtRect.w; *h = heroArtRect.h;
@@ -1712,6 +1724,34 @@ int home_hero_logo_rect(float *x, float *y, float *w, float *h) {
   if (!heroLogoValid) return 0;
   *x = heroLogoRect.x; *y = heroLogoRect.y;
   *w = heroLogoRect.w; *h = heroLogoRect.h;
+  return 1;
+}
+
+int home_collection_card_rect(float *x, float *y, float *w, float *h) {
+  if (!collCardValid) return 0;
+  *x = collCardRect.x; *y = collCardRect.y;
+  *w = collCardRect.w; *h = collCardRect.h;
+  return 1;
+}
+
+int home_collection_logo_rect(float *x, float *y, float *w, float *h) {
+  if (!collLogoValid) return 0;
+  *x = collLogoRect.x; *y = collLogoRect.y;
+  *w = collLogoRect.w; *h = collLogoRect.h;
+  return 1;
+}
+
+int home_collection_title_rect(float *x, float *y, float *w, float *h) {
+  if (!collTitleValid) return 0;
+  *x = collTitleRect.x; *y = collTitleRect.y;
+  *w = collTitleRect.w; *h = collTitleRect.h;
+  return 1;
+}
+
+int home_collection_group_rect(float *x, float *y, float *w, float *h) {
+  if (!collGroupValid) return 0;
+  *x = collGroupRect.x; *y = collGroupRect.y;
+  *w = collGroupRect.w; *h = collGroupRect.h;
   return 1;
 }
 
@@ -2339,10 +2379,10 @@ static void drawHero(Uint32 now, float output) {
         else if(!folder->hero[0])famHold=0;
         heroArtRect=header;
         int director=!strcasecmp(folder->group,"Directors");
-        txt_draw_alpha(txt_line(TXT_HERO_META,director?"DIRECTORS":"COLLECTIONS",
-                                190,193,200,255),
-                       x,183+txt_cap_inset(TXT_TITLE1)-NV_COLLECTION_HERO_GROUP_GAP
-                          -txt_baseline(TXT_HERO_META),a);
+        { char lbl[80]; col_group_label(folder, lbl, sizeof lbl);
+          txt_draw_alpha(txt_line(TXT_HERO_META,lbl,190,193,200,255),
+                         x,183+txt_cap_inset(TXT_TITLE1)-NV_COLLECTION_HERO_GROUP_GAP
+                            -txt_baseline(TXT_HERO_META),a); }
         txt_block(TXT_TITLE1,folder->title,244,243,247,x,183,860,72,a,2);
         // NO LIST COUNT AND NO "OK to explore": how many lists the folder happens to
         // hold is bookkeeping, and the hint states what the row already teaches on the
@@ -2382,7 +2422,12 @@ static void drawHero(Uint32 now, float output) {
       float x=settings_content_x(),a=(1-output)*famIn;
       // The label is DRAWN by each branch below, once that branch knows where the top
       // of its title is: see NV_COLLECTION_HERO_GROUP_GAP.
-      TxtLine group=txt_line(TXT_HERO_META,folder->group,201,206,218,255);
+      // THE SAME WORDING THE GRID'S HEADER USES, upper-cased by col_group_label.
+      // The grid used to translate the group into a label of its own, so opening a
+      // folder swapped the word out from under the viewer while everything around
+      // it was travelling into place.
+      char groupLbl[80]; col_group_label(folder, groupLbl, sizeof groupLbl);
+      TxtLine group=txt_line(TXT_HERO_META,groupLbl,201,206,218,255);
       if (isDirector) {
         const char *photo=director_photo(folder->title);
         // THE PORTRAIT IS ART, so it follows the BACKDROP'S extent and not the copy's
@@ -2480,13 +2525,42 @@ static void drawHero(Uint32 now, float output) {
       // 24 is 24 wherever it is read. A TxtLine's own box would hide some 22px of air
       // above a 76px capital and 5 below a 21px baseline, and that is what made an
       // earlier "14" arrive on screen as 38.
-      txt_draw_alpha(group,x,NV_COLLECTION_HERO_LOGO_Y-NV_COLLECTION_HERO_GROUP_GAP
-                             -txt_baseline(TXT_HERO_META),a);
+      // It travels with the mark below it — same string, same face, so a move and
+      // never a scale, exactly like the title.
+      collGroupRect = (GfxRect){x,
+          NV_COLLECTION_HERO_LOGO_Y-NV_COLLECTION_HERO_GROUP_GAP
+            -txt_baseline(TXT_HERO_META),
+          (float)group.w, (float)group.h};
+      collGroupValid = 1;
+      if (!seeall_owns_mark())
+        txt_draw_alpha(group,x,NV_COLLECTION_HERO_LOGO_Y-NV_COLLECTION_HERO_GROUP_GAP
+                               -txt_baseline(TXT_HERO_META),a);
+      // BOTH CLEARED FIRST, then whichever this folder actually draws sets its
+      // own. A wordmark that has not decoded yet takes NEITHER branch below —
+      // the name stands in only for a mark that will never arrive — and without
+      // this the grid would fly the PREVIOUS folder's rect for those frames.
+      collLogoValid = 0; collTitleValid = 0;
       if(logo&&ap>0){
-        gfx_rect((GfxRect){x,NV_COLLECTION_HERO_LOGO_Y,w,h},logo,
-                 tex_brand_dark(folder->logo)?GFX_BRAND:GFX_TEXT,
-                 0,0,0,0,.96f,.97f,.98f,a);
+        collLogoRect = (GfxRect){x,NV_COLLECTION_HERO_LOGO_Y,w,h};
+        collLogoValid = 1;
+        // NOT DRAWN while the grid is carrying it. seeall draws this very mark
+        // flying from this rect up into its header; left on here as well there
+        // would be two of them, one fading and one travelling.
+        if (!seeall_owns_mark())
+          gfx_rect(collLogoRect,logo,
+                   tex_brand_dark(folder->logo)?GFX_BRAND:GFX_TEXT,
+                   0,0,0,0,.96f,.97f,.98f,a);
       } else if(showName){
+        // A FOLDER WITH NO WORDMARK STILL HAS A TITLE, and it has to travel too.
+        // Genres, Awards and the rest come up as type, and while only the
+        // streaming services' marks flew, everything else teleported into the
+        // grid's header. The home and the grid both set this in TXT_TITLE1, so
+        // the journey is a move and never a scale — which is the whole reason it
+        // can be done at all with rasterised text.
+        collTitleRect = (GfxRect){x,
+            NV_COLLECTION_HERO_LOGO_Y-txt_cap_inset(TXT_TITLE1),
+            (float)name.w, (float)name.h};
+        collTitleValid = 1;
         // THE NAME ONLY WHEN THERE IS NO LOGO TO COME. A logo is a CDN download that
         // lands a few frames after the folder is adopted, and drawing the name in the
         // meantime meant every streaming service came up as type and then flicked over
@@ -2495,7 +2569,9 @@ static void drawHero(Uint32 now, float output) {
         // img's own onerror (homeScreen.js's getLogoErrorHandler). tex_failed is that
         // onerror — it answers 0 while a retry is still scheduled, so the name appears
         // for a DEAD url and not for a slow one.
-        txt_draw_alpha(name,x,NV_COLLECTION_HERO_LOGO_Y-txt_cap_inset(TXT_TITLE1),a);
+        if (!seeall_owns_mark())
+          txt_draw_alpha(name,x,
+                         NV_COLLECTION_HERO_LOGO_Y-txt_cap_inset(TXT_TITLE1),a);
       }
       // Nothing is drawn while the logo is still on its way: the band keeps its height
       // either way, so whatever sits below it does not move when the logo lands.
@@ -2716,6 +2792,10 @@ static void drawShortcuts(int r, float y) {
     if (x + w < -lw || x > NV_SCREEN_W + lw) continue;
     float radius = radiusOf(w, h);
     GfxRect card = {x, y, w, h};
+    // WHAT THE GRID GROWS OUT OF. The scaled rect, not the resting one: the card is
+    // focused at the moment OK is pressed, so the rect the viewer is looking at is
+    // the one with the focus growth already in it.
+    if (focus.row == r && focus.column == c) { collCardRect = card; collCardValid = 1; }
     // The whole texture unless the focus animation below picks a cell out of a
     // sprite sheet. Re-set per card, never carried over: leaving a cell set would
     // crop the NEXT tile to one frame of the previous one's animation.

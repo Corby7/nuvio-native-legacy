@@ -1,4 +1,5 @@
 #include "seeall.h"
+#include "home.h"   // the rects the opening grows and flies from
 #include "badges.h"
 #include "discover.h"
 #include "catalog.h"
@@ -36,7 +37,17 @@
 #define SEEALL_PAN_ART_W 220.0f
 
 static int   is_open, focus, reqOpen = -1;
-static float anim, scrollY, velY;
+static float anim, animV, scrollY, velY;
+// WHERE THE VIEW GREW FROM: the collection card that was focused when OK was
+// pressed. The grid does not simply appear — it opens out of that card, so the
+// screen the viewer gets is visibly the thing they chose. 0 when the grid was
+// reached some other way (a home row's "See all"), and then it fades in place.
+static GfxRect fromCard;
+static int     fromValid = 0;
+// The window's rectangle for THIS frame, computed once at the top of the draw.
+// A file static because the header clips inside itself (the source tabs), and a
+// clip taken there has to stay inside the window as well.
+static GfxRect gView = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
 static char  title[96];
 static const ColFolder *collection;
 static int source, tabFocus, tabCursor, timeline, ranked;
@@ -55,14 +66,23 @@ static void colorCollection(float *r,float *g,float *b) {
   else if (group("Film Collections") || group("TV Collections"))
     {*r=.12f;*g=.27f;*b=.40f;}
 }
+// THE FOLDER'S OWN GROUP, WORD FOR WORD — "GENRES", "STREAMING", "DIRECTORS".
+//
+// This used to translate the group into a wording of its own: "Genres" became
+// "GENRE", "Streaming" stayed but everything unrecognised became "COLLECTION". The
+// home's collection hero shows the group itself, so opening a folder swapped the
+// word out from under the viewer at the same moment the title beneath it was
+// travelling into place — the one line that should have proved the two screens are
+// the same screen was the one line that changed.
+//
+// col_group_label (collections.c) is the shared wording, so neither side can drift.
+// The fallbacks below are only for a grid with no collection behind it at all: a
+// home row's "See all", which has a catalogue and no folder.
 static const char *labelGroup(void) {
-  if (group("Directors")) return "FILMOGRAPHY";
-  if (group("Awards")) return "AWARDS AND CANON";
-  if (group("Genres")) return "GENRE";
-  if (group("Themes")) return "THEME";
-  if (group("Streaming")) return "STREAMING";
+  static char lbl[80];
+  if (collection) { col_group_label(collection, lbl, sizeof lbl); return lbl; }
   if (ranked) return "RANKING";
-  return "COLLECTION";
+  return "CATALOGUE";
 }
 static const char *subtitleGroup(void) {
   if (timeline) return "Filmography in chronological order";
@@ -99,6 +119,12 @@ static void openSource(void) {
 }
 void seeall_collection(const ColFolder *folder) {
   if(!folder||!folder->nSources)return;
+  // The card this is opening out of, and the wordmark that will travel with it.
+  // Asked for HERE and not while drawing: home_draw stops running the moment the
+  // grid covers the screen, and by then the rect would be a frame out of date.
+  fromValid = home_collection_card_rect(&fromCard.x, &fromCard.y,
+                                        &fromCard.w, &fromCard.h);
+  anim = 0.0f; animV = 0.0f; scrollY = 0.0f; velY = 0.0f; focus = 0;
   memset(tabAnim, 0, sizeof tabAnim);
   collection=folder;source=tabCursor=0;tabFocus=folder->nSources>1;is_open=1;reqOpen=-1;
   timeline=!strcmp(folder->group,"Directors");
@@ -117,6 +143,9 @@ void seeall_collection(const ColFolder *folder) {
 // title.
 void seeall_open(const char *base, const char *kind, const char *catId,
                    const char *heading) {
+  // A home row's "See all" card is not a collection card and has no wordmark to
+  // carry: that path keeps the plain fade it has always had.
+  fromValid = 0;
   is_open = 1; focus = 0; scrollY = 0.0f; velY = 0.0f; reqOpen = -1;
   memset(tabAnim, 0, sizeof tabAnim);
   snprintf(title, sizeof title, "%s", heading ? heading : "");
@@ -132,6 +161,64 @@ void seeall_open(const char *base, const char *kind, const char *catId,
 }
 
 int seeall_is_open(void) { return is_open; }
+
+// THE VIEW'S RECTANGLE THIS FRAME: the card at 0, the whole screen at 1.
+//
+// Everything the grid draws lives inside it, so the screen is revealed THROUGH a
+// window that opens out of the card rather than fading up over the home. The
+// background does not take part — see the note in seeall_draw.
+static GfxRect viewRect(void) {
+  GfxRect all = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+  // CLOSING IS A FADE AND NOTHING ELSE. Running the opening backwards means a
+  // window collapsing onto a card while a mark flies back down into a row that is
+  // itself still arriving — a lot of movement to say "go back", and it read as
+  // fussy. Going IN earns the ceremony; coming OUT does not.
+  if (!is_open) return all;
+  if (!fromValid || anim >= 0.999f) return all;
+  { float g = anim; GfxRect r;
+    r.x = fromCard.x + (all.x - fromCard.x) * g;
+    r.y = fromCard.y + (all.y - fromCard.y) * g;
+    r.w = fromCard.w + (all.w - fromCard.w) * g;
+    r.h = fromCard.h + (all.h - fromCard.h) * g;
+    return r; }
+}
+
+// The copy and the cards come in AFTER the window has opened far enough to hold
+// them: laid into a card-sized rectangle they would be a page of text seen through
+// a letterbox. Nothing is lost by waiting — the window is what carries the first
+// half of the movement.
+static float contentAlpha(void) {
+  if (!fromValid || !is_open) return anim;
+  return anim_smooth((anim - 0.45f) / 0.55f);
+}
+
+// AND IT RISES as it arrives, by NV_SEEALL_RISE, because the wordmark above it is
+// already travelling up. Everything moving one way reads as a single screen
+// assembling; the copy fading in place under a mark that is climbing reads as two
+// unrelated things happening at once.
+static float contentRise(void) {
+  if (!is_open) return 0.0f;   /* see viewRect: the close does not move */
+  return (1.0f - contentAlpha()) * NV_SEEALL_RISE;
+}
+
+// 1 once the window has reached all four edges AND the ground behind it is opaque:
+// the home underneath is invisible and app.c can stop drawing it. While the window
+// is still opening the home IS the background and has to stay.
+int seeall_covers_screen(void) {
+  if (!is_open) return 0;
+  { GfxRect v = viewRect();
+    return anim >= 0.995f && v.x <= 0.5f && v.y <= 0.5f &&
+           v.x + v.w >= NV_SCREEN_W - 0.5f && v.y + v.h >= NV_SCREEN_H - 0.5f; }
+}
+
+// The folder's wordmark is the grid's while it travels, so the home stops drawing
+// its copy. Only true when there is actually a flight to carry it.
+// THE MARK IS THE GRID'S while it travels, whichever of the two it is, so the home
+// stands its own copy down. `is_open` keeps it false through the close, where there
+// is no flight and the home simply takes its mark back.
+int seeall_owns_mark(void) {
+  return is_open && fromValid && anim < 0.999f;
+}
 int seeall_requested_open(void) { int v = reqOpen; reqOpen = -1; return v; }
 
 static int nItems(void) { return disc_seeall_n(); }
@@ -177,7 +264,11 @@ void seeall_update(float dt, Uint32 now) {
   float target, maxY;
   int n = nItems(), lines;
   (void)now;
-  anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
+  // Critically damped, for the reason anim.h records at anim_spring2 and the
+  // detail screen's flight documents at NV_SPRING2_SCREEN: a first-order spring
+  // leaves at maximum speed, which on this size of movement is a cut.
+  anim = anim_spring2(&animV, anim, is_open ? 1.0f : 0.0f, dt,
+                      is_open ? NV_SPRING2_GRID : NV_SPRING2_GRID_OUT);
   if (!is_open) return;
   for (int i = 0; i < COL_SOURCE_MAX; i++) {
     float targetTab = collection && tabFocus && i == tabCursor ? 1.0f : 0.0f;
@@ -321,22 +412,139 @@ static void themeBackground(float a) {
         gfx_tex_aspect_current=0;
       }
     } else {
+      // THE ART KEEPS THE HOME HERO'S RECTANGLE, and that is the whole of "the
+      // background stays in the same place".
+      //
+      // It used to be drawn in a box of its own, 1920x620 across the top. The file
+      // is the same one the home's collection hero is showing — but cover-cropped
+      // into a different shape, so on opening a collection the picture JUMPED to a
+      // different framing at the same moment it dimmed. Standing still was not
+      // enough; it has to stand still in the same rectangle.
+      //
+      // Asking the home for that rect rather than copying its arithmetic also
+      // keeps the two honest across the hero's three layouts (full screen, band,
+      // top band) — heroRectFor owns that decision and this follows it.
+      //
+      // What DOES change is the treatment, which is the point: 38% and this
+      // screen's gradient instead of the hero's full-strength one.
       const char *art=collection->hero[0]?collection->hero:collection->cover;
       GLuint tex=art[0]?tex_get_hero(art):0;
       if(tex) {
+        GfxRect hr;
+        home_hero_rect(&hr.x,&hr.y,&hr.w,&hr.h);
+        if(hr.w<1.0f||hr.h<1.0f)hr=(GfxRect){0,0,NV_SCREEN_W,620};
         gfx_tex_aspect_current=tex_aspect(art);
-        gfx_rect((GfxRect){0,0,NV_SCREEN_W,620},tex,GFX_HERO_FULL,
-                 0,0,0,0,0,0,0,a*.38f);
+        gfx_rect(hr,tex,GFX_HERO_FULL,0,0,0,0,0,0,0,a*.38f);
         gfx_tex_aspect_current=0;
       }
     }
   }
 }
 
-static void themeHeader(float a,float x0) {
+// The intersection of two rectangles, as the clip. The grid already clips itself
+// below the header; while the window is opening it must ALSO stay inside the
+// window, and gfx_crop takes one rect, not two.
+static void cropBoth(GfxRect a, GfxRect b) {
+  float x0 = a.x > b.x ? a.x : b.x, y0 = a.y > b.y ? a.y : b.y;
+  float x1 = a.x + a.w < b.x + b.w ? a.x + a.w : b.x + b.w;
+  float y1 = a.y + a.h < b.y + b.h ? a.y + a.h : b.y + b.h;
+  if (x1 < x0) x1 = x0;
+  if (y1 < y0) y1 = y0;
+  gfx_crop(x0, y0, x1 - x0, y1 - y0);
+}
+
+// The wordmark's box in THIS screen's header. One arithmetic, read twice: by the
+// header that draws it at rest and by the flight that lands on it.
+static int headerLogo(float x0, GfxRect *box, GLuint *tex) {
+  int isDirector = collection && !strcasecmp(collection->group, "Directors");
+  float aspect, w = 560.0f, h;
+  if (!collection || isDirector || collection->editorial || !collection->logo[0])
+    return 0;
+  aspect = tex_aspect(collection->logo);
+  if (aspect <= 0.0f) return 0;
+  h = w / aspect;
+  if (h > 108.0f) { h = 108.0f; w = h * aspect; }
+  *tex = tex_get_exact(collection->logo, w);
+  if (!*tex) return 0;
+  *box = (GfxRect){ x0, 83.0f, w, h };
+  return 1;
+}
+
+// THE WORDMARK TRAVELS, it does not crossfade. The home's collection hero and this
+// header draw the SAME file, so the mark the viewer was reading on the home is the
+// one that ends up in the header — it moves UP, from y=326 to y=83, while the view
+// opens underneath it.
+//
+// Drawn OUTSIDE the window's clip and at full alpha, for the reason the detail's
+// logo records: the fade is for copy that has nowhere to come from, and fading
+// something that is moving only makes the movement harder to follow.
+static void flyingLogo(float x0) {
+  GfxRect dst, from, r; GLuint tex;
+  if (!seeall_owns_mark()) return;
+  if (!headerLogo(x0, &dst, &tex)) return;
+  if (!home_collection_logo_rect(&from.x, &from.y, &from.w, &from.h)) return;
+  r.x = from.x + (dst.x - from.x) * anim;
+  r.y = from.y + (dst.y - from.y) * anim;
+  r.w = from.w + (dst.w - from.w) * anim;
+  r.h = from.h + (dst.h - from.h) * anim;
+  gfx_rect(r, tex, tex_brand_dark(collection->logo) ? GFX_BRAND : GFX_TEXT,
+           0, 0, 0, 0, .96f, .97f, .98f, 1.0f);
+}
+
+// THE SAME JOURNEY FOR A FOLDER THAT HAS NO WORDMARK. Only the streaming services
+// carry one; Genres, Awards and the rest are type, and while just the marks flew,
+// everything else appeared in the header having never crossed the screen.
+//
+// It is a MOVE and never a scale, which is the only reason rasterised text can do
+// this at all: the home sets the name in TXT_TITLE1 and so does this header, so
+// the two differ in POSITION and nothing else. Scaling it would mean re-rasterising
+// every frame, which is the one cost text.c is built to avoid.
+static int titleFlying(float x0, float *tx, float *ty) {
+  GfxRect from; GfxRect dst;  GLuint tex;
+  if (!seeall_owns_mark()) return 0;
+  if (headerLogo(x0, &dst, &tex)) return 0;      /* the wordmark has it */
+  if (!home_collection_title_rect(&from.x, &from.y, &from.w, &from.h)) return 0;
+  *tx = from.x + (x0 - from.x) * anim;
+  *ty = from.y + (80.0f - from.y) * anim;
+  return 1;
+}
+
+// THE LABEL ABOVE THE MARK TRAVELS TOO. It is the same string on both screens now,
+// set in the same face, so — like the title — this is a move and never a scale.
+//
+// Without it the line would fade in place while the title climbed past it, which is
+// the "kinda teleports" the mark's own flight was added to stop.
+static int groupFlying(float x0, float *tx, float *ty) {
+  GfxRect from;
+  if (!seeall_owns_mark()) return 0;
+  if (!home_collection_group_rect(&from.x, &from.y, &from.w, &from.h)) return 0;
+  *tx = from.x + (x0 - from.x) * anim;
+  *ty = from.y + (40.0f - from.y) * anim;
+  return 1;
+}
+
+static void flyingGroup(float x0) {
+  float tx, ty;
+  if (!groupFlying(x0, &tx, &ty)) return;
+  { TxtLine l = txt_line(TXT_HERO_META, labelGroup(), 201, 206, 218, 255);
+    txt_draw_alpha(l, tx, ty, 1.0f); }
+}
+
+static void flyingTitle(float x0) {
+  float tx, ty;
+  if (!titleFlying(x0, &tx, &ty)) return;
+  { TxtLine line = txt_line_trim(TXT_TITLE1, title, 242, 243, 247, 255, 940);
+    txt_draw_alpha(line, tx, ty, 1.0f); }
+}
+
+static void themeHeader(float a,float x0,float dy) {
   float r,g,b;colorCollection(&r,&g,&b);
-  TxtLine eyebrow=txt_line(TXT_HERO_META,labelGroup(),197,202,211,255);
-  txt_draw_alpha(eyebrow,x0,40,a);
+  // THE HOME'S COLOUR, not one of its own: same words, same face, same ink, so
+  // the line genuinely does not change when the folder opens. It is drawn here
+  // only when it is NOT in the air — see flyingGroup.
+  TxtLine eyebrow=txt_line(TXT_HERO_META,labelGroup(),201,206,218,255);
+  { float gx, gy;
+    if (!groupFlying(x0, &gx, &gy)) txt_draw_alpha(eyebrow,x0,40+dy,a); }
   int isDirector=collection&&!strcasecmp(collection->group,"Directors");
   // A director collection's wordmark may contain a head or composed lettering.
   // In the filmography header, the textual name and the clean portrait keep the
@@ -361,22 +569,30 @@ static void themeHeader(float a,float x0) {
   float w=560.0f,h=0.0f;
   if(aspect>0){h=w/aspect;if(h>108){h=108;w=h*aspect;}}
   GLuint logo=hasLogo?tex_get_exact(collection->logo,w):0;
-  if(logo&&aspect>0) {
-    gfx_rect((GfxRect){x0,83,w,h},logo,tex_brand_dark(collection->logo)?GFX_BRAND:GFX_TEXT,0,0,0,0,.96f,.97f,.98f,a);
-  } else {TxtLine line=txt_line_trim(TXT_TITLE1,title,242,243,247,255,940);txt_draw_alpha(line,x0,80,a);}
+  if(logo&&aspect>0&&seeall_owns_mark()) {
+    /* in the air: flyingLogo has it, outside the clip and at full alpha */
+  } else if(logo&&aspect>0) {
+    gfx_rect((GfxRect){x0,83+dy,w,h},logo,tex_brand_dark(collection->logo)?GFX_BRAND:GFX_TEXT,0,0,0,0,.96f,.97f,.98f,a);
+  } else {
+    float tx, ty;
+    if (!titleFlying(x0, &tx, &ty)) {
+      TxtLine line=txt_line_trim(TXT_TITLE1,title,242,243,247,255,940);
+      txt_draw_alpha(line,x0,80+dy,a);
+    }
+  }
   char caption[180];int n=nItems();
   if(disc_seeall_error())snprintf(caption,sizeof caption,"Could not load. OK to try again.");
   else if(!n)snprintf(caption,sizeof caption,"%s",disc_seeall_loading()?"Loading titles…":"No titles in this list.");
   else snprintf(caption,sizeof caption,"%d titles%s  ·  %s",n,disc_seeall_end()?"":" loaded",subtitleGroup());
-  TxtLine sub=txt_line_trim(TXT_DET_META2,caption,196,202,213,255,960);txt_draw_alpha(sub,x0,192,a);
+  TxtLine sub=txt_line_trim(TXT_DET_META2,caption,196,202,213,255,960);txt_draw_alpha(sub,x0,192+dy,a);
   if(collection&&collection->nSources>1) {
     int first=tabCursor>3?tabCursor-3:0;
-    gfx_crop(x0-6,244,NV_SCREEN_W-x0-90,72);
+    cropBoth((GfxRect){x0-6,244+dy,NV_SCREEN_W-x0-90,72}, gView);
     for(int i=first;i<collection->nSources&&i<first+6;i++) {
       float x=x0+(i-first)*322.0f;const ColSource *s=&collection->sources[i];
       int f=tabFocus&&tabCursor==i, selected=source==i;
       float fa=tabAnim[i], scale=1.0f+.025f*fa;
-      GfxRect pill={x-(304*scale-304)*.5f,250-(58*scale-58)*.5f,
+      GfxRect pill={x-(304*scale-304)*.5f,250+dy-(58*scale-58)*.5f,
                     304*scale,58*scale};
       gfx_color(pill,.28f,f?.94f:selected?r*.82f:.09f,
               f?.95f:selected?g*.82f:.10f,
@@ -390,7 +606,7 @@ static void themeHeader(float a,float x0) {
       char label[180];snprintf(label,sizeof label,"%s · %s",s->title,!strcmp(s->type,"series")?"Series":"Films");
       TxtLine t=txt_line_trim(TXT_HERO_META,label,f?22:238,f?24:240,f?28:245,255,276);
       txt_draw_alpha(t,pill.x+(pill.w-t.w)*.5f,pill.y+(pill.h-t.h)*.5f,a);
-    }gfx_no_crop();
+    }cropBoth((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H}, gView);
   }
 }
 
@@ -420,9 +636,29 @@ void seeall_draw(Uint32 now) {
   int n = nItems(), i;
   (void)now;
   if (a < 0.01f) return;
+
+  // THE BACKGROUND DOES NOT TAKE PART IN THE OPENING, and that is deliberate.
+  //
+  // It stays exactly where it is and simply changes treatment: the ground comes up
+  // and themeBackground lays this screen's own gradient over it — the collection's
+  // art across the top at 38%, which is what the grid looks like at rest. Nothing
+  // about it slides or grows. The home's hero is the same folder's art in the same
+  // place, so what the eye sees is the picture dimming into the grid's palette
+  // rather than one screen being replaced by another.
+  //
+  // What MOVES is the window below and the wordmark above it.
   { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     gfx_color(screen, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, a); }
   themeBackground(a);
+
+  // THE VIEW OPENS OUT OF THE CARD. Everything from here down is drawn inside a
+  // rectangle that starts on the collection card the viewer pressed and grows to
+  // the screen, so the grid is revealed THROUGH it — the card becomes the view
+  // instead of being replaced by it. The copy and the cards wait for the window to
+  // be big enough to hold them (contentAlpha).
+  { GfxRect view = viewRect();
+    float ac = contentAlpha(), rise = contentRise();
+    gView = view;
 
   // THE GRID IS CLIPPED BELOW THE HEADER.
   //
@@ -430,10 +666,13 @@ void seeall_draw(Uint32 now) {
   // BEHIND it when scrolling — the title sat over moving imagery and turned
   // into "background". Clipping solves it without needing an opaque band: what
   // rises above the top simply is not drawn.
-  gfx_crop(0.0f, SEEALL_TOP - 12.0f, NV_SCREEN_W, NV_SCREEN_H - SEEALL_TOP + 12.0f);
+  cropBoth((GfxRect){ 0.0f, SEEALL_TOP - 12.0f, NV_SCREEN_W,
+                      NV_SCREEN_H - SEEALL_TOP + 12.0f }, view);
+  a = ac;   /* the grid and the copy below come in on the content's ramp */
   for (i = 0; i < n; i++) {
     float cx = x0 + (float)(i % SEEALL_COLS) * (SEEALL_CARD_W + SEEALL_GAP_X);
-    float cy = SEEALL_TOP + (float)(i / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y) - scrollY;
+    float cy = SEEALL_TOP + (float)(i / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y)
+             - scrollY + rise;
     CatItem it;
     GLuint t;
     // The SAME radius as the home's posters: `posterCardCornerRadiusDp` (12dp x
@@ -480,10 +719,23 @@ void seeall_draw(Uint32 now) {
   }
   if(!n&&disc_seeall_loading())for(int i=0;i<5;i++)
     gfx_color((GfxRect){x0+i*264,SEEALL_TOP,248,372},.06f,.12f,.13f,.15f,a);
-  gfx_no_crop();
+  // THE HEADER above the clip, so it never competes with the art — but still
+  // inside the window, which is what makes it part of the thing that opened.
+  cropBoth((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, view);
+  themeHeader(a,x0,rise);
 
-  // THE HEADER above the clip, so it never competes with the art.
-  themeHeader(a,x0);
-
+  // RE-APPLIED, not assumed: themeHeader clips inside itself for the source tabs,
+  // so the window's clip is not necessarily the one still in force when it
+  // returns. It used to end with gfx_no_crop(), which left the panel below
+  // unclipped and drawing outside the window that is supposed to contain it.
+  cropBoth((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, view);
   if (n > 0) panel(a);
+  gfx_no_crop();
+  // OUTSIDE the window: the wordmark is travelling INTO the header from a place
+  // the window has not reached yet, so clipping it to the window would cut it in
+  // half for the first part of the journey.
+  flyingLogo(x0);
+  flyingTitle(x0);
+  flyingGroup(x0);
+  }
 }

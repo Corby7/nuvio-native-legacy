@@ -83,4 +83,15 @@ const ColFolder *col_folder(int i);
 int col_group(const char *name, int *indices, int max);
 const ColFolder *col_by_catalog(const char *base, const char *type, const char *id);
 void col_color(const ColFolder *f, float *r, float *g, float *b);
+
+// THE FOLDER'S GROUP AS A LABEL: its own name, upper-cased, into the caller's
+// buffer. "Genres" -> "GENRES", "Streaming" -> "STREAMING".
+//
+// It lives here, and both the home's collection hero and the grid's header call
+// it, because the label is the ONE line that must read identically on the two
+// screens — the grid's header used to translate the group into a wording of its
+// own ("COLLECTION", "GENRE"), so opening a folder changed the word under the
+// viewer's eye at the same moment everything else was travelling into place.
+// A caller's buffer, not a static one: both screens draw it in the same frame.
+void col_group_label(const ColFolder *f, char *out, int n);
 #endif

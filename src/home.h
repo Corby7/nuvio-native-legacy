@@ -50,6 +50,17 @@ void home_hero_rect(float *x, float *y, float *w, float *h);
 // Where the hero's LOGO rests, for the detail to fly the same image into its own
 // layout. 0 when this title has none, and the detail then keeps its plain fade.
 int home_hero_logo_rect(float *x, float *y, float *w, float *h);
+// Where the FOCUSED collection card sits, and where the collection hero's wordmark
+// rests. The grid grows its view out of the first and flies the second up into its
+// header. 0 when there is no such thing on screen.
+int home_collection_card_rect(float *x, float *y, float *w, float *h);
+int home_collection_logo_rect(float *x, float *y, float *w, float *h);
+// And the title as TYPE, for the folders that have no wordmark. Both screens set
+// it in TXT_TITLE1, so the grid moves it rather than scaling it.
+int home_collection_title_rect(float *x, float *y, float *w, float *h);
+// And the GROUP label above it ("GENRES", "STREAMING"), which the grid's header
+// now repeats word for word instead of translating.
+int home_collection_group_rect(float *x, float *y, float *w, float *h);
 void home_shutdown(void);
 // Records the interrupted title for the contextual "Resume now" band. The band
 // only exists while the progress makes sense (neither the start nor the end).

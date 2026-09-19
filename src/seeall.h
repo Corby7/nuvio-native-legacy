@@ -14,7 +14,20 @@
 #define NV_SEEALL_H
 #include <SDL2/SDL.h>
 #include "collections.h"
+// Opens a COLLECTION. The view grows out of the collection card that was focused
+// when it was pressed and carries the folder's wordmark up into this screen's
+// header; both rects are read from the home at this moment, before it stops being
+// drawn. A folder reached with no card on screen falls back to a plain fade.
 void seeall_collection(const ColFolder *folder);
+// 1 once the window has reached every edge and the ground behind it is opaque: the
+// screen underneath is invisible and need not be drawn. NOT the same question as
+// seeall_is_open, which is true from the first frame of the opening.
+int  seeall_covers_screen(void);
+// 1 while the folder's MARK is in the air between the home's hero and this header
+// — the wordmark, or the title as type for a folder that has no wordmark. The home
+// reads it to stand its own copy down for the duration. False through the close,
+// which is a plain fade with nothing travelling.
+int  seeall_owns_mark(void);
 
 // Opens with the catalogue behind a home row.
 void seeall_open(const char *base, const char *kind, const char *catId,

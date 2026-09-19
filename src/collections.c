@@ -276,6 +276,18 @@ int col_load(const char *dir) {
     }
   }free(body);revisionCol++;return count;
 }
+// The folder's own group name, upper-cased. See the note in collections.h for why
+// the two screens share one wording instead of each inventing its own.
+void col_group_label(const ColFolder *f, char *out, int n) {
+  int i = 0;
+  if (n <= 0) return;
+  if (f) for (; f->group[i] && i < n - 1; i++) {
+    char c = f->group[i];
+    out[i] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+  }
+  out[i] = 0;
+}
+
 void col_color(const ColFolder *f,float *r,float *g,float *b) {
   *r=.16f;*g=.23f;*b=.30f;if(!f)return;
   if(strstr(f->title,"Netflix")){*r=.52f;*g=.035f;*b=.065f;}

@@ -1133,6 +1133,21 @@
 // and 95% at 474ms; the closing is a little brisker, as a movement the viewer
 // has already decided on should be.
 #define NV_SPRING2_SCREEN      10.0f
+// THE COLLECTION GRID'S WINDOW, which opens out of the card that was pressed. It
+// is quicker than the detail's flight on purpose: that one carries a picture the
+// viewer is meant to watch arrive, this one is a frame getting out of the way of a
+// list. 15 puts the halfway point at 1.678/w = 112ms and 95% at ~316ms.
+#define NV_SPRING2_GRID        15.0f
+#define NV_SPRING2_GRID_OUT    17.0f
+// HOW FAR THE GRID'S COPY AND CARDS RISE into place as they come in. The folder's
+// wordmark is already travelling UP, from the home hero's 326 to this screen's 83,
+// so everything else rising with it means nothing on screen moves against anything
+// else — the same rule NV_DETW_COPY_TOGETHER applies to the title screen.
+//
+// It is an ADDITION to the window opening out of the card, not a replacement for
+// it: the window is what says "this card became the view", and taking movement
+// away to tidy a transition is the mistake the detail screen's notes record twice.
+#define NV_SEEALL_RISE          56.0f
 #define NV_SPRING2_SCREEN_OUT  14.0f
 // HOW LONG THE BACKDROP TAKES TO GIVE THE SCREEN BACK on the way out, as a
 // multiplier on the flight. 1.8 has it fully opaque down to s = 0.555 and
