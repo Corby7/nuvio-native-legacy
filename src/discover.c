@@ -728,6 +728,41 @@ typedef struct {
   char nameAddon[64];   // "Xperience", for the "from <addon>" line in the result
 } Decl;
 
+// EVERY CATALOGUE EVERY ADDON DECLARES, with the name its manifest gives it.
+//
+// It lived inside build() as a function-local static, which was fine while the
+// only consumer was the row builder standing over it. It is at file scope now
+// because disc_catalog_title reads it from another screen entirely — see the
+// note there for why the home's ROWS were not a good enough answer.
+//
+// static: 256 entries pass 200 KB, and that does not fit comfortably on a
+// thread's stack. build() runs once and on a single thread, so there is no
+// reentrancy for this to break.
+static Decl decls[DECL_MAX];
+static int  nDecl;
+
+// The manifest's name for one catalogue, or "" when no installed addon declares
+// it. Matched on the ADDRESS and the ID; `kind` only breaks a tie.
+//
+// THE KIND IS NOT PART OF THE KEY, and that is deliberate. A collection source
+// carries the type the COLLECTION wants ("anime", "all"), while a manifest
+// declares the type the ADDON serves — AIOMetadata's MAL catalogues are declared
+// "movie" and appear in collections as "anime". Keyed on the kind, every one of
+// those missed and fell back to showing a raw id. Catalogue ids are unique
+// within an addon, so the address and the id are already the whole key.
+const char *disc_catalog_title(const char *base, const char *kind,
+                               const char *catId) {
+  int i, fallback = -1;
+  if (!base || !*base || !catId || !*catId) return "";
+  for (i = 0; i < nDecl; i++) {
+    if (strcmp(decls[i].id, catId)) continue;
+    if (!decls[i].base || strcmp(decls[i].base, base)) continue;
+    if (kind && *kind && !strcmp(decls[i].kind, kind)) return decls[i].title;
+    if (fallback < 0) fallback = i;
+  }
+  return fallback >= 0 ? decls[fallback].title : "";
+}
+
 // The owner's preferences, the local equivalent of `homeCatalogPrefs`. A text file
 // because the web app's is another process's localStorage — the same reason that
 // already held for progress: that file belongs to whoever keeps it open, and
@@ -1596,11 +1631,7 @@ static void *build(void *u) {
   // app's algorithm (sortAndFilterRowsInternal), with the preferences read from
   // art/rows.txt.
   {
-    // static: 256 entries pass 200 KB, and that does not fit comfortably on a
-    // thread's stack. build() runs once and on a single thread, so there is no
-    // reentrancy for this to break.
-    static Decl decls[DECL_MAX];
-    int nDecl = 0, k;
+    int k;
     CatRow filter[CAT_FILTER_MAX];
     int nFilter = 0;
     // Row 0 is "Continue watching", which was assembled above. It is SYNTHETIC: it
@@ -2276,6 +2307,173 @@ int disc_seeall_item(int i, CatItem *dst) {
   if (dst && i >= 0 && i < seeallN) { memcpy(dst, &seeallItems[i], sizeof *dst); ok = 1; }
   pthread_mutex_unlock(&seeallLock);
   return ok;
+}
+
+// --- GROWING A HOME ROW ------------------------------------------------------
+//
+// Every home row used to end in a "See all" card: the row showed twelve, the
+// catalogue had hundreds, and the card was the only door to the thirteenth. The
+// row now simply KEEPS GOING — reaching its end asks the catalogue for the page
+// after what is already on screen, and the new items go into the row itself.
+//
+// It is NOT the "See all" list above, and the difference matters: that one keeps
+// a catalogue of its own precisely so a piece of navigation does not change what
+// the library and the search sweep. Here the point IS the home's own row, so the
+// page goes into the shared catalogue, through cat_row_grow.
+//
+// ONE PAGE AT A TIME, for the whole home. The owner walks one row at a time, and
+// a single request in flight means one thread, one staging buffer and no
+// question of two pages landing in the wrong rows.
+#define ROW_PAGE 60
+
+static CatItem rowItems[ROW_PAGE];
+static int  rowN, rowRaw, rowReady, rowAlive, rowValid;
+static char rowKey[192], rowBase[600], rowKind[8], rowCat[96];
+static int  rowSkip;
+static pthread_mutex_t rowLock = PTHREAD_MUTEX_INITIALIZER;
+
+// The rows that have nothing more to give, by catalogue key. Without this the
+// home asks again on the very next frame — the focus is still sitting on the last
+// poster, which is what triggers the request — and a catalogue at its end (or an
+// addon that is down) would be asked for the same page forever.
+//
+// Twice CAT_FILTER_MAX so it cannot fill while the home has rows to page: at 24
+// rows this never wraps.
+static char rowEnded[CAT_FILTER_MAX * 2][192];
+static int  nRowEnded;
+static int rowIsEnded(const char *key) {
+  for (int i = 0; i < nRowEnded; i++) if (!strcmp(rowEnded[i], key)) return 1;
+  return 0;
+}
+static void rowEnd(const char *key) {
+  if (rowIsEnded(key)) return;
+  if (nRowEnded >= (int)(sizeof rowEnded / sizeof rowEnded[0])) return;
+  snprintf(rowEnded[nRowEnded++], sizeof rowEnded[0], "%s", key);
+}
+
+static void *threadRow(void *u) {
+  char url[1600], base[600], type[8], id[96];
+  char *body;
+  const char *p;
+  int skip, raw = 0, got = 0, valid;
+  (void)u;
+  pthread_mutex_lock(&rowLock);
+  skip = rowSkip;
+  snprintf(base, sizeof base, "%s", rowBase);
+  snprintf(type, sizeof type, "%s", rowKind);
+  snprintf(id,   sizeof id,   "%s", rowCat);
+  pthread_mutex_unlock(&rowLock);
+  if (skip) snprintf(url, sizeof url, "%s/catalog/%s/%s/skip=%d.json", base, type, id, skip);
+  else      snprintf(url, sizeof url, "%s/catalog/%s/%s.json", base, type, id);
+  // The same 8 s as readCatalog, for the same reason: an addon that is not
+  // answering is not going to.
+  body = net_download(url, 8);
+  valid = body && strstr(body, "\"metas\"") ? 1 : 0;
+  for (p = body ? js_array(body, NULL, "metas") : NULL; p; p = js_next(js_end(p))) {
+    const char *f = js_end(p);
+    raw++;
+    if (got < ROW_PAGE && ofMeta(p, f, type, &rowItems[got])) got++;
+  }
+  free(body);
+  pthread_mutex_lock(&rowLock);
+  rowN = got; rowRaw = raw; rowValid = valid;
+  rowReady = 1; rowAlive = 0;
+  pthread_mutex_unlock(&rowLock);
+  return NULL;
+}
+
+void disc_row_more(const char *key, const char *base, const char *kind,
+                   const char *catId, int have) {
+  pthread_t t;
+  if (!key || !*key || !base || !*base || !kind || !catId || !*catId) return;
+  if (have < 1 || rowIsEnded(key)) return;
+  pthread_mutex_lock(&rowLock);
+  // One page in flight for the whole home, and the one that has LANDED is not
+  // overwritten before disc_row_collect has put it in its row.
+  if (rowAlive || rowReady) { pthread_mutex_unlock(&rowLock); return; }
+  snprintf(rowKey,  sizeof rowKey,  "%s", key);
+  snprintf(rowBase, sizeof rowBase, "%s", base);
+  snprintf(rowKind, sizeof rowKind, "%s", kind);
+  snprintf(rowCat,  sizeof rowCat,  "%s", catId);
+  // THE SKIP IS WHAT THE ROW ALREADY HOLDS, and the duplicate check below is what
+  // makes that safe against either kind of addon. One that honours `skip` answers
+  // with the items after those; one that ignores it answers with the first page
+  // again, whose first `have` items are the ones on screen and get dropped —
+  // leaving exactly the remainder of that page, which is what was wanted.
+  rowSkip = have;
+  rowN = rowRaw = 0; rowValid = 0;
+  rowAlive = 1;
+  if (pthread_create(&t, NULL, threadRow, NULL) != 0) rowAlive = 0;
+  else pthread_detach(t);
+  pthread_mutex_unlock(&rowLock);
+}
+
+int disc_row_loading(const char *key) {
+  int busy;
+  if (!key) return 0;
+  pthread_mutex_lock(&rowLock);
+  busy = (rowAlive || rowReady) && !strcmp(rowKey, key);
+  pthread_mutex_unlock(&rowLock);
+  return busy;
+}
+
+int disc_row_ended(const char *key) { return key && rowIsEnded(key); }
+
+// ON THE DRAWING THREAD, and that is the point of the staging buffer.
+//
+// cat_row_grow rewrites the item array from the insertion point on and moves the
+// rows after it. Done from the worker, the drawing thread would be walking those
+// very windows at that moment; done here, between two frames, there is nobody
+// mid-row. The network — the part worth a thread — has already happened.
+int disc_row_collect(void) {
+  CatItem page[ROW_PAGE];
+  const CatRow *f = NULL;
+  char key[192];
+  int got, raw, valid, r, nr, grown = 0;
+  pthread_mutex_lock(&rowLock);
+  if (!rowReady) { pthread_mutex_unlock(&rowLock); return 0; }
+  got = rowN; raw = rowRaw; valid = rowValid;
+  snprintf(key, sizeof key, "%s", rowKey);
+  if (got > 0) memcpy(page, rowItems, sizeof(CatItem) * (size_t)got);
+  rowReady = 0;
+  pthread_mutex_unlock(&rowLock);
+
+  nr = cat_n_rows();
+  for (r = 0; r < nr; r++) {
+    const CatRow *c = cat_row(r);
+    if (c && !strcmp(c->key, key)) { f = c; break; }
+  }
+  // The catalogue was republished under the request (a late row from discovery,
+  // a change of profile). The page is dropped rather than guessed at: the index
+  // it was asked for no longer names the same row.
+  if (!f) return 0;
+
+  // WHAT THE ROW ALREADY HAS DOES NOT GO IN TWICE. It is both the ordinary
+  // overlap of an addon that ignores `skip` and the signal that the catalogue has
+  // run out: a page with nothing new in it ends the row.
+  { int keep = 0;
+    for (int i = 0; i < got; i++) {
+      int dup = 0;
+      if (!page[i].imdb[0]) continue;
+      for (int c = 0; c < f->n && f->start + c < cat_n() && !dup; c++) {
+        const CatItem *there = cat_item(f->start + c);
+        if (there && !strcmp(there->imdb, page[i].imdb)) dup = 1;
+      }
+      for (int c = 0; c < keep && !dup; c++)
+        if (!strcmp(page[c].imdb, page[i].imdb)) dup = 1;
+      if (!dup) page[keep++] = page[i];
+    }
+    got = keep; }
+
+  if (got > 0) grown = cat_row_grow(r, page, got);
+  // The end, in every shape it comes in: an answer that was not a catalogue, an
+  // empty one, one that brought only what was already there, and the CAT_MAX
+  // ceiling refusing the rest. A failed request counts as the end too — the focus
+  // is still on the last poster and would otherwise ask again every frame, which
+  // on a dead addon is a request loop. The next launch asks again.
+  if (!valid || !raw || got < 1 || grown < got) rowEnd(key);
+  if (grown) printf("[disc] row grew: %s (+%d)\n", key, grown);
+  return grown;
 }
 
 void disc_episodes(int indexItem, int season) {

@@ -32,6 +32,9 @@ enum { CTX_PENDING = 1, CTX_CONFIRMED = 2, CTX_FAILURE = 3 };
 #define CTX_FOOTER  70.0f
 
 static int   is_open, idx = -1, focus, reqDetails = -1;
+// The row the card was in, and whether the owner asked to see all of it.
+static CtxCatalog row;
+static int   reqSeeAll;
 static float anim;
 static int   operation, intent, stateOperation;
 static int   mirrorApplied;
@@ -73,13 +76,14 @@ static int observeHold(void *u, SDL_Event *e) {
   return 0;
 }
 
-// Up to three: details, library and — only on films/series — watched.
-#define CTX_MAX 3
+// Up to four: details, library, — only on films/series — watched, and the row
+// itself when it came from a catalogue.
+#define CTX_MAX 4
 static struct { const char *rot; int action; } ops[CTX_MAX];
 static int nOps;
 static float focusAnim[CTX_MAX];
 static int holdObserver;
-enum { OP_DETAILS, OP_LIST, OP_WATCHED };
+enum { OP_DETAILS, OP_LIST, OP_WATCHED, OP_SEEALL };
 
 static int indexCurrent(void) {
   int n = cat_n();
@@ -124,9 +128,42 @@ static void build(void) {
                         : "Mark as watched";
     ops[nOps].action = OP_WATCHED; nOps++;
   }
+  // THE ROW, LAST. It is the only option here that does not act on the title in
+  // the header, so it goes below the three that do rather than between them.
+  //
+  // It carries the row's NAME because "Browse this list" would be the one line in
+  // this modal that does not say what it will do: the header names the title, and
+  // nothing on screen would name the list being opened.
+  if (row.base[0] && row.catId[0]) {
+    static char label[96];
+    if (row.title[0]) {
+      // 28 IS A WIDTH, not a round number. The button draws its text with
+      // txt_line and no trimming, so anything too long runs out past the modal's
+      // edge instead of being cut. At NV_FT_PLR_BODY (32px) the ~588px of button
+      // left of the text takes about 34 characters, and "Browse " is 7 of them.
+      // Every row name that exists today fits ("Popular - Movie", "Oscars 2026 -
+      // Movie"); a renamed catalogue is what this is here for.
+      char cut[28];
+      snprintf(cut, sizeof cut, "%s", row.title);
+      if (strlen(row.title) >= sizeof cut) {
+        // Room for the ellipsis AND its terminator, and never mid-character: cut
+        // between the bytes of a three-byte glyph and the line draws a
+        // replacement box. Back up to the first byte of whatever sits there.
+        size_t k = sizeof cut - 4;
+        while (k > 0 && (cut[k] & 0xC0) == 0x80) k--;
+        snprintf(cut + k, sizeof cut - k, "\xe2\x80\xa6");
+      }
+      snprintf(label, sizeof label, "Browse %s", cut);
+    } else {
+      snprintf(label, sizeof label, "Browse the whole row");
+    }
+    ops[nOps].rot = label; ops[nOps].action = OP_SEEALL; nOps++;
+  }
 }
 
-void ctx_open(int index_) {
+void ctx_open(int index_) { ctx_open_row(index_, NULL); }
+
+void ctx_open_row(int index_, const CtxCatalog *from) {
   if (holdCancelled) {
     holdCancelled = 0;
     holdReady = 0;
@@ -139,6 +176,9 @@ void ctx_open(int index_) {
   holdReady = 0;
   swallowOk = holdActive;
   idx = index_; focus = 0; is_open = 1; reqDetails = -1;
+  memset(&row, 0, sizeof row);
+  if (from) row = *from;
+  reqSeeAll = 0;
   operation = CTX_OP_NONE; intent = 0; stateOperation = 0;
   mirrorApplied = 0;
   operationImdb[0] = 0;
@@ -148,6 +188,12 @@ void ctx_open(int index_) {
 
 int ctx_is_open(void) { return is_open; }
 int ctx_requested_details(void) { int v = reqDetails; reqDetails = -1; return v; }
+int ctx_requested_seeall(CtxCatalog *out) {
+  int v = reqSeeAll;
+  reqSeeAll = 0;
+  if (v && out) *out = row;
+  return v;
+}
 
 static void apply(void) {
   int current = indexCurrent();
@@ -159,6 +205,7 @@ static void apply(void) {
       stateOperation != CTX_FAILURE) return;
   switch (action) {
     case OP_DETAILS: reqDetails = idx; break;
+    case OP_SEEALL:  reqSeeAll = 1;    break;
     case OP_LIST:
       // Capture the intent BEFORE any write. The same value goes on to the
       // POST and only reaches the local mirror after a 2xx response.
@@ -184,7 +231,7 @@ static void apply(void) {
       build();
       break;
   }
-  if (action == OP_DETAILS) is_open = 0;
+  if (action == OP_DETAILS || action == OP_SEEALL) is_open = 0;
 }
 
 void ctx_event(const SDL_Event *e) {

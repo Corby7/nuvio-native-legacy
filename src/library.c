@@ -306,7 +306,10 @@ void library_update(float dt, Uint32 now) {
     target = 0.0f;
   }
   if (target < 0.0f) target = 0.0f;
-  scrollY = anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
+  // The poster grids' own rate — see NV_SPRING_GRID. This was 8, which is where
+  // "coming back into view is slow" started; it is NOT the critically damped
+  // spring, for the reason recorded against that constant.
+  scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
 }
 
 // A mode pill. Chosen but unfocused it gets background #303030 and a white

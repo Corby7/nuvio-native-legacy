@@ -695,6 +695,13 @@ void app_update(float dt, Uint32 now) {
       it.meta   = ci ? ci->meta : NULL;
       detail_open(&it, 0);
     } }
+  // THE WHOLE ROW, asked for from the poster's menu. It is the one path left to
+  // the grid from a catalogue row now that the "See all" card at the end of the
+  // row is gone: the row itself pages as the owner walks it, and this is for
+  // wanting the list at a glance rather than one poster at a time.
+  { CtxCatalog c;
+    if (ctx_requested_seeall(&c) && c.base[0] && c.catId[0])
+      seeall_open(c.base, c.kind, c.catId, c.title); }
   // A title chosen in the grid: opens the detail, as though it had come from the home.
   { int idx = seeall_requested_open();
     if (idx >= 0) {

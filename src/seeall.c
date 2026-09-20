@@ -10,34 +10,73 @@
 #include "anim.h"
 #include "settings.h"
 #include "director.h"
+#include "dropdown.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <unistd.h>
 
-// MEASURED from the web app (catalogSeeAllScreen, .seeall-card): a 248-wide
-// poster with radius 12. At 1920, 5 columns fit with the screen gutter on both sides.
-#define SEEALL_COLS      (timeline ? 1 : 5)
-#define SEEALL_CARD_W  248.0f
-#define SEEALL_CARD_H  (timeline ? 236.0f : SEEALL_CARD_W * 1.5f)
-#define SEEALL_GAP_X    16.0f                 // .seeall-grid: gap 20px 16px
-#define SEEALL_GAP_Y    (20.0f + 40.0f)       // gap + the title line under the poster
-#define SEEALL_TOP    (collection ? 332.0f : 244.0f)
-
-// DETAIL PANEL, on the right. Measurements from the web app (.seeall-detail),
-// anchored explicitly to the real 1920x1080 screen: top 170, right 104, w 336.
+// THE GRID IS THE APP'S GRID, WHICH IS THE LIBRARY'S. See the note on NV_LIB_*
+// in layout.h.
 //
-// FIXED and not scrolling along: the CSS itself records that `position: sticky`
-// does not exist in the TV's Chromium 53 and that without `fixed` the panel
-// vanished as soon as the owner scrolled. There is no flow here at all.
-#define SEEALL_PAN_W   336.0f
-#define SEEALL_PAN_X   (NV_SCREEN_W - 104.0f - SEEALL_PAN_W)
-#define SEEALL_PAN_Y   SEEALL_TOP
-#define SEEALL_PAN_ART_H 330.0f
-#define SEEALL_PAN_ART_W 220.0f
+// It used to be this screen's own measurement — a 248-wide poster 16 from its
+// neighbour with a 20px row gap, read off `.seeall-card` — and the result was
+// that opening a collection out of the Library landed the viewer on a visibly
+// tighter wall than the one they had just left. Same posters, same app, two
+// different grids. The card, the gaps and the row step are the Library's now,
+// and the only thing this screen decides for itself is how many columns fit
+// beside its detail panel.
+// SIX COLUMNS, THE FULL WIDTH, AND NO DETAIL PANEL.
+//
+// There used to be a 336-wide column on the right holding one item's still,
+// synopsis and credits, which is where 440 of these 1920 pixels went and why the
+// grid could only fit five narrow columns. It is gone. A grid screen's job is the
+// grid; the title screen is one press away and says all of that proprly, with
+// room to say it.
+//
+// Everything else is still the Library's: six columns, 24 between them, 16 down
+// to the title, 85.8 from one poster's foot to the next one's head.
+#define SEEALL_GRID_COLS 6
+#define SEEALL_COLS    (timeline ? 1 : SEEALL_GRID_COLS)
+#define SEEALL_CARD_W  gridCardW()
+#define SEEALL_CARD_H  (timeline ? 236.0f : SEEALL_CARD_W * 1.5f)
+#define SEEALL_GAP_X   NV_LIB_CARD_GAP
+// The Directors timeline is not a poster grid and keeps its own step; its rows
+// are 236-tall stills with the synopsis beside them.
+#define SEEALL_GAP_Y   (timeline ? 60.0f : (NV_LIB_LINE_STEP - NV_LIB_POSTER_H))
+// THE CLEARANCE UNDER THE HEADER IS THE DISSOLVE BAND, which is why it is
+// SEEALL_FADE and not a spacing number chosen by eye: a card has to have reached
+// zero by the time it arrives at the picker row, or it is drawn over the
+// dropdowns on its way past. So the grid begins exactly one band below whatever
+// the header ends with — the picker row when there is one, the title when there
+// is not (a home row's "See all" has no sources to pick between).
+#define SEEALL_TOP     (nPicks ? SEEALL_PICK_Y + NV_DD_PICK_H + SEEALL_FADE \
+                               : 244.0f)
+// And the clip sits at the top of that band, where nothing is left to show.
+#define SEEALL_CLIP_TOP (SEEALL_TOP - SEEALL_FADE)
+// THE PICKER ROW. Two dropdowns at most, and unlike Discover's three they do not
+// stretch across the screen: the detail panel owns the right of this one.
+#define SEEALL_PICK_Y  212.0f
+#define SEEALL_PICK_W  360.0f
+#define SEEALL_PICK_GAP 12.0f
+// THE BAND A CARD DISSOLVES ACROSS as it goes under the header.
+//
+// IT IS ALSO THE GAP between the picker row and the first row of posters, and
+// that is not a coincidence — see SEEALL_TOP. So this number cannot be chosen
+// for the dissolve alone: at the home's 80 the dissolve was lovely and the gap
+// under the dropdowns was visibly too deep. 48 is the compromise, and it is
+// Discover's clearance rather than a number invented here.
+//
+// It cannot go to zero. A card still partly opaque when it reaches the dropdowns
+// is drawn behind them, and the header is not a solid band — it is a wordmark
+// and two pills over the collection's own art, so a ghost would show through
+// beside them.
+#define SEEALL_FADE     48.0f
+
 
 static int   is_open, focus, reqOpen = -1;
-static float anim, animV, scrollY, velY;
+static float anim, animV, scrollY;
 // WHERE THE VIEW GREW FROM: the collection card that was focused when OK was
 // pressed. The grid does not simply appear — it opens out of that card, so the
 // screen the viewer gets is visibly the thing they chose. 0 when the grid was
@@ -45,15 +84,67 @@ static float anim, animV, scrollY, velY;
 static GfxRect fromCard;
 static int     fromValid = 0;
 // The window's rectangle for THIS frame, computed once at the top of the draw.
-// A file static because the header clips inside itself (the source tabs), and a
-// clip taken there has to stay inside the window as well.
+// A file static because anything that takes a clip of its own while drawing the
+// header has to stay inside the window as well.
 static GfxRect gView = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
 static char  title[96];
 static const ColFolder *collection;
-static int source, tabFocus, tabCursor, timeline, ranked;
-static float tabAnim[COL_SOURCE_MAX];
+static int source, timeline, ranked;
 static int order[SEEALL_MAX], orderN=-1;
 static char catalogId[96];
+
+// THE TWO PICKERS. A collection's sources are each a catalogue of ONE media
+// type — "Netflix Popular" (movie), "Netflix New" (series) — and they used to be
+// a row of pills, one per source, that scrolled sideways once there were more
+// than six. That row made the viewer read every option end to end to find the
+// two things they actually wanted to say: which kind, and which list.
+//
+// Two dropdowns say it in that order. Movies and Series, each offering the
+// sources of its type, and only the types the folder HAS get a picker — a
+// collection of films alone shows one dropdown and no empty Series beside it.
+//
+// The control is dropdown.c's, the same one the Discover screen draws.
+enum { TY_MOVIE, TY_SERIES, TY_N };
+static const char *const TY_LABEL[TY_N] = { "Movies", "Series" };
+// The sources of each type, as indices into collection->sources.
+static int   srcOf[TY_N][COL_SOURCE_MAX], nSrcOf[TY_N];
+// The chosen option WITHIN a type's list. Kept per type so that moving from
+// Series back to Movies returns to the movie list the viewer had, rather than
+// resetting to the first one.
+static int   selOf[TY_N];
+// The types that have a picker, left to right, and which of them the focus is
+// on. `pickFocus` is the old `tabFocus`: 1 when the row has the focus and not
+// the grid.
+static int   picks[TY_N], nPicks, pickSel, pickFocus;
+static float pickAnim[TY_N];
+// The OPEN list: the TYPE whose options are expanded (-1 when none), and the
+// row inside it — which is NOT selOf: the list opens on the current value and
+// moving inside it must change nothing until OK. The same split Discover and
+// the detail screen's season picker use.
+static int   menuOpen = -1, menuFocus;
+// One spring for the grid's focus, because only ever one card is focused. The
+// card it belongs to is `focus`; when that moves the scale stays put and the
+// new card simply has it. Discover does the same.
+static float animCard;
+
+// HOW WIDE A CARD HAS TO BE for six of them to fit the width.
+//
+// IT DEPENDS ON THE RAIL, which is why it is read off settings_content_x rather
+// than fixed at the Library's 268. The Library hardcodes x=96 and a 268 card;
+// this screen cannot, because with the fixed rail on (the owner's profile) the
+// content genuinely starts at 248 and six 268s would need 1728 more — 56 past
+// the right edge of the screen. Fitted, the card is about 241 with the rail and
+// about 265 without it, which is the Library's to within a couple of pixels.
+//
+// Never wider than the Library's card: that is the app's poster, and a screen
+// with nothing on either side of it should not grow past it.
+static float gridCardW(void) {
+  float avail = NV_SCREEN_W - settings_content_x() - NV_CONTENT_PAD;
+  float w = (avail - (SEEALL_GRID_COLS - 1) * NV_LIB_CARD_GAP)
+          / (float)SEEALL_GRID_COLS;
+  if (w < 120.0f) w = 120.0f;
+  return w > NV_LIB_CARD_W ? NV_LIB_CARD_W : w;
+}
 static int group(const char *name) {
   return collection && !strcmp(collection->group, name);
 }
@@ -84,25 +175,130 @@ static const char *labelGroup(void) {
   if (ranked) return "RANKING";
   return "CATALOGUE";
 }
-static const char *subtitleGroup(void) {
-  if (timeline) return "Filmography in chronological order";
-  if (group("Awards")) return ranked ? "Ranking in its original order" : "Awards list configured by the user";
-  if (group("Genres")) return "Titles of this genre in your catalogue";
-  if (group("Themes")) return "Curated by theme and mood";
-  if (group("Streaming")) return "Catalogue organised by service";
-  return ranked ? "Original ranking order" : "A selection from your catalogue";
-}
 
 static int yearOf(const CatItem *it) {
   for(const char *s=it->meta;*s;s++)if((*s=='1'||*s=='2')&&strlen(s)>=4&&s[1]>='0'&&s[1]<='9'&&s[2]>='0'&&s[2]<='9'&&s[3]>='0'&&s[3]<='9')return atoi(s);
   return 9999;
 }
 static int viewItem(int i,CatItem *out) {return disc_seeall_item(timeline&&i<orderN?order[i]:i,out);}
+
+static int typeOf(const ColSource *s) {
+  return !strcmp(s->type, "series") ? TY_SERIES : TY_MOVIE;
+}
+// Which picker is in effect: the type of the source the grid is showing. The
+// other one is drawn dim, because with two pickers over one grid, two white
+// values would say both are live and neither would say which list this is.
+static int activeType(void) {
+  if (!collection || source < 0 || source >= collection->nSources) return TY_MOVIE;
+  return typeOf(&collection->sources[source]);
+}
+// THE CATALOGUE'S REAL NAME, out of the addon's manifest.
+//
+// NOT ONE of the owner's collection sources carries a title — checked against
+// the real account, all 129 of them across Genres, Streaming Services and
+// Discover arrive with title="" — so every option on this screen is named by
+// this function or not at all. Untouched, they read "mdblist.91211", which is
+// the catalogue's id and tells nobody anything.
+//
+// THE ADDONS NAME THEIR CATALOGUES, in the manifests the app has already read.
+// This used to ask cat_row for that name, and cat_row is the wrong list: it
+// holds the catalogues the HOME is showing, around two dozen of them, ordered
+// and filtered by the owner's preferences. That is why only Streaming Services
+// came out named — those few catalogues happen to be on the home — while every
+// genre folder, pointing at mdblist lists the owner has no home row for, fell
+// straight through to the id. disc_catalog_title reads the whole DECLARED set
+// instead, which is every catalogue of every installed addon.
+//
+// It comes back as "Top Rated - Movie", because the home's rows want the type on
+// the end of the line (formatTitle, discover.c). Here the picker's own label
+// says Movies directly above it, so the suffix comes off again rather than being
+// printed twice on one row.
+static const char *catalogName(const ColSource *s) {
+  static char out[96];
+  const char *base = col_source_base(s);
+  const char *found;
+  if (!base || !*base) return "";
+  found = disc_catalog_title(base, s->type, s->catId);
+  if (!found || !*found) return "";
+  snprintf(out, sizeof out, "%s", found);
+  // The LAST " - ", not the first: a catalogue genuinely called
+  // "Top - Rated - Movie" must lose only the type.
+  { char *cut = NULL, *p = out;
+    for (; *p; p++) if (p[0]==' ' && p[1]=='-' && p[2]==' ') cut = p;
+    if (cut && (!strcasecmp(cut + 3, "Movie") || !strcasecmp(cut + 3, "Series")))
+      *cut = 0; }
+  return out;
+}
+// WHAT AN OPTION READS AS. A collection's sources carry the folder's name in
+// their own titles — "Netflix Popular", "Netflix New Releases" — and the header
+// directly above already says Netflix in letters an inch tall. So the name comes
+// off and what is left is the actual choice: "Popular", "New Releases". A source
+// titled exactly like its folder has no choice in it and keeps its own name.
+static const char *sourceOption(int idx) {
+  static char out[128];
+  const ColSource *s;
+  const char *t;
+  size_t n;
+  if (!collection || idx < 0 || idx >= collection->nSources) return "";
+  s = &collection->sources[idx];
+  t = s->title[0] ? s->title : catalogName(s);
+  if (!t[0]) t = s->catId;
+  n = strlen(collection->title);
+  if (n && !strncasecmp(t, collection->title, n)) {
+    const char *rest = t + n;
+    while (*rest == ' ' || *rest == '-' || *rest == ':') rest++;
+    if (*rest) t = rest;
+  }
+  snprintf(out, sizeof out, "%s", t);
+  return out;
+}
+// dropdown.c asks for its rows through this; `ctx` is the type being listed.
+static const char *pickOption(void *ctx, int i) {
+  int t = *(int *)ctx;
+  return (t >= 0 && t < TY_N && i >= 0 && i < nSrcOf[t])
+       ? sourceOption(srcOf[t][i]) : "";
+}
+// The pickers follow whatever source is live, so a grid reached by ANY route —
+// the collection card on the home, a home row's "See all" pointing at one
+// catalogue of the folder — opens with the right picker lit and the right
+// option under it.
+static void syncPickers(void) {
+  int t, i;
+  if (!collection || source < 0 || source >= collection->nSources) return;
+  t = typeOf(&collection->sources[source]);
+  for (i = 0; i < nSrcOf[t]; i++) if (srcOf[t][i] == source) selOf[t] = i;
+  for (i = 0; i < nPicks; i++) if (picks[i] == t) pickSel = i;
+}
+static void buildPickers(void) {
+  int t, i;
+  nPicks = 0; pickSel = 0; pickFocus = 0;
+  menuOpen = -1; menuFocus = 0;
+  memset(pickAnim, 0, sizeof pickAnim);
+  memset(nSrcOf, 0, sizeof nSrcOf);
+  memset(selOf, 0, sizeof selOf);
+  if (!collection) return;
+  for (i = 0; i < collection->nSources; i++) {
+    int ty = typeOf(&collection->sources[i]);
+    if (nSrcOf[ty] < COL_SOURCE_MAX) srcOf[ty][nSrcOf[ty]++] = i;
+  }
+  for (t = 0; t < TY_N; t++) if (nSrcOf[t]) picks[nPicks++] = t;
+  syncPickers();
+}
+static void openSource(void);
+// Commits option `i` of the type-`t` list. The dropdown's OK lands here, and
+// nothing else changes which source is on screen.
+static void chooseSource(int t, int i) {
+  if (t < 0 || t >= TY_N || i < 0 || i >= nSrcOf[t]) return;
+  selOf[t] = i;
+  if (srcOf[t][i] == source) return;   /* already the one showing */
+  source = srcOf[t][i];
+  openSource();
+}
 static void openSource(void) {
   const ColSource *s=&collection->sources[source];
   snprintf(catalogId,sizeof catalogId,"%s",s->catId);
   ranked=strstr(s->catId,"top100")||strstr(s->catId,"top250")||strstr(s->catId,"top10");
-  focus=0;scrollY=velY=0;orderN=-1;
+  focus=0;scrollY=0;orderN=-1;
   // col_source_base and not s->base: a collection from the account stores the
   // addon's ID, and the address comes from the INSTALLED addon with that id.
   { const char *base=col_source_base(s);
@@ -124,11 +320,16 @@ void seeall_collection(const ColFolder *folder) {
   // grid covers the screen, and by then the rect would be a frame out of date.
   fromValid = home_collection_card_rect(&fromCard.x, &fromCard.y,
                                         &fromCard.w, &fromCard.h);
-  anim = 0.0f; animV = 0.0f; scrollY = 0.0f; velY = 0.0f; focus = 0;
-  memset(tabAnim, 0, sizeof tabAnim);
-  collection=folder;source=tabCursor=0;tabFocus=folder->nSources>1;is_open=1;reqOpen=-1;
+  anim = 0.0f; animV = 0.0f; scrollY = 0.0f; focus = 0;
+  animCard = 0.0f;
+  collection=folder;source=0;is_open=1;reqOpen=-1;
   timeline=!strcmp(folder->group,"Directors");
   snprintf(title,sizeof title,"%s",folder->title);openSource();
+  buildPickers();
+  // The row starts with the focus only when there is a choice to make in it.
+  // One source is one grid, and landing on a dropdown that cannot open is a
+  // press wasted before the viewer has seen a single poster.
+  pickFocus = folder->nSources > 1;
 }
 
 // The parameter MUST NOT be called `title`: there is a `static char title[96]`
@@ -146,15 +347,18 @@ void seeall_open(const char *base, const char *kind, const char *catId,
   // A home row's "See all" card is not a collection card and has no wordmark to
   // carry: that path keeps the plain fade it has always had.
   fromValid = 0;
-  is_open = 1; focus = 0; scrollY = 0.0f; velY = 0.0f; reqOpen = -1;
-  memset(tabAnim, 0, sizeof tabAnim);
+  is_open = 1; focus = 0; scrollY = 0.0f; reqOpen = -1;
+  animCard = 0.0f;
   snprintf(title, sizeof title, "%s", heading ? heading : "");
   collection=col_by_catalog(base,kind,catId);timeline=collection&&!strcmp(collection->group,"Directors");
-  source=tabCursor=tabFocus=0;orderN=-1;
+  source=0;orderN=-1;
   if(collection) {
-    for(int i=0;i<collection->nSources;i++)if(!strcmp(collection->sources[i].catId,catId)&&!strcmp(collection->sources[i].type,kind)){source=tabCursor=i;break;}
+    for(int i=0;i<collection->nSources;i++)if(!strcmp(collection->sources[i].catId,catId)&&!strcmp(collection->sources[i].type,kind)){source=i;break;}
     snprintf(title,sizeof title,"%s",collection->title);
   }
+  // AFTER the source is resolved, so syncPickers lights the picker that matches
+  // the catalogue this was opened on and not the folder's first one.
+  buildPickers();
   snprintf(catalogId,sizeof catalogId,"%s",catId);
   ranked=strstr(catId,"top100")||strstr(catId,"top250")||strstr(catId,"top10");
   disc_seeall_open(base, kind, catId);
@@ -294,16 +498,39 @@ void seeall_event(const SDL_Event *e) {
   int n = nItems(), k;
   if (!is_open || e->type != SDL_KEYDOWN) return;
   k = e->key.keysym.sym;
-  if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
-      e->key.keysym.scancode == NV_SCANCODE_BACK) { is_open = 0; return; }
-  if(collection&&tabFocus) {
-    if(k==SDLK_LEFT&&tabCursor>0)tabCursor--;
-    if(k==SDLK_RIGHT&&tabCursor+1<collection->nSources)tabCursor++;
-    if(k==SDLK_RETURN||k==SDLK_KP_ENTER){source=tabCursor;openSource();tabFocus=0;}
-    if(k==SDLK_DOWN&&n>0)tabFocus=0;
+  { int back = (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
+                e->key.keysym.scancode == NV_SCANCODE_BACK);
+    // AN OPEN LIST OWNS THE WHOLE D-PAD, Back included: it is a question
+    // standing in front of the screen, and Back answers the question rather
+    // than leaving the grid. Nothing behind it sees a key. The same rule
+    // Discover and the detail screen's season picker follow — which is why this
+    // stands ABOVE the Back that closes the screen and not below it.
+    if (menuOpen >= 0) {
+      int t = menuOpen;
+      if (back || k == SDLK_LEFT || k == SDLK_RIGHT) menuOpen = -1;
+      else if (k == SDLK_UP)   { if (menuFocus > 0) menuFocus--; }
+      else if (k == SDLK_DOWN) { if (menuFocus + 1 < nSrcOf[t]) menuFocus++; }
+      else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+        menuOpen = -1;
+        chooseSource(t, menuFocus);
+      }
+      return;
+    }
+    if (back) { is_open = 0; return; } }
+  if(nPicks&&pickFocus) {
+    if(k==SDLK_LEFT&&pickSel>0)pickSel--;
+    else if(k==SDLK_RIGHT&&pickSel+1<nPicks)pickSel++;
+    else if(k==SDLK_RETURN||k==SDLK_KP_ENTER||k==SDLK_SPACE) {
+      // A list with one option in it is not a question. The picker is still
+      // drawn — it says which list is on screen — but OK does not open a sheet
+      // whose only row is the one already showing.
+      int t = picks[pickSel];
+      if (nSrcOf[t] > 1) { menuOpen = t; menuFocus = selOf[t]; }
+    }
+    else if(k==SDLK_DOWN&&n>0)pickFocus=0;
     return;
   }
-  if(k==SDLK_UP&&focus<SEEALL_COLS&&collection){tabFocus=1;tabCursor=source;return;}
+  if(k==SDLK_UP&&focus<SEEALL_COLS&&nPicks){pickFocus=1;syncPickers();return;}
   if((k==SDLK_RETURN||k==SDLK_KP_ENTER)&&disc_seeall_error()){disc_seeall_more();return;}
   if (n < 1) return;
   if (k == SDLK_RIGHT && focus + 1 < n) focus++;
@@ -337,11 +564,17 @@ void seeall_update(float dt, Uint32 now) {
   anim = anim_spring2(&animV, anim, is_open ? 1.0f : 0.0f, dt,
                       is_open ? NV_SPRING2_GRID : NV_SPRING2_GRID_OUT);
   if (!is_open) return;
-  for (int i = 0; i < COL_SOURCE_MAX; i++) {
-    float targetTab = collection && tabFocus && i == tabCursor ? 1.0f : 0.0f;
-    tabAnim[i] = anim_spring(tabAnim[i], targetTab, dt,
-                           targetTab > tabAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  for (int t = 0; t < TY_N; t++) {
+    float targetPick = nPicks && pickFocus && picks[pickSel] == t ? 1.0f : 0.0f;
+    pickAnim[t] = anim_spring(pickAnim[t], targetPick, dt,
+                           targetPick > pickAnim[t] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
+  // The grid's own focus. It is the CARD scale, so it drops to 0 while the
+  // picker row has the focus: a poster still swollen under a dropdown the viewer
+  // has moved up to reads as two things focused at once.
+  { float targetCard = (!pickFocus && n > 0) ? 1.0f : 0.0f;
+    animCard = anim_spring(animCard, targetCard, dt,
+                           targetCard > animCard ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
   if(timeline&&n!=orderN) {
     int old=orderN>0&&focus<orderN?order[focus]:-1;int years[SEEALL_MAX];
     for(int i=0;i<n;i++){CatItem it;order[i]=i;years[i]=disc_seeall_item(i,&it)?yearOf(&it):9999;}
@@ -350,95 +583,44 @@ void seeall_update(float dt, Uint32 now) {
   }
   lines = (n + SEEALL_COLS - 1) / SEEALL_COLS;
   // Aims the focused row at 30% of the usable height, as the rest of the app does.
-  target = SEEALL_TOP + (float)(focus / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y)
-       - NV_SCREEN_H * 0.30f;
-  if(tabFocus)target=0;
+  { float row = (float)(focus / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y);
+    target = SEEALL_TOP + row - NV_SCREEN_H * 0.30f;
+    // BUT NEVER PAST THE TOP OF THE GRID, and this is what was slicing the
+    // posters. 30% of 1080 is 324 and the grid begins at 360, so the aim alone
+    // put the focused row's head at y=324 — twelve pixels ABOVE the line the
+    // grid is clipped at — and the top 24px of every focused card was cut off
+    // by the header band. It was true from the very first row, because the aim
+    // is 36px of scroll even at row 0.
+    //
+    // Clamping to `row` lands that row exactly on SEEALL_TOP: flush under the
+    // header, nothing cut. Where the header is shallow enough for the 30% aim
+    // to sit below it the aim still wins, so this is a floor and not a
+    // replacement for it. Discover reached the same place from the other
+    // direction — see the snap note in discoverui.c.
+    if (target > row) target = row; }
+  if(pickFocus)target=0;
   maxY = SEEALL_TOP + (float)lines * (SEEALL_CARD_H + SEEALL_GAP_Y) - NV_SCREEN_H + 120.0f;
   if (maxY < 0.0f) maxY = 0.0f;
   if (target < 0.0f) target = 0.0f;
   if (target > maxY) target = maxY;
-  scrollY = anim_spring2(&velY, scrollY, target, dt, NV_SPRING2_SCROLL);
+  scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
 }
 
-// THE RIGHT-HAND PANEL: what the grid alone does not say — synopsis, genres, score.
+// THE RIGHT-HAND PANEL IS GONE, and this is where it was.
 //
-// Without it the owner sees 50 posters and no information; it was what the
-// screen needed to stop being just a wall of images.
-static void panel(float a) {
-  CatItem it;
-  float y = SEEALL_PAN_Y;
-  if (!viewItem(focus, &it)) return;
-
-  // The side context uses the poster, never repeating the timeline's still.
-  // It keeps the 2:3 geometry even without art so the metadata does not shift.
-  { GfxRect r = { SEEALL_PAN_X, y, SEEALL_PAN_ART_W, SEEALL_PAN_ART_H };
-    const char *art = it.poster[0] ? it.poster : it.backdrop;
-    float radius = 12.0f / SEEALL_PAN_ART_H;   // fraction of the HEIGHT
-    GLuint t = art[0] ? tex_get_width(art, SEEALL_PAN_ART_W) : 0;
-    gfx_color(r, radius, 1, 1, 1, 0.05f * a);
-    if (t) {
-      gfx_tex_aspect_current = tex_aspect(art);
-      gfx_rect(r, t, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, a);
-      gfx_tex_aspect_current = 0.0f;
-    } else {
-      TxtLine missing = txt_line_trim(TXT_HERO_META, "No poster", 185, 191, 204, 255, r.w-24);
-      txt_draw_alpha(missing, r.x+(r.w-missing.w)*.5f, r.y+(r.h-missing.h)*.5f, a);
-    } }
-  y += SEEALL_PAN_ART_H + 18.0f;
-  float badgeW=badges_draw(badges_provider(it.providerName),SEEALL_PAN_X,y,SEEALL_PAN_W,28,a);
-  if(badgeW>0)y+=40;
-
-  // THE LOGO in place of the title where there is one (max 264x82 in the web
-  // app); the name set in the interface font only when there is no logo.
-  { GLuint tl = it.logo[0] ? tex_get_width(it.logo, 264.0f) : 0;
-    float ap = it.logo[0] ? tex_aspect(it.logo) : 0.0f;
-    if (tl && ap > 0.0f) {
-      float wL = 264.0f, hL = wL / ap;
-      if (hL > 82.0f) { hL = 82.0f; wL = hL * ap; }
-      { GfxRect rl = { SEEALL_PAN_X, y, wL, hL };
-        GfxMode m = tex_brand_dark(it.logo) ? GFX_BRAND : GFX_TEXT;
-        gfx_tex_aspect_current = 0.0f;
-        gfx_rect(rl, tl, m, 0, 0, 0, 0.0f, 1, 1, 1, a); }
-      y += hL + 4.0f;
-    } else {
-      TxtLine t = txt_line_trim(TXT_HEADLINE, it.title, 245, 245, 245, 255,
-                                   SEEALL_PAN_W);
-      txt_draw_alpha(t, SEEALL_PAN_X, y, a);
-      y += t.h + 6.0f;
-    } }
-
-  if (it.genre[0]) {
-    TxtLine t = txt_line_trim(TXT_CAPTION, it.genre, 220, 231, 244, 255,
-                                 SEEALL_PAN_W);
-    txt_draw_alpha(t, SEEALL_PAN_X, y, a * 0.72f);
-    y += t.h + 6.0f;
-  }
-  // The score pill, in the IMDb yellow the web app uses (245,197,24).
-  if (it.score > 0) {
-    char n[16];
-    snprintf(n, sizeof n, "%.1f", it.score / 10.0f);
-    { TxtLine t = txt_line(TXT_CAPTION, n, 23, 19, 10, 255);
-      GfxRect r = { SEEALL_PAN_X, y + 8.0f, t.w + 26.0f, t.h + 8.0f };
-      gfx_color(r, 8.0f / (t.h + 8.0f), 0.961f, 0.773f, 0.094f, 0.92f * a);
-      txt_draw_alpha(t, SEEALL_PAN_X + 13.0f, y + 12.0f, a);
-      y += r.h + 14.0f; }
-  }
-  if (it.meta[0]) {
-    TxtLine t = txt_line_trim(TXT_DET_META2, it.meta, 240, 240, 240, 255,
-                                 SEEALL_PAN_W);
-    txt_draw_alpha(t, SEEALL_PAN_X, y, a * 0.92f);
-    y += t.h + 12.0f;
-  }
-  if (it.synopsis[0]) {
-    // As far as it fits without passing the usable bottom (the web app cuts at
-    // max-height: 100% - 210).
-    int lines = (int)((NV_SCREEN_H - 48.0f - y) / 34.0f);
-    if (lines > 8) lines = 8;
-    if (lines > 0)
-      txt_block(TXT_DET_META2, it.synopsis, 236, 236, 236,
-                SEEALL_PAN_X, y, SEEALL_PAN_W, 34.0f, a * 0.86f, lines);
-  }
-}
+// It showed the focused item's art, synopsis, score and credits in a 336-wide
+// column on the right, and it was a port of the web app's `.seeall-detail`. Two
+// things were wrong with it on a television. It opened by drawing the focused
+// POSTER — the very card the viewer was looking at, at nearly the same size, a
+// few inches to its left — so the first half of the column was a copy of
+// something already on screen. And the column cost 440 of the 1920 pixels here,
+// which is what held the grid down to five narrow posters.
+//
+// Replacing the poster with the title's still fixed the duplication and bought
+// the synopsis four more lines, but not the width: a browse screen was still
+// spending a quarter of itself on one item. The title screen is ONE PRESS away
+// and gives that item the whole display. So the column went, the grid took the
+// width, and the posters are the Library's again.
 
 static const char *portraitLocal(const ColFolder *folder) {
   static char path[700];
@@ -607,8 +789,16 @@ static void flyingTitle(float x0) {
     txt_draw_alpha(line, tx, ty, 1.0f); }
 }
 
+// Where picker `i` of the row sits. `dy` is the content's rise, so the row
+// arrives with the copy above it rather than being pinned while everything
+// around it moves.
+static GfxRect pickRect(int i, float x0, float dy) {
+  GfxRect r = { x0 + i * (SEEALL_PICK_W + SEEALL_PICK_GAP), SEEALL_PICK_Y + dy,
+                SEEALL_PICK_W, NV_DD_PICK_H };
+  return r;
+}
+
 static void themeHeader(float a,float x0,float dy) {
-  float r,g,b;colorCollection(&r,&g,&b);
   // THE HOME'S COLOUR, not one of its own: same words, same face, same ink, so
   // the line genuinely does not change when the folder opens. It is drawn here
   // only when it is NOT in the air — see flyingGroup.
@@ -650,39 +840,44 @@ static void themeHeader(float a,float x0,float dy) {
       txt_draw_alpha(line,x0,80+dy,a);
     }
   }
-  char caption[180];int n=nItems();
-  if(disc_seeall_error())snprintf(caption,sizeof caption,"Could not load. OK to try again.");
-  else if(!n)snprintf(caption,sizeof caption,"%s",disc_seeall_loading()?"Loading titles…":"No titles in this list.");
-  else snprintf(caption,sizeof caption,"%d titles%s  ·  %s",n,disc_seeall_end()?"":" loaded",subtitleGroup());
-  TxtLine sub=txt_line_trim(TXT_DET_META2,caption,196,202,213,255,960);txt_draw_alpha(sub,x0,192+dy,a);
-  if(collection&&collection->nSources>1) {
-    int first=tabCursor>3?tabCursor-3:0;
-    cropBoth((GfxRect){x0-6,244+dy,NV_SCREEN_W-x0-90,72}, gView);
-    for(int i=first;i<collection->nSources&&i<first+6;i++) {
-      float x=x0+(i-first)*322.0f;const ColSource *s=&collection->sources[i];
-      int f=tabFocus&&tabCursor==i, selected=source==i;
-      float fa=tabAnim[i], scale=1.0f+.025f*fa;
-      GfxRect pill={x-(304*scale-304)*.5f,250+dy-(58*scale-58)*.5f,
-                    304*scale,58*scale};
-      gfx_color(pill,.28f,f?.94f:selected?r*.82f:.09f,
-              f?.95f:selected?g*.82f:.10f,
-              f?.97f:selected?b*.82f:.12f,a);
-      if(!f) gfx_rect(pill,0,GFX_RING,0,1.5f/pill.h,0,.28f,
-                      selected?.86f:.36f,selected?.88f:.38f,
-                      selected?.92f:.43f,a*(selected?.72f:.35f));
-      if(selected&&!f)
-        gfx_color((GfxRect){pill.x+18,pill.y+pill.h-4,pill.w-36,3},.5f,
-                .84f+r*.16f,.84f+g*.16f,.84f+b*.16f,a);
-      char label[180];snprintf(label,sizeof label,"%s · %s",s->title,!strcmp(s->type,"series")?"Series":"Movies");
-      TxtLine t=txt_line_trim(TXT_HERO_META,label,f?22:238,f?24:240,f?28:245,255,276);
-      txt_draw_alpha(t,pill.x+(pill.w-t.w)*.5f,pill.y+(pill.h-t.h)*.5f,a);
-    }cropBoth((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H}, gView);
+  // NO COUNT AND NO STRAPLINE. This line used to read "20 titles loaded  ·  A
+  // selection from your catalogue", and neither half earned its place: the
+  // viewer can see how many posters there are, "loaded" exposed the pager as a
+  // fact about the fetch rather than about the list, and the strapline was a
+  // sentence generated per group ("Curated by theme and mood") that said nothing
+  // the folder's own name had not already said.
+  //
+  // What is left is the three things the grid genuinely CANNOT say for itself:
+  // that it is still arriving, that it is empty, or that it failed — and those
+  // are drawn WHERE THE GRID WOULD BE, not as a strapline under the title. The
+  // caption's old slot at 192 is now 20px above the picker row, but that is not
+  // why it moved: a line saying the list is empty belongs in the empty space,
+  // which is what Discover's own empty state does.
+  //
+  // AND NOT "Loading titles…" ANY MORE: the skeleton row below draws in exactly
+  // this space while the fetch is out, and a word for it on top of the blocks
+  // that already mean it is one message twice, printed over itself.
+  { int n = nItems();
+    const char *msg = disc_seeall_error() ? "Could not load. OK to try again."
+                    : (n || disc_seeall_loading()) ? NULL
+                                            : "No titles in this list.";
+    if (msg) {
+      TxtLine sub = txt_line_trim(TXT_DET_META2, msg, 196, 202, 213, 255, 960);
+      txt_draw_alpha(sub, x0, SEEALL_TOP + 12.0f + dy, a);
+    } }
+  // THE PICKERS. The pill per source that used to be here is in the history at
+  // the head of this file's picker block; these are dropdown.c's, the same
+  // control Discover draws.
+  for (int i = 0; i < nPicks; i++) {
+    int t = picks[i];
+    dd_pill(pickRect(i, x0, dy), TY_LABEL[t], sourceOption(srcOf[t][selOf[t]]),
+            pickAnim[t], t == activeType(), a);
   }
 }
 
 static void timelineCard(int i,float cy,float a,float x0) {
   CatItem it;if(!viewItem(i,&it))return;
-  int sel=i==focus&&!tabFocus;float r,g,b;colorCollection(&r,&g,&b);
+  int sel=i==focus&&!pickFocus;float r,g,b;colorCollection(&r,&g,&b);
   // The line organises the chronology; it is not a decorative card border.
   gfx_color((GfxRect){x0+109,cy-30,2,SEEALL_CARD_H+SEEALL_GAP_Y},0,.48f,.47f,.46f,a*.6f);
   gfx_color((GfxRect){x0+102,cy+24,16,16},.5f,sel?.95f:r,sel?.95f:g,sel?.97f:b,a);
@@ -736,15 +931,45 @@ void seeall_draw(Uint32 now) {
   // BEHIND it when scrolling — the title sat over moving imagery and turned
   // into "background". Clipping solves it without needing an opaque band: what
   // rises above the top simply is not drawn.
-  cropBoth((GfxRect){ 0.0f, SEEALL_TOP - 12.0f, NV_SCREEN_W,
-                      NV_SCREEN_H - SEEALL_TOP + 12.0f }, view);
+  cropBoth((GfxRect){ 0.0f, SEEALL_CLIP_TOP, NV_SCREEN_W,
+                      NV_SCREEN_H - SEEALL_CLIP_TOP }, view);
   a = ac;   /* the grid and the copy below come in on the content's ramp */
+  // TWO PASSES: the focused card GROWS, and a card that grows has to be drawn
+  // over its neighbours or the poster beside it clips its border. The Library
+  // and Discover both do this, and for the same reason.
+  for (int pass = 0; pass < 2; pass++)
   for (i = 0; i < n; i++) {
     float cx = x0 + (float)(i % SEEALL_COLS) * (SEEALL_CARD_W + SEEALL_GAP_X);
     float cy = SEEALL_TOP + (float)(i / SEEALL_COLS) * (SEEALL_CARD_H + SEEALL_GAP_Y)
              - scrollY + rise;
     CatItem it;
     GLuint t;
+    int sel = (i == focus && !pickFocus);
+    // CARDS DISSOLVE AS THEY LEAVE, exactly as the home's rows do.
+    //
+    // The clip alone removes them, but a poster that is simply chopped off by an
+    // invisible line reads as a rendering fault — which is what this screen did:
+    // a row slid up and was guillotined against the header. The home answers it
+    // with an 80px band above the fold in which a row ramps to nothing (see the
+    // top-edge mask in home_draw), so what crosses the boundary has already gone.
+    // Same band, same smoothstep, same clock here.
+    //
+    // MEASURED AT REST, not at the animated position: `cy` carries the opening
+    // window's rise, and reading the ramp through that faded the whole grid in
+    // from the top on every entrance. The home's note records the same trap.
+    float edge = anim_edge(cy - rise, SEEALL_CLIP_TOP, SEEALL_FADE);
+    // THE FOCUSED POSTER SCALES, which it did not before: it got a white ring
+    // laid 4px outside it and stayed exactly the size of its neighbours. Every
+    // other grid in this app grows the card instead — `.library-grid-card.focused
+    // { transform: scale(1.02) }` with the origin at the TOP, and the 4px border
+    // on the INSIDE rather than as a halo outside. A ring where the rest of the
+    // app has a lift is what made this screen feel like a different app.
+    float f = (sel && !timeline) ? animCard : 0.0f;
+    float scale = 1.0f + NV_LIB_FOCUS_SCALE * f;
+    float cw = SEEALL_CARD_W * scale, chh = SEEALL_CARD_H * scale;
+    // `transform-origin: top`: the top edge stays on its row and the growth goes
+    // downwards, so only x is re-centred.
+    GfxRect r = { cx - (cw - SEEALL_CARD_W) * 0.5f, cy, cw, chh };
     // The SAME radius as the home's posters: `posterCardCornerRadiusDp` (12dp x
     // 2 = 24px), a fraction of the SMALLER side because the shader's SDF is
     // normalised. The fixed NV_RADIUS_CARD that used to be here gave a corner
@@ -753,53 +978,84 @@ void seeall_draw(Uint32 now) {
     // `p = (uv-0.5)*vec2(asp,1.0)` makes one SDF unit h pixels on both axes.
     // Dividing by the width rounded this poster half again too much. See the
     // note on radiusInset in home.c.
-    float radius = settings_radius_poster_px() / SEEALL_CARD_H;
-    int sel = (i == focus);
-    if (cy > NV_SCREEN_H || cy + SEEALL_CARD_H + 40.0f < SEEALL_TOP - 12.0f) continue;
-    if(timeline){timelineCard(i,cy,a,x0);continue;}
-    if (!viewItem(i, &it)) continue;
-    { GfxRect r = { cx, cy, SEEALL_CARD_W, SEEALL_CARD_H };
-      if (sel && !tabFocus) {
-        GfxRect ring = { cx - 4, cy - 4, SEEALL_CARD_W + 8, SEEALL_CARD_H + 8 };
-        gfx_color(ring, settings_radius_poster_px() / (SEEALL_CARD_W + 8.0f), 1, 1, 1, a);
+    float radius = settings_radius_poster_px() / r.h;
+    if (cy > NV_SCREEN_H || cy + SEEALL_CARD_H + 40.0f < SEEALL_CLIP_TOP) continue;
+    // The Directors timeline scrolls in the same viewport and dissolves with it.
+    if(timeline){
+      if(!pass&&edge>0.004f){
+        gfx_opacity_group=edge;timelineCard(i,cy,a,x0);gfx_opacity_group=1.0f;
       }
+      continue;}
+    /* pass 0 lays the row, pass 1 puts the one that grew back on top of it */
+    if ((pass == 1) != (f > 0.01f)) continue;
+    if (!viewItem(i, &it)) continue;
+    if (edge <= 0.004f) continue;
+    gfx_opacity_group = edge;
+    {
+      // The RESTING width, not the animated one: tex_cache re-decodes an exact
+      // request whose width moves, and a poster that re-decodes through a focus
+      // spring is a poster that is missing for the length of it.
       t = it.poster[0] ? tex_get_width(it.poster, SEEALL_CARD_W)
         : (it.backdrop[0] ? tex_get_width(it.backdrop, SEEALL_CARD_W) : 0);
       if (t) {
         gfx_tex_aspect_current = tex_aspect(it.poster[0] ? it.poster : it.backdrop);
-        gfx_rect(r, t, GFX_CARD, sel ? 1.0f : 0.0f, 0, 0, radius, 0, 0, 0, a);
+        gfx_rect(r, t, GFX_CARD, f, 0, 0, radius, 0, 0, 0, a);
         gfx_tex_aspect_current = 0.0f;
       } else {
         // A skeleton while the art has not arrived — the same colour as the rest of
         // the app, and on the same sweep of light (gfx_skeleton).
         gfx_skeleton(r, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
                 NV_COLOR_SKELETON_B, a);
-      } }
+      }
+      // The focus border, 4px ON THE INSIDE — "Android TV uses the inside focus
+      // border, not an outer halo", says the stylesheet.
+      //
+      // GFX_RING_INSET AND NOT GFX_RING, and this is what made the corners look
+      // wrong. GFX_RING centres its band on the shape's contour, so half the
+      // stroke falls OUTSIDE the rounded rectangle. Along the straight sides
+      // that half lands outside the quad and is simply never rasterised, giving
+      // a 3px line; at the CORNERS it lands in the square quad's leftover
+      // triangle, where there IS a fragment to paint, so the full 6px got drawn
+      // and the border visibly swelled and bulged at each corner. Thin sides,
+      // fat corners, on every focused poster.
+      //
+      // GFX_RING_INSET puts the band strictly between the contour and
+      // `thickness` inside it, so it is the same weight the whole way round.
+      //
+      // AND /r.h, NOT /r.w: the SDF is normalised to the HEIGHT — `p =
+      // (uv-0.5)*vec2(asp,1.0)` makes one unit h pixels on both axes — so a
+      // thickness divided by the width comes out at w/h of what was asked for.
+      if (f > 0.01f)
+        gfx_rect(r, 0, GFX_RING_INSET, 0, NV_LIB_POSTER_BORDER / r.h, 0, radius,
+                 0.961f, 0.961f, 0.961f, f * a); }
+    // The title stays on the UNSCALED column, as the Library's does: a name
+    // that slid sideways under a poster that grew would be two movements where
+    // the card only made one.
     { int c = sel ? 255 : 214;
-      TxtLine l = txt_line_trim(TXT_DET_META2, it.title, c, c, c, 255,
+      TxtLine l = txt_line_trim(TXT_CALLOUT, it.title, c, c, c, 255,
                                    SEEALL_CARD_W);
-      txt_draw_alpha(l, cx, cy + SEEALL_CARD_H + 10.0f, a * (sel ? 1.0f : 0.86f)); }
+      txt_draw_alpha(l, cx, cy + SEEALL_CARD_H + NV_LIB_TITLE_GAP,
+                     a * (sel ? 1.0f : 0.86f)); }
     if(ranked) {
       char rank[8];snprintf(rank,sizeof rank,"%d",i+1);
-      TxtLine edge=txt_line(TXT_RANK,rank,234,236,241,255),ink=txt_line(TXT_RANK,rank,17,18,22,255);
-      float x=cx-10,y=cy+SEEALL_CARD_H-edge.h;
-      for(int dx=-2;dx<=2;dx+=2)for(int dy=-2;dy<=2;dy+=2)txt_draw_alpha(edge,x+dx,y+dy,a);
+      TxtLine mark=txt_line(TXT_RANK,rank,234,236,241,255),ink=txt_line(TXT_RANK,rank,17,18,22,255);
+      float x=r.x-10,y=r.y+r.h-mark.h;
+      for(int dx=-2;dx<=2;dx+=2)for(int dy=-2;dy<=2;dy+=2)txt_draw_alpha(mark,x+dx,y+dy,a);
       txt_draw_alpha(ink,x,y,a);
     }
+    // PUT IT BACK. A group opacity left set bleeds onto everything drawn after
+    // it — here that would be the header and the wordmark.
+    gfx_opacity_group = 1.0f;
   }
-  if(!n&&disc_seeall_loading())for(int i=0;i<5;i++)
-    gfx_color((GfxRect){x0+i*264,SEEALL_TOP,248,372},.06f,.12f,.13f,.15f,a);
+  gfx_opacity_group = 1.0f;
+  if(!n&&disc_seeall_loading())for(int i=0;i<SEEALL_COLS;i++)
+    gfx_color((GfxRect){x0+i*(SEEALL_CARD_W+SEEALL_GAP_X),SEEALL_TOP,
+                        SEEALL_CARD_W,SEEALL_CARD_H},.06f,.12f,.13f,.15f,a);
   // THE HEADER above the clip, so it never competes with the art — but still
   // inside the window, which is what makes it part of the thing that opened.
   cropBoth((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, view);
   themeHeader(a,x0,rise);
 
-  // RE-APPLIED, not assumed: themeHeader clips inside itself for the source tabs,
-  // so the window's clip is not necessarily the one still in force when it
-  // returns. It used to end with gfx_no_crop(), which left the panel below
-  // unclipped and drawing outside the window that is supposed to contain it.
-  cropBoth((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, view);
-  if (n > 0) panel(a);
   gfx_no_crop();
   // OUTSIDE the window: the wordmark is travelling INTO the header from a place
   // the window has not reached yet, so clipping it to the window would cut it in
@@ -807,5 +1063,13 @@ void seeall_draw(Uint32 now) {
   flyingLogo(x0);
   flyingTitle(x0);
   flyingGroup(x0);
+  // LAST OF EVERYTHING, and uncropped: an open list covers the grid, the panel
+  // and the picker beside it, and it carries a shadow that has to fall on them.
+  if (menuOpen >= 0) {
+    int t = menuOpen, i;
+    for (i = 0; i < nPicks && picks[i] != t; i++) ;
+    if (i < nPicks)
+      dd_menu(pickRect(i, x0, rise), nSrcOf[t], menuFocus, pickOption, &t, a);
+  }
   }
 }

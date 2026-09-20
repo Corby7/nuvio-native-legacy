@@ -139,6 +139,14 @@ int  disc_search_generation(void);
 // everywhere else, so the screen can ask about whichever one the picker is on.
 void disc_catalog_genres(const char *base, const char *kind, const char *id,
                          const char *options, const char *end);
+// The manifest's name for one catalogue of an installed addon, or "" when none
+// declares it. It is the WHOLE declared set and not the home's rows: a
+// collection routinely points at a catalogue the owner has switched off the
+// home, and it still has to be named on the collection screen. See the note on
+// the implementation for why the kind is not part of the key.
+const char *disc_catalog_title(const char *base, const char *kind,
+                               const char *catId);
+
 int  disc_genres_n(const char *base, const char *kind, const char *id);
 // Option `i`, or "" out of range. The list does NOT include the "Default"
 // entry the picker shows first — that one means "no genre parameter at all",
@@ -157,6 +165,27 @@ int  disc_searching(void);
 // Requests the episodes of title `itemIndex` in season `season` (0 = the season
 // the owner stopped on, or the first). Idempotent: asking twice for the same
 // thing does not repeat the fetch.
+// --- GROWING A HOME ROW ------------------------------------------------------
+//
+// A home row no longer stops at the twelve it was built with and no longer ends
+// in a card that leads somewhere else: reaching its end asks the catalogue for
+// the page after what it holds, and the row gets longer in place. See the long
+// note in discover.c.
+//
+// `have` is how many the row has RIGHT NOW, which is the skip to ask for. One
+// request is in flight for the whole home at a time; a second call while it runs,
+// or on a row whose catalogue has run out, does nothing.
+void disc_row_more(const char *key, const char *base, const char *kind,
+                   const char *catId, int have);
+// 1 while this row's page is on its way. Whatever draws can say so.
+int  disc_row_loading(const char *key);
+// 1 once this row's catalogue has answered with nothing new. It stays that way
+// for the session.
+int  disc_row_ended(const char *key);
+// Puts a page that has landed into its row, ON THE DRAWING THREAD, and returns
+// how many items went in. Called once a frame by the home.
+int  disc_row_collect(void);
+
 // --- SEE ALL: a whole catalogue, in pages ------------------------------------
 //
 // The home shows 12 items per row (MAX_PER_ROW). The catalogue has more, and the

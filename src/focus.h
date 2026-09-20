@@ -7,7 +7,13 @@
 #ifndef NV_FOCUS_H
 #define NV_FOCUS_H
 
-#define FOCUS_MAX_ROWS 32
+// 48 AND NOT 32, which is MAX_FILTER in home.c — the home builds up to that many
+// rows (24 catalogues plus the owner's collections) and focus_start CLAMPS what it
+// is given. At 32 the rows past the thirty-second existed, were drawn and were
+// simply unreachable: the down arrow stopped, with nothing logged. tests/
+// home_layout.c asserts the two agree, and that assertion has been failing since
+// MAX_FILTER was raised.
+#define FOCUS_MAX_ROWS 48
 
 typedef struct {
   int row;

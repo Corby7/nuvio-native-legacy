@@ -4,6 +4,16 @@
 #include <assert.h>
 #include "../src/home.c"
 
+// THE ACCOUNT'S ROW PREFERENCES, STUBBED. They live in discover.c, which drags in
+// the network and SDL; this test links the logic under test and nothing else (see
+// tests/home.sh). An empty preference list is the state syncRows already has to
+// handle — it is what a first run looks like — so the composition it produces here
+// is the packaged order, which is what the assertions below are written against.
+int         disc_prefs_n(void) { return 0; }
+const char *disc_prefs_key(int i) { (void)i; return ""; }
+int         disc_prefs_hidden(const char *key) { (void)key; return 0; }
+const char *disc_prefs_title(const char *key) { (void)key; return NULL; }
+
 int main(void) {
   assert(MAX_FILTER <= FOCUS_MAX_ROWS);
   assert(profileCatalog("Oscars 2026 - Movie") == ROW_COLLECTION);
@@ -83,7 +93,7 @@ int main(void) {
       if (!strcmp(rows[r].key, filters[i].key)) found=1;
     assert(found);
   }
-  rows[9].n=3;rows[9].stackN=0;rows[9].seeAll=1;
+  rows[9].n=3;rows[9].stackN=0;rows[9].stackOpen=1;
   for(int i=0;i<nRows;i++)assert(strcmp(rows[i].title,"Your catalogues"));
   snprintf(filters[15].key,sizeof filters[15].key,"social_activity");
   filters[15].base[0]=filters[15].catId[0]=0;
@@ -93,7 +103,7 @@ int main(void) {
     social++;assert(rows[i].start==45 && rows[i].n==3);
   }
   assert(social==1); // real data replaces empty, never duplicates the row
-  assert(rows[9].stackN==0 && rows[9].n==3 && rows[9].seeAll);
+  assert(rows[9].stackN==0 && rows[9].n==3 && rows[9].stackOpen);
 
   // Another title's art is never a silent fallback, even when the index is
   // beyond the local library. With no catalogue, the local arrays stay available
@@ -124,6 +134,43 @@ int main(void) {
     assert(x==0.35f && v==0.0f);
   }
   assert(NV_HERO_FADE_MS>=180.0f && NV_HERO_FADE_MS<=250.0f);
+
+  // A ROW GROWS IN PLACE: the page lands at the end of its own window, the rows
+  // after it follow their items, and the home picks the longer row up. This is
+  // what replaced the "See all" card, so the row has to be able to pass the twelve
+  // it was born with.
+  { CatRow two[2] = {0};
+    CatItem page[3] = {0};
+    int before;
+    for (int i = 0; i < 2; i++) {
+      snprintf(two[i].key,  sizeof two[i].key,  "grow_%d", i);
+      snprintf(two[i].title, sizeof two[i].title, "Grow %d", i);
+      snprintf(two[i].kind,  sizeof two[i].kind,  "movie");
+      snprintf(two[i].base,  sizeof two[i].base,  "https://example.invalid/addon");
+      snprintf(two[i].catId, sizeof two[i].catId, "grow%d", i);
+      two[i].start = i * 12; two[i].n = 12;
+    }
+    for (int i = 0; i < 24; i++)
+      snprintf(itemsTeste[i].imdb, sizeof itemsTeste[i].imdb, "tt%d", i);
+    for (int i = 0; i < 3; i++)
+      snprintf(page[i].imdb, sizeof page[i].imdb, "ttnew%d", i);
+    cat_set_all(itemsTeste, 24, two, 2);
+    before = cat_n();
+    assert(cat_row(0)->n == 12 && cat_row(1)->start == 12);
+    assert(cat_row_grow(0, page, 3) == 3);
+    assert(cat_n() == before + 3);
+    assert(cat_row(0)->n == 15);
+    // The second row moved with its items, and they are still its items.
+    assert(cat_row(1)->start == 15 && cat_row(1)->n == 12);
+    assert(!strcmp(cat_item(15)->imdb, "tt12"));
+    assert(!strcmp(cat_item(12)->imdb, "ttnew0"));
+    filtersApplied = -1; syncRows();
+    { int found = -1;
+      for (int r = 0; r < nRows; r++) if (!strcmp(rows[r].key, "grow_0")) found = r;
+      assert(found >= 0);
+      assert(rows[found].n == 15);            // past the twelve it was built with
+      assert(focus.nColumns[found] == 15); }  // and no "See all" column after it
+  }
   free(itemsTeste);
   puts("home layout: PASS (fallback, imported collections, requested order, ranks, focus)");
   return 0;

@@ -46,11 +46,15 @@ int   seeall_owns_mark(void);
 // synthetic ones (Continue watching, Among friends) all land here too. This array
 // is the headroom, not the limit — what actually trims the list is CAT_FILTER_MAX.
 #define MAX_FILTER    48
-// 13 and not 12: there are 12 POSTERS plus the "See all" card's column, which takes
-// the position after the last piece of art. With 12 here, animFocus[r][12] wrote
-// outside the array — the card never lit up on focus and the neighbour's memory was
-// silently corrupted.
-#define MAX_CARDS 33
+// THE CEILING OF A ROW, and it is not the twelve the row is BORN with: reaching
+// the last poster asks the catalogue for its next page and the row gets longer in
+// place (disc_row_more), so the number here is where that stops.
+//
+// It is a real ceiling and not a formality — animFocus[r][c] and Row.folders are
+// indexed by column, and a row that grew past this would write outside both. The
+// draw loop skips every card off screen, so the cost of the size is the arrays
+// themselves: ~38 KB of springs and ~40 KB across the two copies of rows[].
+#define MAX_CARDS 200
 
 typedef struct {
   char title[96];
@@ -61,9 +65,10 @@ typedef struct {
   // because the rows were four and hard-coded. With the rows coming from the addons'
   // catalogues, each has a size of its own.
   int start;
-  // The "See all" card takes column `n` (the one after the last piece of art). Kept
-  // per row because only the ones that came from an addon catalogue have it.
-  int seeAll;
+  // TOP 10 ONLY: 1 once the stack has been opened into its ten cards. It has to
+  // survive a republication of the catalogue — discovery publishes on every row
+  // that lands — or a stack the owner opened would fold itself shut behind them.
+  int stackOpen;
   char base[600], catId[96];
   // The CATALOGUE's "movie" | "series". The `kind` above is the card's shape
   // (portrait/landscape), which is a different thing — you cannot deduce one from
@@ -612,7 +617,6 @@ static int focus_can_press_long(void) {
   const Row *s = &rows[focus.row];
   if (s->kind == ROW_CATALOGS || s->kind == ROW_SOCIAL ||
       s->kind == ROW_TOP10) return 0;
-  if (s->seeAll && focus.column == s->n) return 0;
   return focus.column >= 0 && focus.column < s->n;
 }
 
@@ -821,11 +825,56 @@ int home_start(const char *dirArt) {
   // the first content row (as in buildModernNavigationRows()).
   int cols[MAX_FILTER];
   for (int i = 0; i < nRows; i++)
-    cols[i] = rows[i].n + (rows[i].seeAll ? 1 : 0);
+    cols[i] = rows[i].n;
   focus_start(&focus, nRows, cols);
   heroSwapIn = SDL_GetTicks() + NV_HERO_INTERVAL_MS;
   printf("home: %d backdrops, %d posters, %d rows\n", nBd, nPst, nRows);
   return 1;
+}
+
+// The row's name AS THE HOME SHOWS IT, which is not always the name the
+// catalogue carries: `catalogTypeSuffixEnabled` off drops the " - Movie" /
+// " - Series" that formatCatalogRowTitle appends (homeUtils.js:62).
+//
+// It is applied while DRAWING and not in discovery, so that the preference takes
+// effect at once instead of on the next start — and for the same reason it has to
+// be applied again by anyone else who shows a row's name. The poster's menu was
+// the second such place and said "Browse Popular - Movie" over a row headed
+// "Popular"; the grid it opens is a third, through the heading it is given.
+static const char *rowHeading(const char *title, char *out, size_t size) {
+  const char *cut, *last = NULL;
+  size_t keep;
+  if (!title) return "";
+  if (settings_suffix_kind()) return title;
+  for (cut = strstr(title, " - "); cut; cut = strstr(cut + 3, " - ")) last = cut;
+  if (!last || (strcmp(last + 3, "Movie") && strcmp(last + 3, "Series")))
+    return title;
+  keep = (size_t)(last - title);
+  if (keep >= size) keep = size - 1;
+  memcpy(out, title, keep);
+  out[keep] = 0;
+  return out;
+}
+
+// THE ROW'S CATALOGUE, for the poster's menu. The menu offers to open the whole
+// row as a grid, and only the home knows which row a card is in — the item itself
+// cannot say, because the same title sits in several rows at once.
+//
+// A row with no catalogue behind it ("Continue watching", the collections, the
+// friends' feed) leaves base/catId empty, and the menu simply does not draw that
+// option. A Top 10 is excluded for the same reason it does not page: it is ten
+// titles by definition, and its grid would be the hundred behind them.
+static void rowCatalog(int r, CtxCatalog *out) {
+  memset(out, 0, sizeof *out);
+  if (r < 0 || r >= nRows) return;
+  if (rows[r].kind == ROW_TOP10 || rows[r].kind == ROW_CATALOGS ||
+      rows[r].kind == ROW_SOCIAL) return;
+  { char withoutSuffix[96];
+    snprintf(out->title, sizeof out->title, "%s",
+             rowHeading(rows[r].title, withoutSuffix, sizeof withoutSuffix)); }
+  snprintf(out->base,  sizeof out->base,  "%s", rows[r].base);
+  snprintf(out->kind,  sizeof out->kind,  "%s", rows[r].catKind);
+  snprintf(out->catId, sizeof out->catId, "%s", rows[r].catId);
 }
 
 void home_event(const SDL_Event *e) {
@@ -868,9 +917,6 @@ void home_event(const SDL_Event *e) {
         return;
       }
       Uint32 duration = okSince ? SDL_GetTicks() - okSince : 0;
-      int onSeeAll = (focus.row >= 0 && focus.row < nRows &&
-                       rows[focus.row].seeAll &&
-                       focus.column == rows[focus.row].n);
       okSince = 0;
       okPressing = 0;
       okLongFired = 0;
@@ -879,9 +925,9 @@ void home_event(const SDL_Event *e) {
       if(rows[focus.row].kind==ROW_TOP10 && rows[focus.row].stackN) {
         Row *s=&rows[focus.row];
         s->n=s->stackN<10?s->stackN:10;
-        s->stackN=0;s->seeAll=1;
+        s->stackN=0;s->stackOpen=1;
         focus.column=0;focus.columnRemembered[focus.row]=0;
-        focus.nColumns[focus.row]=s->n+1;
+        focus.nColumns[focus.row]=s->n;
         return;
       }
       if(rows[focus.row].kind==ROW_SOCIAL && rows[focus.row].start<0) {
@@ -895,11 +941,10 @@ void home_event(const SDL_Event *e) {
         if (focus.column >= 0 && focus.column < rows[focus.row].n) {
           seeall_collection(col_folder(rows[focus.row].folders[focus.column]));
         }
-      } else if (onSeeAll) {
-        seeall_open(rows[focus.row].base, rows[focus.row].catKind,
-                      rows[focus.row].catId, rows[focus.row].title);
       } else if (duration >= NV_HOLD_MS) {
-        ctx_open(rows[focus.row].start + focus.column);
+        { CtxCatalog c;
+          rowCatalog(focus.row, &c);
+          ctx_open_row(rows[focus.row].start + focus.column, &c); }
       } else {
         requestOpen = 1;
       }
@@ -919,8 +964,8 @@ void home_event(const SDL_Event *e) {
 #endif
   // OK NO LONGER ACTS ON THE KEYDOWN. Opening the title there made "holding"
   // impossible: by the time the key went up, the detail had been open for half a
-  // second. The whole decision — open, "See all" or the poster's menu — lives in the
-  // KEYUP above, which is the only point that knows the DURATION.
+  // second. The whole decision — open the title or its menu — lives in the KEYUP
+  // above, which is the only point that knows the DURATION.
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) return;
   // ANY OTHER KEY ENDS THE HOLD. An arrow pressed while OK is down already voids the
   // gesture inside ctxmenu (holdCancelled), but the home did not hear about it: the
@@ -1076,13 +1121,11 @@ static void syncRows(void) {
       rows[destination].kind = ROW_HIGHLIGHT;
       hasHighlight = 1;
     }
-    // MAX_CARDS - 1: the last column belongs to the "See all" card. Without
-    // reserving it, a full row would push the card outside the animation array.
-    rows[destination].n   = cf->n > 12 ? 12 : cf->n;
-    // ONE EXTRA COLUMN: the "See all" card at the end. Only on a row that came from
-    // an addon CATALOGUE — "Continue watching" and the Trakt lists have no
-    // continuation to ask for (their base is empty).
-    rows[destination].seeAll = (cf->base[0] && cf->catId[0]) ? 1 : 0;
+    // THE WHOLE WINDOW, clamped only by the column arrays. It used to be cut at
+    // twelve here, because twelve was all a row could ever hold; the row now grows
+    // as the owner walks it (see growRow) and the catalogue's window grows with it,
+    // so cutting at twelve would throw away every page that arrived.
+    rows[destination].n   = cf->n > MAX_CARDS ? MAX_CARDS : cf->n;
     snprintf(rows[destination].base,  sizeof rows[destination].base,  "%s", cf->base);
     snprintf(rows[destination].catId, sizeof rows[destination].catId, "%s", cf->catId);
     snprintf(rows[destination].catKind, sizeof rows[destination].catKind, "%s", cf->kind);
@@ -1246,7 +1289,7 @@ static void syncRows(void) {
   for(int i=0;i<destination;i++) {
     Row *s=&rows[i];s->stackN=0;
     if(s->kind==ROW_TOP10 && s->base[0] && s->catId[0]) {
-      s->stackN=s->n;s->n=1;s->seeAll=0;
+      s->stackN=s->n;s->n=1;s->stackOpen=0;
     }
   }
   int socialExists=0;
@@ -1309,9 +1352,9 @@ static void syncRows(void) {
     for (int a = 0; a < nOld; a++)
       if (!strcmp(rows[r].key, old[a].key)) {
         if(rows[r].kind==ROW_TOP10 && old[a].kind==ROW_TOP10 &&
-           !old[a].stackN && old[a].seeAll && rows[r].stackN) {
+           !old[a].stackN && old[a].stackOpen && rows[r].stackN) {
           rows[r].n=rows[r].stackN<10?rows[r].stackN:10;
-          rows[r].stackN=0;rows[r].seeAll=1;
+          rows[r].stackN=0;rows[r].stackOpen=1;
         }
         scrollX[r] = oldX[a];
         velX[r] = oldVelX[a];
@@ -1327,8 +1370,7 @@ static void syncRows(void) {
   if (keyExp[0])
     for (r = 0; r < nRows; r++)
       if (!strcmp(rows[r].key, keyExp)) { expRow = r; break; }
-  if (expRow < 0 || colExp < 0 ||
-      colExp >= rows[expRow].n + (rows[expRow].seeAll ? 1 : 0)) {
+  if (expRow < 0 || colExp < 0 || colExp >= rows[expRow].n) {
     expRow = expColumn = -1; expOpen = 0.0f;
   } else {
     expColumn = colExp;
@@ -1347,7 +1389,7 @@ static void syncRows(void) {
     // point at something else.
     int found = -1;
     for (k = 0; k < nRows; k++)
-      cols[k] = rows[k].n + (rows[k].seeAll ? 1 : 0);
+      cols[k] = rows[k].n;
     focus_start(&focus, nRows, cols);
     if (keyFocus[0])
       for (k = 0; k < nRows; k++)
@@ -1421,8 +1463,45 @@ static void warmHero(int target, int previous) {
   if (art) tex_prefetch(art);
 }
 
+// KEEPS THE FOCUSED ROW FED.
+//
+// A row is born with the twelve items discovery read (MAX_PER_ROW) and the
+// catalogue behind it has hundreds. Rather than a card at the end that leads to a
+// screen of the same list, the row asks for the next page as the owner walks into
+// its last cards, and the posters are simply there when they arrive.
+//
+// THREE CARDS OF WARNING and not one: the page is a network round trip, and asked
+// for on the last card the owner is already looking at the end of the row while it
+// flies. Three is roughly the screen's remaining width at a walking pace.
+//
+// Only the rows that CAME FROM a catalogue can grow — "Continue watching", the
+// Trakt lists, the collections and the social feed have no `base` to ask.
+//
+// A TOP 10 IS THE EXCEPTION AMONG THE ONES THAT DO HAVE ONE. It has a catalogue
+// behind it and would page like any other, and its eleventh card would be a
+// rank-11 poster in a row whose whole premise is that there are ten. It stops at
+// ten whether it is still folded into its stack or opened out of it.
+//
+// Everything else about when to stop lives in discover.c: a row whose catalogue
+// has run out is remembered there, so this may ask on every frame and cost
+// nothing.
+static void growRow(void) {
+  const Row *s;
+  if (focus.row < 0 || focus.row >= nRows) return;
+  s = &rows[focus.row];
+  if (!s->base[0] || !s->catId[0]) return;
+  if (s->kind == ROW_TOP10 || s->kind == ROW_CATALOGS || s->kind == ROW_SOCIAL) return;
+  if (s->n >= MAX_CARDS) return;
+  if (focus.column < s->n - 3) return;
+  disc_row_more(s->key, s->base, s->catKind, s->catId, s->n);
+}
+
 void home_update(float dt, Uint32 now) {
+  // BEFORE syncRows, which is what notices the row got longer: collecting after it
+  // would leave the new posters waiting a frame for the next rebuild.
+  disc_row_collect();
   syncRows();
+  growRow();
 
   const int motionReduced = settings_animations_reduced();
   // NV_HOLD_FEEDBACK_MS IS THE SILENCE BEFORE THE BAR, NOT THE WHOLE GESTURE.
@@ -1447,7 +1526,9 @@ void home_update(float dt, Uint32 now) {
     okSince = 0;
     // The context menu is still the owner of the actions and the UI. The home only
     // fires once at the threshold and consumes the following KEYUP.
-    ctx_open(rows[focus.row].start + focus.column);
+    { CtxCatalog c;
+      rowCatalog(focus.row, &c);
+      ctx_open_row(rows[focus.row].start + focus.column, &c); }
   }
 
   // The catalogue may shrink between two responses. Normalising the carousel's
@@ -1501,13 +1582,12 @@ void home_update(float dt, Uint32 now) {
   {
     int target = -1;
     // `driven` answers "is a card focused at all", which is NOT the same question as
-    // "does the focused card name a title". Three cases give a target of -1 while the
+    // "does the focused card name a title". Two cases give a target of -1 while the
     // focus is very much on something: a collection row (its hero is drawn on its own
-    // path, further down), the see-all card at the end of a row, and the social row's
-    // empty state. Reading -1 as "nobody is here" handed all three back to the
-    // automatic carousel — so parking on a See all rotated the hero every 7 s, and
-    // walking a collection row left the carousel turning UNSEEN behind its hero, then
-    // flashed whatever it had landed on when the focus returned to a poster row.
+    // path, further down) and the social row's empty state. Reading -1 as "nobody is
+    // here" handed both back to the automatic carousel — walking a collection row
+    // left the carousel turning UNSEEN behind its hero, then flashed whatever it had
+    // landed on when the focus returned to a poster row.
     int driven = 0;
     if (focus.row >= 0 && focus.row < nRows) {
       driven = 1;
@@ -1637,8 +1717,7 @@ void home_update(float dt, Uint32 now) {
   // the middle of any test.
 
   for (int r = 0; r < nRows; r++) {
-    int nAnim = rows[r].n + (rows[r].seeAll ? 1 : 0);
-    if (nAnim > MAX_CARDS) nAnim = MAX_CARDS;
+    int nAnim = rows[r].n > MAX_CARDS ? MAX_CARDS : rows[r].n;
     for (int c = 0; c < nAnim; c++) {
       float target = focus_index(&focus, r, c) ? 1.0f : 0.0f;
       animFocus[r][c] = motionReduced
@@ -3082,7 +3161,22 @@ void home_draw(Uint32 now) {
   float y = NV_SHELF_TOP + NV_SHELF_PAD_TOP - scrollY + slideDown;
   for (int r = 0; r < nRows; r++) {
     KindRow kind = rows[r].kind;
-    float fade=anim_clamp((y-(NV_SHELF_TOP-80))/80,0,1);
+    // THE TOP-EDGE MASK IS READ WHERE THE ROW RESTS, not where the slide has taken
+    // it. `y` already carries slideDown, and the ramp below is what makes a row
+    // scrolled off the top invisible — so a stack pushed down by a whole viewport
+    // walked every row that was ABOVE the fold back through that ramp and FADED
+    // THEM IN. Opening a title from the fourth row brought "Continue watching"
+    // down across the screen with it, a row the user had scrolled past and could
+    // not see at the moment they pressed OK.
+    //
+    // Measured from the resting position the mask says what it is supposed to say:
+    // how much of this row was on screen when the transition started. What was
+    // visible slides down and fades out; what was already above the viewport's top
+    // edge stays at zero for the whole flight, in both directions — the return is
+    // the same expression read backwards, so nothing fades in from above on the
+    // way back either.
+    float yRest = y - slideDown;
+    float fade=anim_clamp((yRest-(NV_SHELF_TOP-80))/80,0,1);
     // THEY GO DOWN AND THEY FADE, together and on the same clock. The movement is
     // what removes them — they clear the clip either way — and the fade is what
     // stops the lower rows reading as a solid block sliding over the title screen's
@@ -3101,24 +3195,10 @@ void home_draw(Uint32 now) {
     if (y < NV_SCREEN_H + 200 && y + NV_LEGACY_ROW_HEAD_H + lh > -200) {
       // `catalogTypeSuffixEnabled`. formatCatalogRowTitle (homeUtils.js:62) does
       // `if (!showTypeSuffix) return base;` — it returns the capitalised name and
-      // that is that. Here the suffix is removed while DRAWING and not in discovery,
-      // otherwise the preference would only take effect once the network brought the
-      // catalogues again — that is, only on the next start.
-      const char *rotFilter = rows[r].title;
+      // that is that. See rowHeading, which the poster's menu shares.
       char withoutSuffix[96];
-      if (!settings_suffix_kind() && rotFilter) {
-        const char *cut = strstr(rotFilter, " - ");
-        const char *last = NULL;
-        while (cut) { last = cut; cut = strstr(cut + 3, " - "); }
-        if (last && (!strcmp(last + 3, "Movie")
-                       || !strcmp(last + 3, "Series"))) {
-          size_t n = (size_t)(last - rotFilter);
-          if (n >= sizeof withoutSuffix) n = sizeof withoutSuffix - 1;
-          memcpy(withoutSuffix, rotFilter, n);
-          withoutSuffix[n] = 0;
-          rotFilter = withoutSuffix;
-        }
-      }
+      const char *rotFilter = rowHeading(rows[r].title, withoutSuffix,
+                                         sizeof withoutSuffix);
       TxtLine tl = txt_line_trim(TXT_ROW_TITLE, rotFilter, 245, 246, 249, 255,
                                     NV_SCREEN_W - settings_content_x() - 180);
       txt_draw(tl, settings_content_x(), y);
@@ -3135,9 +3215,14 @@ void home_draw(Uint32 now) {
       }
       if (focus.row == r) {
         char pos[32];
-        if (focus.column < rows[r].n)
+        // THE ELLIPSIS IS THE ONLY SIGN THE ROW IS STILL GROWING. Standing on the
+        // last poster of a row whose next page is in flight, the remote does
+        // nothing for a second or two; without this the row reads as finished and
+        // the owner walks away from titles that are about to arrive.
+        if (disc_row_loading(rows[r].key))
+          snprintf(pos, sizeof pos, "%d / %d \xe2\x80\xa6", focus.column + 1, rows[r].n);
+        else
           snprintf(pos, sizeof pos, "%d / %d", focus.column + 1, rows[r].n);
-        else snprintf(pos, sizeof pos, "See all");
         TxtLine lp = txt_line(TXT_HERO_META, pos, 186, 191, 202, 255);
         txt_draw(lp, NV_SCREEN_W - NV_HOME_SAFE_RIGHT - lp.w, y + (tl.h - lp.h)*.5f);
       }
@@ -3147,53 +3232,16 @@ void home_draw(Uint32 now) {
         continue;
       }
 
-      // THE "SEE ALL" CARD at the end of the row. Drawn before the posters' loop so
-      // as not to inherit its variables; it is not a title and uses no art.
+      // THE "SEE ALL" CARD at the end of the row IS GONE, and this is where it
+      // was drawn: a framed card in column `n` with an arrow and the words "See
+      // all", which opened the catalogue as a grid on a screen of its own.
       //
-      // MEASURED in the web app (.home-seeall-card-inner): a 2 px frame in
-      // rgba(255,255,255,0.12) over rgba(255,255,255,0.06), with the arrow and label
-      // stacked and centred. Focused, the frame lights up.
-      if (rows[r].seeAll) {
-        int c = rows[r].n;
-        float f = animFocus[r][c];
-        // The see-all card does NOT take the row's focus scale — components.css:5804
-        // is `transform: none !important` on it. It is not a poster card either, so the
-        // sibling dimming further down never touches it.
-        float scale = 1.0f;
-        float w = lw * scale, h = artH * scale;
-        float cx = settings_content_x() + c * step - scrollX[r] + lw * 0.5f;
-        float cy = cardY + artH * 0.5f;
-        if (cx > -lw * 1.5f && cx < NV_SCREEN_W + lw) {
-          float px = cx - w * 0.5f, py = cy - h * 0.5f;
-          // `.home-seeall-card-inner` fills the card's CONTENT box, so it is
-          // inset by the card's own 2px border and no further — the poster's
-          // second border (NV_CARD_PAD) has no counterpart here. Its visible
-          // outline is its own 2px rgba(255,255,255,0.12) border, which lights
-          // up to #f5f5f5 on focus over a rgba(255,255,255,0.06) fill.
-          float in = NV_CARD_BORDER * scale;
-          GfxRect r0 = frameOf((GfxRect){ px, py, w, h }, in);
-          float radius = radiusInset(r0.w, r0.h, in);
-          float luma = 0.06f + 0.10f * f;
-          // Fill, then the border stroked on top of it. NOT the fill-under-fill
-          // the poster's focus border uses: there the artwork is opaque and
-          // hides the sheet under it, but here both layers are white washes, so
-          // painting one over the other would ADD — the 0.06 middle would come
-          // out at 0.22 and the card would read as a grey slab.
-          gfx_color(r0, radius, 1, 1, 1, luma);
-          gfx_rect(r0, 0, GFX_RING, 0, NV_FRAME_RING * scale / r0.h, 0, radius,
-                   1, 1, 1, 0.12f + 0.84f * f);
-          { TxtLine ls = txt_line(TXT_TITLE2, "\xe2\x86\x92",
-                                    236, 237, 242, 255);
-            TxtLine lr = txt_line(TXT_ROW_TITLE, "See all",
-                                    f > 0.5f ? 255 : 190, f > 0.5f ? 255 : 194,
-                                    f > 0.5f ? 255 : 203, 255);
-            float block = ls.h + 14.0f + lr.h;
-            float by = r0.y + (r0.h - block) * 0.5f;
-            txt_draw_alpha(ls, r0.x + (r0.w - ls.w) * 0.5f, by, 0.95f);
-            txt_draw_alpha(lr, r0.x + (r0.w - lr.w) * 0.5f,
-                               by + ls.h + 14.0f, 1.0f); }
-        }
-      }
+      // It was there because the row held twelve and the catalogue held hundreds,
+      // so without it there was no path to the thirteenth title. The row now goes
+      // and fetches the thirteenth itself (growRow, in home_update), which makes the
+      // card a door to a screen showing the same list the row already shows — and one
+      // more press between the owner and a poster. The grid screen itself stays:
+      // the collections still open into it.
 
       for (int passe = 1; passe < 2; passe++) {
         for (int c = 0; c < rows[r].n; c++) {

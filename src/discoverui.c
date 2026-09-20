@@ -7,6 +7,7 @@
 #include "catalog.h"
 #include "discover.h"
 #include "settings.h"
+#include "dropdown.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -344,116 +345,42 @@ void dui_update(float dt, Uint32 now) {
     scrollTarget = 0.0f;
   }
   if (scrollTarget < 0.0f) scrollTarget = 0.0f;
-  scrollY = anim_spring(scrollY, scrollTarget, dt, NV_SPRING_SCROLL);
+  scrollY = anim_spring(scrollY, scrollTarget, dt, NV_SPRING_GRID);
 }
 
 // --- Drawing -----------------------------------------------------------------
-// One picker: a small grey label over a large white value, in a pill. The same
-// furniture as the Library's, at the sheet's CURRENT numbers — a 100-tall pill
-// with an INSET focus band, not the 110-tall radius-36 box library.c still
-// draws. See the note on NV_DSC_* in layout.h.
-static void drawPicker(int p) {
+// The pickers and the list they open are dropdown.c's — the same control the
+// collection grid draws, so the two cannot drift. Only which picker is where,
+// and what its label and value read as, belong to this screen.
+static const char *menuLabel(void *ctx, int i) {
+  return optionLabel(*(int *)ctx, i);
+}
+
+static GfxRect pickRect(int p) {
   GfxRect r = { NV_DSC_X + p * NV_DSC_PICK_STEP, NV_DSC_PICK_Y,
                 NV_DSC_PICK_W, NV_DSC_PICK_H };
-  float f = animPick[p];
+  return r;
+}
+
+static void drawPicker(int p) {
+  const CatRow *cat = currentCat();
   const char *label = (p == PICK_TYPE) ? "Type"
                     : (p == PICK_CATALOG) ? "Catalog" : "Genre";
   const char *value;
-  const CatRow *cat = currentCat();
 
   if (p == PICK_TYPE) value = KIND_LABEL[kindSel];
   else if (p == PICK_CATALOG) value = cat ? cat->title : "None";
   else value = genreLabel(genreSel);
 
-  // #222 at rest going to --focus-bg #303030 on focus, with the 1px edge drawn
-  // as the gap between two shapes — a 1px stroke on a 100-tall pill cannot be
-  // antialiased and breaks up around the cap. The measurement is in search.c.
-  { float fill = anim_blend(0.133f, 0.188f, f);
-    float edge = anim_blend(0.2f, 0.2f, f);
-    gfx_color(r, NV_DSC_PICK_PILL, edge, edge, edge, 1.0f);
-    { GfxRect in = { r.x + 1.0f, r.y + 1.0f, r.w - 2.0f, r.h - 2.0f };
-      gfx_color(in, NV_DSC_PICK_PILL, fill, fill, fill, 1.0f); } }
-  if (f > 0.01f)
-    gfx_rect(r, 0, GFX_RING_INSET, 0, NV_DSC_PICK_RING / r.h, 0,
-             NV_DSC_PICK_PILL, 1.0f, 1.0f, 1.0f, 0.96f * f);
-
-  { // 20/500 --text-tertiary over 28/500 white, 4 apart, the pair centred in
-    // the pill as a block rather than each line on its own. The value is
-    // trimmed short of the chevron, not of the pill: a catalogue name long
-    // enough to reach it would otherwise print straight through the glyph.
-    float textW = r.w - 2 * NV_DSC_PICK_PADX - NV_DSC_CHEV - 16.0f;
-    TxtLine tl = txt_line(TXT_SRCH_META, label, 128, 128, 128, 255);
-    TxtLine tv = txt_line_trim(TXT_CALLOUT, value, 255, 255, 255, 255, textW);
-    float block = (float)tl.h + NV_DSC_PICK_COPY_GAP + (float)tv.h;
-    float ty = r.y + (r.h - block) * 0.5f;
-    txt_draw_alpha(tl, r.x + NV_DSC_PICK_PADX, ty, 0.95f);
-    txt_draw(tv, r.x + NV_DSC_PICK_PADX, ty + (float)tl.h + NV_DSC_PICK_COPY_GAP); }
-
-  // THE CHEVRON IS WHAT SAYS "THIS OPENS". Without it the pill reads as a label
-  // with a value in it, and nothing on screen suggests OK would do anything.
-  // It points DOWN whether the list is open or shut — the web app does not flip
-  // it either, and the season picker's note records the same choice.
-  { GfxRect ch = { r.x + r.w - NV_DSC_PICK_PADX - NV_DSC_CHEV,
-                   r.y + (r.h - NV_DSC_CHEV) * 0.5f, NV_DSC_CHEV, NV_DSC_CHEV };
-    float luma = anim_blend(0.702f, 0.902f, f);
-    gfx_icon(ch, "chevron_down", luma, luma, luma, 1.0f); }
+  // All three are live at once here: they are three halves of one request, not
+  // alternatives to each other. See dd_pill's `active`.
+  dd_pill(pickRect(p), label, value, animPick[p], 1, 1.0f);
 }
 
-// THE OPEN LIST. Drawn LAST of everything on the screen, over the grid it
-// covers — it is a question standing in front of the page, and the web gives it
-// a z-index and a shadow for exactly that reason.
-//
-// It hangs 8 below its anchor, matches its width, and scrolls once the options
-// run past six rows. All of this is the detail screen's season picker; see the
-// note on NV_DSC_MENU_* in layout.h for why it is restated rather than shared.
 static void drawMenu(void) {
-  int p = menuOpen, n, vis, first, i;
+  int p = menuOpen;
   if (p < 0) return;
-  n = optionsN(p);
-  if (n <= 0) return;
-  vis = n < NV_DSC_OPT_VIS ? n : NV_DSC_OPT_VIS;
-
-  { GfxRect anchor = { NV_DSC_X + p * NV_DSC_PICK_STEP, NV_DSC_PICK_Y,
-                       NV_DSC_PICK_W, NV_DSC_PICK_H };
-    float h = NV_DSC_MENU_PADY * 2 + vis * NV_DSC_OPT_H;
-    GfxRect box = { anchor.x, anchor.y + anchor.h + NV_DSC_MENU_GAP,
-                    anchor.w, h };
-    // The radius is 64 CSS px on a box far taller than 128, and gfx normalises
-    // the radius to the HEIGHT — so it is 64/h here and NOT the pill constant.
-    // At 0.5 a box this tall rounds into a lozenge. Same trap as the season
-    // menu's, and recorded there too.
-    float radius = 64.0f / box.h;
-    // The drop shadow first, then the plate. GFX_SHADOW multiplies by uFocus
-    // and not by the colour's alpha, so it takes 1.0 there — passed the 0 that
-    // every other mode here takes, the blot comes out invisible.
-    { GfxRect sh = { box.x, box.y + 8.0f, box.w, box.h };
-      gfx_rect(sh, 0, GFX_SHADOW, 1.0f, 0, 0, radius, 0, 0, 0, 0.6f); }
-    gfx_color(box, radius, 0.133f, 0.133f, 0.133f, 1.0f);
-    gfx_rect(box, 0, GFX_RING, 0, 1.0f / box.h, 0, radius, 1, 1, 1, 0.08f);
-
-    // Which six. The focused option is kept in view by scrolling the WINDOW,
-    // not by moving the menu.
-    first = menuFocus - vis + 1;
-    if (first < 0) first = 0;
-    if (first > n - vis) first = n - vis;
-    if (menuFocus < first) first = menuFocus;
-
-    for (i = 0; i < vis; i++) {
-      int c = first + i;
-      GfxRect op = { box.x + NV_DSC_MENU_PADX,
-                     box.y + NV_DSC_MENU_PADY + i * NV_DSC_OPT_H,
-                     box.w - NV_DSC_MENU_PADX * 2, NV_DSC_OPT_H };
-      int on = (c == menuFocus);
-      // The focused row inverts to #f5f5f5 with #111 ink; the rest are
-      // transparent with white. The CURRENT value gets no mark of its own — the
-      // list opened with the focus already on it.
-      if (on) gfx_color(op, NV_RADIUS_PILL, 0.961f, 0.961f, 0.961f, 1.0f);
-      { int ink = on ? 17 : 255;
-        TxtLine l = txt_line_trim(TXT_DETWEB_OPT, optionLabel(p, c),
-                                  ink, ink, ink, 255,
-                                  op.w - NV_DSC_OPT_PADX * 2);
-        txt_draw(l, op.x + NV_DSC_OPT_PADX, op.y + (op.h - (float)l.h) * 0.5f); }
-    } }
+  dd_menu(pickRect(p), optionsN(p), menuFocus, menuLabel, &menuOpen, 1.0f);
 }
 
 // The grid. 252-wide posters, six across, the focused one scaled 1.05 from its
@@ -491,9 +418,21 @@ static void drawGrid(void) {
       float f = isFocus ? animCard : 0.0f;
       float top = NV_DSC_GRID_Y + (float)(i / NV_DSC_COLUMNS) * NV_DSC_LINE_STEP - scrollY;
       float left = NV_DSC_X + (float)(i % NV_DSC_COLUMNS) * NV_DSC_CARD_STEP;
+      // THE ROW DISSOLVES AS IT LEAVES, the home's top-edge mask and the
+      // collection grid's. The clip alone guillotines a poster against an
+      // invisible line; this has it gone before it gets there. `top` already
+      // carries the scroll and this screen has no entrance offset, so it IS the
+      // resting y that anim_edge wants.
+      float edge = anim_edge(top, NV_DSC_CLIP_TOP, NV_DSC_FADE);
       if ((pass == 1) != (f > 0.01f)) continue;
       if (top > NV_SCREEN_H + 40.0f || top + NV_DSC_POSTER_H < -40.0f) continue;
+      // `&& !isFocus`: navigating UPWARDS the newly focused row descends INTO
+      // the fold, so it starts at zero — and skipping it there would drop
+      // itemFocus for those frames and blink the backdrop this screen feeds.
+      // Drawn at zero it costs nothing and the bookkeeping below still runs.
+      if (edge <= 0.004f && !isFocus) continue;
       if (!disc_seeall_item(i, &it)) continue;
+      gfx_opacity_group = edge;
 
       { float scale = anim_blend(1.0f, 1.0f + NV_DSC_FOCUS_SCALE, f);
         float w = NV_DSC_CARD_W * scale, h = NV_DSC_POSTER_H * scale;
@@ -525,6 +464,10 @@ static void drawGrid(void) {
           txt_draw_alpha(tl, card.x, top + h + NV_DSC_TITLE_GAP, 0.98f);
         }
 
+        // PUT IT BACK before anything else is drawn: a group opacity left set
+        // bleeds onto the pickers and the open menu above.
+        gfx_opacity_group = 1.0f;
+
         if (isFocus) {
           int idx = it.imdb[0] ? cat_index_by_imdb(it.imdb) : -1;
           itemFocus.index_ = idx;
@@ -537,6 +480,7 @@ static void drawGrid(void) {
         }
       }
     }
+  gfx_opacity_group = 1.0f;
   gfx_no_crop();
 
 }

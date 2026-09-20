@@ -29,6 +29,9 @@ void cat_backdrop_shrink(char *url, unsigned size, unsigned width) {
 // Makes sure there is room for `want` items. Returns 0 if it could not (and the
 // caller carries on with what it had, which beats losing everything).
 static void ensureTracks(int count);
+// Defined below, next to cat_set_all — the two callers that put items in are
+// there and it reads `items`, which is declared above this line.
+static void applyProgress(int from, int to);
 
 static int ensureSpace(int want) {
   CatItem *new;
@@ -773,9 +776,115 @@ void cat_set(const CatItem *list, int count) {
   cat_set_all(list, count, NULL, 0);
 }
 
+// GROWS ONE ROW IN PLACE, with the new items landing at the END of its window.
+//
+// It is what replaced the "See all" card at the end of every home row: reaching
+// the last poster now asks the catalogue for the next page and the row simply
+// gets longer, instead of a card that took the viewer to a screen of its own.
+//
+// The insertion is in the MIDDLE of the item array and not at the end, and that
+// is forced by the shape of the data: a row is a (start,n) WINDOW into the one
+// array, so items appended behind the last row would not belong to any window.
+// Everything after the insertion point therefore shifts by `count`, and the
+// windows that start after it shift with their items — which is the same
+// rewrite discovery already does when a row lands out of order (see the note in
+// discover.c on rebuilding rather than appending).
+//
+// Indices held ACROSS frames by another screen go stale here, exactly as they do
+// on a cat_set_all. That is survivable because of WHEN this runs: only the home
+// pages, only on the drawing thread, and only while the focus is walking a row —
+// so no detail screen, player or menu is standing on an index at that moment.
+//
+// It follows cat_append_batch's block swap (a fresh block, the old one kept as
+// garbage for a generation rather than freed under a reader), and NOT
+// cat_set_all's zeroing of `n`: this runs on the thread that draws, so there is
+// nobody to see an intermediate state, and blanking the catalogue for a frame in
+// the middle of a scroll would be a visible blink.
+//
+// Returns how many items it actually took, which is less than `count` at the
+// CAT_MAX ceiling and 0 when it could not grow — either answer tells the caller
+// the row is finished.
+int cat_row_grow(int r, const CatItem *v, int count) {
+  static CatItem *garbage;
+  CatItem *new;
+  int at, k, newN, older = n;
+  if (r < 0 || r >= nFilters || !v || count < 1 || n < 1) return 0;
+  at = filters[r].start + filters[r].n;
+  if (at < 0 || at > n) return 0;
+  if (n + count > CAT_MAX) count = CAT_MAX - n;
+  if (count < 1) return 0;
+  newN = n + count;
+  new = malloc(sizeof(CatItem) * (size_t)newN);
+  if (!new) return 0;
+  memcpy(new, items, sizeof(CatItem) * (size_t)at);
+  memcpy(new + at, v, sizeof(CatItem) * (size_t)count);
+  memcpy(new + at + count, items + at, sizeof(CatItem) * (size_t)(older - at));
+  free(garbage);
+  garbage = items;
+  items = new;
+  nAllocated = newN;
+  n = newN;
+  filters[r].n += count;
+  // The windows that begin AFTER the insertion point follow their items. `>= at`
+  // and not `> at`: a row starting exactly where the new items go is the NEXT
+  // row, and leaving it where it was would hand it this row's new page.
+  for (k = 0; k < nFilters; k++)
+    if (k != r && filters[k].start >= at) filters[k].start += count;
+  // The episode ranges are indexed by ITEM, so the shift invalidates them all —
+  // and ensureTracks zeroes them anyway. They are refetched when a title opens.
+  nEps = 0;
+  ensureTracks(nAllocated);
+  applyProgress(at, at + count);
+  return count;
+}
+
+// Reapplies progress.txt over the items in [from, to).
+//
+// Every item that enters the catalogue is born ZEROED — the network's `metas`
+// carry no idea of what this household has already watched — so whoever puts
+// items in has to bring the progress back over them. It used to live inline in
+// cat_set_all, which was the only way in; cat_row_grow is the second one, and a
+// page arriving without this shows a row of titles with no resume bar while the
+// twelve above it have theirs.
+//
+// The range exists so the second caller does not pay for the first: growing one
+// row by twenty items re-reads the file for those twenty, not for the three
+// hundred already standing.
+static void applyProgress(int from, int to) {
+  char path[600], line[256];
+  FILE *fp;
+  if (!dirWriting[0] || !items || from < 0 || to > n || from >= to) return;
+  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
+  fp = fopen(path, "r");
+  if (!fp) return;
+  while (fgets(line, sizeof line, fp)) {
+    char id[24]; double pos, duration;
+    int season = 0, episode = 0, i;
+    long long ms = 0;
+    if (sscanf(line, "%23s %lf %lf %d %d %lld", id, &pos, &duration, &season, &episode, &ms) < 3 || duration <= 1.0) continue;
+    for (i = from; i < to; i++) {
+      size_t L = strlen(id);
+      if (!strncmp(items[i].imdb, id, L) &&
+          (items[i].imdb[L] == 0 || items[i].imdb[L] == ':')) {
+        items[i].progress = cat_pct(pos, duration);
+        items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
+        items[i].resumedMs = ms;
+        if(season>0 && episode>0) {
+          if(items[i].season!=season || items[i].episode!=episode) {
+            items[i].nameEpisode[0]=0; items[i].thumbEp[0]=0;
+          }
+          items[i].season=season; items[i].episode=episode;
+        }
+        break;
+      }
+    }
+  }
+  fclose(fp);
+}
+
+
 void cat_set_all(const CatItem *list, int count,
                       const CatRow *newFilters, int nNew) {
-  int i;
   if (!list || count < 1) return;
   // A BLOCK SWAP, with no realloc in place.
   //
@@ -829,37 +938,7 @@ void cat_set_all(const CatItem *list, int count,
   (void)0;
   // Progress comes from a file and is keyed by imdb, so it survives the swap —
   // but it has to be reapplied, because the new items were born zeroed.
-  if (dirWriting[0]) {
-    char path[600], line[256];
-    FILE *fp;
-    snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
-    fp = fopen(path, "r");
-    if (fp) {
-      while (fgets(line, sizeof line, fp)) {
-        char id[24]; double pos, duration;
-        int season = 0, episode = 0;
-        long long ms = 0;
-        if (sscanf(line, "%23s %lf %lf %d %d %lld", id, &pos, &duration, &season, &episode, &ms) < 3 || duration <= 1.0) continue;
-        for (i = 0; i < n; i++) {
-          size_t L = strlen(id);
-          if (!strncmp(items[i].imdb, id, L) &&
-              (items[i].imdb[L] == 0 || items[i].imdb[L] == ':')) {
-            items[i].progress = cat_pct(pos, duration);
-            items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
-            items[i].resumedMs = ms;
-            if(season>0 && episode>0) {
-              if(items[i].season!=season || items[i].episode!=episode) {
-                items[i].nameEpisode[0]=0; items[i].thumbEp[0]=0;
-              }
-              items[i].season=season; items[i].episode=episode;
-            }
-            break;
-          }
-        }
-      }
-      fclose(fp);
-    }
-  }
+  applyProgress(0, n);
 }
 
 void cat_set_episodes(int indexItem, const CatEp *list, int count) {

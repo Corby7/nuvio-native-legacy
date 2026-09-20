@@ -430,6 +430,12 @@ void cat_set_all(const CatItem *list, int count,
                       const CatRow *filters, int nFilters);
 
 
+// Grows ONE home row by `count` items, which land at the end of its window and
+// push everything after them along. It is how a row keeps going when the focus
+// reaches its last poster — see the long note on the implementation. Returns how
+// many it took; less than asked (or 0) means the row can grow no further.
+int cat_row_grow(int r, const CatItem *v, int count);
+
 // Replaces the episodes of ONE title. Called when the detail screen opens.
 void cat_set_episodes(int indexItem, const CatEp *list, int n);
 // Fills ONE episode's IMDb score (tenths) in place, matched on season+episode.

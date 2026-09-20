@@ -79,6 +79,21 @@ static inline float anim_smooth(float t) {
   return t * t * (3.0f - 2.0f * t);
 }
 
+// THE TOP-EDGE DISSOLVE every scrolling grid in this app uses: 1 at rest, ramping
+// to 0 across `band` pixels as `y` climbs towards `edge`.
+//
+// It is the home's — see the top-edge mask in home_draw. A row that is merely
+// clipped is guillotined against an invisible line and reads as a rendering
+// fault; a row that has already reached zero by the time it arrives there simply
+// stops being there, which is what "the things disappear, they don't rise" means.
+//
+// PASS THE RESTING y, not the animated one. Where a screen offsets its content
+// while opening, reading the ramp through that offset fades the whole grid in
+// from the top on every entrance. The home records the same trap.
+static inline float anim_edge(float y, float edge, float band) {
+  return anim_smooth((y - edge) / band);
+}
+
 // Progress 0..1 with ITS OWN CLOCK: advances `dt` seconds towards `target`,
 // spending `ms` over the whole journey. Used where the timing has to match a
 // measurement (the menu veil), not merely "settle quickly".

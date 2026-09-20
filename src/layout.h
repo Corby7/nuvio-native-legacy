@@ -1106,6 +1106,25 @@
 #define NV_SPRING_FOCUS     25.0f    // coming into focus  (95% in 120ms)
 #define NV_SPRING_BLUR  25.0f    // leaving it         (the same time: see above)
 #define NV_SPRING_SCROLL    8.0f
+// THE POSTER GRIDS' PAGE SCROLL — the Library, Discover and the collection grid.
+//
+// FIRST-ORDER AND NOT anim_spring2, which is the opposite of what the rest of
+// this app was moving towards, so it is worth saying why. The second-order
+// spring's whole virtue is a SOFT START: it leaves at zero velocity, which is
+// what makes the home's row glide match the reference. On these grids the soft
+// start is a liability, because the thing the viewer is waiting for is the row
+// arriving from off-screen, and it only becomes visible in the last tenth of the
+// travel — the part the soft start pushes furthest away. MEASURED in simulation
+// against the shipped builds: the collection grid on spring2 at 11.5 left the
+// incoming row invisible for 367 ms and 90% opaque at 517 ms, where the Library
+// on the first-order spring was 250/450. It was reported, twice, as the cards
+// coming back into view being slow — and as being slower than the Library, which
+// it measurably was.
+//
+// 12 and not the 8 the Library used: 8 matched the Library's own feel, and the
+// Library was itself called slow. At 12 the three grids land at 167-217 ms to
+// first sight and settle by ~520 ms.
+#define NV_SPRING_GRID     12.0f
 // The frequency (rad/s) of the second-order spring that scrolls the home's rows. It
 // takes the k of the TAIL measured on the reference's glide (~12.5 /s); 11.5 is the
 // value that makes the whole curve match, because in this spring the tail is only
@@ -1485,6 +1504,12 @@
 //                        with a 24 gutter), 2:3 poster = 268x402 radius 24 with a
 //                        4px border ON THE INSIDE, title 32/500 lh 1.18 at 16 from
 //                        the poster; row step 487.8 (455.8 + 32)
+// THESE ARE THE APP'S GRID. Every screen that lays posters out in a grid uses
+// this card, this gap and this row step — the Library, the Discover screen at
+// its own inset, and the collection grid (seeall.c). Moving between them should
+// be the same wall with different titles in it, and a grid re-measured per
+// screen is how that stops being true: the collection grid used to be 248-wide
+// posters 16 apart, which read as another app's screen.
 #define NV_LIB_X            96.0f
 #define NV_LIB_Y            48.0f
 #define NV_LIB_W          1728.0f
@@ -1515,6 +1540,40 @@
 #define NV_LIB_FOCUS_SCALE  0.02f
 
 // ---------------------------------------------------------------------------
+// THE DROPDOWN — the app's one picker control, drawn by dropdown.c.
+//
+// It was the Discover screen's, measured off NuvioWeb's `.library-picker-anchor`
+// and its menu, and the numbers lived in the NV_DSC_ block below. The collection
+// grid then needed the same control, and the choice was to copy sixty lines of
+// drawing or to move them. This is the move: the geometry is here, the drawing is
+// in dropdown.c, and both screens ask for the same furniture.
+//
+// What stays with each screen is WHERE its pickers sit and how wide they are —
+// that is page layout, not the control.
+#define NV_DD_PICK_H      100.0f   // min(5.21vw, 100px)
+#define NV_DD_PICK_PADX    36.0f   // .library-picker-anchor padding
+// A PILL, like the search field: border-radius 64 on a box 100 tall clamps to
+// half the height. The radius here is a fraction OF THE HEIGHT, so 0.5.
+#define NV_DD_PILL          0.5f
+#define NV_DD_RING          3.0f   // box-shadow: inset 0 0 0 3px, focused
+#define NV_DD_COPY_GAP      4.0f   // .library-picker-copy gap
+#define NV_DD_CHEV         32.0f   // the chevron, right-aligned in the anchor
+// The list a picker opens. It is the detail screen's season picker, and
+// deliberately so — that control already taught this app how a list behaves on
+// a D-pad, and a second idiom for the same job would be a worse answer twice.
+// The numbers are its numbers (NV_DETWEB_SEA_MENU_* in detail.h), restated here
+// so a screen does not include the detail screen's header for five constants and
+// inherit its whole vocabulary.
+#define NV_DD_MENU_GAP      8.0f   // anchor base -> the menu's top
+#define NV_DD_MENU_PADY     4.0f
+#define NV_DD_MENU_PADX    10.0f
+#define NV_DD_OPT_H        84.0f
+#define NV_DD_OPT_PADX     32.0f
+// Six rows, then it scrolls. The web caps its menu at 540px, which is 6.4 of
+// these — and six is also what the season picker settled on.
+#define NV_DD_OPT_VIS         6
+
+// ---------------------------------------------------------------------------
 // The DISCOVER screen — READ OFF NuvioWeb's css/components.css (2026-09-19).
 //
 // It is the Library's furniture with a different data source: the same picker
@@ -1540,29 +1599,8 @@
 #define NV_DSC_PICK_N          3
 #define NV_DSC_PICK_W       ((NV_DSC_W - (NV_DSC_PICK_N - 1) * NV_DSC_PICK_GAP) / NV_DSC_PICK_N)
 #define NV_DSC_PICK_STEP    (NV_DSC_PICK_W + NV_DSC_PICK_GAP)
-#define NV_DSC_PICK_H      100.0f   // min(5.21vw, 100px)
-#define NV_DSC_PICK_PADX    36.0f   // .library-picker-anchor padding
-// A PILL, like the search field: border-radius 64 on a box 100 tall clamps to
-// half the height. The radius here is a fraction OF THE HEIGHT, so 0.5.
-#define NV_DSC_PICK_PILL     0.5f
-#define NV_DSC_PICK_RING     3.0f   // box-shadow: inset 0 0 0 3px, focused
-#define NV_DSC_PICK_LABEL_H 24.0f   // .library-picker-title line-height
-#define NV_DSC_PICK_COPY_GAP 4.0f   // .library-picker-copy gap
-// The DROPDOWN a picker opens. It is the detail screen's season picker, and
-// deliberately so — that control already taught this app how a list behaves on
-// a D-pad, and a second idiom for the same job would be a worse answer twice.
-// The numbers are its numbers (NV_DETWEB_SEA_MENU_* in detail.h), restated here
-// so the Discover screen does not include the detail screen's header for five
-// constants and inherit its whole vocabulary.
-#define NV_DSC_CHEV         32.0f   // the chevron, right-aligned in the anchor
-#define NV_DSC_MENU_GAP      8.0f   // anchor base -> the menu's top
-#define NV_DSC_MENU_PADY     4.0f
-#define NV_DSC_MENU_PADX    10.0f
-#define NV_DSC_OPT_H        84.0f
-#define NV_DSC_OPT_PADX     32.0f
-// Six rows, then it scrolls. The web caps its menu at 540px, which is 6.4 of
-// these — and six is also what the season picker settled on.
-#define NV_DSC_OPT_VIS         6
+// The control itself is NV_DD_* above; only the row's own geometry is here.
+#define NV_DSC_PICK_H       NV_DD_PICK_H
 // The grid. The web says `repeat(auto-fill, minmax(252px, 252px))` with
 // `gap: 48px 24px` — FIXED 252 columns, which at this width fits six and leaves
 // 160px of the row empty on the right.
@@ -1593,21 +1631,31 @@
 // inside the scrollport, so a card really does run to the last pixel. Stopping
 // 60 short was cutting cards off with screen still left under them.
 #define NV_DSC_GRID_BOTTOM  NV_SCREEN_H
-// The line the grid is clipped at. IT SITS INSIDE THE ROW GAP, 24 above the
-// posters, and not up under the pickers — the 24 is what makes it immune to the
-// font's exact metrics.
+// The line the grid is clipped at, AND the top of the band a row dissolves
+// across on its way out — the two are the same line, because a row that has
+// already reached zero cannot be cut by the clip.
 //
-// MEASURED: with the clip at 248 (pickers + 16) a THREE-PIXEL sliver of the
-// previous row's titles survived at y 250-252. The arithmetic says it should
-// not: a snapped scroll puts row N's posters at NV_DSC_GRID_Y, which leaves row
-// N-1's title ending exactly NV_DSC_ROW_GAP higher, at 248. But NV_DSC_LD_TITLE
-// is the CSS line box (24 x 1.18 = 28.3) and SDL_ttf's box for the same face is
-// nearer 30, so the descenders ran a couple of pixels past where the sheet says
-// the line ends. That sliver is what read as the odd cut at the top.
+// IT IS THE PICKER ROW'S BASE NOW, where it used to sit 24 above the posters and
+// deliberately not up here. That note is worth keeping, because the reason it
+// sat lower no longer applies:
 //
-// Clipping 24 lower costs nothing — the band is empty gap either way — and no
-// plausible disagreement between a CSS line box and a rasteriser's is 24px.
-#define NV_DSC_CLIP_TOP     (NV_DSC_GRID_Y - 24.0f)
+//   MEASURED: with the clip at 248 (pickers + 16) a THREE-PIXEL sliver of the
+//   previous row's titles survived at y 250-252. The arithmetic says it should
+//   not: a snapped scroll puts row N's posters at NV_DSC_GRID_Y, which leaves
+//   row N-1's title ending exactly NV_DSC_ROW_GAP higher, at 248. But
+//   NV_DSC_LD_TITLE is the CSS line box (24 x 1.18 = 28.3) and SDL_ttf's box for
+//   the same face is nearer 30, so the descenders ran a couple of pixels past
+//   where the sheet says the line ends.
+//
+// The dissolve settles that sliver at the source: opacity is keyed off the ROW's
+// top, and at rest row N-1's top is a whole line step above the fold, so the row
+// and its descenders are at zero and nothing is drawn to be cut. The clip is now
+// only a backstop.
+#define NV_DSC_CLIP_TOP     (NV_DSC_PICK_Y + NV_DSC_PICK_H)
+// The 64 of clearance under the pickers, read as what it now does: the distance
+// a row has to dissolve across. Same ramp as the home's and the collection
+// grid's — anim_edge.
+#define NV_DSC_FADE         (NV_DSC_GRID_Y - NV_DSC_CLIP_TOP)
 
 #define NV_DET_MARGIN_X  120.0f
 #define NV_DET_MARGIN_Y   38.0f
