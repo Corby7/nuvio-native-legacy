@@ -1835,14 +1835,10 @@ static void fromMeta(const char *meta, char *year, size_t na, char *rest, size_t
   snprintf(rest, nr, "%s", r);
 }
 
-// The IMDb badge: the real mark 60 wide with its height following the file, the score
-// 8px later in rgb(179,179,179) — the SAME colour as the rest of the line, and not
-// white. Measured on the two captures from the device (the badge at x=628..687 on the
-// series and 714..773 on the film, always y=938..967).
-//
-// It is NOT the 109x60 this file carried over from the web app: there the logo is 60
-// TALL and here the whole badge is 30. With the web app's value the badge was twice the
-// height of the line it lives on.
+// The IMDb badge: the real mark NV_DETW2_IMDB_H tall with its width following the file,
+// then the score in the mark's own yellow, rgb(245,197,24) — the pairing the episode rows
+// and the web's `.series-imdb-badge` use. It was 60x30 with the score in the line's grey,
+// which made the plate the loudest thing in the hero and the number the quietest.
 //
 // The mark used to be DRAWN here (a yellow rectangle with "IMDb" in it) because the app
 // packages no SVG. art/icons/imdb_logo.png is the same mark as a PNG, so every screen
@@ -1852,22 +1848,20 @@ static float drawBadgeImdb(float x, float yCenter, int score, float a) {
   if (score <= 0) return 0.0f;
   char txt[8];
   snprintf(txt, sizeof txt, "%d.%d", score / 10, score % 10);
-  TxtLine l = txt_line(TXT_DET_SIN, txt, 179, 179, 179, 255);
-  // THE HEIGHT FOLLOWS THE FILE, not a constant: the mark is 575x289.83 and forcing
-  // it into a fixed 60x30 would stretch it by whatever the rounding left over. The
-  // aspect is 0 until the first decode lands, and NV_DETW2_IMDB_H stands in for that
-  // one frame — the same two-step the hero logo does, for the same reason.
+  TxtLine l = txt_line(TXT_DET_SIN, txt, 245, 197, 24, 255);
+  // THE WIDTH FOLLOWS THE FILE, not a constant: forcing the mark into a fixed box
+  // would stretch it by whatever the rounding left over. NV_IMDB_MARK_AR stands in for
+  // the one frame before the decode lands.
   const char *file = gfx_icon_path("imdb_logo");
   float ar = tex_aspect(file);
-  float h = ar > 0 ? NV_DETW2_IMDB_W / ar : NV_DETW2_IMDB_H;
-  GLuint mark = tex_get_exact(file, NV_DETW2_IMDB_W);
-  GfxRect brand = { x, yCenter - h * 0.5f, NV_DETW2_IMDB_W, h };
+  float h = NV_DETW2_IMDB_H, w = h * (ar > 0 ? ar : NV_IMDB_MARK_AR);
+  GLuint mark = tex_get_exact(file, NV_IMDB_MARK_TEX_W);
+  GfxRect brand = { x, yCenter - h * 0.5f, w, h };
   // GFX_TEXT keeps the texture's RGB *and* its alpha, which is the only mode that
   // can draw black letters on a yellow plate. gfx_icon would take the alpha alone.
   if (mark) gfx_rect(brand, mark, GFX_TEXT, 0, 0, 0, 0.0f, 1, 1, 1, a);
-  txt_draw_alpha(l, x + NV_DETW2_IMDB_W + NV_DETW2_IMDB_GAP,
-                     yCenter - l.h * 0.5f, a);
-  return NV_DETW2_IMDB_W + NV_DETW2_IMDB_GAP + l.w;
+  txt_draw_alpha(l, x + w + NV_DETW2_IMDB_GAP, yCenter - l.h * 0.5f, a);
+  return w + NV_DETW2_IMDB_GAP + l.w;
 }
 
 // The OUTLINE badge of the second meta line. It carries TWO things inside the same box
@@ -1987,6 +1981,17 @@ static void drawSkel(float x, float yCenter, float w, float h, float a) {
                NV_RADIUS_PILL, 0.20f, 0.21f, 0.23f, a * 0.60f);
 }
 
+// THE LOGO AS LAST DRAWN, for the player's handoff (detail_logo_rect), and the flag
+// that keeps this page from drawing its own copy while the player's is flying.
+static GfxRect logoLast;
+static int logoLastValid = 0, logoHidden = 0;
+int detail_logo_rect(GfxRect *out) {
+  if (!logoLastValid) return 0;
+  *out = logoLast;
+  return 1;
+}
+void detail_hide_logo(int hide) { logoHidden = hide; }
+
 static void heroWeb(float a, float offset) {
   // THE FLIGHT KEEPS THIS BLOCK ALIVE AT ALPHA 0, and only for the logo.
   //
@@ -2044,9 +2049,9 @@ static void heroWeb(float a, float offset) {
 
   // On a series the web app writes "Writer:"/"Creator:"; on a film, "Director:".
   char sup[192] = "";
+  const char *supRole = isSeries() ? "Writer" : "Director";
   if (ci && ci->directing[0])
-    snprintf(sup, sizeof sup, "%s: %s", isSeries() ? "Writer" : "Director",
-             ci->directing);
+    snprintf(sup, sizeof sup, "%s: %s", supRole, ci->directing);
 
   const char *sin = synopsisOf(idx);
 
@@ -2124,6 +2129,7 @@ static void heroWeb(float a, float offset) {
 
   // --- logo -----------------------------------------------------------------
   const char *fileLogo = logoOf(idx);
+  logoLastValid = 0;
   // TEX_GET CAPS THE DECODE AT 640 AND THIS LOGO IS DRAWN UP TO 1000.
   //
   // The note that used to sit here said "the 960 ceiling would already be
@@ -2223,7 +2229,9 @@ static void heroWeb(float a, float offset) {
     //
     // -1 = still loading: treat it as light and do not tint. Erring on the side of not
     // touching the art is right while it is not known.
-    { GfxMode m = tex_brand_dark(fileLogo) ? GFX_BRAND : GFX_TEXT;
+    logoLast = r; logoLastValid = 1;
+    if (!logoHidden) {
+      GfxMode m = tex_brand_dark(fileLogo) ? GFX_BRAND : GFX_TEXT;
       gfx_rect(r, texLogo, m, 0, 0, 0, 0.0f, 1, 1, 1, aLogo); }
   } else {
     // With no logo, the NAME. The box's height is still the logo's, so the button row
@@ -2315,9 +2323,16 @@ static void heroWeb(float a, float offset) {
       drawSkel(NV_DETW2_X, ySup + NV_DETW2_SKEL_H * 0.5f + 4.0f,
                NV_DETW2_SKEL_SUP, NV_DETW2_SKEL_H, a * (1.0f - skelSup));
     if (sup[0] && skelSup > 0.001f) {
-      TxtLine l = txt_line_trim(TXT_DET_SIN, sup, 179, 179, 179, 255,
-                                   NV_DETW2_TEXT_W);
-      txt_draw_alpha(l, NV_DETW2_X, ySup, a * skelSup);
+      // LABEL AND NAME IN TWO GREYS, the season picker's "Season 3 · 8 Eps" pairing:
+      // the role recedes to 128 and the name keeps the line's 179, so the eye lands on
+      // the person rather than on the word "Director".
+      char role[32];
+      snprintf(role, sizeof role, "%s: ", supRole);
+      TxtLine lr = txt_line(TXT_DET_SIN, role, 128, 128, 128, 255);
+      TxtLine l = txt_line_trim(TXT_DET_SIN, ci->directing, 179, 179, 179, 255,
+                                   NV_DETW2_TEXT_W - lr.w);
+      txt_draw_alpha(lr, NV_DETW2_X, ySup, a * skelSup);
+      txt_draw_alpha(l, NV_DETW2_X + lr.w, ySup, a * skelSup);
     }
   }
 
@@ -2425,7 +2440,8 @@ static void heroWeb(float a, float offset) {
       else brand=extras_path_brand_name("trakt_wordmark");
       GLuint logo=tex_get(brand);
       char value[20];snprintf(value,sizeof value,"%d%%",n/10);
-      TxtLine lv=txt_line(TXT_DET_META2,value,220,220,225,255);
+      // The line's own type and grey, like the year beside it — it was 23px at 220.
+      TxtLine lv=txt_line(TXT_DET_SIN,value,179,179,179,255);
       float mh=sources[i]==EX_TRAKT?22.0f:32.0f,mw=mh;
       if(logo){float ap=tex_aspect(brand);if(ap>0)mw=mh*ap;if(mw>110)mw=110;}
       // FENCED LIKE EVERY OTHER GROUP ON THE LINE. These two used to join on a bare
@@ -2484,14 +2500,17 @@ static void heroWeb(float a, float offset) {
     if (!isSeries() && duration[0]) {
       if (something) { drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);
                   x += NV_DETW2_SEP * 2 + NV_DETW2_BAR_W; }
-      TxtLine ld = txt_line(TXT_DET_META2, duration, 255, 255, 255, 255);
+      // THE SAME TYPE AS LINE 1. These were 23px WHITE under a 26px grey line, so the
+      // runtime and the country — the least of the facts here — out-shouted the genres
+      // and the year above them, and the two lines read as two different components.
+      TxtLine ld = txt_line(TXT_DET_SIN, duration, 179, 179, 179, 255);
       txt_draw_alpha(ld, x, yc - ld.h * 0.5f, a);
       x += ld.w; something = 1;
     }
     if (ci && ci->country[0]) {
       if (something) { drawSep(x + NV_DETW2_SEP, yc, 0.502f, a);
                   x += NV_DETW2_SEP * 2 + NV_DETW2_BAR_W; }
-      TxtLine lp = txt_line(TXT_DET_META2, ci->country, 255, 255, 255, 255);
+      TxtLine lp = txt_line(TXT_DET_SIN, ci->country, 179, 179, 179, 255);
       txt_draw_alpha(lp, x, yc - lp.h * 0.5f, a);
     }
   }
@@ -2568,12 +2587,29 @@ static int epsInSeason(int c) {
   return 0;
 }
 
-// "Season 3" and, separately, " · 8 Eps". They are two styles on one line — 600 white
+// "Season 3" and, separately, "8 Eps". They are two styles on one line — 600 white
 // and 400 grey — so the caller draws them in two passes and this only builds the text.
+// The "·" between them is not in the string: seaTail draws it with a gap each side.
 static void labelSeasonEps(int c, char *tail, size_t n) {
   int q = epsInSeason(c);
-  if (q > 0) snprintf(tail, n, "· %d Eps", q);
+  if (q > 0) snprintf(tail, n, "%d Eps", q);
   else       tail[0] = 0;
+}
+
+// The "· 8 Eps" tail from `x`, centred on `yc`, in `font` and grey `g`: the dot with
+// NV_DETWEB_SEA_DOT each side, then the count. Returns its width; `draw` 0 only
+// measures, for widthSeason.
+static float seaTail(TxtStyle font, const char *tail, float x, float yc, int g,
+                     float a, int draw) {
+  if (!tail[0]) return 0.0f;
+  TxtLine ld = txt_line(font, "\xc2\xb7", g, g, g, 255);
+  TxtLine lt = txt_line(font, tail, g, g, g, 255);
+  float xt = NV_DETWEB_SEA_DOT * 2.0f + ld.w;
+  if (draw) {
+    txt_draw_alpha(ld, x + NV_DETWEB_SEA_DOT, yc - ld.h * 0.5f, a);
+    txt_draw_alpha(lt, x + xt, yc - lt.h * 0.5f, a);
+  }
+  return xt + lt.w;
 }
 
 // The picker's width: padding + the label + the gap + the chevron + padding. It is the
@@ -2588,9 +2624,7 @@ static float widthSeason(int c) {
     labelSeason(i, rot, sizeof rot);
     labelSeasonEps(i, tail, sizeof tail);
     TxtLine l  = txt_line(TXT_DETWEB_SEA, rot, 255, 255, 255, 255);
-    TxtLine lt = tail[0] ? txt_line(TXT_DETWEB_SEA_EPS, tail, 179, 179, 179, 255)
-                         : (TxtLine){0};
-    float w = l.w + (lt.w > 0.0f ? NV_DETWEB_SEA_TAIL + lt.w : 0.0f);
+    float w = l.w + seaTail(TXT_DETWEB_SEA_EPS, tail, 0, 0, 179, 1.0f, 0);
     if (w > widest) widest = w;
   }
   return NV_DETWEB_SEA_PADX * 2 + widest + NV_DETWEB_SEA_GAP + NV_DETWEB_SEA_CHEV;
@@ -2640,11 +2674,7 @@ static void drawSeason(GfxRect r, int c, float f, float a) {
   { float x = r.x + NV_DETWEB_SEA_PADX;
     TxtLine l = txt_line(TXT_DETWEB_SEA, rot, 255, 255, 255, 255);
     txt_weight(l, x, r.y + (r.h - l.h) * 0.5f, a, 1.0f);
-    x += l.w + NV_DETWEB_SEA_TAIL;
-    if (tail[0]) {
-      TxtLine lt = txt_line(TXT_DETWEB_SEA_EPS, tail, 179, 179, 179, 255);
-      txt_draw_alpha(lt, x, r.y + (r.h - lt.h) * 0.5f, a);
-    } }
+    seaTail(TXT_DETWEB_SEA_EPS, tail, x + l.w, r.y + r.h * 0.5f, 179, a, 1); }
   // The chevron is the web's own SVG rasterised; it points DOWN closed and the web does
   // not flip it when open, so neither does this.
   { GfxRect ch = { r.x + r.w - NV_DETWEB_SEA_PADX - NV_DETWEB_SEA_CHEV,
@@ -2708,11 +2738,7 @@ static void drawSeasonMenu(GfxRect anchor, float a) {
       float x = op.x + NV_DETWEB_SEA_OPT_PADX;
       TxtLine l = txt_line(TXT_DETWEB_OPT, rot, ink, ink, ink, 255);
       txt_draw_alpha(l, x, op.y + (op.h - l.h) * 0.5f, a);
-      x += l.w + NV_DETWEB_SEA_TAIL;
-      if (tail[0]) {
-        TxtLine lt = txt_line(TXT_DETWEB_OPT, tail, grey, grey, grey, 255);
-        txt_draw_alpha(lt, x, op.y + (op.h - lt.h) * 0.5f, a);
-      } }
+      seaTail(TXT_DETWEB_OPT, tail, x + l.w, op.y + op.h * 0.5f, grey, a, 1); }
   }
 }
 

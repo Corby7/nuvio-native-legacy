@@ -7,6 +7,7 @@
 // player's preferences, but the video module is what defines it.
 #include "video.h"
 #include "catalog.h"
+#include "gfx.h"
 #include <SDL2/SDL.h>
 
 // Opens playback of title `catalogIndex` (a circular index, the same as the
@@ -46,6 +47,15 @@ void player_update(float dt, Uint32 now);
 void player_draw(Uint32 now);
 int  player_wants_exit(void);  // 1 as soon as Back was pressed
 void player_shutdown(void);
+// THE HANDOFF FROM THE TITLE SCREEN. Called right after player_open when Play/Resume
+// was pressed there: the player's entrance then crossfades over the page instead of
+// rising out of black, and the title's logo flies from `from` (the rect the detail
+// last drew it at; w <= 0 when it had none) to the loading screen's centre.
+void player_open_from_detail(GfxRect from);
+// 1 while that entrance is still running and the page underneath still shows through
+// it — the router keeps drawing the detail for exactly that long.
+int  player_handing_off(void);
+int  player_logo_in_flight(void);   // the page hides its own logo while this is 1
 
 // --- ASPECT MODES ------------------------------------------------------------
 // The web app's EIGHT modes, in the same order and with the same factors

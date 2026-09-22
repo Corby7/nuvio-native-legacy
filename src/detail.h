@@ -33,6 +33,12 @@ float detail_progress(void);        // 1 while the screen exists, exiting includ
 // is work thrown away. Measured: the home costs the full-screen hero plus ~20
 // cards, and without this cut the detail page ran at 20fps.
 int  detail_covers_screen(void);
+// Where the title's logo was last drawn, for the player's handoff to fly it from.
+// 0 when the page drew the name instead (or nothing).
+int  detail_logo_rect(GfxRect *out);
+// While the player's copy of the logo is in the air the page must not draw its own,
+// or the flight leaves a ghost behind at the start.
+void detail_hide_logo(int hide);
 // 1 when the card has settled in place and is not stretched: in that state the
 // home behind it only shows through the frame.
 int  detail_settled(void);
@@ -324,10 +330,12 @@ int  detail_requested_do_start(void);
 #define NV_DETWEB_SEA_GAP     24.0f   // label -> chevron
 #define NV_DETWEB_SEA_CHEV    32.0f
 // "Season 1" and " · 16 Eps" are ONE string in the web, split here because they are two
-// styles (600 white, 400 grey). The space between them has to be drawn as a GAP: given
-// to the tail as a leading space it disappears, because SDL_ttf trims the line it
-// rasterises and the label came out as "Season 1· 16 Eps".
-#define NV_DETWEB_SEA_TAIL     8.0f
+// styles (600 white, 400 grey). The spaces around the dot have to be drawn as GAPS:
+// given to the tail as a leading space it disappears, because SDL_ttf trims the line it
+// rasterises and the label came out as "Season 1· 16 Eps". Each side of the dot, the
+// same 16 as NV_DETEP_DOT_SEP on the episode rows underneath — a plain space after it
+// (~8 at 30px) read as cramped next to every other dot in the app.
+#define NV_DETWEB_SEA_DOT     16.0f
 #define NV_DETWEB_SEA_BORDER   1.0f
 // The focused ring is INSET, so it eats into the pill instead of growing it. Drawn
 // as a ring on the same rect, not as a plate behind it.
@@ -498,9 +506,14 @@ int  detail_requested_do_start(void);
 // It is drawn with GFX_TEXT and not gfx_icon: the mark is yellow with black
 // letters, and gfx_icon's GFX_BRAND takes only the alpha and would flatten both
 // into one tint. Same reasoning as the brand lockup — see gfx.h.
-#define NV_DETW2_IMDB_W       60.0f
-#define NV_DETW2_IMDB_H       30.0f   // the fallback, until the file's aspect is known
-#define NV_DETW2_IMDB_GAP      8.0f
+//
+// SIZED BY HEIGHT NOW, like the episode rows (NV_DETEP_IMDB_H). At 60x30 the plate stood
+// taller than every glyph on its line and was the loudest thing in the hero; 24 sits
+// just over the digits of the 26px line, the same proportion the episode row settled on,
+// so the two marks on this one screen read as the same badge. The decode stays at
+// NV_IMDB_MARK_TEX_W — see there for why every caller asks for that one width.
+#define NV_DETW2_IMDB_H       24.0f
+#define NV_DETW2_IMDB_GAP     12.0f   // mark -> score, NV_DETEP_IMDB_GAP's value
 // TWO SEPARATORS, and they are deliberately different shapes — which is exactly
 // what NuvioWeb does, and what one shape for both got wrong.
 //

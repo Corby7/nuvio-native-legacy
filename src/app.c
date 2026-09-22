@@ -559,6 +559,11 @@ void app_update(float dt, Uint32 now) {
       // video — which plays normally and so passes for success.
       const CatItem *ci = cat_item(detail_index());
       player_open(detail_index(), NULL);
+      // The entrance crossfades over the page and flies the logo out of it, rather
+      // than cutting to black and fading the loading screen up from nothing.
+      { GfxRect from = { 0, 0, 0, 0 };
+        detail_logo_rect(&from);
+        player_open_from_detail(from); }
       episodeOfDetail();
       // The episode is only final AFTER the player opens. Always redo the
       // subtitle request at that point; the prefetch search may have started on
@@ -765,7 +770,12 @@ void app_draw(Uint32 now) {
 
   // The player covers everything; drawing what is behind it is work thrown away —
   // the same arithmetic that already held for the stretched detail card.
-  if (!player_is_open()) {
+  //
+  // EXCEPT WHILE IT IS STILL ARRIVING FROM THE TITLE SCREEN. For that half second the
+  // page is the background the player's art crossfades over, and its logo is the one
+  // in flight — so the page keeps drawing, minus its own copy of the logo.
+  detail_hide_logo(player_logo_in_flight());
+  if (!player_is_open() || player_handing_off()) {
     // "See all" covers the screen behind it completely (an opaque background), so
     // the home need not be drawn underneath — the same arithmetic as
     // detail_covers_screen.

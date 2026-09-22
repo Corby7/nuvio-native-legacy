@@ -44,6 +44,7 @@
 #include "subtitle.h"
 #include "intro.h"
 #include "home.h"
+#include "settings.h"
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
@@ -274,6 +275,13 @@ static Uint32 settleAt = 0;
 static float  settleTarget = 0.0f;
 static int    statsOpen = 0;   // the stream stats panel (#playerStatsOverlay)
 static float entry = 0.0f;       // 0..1 the screen's opening/closing fade
+static float entryV = 0.0f;      // its velocity: the opening runs on anim_spring2
+// THE HANDOFF FROM THE TITLE SCREEN (player_open_from_detail). `fromDetail` says the
+// page is still underneath and the entrance crossfades over it; `flyFrom` is where the
+// page last drew the logo, w 0 when it drew none.
+static int     fromDetail = 0;
+static GfxRect flyFrom;
+static int     flying = 0;   // the last frame drew the logo on its flight path
 static Uint32 lastInput = 0;
 // The instant the PICTURE started (not the screen's opening: between the two there
 // is the source search, which can take seconds). Zero while there has been none.
@@ -692,7 +700,8 @@ void player_open(int indexCatalog, const char *url) {
   // has already arrived when the controls appear for the first time.
   { const CatItem *ci = cat_item(idx);
     if (ci && ci->imdb[0]) parental_request(ci->imdb); }
-  playing = 1; visible = 1; anim = 0.0f; entry = 0.0f;
+  playing = 1; visible = 1; anim = 0.0f; entry = 0.0f; entryV = 0.0f;
+  fromDetail = 0; flyFrom = (GfxRect){ 0, 0, 0, 0 }; flying = 0;
   reqSources = errorSource = reqTracks = reqNextT = reqNextE = 0; startImage = 0;
   nextDismissed = 0; nextFocus = 1;
   skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0;
@@ -721,6 +730,33 @@ void player_open(int indexCatalog, const char *url) {
 }
 
 int player_is_open(void)    { return is_open; }
+
+void player_open_from_detail(GfxRect from) {
+  if (!is_open) return;
+  fromDetail = 1;
+  flyFrom = from;
+}
+// Until the art has all but covered the page. Past 0.98 what is left of the page is
+// under two percent of the art's opacity, and the veil over both darkens it further.
+//
+// AND FOR THE WHOLE WAY BACK, when Back cancels a source that never opened. Leaving
+// the page out of the exit faded the loading screen to BLACK, and then the title
+// screen arrived whole in one frame — with the logo, which had been flying back at
+// full opacity, cutting over to the page's copy of itself: the flicker. With the page
+// underneath, the exit is the entrance played backwards.
+//
+// NOT ONCE THERE IS A PICTURE. The video is a hardware plane behind this surface and
+// the player punches a hole to show it; a page drawn underneath would be erased by
+// that hole wherever the frame is, so leaving playback keeps its plain fade.
+// Whether the page should hide its logo: only while THIS screen is drawing one in
+// flight. The error screen has none, and a page hiding its logo under it would bring
+// the title back without one and then pop it in at the end.
+int player_logo_in_flight(void) { return player_handing_off() && flying; }
+
+int player_handing_off(void) {
+  if (!is_open || !fromDetail || player_has_video()) return 0;
+  return exiting || entry < 0.98f;
+}
 int player_wants_exit(void) { return requestedExit; }
 // Only after loadCompleted. Before that the pipeline has put nothing on the hardware
 // plane, and punching the surface early swapped the art for a BLACK rectangle while
@@ -1150,13 +1186,31 @@ void player_update(float dt, Uint32 now) {
   if (cardFocus && !cardPresent()) { cardFocus = 0; barFocus = 1; }
   if (!is_open) return;
 
-  entry = anim_spring(entry, exiting ? 0.0f : 1.0f, dt, NV_SPRING_SCREEN);
+  // THE OPENING RUNS ON THE DETAIL'S OWN CURVE. The first-order spring left at full
+  // speed on the first frame — a third of the fade inside one frame at 60Hz, which
+  // read as a cut, and with the title screen still underneath (the handoff) it read
+  // as the page blinking out. anim_spring2 starts at rest and lands with no overshoot,
+  // the same movement as home -> detail, so the two steps into a title feel like one
+  // gesture. The exit keeps its brisk first-order curve: that one is an instruction
+  // already given.
+  // Back to the title screen it runs on the same curve backwards — the logo flying
+  // home has to start at rest too, or it leaves with a jerk.
+  if (exiting && fromDetail && !player_has_video())
+    entry = anim_spring2_reduced(&entryV, entry, 0.0f, dt, NV_SPRING2_SCREEN,
+                                 settings_animations_reduced());
+  else if (exiting) entry = anim_spring(entry, 0.0f, dt, NV_SPRING_SCREEN);
+  else entry = anim_spring2_reduced(&entryV, entry, 1.0f, dt, NV_SPRING2_SCREEN,
+                                    settings_animations_reduced());
   // Marks the first frame WITH A PICTURE. It is from here that the parental guide
   // counts its time — counting from the screen's opening would make the guide spend
   // its allowance while the app was still looking for a source, and it would
   // disappear before the film appeared.
   if (!startImage && hasVideo && video_ready()) { startImage = now; wake(); }
-  if (exiting && entry < 0.02f) { is_open = 0; exiting = 0; entry = 0.0f; return; }
+  // A HANDOFF CLOSES LATER. At 0.02 the logo flying home is still 2% of the way from
+  // the centre — ~10px on a wide wordmark — and the page's own copy then takes over in
+  // place: a visible jump on the last frame. At 0.003 the gap is under a pixel.
+  if (exiting && entry < (fromDetail ? 0.003f : 0.02f)) {
+    is_open = 0; exiting = 0; entry = 0.0f; flying = 0; return; }
 
   // With a pipeline, the position and duration come FROM IT; dt only serves the
   // animations. The added-up clock still exists for when there is no video (on the
@@ -1688,6 +1742,10 @@ void player_draw(Uint32 now) {
   // 0 is the full-screen quad: the shader's crop (cover) is what stops the 16:9 art
   // stretching when the screen is not exactly 16:9.
   GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+  // THE SECOND ACT OF THE ENTRANCE: 0 until the art has mostly covered what was under
+  // it, then up to 1. What is NEW on this screen waits for it; see the staging note at
+  // the loading indicator.
+  float late = anim_smooth((entry - 0.70f) / 0.30f);
   if (player_has_video()) {
     // The hole follows the SAME rectangle that went to the hardware plane, clipped by
     // the screen. Always punching the whole screen, as before, left a black band in
@@ -1717,38 +1775,71 @@ void player_draw(Uint32 now) {
   // An opening indicator: dots pulsing in the centre, over the darkened art.
   // A spinner would need rotation in the shader; three dots in counterphase say the
   // same thing with what already exists, and they read well from a distance.
+  flying = 0;
   if (player_loading()) {
     GfxRect dark = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     int k;
     gfx_color(dark, 0.0f, 0, 0, 0, 0.55f * entry);
-    GLuint logo = c && c->logo[0] ? tex_get_width(c->logo, 520) : 0;
-    if (logo) {
-      float ar = tex_aspect(c->logo), w = 520, h = ar > 0 ? w / ar : 120;
+    // THE STAGING. The logo is the one thing the viewer was already looking at, so it
+    // leads; the spinner and the words are news, so they wait until it has nearly
+    // arrived and then rise the last few pixels into place. Arriving all at once the
+    // screen reads as a replacement; staged, it reads as the same title changing room.
+    float rise = (1.0f - late) * 18.0f;
+    GLuint logo = 0;
+    float w = 520, h = 120, ar = 0.0f;
+    if (c && c->logo[0]) {
+      // ON A HANDOFF, THE DETAIL'S TEXTURE. The page asked for this file with
+      // tex_get_exact at the width it drew it; asking for another width here while
+      // both screens draw would re-decode the PNG every frame (see the logo note in
+      // detail.c). The same request is a cache hit, and 810 -> 520 is a downscale.
+      logo = (fromDetail && flyFrom.w > 0.0f) ? tex_get_exact(c->logo, flyFrom.w)
+                                              : tex_get_width(c->logo, 520);
+      ar = tex_aspect(c->logo);
+      h = ar > 0 ? w / ar : 120;
       if (h > 160) { h = 160; w = h * ar; }
-      gfx_rect((GfxRect){(NV_SCREEN_W-w)*.5f,NV_SCREEN_H*.5f-h-60,w,h},logo,
-               tex_brand_dark(c->logo)?GFX_BRAND:GFX_TEXT,0,0,0,0,.95f,.95f,.97f,entry);
+    }
+    if (logo) {
+      GfxRect r = { (NV_SCREEN_W - w) * .5f, NV_SCREEN_H * .5f - h - 60, w, h };
+      float la = entry;
+      // THE FLIGHT: from the rect the title screen drew it at to the centre, on
+      // `entry` itself, so it lands exactly as the art finishes covering the page. It
+      // flies at full opacity — the fade is for things with nowhere to come from, and
+      // the page's own copy is hidden for as long as this one is in the air.
+      if (fromDetail && flyFrom.w > 0.0f) {
+        float p = entry;
+        r.x = flyFrom.x + (r.x - flyFrom.x) * p;
+        r.y = flyFrom.y + (r.y - flyFrom.y) * p;
+        r.w = flyFrom.w + (r.w - flyFrom.w) * p;
+        r.h = flyFrom.h + (r.h - flyFrom.h) * p;
+        la = 1.0f;
+        flying = 1;
+      }
+      gfx_rect(r, logo, tex_brand_dark(c->logo) ? GFX_BRAND : GFX_TEXT,
+               0, 0, 0, 0, .95f, .95f, .97f, la);
     } else {
       TxtLine t = txt_line_trim(TXT_PLR_TITLE,c?c->title:"Playing",240,241,244,255,680);
-      txt_draw_alpha(t,(NV_SCREEN_W-t.w)*.5f,NV_SCREEN_H*.5f-150,entry);
+      txt_draw_alpha(t,(NV_SCREEN_W-t.w)*.5f,NV_SCREEN_H*.5f-150+rise,entry*late);
     }
     // A ring with a luminous tail, animated with no new textures per frame.
     for (k = 0; k < 12; k++) {
       float ang = k * 6.2831853f / 12.0f + now * .006f;
       float br = .18f + .82f * k / 11.0f;
       GfxRect pt = {NV_SCREEN_W*.5f + cosf(ang)*24 - 4,
-                    NV_SCREEN_H*.5f + sinf(ang)*24 - 4,8,8};
-      gfx_color(pt,.5f,.95f,.95f,.97f,br*entry);
+                    NV_SCREEN_H*.5f + sinf(ang)*24 - 4 + rise,8,8};
+      gfx_color(pt,.5f,.95f,.95f,.97f,br*entry*late);
     }
     { TxtLine lc = txt_line(TXT_CALLOUT, "Opening source", 236, 237, 242, 255);
       txt_draw_alpha(lc, NV_SCREEN_W * 0.5f - lc.w * 0.5f,
-                         NV_SCREEN_H * 0.5f + 50, 0.85f * entry); }
+                         NV_SCREEN_H * 0.5f + 50 + rise, 0.85f * entry * late); }
     if (lineEp[0]) {
       TxtLine le = txt_line_trim(TXT_PG_END,lineEp,196,198,204,255,680);
-      txt_draw_alpha(le,(NV_SCREEN_W-le.w)*.5f,NV_SCREEN_H*.5f+94,entry);
+      txt_draw_alpha(le,(NV_SCREEN_W-le.w)*.5f,NV_SCREEN_H*.5f+94+rise,entry*late);
     }
   }
   if (errorSource) {
-    gfx_color(screen,0,.02f,.02f,.025f,.65f);
+    // With the screen's fade: at a flat .65 it stayed on through the whole exit and
+    // then vanished in one frame, over the title screen coming back underneath.
+    gfx_color(screen,0,.02f,.02f,.025f,.65f*entry);
     TxtLine er=txt_line(TXT_CALLOUT,"Could not open the source",240,241,243,255);
     txt_draw_alpha(er,(NV_SCREEN_W-er.w)*.5f,400,entry);
     TxtLine aj=txt_line(TXT_PG_END,"Open Sources to choose another option or reload.",192,194,200,255);
@@ -1787,7 +1878,10 @@ void player_draw(Uint32 now) {
   // remote down to keep reading it. It closes the way it opened: the button.
   if (statsOpen) drawStats(entry);
 
-  float a = anim * entry;
+  // ON A HANDOFF THE TRANSPORT WAITS TOO. It came up with the art, and for the first
+  // half of the crossfade its title, bar and buttons sat over the title screen's own
+  // synopsis and meta lines — two layers of type at once, neither readable.
+  float a = anim * entry * (fromDetail ? late : 1.0f);
 
   // Two gradients, as in the web app: .player-controls-gradient-top (150px, 0.7 -> 0)
   // and .player-controls-gradient-bottom (200px, 0 -> 0.8). The bottom one supports
