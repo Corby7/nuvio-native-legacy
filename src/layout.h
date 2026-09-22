@@ -794,13 +794,16 @@
 // the one place on this screen where Bold is a MEASUREMENT and not the optical
 // choice text.c makes for 600.
 #define NV_FT_DETWEB_TIP 24   // .series-circle-btn::after (weight 700)
-// The SEASON PICKER and the EPISODE CARD, same session, same method.
+// The SEASON PICKER, measured in NuvioWeb on 2026-09-15, and the EPISODE LIST (see
+// the NV_DETEP_* block in detail.h). The list's sizes started from the owner's
+// reference and were raised a quarter on the owner's word that at the reference's
+// 17-20px the rows were hard to read from the sofa.
 #define NV_FT_DETWEB_SEA  30   // .library-picker-value (600) and its " · N Eps" (400)
 #define NV_FT_DETWEB_OPT  28   // .library-picker-option (500)
-#define NV_FT_DETWEB_EPB  20   // .series-episode-badge (600, letter-spacing 2)
-#define NV_FT_DETWEB_EPM  20   // .series-episode-meta (400)
-#define NV_FT_DETWEB_EPT  32   // .series-episode-title (800)
-#define NV_FT_DETWEB_EPD  32   // .series-episode-desc-row (400), leading 44
+#define NV_FT_DETWEB_EPB  21   // the row's "EP 3" kicker (600, tracked out)
+#define NV_FT_DETWEB_EPM  23   // the row's meta line: duration, date, score (400)
+#define NV_FT_DETWEB_EPT  34   // the row's title (600)
+#define NV_FT_DETWEB_EPD  25   // the row's synopsis (400), leading NV_DETEP_DESC_LD
 #define NV_FT_PLR_TITLE 56   // .player-title
 #define NV_FT_PLR_BODY  32   // .player-subtitle and .player-time-label
 // The player's top corner, RE-MEASURED 2026-09-17 against the transport block at
@@ -2156,7 +2159,6 @@
 #define NV_SRC_BAND_LEAD    20.0f   // how far left of the first chip it reaches
 #define NV_SRC_BAND_FADE   150.0f   // how far it takes to reach full, rightwards
 #define NV_SRC_BAND_W      (NV_SRC_BAND_LEAD + NV_SRC_CONTENT_W + NV_SRC_PAD)
-#define NV_SRC_SLIDE        0.06f
 // CARDS, ON TRIAL. 1 draws every row as its own rounded card and marks focus with
 // a white ring, the language the home screen's cards already speak; 0 is the
 // band above. The cards reuse the row's box (NV_SRC_ROW_H on NV_SRC_ROW's pitch,
@@ -2170,14 +2172,17 @@
 // list became boxes of boxes, the chips' outlines inside the cards' outlines.
 #define NV_SRC_CARD_FILL    0.05f
 #define NV_SRC_CARD_FOCUS   0.09f
-// The ink is TRUE BLACK. The design's rgb(6,7,10) read as a navy veil, and a
-// neutral rgb(6,6,6) with the elliptical lift at grey still read as grey; the
-// shader's lift now takes this same ink, so the ellipse only deepens the veil
-// towards the right edge and never lightens it. The ramp stopping short of 1 is
-// what keeps a bright backdrop faintly visible at the edge.
-#define NV_SRC_INK_R      0.0f
-#define NV_SRC_INK_G      0.0f
-#define NV_SRC_INK_B      0.0f
+// The ink is THE PAGE'S OWN #0d0d0d — the colour the title screen's vignette ramps
+// to on the left, behind the episode list — at the ramp's full depth. It was TRUE
+// BLACK, which read as a black slab over the title rather than the same darkness the
+// rest of the page is shaded with; the owner's word was "too black". What changes is
+// the colour, not the depth: holding the ramp to 84% as well took the veil so far
+// back that it read as gone. A navy rgb(6,7,10) and a grey rgb(6,6,6) were both tried
+// before and rejected, so the ink stays neutral.
+#define NV_SRC_INK_R      0.051f
+#define NV_SRC_INK_G      0.051f
+#define NV_SRC_INK_B      0.051f
+#define NV_SRC_VEIL_A     1.0f
 // The header sits 32px lower than it first did: at 40 the heading crowded the top
 // edge, and the design gives the sheet a real top margin.
 #define NV_SRC_TITLE_Y      72.0f

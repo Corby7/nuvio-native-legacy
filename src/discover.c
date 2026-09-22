@@ -1954,6 +1954,10 @@ static void metaCacheStore(const char *id, const char *body) {
 // It runs AFTER publishEpisodes, so the row is already on screen and the numbers
 // arrive into it — cat_set_ep_score fills them in place rather than republishing the
 // list, which would restart every thumbnail.
+//
+// THE RUNTIMES COME FROM HERE TOO. Each entry also carries `runtime` in minutes
+// (Silo S1E1: 62), and Cinemeta's `videos` carry none — so this is the only source
+// the episode list has for "62 min", and it costs nothing: the body is already here.
 #ifndef NV_IMDB_RATINGS
 #define NV_IMDB_RATINGS ""
 #endif
@@ -1976,6 +1980,8 @@ static void episodeScores(long tmdb, int targetItem) {
       while (ep) {
         const char *eEnd = js_end(ep);
         int en = (int)js_num(ep, eEnd, "episode_number", -1);
+        int rt = (int)js_num(ep, eEnd, "runtime", 0);
+        if (sn >= 0 && en > 0 && rt > 0) cat_set_ep_runtime(targetItem, sn, en, rt);
         // imdb_rating is the one the badge names; vote_average carries the same
         // number and is read only when the first is absent.
         double v = js_num(ep, eEnd, "imdb_rating", -1.0);

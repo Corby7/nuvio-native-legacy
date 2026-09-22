@@ -248,6 +248,15 @@ a BMP written by hand.
 bash /tmp/shot.sh 6          # build + deploy + capture + download + convert
 ```
 
+**On the TV the channel is NOT in /tmp.** Since webOS 11 the app runs with a /tmp
+of its own that the Developer Mode ssh user cannot even list. `devPath()` in
+main.c puts `nuvio-key`, `nuvio-goto`, `nuvio-video`, `nuvio-rect`,
+`nuvio-shot-req` and `nuvio-shot.bmp` in the app's data folder instead,
+`/media/developer/apps/usr/palm/applications/space.nuvio.native.legacy/.nuvio`
+(group `jailer`, 775 — the ssh user is in `jailer`). The Mac build keeps /tmp,
+so `tools/dev.sh` is unchanged. `chmod 664` each request you write so the app
+can consume it.
+
 > **The two scripts this file names live in `/tmp` and are therefore GONE**
 > whenever the machine has been rebooted. The protocol is what matters and it is
 > written out above; two traps when rebuilding them: the request file must be

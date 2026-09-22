@@ -445,6 +445,10 @@ void cat_set_episodes(int indexItem, const CatEp *list, int n);
 // Returns 1 when an episode matched, so the caller can log what LANDED rather
 // than what it parsed.
 int  cat_set_ep_score(int indexItem, int season, int episode, int tenths);
+// The same for ONE episode's runtime, written as "62 min" into `duration` when it is
+// empty. Cinemeta's `videos` carry no runtime at all, so without this the episode
+// list had no length for any episode; the ratings API that brings the scores has it.
+int  cat_set_ep_runtime(int indexItem, int season, int episode, int minutes);
 
 // Replaces ONE item, preserving the rest. Used when the detail screen opens and
 // brings cast, directing and seasons the row's catalogue did not have.

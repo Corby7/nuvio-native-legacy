@@ -4,6 +4,7 @@
 #include "gfx.h"
 #include "text.h"
 #include "anim.h"
+#include "settings.h"
 #include "layout.h"
 #include <stdio.h>
 #include <string.h>
@@ -21,6 +22,9 @@ int stream_sheet_reload(void) { int r = reload; reload = 0; return r; }
 
 static int is_open = 0, focus = 0, choice = -1;
 static float anim = 0.0f, scroll = 0.0f;
+// THE SHEET'S TRAVEL, 0 = off the right edge of the screen, 1 = in place, and its
+// velocity. `anim` above is derived from it and is only the sheet's OPACITY.
+static float travel = 0.0f, velTravel = 0.0f;
 static float tipA[2];   // the header tooltips' fades: Reload, Close
 // The highlight's row, in ITEM units (2.4 = between the third and the fourth).
 // The highlight slides between rows instead of jumping: with a hard jump the
@@ -296,7 +300,17 @@ void stream_sheet_event(const SDL_Event *e) {
 }
 void stream_sheet_update(float dt, Uint32 now) {
   (void)now;
-  anim=anim_spring(anim,is_open?1:0,dt,NV_SPRING_SCREEN);
+  // IT COMES IN FROM THE RIGHT EDGE, its whole width, and leaves the same way. The
+  // second-order spring the title screen's own flight uses (NV_SPRING2_SCREEN): it
+  // starts from rest, so the sheet gathers speed off the edge instead of jumping,
+  // and a Back pressed mid-way turns round from wherever it has got to. It used to
+  // slide 6% of its width and fade, which read as appearing rather than arriving.
+  //
+  // The opacity runs AHEAD of the travel (x1.6), so the sheet is solid for most of
+  // the journey and it is the movement, not a fade, that the eye follows.
+  travel=anim_spring2_reduced(&velTravel,travel,is_open?1:0,dt,NV_SPRING2_SCREEN,
+                              settings_animations_reduced());
+  anim=anim_clamp(travel*1.6f,0.0f,1.0f);
   { int k;
     for(k=0;k<2;k++)
       tipA[k]=anim_ramp(tipA[k],is_open && group==-1 && focus==k?1.0f:0.0f,dt,NV_SRC_TIP_MS); }
@@ -308,7 +322,9 @@ void stream_sheet_update(float dt, Uint32 now) {
   float target=focus*NV_SRC_ROW-(area-NV_SRC_ROW)*.5f;
   if(target>max) target=max;
   if(target<0) target=0;
-  scroll=anim_spring(scroll,target,dt,NV_SPRING_SCROLL);
+  // Discover's grid spring, so the three lists that scroll row by row — Discover,
+  // the title's episodes and this one — all move the same way.
+  scroll=anim_spring(scroll,target,dt,NV_SPRING_GRID);
 }
 int stream_sheet_chose(int *out) {
   if(choice<0) return 0;
@@ -626,8 +642,8 @@ static void tabs(float left, float w, float y, int cursor, float a) {
 
 void stream_sheet_draw(Uint32 now) {
   if(anim<.005f) return;
-  // The sheet SLIDES A SHORT WAY and fades, rather than flying in its own width.
-  float slide=(1-anim)*NV_SRC_VEIL_W*NV_SRC_SLIDE;
+  // The sheet travels its whole width in from the right edge — see the update.
+  float slide=(1-travel)*NV_SRC_VEIL_W;
   float x=NV_SCREEN_W-NV_SRC_VEIL_W+slide;
   float cx=NV_SCREEN_W-NV_SRC_PAD-NV_SRC_CONTENT_W+slide, cw=NV_SRC_CONTENT_W;
   int nf, row;
@@ -640,7 +656,7 @@ void stream_sheet_draw(Uint32 now) {
   // costs a second full screen of fill and flattens the hero the design shows at
   // full strength on the left. The ramp is the entire treatment.
   gfx_rect((GfxRect){x,0,NV_SRC_VEIL_W,NV_SCREEN_H},0,GFX_SRC_VEIL,0,
-           1,0,0,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,anim);
+           1,0,0,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,anim*NV_SRC_VEIL_A);
 
   // --- the heading, with the count on its baseline and the episode after it.
   txt_draw_alpha(txt_line(TXT_PANEL_TITLE,"Sources",240,241,243,255),cx,NV_SRC_TITLE_Y,anim);
@@ -700,12 +716,25 @@ void stream_sheet_draw(Uint32 now) {
   tabs(cx,cw,NV_SRC_TABS_Y,group==0,anim);
   gfx_no_crop();
 
-  gfx_crop(x,NV_SRC_TOP,NV_SRC_VEIL_W,NV_SCREEN_H-NV_SRC_TOP-NV_SRC_FOOT);
+  // ROWS DISSOLVE AS THEY LEAVE THE TOP, the way Discover's grid and the episode
+  // list do (anim_edge): across the air between the tabs' focus ring and the first
+  // row, a row going up fades to nothing, so it is gone before the clip would cut it
+  // against the tabs. The clip therefore starts at the tabs' base, not at the list.
+  const float fadeTop=NV_SRC_TABS_Y+NV_SRC_TAB_H+NV_SRC_TAB_RING_OUT;
+  // It runs to the SCREEN's bottom edge, not NV_SRC_FOOT above it. Clipped there,
+  // the card under the last whole one was cut off 32px short of the edge with
+  // nothing below it — a line drawn by the layout's padding, not by anything on
+  // screen. NV_SRC_FOOT stays in the scroll's arithmetic, so the LAST card still
+  // ends with that air under it.
+  gfx_crop(x,fadeTop,NV_SRC_VEIL_W,NV_SCREEN_H-fadeTop);
   nf=nFiltered();
   for(row=0;row<nf;row++) {
     float y=NV_SRC_TOP+row*NV_SRC_ROW-scroll;
+    float edge=anim_edge(y,fadeTop,NV_SRC_TOP-fadeTop);
     int i,sel;
-    if(y+NV_SRC_ROW<NV_SRC_TOP || y>NV_SCREEN_H-NV_SRC_FOOT) continue;
+    if(y+NV_SRC_ROW<fadeTop || y>NV_SCREEN_H) continue;
+    if(edge<=0.004f) continue;
+    gfx_opacity_group=edge;
     i=filtered(row); sel=group==1 && focus==row;
     // The row's own box, softened over NV_SRC_BAND_LEAD at its left end — see the
     // note in layout.h. It stops next to the first chip and never reaches the
@@ -725,6 +754,9 @@ void stream_sheet_draw(Uint32 now) {
                      1,1,1,NV_SRC_FOCUS_FILL*anim);
     drawRow(&list[i],cx,cw,y,i==current,sel,now,anim*(sel?1.0f:NV_SRC_DIM));
 #endif
+    // PUT IT BACK before anything else is drawn: a group opacity left set bleeds
+    // onto every later draw call in the frame.
+    gfx_opacity_group=1.0f;
   }
   if(!nf) {
     const char *msg=addons_state()==ADD_SEARCHING?"Fetching sources from the addons\xE2\x80\xA6":"No direct source available. Use Reload to try again.";

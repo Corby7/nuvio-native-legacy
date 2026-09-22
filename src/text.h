@@ -27,14 +27,14 @@ typedef enum {
   // stays where it is because profile.c draws its "OK · Try again" hint with it.
   TXT_DETWEB_BTN,  // .series-primary-btn       32 / 600
   TXT_DETWEB_TIP,  // .series-circle-btn::after 24 / 700
-  // The season picker and the episode card, re-measured in NuvioWeb 2026-09-15.
+  // The season picker and the episode list (NV_DETEP_* in detail.h).
   TXT_DETWEB_SEA,      // .library-picker-value       30 / 600
   TXT_DETWEB_SEA_EPS,  // its " · N Eps" tail          30 / 400
   TXT_DETWEB_OPT,      // .library-picker-option      28 / 500
-  TXT_DETWEB_EP_BADGE, // .series-episode-badge       20 / 600
-  TXT_DETWEB_EP_META,  // .series-episode-meta        20 / 400
-  TXT_DETWEB_EP_TITLE, // .series-episode-title       32 / 800
-  TXT_DETWEB_EPD,      // .series-episode-desc-row    32 / 400
+  TXT_DETWEB_EP_BADGE, // the row's "EP 3" kicker     21 / 600
+  TXT_DETWEB_EP_META,  // the row's meta line         23 / 400
+  TXT_DETWEB_EP_TITLE, // the row's title             34 / 600
+  TXT_DETWEB_EPD,      // the row's synopsis          25 / 400
   // The HERO's meta line: 21 / 500, rgb(179,179,179). It is neither TXT_CAPTION
   // (22/400) nor TXT_CALLOUT (28/500) — one gets the weight wrong, the other the
   // size, and the line came out either too faint or too heavy against the art.
@@ -266,6 +266,11 @@ float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
 // the content comes from outside.
 float txt_block(TxtStyle style, const char *s, int r, int g, int b,
                 float x, float y, float width, float leading, float alpha, int maxLines);
+
+// How many lines txt_block would wrap `s` into at `width`, drawing nothing and
+// rasterising nothing. For a caller that has to size a box around the text before
+// it draws it.
+int txt_block_lines(TxtStyle style, const char *s, float width);
 
 // The same block, but RIGHT-ALIGNED: every line ends at `xRight`. The credits in
 // the bottom-right corner need this — left-aligned, their edge comes out ragged

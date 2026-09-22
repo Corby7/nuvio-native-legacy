@@ -47,6 +47,27 @@
 // sofa with the remote: write "down", "ok", "back"... into /tmp/nuvio-key and the
 // app handles it as though it came from the D-pad. One key per line; the file is
 // consumed.
+// WHERE THE DEV CHANNEL'S FILES LIVE. /tmp on the Mac; on the TV, the app's data
+// folder. Since webOS 11 the app runs with a /tmp of its own that the Developer
+// Mode ssh user cannot even list, so a request written to the TV's /tmp over ssh
+// never reached the app and a capture never came back out. The data folder is
+// owned by the app's uid with group `jailer`, mode 775, and the ssh user is in
+// `jailer` — the one directory both sides can write.
+//
+// Several paths are live in one expression (a rename takes two), hence the ring
+// of buffers.
+static const char *devPath(const char *name) {
+  static char ring[4][600];
+  static int next;
+  char *out = ring[next++ & 3];
+  const char *dir = "/tmp";
+#ifndef __APPLE__
+  if (data_dir()[0]) dir = data_dir();
+#endif
+  snprintf(out, sizeof ring[0], "%s/%s", dir, name);
+  return out;
+}
+
 static SDL_Keycode codeOfKey(const char *name) {
   if (!strcmp(name, "up"))    return SDLK_UP;
   if (!strcmp(name, "down"))  return SDLK_DOWN;
@@ -138,8 +159,8 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
     releaseIn = 0;
   }
   static time_t blockedKey;
-  if (!requestNew("/tmp/nuvio-key", &blockedKey)) return;
-  FILE *f = fopen("/tmp/nuvio-key", "r");
+  if (!requestNew(devPath("nuvio-key"), &blockedKey)) return;
+  FILE *f = fopen(devPath("nuvio-key"), "r");
   if (!f) return;
   char line[32];
   while (fgets(line, sizeof line, f)) {
@@ -194,7 +215,7 @@ static void keysInjected(void (*deliver)(const SDL_Event *)) {
     else { e.type = SDL_KEYUP; deliver(&e); }
   }
   fclose(f);
-  consumeOrBlocks("/tmp/nuvio-key", &blockedKey);
+  consumeOrBlocks(devPath("nuvio-key"), &blockedKey);
 }
 
 // --- GOTO: reach a screen without driving the arrows -------------------------
@@ -214,24 +235,24 @@ static void gotoIfRequested(void) {
   static Uint32 since;
   char id[32];
   FILE *f;
-  if (!requestNew("/tmp/nuvio-goto", &blocked)) { since = 0; return; }
-  f = fopen("/tmp/nuvio-goto", "r");
+  if (!requestNew(devPath("nuvio-goto"), &blocked)) { since = 0; return; }
+  f = fopen(devPath("nuvio-goto"), "r");
   if (!f) return;
   if (!fgets(id, sizeof id, f)) { id[0] = 0; }
   fclose(f);
   { char *e = id + strlen(id);
     while (e > id && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0; }
-  if (!id[0]) { consumeOrBlocks("/tmp/nuvio-goto", &blocked); return; }
+  if (!id[0]) { consumeOrBlocks(devPath("nuvio-goto"), &blocked); return; }
   if (!since) since = SDL_GetTicks();
   if (app_goto_detail(id)) {
-    consumeOrBlocks("/tmp/nuvio-goto", &blocked);
+    consumeOrBlocks(devPath("nuvio-goto"), &blocked);
     since = 0;
     return;
   }
   if (SDL_GetTicks() - since > 8000) {
     printf("[goto] %s is not in the catalogue\n", id);
     fflush(stdout);
-    consumeOrBlocks("/tmp/nuvio-goto", &blocked);
+    consumeOrBlocks(devPath("nuvio-goto"), &blocked);
     since = 0;
   }
 }
@@ -261,8 +282,8 @@ static void videoIfRequested(void) {
   static time_t blocked;
   char url[1024];
   FILE *f;
-  if (!requestNew("/tmp/nuvio-video", &blocked)) return;
-  f = fopen("/tmp/nuvio-video", "r");
+  if (!requestNew(devPath("nuvio-video"), &blocked)) return;
+  f = fopen(devPath("nuvio-video"), "r");
   if (!f) return;
   if (fgets(url, sizeof url, f)) {
     char *end = url + strlen(url);
@@ -273,7 +294,7 @@ static void videoIfRequested(void) {
     else { video_play(url); video_window(0, 0, 1920, 1080); }
   }
   fclose(f);
-  consumeOrBlocks("/tmp/nuvio-video", &blocked);
+  consumeOrBlocks(devPath("nuvio-video"), &blocked);
 }
 
 // The same protocol as /tmp/nuvio-video, for the CROP: write eight numbers
@@ -289,8 +310,8 @@ static void rectIfRequested(void) {
   static time_t blocked;
   char line[256];
   FILE *f;
-  if (!requestNew("/tmp/nuvio-rect", &blocked)) return;
-  f = fopen("/tmp/nuvio-rect", "r");
+  if (!requestNew(devPath("nuvio-rect"), &blocked)) return;
+  f = fopen(devPath("nuvio-rect"), "r");
   if (!f) return;
   if (fgets(line, sizeof line, f)) {
     int sx, sy, sw, sh, dx, dy, dw, dh;
@@ -306,7 +327,7 @@ static void rectIfRequested(void) {
     }
   }
   fclose(f);
-  consumeOrBlocks("/tmp/nuvio-rect", &blocked);
+  consumeOrBlocks(devPath("nuvio-rect"), &blocked);
 }
 
 // THE LETTERBOX. The layout is authored at 1920x1080 and the shader maps it
@@ -343,8 +364,8 @@ static void applySurface(SDL_Window *win) {
 
 static void captureIfRequested(void) {
   static time_t blocked;
-  if (!requestNew("/tmp/nuvio-shot-req", &blocked)) return;
-  consumeOrBlocks("/tmp/nuvio-shot-req", &blocked);
+  if (!requestNew(devPath("nuvio-shot-req"), &blocked)) return;
+  consumeOrBlocks(devPath("nuvio-shot-req"), &blocked);
 
   // Reads the WHOLE drawable, not a fixed 1920x1080: on a retina screen the
   // buffer is larger than the window, and reading the window's size captures only
@@ -376,13 +397,13 @@ static void captureIfRequested(void) {
   header[34] = n & 255; header[35] = (n >> 8) & 255; header[36] = (n >> 16) & 255; header[37] = (n >> 24) & 255;
 
   // write to a temporary and only then rename: a reader never picks up a half file
-  FILE *f = fopen("/tmp/.nuvio-shot.tmp", "wb");
+  FILE *f = fopen(devPath(".nuvio-shot.tmp"), "wb");
   if (f) {
     fwrite(header, 1, 54, f);
     fwrite(px, 1, n, f);
     fclose(f);
-    rename("/tmp/.nuvio-shot.tmp", "/tmp/nuvio-shot.bmp");
-    printf("capture: /tmp/nuvio-shot.bmp (%u bytes)\n", size);
+    rename(devPath(".nuvio-shot.tmp"), devPath("nuvio-shot.bmp"));
+    printf("capture: %s (%u bytes)\n", devPath("nuvio-shot.bmp"), size);
   }
   free(px);
 }

@@ -987,6 +987,13 @@ static const char *FS_BODY[GFX_NMODES] = {
   "          : uColor.rgb;\n"
   "  gl_FragColor = vec4(oc, oa * uColor.a);\n"
   "}\n",
+
+  // GFX_ROW_FADE — a wash, solid to uPar.x and eased out to zero at the right.
+  "void main(){\n"
+  "  float a = 1.0 - smoothstep(uPar.x, 1.0, clamp(vUv.x, 0.0, 1.0));\n"
+  "  if (a <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uColor.rgb, a * uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -1018,7 +1025,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_MENU_FEATHER — a horizontal ramp over a square-cornered panel */
   {0,0},   /* GFX_MENU_SCRIM   — likewise, full-bleed behind it */
   {0,0},   /* GFX_ERAIL_SCRIM  — a full-bleed vertical ramp: no SDF, no texture */
-  {0,0}    /* GFX_SRC_VEIL     — two gradients in one fragment: no SDF, no texture */
+  {0,0},   /* GFX_SRC_VEIL     — two gradients in one fragment: no SDF, no texture */
+  {0,0}    /* GFX_ROW_FADE     — a horizontal ramp over a square band: no SDF */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {

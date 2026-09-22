@@ -680,6 +680,21 @@ int cat_set_ep_score(int indexItem, int season, int episode, int tenths) {
   return 0;
 }
 
+int cat_set_ep_runtime(int indexItem, int season, int episode, int minutes) {
+  int m = cat_n();
+  if (m < 1 || minutes <= 0) return 0;
+  indexItem = ((indexItem % m) + m) % m;
+  for (int i = 0; i < epCount[indexItem]; i++) {
+    CatEp *e = &eps[epStart[indexItem] + i];
+    if (e->season == season && e->episode == episode) {
+      // Only into an EMPTY field: one the addon already filled is left as it said.
+      if (!e->duration[0]) snprintf(e->duration, sizeof e->duration, "%d min", minutes);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 const CatEp *cat_episode(int indexItem, int i) {
   int m = cat_n();
   if (m < 1) return NULL;

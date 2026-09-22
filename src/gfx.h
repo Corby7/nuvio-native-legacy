@@ -403,7 +403,17 @@ typedef enum {
   //   uPar.x = 0 draws the ramp alone (a white wash for the focused row, which
   //            must not pick up the lift's blue); >= 0.5 adds the lift
   GFX_SRC_VEIL = 37,
-  GFX_NMODES = 38
+  // GFX_ROW_FADE — a flat wash that DISSOLVES to the right instead of ending.
+  //
+  // The focused episode row's band. Cut off square it drew a hard vertical line
+  // across the backdrop; this holds the colour solid up to uPar.x of the quad's
+  // width and eases it out (smoothstep) to nothing at the right edge, so there is no
+  // place where the band can be seen to stop.
+  //
+  //   uPar.x = where the fade begins, in 0..1 of the quad's width
+  //   uColor = the wash's colour, and its full-strength alpha
+  GFX_ROW_FADE = 38,
+  GFX_NMODES = 39
 } GfxMode;
 
 typedef struct {

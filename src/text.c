@@ -180,10 +180,9 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   // An option is 500, and it is read on a LIGHT row as often as a dark one (the
   // focused one inverts). Medium is the value 500 itself, with nothing to resolve.
   { NV_FT_DETWEB_OPT, WEIGHT_MEDIUM  },
-  { NV_FT_DETWEB_EPB, WEIGHT_BOLD    },   // 600, white on a dark pill
+  { NV_FT_DETWEB_EPB, WEIGHT_BOLD    },   // 600, the tracked-out "EP 3"
   { NV_FT_DETWEB_EPM, WEIGHT_REGULAR },
-  // 800 is past Bold and the embedded family stops there; the caller adds a heavier
-  // pass on top (txt_weight), which is how the old episode title already did it.
+  // The episode row's title is 600 on a dark ground: Bold, by the optical rule.
   { NV_FT_DETWEB_EPT, WEIGHT_BOLD    },
   { NV_FT_DETWEB_EPD, WEIGHT_REGULAR },
   { NV_FT_HERO_META, WEIGHT_MEDIUM  },   // .home-modern-hero-meta-line (21/500)
@@ -1194,6 +1193,33 @@ float txt_block(TxtStyle style, const char *s, int r, int g, int b,
     used += leading;
   }
   return used;
+}
+
+int txt_block_lines(TxtStyle style, const char *s, float width) {
+  if (!s || !*s) return 0;
+  char line[512]; line[0] = 0;
+  int nLines = 0;
+  const char *p = s;
+  while (*p) {
+    const char *start = p;
+    while (*p && *p != ' ') p++;
+    size_t np = (size_t)(p - start);
+    while (*p == ' ') p++;
+    char attempt[512];
+    size_t nl = strlen(line);
+    if (nl + np + 2 >= sizeof attempt) break;
+    memcpy(attempt, line, nl);
+    if (nl) attempt[nl++] = ' ';
+    memcpy(attempt + nl, start, np);
+    attempt[nl + np] = 0;
+    if (widthOf(style, attempt, TXT_FAMILY_INTER) > width && line[0]) {
+      nLines++;
+      memcpy(line, start, np); line[np] = 0;
+    } else {
+      memcpy(line, attempt, nl + np + 1);
+    }
+  }
+  return nLines + (line[0] ? 1 : 0);
 }
 
 // It wraps like txt_block, but positions each line by the RIGHT EDGE. The

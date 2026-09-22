@@ -147,30 +147,21 @@ int  detail_requested_do_start(void);
 // and the cast share page 3's top so that moving the focus between them does not
 // retarget the page under a hand that is already on the d-pad.
 #define NV_DETP_G_TEMP      NV_DETP_P2
-#define NV_DETP_G_EP        1320.0f   // == NV_DETP_EP_Y
+#define NV_DETP_G_EP        NV_DETP_EP_Y
 #define NV_DETP_G_TABS      NV_DETP_P3
 #define NV_DETP_G_CAST      NV_DETP_P3
 
-// WHERE THE SEASON PICKER IS DRAWN, and it is the first thing on page 2: the page's
-// top plus the page's inset. It was 1080 + 48 of the web row's padding = 1128, and 48
-// from the top edge of a television is not an inset — it read as the control being
-// clipped by the bezel. Its size and look are NV_DETWEB_SEA_*; the old
-// NV_DETP_TEMP_H/PADX/GAP described a row of chips that no longer exists.
-#define NV_DETP_TEMP_Y      (NV_DETP_P2 + NV_DETP_PAD_TOP)   /* 1176 */
-
-// WHERE THE EPISODE ROW IS DRAWN. Everything about the card itself — its size, its
-// parts and its focus — now lives in the NV_DETWEB_EP_* block further down, measured
-// in NuvioWeb on 2026-09-15.
-//
-// The whole NV_DETP_EP_* set that used to sit here has gone with the card it described:
-// a 640x414 box carrying a three-line synopsis and a clock + duration INSIDE the
-// thumbnail, from a device capture of a different build. The web's card has neither,
-// and keeping a dead set of constants beside a live one is how this row came to be
-// ported twice from two references in the first place.
-// The picker's base (1256) plus 64 of air. 64 and not the web's 24: with the page to
-// itself the rail is no longer squeezed under the control, and the card grows 5% on
-// focus (NV_DETWEB_EP_FOCUS), which eats 10 of whatever gap it is given.
-#define NV_DETP_EP_Y        1320.0f
+// THE EPISODE PAGE'S HEAD is the season picker alone, at the page's top-left. The
+// owner's reference has the title's logo there with the picker beside it; the logo
+// was tried under the picker and dropped — the hero one page up already names the
+// title, and without it the list gets four rows instead of three and a half.
+#define NV_DETEP_TOP          80.0f   // the page's top -> the picker
+#define NV_DETP_TEMP_Y      (NV_DETP_P2 + NV_DETEP_TOP)
+#define NV_DETEP_LIST_GAP     56.0f   // the picker's base -> the first row
+// WHERE THE EPISODE LIST STARTS, and it runs to the page's end (NV_DETP_P3). The rows
+// scroll inside that window and are clipped to it, so page 3 never shows a row.
+#define NV_DETP_EP_Y        (NV_DETP_TEMP_Y + NV_DETWEB_SEA_H + NV_DETEP_LIST_GAP)
+#define NV_DETEP_LIST_H     (NV_DETP_P3 - NV_DETP_EP_Y)
 // The focus ring, 4px, and it is now a MEASUREMENT on both places rather than a
 // rounding: `.series-episode-card.focused .series-episode-thumb` reads
 // `box-shadow: rgb(255,255,255) 0 0 0 4px` at 1920, same as the hero's buttons. The
@@ -352,88 +343,60 @@ int  detail_requested_do_start(void);
 // `max-height: 540px` and scrolls; 540 / 84 = 6.4, so six whole rows.
 #define NV_DETWEB_SEA_OPT_VIS      6
 
-// --- THE EPISODE CARD, MEASURED IN NuvioWeb --------------------------------
+// --- THE EPISODE LIST ------------------------------------------------------
 //
-// Measured in the same session on `.series-episode-card` and its children. It
-// replaces the NV_DETP_EP_* block, which came from a device capture of a different
-// build and differs in the CARD'S CONTENT and not merely its size: that one carried
-// a three-line synopsis and a clock + duration INSIDE the thumbnail, and the web has
-// neither. The synopsis lives BELOW the row, in one line of copy that follows the
-// focus (`.series-episode-desc-row`).
+// A VERTICAL LIST, one row per episode, from the owner's reference (2026-09-22),
+// measured off it at 1920 and then opened up a quarter — type and air both — because
+// at the reference's own sizes the rows were hard to read on the TV. It replaces
+// NuvioWeb's horizontal rail of 600x395 cards,
+// which showed two and a half episodes and one synopsis at a time.
 //
-//   track    gap 48, cards from x=208  ->  step 648
-//   card     600 wide; the thumbnail is 600x395 radius 24, and the card is 403
-//            because 8px below it are the progress bar's slot
-//   copy     padding 24 32 — so the top row sits at +24 and the bottom block's base
-//            24 above the thumbnail's
-//   badge    "EPISODE 1", padding 10 20, radius 64 (a PILL, not the 12 the port had),
-//            font 20/600 tracked out 2, background rgba(0,0,0,.42)
-//   status   a 50x50 circle at the top RIGHT, 2px DASHED rgba(179,179,179,.9)
-//   meta     20/400 rgb(179,179,179), gap 24: the IMDb badge (a 20-tall mark plus the
-//            score) and then the date written out
-//   title    32/800, min-height 56, white
-//   gradient linear(rgba(0,0,0,0) 52%, rgba(0,0,0,.77) 72%, rgba(0,0,0,.95) 100%)
-#define NV_DETWEB_EP_W       600.0f
-#define NV_DETWEB_EP_THUMB   395.0f
-#define NV_DETWEB_EP_H       403.0f   // thumbnail + the progress bar's 8
-#define NV_DETWEB_EP_STEP    648.0f   // 600 + the track's gap of 48
-#define NV_DETWEB_EP_RADIUS   24.0f
-#define NV_DETWEB_EP_PADX     32.0f
-#define NV_DETWEB_EP_PADY     24.0f
-#define NV_DETWEB_EP_BADGE_H  48.0f   // line-height 28 + 10 of padding each side
-#define NV_DETWEB_EP_BADGE_PADX 20.0f
-#define NV_DETWEB_EP_BADGE_LS  2.0f   // letter-spacing, and it is what makes it read
-#define NV_DETWEB_EP_STATUS   50.0f
-#define NV_DETWEB_EP_META_H   28.0f
-#define NV_DETWEB_EP_META_GAP 24.0f
-// The score's ink. MEASURED on `.series-imdb-badge` and the span beside it: BOTH are
-// rgb(245,197,24), the same yellow as the mark — not the rgb(179,179,179) the rest of
-// the meta line uses, and not what this port drew.
-#define NV_DETWEB_EP_SCORE_R    245
-#define NV_DETWEB_EP_SCORE_G    197
-#define NV_DETWEB_EP_SCORE_B     24
-// A dot between the score and the date. The web has only its 24px flex gap there; the
-// owner asked for a separator, and it is the dim one the home's meta line uses — the
-// same NV_HERO_META_DOT strength, so the mark reads as punctuation and not as another
-// item on the line.
-#define NV_DETWEB_EP_DOT_SEP  12.0f
-#define NV_DETWEB_EP_TITLE_H  56.0f
-#define NV_DETWEB_EP_IMDB_H   20.0f   // the mark's height; the width follows the art
-#define NV_DETWEB_EP_IMDB_GAP 10.0f   // mark -> score
-// THE PROGRESS BAR, and it diverges from the web ON PURPOSE.
-//
-// `.series-episode-progress` is a separate element BELOW the thumbnail, 8 tall with
-// `border-radius: 999px` — and ported literally it reads as a loose rail sitting under
-// a detached card, its square ends poking past the 24px corner. The owner's call is
-// that it should look like the Continue Watching card's: *"the progress bar should be
-// similar to continuewatching progress bar"*.
-//
-// So it goes through GFX_CW_BAR, which takes the CARD's rect and radius and cuts the
-// band with the same SDF the artwork is cut with — full-bleed against the base, both
-// ends rounding exactly as the corner does. The height and the minimum width are the
-// Continue Watching card's (NV_CW_BAR_H, NV_CW_BAR_MINW), because matching it is the
-// point.
-#define NV_DETWEB_EP_BAR_H     8.0f
-// FOCUS: `transform: scale(1.05)` on the CARD, a 4px white ring on the THUMBNAIL and
-// a drop shadow `0 8px 30px rgba(0,0,0,.5)`. The port had no scale and a ring only —
-// the note claiming the web uses `transform: none` here was read off the hero's rule,
-// which is a different selector.
-#define NV_DETWEB_EP_FOCUS     1.05f
-#define NV_DETWEB_EP_RING      4.0f
-// The line of copy UNDER the row, which is where the episode's synopsis went:
-// `.series-episode-desc-row`, 32/400 white, leading 44, 1179 wide from x=208, with
-// 32 of padding below it.
-// The card's base -> the copy's top. It is the TRACK's padding-bottom: the cards end
-// at 579 and `.series-episode-desc-row` starts at 627.
-#define NV_DETWEB_EPD_Y       48.0f
-#define NV_DETWEB_EPD_W     1179.0f
-#define NV_DETWEB_EPD_LD      44.0f
-// FOUR lines, not the web's two. Two lines at 32/44 over 1179px truncates most
-// episode synopses mid-sentence, and with the block on a page of its own there is room
-// for the text to be read rather than teased. Four is also what the Compose app
-// settled on for this same copy (EpisodesSection.kt, descriptionMaxLines = 4).
-#define NV_DETWEB_EPD_LINES      4
-#define NV_DETWEB_EPD_PAD_END 32.0f
+//   row      224 tall at rest, rows touching. The FOCUSED row grows to hold its whole
+//            synopsis, and the rows under it move down on the focus spring.
+//   band     the focused row is lit by a white wash from the screen's left edge that
+//            DISSOLVES to the right (GFX_ROW_FADE) — no line where it stops
+//   thumb    288x162 (16:9), radius 12, at the gutter; focused: a 4px white ring
+//            and the Continue Watching bar along its base when there is progress
+//   copy     32 right of the thumbnail and centred on the row, on BASELINES: title
+//            -> meta 42, meta -> synopsis 44, synopsis leading 35. At rest the
+//            synopsis is one line; focused, all of it.
+//   right    at rest a watched mark; focused, "22 min left" and a Resume / Play pill
+//            that ends at NV_DETEP_RIGHT
+//   rest     every row but the focused one at NV_DETEP_DIM while the list has focus
+#define NV_DETEP_ROW_H       224.0f
+#define NV_DETEP_PADY         40.0f   // a grown row's air above and below its copy
+#define NV_DETEP_THUMB_W     288.0f
+#define NV_DETEP_THUMB_H     162.0f
+#define NV_DETEP_THUMB_R      12.0f
+#define NV_DETEP_RING          4.0f
+#define NV_DETEP_TEXT_GAP     32.0f   // thumbnail -> copy
+#define NV_DETEP_BAND_A        0.08f  // the band is white at this alpha
+#define NV_DETEP_BAND_FADE     0.50f  // where across the screen the band starts to go
+#define NV_DETEP_RIGHT      1418.0f   // where the pill and the watched mark end
+#define NV_DETEP_ACT_GAP      40.0f   // the copy's right edge -> the right-hand column
+// How lit a row is. DIM is every unfocused row while the list has the focus; REST is
+// every row while it does not (the picker is focused, or the page is scrolling in),
+// so the list does not look disabled before you have entered it.
+#define NV_DETEP_DIM           0.55f
+#define NV_DETEP_REST          0.72f
+#define NV_DETEP_KICK_GAP     30.0f   // "EP3" -> the title
+#define NV_DETEP_KICK_LS       2.5f   // "EP 3"'s letter-spacing
+#define NV_DETEP_META_DY      42.0f   // title baseline -> meta baseline
+#define NV_DETEP_DESC_DY      44.0f   // meta baseline -> the synopsis' first baseline
+#define NV_DETEP_DESC_LD      35.0f
+#define NV_DETEP_DOT_SEP      16.0f   // each side of the "·" on the meta line
+// The mark's height; the width follows the art. 23, a little over the score's digits,
+// as in the owner's reference: at 26 the badge outweighed the number it labels, and at
+// 20 it read smaller than the digits beside it.
+#define NV_DETEP_IMDB_H       23.0f
+#define NV_DETEP_IMDB_GAP     12.0f   // mark -> score
+// The focused row's pill: #f5f5f5 with #111 ink, the hero's focused pair.
+#define NV_DETEP_BTN_H        72.0f
+#define NV_DETEP_BTN_PADX     32.0f
+#define NV_DETEP_BTN_ICON     24.0f
+#define NV_DETEP_BTN_GAPI     14.0f   // icon -> label
+#define NV_DETEP_LEFT_GAP     24.0f   // "22 min left" -> the pill
+#define NV_DETEP_CHECK        42.0f   // the watched mark's diameter
 
 // THE TEXT STACK. Both captures give the same absolute coordinates for what is
 // BELOW the synopsis (the IMDb badge at y=938, the age-rating badge at y=999) and
