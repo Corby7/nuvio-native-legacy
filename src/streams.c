@@ -1,5 +1,4 @@
 #include "streams.h"
-#include "badges.h"
 #include <pthread.h>
 #include "net.h"
 #include "gfx.h"
@@ -9,36 +8,41 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 #include "addons.h"
 #include "mark.h"
-
-#define SHEET_W       720.0f
-#define SHEET_LINE   228.0f
-#define SHEET_TOP    272.0f
 
 static Stream *list;
 static int n = 0;
 static int current = -1, reload;
-static char context[320];
 void stream_set_current(int i) { current = i >= 0 && i < n ? i : -1; }
 int stream_current(void) { return current; }
-void stream_sheet_context(const char *s) { snprintf(context, sizeof context, "%s", s ? s : ""); }
 int stream_sheet_reload(void) { int r = reload; reload = 0; return r; }
 
 static int is_open = 0, focus = 0, choice = -1;
 static float anim = 0.0f, scroll = 0.0f;
+static float tipA[2];   // the header tooltips' fades: Reload, Close
 // The highlight's row, in ITEM units (2.4 = between the third and the fourth).
 // The highlight slides between rows instead of jumping: with a hard jump the
 // sheet looked like it swapped its contents on every keypress, and on a D-pad
 // it is the continuity of the highlight that says "this is still the same list,
 // you only moved".
 
+// "" and not "FILE" when nothing says. The row prints the container as one word
+// in a list of facts, and a fact nobody knows is left out — "FILE" was a label
+// invented for the unknown case and it appeared on more rows than any real
+// container did.
 static const char *containerOf(const Stream *s) {
   if (s->mp4 || strstr(s->url, ".mp4") || strstr(s->label, ".mp4")) return "MP4";
   if (strstr(s->url, ".mkv") || strstr(s->file, ".mkv") || strstr(s->description, ".mkv")) return "MKV";
   if (strstr(s->url, ".m3u8") || strstr(s->label, "HLS")) return "HLS";
-  return "FILE";
+  return "";
 }
+
+// Re-scores every row against the runtime the sheet has been told about. Both
+// are defined with the sheet's own state, below.
+static void rank(void);
+static int runtimeS;
 
 static Uint32 receivedIn;
 
@@ -53,6 +57,13 @@ void stream_set_list(const Stream *l, int count) {
   if (new) memcpy(new, l, sizeof(Stream) * (size_t)count);
   free(list); list = new; n = new ? count : 0; current = -1;
   focus = 0;
+  // A NEW LIST IS A NEW TITLE, so the runtime goes with the old one. Keeping it
+  // would divide this title's file sizes by the last title's length and print a
+  // bitrate that is wrong by whatever the two differ by — a 45-minute episode
+  // measured against a 3-hour film reads as four times the quality it is.
+  // Whoever opens the sheet supplies the runtime again (stream_sheet_runtime).
+  runtimeS = 0;
+  rank();
 }
 
 int stream_n(void) {
@@ -219,6 +230,20 @@ static int group, filter;
 static char providers[13][96];
 static int nProviders;
 
+static void rank(void) {
+  int i;
+  for (i = 0; i < n; i++) stream_rank(&list[i], runtimeS);
+}
+
+void stream_sheet_runtime(int seconds) {
+  // A guard and not an assignment: video_duration() answers 0 until the pipeline
+  // has the file open, and the player asks every frame the sheet is up. Taking
+  // the 0 would wipe a runtime the title screen had already supplied.
+  if (seconds <= 0 || seconds == runtimeS) return;
+  runtimeS = seconds;
+  rank();
+}
+
 static void updateProviders(void) {
   nProviders = 1;
   snprintf(providers[0],sizeof providers[0],"All");
@@ -272,12 +297,15 @@ void stream_sheet_event(const SDL_Event *e) {
 void stream_sheet_update(float dt, Uint32 now) {
   (void)now;
   anim=anim_spring(anim,is_open?1:0,dt,NV_SPRING_SCREEN);
+  { int k;
+    for(k=0;k<2;k++)
+      tipA[k]=anim_ramp(tipA[k],is_open && group==-1 && focus==k?1.0f:0.0f,dt,NV_SRC_TIP_MS); }
   updateProviders();
   int nf=nFiltered();
   if(group==1 && focus>=nf) focus=nf>0?nf-1:0;
-  float area=NV_SCREEN_H-SHEET_TOP-32;
-  float max=nf*SHEET_LINE-area;
-  float target=focus*SHEET_LINE-(area-SHEET_LINE)*.5f;
+  float area=NV_SCREEN_H-NV_SRC_TOP-NV_SRC_FOOT;
+  float max=nf*NV_SRC_ROW-area;
+  float target=focus*NV_SRC_ROW-(area-NV_SRC_ROW)*.5f;
   if(target>max) target=max;
   if(target<0) target=0;
   scroll=anim_spring(scroll,target,dt,NV_SPRING_SCROLL);
@@ -287,64 +315,420 @@ int stream_sheet_chose(int *out) {
   if(out) *out=choice;
   choice=-1;return 1;
 }
+
+// --- THE ROW ------------------------------------------------------------------
+//
+// Three chips, then quiet text; the size and the quality bar on the right. The
+// rules and the reasoning are in layout.h under "THE SOURCES SHEET"; what
+// follows is only their arithmetic.
+
+// CAPITALS CENTRED, not the line's box. A TxtLine is as tall as the FONT, so a
+// 20px line carries about 6px of air over a capital and 5 under the baseline —
+// centring the box inside a 38px chip therefore sits the word visibly low. See
+// txt_cap_inset in text.h, which exists for exactly this.
+static float capCentre(TxtStyle st, float top, float h) {
+  float inset = txt_cap_inset(st), cap = txt_baseline(st) - inset;
+  return top + (h - cap) * 0.5f - inset;
+}
+
+// ONE CHIP, and it is one of two things and never a third: FILLED — a white
+// ground with dark ink, which 4K and only 4K gets — or OUTLINED, a ring with
+// nothing inside it.
+//
+// The ring is GFX_RING_INSET and not a smaller rectangle painted in the
+// background colour: the row behind it is transparent when unfocused and a pale
+// wash when focused, so a painted "middle" would read as a light smudge on one
+// row and match on the other. Inset rather than GFX_RING because that one
+// strokes ACROSS the quad's edge, which would make a chip 2px wider than the
+// width this returns and walk the whole row along.
+static float chip(const char *label, float x, float y, int filled,
+                  float cr, float cg, float cb, int ir, int ig, int ib, float a) {
+  float lw = txt_tracking(TXT_SRC_CHIP, label, ir, ig, ib, -1, 0, 0, NV_SRC_CHIP_TRACK);
+  float w = lw + 2 * NV_SRC_CHIP_PADX;
+  GfxRect r = { x, y, w, NV_SRC_CHIP_H };
+  float rad = NV_SRC_CHIP_R / NV_SRC_CHIP_H;
+  if (filled) gfx_color(r, rad, cr, cg, cb, a);
+  else gfx_rect(r, 0, GFX_RING_INSET, 0, NV_SRC_CHIP_RING / NV_SRC_CHIP_H, 0,
+                rad, cr, cg, cb, a);
+  txt_tracking(TXT_SRC_CHIP, label, ir, ig, ib, x + NV_SRC_CHIP_PADX,
+               capCentre(TXT_SRC_CHIP, y, NV_SRC_CHIP_H), a, NV_SRC_CHIP_TRACK);
+  return w + NV_SRC_CHIP_GAP;
+}
+
+// THE QUALITY BAR. Four segments, filled up to the tier — ordinal by
+// construction, the way a signal-strength meter reads. It replaces both the row
+// of stars the aggregators send and the "Tier" word the sheet used to print:
+// neither of those says which end is good.
+static void segments(float x, float y, int tier, float a) {
+  int i;
+  for (i = 0; i < NV_SRC_SEG_N; i++)
+    gfx_color((GfxRect){ x + i * (NV_SRC_SEG_W + NV_SRC_SEG_GAP), y,
+                         NV_SRC_SEG_W, NV_SRC_SEG_H },
+              0.5f, 1, 1, 1, (i <= tier ? 0.82f : 0.16f) * a);
+}
+
+// EVERY WORD IN A ROW GOES DOWN TWICE: a black copy NV_SRC_SHADOW lower, then
+// the ink. Not the chips — those sit on a ground of their own, and a shadow
+// under the filled 4K one reads as a smudge rather than a lift.
+static void ink(TxtLine l, float x, float y, float a) {
+  txt_draw_shadow(l, x, y + NV_SRC_SHADOW, a * NV_SRC_SHADOW_A);
+  txt_draw_alpha(l, x, y, a);
+}
+
+// THE EQUALISER, for the row that is playing. Bottom-aligned on the text's own
+// baseline, because the bars are read as sitting ON the line the words sit on —
+// centred on the line box they float, and the shortest of them floats worst.
+//
+// The three periods are deliberately not multiples of one another: at any simple
+// ratio the bars return to the same arrangement every cycle and the eye starts
+// reading the pattern rather than the movement.
+static void equaliser(float x, float base, Uint32 now, float a) {
+  static const float SPEED[3] = { 0.0091f, 0.0067f, 0.0113f };  // radians per ms
+  static const float PHASE[3] = { 0.0f, 2.1f, 4.2f };
+  int i;
+  for (i = 0; i < 3; i++) {
+    float s = 0.5f + 0.5f * sinf((float)now * SPEED[i] + PHASE[i]);
+    float h = NV_SRC_EQ_H * (NV_SRC_EQ_MIN + (1.0f - NV_SRC_EQ_MIN) * s);
+    gfx_color((GfxRect){ x + i * (NV_SRC_EQ_W + NV_SRC_EQ_GAP), base - h,
+                         NV_SRC_EQ_W, h },
+              NV_SRC_EQ_R / h, 1, 1, 1, a);
+  }
+}
+#define SRC_EQ_TOTAL (3 * NV_SRC_EQ_W + 2 * NV_SRC_EQ_GAP)
+
+static const char *TIER_WORD[4] = { "POOR", "FAIR", "GOOD", "BEST" };
+
+// THE TIER'S COLOUR. Sampled off the design's own render, and undimmed: three of
+// its four rows are unfocused there, so the values on screen are the ink at
+// NV_SRC_DIM over the sheet — BEST reads (126,208,158) at full strength and GOOD
+// reads (89,104,67), which is (179,209,135) halved.
+//
+// A RAMP AND NOT FOUR LABELS: green to lime to amber to coral is the same
+// direction the bar already runs in, so the two say one thing twice rather than
+// two things. That redundancy is the point on a screen read from three metres —
+// the word survives when the four little segments are too small to count, and the
+// bar survives for anyone who cannot separate the amber from the coral.
+//
+// POOR is the one the design does not show; coral continues the ramp without
+// becoming a warning. The row is still a source somebody may want, not an error.
+static const int TIER_INK[4][3] = {
+  { 224, 132, 120 },   // POOR
+  { 225, 185, 115 },   // FAIR
+  { 179, 209, 135 },   // GOOD
+  { 126, 208, 158 },   // BEST
+};
+
+// "INSTANT" IS NOT GREEN. It was BEST's green, and next to the tier word it
+// made two colour signals per row where the design has one. It is a neutral one
+// step BRIGHTER than the rest of its line instead: the lead fact, not a badge.
+// One item of the second line, with the dot that separates it from the one
+// before. Returns the new cursor.
+static float metaItemIn(TxtStyle st, const char *text, float x, float y, int first,
+                        int r, int g, int b, int dim, float a) {
+  if (!text || !text[0]) return x;
+  if (!first) {
+    TxtLine d = txt_line(TXT_SRC_META, "\xC2\xB7", 255, 255, 255, dim);
+    ink(d, x, y, a);
+    x += (float)d.w + 10.0f;
+  }
+  { TxtLine l = txt_line(st, text, r, g, b, 255);
+    ink(l, x, y, a);
+    return x + (float)l.w + 10.0f; }
+}
+static float metaItem(const char *text, float x, float y, int first,
+                      int r, int g, int b, int dim, float a) {
+  return metaItemIn(TXT_SRC_META, text, x, y, first, r, g, b, dim, a);
+}
+
+// THE FOCUSED ROW'S TYPE IS WHITE, not the grey the others use. The band alone
+// was carrying the state, and at 0.12 over a veil that no longer hides the
+// picture it could not carry it far enough — from the sofa the row you were on
+// looked like the rows you were not. Brightening the ink costs nothing and is
+// the half of the pair that survives at distance.
+static void drawRow(const Stream *s, float left, float w, float top, int playing,
+                    int sel, Uint32 now, float a) {
+  // Only the LEAD fact is bright on the focused row ("Instant", "Playing"); the
+  // rest of the line and the audio/codec run stay grey and the dots darker still,
+  // as the design sets them. All-white read as one undifferentiated sentence.
+  const int metaR = sel ? 176 : 146, metaG = sel ? 178 : 149, metaB = sel ? 184 : 156;
+  const int sep = sel ? 104 : 80;   // the separating dots follow the type
+  const int readyR = sel ? 244 : 178;
+  float x = left, y = top + NV_SRC_CHIP_Y;
+  char buf[64];
+  const char *container = containerOf(s);
+  int first = 1;
+
+  // --- the chips, left to right: resolution, dynamic range, source.
+  if (s->res[0]) {
+    int uhd = !strcmp(s->res, "4K");
+    x += uhd ? chip(s->res, x, y, 1, 0.97f, 0.97f, 0.98f, 18, 18, 20, a)
+             : chip(s->res, x, y, 0, 1, 1, 1, 222, 224, 228, a);
+  }
+  // Dolby Vision used to carry a gold outline as the row's one tint. It is white
+  // like every other chip now: the row already spends colour on the tier word and
+  // on the Instant mark, and a third accent left nothing quiet enough for any of
+  // them to read as a signal. The chip still says DV; it no longer shouts it.
+  if (s->range[0]) x += chip(s->range, x, y, 0, 1, 1, 1, 220, 222, 228, a);
+  if (s->source[0]) x += chip(s->source, x, y, 0, 1, 1, 1, 226, 228, 232, a);
+
+  // --- audio and codec: BARE TEXT, never a chip. They are what you read after
+  // the question the chips answered, and giving them a shape of their own is
+  // what made the old row a wall of six logotypes at five sizes.
+  // They are separated EXACTLY as the line below is — metaItem's dot and its 10px
+  // either side — and not by "  ·  " in one string: two spaces are narrower than
+  // those gaps, and the two lines then kept two different rhythms.
+  { const char *part[2] = { s->audio, s->codec };
+    const int tr = sel ? 184 : 152, tg = sel ? 186 : 155, tb = sel ? 192 : 162;
+    int i, lead = 1;
+    // `x` already carries one NV_SRC_CHIP_GAP past the last chip, which is the
+    // same gap the chips keep between themselves. Nothing is added to it.
+    for (i = 0; i < 2; i++) {
+      if (!part[i][0]) continue;
+      if (!lead) {
+        TxtLine d = txt_line(TXT_SRC_TEXT, "\xC2\xB7", 255, 255, 255, sep);
+        ink(d, x, capCentre(TXT_SRC_TEXT, y, NV_SRC_CHIP_H), a);
+        x += (float)d.w + 10.0f;
+      }
+      { float ty = capCentre(TXT_SRC_TEXT, y, NV_SRC_CHIP_H);
+        float tw = txt_tracking(TXT_SRC_TEXT, part[i], tr, tg, tb, -1, 0, 0,
+                                NV_SRC_TEXT_TRACK);
+        // Tracked text cannot be trimmed, so a run that would reach the size
+        // column is left out whole rather than cut mid-word.
+        if (x + tw > left + w - NV_SRC_SIZE_COL) break;
+        txt_tracking(TXT_SRC_TEXT, part[i], 0, 0, 0, x, ty + NV_SRC_SHADOW,
+                     a * NV_SRC_SHADOW_A, NV_SRC_TEXT_TRACK);
+        txt_tracking(TXT_SRC_TEXT, part[i], tr, tg, tb, x, ty, a, NV_SRC_TEXT_TRACK);
+        x += tw + 10.0f; }
+      lead = 0;
+    } }
+
+  // --- the second line: how it plays, where it came from, and how fat it is.
+  x = left; y = top + NV_SRC_META_Y;
+  // PLAYING REPLACES THE AVAILABILITY MARK, it does not sit beside it. Whether
+  // this source is instant stopped mattering the moment it became the one on
+  // screen, and the row has no room to say both.
+  if (playing) {
+    equaliser(x, y + txt_baseline(TXT_SRC_META), now, a);
+    x += SRC_EQ_TOTAL + 9.0f;
+    x = metaItemIn(TXT_SRC_STATE, "Playing", x, y, 1, 244, 245, 248, sep, a);
+    first = 0;
+  } else if (s->cached) {
+    // The bolt is a PNG, not a character: Inter has no U+26A1 and SDL_ttf draws
+    // .notdef without complaining, which is the hollow box this sheet used to
+    // show wherever an addon's own emoji reached the screen.
+    gfx_icon((GfxRect){ x, y + 1.0f, NV_SRC_BOLT, NV_SRC_BOLT }, "instant",
+             readyR / 255.0f, readyR / 255.0f, readyR / 255.0f, a);
+    x += NV_SRC_BOLT + 7.0f;
+    x = metaItem("Instant", x, y, 1, readyR, readyR, readyR + 4, sep, a);
+    first = 0;
+  } else if (s->p2p) {
+    // P2P is the exception, so it gets a mark; "not cached" is not a state worth
+    // a word of its own on every other row.
+    TxtLine l = txt_line(TXT_SRC_TIER, "P2P", sel ? 218 : 156,
+                         sel ? 220 : 158, sel ? 226 : 164, 255);
+    float pw = (float)l.w + 20.0f, ph = 26.0f;
+    if (!first) x += 10.0f;
+    gfx_color((GfxRect){ x, y + 1.0f, pw, ph }, 7.0f / ph, 1, 1, 1, 0.10f * a);
+    txt_draw_alpha(l, x + 10.0f, capCentre(TXT_SRC_TIER, y + 1.0f, ph), a);
+    x += pw + 10.0f;
+    first = 1;   // the chip carries its own separation
+  }
+  x = metaItem(s->service[0] ? s->service : s->provider, x, y, first,
+                metaR, metaG, metaB, sep, a); first = 0;
+  x = metaItem(container, x, y, 0, metaR, metaG, metaB, sep, a);
+  // THE SEED COUNT ONLY ON A TORRENT. On an instant row it is a number the
+  // aggregator scraped from somewhere and it changes nothing about whether the
+  // file plays; printing it on every row is what taught the eye to skip it.
+  if (s->p2p && s->seeders > 0) {
+    snprintf(buf, sizeof buf, "\xE2\x86\x91 %d", s->seeders);
+    x = metaItem(buf, x, y, 0, metaR, metaG, metaB, sep, a);
+  }
+  if (s->mbps > 0.05f) {
+    snprintf(buf, sizeof buf, "%.1f Mbps", (double)s->mbps);
+    x = metaItem(buf, x, y, 0, metaR, metaG, metaB, sep, a);
+  }
+
+  // --- the right column: size over the quality bar, both flush right.
+  if (s->sizeMB > 0) {
+    TxtLine l;
+    if (s->sizeMB >= 1024) snprintf(buf, sizeof buf, "%.1f GB", s->sizeMB / 1024.0);
+    else                   snprintf(buf, sizeof buf, "%ld MB", s->sizeMB);
+    l = txt_line(TXT_SRC_SIZE, buf, 244, 245, 248, 255);
+    ink(l, left + w - (float)l.w, top + NV_SRC_SIZE_Y, a);
+  }
+  { const char *word = TIER_WORD[s->tier & 3];
+    const int *tint = TIER_INK[s->tier & 3];
+    float tw = txt_tracking(TXT_SRC_TIER, word, tint[0], tint[1], tint[2],
+                            -1, 0, 0, NV_SRC_TIER_TRACK);
+    float bw = NV_SRC_SEG_N * NV_SRC_SEG_W + (NV_SRC_SEG_N - 1) * NV_SRC_SEG_GAP;
+    float wordX = left + w - tw;
+    float wordY = capCentre(TXT_SRC_TIER, top + NV_SRC_META_Y - 6.0f, 26.0f);
+    // txt_tracking rasterises per COLOUR, so the black twin is a second cache
+    // entry — but there are only four tier words, so that is four in total.
+    txt_tracking(TXT_SRC_TIER, word, 0, 0, 0,
+                 wordX, wordY + NV_SRC_SHADOW, a * NV_SRC_SHADOW_A,
+                 NV_SRC_TIER_TRACK);
+    txt_tracking(TXT_SRC_TIER, word, tint[0], tint[1], tint[2],
+                 wordX, wordY, a, NV_SRC_TIER_TRACK);
+    // THE BAR STAYS WHITE. It is the redundant half of the pair, and tinting it
+    // too would make the row's loudest mark its quality rather than its
+    // resolution — the 4K chip is the one thing that may shout here.
+    segments(wordX - 14.0f - bw, top + NV_SRC_META_Y + 5.0f, s->tier, a); }
+}
+
+// --- THE TABS -----------------------------------------------------------------
+//
+// Pills: the one in force filled white with dark ink, the others a faint fill and
+// a hairline. The filled pill is the filter, not the cursor — it stays white while
+// the cursor is on the list — so the CURSOR on the tabs is a ring outside the
+// white pill, the same ring the focused card wears.
+static void tabs(float left, float w, float y, int cursor, float a) {
+  float widths[13], total = 0, x;
+  int i, from = 0;
+  for (i = 0; i < nProviders; i++) {
+    widths[i] = (float)txt_line(TXT_SRC_TAB, providers[i], 255, 255, 255, 255).w
+                + 2 * NV_SRC_TAB_PADX;
+    total += widths[i] + NV_SRC_TAB_GAP;
+  }
+  // Scroll only as far as it takes to bring the active tab into view: the strip
+  // keeps its left edge whenever it fits, which is the common case.
+  if (total > w) {
+    float upTo = 0;
+    for (i = 0; i <= filter && i < nProviders; i++) upTo += widths[i] + NV_SRC_TAB_GAP;
+    while (upTo > w && from < filter) { upTo -= widths[from] + NV_SRC_TAB_GAP; from++; }
+  }
+  x = left;
+  for (i = from; i < nProviders; i++) {
+    int on = i == filter;
+    int c = on ? 22 : 176;
+    GfxRect r = { x, y, widths[i], NV_SRC_TAB_H };
+    TxtLine l;
+    if (x + widths[i] > left + w) break;
+    if (on) {
+      gfx_color(r, 0.5f, .94f, .94f, .95f, a);
+      if (cursor) {
+        GfxRect o = { x - NV_SRC_TAB_RING_OUT, y - NV_SRC_TAB_RING_OUT,
+                      widths[i] + 2 * NV_SRC_TAB_RING_OUT,
+                      NV_SRC_TAB_H + 2 * NV_SRC_TAB_RING_OUT };
+        gfx_rect(o, 0, GFX_RING_INSET, 0, NV_SRC_TAB_RING / o.h, 0, 0.5f,
+                 1, 1, 1, 0.95f * a);
+      }
+    } else {
+      gfx_color(r, 0.5f, 1, 1, 1, 0.05f * a);
+      gfx_rect(r, 0, GFX_RING_INSET, 0, 1.5f / NV_SRC_TAB_H, 0, 0.5f,
+               1, 1, 1, 0.10f * a);
+    }
+    l = txt_line(TXT_SRC_TAB, providers[i], c, c, c + 2, 255);
+    txt_draw_alpha(l, x + NV_SRC_TAB_PADX, capCentre(TXT_SRC_TAB, y, NV_SRC_TAB_H), a);
+    x += widths[i] + NV_SRC_TAB_GAP;
+  }
+}
+
 void stream_sheet_draw(Uint32 now) {
-  (void)now;
   if(anim<.005f) return;
-  float x=NV_SCREEN_W-SHEET_W+(1-anim)*SHEET_W;
-  gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,.02f,.02f,.025f,.35f*anim);
-  gfx_color((GfxRect){x,0,SHEET_W,NV_SCREEN_H},.025f,.095f,.095f,.10f,anim);
-  txt_draw_alpha(txt_line(TXT_PANEL_TITLE,"Sources",240,241,243,255),x+40,44,anim);
-  for(int i=0;i<2;i++) {
-    float bx=x+SHEET_W-284+i*128;
-    int sel=group==-1 && focus==i;
-    gfx_color((GfxRect){bx,44,120,50},.3f,sel?.94f:.14f,sel?.94f:.14f,sel?.95f:.15f,anim);
-    int c=sel?24:224;
-    TxtLine l=txt_line(TXT_PG_END,i?"Close":"Reload",c,c,c,255);
-    txt_draw_alpha(l,bx+(120-l.w)*.5f,58,anim);
-  }
-  txt_draw_alpha(txt_line_trim(TXT_PG_END,context,184,187,193,255,SHEET_W-80),x+40,126,anim);
-  gfx_crop(x+40,180,SHEET_W-80,62);
-  int start=filter>1?filter-1:0;
-  float tx=x+40;
-  for(int i=start;i<nProviders && i<start+3;i++) {
-    float w=i?232:108;int sel=i==filter,c=sel?24:202;
-    gfx_color((GfxRect){tx,182,w,50},.5f,sel?.94f:.14f,sel?.94f:.14f,sel?.95f:.15f,anim);
-    TxtLine l=txt_line_trim(TXT_PG_END,providers[i],c,c,c,255,w-24);
-    txt_draw_alpha(l,tx+(w-l.w)*.5f,196,anim);
-    if(sel && group==0) gfx_color((GfxRect){tx+16,237,w-32,2},0,.94f,.94f,.95f,anim);
-    tx+=w+12;
-  }
+  // The sheet SLIDES A SHORT WAY and fades, rather than flying in its own width.
+  float slide=(1-anim)*NV_SRC_VEIL_W*NV_SRC_SLIDE;
+  float x=NV_SCREEN_W-NV_SRC_VEIL_W+slide;
+  float cx=NV_SCREEN_W-NV_SRC_PAD-NV_SRC_CONTENT_W+slide, cw=NV_SRC_CONTENT_W;
+  int nf, row;
+  char count[192];
+  // ONE QUAD, ONE RAMP, AND NO FULL-SCREEN SCRIM BEHIND IT.
+  //
+  // There used to be a flat 0.35 black over the whole screen under this. A
+  // uniform veil dims the backdrop equally everywhere, so it contributes no
+  // gradient of its own and does nothing the ramp is not already doing — it only
+  // costs a second full screen of fill and flattens the hero the design shows at
+  // full strength on the left. The ramp is the entire treatment.
+  gfx_rect((GfxRect){x,0,NV_SRC_VEIL_W,NV_SCREEN_H},0,GFX_SRC_VEIL,0,
+           1,0,0,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,anim);
+
+  // --- the heading, with the count on its baseline and the episode after it.
+  txt_draw_alpha(txt_line(TXT_PANEL_TITLE,"Sources",240,241,243,255),cx,NV_SRC_TITLE_Y,anim);
+  { TxtLine title=txt_line(TXT_PANEL_TITLE,"Sources",240,241,243,255);
+    // CENTRED ON THE HEADING'S CAPITALS, not sat on its baseline. Sharing a
+    // baseline is right for two runs of the same sentence; here the count is a
+    // separate object beside a 40px word, and hung off the baseline it read as
+    // having slipped down. Centring uses the CAP box of each and not the line
+    // box, for the reason txt_cap_inset exists: a line is as tall as the font, so
+    // two of different sizes centred box-to-box are not optically centred at all.
+    float capT=txt_cap_inset(TXT_PANEL_TITLE), capC=txt_cap_inset(TXT_SRC_COUNT);
+    float midT=NV_SRC_TITLE_Y+(capT+txt_baseline(TXT_PANEL_TITLE))*0.5f;
+    float by=midT-(capC+txt_baseline(TXT_SRC_COUNT))*0.5f;
+    // The count ONLY. The episode used to follow it when the sheet was opened
+    // from the player, and it is already on screen in the player behind.
+    snprintf(count,sizeof count,"%d found",n);
+    txt_draw_alpha(txt_line_trim(TXT_SRC_COUNT,count,132,135,142,255,cw-(float)title.w-300.0f),
+                   cx+(float)title.w+18.0f,by,anim); }
+
+  // Reload and Close: TWO ICONS IN ONE PILL, as the design draws them. The pill
+  // is a faint fill and a hairline, so at rest it reads as one quiet control;
+  // the cursor on either icon puts a white disc behind it with the glyph in ink.
+  { float h=NV_SRC_HEAD_H, w=2*NV_SRC_HEAD_BTN+2*NV_SRC_HEAD_INSET;
+    float px=cx+cw-w, py=NV_SRC_TITLE_Y+2.0f+22.0f-h*0.5f;
+    GfxRect pill={px,py,w,h};
+    int i;
+    gfx_color(pill,0.5f,1,1,1,0.05f*anim);
+    gfx_rect(pill,0,GFX_RING_INSET,0,1.5f/h,0,0.5f,1,1,1,0.10f*anim);
+    for(i=0;i<2;i++) {
+      int sel=group==-1 && focus==i;
+      float bx=px+NV_SRC_HEAD_INSET+i*NV_SRC_HEAD_BTN, by=py+(h-NV_SRC_HEAD_BTN)*0.5f;
+      float ic=NV_SRC_HEAD_ICON, c=sel?0.09f:0.86f;
+      if(sel) gfx_color((GfxRect){bx,by,NV_SRC_HEAD_BTN,NV_SRC_HEAD_BTN},0.5f,
+                        .94f,.94f,.95f,anim);
+      gfx_icon((GfxRect){bx+(NV_SRC_HEAD_BTN-ic)*0.5f,by+(NV_SRC_HEAD_BTN-ic)*0.5f,ic,ic},
+               i?"close":"reload",c,c,c+(sel?0.01f:0.02f),anim);
+      // THE TOOLTIP, under the icon rather than over it: above there is only the
+      // top margin. It is centred on the button, but never allowed past the
+      // pill's right edge, or "Close" would run off towards the screen's.
+      if(tipA[i]>0.01f) {
+        const char *tip=i?"Close":"Reload";
+        float al=anim*tipA[i];
+        TxtLine t=txt_line(TXT_SRC_STATE,tip,244,245,248,255);
+        TxtLine d=txt_line(TXT_SRC_STATE,tip,0,0,0,255);
+        float tx=bx+(NV_SRC_HEAD_BTN-(float)t.w)*0.5f;
+        float ty=py+h+NV_SRC_TIP_GAP-(1.0f-tipA[i])*NV_SRC_TIP_RISE;
+        if(tx+(float)t.w>px+w) tx=px+w-(float)t.w;
+        txt_draw_alpha(d,tx,ty+2.0f,al*0.80f);
+        txt_draw_alpha(d,tx-1.0f,ty+3.0f,al*0.40f);
+        txt_draw_alpha(d,tx+1.0f,ty+3.0f,al*0.40f);
+        txt_draw_alpha(t,tx,ty,al);
+      }
+    } }
+
+  gfx_crop(cx-NV_SRC_TAB_RING_OUT,NV_SRC_TABS_Y-NV_SRC_TAB_RING_OUT,
+           cw+2*NV_SRC_TAB_RING_OUT,NV_SRC_TAB_H+2*NV_SRC_TAB_RING_OUT);
+  tabs(cx,cw,NV_SRC_TABS_Y,group==0,anim);
   gfx_no_crop();
-  gfx_crop(x+36,SHEET_TOP,SHEET_W-72,NV_SCREEN_H-SHEET_TOP-32);
-  int nf=nFiltered();
-  for(int row=0;row<nf;row++) {
-    float y=SHEET_TOP+row*SHEET_LINE-scroll;
-    if(y+SHEET_LINE<SHEET_TOP || y>NV_SCREEN_H-32) continue;
-    int i=filtered(row),sel=group==1 && focus==row;
-    const Stream *s=&list[i];
-    GfxRect r={x+40,y,SHEET_W-80,SHEET_LINE-14};
-    if(sel) gfx_color(r,.10f,.94f,.94f,.95f,anim);
-    r.x+=2;r.y+=2;r.w-=4;r.h-=4;
-    gfx_color(r,.09f,.135f,.135f,.14f,anim);
-    float lx=x+62,w=SHEET_W-124;
-    char name[sizeof s->label],description[sizeof s->description];
-    snprintf(name,sizeof name,"%s",s->label);snprintf(description,sizeof description,"%s",s->description);
-    // SDL_ttf does not interpret line breaks; do not render .notdef glyphs.
-    for(char *p=name;*p;p++)if((unsigned char)*p<32)*p=' ';
-    for(char *p=description;*p;p++)if((unsigned char)*p<32)*p=' ';
-    txt_draw_alpha(txt_line_trim(TXT_PANEL_ITEM,name,240,241,243,255,w),lx,y+16,anim);
-    txt_draw_alpha(txt_line_trim(TXT_PG_END,i==current?"Now playing":s->provider,175,178,185,255,w),lx,y+46,anim);
-    txt_block(TXT_PG_END,description,194,197,202,lx,y+76,w,25,anim,2);
-    char meta[192],which[24]="";
-    if(s->height) snprintf(which,sizeof which," · %dp",s->height);
-    snprintf(meta,sizeof meta,"%s%s%s%s",containerOf(s),which,s->dolbyVision?" · Dolby Vision":"",s->dolbyAtmos?" · Atmos":"");
-    if(s->sizeMB) {size_t p=strlen(meta);snprintf(meta+p,sizeof meta-p," · %.1f GB",s->sizeMB/1024.0);}
-    txt_draw_alpha(txt_line_trim(TXT_MINI,meta,224,226,232,255,w),lx,y+140,anim);
-    badges_draw(s->badges,lx,y+171,w,26,anim);
+
+  gfx_crop(x,NV_SRC_TOP,NV_SRC_VEIL_W,NV_SCREEN_H-NV_SRC_TOP-NV_SRC_FOOT);
+  nf=nFiltered();
+  for(row=0;row<nf;row++) {
+    float y=NV_SRC_TOP+row*NV_SRC_ROW-scroll;
+    int i,sel;
+    if(y+NV_SRC_ROW<NV_SRC_TOP || y>NV_SCREEN_H-NV_SRC_FOOT) continue;
+    i=filtered(row); sel=group==1 && focus==row;
+    // The row's own box, softened over NV_SRC_BAND_LEAD at its left end — see the
+    // note in layout.h. It stops next to the first chip and never reaches the
+    // picture.
+#if NV_SRC_CARDS
+    { GfxRect card={cx,y,cw,NV_SRC_CARD_H};
+      float rad=NV_SRC_CARD_R/NV_SRC_CARD_H;
+      gfx_color(card,rad,1,1,1,(sel?NV_SRC_CARD_FOCUS:NV_SRC_CARD_FILL)*anim);
+      if(sel) gfx_rect(card,0,GFX_RING_INSET,0,NV_SRC_CARD_RING/NV_SRC_CARD_H,0,
+                       rad,1,1,1,0.95f*anim); }
+    drawRow(&list[i],cx+NV_SRC_CARD_PADX,cw-2*NV_SRC_CARD_PADX,
+            y+(NV_SRC_CARD_H-NV_SRC_ROW_H)*0.5f,i==current,sel,now,
+            anim*(sel?1.0f:NV_SRC_DIM));
+#else
+    if(sel) gfx_rect((GfxRect){cx-NV_SRC_BAND_LEAD,y,NV_SRC_BAND_W,NV_SRC_ROW_H},
+                     0,GFX_MENU_FEATHER,0,NV_SRC_BAND_FADE/NV_SRC_BAND_W,0,0,
+                     1,1,1,NV_SRC_FOCUS_FILL*anim);
+    drawRow(&list[i],cx,cw,y,i==current,sel,now,anim*(sel?1.0f:NV_SRC_DIM));
+#endif
   }
   if(!nf) {
-    const char *s=addons_state()==ADD_SEARCHING?"Fetching sources from the addons…":"No direct source available. Use Reload to try again.";
-    txt_block(TXT_PG_END,s,196,199,204,x+56,SHEET_TOP+40,SHEET_W-112,28,anim,3);
+    const char *msg=addons_state()==ADD_SEARCHING?"Fetching sources from the addons\xE2\x80\xA6":"No direct source available. Use Reload to try again.";
+    txt_block(TXT_SRC_TEXT,msg,166,169,176,cx,NV_SRC_TOP+28.0f,cw,32.0f,anim,3);
   }
   gfx_no_crop();
 }

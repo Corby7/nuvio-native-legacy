@@ -2067,4 +2067,212 @@
 // 20 x Inter's `normal` (1.21), the origin line and the year.
 #define NV_LD_SRCH_META   24.2f
 
+// --- THE SOURCES SHEET -------------------------------------------------------
+//
+// The panel that rises over the title screen and the player to list the sources.
+//
+// It used to be four blocks of prose per row: the addon's name, its provider,
+// two wrapped lines of its own description, a meta line, and a strip of logos.
+// The three facts the eye actually wants — is it 4K, is it Dolby Vision, how big
+// is it — were each stated two or three times, in two or three visual languages,
+// and none of them was readable from three metres.
+//
+// The rebuild is the badge sheet's rule: THREE CHIPS AT MOST — resolution,
+// dynamic range, source — all one height and one radius, and everything else
+// drops to quiet text. Filled means 4K and nothing below it, and every chip is
+// white: Dolby Vision's gold outline went when the tier word and the Instant
+// mark took the row's colour budget. A row that keeps every token to one shape is
+// scannable in a single fixation, which is what a list of twelve near-identical
+// files needs and what wrapped prose can never give.
+//
+// The numbers are this sheet's own, resolved at the 1920x1080 canvas the app
+// draws on. They borrow nothing from the tracks panel or the episode list: those
+// are prose lists and this one is a table, and the trap of sharing a size across
+// three screens is recorded three times over in the font block above.
+// IT IS NOT A PANEL, AND THE WIDTH BELOW IS THE VEIL, NOT A SURFACE.
+//
+// What stops a panel reading as a panel is removing its EDGE. The first attempt
+// at that reused the track menus' feather (GFX_MENU_FEATHER), which softens the
+// leading edge of a surface that is otherwise solid — so the ramp finished at
+// the content column, 56% across the screen, and the right 44% was flat black.
+// That completion point IS an edge. The eye finds it exactly as fast as it finds
+// a hard one, and the complaint it was meant to answer came back unchanged.
+//
+// So there is no surface here at all, only a ramp: 1240px of it, anchored right,
+// climbing through four segments and topping out at 0.97 (GFX_SRC_VEIL carries
+// the stops). Nowhere across those 1240px is it flat, which is the property that
+// matters — there is no pixel you can point at and say the image ends here.
+//
+// THE VEIL IS WIDER THAN THE CONTENT, and it has to be: the content column is
+// 804px and the ramp is 1240, so 436px of ramp reach out to the left of the
+// first chip with nothing drawn on them. That stretch is the effect. Writing the
+// two as one number is what produced the slab.
+//
+// IT ALSO HAS TO CLEAR THE TITLE SCREEN'S SYNOPSIS, and that is what sets the
+// numbers rather than any proportion of the screen. The description block behind
+// is NV_DETW2_X..+NV_DETW2_TEXT_W, which is 96..1136; the rows used to start at
+// 1068, so the sheet's first chip began 68px BEFORE the prose ended and sat on
+// top of it. The column moved right until it clears, with a breath:
+//
+//   veil x    = 1920 - 1060 = 860
+//   content x = 1920 - 48 - 712 = 1160     content w = 712   (synopsis ends 1136)
+//
+// The ramp's lead-in still crosses the last stretch of that prose, and it has to:
+// a ramp soft enough to have no edge needs some 600px of run, and there are only
+// 784 between the end of the synopsis and the screen edge, of which the rows want
+// 712. So the choice is a faint wash over the synopsis's final words or a short
+// ramp with a visible edge, and the wash is the cheaper of the two — at 860 it
+// reaches the prose's last character at about 0.48 instead of the 0.66 it was.
+#define NV_SRC_VEIL_W     1060.0f  // the ramp, anchored to the right edge
+#define NV_SRC_CONTENT_W   712.0f  // the column the rows actually occupy
+#define NV_SRC_PAD          48.0f  // the content's right margin
+// THE FOCUS BAND SHARES THE SHEET'S LEFT EDGE AND ITS RULE, not its curve.
+//
+// It began by borrowing GFX_SRC_VEIL outright, which put a pale wash out over the
+// picture wherever the veil was still faint — a highlight that bleeds is worse
+// than no highlight, because the eye reads the bleed as the thing rather than the
+// row. Pulled back to a short 72px lead it stopped bleeding and started stopping:
+// the band ended in mid-air, well inside the sheet, which is its own kind of edge.
+//
+// THE BAND IS THE ROW'S OWN BOX. It ends immediately left of the first chip and
+// runs to the screen edge; it does not reach out into the picture at any width.
+//
+// The soft left end is a SHORT lead, not a dissolve into the backdrop. Making it
+// follow the veil's curve, so that it faded out where the sheet did, put a pale
+// wash across the open picture for hundreds of pixels — correct by one reading of
+// "dissolves into the screen" and wrong by the one that matters, which is that a
+// row's highlight belongs to the row.
+//
+// WHERE IT ENDS AND HOW LONG IT TAKES ARE TWO NUMBERS, and collapsing them into
+// one is why this took so many passes. LEAD is the only thing that decides how
+// far left the band reaches — 20px, just clear of the first chip. FADE is how far
+// it then travels before it is at full strength, and it runs to the RIGHT, in
+// over the row's own content. Lengthening the ramp therefore costs nothing at the
+// left end: the band still stops exactly where it stops.
+//
+// 150 rather than 20 because at 20 the wash arrived all at once. It is only a
+// 0.12 wash either way, so nothing here is a hard edge; the difference is whether
+// the eye reads an end or a gradient, and 150 reads as a gradient.
+#define NV_SRC_BAND_LEAD    20.0f   // how far left of the first chip it reaches
+#define NV_SRC_BAND_FADE   150.0f   // how far it takes to reach full, rightwards
+#define NV_SRC_BAND_W      (NV_SRC_BAND_LEAD + NV_SRC_CONTENT_W + NV_SRC_PAD)
+#define NV_SRC_SLIDE        0.06f
+// CARDS, ON TRIAL. 1 draws every row as its own rounded card and marks focus with
+// a white ring, the language the home screen's cards already speak; 0 is the
+// band above. The cards reuse the row's box (NV_SRC_ROW_H on NV_SRC_ROW's pitch,
+// so the 16px between them is the gap) and cost no rows in view.
+#define NV_SRC_CARDS         1
+#define NV_SRC_CARD_PADX    32.0f   // card edge to the first chip, and to the size
+#define NV_SRC_CARD_H      130.0f   // the row's 112px box plus 9px above and below
+#define NV_SRC_CARD_R       18.0f
+#define NV_SRC_CARD_RING     2.5f
+// Unfocused cards are a faint fill and NO border: with a ring on every card the
+// list became boxes of boxes, the chips' outlines inside the cards' outlines.
+#define NV_SRC_CARD_FILL    0.05f
+#define NV_SRC_CARD_FOCUS   0.09f
+// The ink is TRUE BLACK. The design's rgb(6,7,10) read as a navy veil, and a
+// neutral rgb(6,6,6) with the elliptical lift at grey still read as grey; the
+// shader's lift now takes this same ink, so the ellipse only deepens the veil
+// towards the right edge and never lightens it. The ramp stopping short of 1 is
+// what keeps a bright backdrop faintly visible at the edge.
+#define NV_SRC_INK_R      0.0f
+#define NV_SRC_INK_G      0.0f
+#define NV_SRC_INK_B      0.0f
+// The header sits 32px lower than it first did: at 40 the heading crowded the top
+// edge, and the design gives the sheet a real top margin.
+#define NV_SRC_TITLE_Y      72.0f
+#define NV_SRC_TABS_Y      160.0f  // the tab pills' top edge
+// The header's Reload/Close pill: two round buttons inside one rounded pill.
+#define NV_SRC_HEAD_H       64.0f   // the pill
+#define NV_SRC_HEAD_BTN     52.0f   // each button, and the white disc under focus
+#define NV_SRC_HEAD_INSET    6.0f   // pill edge to a button
+#define NV_SRC_HEAD_ICON    24.0f   // the glyph
+// The header tooltip, under the focused icon: the detail screen's circle-button
+// tooltip (bold, shadowed, no pill, 140ms fade with a 4px travel), set smaller.
+#define NV_SRC_TIP_GAP      12.0f  // the header pill's bottom -> the label's top
+#define NV_SRC_TIP_MS      140.0f
+#define NV_SRC_TIP_RISE      4.0f
+// THE TABS ARE PILLS. They were bare text over an underline, because pill tabs
+// once had the same shape as the rows below and read as one more source. With
+// the rows now cards, a 50px pill and a 130px card no longer look alike.
+#define NV_SRC_TAB_H        50.0f
+#define NV_SRC_TAB_PADX     26.0f  // ink to the pill's edge, each side
+#define NV_SRC_TAB_GAP      12.0f  // between one pill and the next
+#define NV_SRC_TAB_RING      2.5f  // the cursor's ring, when the cursor is on the tabs
+#define NV_SRC_TAB_RING_OUT  5.0f  // ... and how far outside the pill it sits
+#define NV_SRC_TOP         244.0f  // the first row's top edge
+#define NV_SRC_FOOT         32.0f  // clear space below the last row
+#if NV_SRC_CARDS
+#define NV_SRC_ROW         148.0f  // pitch: a 130px card and an 18px gap
+#else
+#define NV_SRC_ROW         128.0f  // pitch: 6 rows and a half are in view
+#endif
+#define NV_SRC_ROW_H       112.0f  // the block the focused row fills
+#define NV_SRC_CHIP_H       38.0f  // the badge sheet's one chip height
+#define NV_SRC_CHIP_R       10.0f  // ... and its one radius
+#define NV_SRC_CHIP_PADX    13.0f  // ink to edge, each side
+// ONE GAP, EVERYWHERE ALONG THE ROW. It was briefly two — a tight one between the
+// chips and a wider one before the bare text, to group the chips — and the uneven
+// rhythm was more conspicuous than the grouping was useful. The hierarchy is
+// already carried by shape and colour: the chips have borders and the text does
+// not. It does not also need the spacing.
+#define NV_SRC_CHIP_GAP     14.0f
+// THE ROW CARRIES ITS OWN LEGIBILITY. The veil was asked to do this and could
+// not: opaque enough to guarantee contrast meant a ramp short enough to show its
+// own end. A shadow costs one draw call per line and makes the type readable on
+// whatever it happens to lie over, which frees the gradient to be chosen for the
+// picture alone. The chips are exempt — they have a ground of their own, and a
+// shadow under the filled 4K one only muddies it.
+#define NV_SRC_SHADOW        2.0f   // `text-shadow: 0 2px`, as the player's tips use
+#define NV_SRC_SHADOW_A      0.75f
+#define NV_SRC_CHIP_RING     2.0f  // the stroke of an OUTLINED chip
+#define NV_SRC_CHIP_Y       17.0f  // the chip row, from the row's top
+#define NV_SRC_META_Y       72.0f  // the availability line, from the row's top
+#define NV_SRC_SIZE_COL    150.0f  // kept clear on the chip line for the size
+#define NV_SRC_SIZE_Y       22.0f  // the file size, from the row's top: sat low,
+                                   // so it and the quality bar read as one block
+#define NV_SRC_BOLT         21.0f  // the "Instant" mark, square
+// THE ROW THAT IS PLAYING gets a moving equaliser where the others carry a bolt,
+// and it is the one animated thing on the sheet. It earns that: "this is the one
+// you are watching" is a state, not a fact, and every static mark on the row is
+// already spoken for. Three bars on three different periods, so the group never
+// falls into step and never reads as a progress indicator.
+#define NV_SRC_EQ_W          4.0f   // one bar
+#define NV_SRC_EQ_GAP        3.0f
+#define NV_SRC_EQ_H         17.0f   // the tallest a bar goes, ~ the cap height beside it
+#define NV_SRC_EQ_MIN       0.30f   // and the shortest, as a fraction of it
+#define NV_SRC_EQ_R          1.5f   // the bars' corner, in pixels at any height
+#define NV_SRC_SEG_W        15.0f  // one segment of the quality bar
+#define NV_SRC_SEG_H         4.0f
+#define NV_SRC_SEG_GAP       5.0f
+#define NV_SRC_SEG_N            4  // four segments, one per tier
+// AN UNFOCUSED ROW IS DIMMED, and that is the whole of the focus treatment —
+// there is no ring and no border. The old sheet drew a white frame around the
+// focused row, which on a list where every row is a box meant the eye had to
+// find a box inside boxes. Dimming the other eleven leaves exactly one row at
+// full strength, and a 4K chip that is white on one row and grey on the rest
+// says "this one" before any shape is read.
+#define NV_SRC_DIM         0.50f
+// What reaches the screen, directly: the band carries the fill at full strength
+// across the whole content column. 0.055 was the original and it was a hint
+// rather than a state — the focused row was legible mostly because its type was
+// brighter, which is not something that carries across a room.
+#define NV_SRC_FOCUS_FILL   0.12f
+
+#define NV_FT_SRC_TITLE   40  // "Sources"
+#define NV_FT_SRC_COUNT   22  // "12 found", and the episode the sheet was opened on
+#define NV_FT_SRC_TAB     22  // the provider tabs
+// THE CHIPS AND THE AUDIO/CODEC RUN ARE TRACKED CAPS, as the design sets them.
+// Untracked at 20px Inter packed "5.1" into something that read as "51", and the
+// chips looked like buttons rather than labels. Two pixels smaller buys back the
+// width the tracking costs.
+#define NV_FT_SRC_CHIP    18  // 4K / DV / REMUX
+#define NV_SRC_CHIP_TRACK  1.4f  // 0.08em at 18px
+#define NV_FT_SRC_TEXT    18  // audio and codec, bare text after the chips
+#define NV_SRC_TEXT_TRACK  0.9f  // 0.05em at 18px
+#define NV_FT_SRC_META    20  // the availability line
+#define NV_FT_SRC_SIZE    30  // the file size
+#define NV_FT_SRC_TIER    17  // BEST / GOOD / FAIR / POOR
+#define NV_SRC_TIER_TRACK  1.4f  // 0.08em at 17px
+
 #endif

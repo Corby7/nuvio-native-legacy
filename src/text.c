@@ -200,7 +200,11 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   // optical rule the top of this table states, applied to the quieter half of the
   // pair rather than the loud one.
   { NV_FT_PG_SEV,    WEIGHT_MEDIUM  },  // .player-parental-severity / separator
-  { 36, WEIGHT_REGULAR },             // headers of the official player's panels
+  // The sources sheet is its ONLY caller (episodes.c takes TXT_PANEL_ITEM, not
+  // this one), so the weight moved to Bold with that sheet's rebuild and no other
+  // screen saw it. 36 -> 40 for the same reason: "Sources" is now the heading of
+  // a table, with a count beside it, not a label over a list.
+  { NV_FT_SRC_TITLE, WEIGHT_BOLD },   // "Sources", the sheet's heading
   { 24, WEIGHT_BOLD },                // episode/source inside the list
   { 28, WEIGHT_MEDIUM },              // title on the Continue Watching card
   { 23, WEIGHT_REGULAR },             // season and episode name
@@ -306,6 +310,17 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_SRCH_NAME,  WEIGHT_MEDIUM  },  // TXT_SRCH_NAME  .search-result-name
   { NV_FT_SRCH_META,  WEIGHT_REGULAR },  // TXT_SRCH_META  .search-results-subtitle
   { NV_FT_SRCH_EMPTY, WEIGHT_REGULAR },  // TXT_SRCH_EMPTY .search-empty-state p
+  // The sources sheet. The chip label and the tier word are BOLD because they are
+  // small caps on a dark ground, which is the optical rule at the top of this
+  // table; the size is bold because it is the number the row is scanned for.
+  { NV_FT_SRC_COUNT, WEIGHT_REGULAR },   // TXT_SRC_COUNT
+  { NV_FT_SRC_TAB,   WEIGHT_BOLD    },   // TXT_SRC_TAB
+  { NV_FT_SRC_CHIP,  WEIGHT_BOLD    },   // TXT_SRC_CHIP
+  { NV_FT_SRC_TEXT,  WEIGHT_MEDIUM  },   // TXT_SRC_TEXT
+  { NV_FT_SRC_META,  WEIGHT_MEDIUM  },   // TXT_SRC_META
+  { NV_FT_SRC_SIZE,  WEIGHT_BOLD    },   // TXT_SRC_SIZE
+  { NV_FT_SRC_TIER,  WEIGHT_BOLD    },   // TXT_SRC_TIER
+  { NV_FT_SRC_META,  WEIGHT_BOLD    },   // TXT_SRC_STATE
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
@@ -1051,6 +1066,15 @@ void txt_draw_alpha(TxtLine l, float x, float y, float alpha) {
   if (alpha <= 0.004f) return;
   GfxRect r = { fits(x), fits(y), (float)l.w, (float)l.h };
   gfx_rect(r, l.tex, GFX_TEXT, 0, 0, 0, 0.0f, 1, 1, 1, alpha);
+}
+
+// GFX_BRAND and not GFX_TEXT: that one passes the texture's RGB straight through
+// and would draw the line in its own colour again. See the note in text.h.
+void txt_draw_shadow(TxtLine l, float x, float y, float alpha) {
+  if (!l.tex) return;
+  if (alpha <= 0.004f) return;
+  { GfxRect r = { fits(x), fits(y), (float)l.w, (float)l.h };
+    gfx_rect(r, l.tex, GFX_BRAND, 0, 0, 0, 0.0f, 0, 0, 0, alpha); }
 }
 
 float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,

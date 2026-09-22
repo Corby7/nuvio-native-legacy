@@ -137,6 +137,21 @@ typedef enum {
                      // and .search-history-label  24 / 500, uppercase, tracked 1
   TXT_SRCH_META,     // .search-results-subtitle and .search-result-date  20 / 400
   TXT_SRCH_EMPTY,    // .search-empty-state p      24 / 400
+  // The SOURCES sheet, rebuilt as a table — see "THE SOURCES SHEET" in layout.h.
+  // None of these borrows TXT_PG_END, the 20/400 the old rows drew with: that one
+  // is shared with the episode list and the tracks panel, and this screen needs
+  // its meta line at 500 to hold up beside a chip.
+  //
+  // APPENDED, for the reason given five times above: STYLES in text.c is indexed
+  // by this order, so an insertion in the middle shifts every style after it.
+  TXT_SRC_COUNT,     // "12 found" beside the heading      22 / 400
+  TXT_SRC_TAB,       // the provider tabs                  24 / 600
+  TXT_SRC_CHIP,      // 4K / DV / REMUX, tracked           18 / 700
+  TXT_SRC_TEXT,      // audio and codec, tracked caps      18 / 500
+  TXT_SRC_META,      // the availability line              20 / 500
+  TXT_SRC_SIZE,      // the file size                      30 / 700
+  TXT_SRC_TIER,      // BEST / GOOD / FAIR / POOR          17 / 700
+  TXT_SRC_STATE,     // "Playing", on the availability line 20 / 700
   TXT_NFONTS
 } TxtStyle;
 
@@ -222,6 +237,21 @@ float txt_baseline(TxtStyle style);
 // Draws at the top-left corner (x,y).
 void txt_draw(TxtLine l, float x, float y);
 void txt_draw_alpha(TxtLine l, float x, float y, float alpha);
+
+// A SHADOW FROM THE LINE ALREADY IN HAND — the same texture, tinted black.
+//
+// The player fakes its text-shadow by rasterising a SECOND TxtLine in black and
+// drawing it 2px down. That is right for one label and wrong for a list: the
+// cache is keyed on (font, size, string, COLOUR), so every shadowed string takes
+// a second slot, and the sources sheet puts some seventy strings on screen at
+// once. Doubling that is how a cache starts evicting, and an evicting line cache
+// does not degrade quietly — the text flickers (see txt_evictions).
+//
+// SDL_ttf bakes the colour into RGB and leaves coverage in ALPHA, so the glyphs'
+// shape is in the alpha channel whatever colour they were rendered. GFX_BRAND
+// takes its shape from exactly there and its colour from the caller, which makes
+// a black copy of any cached line for one extra draw call and no extra entry.
+void txt_draw_shadow(TxtLine l, float x, float y, float alpha);
 
 // Draws with letter SPACING (tracking) and returns the total width. SDL_ttf has
 // no tracking, and the tvOS page title depends on it: without the wide spacing

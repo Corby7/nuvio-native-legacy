@@ -20,7 +20,16 @@
 
 typedef struct {
   char label[192];     // Short name of the source
-  char provider[96];
+  char provider[96];   // the ADDON that answered: "AIOStreams", "Torrentio"
+  // THE SERVICE THE ADDON GOT IT FROM, when the addon says so.
+  //
+  // An aggregator is not a source. AIOStreams answers for a dozen upstreams and
+  // puts the real one in the stream's name — "Cached  Comet  ****" — so a row
+  // that printed `provider` said "AIOStreams" twelve times and told the user
+  // nothing they could not read off the tab above the list.
+  //
+  // Empty when the addon is the source, and the row falls back to `provider`.
+  char service[48];
   // 1024 and not 512. MEASURED: AIOStreams playback links are 525 to 547
   // characters long (two signed segments), and at 512 they were ALL truncated
   // silently. The server then answered with a 120s notice MP4 that PLAYS
@@ -30,18 +39,56 @@ typedef struct {
   int  height;          // 2160, 1080, 720...
   int  dolbyVision;
   int  dolbyAtmos;
-  uint64_t badges;     // classified once, never regex while drawing
   int  mp4;             // 1 = progressive MP4; 0 = HLS or something else
   long sizeMB;       // 0 when unknown
   char description[2048];
   char file[512];
+
+  // THE ROW'S TOKENS, decided ONCE by the parser and never re-derived while
+  // drawing. The old sheet read the same blob of text at 60fps to work out what
+  // it was looking at, and having no single place where a source is classified
+  // is how the row came to state "2160p", "4K" and "Dolby Vision" three times in
+  // three sizes. Empty (or 0) means THE ADDON DID NOT SAY — draw nothing, never
+  // a fallback value.
+  char res[8];       // "4K", "1080p", "720p", "SD"
+  char range[8];     // "DV", "HDR10+", "HDR10", "HLG", "HDR"; empty for SDR
+  char source[8];    // "REMUX", "BLURAY", "WEB-DL", "WEBRIP", "HDTV", "HDRIP", "DVD", "CAM"
+  char audio[16];    // "ATMOS 7.1", "DTS-HD 5.1", "EAC3 5.1"
+  char codec[8];     // "HEVC", "AV1", "H.264"
+  int  seeders;      // torrent swarm size
+  int  cached;       // 1 = ready to stream now, which the sheet calls "Instant"
+  // 1 = a torrent that has to be fetched. IT IS THE ONLY ROW WHERE THE SEED
+  // COUNT MEANS ANYTHING: on a cached debrid file the number is a leftover from
+  // whatever the aggregator scraped, and putting it on every row taught the eye
+  // to skip the one place it decides whether the thing will play at all.
+  int  p2p;
+  float mbps;        // the video bitrate; see stream_sheet_runtime
+  int  tier;         // 0 POOR, 1 FAIR, 2 GOOD, 3 BEST — the segmented bar
 } Stream;
+
+// THE SEGMENTED BAR'S VALUE, and the bitrate it is worked out from.
+//
+// Called by the parser with no runtime, and again by the sheet once one is known
+// (stream_sheet_runtime). It fills `mbps` when it is still 0 and the runtime lets
+// it be derived, then sets `tier`. Safe to call repeatedly: a bitrate the addon
+// stated itself is never overwritten.
+void stream_rank(Stream *s, int runtimeSeconds);
 
 // Network-free parser: the caller frees *output. Returns -1 if the allocation fails.
 int stream_parse(const char *json, const char *provider, Stream **output);
 void stream_set_current(int index_);
 int stream_current(void);
-void stream_sheet_context(const char *text);
+// THE RUNTIME THE SOURCES BELONG TO, in seconds; 0 when it is not known.
+//
+// It is what turns a file size into a BITRATE, and the bitrate is the one number
+// that separates two 54 GB remuxes. Most addons never state it: Torrentio sends
+// a size and a seed count and nothing else, so a sheet that only printed the
+// bitrate when the addon spelled it out left it blank on the majority of rows.
+//
+// The player passes video_duration(); the title screen passes TMDB's runtime,
+// which it only has for films. Unknown stays unknown — a row with no runtime and
+// no stated bitrate simply does not show one.
+void stream_sheet_runtime(int seconds);
 int stream_sheet_reload(void);
 
 // Replaces the current title's list. Call when the addons answer.

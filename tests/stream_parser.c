@@ -4,6 +4,25 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// One source, from the JSON an addon would really send. `name` and
+// `description` are the two fields every aggregator fills; the tokens are read
+// out of both together, which is why the tests below split the facts across
+// them the way the addons do.
+static Stream one(const char *name, const char *description, const char *url) {
+  char json[4000];
+  Stream *v = NULL, s;
+  int count;
+  snprintf(json, sizeof json,
+           "{\"streams\":[{\"url\":\"%s\",\"name\":\"%s\",\"description\":\"%s\"}]}",
+           url, name, description);
+  count = stream_parse(json, "Torrentio", &v);
+  assert(count == 1);
+  s = v[0];
+  free(v);
+  return s;
+}
+
 int main(void) {
   char json[32000];size_t n=0;
   n+=snprintf(json+n,sizeof json-n,"{\"streams\":[");
@@ -15,5 +34,90 @@ int main(void) {
   assert(count==100 && v[99].mp4 && v[99].dolbyVision && v[99].height==2160);
   assert(!v[0].dolbyVision);free(v);
   count=stream_parse("{\"streams\":[]}","fixture",&v);assert(count==0);free(v);
-  puts("PASS ASan/UBSan: parser in isolation, 100 sources, MP4/DV in the last position.");
+
+  // --- THE ROW'S TOKENS ------------------------------------------------------
+  // Torrentio's shape: the release name in `name`, the swarm and the size in
+  // `description`, both marked with EMOJI the app's font cannot draw. The number
+  // has to survive the parse or the seed count reaches the screen as a box.
+  { Stream s = one("Torrentio 4k",
+                   "Film.2024.2160p.UHD.BluRay.REMUX.DV.HDR.TrueHD.Atmos.7.1.x265-GRP "
+                   "\\n\xF0\x9F\x91\xA4 48 \xF0\x9F\x92\xBE 54.3 GB",
+                   "https://example.invalid/a.mkv");
+    assert(!strcmp(s.res, "4K"));
+    assert(!strcmp(s.range, "DV"));
+    assert(!strcmp(s.source, "REMUX"));
+    assert(!strcmp(s.audio, "ATMOS 7.1"));
+    assert(!strcmp(s.codec, "HEVC"));
+    assert(s.seeders == 48);
+    // NOT cached, and so P2P — but the word "Torrentio" is what used to decide
+    // that, which made every cached row from the addon a torrent too.
+    assert(s.p2p == 1 && s.cached == 0);
+    assert(s.tier == 3); }
+
+  // The same file through a debrid cache: instant, no swarm worth reading, and a
+  // bitrate the aggregator states itself.
+  { Stream s = one("[RD+] AIOStreams",
+                   "Film.2024.1080p.WEB-DL.DDP5.1.H.264-GRP \\n8.4 GB \\n12.4 Mbps",
+                   "https://example.invalid/b.mkv");
+    assert(!strcmp(s.res, "1080p"));
+    assert(!s.range[0]);              // SDR shows nothing
+    assert(!strcmp(s.source, "WEB-DL"));
+    assert(!strcmp(s.audio, "EAC3 5.1"));
+    assert(!strcmp(s.codec, "H.264"));
+    assert(s.cached == 1 && s.p2p == 0);
+    assert(s.mbps > 12.3f && s.mbps < 12.5f); }
+
+  // "Not cached" is a torrent, whatever else the blob says.
+  { Stream s = one("AIOStreams", "Not Cached \\nFilm.2024.720p.WEBRip.AAC-GRP \\nSeeders: 3",
+                   "https://example.invalid/c.mkv");
+    assert(s.cached == 0 && s.p2p == 1 && s.seeders == 3);
+    // Three seeders on a webrip is the bottom of the scale, and the bar has to
+    // say so — that is the whole reason POOR exists.
+    assert(s.tier == 0); }
+
+  // THE BITRATE THE ADDON DID NOT STATE. Torrentio sends a size and nothing
+  // else; it only becomes a number once the sheet says what the size is a size
+  // of. 8000 MB over 100 minutes is 10.7 Mbps.
+  { Stream s = one("Torrentio", "Film.2024.1080p.BluRay.x264-GRP \\n\xF0\x9F\x92\xBE 8 GB",
+                   "https://example.invalid/d.mkv");
+    assert(s.sizeMB == 8192 && s.mbps == 0);
+    stream_rank(&s, 100 * 60);
+    assert(s.mbps > 10.5f && s.mbps < 11.0f);
+    // And calling again never overwrites a bitrate already worked out.
+    stream_rank(&s, 30 * 60);
+    assert(s.mbps > 10.5f && s.mbps < 11.0f); }
+
+  // A CAM is the one source that can reach POOR on its own.
+  { Stream s = one("[RD+] AIOStreams", "Film.2024.720p.HDCAM.AAC-GRP \\n1.2 GB",
+                   "https://example.invalid/e.mkv");
+    assert(!strcmp(s.source, "CAM") && s.tier == 0); }
+
+  // --- THE UPSTREAM SERVICE --------------------------------------------------
+  // The exact shape MEASURED on the device: state, service, stars, held apart by
+  // typographic spaces and a zero-width joiner.
+  { Stream s = one("Cached\xE2\x80\x82\xE2\x80\x82" "Comet" "\xE2\x80\x8D\xE2\x80\x82\xE2\x80\x82"
+                   "\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85\xE2\x98\x85",
+                   "49 \xE1\xB4\xB9\xE1\xB5\x87\xE1\xB5\x96\xCB\xA2",
+                   "https://example.invalid/f.mkv");
+    assert(!strcmp(s.service, "Comet"));
+    assert(s.cached == 1 && s.p2p == 0);
+    assert(s.mbps > 48.9f && s.mbps < 49.1f); }
+
+  // An addon that IS the source leaves it empty, and the row falls back to the
+  // addon's own name.
+  { Stream s = one("Torrentio 4k", "Film.2024.2160p.WEB-DL.mkv \\n\xF0\x9F\x91\xA4 9",
+                   "https://example.invalid/g.mkv");
+    assert(!strcmp(s.service, "Torrentio 4k")); }
+
+  // The two spellings of the same file, from the same list: both have to reach
+  // the same codec and the same channel count.
+  {
+    { Stream s = one("Cached", "Last Seen S01E01 2160p ATVP WEB-DL DDP5 1 Atmos DV "
+                     "HDR10Plus H 265-Kitsune.mkv", "https://example.invalid/i.mkv");
+      assert(!strcmp(s.codec, "HEVC") && !strcmp(s.audio, "ATMOS 5.1")); }
+    { Stream s = one("Cached", "Last.Seen.S01E01.2160p.Apple.TV+.WEB-DL.DDP.5.1.Atmos."
+                     "HDR10+.H.265-BlackTV.mkv", "https://example.invalid/j.mkv");
+      assert(!strcmp(s.codec, "HEVC") && !strcmp(s.audio, "ATMOS 5.1")); } }
+
+  puts("PASS ASan/UBSan: parser in isolation, 100 sources, tokens, service, cache state and the tier.");
 }

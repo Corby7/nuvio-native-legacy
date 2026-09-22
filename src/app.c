@@ -35,6 +35,7 @@
 #include "settings.h"
 #include "player.h"
 #include "streams.h"
+#include "extras.h"
 #include "video.h"
 #include "addons.h"
 #include "discover.h"
@@ -585,7 +586,14 @@ void app_update(float dt, Uint32 now) {
       if (c && c->imdb[0]) trakt_watchlist(c->imdb, !c->inList);
       if (c) cat_set_in_list(i, !c->inList);
     }
-    if (detail_requested_sources())     stream_sheet_open();
+    if (detail_requested_sources()) {
+      // TMDB's runtime, so the sheet can turn a file size into a bitrate. It is
+      // 0 for a series — extras_profile_duration is the FILM fact sheet — and
+      // the sheet simply shows no bitrate on those rows rather than one derived
+      // from a length it does not have.
+      stream_sheet_runtime(extras_profile_duration() * 60);
+      stream_sheet_open();
+    }
   }
   // Choosing a source in the sheet starts playing THAT one. Switching source with
   // the player already open counts too: it closes the current session and opens on
@@ -634,7 +642,9 @@ void app_update(float dt, Uint32 now) {
     }
   }
   if (waitingSource != 2 && player_requested_sources()) {
-    stream_sheet_context(player_line_episode());
+    // The one place the runtime is known exactly, episode or film: it is the
+    // file that is open.
+    stream_sheet_runtime((int)video_duration());
     stream_sheet_open();
   }
   if (waitingSource != 2 && stream_sheet_reload()) {

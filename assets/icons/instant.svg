@@ -1,0 +1,13 @@
+<!-- The "Instant" mark on a row of the sources sheet: a source that will start
+     playing when OK is pressed rather than after a download nobody can watch
+     the progress of.
+
+     It is the SAME glyph the web app uses (CACHED_ICON_SVG in
+     js/ui/screens/stream/streamScreen.js, Phosphor's lightning, fill) and it
+     lives here rather than in NuvioWeb/assets/icons because the web app carries
+     it inline in a string, not as a file.
+
+     THE ALPHA IS THE GLYPH: gfx_icon draws with GFX_BRAND, which takes the shape
+     from the texture's alpha and the colour from the caller. rsvg-convert with
+     no background flag gives exactly that. Do not flatten it onto a ground. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="#ffffff"><path d="M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17Z"/></svg>

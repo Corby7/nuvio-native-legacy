@@ -933,6 +933,60 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  else               g = mix(0.94, 0.98, (t - 0.48) / 0.52);\n"
   "  gl_FragColor = vec4(uColor.rgb, g * uColor.a);\n"
   "}\n",
+
+  // GFX_SRC_VEIL — the sources sheet's ground. See gfx.h for why this exists
+  // rather than GFX_MENU_FEATHER, which is the mistake it replaces.
+  //
+  // Two CSS layers composited HERE, in one fragment: the ramp along the quad, and
+  // an elliptical deepening hung on the right edge, in the same black ink.
+  //
+  // SEVEN SEGMENTS, NOT THE DESIGN'S FOUR, and the reason is where the rows sit.
+  // The board's stops describe a veil whose content lives in its LAST THIRD; this
+  // column starts at 28% of it. That difference has been resolved twice wrongly
+  // and the record is worth keeping, because both failures look obvious only
+  // afterwards:
+  //
+  //   the board's stops as written  0.52 at the first chip — a lit backdrop came
+  //                                 through the type and it was hard to read
+  //   pulled steep, 0.88 by 28%     readable, and the edge was back: the climb
+  //                                 finished inside 300px and the eye found the
+  //                                 place where it stopped
+  //
+  // These sit between the two, reaching 0.70 at the first chip and still moving
+  // afterwards — 0.86 at 42%, 0.94 at 60%, easing back to 0.96 at the screen's edge. The visible
+  // ramp is some 640px rather than 300, and no segment is flat.
+  //
+  // THE TYPE NO LONGER DEPENDS ON IT. Every word in a row is drawn over its own
+  // shadow now (NV_SRC_SHADOW), so legibility is the text's business and this is
+  // free to be as gentle as the picture needs. Trying to buy both from one ramp
+  // is what produced the two failures above. `a2 over a1` is the
+  // ordinary straight-alpha composite, and the guard on `oa` is not paranoia —
+  // both layers are zero along the quad's left edge and the divide is taken every
+  // pixel of it.
+  "void main(){\n"
+  "  float t = clamp(vUv.x, 0.0, 1.0);\n"
+  "  float a1;\n"
+  "  if (t < 0.10)      a1 = mix(0.00, 0.16, t / 0.10);\n"
+  "  else if (t < 0.20) a1 = mix(0.16, 0.46, (t - 0.10) / 0.10);\n"
+  "  else if (t < 0.28) a1 = mix(0.46, 0.70, (t - 0.20) / 0.08);\n"
+  "  else if (t < 0.42) a1 = mix(0.70, 0.86, (t - 0.28) / 0.14);\n"
+  "  else if (t < 0.60) a1 = mix(0.86, 0.94, (t - 0.42) / 0.18);\n"
+  "  else if (t < 0.80) a1 = mix(0.94, 0.975, (t - 0.60) / 0.20);\n"
+  "  else               a1 = mix(0.975, 0.96, (t - 0.80) / 0.20);\n"
+  // The radii ARE the CSS's 90% and 120% of the box, so the ellipse is described
+  // in the quad's own normalised space and needs no uniform of its own.
+  "  float a2 = 0.0;\n"
+  "  if (uPar.x >= 0.5) {\n"
+  "    vec2 p = vec2((vUv.x - 1.0) / 0.90, (vUv.y - 0.5) / 1.20);\n"
+  "    a2 = 0.30 * (1.0 - clamp(length(p) / 0.72, 0.0, 1.0));\n"
+  "  }\n"
+  "  float oa = a2 + a1 * (1.0 - a2);\n"
+  "  vec3 lift = uColor.rgb;\n"
+  "  vec3 oc = oa > 0.0005\n"
+  "          ? (lift * a2 + uColor.rgb * a1 * (1.0 - a2)) / oa\n"
+  "          : uColor.rgb;\n"
+  "  gl_FragColor = vec4(oc, oa * uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -963,7 +1017,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_VEIL_POOL   — its own radial distance, not the rect SDF */
   {0,0},   /* GFX_MENU_FEATHER — a horizontal ramp over a square-cornered panel */
   {0,0},   /* GFX_MENU_SCRIM   — likewise, full-bleed behind it */
-  {0,0}    /* GFX_ERAIL_SCRIM  — a full-bleed vertical ramp: no SDF, no texture */
+  {0,0},   /* GFX_ERAIL_SCRIM  — a full-bleed vertical ramp: no SDF, no texture */
+  {0,0}    /* GFX_SRC_VEIL     — two gradients in one fragment: no SDF, no texture */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {

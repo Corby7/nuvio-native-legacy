@@ -1,5 +1,4 @@
 #include "streams.h"
-#include "badges.h"
 #include "js.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -20,6 +19,291 @@ static int token(const char *s, const char *t) {
     if ((p == s || !isalnum((unsigned char)p[-1])) &&
         !strncasecmp(p, t, n) && !isalnum((unsigned char)p[n])) return 1;
   return 0;
+}
+
+// --- THE ROW'S TOKENS --------------------------------------------------------
+//
+// Everything the sources sheet draws is decided HERE, once, out of the one blob
+// the addons send: name + description + title + filename. The sheet then draws
+// strings and never looks at the blob again.
+//
+// The vocabulary is fixed and short on purpose (see "THE SOURCES SHEET" in
+// layout.h): four resolutions, five dynamic ranges, six sources, one audio
+// format with its channel count, one codec. An addon that sends something else
+// gets an EMPTY field, and the sheet omits that token — which is the whole point
+// of a closed vocabulary. Inventing a label for the unrecognised case is what
+// filled the old row with "FILE" and "Unknown source".
+
+// The number that follows a marker, past whatever punctuation separates them.
+static int numAfter(const char *p) {
+  while (*p == ' ' || *p == ':' || *p == '-' || *p == '\t') p++;
+  return isdigit((unsigned char)*p) ? atoi(p) : 0;
+}
+
+static int startsWord(const char *text, const char *p) {
+  return p == text || !isalnum((unsigned char)p[-1]);
+}
+
+// SEEDERS, in the four spellings the aggregators use. The fourth is an EMOJI —
+// Torrentio writes "\xF0\x9F\x91\xA4 48" — and it is matched as the three bytes it
+// is: the app's Inter has no glyph for it (nor for the bolt, nor for the floppy
+// disc), so every one of these marks has to be turned into a token here or it
+// reaches the screen as .notdef and draws a hollow box.
+static int seedersOf(const char *text) {
+  const char *p;
+  if ((p = strstr(text, "\xF0\x9F\x91\xA4"))) { int v = numAfter(p + 4); if (v) return v; }
+  for (p = text; *p; p++) {
+    if (!startsWord(text, p)) continue;
+    if (!strncasecmp(p, "seeders", 7)) { int v = numAfter(p + 7); if (v) return v; }
+    else if (!strncasecmp(p, "seeds", 5)) { int v = numAfter(p + 5); if (v) return v; }
+    else if (!strncasecmp(p, "seed", 4))  { int v = numAfter(p + 4); if (v) return v; }
+    else if (!strncasecmp(p, "peers", 5)) { int v = numAfter(p + 5); if (v) return v; }
+  }
+  // "48 seeders", the other way round.
+  for (p = text; *p; p++) {
+    const char *q, *r;
+    if (!isdigit((unsigned char)*p) || !startsWord(text, p)) continue;
+    q = p; while (isdigit((unsigned char)*q)) q++;
+    r = q; while (*r == ' ') r++;
+    if (!strncasecmp(r, "seed", 4)) return atoi(p);
+  }
+  return 0;
+}
+
+// The bitrate the addon states, in the three spellings AIOStreams emits — the
+// third being the superscript "\xE1\xB4\xB9\xE1\xB5\x87\xE1\xB5\x96\xCB\xA2", which
+// Inter does have but which reads as noise at this size.
+static float mbpsOf(const char *text) {
+  const char *p;
+  for (p = text; *p; p++) {
+    const char *q, *r;
+    char buf[24];
+    size_t k = 0;
+    if (!isdigit((unsigned char)*p)) continue;
+    if (p != text && (isalnum((unsigned char)p[-1]) || p[-1] == '.')) continue;
+    q = p; while (isdigit((unsigned char)*q) || *q == '.' || *q == ',') q++;
+    r = q; while (*r == ' ') r++;
+    if (strncasecmp(r, "mbps", 4) && strncasecmp(r, "mb/s", 4) &&
+        strncmp(r, "\xE1\xB4\xB9\xE1\xB5\x87\xE1\xB5\x96\xCB\xA2", 11)) continue;
+    for (r = p; r < q && k < sizeof buf - 1; r++) buf[k++] = *r == ',' ? '.' : *r;
+    buf[k] = 0;
+    return (float)atof(buf);
+  }
+  return 0;
+}
+
+// INSTANT OR P2P, and nothing in between.
+//
+// "Instant" is the flag worth reading on a row: it says the file will start
+// playing when you press OK rather than after a download nobody can see the
+// progress of. The counterpart is not "cached: no" — it is a TORRENT, and that
+// is the only state where the seed count decides whether it plays at all.
+//
+// "torrent" and "magnet" are NOT tested for. The provider's own name reaches
+// this text, and "Torrentio" contains "torrent" — testing for it marked every
+// row from the most common addon in the world as P2P, cached or not.
+static void availability(Stream *s, const char *text) {
+  int no = contains(text, "not cached") || contains(text, "uncached") ||
+           contains(text, "non-cached");
+  s->cached = !no && (contains(text, "cached") || token(text, "instant") ||
+                      strstr(text, "\xE2\x9A\xA1") != NULL ||
+                      contains(text, "[rd+]") || contains(text, "[ad+]") ||
+                      contains(text, "[pm+]") || contains(text, "[tb+]") ||
+                      contains(text, "[dl+]") || contains(text, "[oc+]"));
+  s->p2p = !s->cached && (no || s->seeders > 0 || token(text, "p2p") ||
+                          strstr(text, "\xF0\x9F\xA7\xB2") != NULL ||
+                          contains(text, "[rd download]"));
+}
+
+// THE UPSTREAM SERVICE, out of the aggregator's own stream name.
+//
+// MEASURED on the device, AIOStreams writes it exactly like this:
+//
+//   "Cached  Comet‍  ★★★★★"
+//
+// — the cache state, the service, and a run of stars, held apart by typographic
+// spaces and a zero-width joiner. Three of those four parts already have a home
+// on the row: the state is the Instant mark, the stars are the segmented bar
+// (which at least says which end is good), and the invisible characters are
+// nothing at all. Inter has no glyph for any of them, so left in the string they
+// reach the screen as .notdef boxes.
+//
+// What is left is the service, and it is the one part the row could not say
+// before: every row of a twelve-source list read "AIOStreams".
+static void serviceOf(const char *name, char *out, size_t cap) {
+  static const char *DROP[] = { "\xE2\x80\x8B", "\xE2\x80\x8C", "\xE2\x80\x8D",
+                                "\xE2\x81\xA0", "\xE2\x81\xA1", "\xE2\x81\xA2",
+                                "\xE2\x81\xA3", "\xE2\x81\xA4", "\xEF\xBB\xBF" };
+  static const char *STOP[] = { "\xE2\x98\x85", "\xE2\x98\x86", "\xE2\xAD\x90" };
+  static const char *LEAD[] = { "not cached", "uncached", "cached", "instant",
+                                "download", "p2p", "debrid", "torrent" };
+  char buf[192];
+  size_t k = 0, i;
+  const char *p = name, *q;
+
+  out[0] = 0;
+  for (; *p && k < sizeof buf - 1; ) {
+    int skipped = 0;
+    for (i = 0; i < sizeof STOP / sizeof *STOP; i++)
+      if (!strncmp(p, STOP[i], 3)) { p = ""; skipped = 1; break; }
+    if (!*p) break;
+    if (skipped) continue;
+    for (i = 0; i < sizeof DROP / sizeof *DROP; i++)
+      if (!strncmp(p, DROP[i], 3)) { p += 3; skipped = 1; break; }
+    if (skipped) continue;
+    // Every space-like character becomes one plain space, so the trimming below
+    // has a single thing to look for.
+    if ((unsigned char)*p < 32 || *p == ' ') { buf[k++] = ' '; p++; continue; }
+    if (!strncmp(p, "\xE2\x80", 2) && (unsigned char)p[2] >= 0x80 &&
+        (unsigned char)p[2] <= 0x8A) { buf[k++] = ' '; p += 3; continue; }
+    buf[k++] = *p++;
+  }
+  buf[k] = 0;
+
+  q = buf;
+  for (;;) {
+    while (*q == ' ') q++;
+    for (i = 0; i < sizeof LEAD / sizeof *LEAD; i++) {
+      size_t n = strlen(LEAD[i]);
+      if (!strncasecmp(q, LEAD[i], n) && (q[n] == ' ' || !q[n])) { q += n; break; }
+    }
+    if (i == sizeof LEAD / sizeof *LEAD) break;
+  }
+  while (*q == ' ') q++;
+  k = strlen(q);
+  while (k && q[k - 1] == ' ') k--;
+  // A name that was ONLY a state and some stars leaves nothing; the row then
+  // falls back to the addon, which is the honest answer.
+  if (!k) return;
+  if (k >= cap) k = cap - 1;
+  memcpy(out, q, k);
+  out[k] = 0;
+}
+static void tokens(Stream *s, const char *text) {
+  const char *fmt = "", *ch = "";
+
+  if (s->height >= 2160)      snprintf(s->res, sizeof s->res, "4K");
+  else if (s->height >= 1440) snprintf(s->res, sizeof s->res, "1440p");
+  else if (s->height >= 1080) snprintf(s->res, sizeof s->res, "1080p");
+  else if (s->height >= 720)  snprintf(s->res, sizeof s->res, "720p");
+  else if (s->height > 0)     snprintf(s->res, sizeof s->res, "SD");
+
+  // SDR IS THE ABSENCE OF A CHIP. Every file is one thing or another, so a chip
+  // that appears on every row carries no information and costs the row its
+  // scannability — the badge sheet's "SDR: show nothing".
+  if (s->dolbyVision)                      snprintf(s->range, sizeof s->range, "DV");
+  else if (contains(text, "hdr10+") ||
+           contains(text, "hdr10plus"))    snprintf(s->range, sizeof s->range, "HDR10+");
+  else if (contains(text, "hdr10"))        snprintf(s->range, sizeof s->range, "HDR10");
+  else if (token(text, "hlg"))             snprintf(s->range, sizeof s->range, "HLG");
+  else if (token(text, "hdr"))             snprintf(s->range, sizeof s->range, "HDR");
+
+  // "BDRemux" is one word in the Russian trackers' titles, so `token` never saw it.
+  if (token(text, "remux") || token(text, "bdremux"))
+                                           snprintf(s->source, sizeof s->source, "REMUX");
+  else if (contains(text, "bluray") || contains(text, "blu-ray") ||
+           token(text, "bdrip") || token(text, "brrip"))
+                                           snprintf(s->source, sizeof s->source, "BLURAY");
+  else if (contains(text, "web-dl") || contains(text, "webdl") ||
+           contains(text, "web.dl"))       snprintf(s->source, sizeof s->source, "WEB-DL");
+  else if (contains(text, "webrip") || contains(text, "web-rip"))
+                                           snprintf(s->source, sizeof s->source, "WEBRIP");
+  else if (token(text, "hdtv"))            snprintf(s->source, sizeof s->source, "HDTV");
+  // A SCREENER is ranked with a cam: both are pre-release copies, and DVDSCR has
+  // to be caught before DVDRip below or it would read as the finished disc.
+  else if (token(text, "cam") || token(text, "camrip") || token(text, "hdcam") ||
+           token(text, "telesync") || token(text, "dvdscr") || token(text, "scr") ||
+           token(text, "screener"))        snprintf(s->source, sizeof s->source, "CAM");
+  // DVD and HDRip were outside the vocabulary, and a release that says nothing
+  // but "DVDRip" came out with no chip at all — a row with no video line.
+  else if (token(text, "dvdrip") || token(text, "dvd") || token(text, "dvd5") ||
+           token(text, "dvd9"))            snprintf(s->source, sizeof s->source, "DVD");
+  else if (token(text, "hdrip"))           snprintf(s->source, sizeof s->source, "HDRIP");
+
+  if (s->dolbyAtmos)                             fmt = "ATMOS";
+  else if (contains(text, "dts:x") || contains(text, "dts-x"))   fmt = "DTS-X";
+  else if (contains(text, "truehd") || contains(text, "true-hd")) fmt = "TRUEHD";
+  else if (contains(text, "dts-hd") || contains(text, "dtshd"))  fmt = "DTS-HD";
+  else if (token(text, "dts"))                   fmt = "DTS";
+  else if (token(text, "flac"))                  fmt = "FLAC";
+  else if (contains(text, "eac3") || contains(text, "e-ac-3") ||
+           contains(text, "ddp") || contains(text, "dd+"))       fmt = "EAC3";
+  else if (contains(text, "ac3") || contains(text, "dd5.1"))     fmt = "DD";
+  else if (token(text, "aac"))                   fmt = "AAC";
+  // "DDP5 1" is the same thing as "DDP5.1" — the same trap as the codec above,
+  // and from the same files.
+  ch = contains(text, "7.1") || contains(text, "7 1") ? "7.1" :
+       contains(text, "5.1") || contains(text, "5 1") ? "5.1" :
+       contains(text, "2.0") || contains(text, "2 0") ? "2.0" : "";
+  if (fmt[0] && ch[0]) snprintf(s->audio, sizeof s->audio, "%s %s", fmt, ch);
+  else                 snprintf(s->audio, sizeof s->audio, "%s", fmt);
+
+  // "H 265" AND "H.265": release names punctuate the codec every way there is,
+  // and MEASURED on the device both spellings arrive from the same addon in the
+  // same list — "...Atmos DV HDR10Plus H 265-Kitsune.mkv" beside
+  // "...Atmos.HDR10+.H.265-BlackTV.mkv". Matching one of the two is how a row
+  // came to show a codec while the row under it, of the same file, showed none.
+  if (contains(text, "hevc") || token(text, "x265") || token(text, "h265") ||
+      contains(text, "h.265") || contains(text, "h 265"))
+                                          snprintf(s->codec, sizeof s->codec, "HEVC");
+  else if (token(text, "av1"))            snprintf(s->codec, sizeof s->codec, "AV1");
+  else if (token(text, "avc") || token(text, "x264") || token(text, "h264") ||
+           contains(text, "h.264") || contains(text, "h 264"))
+                                          snprintf(s->codec, sizeof s->codec, "H.264");
+
+  s->seeders = seedersOf(text);
+  s->mbps = mbpsOf(text);
+  availability(s, text);
+}
+
+// QUALITY AS A DIRECTION, NOT A LABEL.
+//
+// The bar replaces both the row of stars the aggregators send and the "Tier"
+// word the old sheet printed: neither tells you which end is good. A segmented
+// bar is ordinal by construction — more filled is better, the way signal
+// strength reads — and the word after it only removes the last doubt.
+//
+// FAIR is the starting point, because "watchable, compromises somewhere" is what
+// an unremarkable file is. Everything below moves off it by one step at a time,
+// and the bitrate is what separates two files that carry the same three chips —
+// two 54 GB remuxes differ by nothing else a chip can show.
+void stream_rank(Stream *s, int runtimeSeconds) {
+  int score = 2;
+  if (!s->mbps && s->sizeMB > 0 && runtimeSeconds > 0)
+    s->mbps = (float)(s->sizeMB * 8.0 / runtimeSeconds);
+
+  // Remux is the top of the scale by definition — an untouched stream off the
+  // disc — so it alone can carry a row to BEST with nothing else going for it.
+  if (!strcmp(s->source, "REMUX"))                                 score += 3;
+  else if (!strcmp(s->source, "BLURAY") || !strcmp(s->source, "WEB-DL")) score += 1;
+  else if (!strcmp(s->source, "WEBRIP") || !strcmp(s->source, "HDTV") ||
+           !strcmp(s->source, "HDRIP"))                            score -= 1;
+  else if (!strcmp(s->source, "DVD"))                              score -= 2;
+  else if (!strcmp(s->source, "CAM"))                              score -= 4;
+
+  if (strstr(s->audio, "ATMOS") || strstr(s->audio, "TRUEHD") ||
+      strstr(s->audio, "DTS-HD") || strstr(s->audio, "DTS-X") ||
+      strstr(s->audio, "FLAC"))                                    score += 1;
+  else if (strstr(s->audio, "AAC"))                                score -= 1;
+
+  // Against the resolution, because 8 Mbps is a good 1080p and a poor 4K.
+  if (s->mbps > 0) {
+    float good = s->height >= 2160 ? 25.0f : s->height >= 1080 ? 8.0f : 3.0f;
+    if (s->mbps >= good * 2.0f)      score += 2;
+    else if (s->mbps >= good)        score += 1;
+    else if (s->mbps < good * 0.45f) score -= 2;
+  }
+
+  // The swarm, and ONLY on a torrent: on a cached file the number is whatever
+  // the aggregator last scraped and has no bearing on whether it plays.
+  if (s->p2p) {
+    if (s->seeders < 5)        score -= 3;
+    else if (s->seeders < 20)  score -= 1;
+    else if (s->seeders >= 50) score += 1;
+  }
+  if (s->height && s->height < 720) score -= 1;
+
+  s->tier = score >= 6 ? 3 : score >= 4 ? 2 : score >= 2 ? 1 : 0;
 }
 
 int stream_parse(const char *json, const char *provider, Stream **output) {
@@ -48,11 +332,16 @@ int stream_parse(const char *json, const char *provider, Stream **output) {
       snprintf(text, sizeof text, "%s %s %s %s", s.label, s.description, title, s.file);
       s.height = contains(text, "2160") || token(text, "4k") || token(text, "uhd") ? 2160 :
                  contains(text, "1440") ? 1440 : contains(text, "1080") ? 1080 :
-                 contains(text, "720") ? 720 : contains(text, "480") ? 480 : 0;
+                 contains(text, "720") ? 720 : contains(text, "480") ? 480 :
+                 // Below 480 only as a whole "576p"/"360p" token: the bare
+                 // numbers turn up in file sizes and episode titles.
+                 token(text, "576p") || token(text, "576i") || token(text, "360p") ||
+                 token(text, "240p") ? 480 :
+                 // A DVD is standard definition whether or not it says so.
+                 token(text, "dvdrip") || token(text, "dvd") ? 480 : 0;
       s.dolbyVision = token(text, "dv") || token(text, "dovi") ||
                       contains(text, "dolby vision") || contains(text, "dolbyvision");
       s.dolbyAtmos = token(text, "atmos");
-      s.badges = badges_detect(text);
       s.mp4 = token(text, "mp4") || contains(s.url, ".mp4");
       double bytes = js_num(p, end, "videoSize", 0);
       if (bytes > 0) s.sizeMB = (long)(bytes / (1024.0 * 1024.0));
@@ -66,6 +355,11 @@ int stream_parse(const char *json, const char *provider, Stream **output) {
           if (start < u) s.sizeMB = (long)(atof(start) * scale);
         }
       }
+      tokens(&s, text);
+      serviceOf(s.label, s.service, sizeof s.service);
+      // With no runtime yet: the parser has the size but not what it is a size
+      // OF. The sheet calls this again as soon as it knows (stream_sheet_runtime).
+      stream_rank(&s, 0);
       if (n == cap) {
         int new = cap ? cap * 2 : 32;
         Stream *tmp = realloc(v, (size_t)new * sizeof *tmp);

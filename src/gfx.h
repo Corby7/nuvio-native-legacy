@@ -367,7 +367,43 @@ typedef enum {
   // the middle of the screen, which is the one thing a bottom sheet over video
   // must not do.
   GFX_ERAIL_SCRIM = 36,
-  GFX_NMODES = 37
+  // GFX_SRC_VEIL — the sources sheet's ground: a ramp that never becomes a panel.
+  //
+  // IT IS NOT GFX_MENU_FEATHER, AND THE DIFFERENCE IS THE WHOLE POINT. That one
+  // ramps across a narrow band at the panel's leading edge and is SOLID for the
+  // rest of the quad, because the track menus are a surface with a softened edge.
+  // Used here it put full opacity at 1068px — 56% across the screen — and flat
+  // black over everything right of it, which is a slab with a feathered lip, and
+  // the eye finds the point where the ramp completes just as readily as it finds
+  // a hard edge. It was the same edge the rebuild set out to remove.
+  //
+  // This ramps over the ENTIRE quad, through the design's four segments, and tops
+  // out at 0.97 rather than 1. Across a 1240px veil no 500px stretch of it is
+  // flat, so there is no place to point at and say the image ends here:
+  //
+  //   linear-gradient(to right, rgba(6,7,10,0) 0%, rgba(6,7,10,.34) 18%,
+  //                   rgba(6,7,10,.72) 40%, rgba(6,7,10,.93) 66%,
+  //                   rgba(6,7,10,.97) 100%)
+  //
+  // The 3% it never closes is deliberate and is not the ghosting GFX_MENU_FEATHER
+  // guards against: that one lies over VIDEO, where motion shows through the last
+  // few percent. This lies over a still backdrop, and the lift below carries the
+  // right-hand end to ~0.99 anyway.
+  //
+  // THE LIFT IS THE SECOND LAYER OF THE SAME DESIGN, composited in the fragment
+  // rather than drawn as another quad — same stops, same result, and no second
+  // full screen of fill, which gfx.c records as the thing this Mali cannot spare:
+  //
+  //   radial-gradient(90% 120% at 100% 50%, rgba(28,32,38,.55) 0%, transparent 72%)
+  //
+  // Its colour is fixed in the shader because uColor is already spoken for by the
+  // base ink; the ink travels in uColor so the caller fades the sheet with its
+  // alpha, exactly as GFX_ERAIL_SCRIM does.
+  //
+  //   uPar.x = 0 draws the ramp alone (a white wash for the focused row, which
+  //            must not pick up the lift's blue); >= 0.5 adds the lift
+  GFX_SRC_VEIL = 37,
+  GFX_NMODES = 38
 } GfxMode;
 
 typedef struct {
@@ -432,7 +468,9 @@ void gfx_crop(float x, float y, float w, float h);
 // buttons — "detail_library_add" / "detail_library_saved", "detail_watched" /
 // "detail_watched_off" and "detail_source" — each with a "_filled" twin for the
 // FOCUSED state, which is NuvioWeb's `--series-icon-focused`. The plus is the one
-// exception and it is the sheet's: it has no solid form to fill into.
+// exception and it is the sheet's: it has no solid form to fill into. The sources
+// sheet adds "instant", the bolt on a row that will play at once; it is a file and
+// not a character because Inter has no U+26A1 (tools/build-source-icons.sh).
 //
 // THE FOLDER HOLDS NOTHING THAT IS NOT LOADED. "more", "watched", "unwatched" and
 // "trailer" were dropped once the title screen moved to the web's files and the
