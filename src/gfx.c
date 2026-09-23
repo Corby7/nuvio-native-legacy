@@ -79,7 +79,25 @@ static const char *FS_HEAD =
   "uniform float uAspect;\n"
   "uniform float uAA;      // half-ramp of the edge, in the SDF's units\n"
   "uniform float uTexAsp;   // w/h of the TEXTURE; 0 = do not adjust\n"
-  "uniform vec4  uCell;     // xy offset + zw scale into the texture; 0,0,1,1 = all\n";
+  "uniform vec4  uCell;     // xy offset + zw scale into the texture; 0,0,1,1 = all\n"
+  // DITHER FOR THE LONG SCRIMS. A black ramp over a LIGHT picture spends its
+  // 8-bit alpha steps on large luminance jumps, and across a 600px veil each step
+  // is a band several pixels wide with a straight edge the eye locks onto. On
+  // dark video the same steps land in near-black and vanish, which is why it only
+  // shows on bright scenes. Adding under one step of per-pixel noise before the
+  // output is quantised turns those edges into grain too fine to see.
+  //
+  // Interleaved gradient noise (Jimenez): a fixed per-pixel pattern, so the grain
+  // does not crawl from frame to frame the way a time-seeded hash would. Taken in
+  // NV_UV_P because the product with gl_FragCoord runs past 100, where mediump's
+  // fract has nothing left. Zero stays zero, so the untouched part of the frame
+  // picks up no speckle.
+  "#define NV_DITHER_A (2.0 / 255.0)\n"
+  "float nvDither(float a){\n"
+  "  NV_UV_P vec2 fc = gl_FragCoord.xy;\n"
+  "  NV_UV_P float n = fract(52.9829189 * fract(dot(fc, vec2(0.06711056, 0.00583715))));\n"
+  "  return a > 0.0 ? clamp(a + (n - 0.5) * NV_DITHER_A, 0.0, 1.0) : 0.0;\n"
+  "}\n";
 
 // A rounded-rectangle SDF, corrected for the aspect ratio — without the
 // correction a landscape card's corner comes out oval.
@@ -870,7 +888,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  else if (t < 0.58) g = mix(0.18, 0.48, (t - 0.30) / 0.28);\n"
   "  else if (t < 0.78) g = mix(0.48, 0.74, (t - 0.58) / 0.20);\n"
   "  else               g = mix(0.74, 0.88, (t - 0.78) / 0.22);\n"
-  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, nvDither(g * uColor.a));\n"
   "}\n",
 
   // GFX_VEIL_POOL — an elliptical pool hung from the quad's TOP-RIGHT corner.
@@ -888,7 +906,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  else if (d < 0.56) g = mix(0.50, 0.28, (d - 0.30) / 0.26);\n"
   "  else if (d < 0.78) g = mix(0.28, 0.10, (d - 0.56) / 0.22);\n"
   "  else               g = mix(0.10, 0.00, (d - 0.78) / 0.22);\n"
-  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, nvDither(g * uColor.a));\n"
   "}\n",
 
   // GFX_MENU_FEATHER — the right-hand menu's surface. See gfx.h for why the stops
@@ -909,7 +927,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  else if (t < 0.75) g = mix(0.58, 0.79, (t - 0.60) / 0.15);\n"
   "  else if (t < 0.88) g = mix(0.79, 0.93, (t - 0.75) / 0.13);\n"
   "  else               g = mix(0.93, 1.00, (t - 0.88) / 0.12);\n"
-  "  gl_FragColor = vec4(uColor.rgb, g * uColor.a);\n"
+  "  gl_FragColor = vec4(uColor.rgb, nvDither(g * uColor.a));\n"
   "}\n",
 
   // GFX_MENU_SCRIM — the backdrop behind them, ramping the SAME WAY the feather
@@ -919,7 +937,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float t = clamp(vUv.x, 0.0, 1.0);\n"
   "  float g = t < 0.42 ? mix(0.00, 0.10, t / 0.42)\n"
   "                     : mix(0.10, 0.26, (t - 0.42) / 0.58);\n"
-  "  gl_FragColor = vec4(0.0, 0.0, 0.0, g * uColor.a);\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, nvDither(g * uColor.a));\n"
   "}\n",
 
   // GFX_ERAIL_SCRIM — the episode rail's ground, piecewise-linear through the web
@@ -931,7 +949,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  if (t < 0.22)      g = mix(0.00, 0.72, t / 0.22);\n"
   "  else if (t < 0.48) g = mix(0.72, 0.94, (t - 0.22) / 0.26);\n"
   "  else               g = mix(0.94, 0.98, (t - 0.48) / 0.52);\n"
-  "  gl_FragColor = vec4(uColor.rgb, g * uColor.a);\n"
+  "  gl_FragColor = vec4(uColor.rgb, nvDither(g * uColor.a));\n"
   "}\n",
 
   // GFX_SRC_VEIL — the sources sheet's ground. See gfx.h for why this exists
@@ -990,7 +1008,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  vec3 oc = oa > 0.0005\n"
   "          ? (lift * a2 + uColor.rgb * a1 * (1.0 - a2)) / oa\n"
   "          : uColor.rgb;\n"
-  "  gl_FragColor = vec4(oc, oa * uColor.a);\n"
+  "  gl_FragColor = vec4(oc, nvDither(oa * uColor.a));\n"
   "}\n",
 
   // GFX_ROW_FADE — a wash, solid to uPar.x and eased out to zero at the right.
@@ -1161,7 +1179,7 @@ int gfx_start(void) {
   uvPrecision(uvp, sizeof uvp);
   snprintf(vsrc, sizeof vsrc, "%s%s%s", NV_GLSL_PREFIX, uvp, VS);
   GLuint vs = compiles(GL_VERTEX_SHADER, vsrc);
-  char source[6000];
+  char source[8000];
   for (int m = 0; m < GFX_NMODES; m++) {
     snprintf(source, sizeof source, "%s%s%s%s%s%s", NV_GLSL_PREFIX, uvp, FS_HEAD,
              NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "",
