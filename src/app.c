@@ -294,8 +294,19 @@ void app_event(const SDL_Event *e) {
   // The menu opens HERE, in the same event that asked for it, and not in the next
   // app_update. Deferred by one frame, the keys that come right after the LEFT —
   // and on a remote they do come — are delivered to the screen behind, which still
-  // thinks it owns the focus.
-  if (screen == SCREEN_HOME && home_requested_menu()) menu_open();
+  // thinks it owns the focus. Every screen can ask, each with LEFT at its own
+  // left edge.
+  { int wants = 0;
+    switch (screen) {
+      case SCREEN_SEARCH:   wants = search_requested_menu();   break;
+      case SCREEN_DISCOVER: wants = dui_requested_menu();      break;
+      case SCREEN_LIBRARY:  wants = library_requested_menu();  break;
+      case SCREEN_PROFILE:  wants = profile_requested_menu();  break;
+      case SCREEN_SOCIAL:   wants = social_requested_menu();   break;
+      case SCREEN_SETTINGS: wants = settings_requested_menu(); break;
+      default:              wants = home_requested_menu();     break;
+    }
+    if (wants) menu_open(); }
 }
 
 // The detail screen may ask to open ANOTHER title (a credit from an actor's
@@ -489,11 +500,15 @@ void app_update(float dt, Uint32 now) {
     return;
   }
 
+  // Choosing the screen already showing is a no-op: swapScreen ignores it.
   if (menu_changed_destination()) {
     switch (menu_destination()) {
       case MENU_FETCH:     swapScreen(SCREEN_SEARCH);      break;
       case MENU_LIBRARY: swapScreen(SCREEN_LIBRARY); break;
-      case MENU_PROFILE:     profile_open_side(); requestProfile(); break;
+      // Already on the full profile: the side panel would only fold it back up.
+      case MENU_PROFILE:
+        if (screen != SCREEN_PROFILE) { profile_open_side(); requestProfile(); }
+        break;
       case MENU_SETTINGS:    swapScreen(SCREEN_SETTINGS);    break;
       default:              swapScreen(SCREEN_HOME);       break;
     }

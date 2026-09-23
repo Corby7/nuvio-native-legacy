@@ -13,6 +13,7 @@ void library_event(const SDL_Event *e);
 void library_update(float dt, Uint32 now);
 void library_draw(Uint32 now);
 int  library_wants_exit(void);   // 1 when Back should close the screen
+int  library_requested_menu(void);   // LEFT at the left edge: calls up the menu
 void library_shutdown(void);
 
 // OK pressed on a poster: consumes the request and returns 1, writing into

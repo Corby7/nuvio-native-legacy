@@ -33,7 +33,7 @@ typedef struct { unsigned generation; CatItem person; } SocialTask;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static SocialData data, ready;
 static unsigned generation;
-static int hasReady, wantsExit, selected, chosen = -1;
+static int hasReady, wantsExit, requestMenu, selected, chosen = -1;
 
 static int slugValid(const char *s) {
   return s && s[0] && strspn(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == strlen(s);
@@ -119,9 +119,11 @@ static void openInternal(const CatItem *person, int preserve) {
 }
 void social_open(const CatItem *person) { openInternal(person,0); }
 int social_wants_exit(void){int v=wantsExit;wantsExit=0;return v;}
+int social_requested_menu(void){int v=requestMenu;requestMenu=0;return v;}
 SocialState social_state(void){return data.state;}
 void social_event(const SDL_Event *e){SDL_Keycode k;if(!e||e->type!=SDL_KEYDOWN)return;k=e->key.keysym.sym;
-  if(k==SDLK_ESCAPE||k==SDLK_AC_BACK||k==SDLK_BACKSPACE||k==SDLK_LEFT){wantsExit=1;return;}if(k==SDLK_UP&&selected>0)selected--;if(k==SDLK_DOWN&&selected+1<data.n)selected++;
+  if(k==SDLK_ESCAPE||k==SDLK_AC_BACK||k==SDLK_BACKSPACE){wantsExit=1;return;}
+  if(k==SDLK_LEFT){requestMenu=1;return;}   // the left edge is the side menu; Back leavesif(k==SDLK_UP&&selected>0)selected--;if(k==SDLK_DOWN&&selected+1<data.n)selected++;
   if(k==SDLK_r && data.state!=SOCIAL_LOADING && data.state!=SOCIAL_UPDATING){openInternal(&data.person,1);return;}
   if(k==SDLK_RETURN||k==SDLK_KP_ENTER){if(data.state==SOCIAL_PRIVATE||data.state==SOCIAL_UNAVAILABLE||data.state==SOCIAL_DISCONNECTED||data.state==SOCIAL_STALE){openInternal(&data.person,1);return;}if((data.state==SOCIAL_READY||data.state==SOCIAL_UPDATING)&&selected>=0&&selected<data.n&&data.activities[selected].imdb[0])chosen=selected;}
 }

@@ -42,6 +42,7 @@ static const uint32_t PALETTE[PROFILE_MAX_GENRES] = {
 
 static ProfileData data;
 static int is_open, wantsExit, loading, hasData;
+static int requestMenu;   // LEFT off the full screen's left edge
 static int hasIdentity;
 static int section, item, chosen = -1;
 static int day, requestUpdate;
@@ -109,6 +110,7 @@ int profile_requested_complete(void) { int v=complete;complete=0;return v; }
 void profile_close(void) { is_open = 0; wantsExit = 1; }
 int profile_is_open(void) { return is_open; }
 int profile_wants_exit(void) { int q = wantsExit; wantsExit = 0; return q; }
+int profile_requested_menu(void) { int q = requestMenu; requestMenu = 0; return q; }
 void profile_set_loading(int v) {
   loading = !!v;
   if(loading) state=hasData?PF_UPDATING:PF_LOADING;
@@ -201,7 +203,7 @@ void profile_event(const SDL_Event *e) {
     if(!loading)requestUpdate=1;
     return;
   }
-  if (!hasData) return;
+  if (!hasData) { if (k == SDLK_LEFT) requestMenu = 1; return; }
   // The calendar takes the real D-pad, with continuity between weeks. Leaving
   // through the first or last week hands navigation back to the sections.
   if(section==2 && data.nDays>0) {
@@ -216,7 +218,9 @@ void profile_event(const SDL_Event *e) {
     if(k==SDLK_UP && item>=2){item-=2;return;}
     if(k==SDLK_DOWN && item+2<data.nHighlights){item+=2;return;}
   }
-  if (k == SDLK_LEFT && (section!=1 || item==0)) { profile_close(); return; }
+  // The full screen's left edge is the side menu, as on every other screen; Back
+  // is what leaves. (The side panel above keeps LEFT as close: it is a panel.)
+  if (k == SDLK_LEFT && (section!=1 || item==0)) { requestMenu = 1; return; }
   if (k == SDLK_UP && section > 0) section--;
   else if (k == SDLK_DOWN && section < PF_SECTIONS - 1) {
     section++;

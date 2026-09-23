@@ -20,6 +20,7 @@ void settings_event(const SDL_Event *e);
 void settings_update(float dt, Uint32 now);
 void settings_draw(Uint32 now);
 int  settings_wants_exit(void);   // 1 when Back should close the screen
+int  settings_requested_menu(void);   // LEFT on a row with no value: calls up the menu
 void settings_shutdown(void);
 
 // Read by the rest of the app. "Reduced animations" matters most: with it on,

@@ -89,6 +89,7 @@ int profile_requested_complete(void);
 void profile_close(void);
 int  profile_is_open(void);
 int  profile_wants_exit(void);       // consumes the request to go back
+int  profile_requested_menu(void);   // LEFT at the left edge: calls up the menu
 
 // While loading, the screen preserves the structure with skeletons. A NULL
 // snapshot, or one with no activity, produces the empty state — never invented

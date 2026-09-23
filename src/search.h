@@ -21,6 +21,7 @@ void search_draw(Uint32 now);
 // straight from the middle of the results loses the typed text without the user
 // having asked for that.
 int  search_wants_exit(void);
+int  search_requested_menu(void);   // LEFT at the left edge: calls up the menu
 void search_shutdown(void);
 
 // The compass in the header was pressed: 1 ONCE, and the router should open the

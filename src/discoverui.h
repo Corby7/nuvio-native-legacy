@@ -43,6 +43,7 @@ void dui_draw(Uint32 now);
 // 1 when Back should close the screen. Back first closes an open picker, then
 // climbs from the grid to the pickers, and only then leaves.
 int  dui_wants_exit(void);
+int  dui_requested_menu(void);   // LEFT at the left edge: calls up the menu
 void dui_shutdown(void);
 
 // OK pressed on a poster: 1 ONCE, with the index into the global catalogue, the

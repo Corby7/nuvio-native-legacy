@@ -119,6 +119,7 @@ static int nFilter = 0;
 static int wantsExit = 0;
 static int request = -1;             // the chosen catalogue index, -1 = none
 static int requestDiscover = 0;      // the compass was pressed
+static int requestMenu = 0;          // LEFT off the screen's left edge
 static float animKey[SEARCH_KB_ROWS][SEARCH_KB_COLS];
 // +1 column for the "See All" button at the end of the row.
 static float animRes[SEARCH_MAX_ROWS][SEARCH_MAX_PER_FILTER + 1];
@@ -553,7 +554,7 @@ static void applyHistory(int i) {
 int search_start(void) {
   focus_start(&focusKb, SEARCH_KB_ROWS, KB_COLUMNS);
   toHeader();
-  wantsExit = 0; request = -1; requestDiscover = 0;
+  wantsExit = 0; request = -1; requestDiscover = 0; requestMenu = 0;
   nQuery = 0; query[0] = 0;
   queryFiltered[0] = 0;
   scrollY = scrollTarget = 0.0f;
@@ -579,6 +580,7 @@ void search_shutdown(void) {
 }
 
 int  search_wants_exit(void) { return wantsExit; }
+int  search_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }
 
 int search_requested_discover(void) {
   int v = requestDiscover; requestDiscover = 0; return v;
@@ -661,7 +663,8 @@ void search_event(const SDL_Event *e) {
         if (!ime_is_open()) headCol = 1;
         break;
       case SDLK_LEFT:
-        if (!ime_is_open()) headCol = 0;
+        // From the field itself LEFT is the edge of the screen: the side menu.
+        if (!ime_is_open()) { if (headCol == 0) requestMenu = 1; headCol = 0; }
         break;
       case SDLK_DOWN:
         if (ime_is_open()) break;          // the keyboard owns the D-pad
@@ -689,7 +692,10 @@ void search_event(const SDL_Event *e) {
       return;
     }
     switch (k) {
-      case SDLK_LEFT:  focus_move_grid(&focusKb, -1, 0); break;
+      case SDLK_LEFT:
+        if (focusKb.column == 0) requestMenu = 1;
+        else focus_move_grid(&focusKb, -1, 0);
+        break;
       case SDLK_RIGHT:
         // Going past the keyboard's LAST column enters whatever is to the right.
         // It is the only bridge out of the grid, and that is why it must not fail
@@ -714,7 +720,9 @@ void search_event(const SDL_Event *e) {
   if (panel == PANEL_HIST) {
     switch (k) {
       case SDLK_LEFT:
-        if (focusHist.column == 0 && !ime_usable()) panel = PANEL_KEYS;
+        if (focusHist.column == 0) {
+          if (ime_usable()) requestMenu = 1; else panel = PANEL_KEYS;
+        }
         else focus_move_grid(&focusHist, -1, 0);
         break;
       case SDLK_RIGHT: focus_move_grid(&focusHist, 1, 0); break;

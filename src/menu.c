@@ -232,10 +232,14 @@ const char *menu_label(int d) {
   return (d >= 0 && d < MENU_N) ? LABELS[d] : "";
 }
 
-// Confirms the highlight and collapses. RIGHT also comes through here: on the
-// device the bar does not "cancel" when you leave to the right — the highlighted
-// item is the one the user is looking at, and undoing the choice on the way back
-// would be a surprise.
+// Confirms the highlight and collapses. Only OK comes through here: RIGHT used to
+// as well, and on the remote that meant scrolling past a row and stepping back to
+// the content opened whatever row the highlight happened to rest on.
+//
+// It reports a choice even when the row IS the destination in force: the bar
+// opens from sub-screens too (Discover under Search, a person's activity), and
+// picking "Search" from Discover has to go to Search. The app ignores a choice of
+// the screen it is already on.
 static void choose(void) {
   if (line == MENU_FOOTER) {
     // The footer does not change destination: it asks for the profile picker screen.
@@ -244,7 +248,7 @@ static void choose(void) {
     line = destination;
     return;
   }
-  if (line != destination) { destination = line; changed = 1; }
+  destination = line; changed = 1;
   is_open = 0;
 }
 
@@ -256,10 +260,11 @@ void menu_event(const SDL_Event *e) {
 
   // The same set of "back" keys the detail screen accepts: on the remote it is
   // Back, on a keyboard everyone reaches a different one.
+  // RIGHT is the way back to the content, so it closes like Back does.
   if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
-      k == SDLK_DELETE) { menu_close(); return; }
+      k == SDLK_DELETE || k == SDLK_RIGHT) { menu_close(); return; }
 
-  if (k == SDLK_RIGHT || k == SDLK_RETURN || k == SDLK_KP_ENTER) { choose(); return; }
+  if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { choose(); return; }
   // No wrap-around at the ends: the bar is short and the user sees all four rows
   // at once, so wrapping at the end of the list reads as a fault, not a shortcut.
   if (k == SDLK_DOWN && line < NV_MENU_FOCUSES - 1) line++;

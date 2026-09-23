@@ -39,6 +39,7 @@ static int   menuFocus;
 static int   zone;
 static int   focus;            // index into the grid
 static int   wantsExit;
+static int   requestMenu;   // LEFT off the screen's left edge
 static int   request = -1;
 static float scrollY, scrollTarget;
 static float animPick[PICK_N];
@@ -165,6 +166,7 @@ int dui_start(void) {
 
 void dui_shutdown(void) { hasItemFocus = 0; }
 int  dui_wants_exit(void) { return wantsExit; }
+int  dui_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }
 
 int dui_requested_open(int *indexCatalog) {
   if (request < 0) return 0;
@@ -253,7 +255,7 @@ void dui_event(const SDL_Event *e) {
 
   if (zone == ZONE_PICKERS) {
     switch (k) {
-      case SDLK_LEFT:  if (pickSel > 0) pickSel--; break;
+      case SDLK_LEFT:  if (pickSel > 0) pickSel--; else requestMenu = 1; break;
       case SDLK_RIGHT: if (pickSel < PICK_N - 1) pickSel++; break;
       case SDLK_DOWN:  if (n > 0) { zone = ZONE_GRID; focus = 0; } break;
       case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
@@ -274,6 +276,7 @@ void dui_event(const SDL_Event *e) {
   switch (k) {
     case SDLK_LEFT:
       if (focus % NV_DSC_COLUMNS) focus--;
+      else requestMenu = 1;
       break;
     case SDLK_RIGHT:
       if (focus + 1 < n && (focus + 1) % NV_DSC_COLUMNS) focus++;

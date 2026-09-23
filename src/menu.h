@@ -10,8 +10,9 @@
 //     that decides about leaving.
 //
 // The cycle on the device: focus is on the first column of a row, the user
-// presses LEFT, the bar slides in from the edge and takes focus. RIGHT or OK
-// picks the destination and hands focus back to the content.
+// presses LEFT, the bar slides in from the edge and takes focus. OK picks the
+// destination; RIGHT or Back closes without choosing. Every screen can call it
+// up with LEFT at its left edge, not only the home.
 #ifndef NV_MENU_H
 #define NV_MENU_H
 #include <SDL2/SDL.h>
@@ -57,10 +58,9 @@ int  menu_visible(void);
 // from the bar.
 int  menu_destination(void);
 void menu_set_destination(int destination);
-// 1 exactly once, on the frame where the user chose a destination DIFFERENT from
-// the one in force. Consumes the flag: whoever reads it, handles it. Without
-// this the app would have to keep the previous destination just to discover it
-// had changed.
+// 1 exactly once, on the frame where the user chose a destination — the one in
+// force included, since from a sub-screen that still means "go there". Consumes
+// the flag: whoever reads it, handles it.
 int  menu_changed_destination(void);
 
 const char *menu_label(int destination);

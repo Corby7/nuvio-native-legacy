@@ -11,6 +11,7 @@ void social_event(const SDL_Event *e);
 void social_update(float dt, Uint32 now);
 void social_draw(Uint32 now);
 int social_wants_exit(void);
+int social_requested_menu(void);
 SocialState social_state(void);
 typedef struct {
   char imdb[16];

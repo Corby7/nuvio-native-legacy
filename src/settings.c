@@ -360,6 +360,7 @@ static int focusOp = 0;
 static float animFocus[SETTING_N];
 static float scrollY = 0.0f;
 static int wantsExit = 0;
+static int requestMenu = 0;   // LEFT on a row LEFT cannot change
 
 // How many catalogues the hero uses. 0 = all, which is what the web app writes as
 // "All" when heroCatalogKeys is empty — and it is the owner's profile's case.
@@ -640,6 +641,7 @@ int settings_apply_blob(const char *json) {
 int settings_start(void) { focusOp = 0; scrollY = 0.0f; wantsExit = 0; return 1; }
 void settings_shutdown(void) { }
 int settings_wants_exit(void) { return wantsExit; }
+int settings_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }
 
 // The value of the read-only rows. The disk space is NOT an invented number: it
 // comes from the texture cache, which is exactly what "images" consumes on the
@@ -828,7 +830,9 @@ void settings_event(const SDL_Event *e) {
   }
   else if (k == SDLK_LEFT || k == SDLK_RIGHT) {
     // A read-only item, or one switched off by its dependency, changes with nothing.
-    if (!mutable(focusOp)) return;
+    // LEFT there has no value to step, so it is the way out to the side menu —
+    // on a value row it keeps stepping the value, which is what the row is for.
+    if (!mutable(focusOp)) { if (k == SDLK_LEFT) requestMenu = 1; return; }
     const Option *o = &OPTIONS[focusOp];
     int dir = (k == SDLK_RIGHT) ? 1 : -1;
     if (o->kind == OP_NUMBER) {
