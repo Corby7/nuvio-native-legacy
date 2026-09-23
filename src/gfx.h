@@ -456,7 +456,21 @@ typedef enum {
   //
   //   uPar.x = how much of the perimeter is filled, 0..1
   GFX_RING_FILL = 42,
-  GFX_NMODES = 43
+  // GFX_CARD_DEPTH — the card depth effect (`cardDepth*`), the web's two inset
+  // shadows in one pass over the card's own quad, clipped by its corner:
+  //
+  //   box-shadow: inset 0 2px 0 rgba(255,255,255, edge),
+  //               inset 0 18px 28px rgba(255,255,255, sheen);
+  //
+  // A hairline of light along the top edge, and a glow that fades in from the
+  // top and the two sides. The first port drew these as a solid 12-30px bar and
+  // a flat slab 6% down the card, both hard-edged, which read as stickers on the
+  // poster. Draw it through gfx_card_depth().
+  //
+  //   uPar.x = the card's height in pixels, uPar.y = the glow's downward offset
+  //   uColor.r = edge alpha, uColor.g = sheen alpha
+  GFX_CARD_DEPTH = 43,
+  GFX_NMODES = 44
 } GfxMode;
 
 typedef struct {
@@ -699,6 +713,10 @@ void gfx_glow(GfxRect plate, float radiusPx, float blur,
 
 // Atalhos legiveis para os casos comuns.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
+// The card depth effect over `card` (see GFX_CARD_DEPTH). radius is the card's own
+// fraction; offsetPx is the glow's y offset (18 on posters, the coverage size on
+// episode, cast and trailer cards).
+void gfx_card_depth(GfxRect card, float radius, float edge, float sheen, float offsetPx);
 // Dims the whole screen to black at `alpha`, except inside `hole` with corners of
 // `radiusPx` — in PIXELS, unlike gfx_color's radius. The hole's edge is
 // antialiased over one layout pixel, or ramps out over `featherPx` when larger:

@@ -772,28 +772,13 @@ static GfxRect frameOf(GfxRect card, float pad) {
 }
 
 // --- Card depth (`cardDepth*`) -----------------------------------------------
-// The web app does this with two pseudo-elements over the art: a glow on the TOP edge
-// with opacity `--card-depth-edge` and a discreet light band —
-// `--card-depth-sheen` — crossing the upper part of the card. `--card-depth-coverage`
-// thickens the edge band: `12 + round(18 * coverage)` px
-// (layoutPreferences.js:181). They are the same three numbers as on the Settings screen.
+// The web app's two inset shadows (components.css in NuvioWeb 810d022): a 2px line
+// of light along the top edge at `--card-depth-edge`, and a soft glow offset 18px
+// down with a 28px blur at `--card-depth-sheen`. See GFX_CARD_DEPTH. Coverage only
+// sizes that offset on episode, cast and trailer cards, so the Home rows ignore it.
 static void drawDepth(GfxRect card, float radius, int onHere) {
   if (!settings_depth() || !onHere) return;
-  float border = settings_depth_border();
-  float brightness = settings_depth_brightness();
-  float coverage = settings_depth_coverage();
-  if (border > 0.001f) {
-    float h = 12.0f + 18.0f * coverage;
-    GfxRect track = { card.x, card.y, card.w, h };
-    // A proportional radius: the band is much shorter than the card, so repeating the
-    // card's fraction would round it too much and the edge would peel away from the corner.
-    gfx_color(track, radius * (card.h / (h > 0.0f ? h : 1.0f)) * 0.5f,
-            1.0f, 1.0f, 1.0f, border * 0.55f);
-  }
-  if (brightness > 0.001f) {
-    GfxRect refl = { card.x, card.y + card.h * 0.06f, card.w, card.h * 0.28f };
-    gfx_color(refl, radius, 1.0f, 1.0f, 1.0f, brightness * 0.18f);
-  }
+  gfx_card_depth(card, radius, settings_depth_border(), settings_depth_brightness(), 18.0f);
 }
 // The focused card DOES grow, by a little, and by a different little per card family:
 // see NV_FOCUS_SCALE_POSTER and NV_FOCUS_SCALE_CW for the two values and the CSS they

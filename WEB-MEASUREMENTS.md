@@ -762,7 +762,8 @@ alongside the library? I did not invent an order.
 | `posterLabelsEnabled` | `true` | `true` | ✅ "Poster labels" |
 | `modernLandscapePostersEnabled` | `false` | **`true`** | ✅ exposed; the landscape drawing is not |
 | `posterCardWidthDp` / `posterCardCornerRadiusDp` | 126 / 12 | 120 / 12 | see below |
-| `cardDepth*`, `focusedPosterBackdropExpand*` | — | on | **not ported** |
+| `cardDepth*` | off | on | ✅ Home rows (GFX_CARD_DEPTH); episode, cast and trailer switches not wired yet |
+| `focusedPosterBackdropExpand*` | — | on | **not ported** |
 
 ### The poster size DOES come from `posterCardWidthDp` (re-measured 2026-09-07)
 

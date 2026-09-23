@@ -1099,6 +1099,29 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  if (a * m <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uColor.rgb, uColor.a * a * m);\n"
   "}\n",
+
+  // GFX_CARD_DEPTH — see gfx.h. Both shadows are measured in PIXELS, so a focused
+  // card that grows keeps a 2px line and the same glow, as the CSS does.
+  //
+  // The line is what lies inside the card but outside the card moved down 2px,
+  // so it thins out round the corners exactly as the inset shadow does. The glow
+  // is 1 minus the blurred coverage of the moved-down "hole"; a box blur is
+  // separable, and each edge's gaussian CDF (sigma = blur/2 = 14px) is close
+  // enough to a smoothstep over +-2.2 sigma for a 10% white.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  float H = uPar.x, W = uAspect * H;\n"
+  "  vec2 px = vUv * vec2(W, H);\n"
+  "  float inner = smoothstep(uAA,-uAA, sdf(vUv - vec2(0.0, 2.0 / H), uRadius, uAspect));\n"
+  "  float line = uColor.r * (1.0 - inner);\n"
+  "  float hx = smoothstep(-30.8, 30.8, px.x) - smoothstep(-30.8, 30.8, px.x - W);\n"
+  "  float hy = smoothstep(-30.8, 30.8, px.y - uPar.y) - smoothstep(-30.8, 30.8, px.y - H - uPar.y);\n"
+  "  float glow = uColor.g * (1.0 - hx * hy);\n"
+  "  float a = (line + glow * (1.0 - line)) * m * uColor.a;\n"
+  "  if (a <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(1.0, 1.0, 1.0, a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -1135,7 +1158,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_LOGO         — the art rectangle's own edge ramp: no SDF */
   {1,0},   /* GFX_DROP         — the inflated quad's own SDF */
   {0,0},   /* GFX_SCRIM_HOLE   — its own pixel-space SDF, not the quad's */
-  {1,0}    /* GFX_RING_FILL    — the rect's SDF, masked by perimeter progress */
+  {1,0},   /* GFX_RING_FILL    — the rect's SDF, masked by perimeter progress */
+  {1,0}    /* GFX_CARD_DEPTH   — the card's SDF, and again 2px lower for the line */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -1426,6 +1450,11 @@ void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) 
 // surface remains opaque and the video stays invisible, with no error at all. And
 // the alpha here is the window's composition channel, so this only has any effect
 // with SDL_GL_ALPHA_SIZE 8 requested before the window is created.
+void gfx_card_depth(GfxRect card, float radius, float edge, float sheen, float offsetPx) {
+  if (card.h <= 0.0f || (edge <= 0.001f && sheen <= 0.001f)) return;
+  gfx_rect(card, 0, GFX_CARD_DEPTH, 0, card.h, offsetPx, radius, edge, sheen, 0, 1.0f);
+}
+
 void gfx_hole(GfxRect r) {
   glDisable(GL_BLEND);
   gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, 0.0f, 0, 0, 0, 0);
