@@ -715,6 +715,19 @@ void app_update(float dt, Uint32 now) {
       mark("next episode: fetching sources"); fetchForPlayer(); waitingSource=1;
     }
   }
+  // Near the end of an episode, the next one's sources are fetched ahead of time,
+  // so Next (or the automatic advance) does not open on the full addon wait. The
+  // id is built exactly as targetPlayer builds it, or the cache would never match.
+  if (waitingSource == 0 && player_is_open()) {
+    const CatEp *p = player_prefetch_next();
+    const CatItem *c = cat_item(player_index());
+    if (p && c && c->imdb[0]) {
+      char id[64];
+      snprintf(id, sizeof id, "%.*s:%d:%d", (int)strcspn(c->imdb, ":"), c->imdb,
+               p->season, p->episode);
+      addons_prefetch(id, c->kind);
+    }
+  }
   episodes_update(dt);
   // The Dolby Vision fallback deadline: if the claim does not produce a picture,
   // the video reloads itself without it. It has to tick every frame (see video.h).

@@ -152,89 +152,147 @@ static int addressOfWarning(const char *u) {
 // have chosen — only without waiting for the earlier ones to fail one by one.
 #define SEE_THREADS 4
 
+// IT ANSWERS AS SOON AS THE ANSWER IS KNOWN, not when the last check is done.
+// The rule is "the first one in order that passed", so the answer is settled the
+// moment some row has passed and every row ahead of it has finished and failed —
+// what the rows behind it do can no longer change it. Joining every thread
+// meant the top candidate resolving in 300 ms still waited out a dead link
+// further down, up to its full 10 s.
+//
+// The threads that are still running are left to finish on their own, which is
+// why the batch lives on the heap with a reference count instead of in globals:
+// the last one out frees it, whether that is verify or a straggler. A straggler
+// never touches the list — only its own batch — so it cannot disturb the next
+// title's check either.
 typedef struct {
-  int idx, ok;
+  int idx, ok, done;
   char url[4096], hash[48];
   int fileIdx;
 } Check;
-static Check *checks;
-static int nChecks, nextCheck, checkSeason, checkEpisode;
-static unsigned checkGen;
+typedef struct {
+  pthread_mutex_t lock;
+  pthread_cond_t  changed;
+  Check *checks;
+  int nChecks, nextCheck, season, episode, refs;
+} Batch;
+
+static void batchRelease(Batch *b) {
+  int last;
+  pthread_mutex_lock(&b->lock);
+  last = --b->refs == 0;
+  pthread_mutex_unlock(&b->lock);
+  if (!last) return;
+  pthread_cond_destroy(&b->changed);
+  pthread_mutex_destroy(&b->lock);
+  free(b->checks);
+  free(b);
+}
 
 static void *threadVerify(void *u) {
-  (void)u;
+  Batch *b = (Batch *)u;
   for (;;) {
-    int mine, i;
+    int mine, i, ok = 0;
     char end[900];
     Check *c;
-    pthread_mutex_lock(&seeLock);
-    if (nextCheck >= nChecks) { pthread_mutex_unlock(&seeLock); return NULL; }
-    mine = nextCheck++;
-    pthread_mutex_unlock(&seeLock);
-    c = &checks[mine];
+    pthread_mutex_lock(&b->lock);
+    if (b->nextCheck >= b->nChecks) { pthread_mutex_unlock(&b->lock); break; }
+    mine = b->nextCheck++;
+    pthread_mutex_unlock(&b->lock);
+    c = &b->checks[mine];
     i = c->idx;
     if (!c->url[0] && c->hash[0]) {
       // A link fresh out of the debrid needs no second trip below. It stays in
       // the check until the batch is over; stream_first_good writes it into the
       // list, and only if the list is still the one it was taken from.
-      if (debrid_resolve(c->hash, c->fileIdx, checkSeason, checkEpisode,
-                         c->url, sizeof c->url)) c->ok = 1;
+      if (debrid_resolve(c->hash, c->fileIdx, b->season, b->episode,
+                         c->url, sizeof c->url)) ok = 1;
       else printf("[source] %d torrent did not resolve on the debrid\n", i);
-      continue;
+    } else if (c->url[0]) {
+      // 10 s and not 20: in parallel the timeout stops adding up, but it is still
+      // the time the owner waits for the slowest one ahead of the winner.
+      if (!net_url_final(c->url, 10, end, sizeof end))
+        printf("[source] %d did not resolve\n", i);
+      else if (addressOfWarning(end))
+        printf("[source] %d is a warning (%.60s)\n", i, end);
+      else ok = 1;
     }
-    if (!c->url[0]) continue;
-    // 10 s and not 20: in parallel the timeout stops adding up, but it is still
-    // the time the owner waits for the slowest one.
-    if (!net_url_final(c->url, 10, end, sizeof end)) {
-      printf("[source] %d did not resolve\n", i);
-      continue;
-    }
-    if (addressOfWarning(end)) {
-      printf("[source] %d is a warning (%.60s)\n", i, end);
-      continue;
-    }
-    c->ok = 1;
+    pthread_mutex_lock(&b->lock);
+    c->ok = ok; c->done = 1;
+    pthread_cond_signal(&b->changed);
+    pthread_mutex_unlock(&b->lock);
   }
+  batchRelease(b);
+  return NULL;
+}
+
+// The answer so far, under the batch lock: the position of the first row that
+// passed with everything ahead of it failed, -1 when all failed, -2 while a row
+// ahead of any winner is still being checked.
+static int settled(const Batch *b) {
+  int q;
+  for (q = 0; q < b->nChecks; q++) {
+    if (!b->checks[q].done) return -2;
+    if (b->checks[q].ok) return q;
+  }
+  return -1;
 }
 
 // Checks the rows in `used`, in parallel, and returns the first that passed IN
 // THE ORDER GIVEN. A torrent's resolved url is written back into the list.
 static int verify(const int *used, int nu, int season, int episode) {
-  int chosen = -1, q;
-  checks = calloc((size_t)nu, sizeof(Check));
-  if (!checks) return -1;
+  int chosen = -1, q, at, created = 0;
+  unsigned gen;
+  Batch *b = calloc(1, sizeof *b);
+  if (!b) return -1;
+  b->checks = calloc((size_t)nu, sizeof(Check));
+  if (!b->checks) { free(b); return -1; }
+  pthread_mutex_init(&b->lock, NULL);
+  pthread_cond_init(&b->changed, NULL);
+  b->nChecks = nu; b->season = season; b->episode = episode;
   // Each check copies its row UNDER THE LOCK: out of it, stream_set_list may
   // swap the list at any moment.
   pthread_mutex_lock(&seeLock);
-  checkGen = listGen;
+  gen = listGen;
   for (q = 0; q < nu; q++) {
     int i = used[q];
-    checks[q].idx = i;
+    b->checks[q].idx = i;
     if (i < 0 || i >= n) continue;
-    snprintf(checks[q].url, sizeof checks[q].url, "%s", list[i].url);
-    snprintf(checks[q].hash, sizeof checks[q].hash, "%s", list[i].infoHash);
-    checks[q].fileIdx = list[i].fileIdx;
+    snprintf(b->checks[q].url, sizeof b->checks[q].url, "%s", list[i].url);
+    snprintf(b->checks[q].hash, sizeof b->checks[q].hash, "%s", list[i].infoHash);
+    b->checks[q].fileIdx = list[i].fileIdx;
   }
   pthread_mutex_unlock(&seeLock);
-  nChecks = nu; nextCheck = 0; checkSeason = season; checkEpisode = episode;
-  { pthread_t threads[SEE_THREADS];
-    int created = 0;
-    for (q = 0; q < SEE_THREADS && q < nu; q++)
-      if (pthread_create(&threads[created], NULL, threadVerify, NULL) == 0) created++;
-    if (!created) threadVerify(NULL);   // no threads: in series, same result
-    for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
+
+  // One reference for verify, one per thread — taken BEFORE the thread starts,
+  // so a thread that finishes at once cannot free the batch from under us.
+  b->refs = 1;
+  for (q = 0; q < SEE_THREADS && q < nu; q++) {
+    pthread_t t;
+    pthread_mutex_lock(&b->lock); b->refs++; pthread_mutex_unlock(&b->lock);
+    if (pthread_create(&t, NULL, threadVerify, b) == 0) { pthread_detach(t); created++; }
+    else { pthread_mutex_lock(&b->lock); b->refs--; pthread_mutex_unlock(&b->lock); }
   }
-  // The first one that passed, in the order given.
-  for (q = 0; q < nu; q++)
-    if (checks[q].ok) { chosen = checks[q].idx; break; }
-  if (chosen >= 0) {
+  if (!created) {                        // no threads: in series, same result
+    pthread_mutex_lock(&b->lock); b->refs++; pthread_mutex_unlock(&b->lock);
+    threadVerify(b);
+  }
+
+  pthread_mutex_lock(&b->lock);
+  while ((at = settled(b)) == -2) pthread_cond_wait(&b->changed, &b->lock);
+  // Rows nobody has started yet are not worth starting: the answer is in.
+  b->nextCheck = b->nChecks;
+  pthread_mutex_unlock(&b->lock);
+
+  if (at >= 0) {
+    // The winner's check is done, so no thread writes to it any more.
+    chosen = b->checks[at].idx;
     pthread_mutex_lock(&seeLock);
-    if (checkGen != listGen || chosen >= n) chosen = -1;   // the list moved on
+    if (gen != listGen || chosen >= n) chosen = -1;   // the list moved on
     else if (!list[chosen].url[0])
-      snprintf(list[chosen].url, sizeof list[chosen].url, "%s", checks[q].url);
+      snprintf(list[chosen].url, sizeof list[chosen].url, "%s", b->checks[at].url);
     pthread_mutex_unlock(&seeLock);
   }
-  free(checks); checks = NULL; nChecks = 0;
+  batchRelease(b);
   return chosen;
 }
 

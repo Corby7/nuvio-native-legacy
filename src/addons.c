@@ -30,6 +30,7 @@ static int threadAlive;
 static Stream *result;
 static int nResult;
 static char pendingId[64], pendingKind[16];
+static void preForget(void);
 
 // --- reading the configuration file ------------------------------------------
 
@@ -164,6 +165,8 @@ int addons_export(AddonRemote *output, int max) {
 void addons_forget(void) {
   memset(addon, 0, sizeof addon);
   nAddon = 0;
+  // The prefetched list came through the previous person's addons.
+  preForget();
   printf("[addons] list forgotten (signed out)\n");
 }
 
@@ -513,78 +516,164 @@ void addons_fetch_subtitles(const char *imdb, const char *kind) {
 #define ADD_THREADS 4
 
 typedef struct {
-  int    idx;                 // qual addon
+  int idx;                 // qual addon
   Stream *found;
   int    n;
 } BucketSource;
 
-static BucketSource *buckets;
-static int nBuckets, nextBucket;
-static pthread_mutex_t addLock = PTHREAD_MUTEX_INITIALIZER;
+// One search's worth of work, on the heap and not in globals: the normal fetch
+// and the next-episode prefetch can be running at the same time.
+typedef struct {
+  const char *id, *kind;
+  BucketSource *buckets;
+  int nBuckets, nextBucket;
+  pthread_mutex_t lock;
+} Round;
 
 static void *threadSources(void *u) {
-  (void)u;
+  Round *r = (Round *)u;
   for (;;) {
     int mine, i;
     char url[900], *body;
-    pthread_mutex_lock(&addLock);
-    if (nextBucket >= nBuckets) { pthread_mutex_unlock(&addLock); return NULL; }
-    mine = nextBucket++;
-    pthread_mutex_unlock(&addLock);
-    i = buckets[mine].idx;
+    pthread_mutex_lock(&r->lock);
+    if (r->nextBucket >= r->nBuckets) { pthread_mutex_unlock(&r->lock); return NULL; }
+    mine = r->nextBucket++;
+    pthread_mutex_unlock(&r->lock);
+    i = r->buckets[mine].idx;
     snprintf(url, sizeof url, "%s/stream/%s/%s.json",
-             addon[i].base, targetKind, targetId);
+             addon[i].base, r->kind, r->id);
     // 12 s and not 25: with the addons in parallel the timeout stops adding up,
     // but it is still the time the owner waits for the slowest one.
     body = net_download(url, 12);
     if (!body) { printf("[addons] %s: no response\n", addon[i].name); continue; }
-    buckets[mine].n = stream_parse(body, addon[i].name, &buckets[mine].found);
+    r->buckets[mine].n = stream_parse(body, addon[i].name, &r->buckets[mine].found);
     printf("[addons] %s: %d sources (%u bytes)\n",
-           addon[i].name, buckets[mine].n, (unsigned)strlen(body));
+           addon[i].name, r->buckets[mine].n, (unsigned)strlen(body));
     free(body);
   }
 }
 
-static void *fetch(void *u) {
+// Asks every source addon for `id` and returns the merged list in *out.
+static int gather(const char *id, const char *kind, Stream **out) {
   Stream *found = NULL;
   int n = 0, i;
-  (void)u;
-  mark("addons: query start");
-
-  nBuckets = 0; nextBucket = 0;
-  buckets = calloc((size_t)(nAddon > 0 ? nAddon : 1), sizeof(BucketSource));
-  if (buckets)
+  Round r;
+  memset(&r, 0, sizeof r);
+  r.id = id; r.kind = kind;
+  pthread_mutex_init(&r.lock, NULL);
+  r.buckets = calloc((size_t)(nAddon > 0 ? nAddon : 1), sizeof(BucketSource));
+  if (r.buckets)
     for (i = 0; i < nAddon; i++)
-      if (addon[i].source) buckets[nBuckets++].idx = i;
+      if (addon[i].source) r.buckets[r.nBuckets++].idx = i;
 
-  if (buckets && nBuckets > 0) {
+  if (r.buckets && r.nBuckets > 0) {
     pthread_t threads[ADD_THREADS];
     int created = 0, q;
-    for (q = 0; q < ADD_THREADS && q < nBuckets; q++)
-      if (pthread_create(&threads[created], NULL, threadSources, NULL) == 0) created++;
-    if (!created) threadSources(NULL);        // no threads: in series, same result
+    for (q = 0; q < ADD_THREADS && q < r.nBuckets; q++)
+      if (pthread_create(&threads[created], NULL, threadSources, &r) == 0) created++;
+    if (!created) threadSources(&r);          // no threads: in series, same result
     for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
     // Joins IN ADDON ORDER, which is the order the owner installed them in.
-    for (q = 0; q < nBuckets; q++) {
-      int k = buckets[q].n;
+    for (q = 0; q < r.nBuckets; q++) {
+      int k = r.buckets[q].n;
       if (k > 0) {
         Stream *tmp = realloc(found, sizeof(Stream) * (size_t)(n + k));
         if (tmp) { found = tmp;
-          memcpy(found + n, buckets[q].found, sizeof(Stream) * (size_t)k);
+          memcpy(found + n, r.buckets[q].found, sizeof(Stream) * (size_t)k);
           n += k;
         } else printf("[addons] not enough memory for %d sources\n", k);
       }
-      free(buckets[q].found);
+      free(r.buckets[q].found);
     }
   }
-  free(buckets); buckets = NULL; nBuckets = 0;
+  free(r.buckets);
+  pthread_mutex_destroy(&r.lock);
+  *out = found;
+  return n;
+}
 
+static void *fetch(void *u) {
+  Stream *found = NULL;
+  int n;
+  (void)u;
+  mark("addons: query start");
+  n = gather(targetId, targetKind, &found);
   mark(n ? "addons: sources received" : "addons: no sources");
   result = found; nResult = n;
   printf("[addons] total %d\n", n);
   fflush(stdout);
   atomic_store(&state, n ? ADD_READY : ADD_EMPTY);
   return NULL;
+}
+
+// THE NEXT EPISODE'S SOURCES, FETCHED BEFORE THEY ARE ASKED FOR.
+//
+// Next episode used to start its search only once the current one was over, so
+// every episode of a binge opened with the full addon wait — as long as the
+// slowest addon, up to 12 s — on a black screen. Near the end of an episode the
+// player asks for the next one's list ahead of time, and addons_fetch hands it
+// over at once when the id matches and the list is still fresh.
+//
+// Fresh means under a minute old, the same rule the title page uses
+// (NV_LINK_VALID_MS in app.c): a debrid link expires in minutes. That is why
+// the prefetch is REPEATED while the end of the episode lasts, not done once —
+// credits can run past a minute. Whatever comes out of it is still checked
+// source by source before playing, like any other list.
+#define PRE_VALID_MS   60000u
+#define PRE_REFRESH_MS 45000u
+
+static pthread_t threadPre;
+static int preAlive, preDiscard;      // UI thread only
+static _Atomic int preDone;
+static char preWantId[64], preWantKind[16];
+static Stream *preNew; static int preNewN;
+static char preId[64], preKind[16];
+static Stream *preList; static int preN;
+static Uint32 preAt;
+
+static void *prefetch(void *u) {
+  (void)u;
+  preNewN = gather(preWantId, preWantKind, &preNew);
+  printf("[addons] prefetched %s: %d\n", preWantId, preNewN);
+  fflush(stdout);
+  atomic_store(&preDone, 1);
+  return NULL;
+}
+
+// Collects a finished prefetch into the cache. UI thread.
+static void preReap(void) {
+  if (!preAlive || !atomic_load(&preDone)) return;
+  pthread_join(threadPre, NULL);
+  preAlive = 0;
+  free(preList); preList = NULL; preN = 0;
+  if (!preDiscard && preNewN > 0) {
+    preList = preNew; preN = preNewN; preAt = SDL_GetTicks();
+    snprintf(preId, sizeof preId, "%s", preWantId);
+    snprintf(preKind, sizeof preKind, "%s", preWantKind);
+  } else free(preNew);
+  preNew = NULL; preNewN = 0; preDiscard = 0;
+}
+
+static void preClear(void) {
+  free(preList); preList = NULL; preN = 0; preId[0] = 0;
+}
+
+static void preForget(void) {
+  preClear();
+  if (preAlive) preDiscard = 1;
+}
+
+void addons_prefetch(const char *id, const char *kind) {
+  if (!nAddon || !id || !*id) return;
+  preReap();
+  if (preAlive) return;                              // one in flight already
+  if (preN > 0 && !strcmp(id, preId) && SDL_GetTicks() - preAt < PRE_REFRESH_MS)
+    return;                                          // still fresh
+  snprintf(preWantId, sizeof preWantId, "%s", id);
+  snprintf(preWantKind, sizeof preWantKind, "%s", kind && *kind ? kind : "movie");
+  atomic_store(&preDone, 0);
+  preAlive = 1;
+  if (pthread_create(&threadPre, NULL, prefetch, NULL) != 0) preAlive = 0;
 }
 
 void addons_fetch(const char *imdb, const char *kind) {
@@ -596,6 +685,17 @@ void addons_fetch(const char *imdb, const char *kind) {
       snprintf(pendingId, sizeof pendingId, "%s", imdb);
       snprintf(pendingKind, sizeof pendingKind, "%s", kind ? kind : "movie");
     }
+    return;
+  }
+  preReap();
+  if (preN > 0 && !strcmp(imdb, preId) && !strcmp(kind ? kind : "movie", preKind) &&
+      SDL_GetTicks() - preAt < PRE_VALID_MS) {
+    printf("[addons] %s: %d prefetched sources, %ums old\n",
+           imdb, preN, (unsigned)(SDL_GetTicks() - preAt));
+    mark("addons: prefetched sources used");
+    stream_set_list(preList, preN);
+    preClear();
+    state = ADD_READY;
     return;
   }
   stream_set_list(NULL, 0);
@@ -627,5 +727,7 @@ void addons_shutdown(void) {
   threadSubCreated = threadSubAlive = 0; nSubs = 0;
   pthread_mutex_unlock(&subLock);
   free(result); result = NULL; nResult = 0;
+  if (preAlive) { pthread_join(threadPre, NULL); preAlive = 0; free(preNew); preNew = NULL; }
+  preClear();
   state = ADD_STOPPED;
 }

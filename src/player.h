@@ -22,6 +22,9 @@ const char *player_line_episode(void);
 int player_requested_sources(void);
 int player_requested_next(int *season, int *episode);
 const CatEp *player_next_episode(void);
+// The next episode, once this one is close enough to its end that the next
+// one's sources are worth fetching ahead of time; NULL otherwise.
+const CatEp *player_prefetch_next(void);
 void player_error_source(void);
 // RECORDS A PLAYBACK FAILURE in the failure log (failures.h) and puts a short
 // notice on screen. `stage` is where it died — "source", "load" or "playback" —

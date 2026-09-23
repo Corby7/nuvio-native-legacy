@@ -1120,6 +1120,18 @@ static int offerNext(void) {
 // before the show it was offering to skip had drawn a frame.
 static int playbackReady(void) { return startImage != 0 || !hasVideo; }
 
+// A little ahead of the card: the prefetch takes as long as the slowest addon,
+// and it should be in hand by the time the card offers Next.
+#define PLR_PREFETCH_S 180.0f
+const CatEp *player_prefetch_next(void) {
+  double end; int kind;
+  if (!is_open || waitingSource || errorSource || !playbackReady()) return NULL;
+  if (durationSeg <= 1.0f) return NULL;
+  if (!(intro_active(posSeg, &end, &kind) && kind == INTRO_CREDITS) &&
+      durationSeg - posSeg > PLR_PREFETCH_S) return NULL;
+  return player_next_episode();
+}
+
 static int nextCardUp(void) {
   if (!playbackReady()) return 0;
   return offerNext() && !nextDismissed && player_next_episode() != NULL;

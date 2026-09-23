@@ -69,6 +69,13 @@ int  addons_has_catalog(int i);  // 1 quando o addon fornece catalogo
 // episode). Returns immediately; the result arrives through stream_set_list.
 void addons_fetch(const char *imdb, const char *kind);
 
+// Fetches `id`'s sources into a side cache, WITHOUT touching the current list —
+// the player asks for the next episode while this one is still playing, and the
+// source sheet must go on showing this one's. addons_fetch for the same id hands
+// the cached list over at once while it is under a minute old. Cheap to call on
+// every frame: it does nothing while a prefetch runs or the cache is fresh.
+void addons_prefetch(const char *id, const char *kind);
+
 // --- external subtitles (OpenSubtitles) --------------------------------------
 // A subtitle addon answers at /subtitles/<type>/<id>.json with
 // {"subtitles":[{lang,url,subtitleFileName,...}]}. There are dozens per title,
