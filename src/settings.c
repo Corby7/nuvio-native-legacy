@@ -52,7 +52,7 @@
 // MIDDLE is safe: the file is keyed, not positional (see settings_dir).
 typedef enum {
   // Playback
-  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_SUBS,
+  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_SUBS, SETTING_SEEK_COLOR,
   // Layout da Home
   SETTING_LANDSCAPE, SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
   // Conteudo da Home
@@ -89,6 +89,18 @@ static const char *V_QUALITY[] = { "Automatic", "4K", "1080p", "720p" };
 // and is given Portuguese has been answered a question they did not ask. The
 // languages are the ones addons.c searches; there is no third in the search.
 static const char *V_SUBS[] = { "Off", "Automatic", "Portuguese", "English" };
+// The player's seek bar: the fill and the playhead. Violet is the brand mark's
+// own colour and the default; White is what the bar was before. The RGB lives in
+// SEEK_RGB below, in the same order.
+static const char *V_SEEK[] = { "Violet", "White", "Blue", "Green", "Red", "Orange" };
+static const float SEEK_RGB[][3] = {
+  { 0x83 / 255.0f, 0x67 / 255.0f, 0xF5 / 255.0f },   /* #8367F5 */
+  { 0xF5 / 255.0f, 0xF5 / 255.0f, 0xF5 / 255.0f },   /* #F5F5F5, the old fill */
+  { 0x3B / 255.0f, 0x82 / 255.0f, 0xF6 / 255.0f },   /* #3B82F6 */
+  { 0x22 / 255.0f, 0xC5 / 255.0f, 0x5E / 255.0f },   /* #22C55E */
+  { 0xE5 / 255.0f, 0x48 / 255.0f, 0x4D / 255.0f },   /* #E5484D */
+  { 0xF5 / 255.0f, 0x9E / 255.0f, 0x0B / 255.0f },   /* #F59E0B */
+};
 static const char *V_ON[]      = { "On", "Off" };
 static const char *V_ANIM[]      = { "Full", "Reduced" };
 // `collapseSidebar`: collapsed = the rail disappears and the content starts at 104.
@@ -135,6 +147,7 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Dolby Vision",               V_ON, 2),
   ESC("Dolby Atmos",                V_ON, 2),
   ESC("Subtitles",                  V_SUBS, 4),
+  ESC("Seek bar colour",            V_SEEK, 6),
 
   ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
   ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
@@ -214,6 +227,8 @@ static const char *KEY[] = {
   // never matches in the blob, which is what keeps the row local — and, unlike a
   // "-" key, it is still written to settings.txt.
   "subtitlePreferredGroup",
+  // Local to this port: the web app has no such key, so the blob never touches it.
+  "seekBarColor",
   "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
   "heroBackdropArea", "heroBackdropScale",
   "collapseSidebar", "modernSidebar", "modernSidebarBlur",
@@ -253,7 +268,7 @@ typedef char checked_one_key_per_option[
 // grouping, not a navigation level: up/down crosses the headers without stopping
 // on them, as on the device. The titles are the web app's.
 static const struct { const char *title; int start, n; } SECTIONS[] = {
-  { "Playback",                     SETTING_QUALITY,           4 },
+  { "Playback",                     SETTING_QUALITY,           5 },
   { "Home layout",                    SETTING_LANDSCAPE,           4 },
   { "Home content",               SETTING_RAIL,               13 },
   { "Continue watching",           SETTING_CW_ON,           7 },
@@ -279,6 +294,7 @@ static int value[SETTING_N] = {
   // owner reported as "subtitles are not really a thing here". A default of Off
   // would ship the same complaint with a switch next to it.
   1,                /* subtitles: automatic (English) */
+  0,                /* seek bar colour: violet */
 
   0,                /* landscape posters: ON (the owner's profile; factory: off) */
   0,                /* full-screen backdrop: ON (profile; factory: off) */
@@ -350,6 +366,11 @@ int settings_animations_reduced(void) { return value[SETTING_ANIM] == 1; }
 int settings_dolby_vision(void)        { return on(SETTING_DV); }
 int settings_dolby_atmos(void)         { return on(SETTING_ATMOS); }
 int settings_subtitle_pref(void)       { return value[SETTING_SUBS]; }
+void settings_seek_color(float *r, float *g, float *b) {
+  int i = value[SETTING_SEEK_COLOR];
+  if (i < 0 || i >= (int)(sizeof SEEK_RGB / sizeof *SEEK_RGB)) i = 0;
+  *r = SEEK_RGB[i][0]; *g = SEEK_RGB[i][1]; *b = SEEK_RGB[i][2];
+}
 
 // `collapseSidebar: modernSidebar ? false : Boolean(collapseSidebar)` — the modern
 // bar TURNS OFF the collapsing, and not the other way round. Copied from
@@ -720,6 +741,7 @@ static const char *helpOption(int op) {
     return "Turn on Depth effect to customise this detail.";
   }
   switch (op) {
+    case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead.";
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
     case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";

@@ -33,6 +33,8 @@ int settings_dolby_atmos(void);
 // 2 Portuguese, 3 English — the file's own track first, a download after. Read by
 // tracks.c, which owns the selection.
 int settings_subtitle_pref(void);
+// The player's seek bar colour (fill and playhead), from the Playback row.
+void settings_seek_color(float *r, float *g, float *b);
 // "Automatic", "4K", "1080p" or "720p" — the displayed label, so whatever picks
 // the video source shows exactly what the user chose.
 const char *settings_quality(void);

@@ -2454,10 +2454,14 @@ static void drawPlayer(Uint32 now) {
                 1, 1, 1, 0.30f * ab); }
   // Half a pixel already counts: with the test at 1.0 the start of the film drew
   // nothing, and the bar seemed only to start moving after a while.
-  { float fwid = cw * frac;
+  // The fill and the playhead take the Settings colour (Playback -> Seek bar
+  // colour); the track and the buffer stay neutral white, so only what has been
+  // played carries it.
+  { float fwid = cw * frac, sr, sg, sb;
+    settings_seek_color(&sr, &sg, &sb);
     if (fwid > 0.5f)
       gfx_color((GfxRect){ cx, yBar, fwid, hRail }, railRadius(fwid, hRail),
-                PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, ab);
+                sr, sg, sb, ab);
     // THE PLAYHEAD. `transform: scale(0)` at rest and `scale(1)` when the shell has
     // focus, so the resting bar stays a hairline and the knob is what says the bar
     // is now the thing LEFT and RIGHT are driving. Centred on the track's middle,
@@ -2465,7 +2469,7 @@ static void drawPlayer(Uint32 now) {
     { float d = PLR_RAIL_KNOB * fBar;
       if (d > 0.5f)
         gfx_color((GfxRect){ cx + fwid - d * 0.5f, yBar + hRail * 0.5f - d * 0.5f, d, d },
-                  0.5f, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, ab); } }
+                  0.5f, sr, sg, sb, ab); } }
   // WHERE PLAYBACK STILL IS (.player-seek-origin): a 4px tick at the position the
   // film is actually at while you aim somewhere else. Without it a long hold gives
   // you a bar full of numbers and no way to tell how far you have strayed from
