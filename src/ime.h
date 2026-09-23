@@ -90,6 +90,14 @@ void ime_close(void);
 // anything on screen.
 int  ime_is_open(void);
 
+// 1 while the platform's keyboard is actually ON SCREEN — not merely asked for.
+// The LG keyboard can go down on its own (the owner steps off its top row, or
+// presses its hide key) without the app calling ime_close; from then on the
+// D-pad reaches the app again, and a screen that still gated its arrows on
+// ime_is_open() left the field dead until Back. On the Mac there is no screen
+// keyboard, so this is always 0 there.
+int  ime_shown(void);
+
 // Feeds one event to the text field. Returns 1 when the event was CONSUMED and
 // the caller must not also act on it.
 //

@@ -13,6 +13,7 @@ static SDL_Window *win;
 static int   open_;
 static int   refused;        // the platform was asked and did not deliver
 static int   sawText;        // an SDL_TEXTINPUT has arrived at least once
+static int   wasShown;       // the keyboard was seen on screen since ime_open
 static Uint32 openedAt;
 static int   saidSo;         // the one log line, not one per frame
 
@@ -55,6 +56,7 @@ void ime_open(GfxRect field) {
   SDL_Rect r;
   if (open_) return;
   open_ = 1;
+  wasShown = 0;
   openedAt = SDL_GetTicks();
   // The rectangle is in the layout canvas and SDL wants window pixels. On this
   // TV they are the same (the window IS 1920x1080; see applySurface in main.c),
@@ -77,10 +79,27 @@ void ime_close(void) {
 
 int ime_is_open(void) { return open_; }
 
+int ime_shown(void) {
+#ifdef __APPLE__
+  return 0;
+#else
+  return open_ && SDL_IsScreenKeyboardShown(win) ? 1 : 0;
+#endif
+}
+
 void ime_pump(void) {
 #ifndef __APPLE__
-  if (!open_ || refused || sawText) return;
-  if (SDL_IsScreenKeyboardShown(win)) { sawText = 1; return; }
+  if (!open_ || refused) return;
+  // Seen up and now down: the platform lowered it without asking. Follow it, so
+  // the field stops acting as though it were still taking text (the blinking
+  // caret, OK meaning submit instead of raising the keyboard again).
+  if (SDL_IsScreenKeyboardShown(win)) { wasShown = 1; sawText = 1; return; }
+  if (wasShown) {
+    printf("[ime] the system keyboard went down on its own\n");
+    ime_close();
+    return;
+  }
+  if (sawText) return;
   if (SDL_GetTicks() - openedAt < NV_IME_GIVE_UP) return;
   // The platform said it had a keyboard, was asked for it, and produced
   // nothing. Refuse it for the rest of the session so the caller can put its

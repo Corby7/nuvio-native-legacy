@@ -637,6 +637,16 @@ void search_event(const SDL_Event *e) {
 
   if (k == SDLK_AC_BACK || k == SDLK_ESCAPE) { goBack(); return; }
 
+  // An arrow that REACHES the app with the keyboard asked for but not on screen
+  // means the system keyboard is no longer holding the D-pad. Lower it here and
+  // let the arrow do what it does on the field — down to the results, right to
+  // the compass, left to the menu — instead of swallowing it until Back.
+  if (ime_is_open() && !ime_shown() &&
+      (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT)) {
+    printf("[search] arrow with the keyboard down: leaving the field\n");
+    ime_close();
+  }
+
   if (panel == PANEL_FIELD) {
     switch (k) {
       case SDLK_RETURN: case SDLK_KP_ENTER:
