@@ -158,6 +158,16 @@ static int decorate(CatItem *d, const char *kind) {
   js_text(body, NULL, "logo", d->logo, sizeof d->logo);
   if (!d->title[0]) js_text(body, NULL, "name", d->title, sizeof d->title);
   js_text(body, NULL, "description", d->synopsis, sizeof d->synopsis);
+  // THE IMDb SCORE, off the same body. It was never read here, so every Continue
+  // watching (and Library) item reached the hero with score 0 and the mark and
+  // number simply did not draw — while the same title in any catalogue row had
+  // them. Stored in tenths like the rest of the catalogue; see discover.c.
+  { double score = js_num(body, NULL, "imdbRating", 0.0);
+    if (score > 0.0 && d->score <= 0) {
+      int n10 = (int)(score * 10.0 + 0.5);
+      if (n10 > 99) n10 /= 10;      // it already came multiplied
+      d->score = n10;
+    } }
   // The same rewrite discover.c does on this same field, and it was missing here:
   // these are the history and watchlist items, which fill Continue watching and
   // the Library — the rows the hero sits above. See cat_backdrop_shrink.

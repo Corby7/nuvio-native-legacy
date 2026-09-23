@@ -2199,7 +2199,9 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
       // design of it, and no amount of nudging a font size reproduces that.
       //
       // The score stays at 179 grey — measured BRIGHTER than the tokens around it,
-      // because it is the one number on the line anyone looks for.
+      // because it is the one number on the line anyone looks for. NOT the mark's
+      // yellow the title screen uses: tried here, and over the hero it pulled the eye
+      // off the title — the mark beside it is yellow enough.
       float bx = cx + NV_HERO_META_SEP * 2.0f;
       { TxtLine ld = txt_line(TXT_HERO_META, "\xe2\x80\xa2", dim, dim, dim, 255);
         txt_draw_alpha(ld, cx + NV_HERO_META_SEP,
