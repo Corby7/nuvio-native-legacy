@@ -1,5 +1,5 @@
-// Settings: a vertical list in sections, the label on the left and the value on
-// the right.
+// Settings: a list of sections, each a button that opens that section's options —
+// a vertical list, the label on the left and the value on the right.
 //
 // The rule that organises the whole screen: there are THREE natures of row and
 // they HAVE to look different. A choice row takes focus and gets arrows around
@@ -34,16 +34,20 @@
 
 #define SETTING_LINE_H       88.0f
 #define SETTING_LINE_GAP      8.0f
-#define SETTING_SEC_GAP       46.0f    // end of one section to the next section's header
-#define SETTING_SEC_HEADER     44.0f    // height reserved for the section header
 // Not a constant: it follows the rail, like all the rest of the content. With the
 // bar collapsed the list also starts at 104 — leaving 248 hard-coded here made
 // the Settings screen the only one misaligned with the others.
 #define SETTING_LIST_X      settings_content_x()
 #define SETTING_LIST_W     1120.0f
 #define SETTING_PAD           34.0f    // row edge to text
-#define SETTING_TOP        (NV_MARGIN_Y + 118.0f)   // below the screen's title
-#define SETTING_BASE        (NV_SCREEN_H - NV_MARGIN_Y - 48.0f)
+// The title is the same as Library's and Search's: TITLE3 with 1px tracking, at
+// the same height. Inside a section, the path ("Settings › Playback") sits between
+// it and the list; the list starts at the same height on both levels.
+#define SETTING_PATH_Y     (NV_DSC_Y + NV_DSC_TITLE_H + 36.0f)
+#define SETTING_TOP        (SETTING_PATH_Y + 44.0f)
+// Where scrolling keeps the focused row above. The list itself is NOT cut here:
+// it runs on to the bottom of the screen, like Library's grid.
+#define SETTING_BASE        (NV_SCREEN_H - NV_MARGIN_Y)
 // The row's radius as a fraction of the smaller side (the shader's SDF is
 // normalised): 12px over a height of 88.
 #define SETTING_RADIUS           0.14f
@@ -268,21 +272,33 @@ static const char *KEY[] = {
 typedef char checked_one_key_per_option[
   (sizeof KEY / sizeof *KEY == SETTING_N) ? 1 : -1];
 
-// Where each section starts and how many options it has. A section is a visual
-// grouping, not a navigation level: up/down crosses the headers without stopping
-// on them, as on the device. The titles are the web app's.
-static const struct { const char *title; int start, n; } SECTIONS[] = {
-  { "Playback",                     SETTING_QUALITY,           6 },
-  { "Home layout",                    SETTING_LANDSCAPE,           4 },
-  { "Home content",               SETTING_RAIL,               13 },
-  { "Continue watching",           SETTING_CW_ON,           7 },
-  { "Detail page",             SETTING_DET_BLUR_NOT_WATCHED, 4 },
-  { "Poster focus",                 SETTING_EXPAND,            3 },
-  { "Depth effect",         SETTING_DEPTH,                9 },
-  { "Item size",              SETTING_WIDTH_DP,          2 },
-  { "Interface",                      SETTING_ANIM,                  1 },
-  { "Account",                          SETTING_PROFILE_ACTIVE,        5 },
-  { "About",                          SETTING_VERSION_I,            2 },
+// Where each section starts and how many options it has. A section is a
+// navigation level: the screen opens on a list of the sections, and OK on one
+// opens its options. The titles are the web app's; the blurb is what the side
+// panel says about a section before it is opened.
+static const struct { const char *title; int start, n; const char *blurb; } SECTIONS[] = {
+  { "Playback",          SETTING_QUALITY,              6,
+    "Quality, Dolby formats, subtitles and the player's seek bar and countdown." },
+  { "Home layout",       SETTING_LANDSCAPE,            4,
+    "Poster shape and how the hero backdrop is drawn." },
+  { "Home content",      SETTING_RAIL,                13,
+    "The sidebar, the hero and what the Home rows show." },
+  { "Continue watching", SETTING_CW_ON,                7,
+    "Whether the resume row appears, how it looks and how it is sorted." },
+  { "Detail page",       SETTING_DET_BLUR_NOT_WATCHED, 4,
+    "Spoilers, the trailer button, metadata and release dates on a title's page." },
+  { "Poster focus",      SETTING_EXPAND,               3,
+    "What a poster does when it is focused." },
+  { "Depth effect",      SETTING_DEPTH,                9,
+    "The lit edge and sheen on cards, and which cards get it." },
+  { "Item size",         SETTING_WIDTH_DP,             2,
+    "Poster width and corner radius." },
+  { "Interface",         SETTING_ANIM,                 1,
+    "Motion across the app." },
+  { "Account",           SETTING_PROFILE_ACTIVE,       5,
+    "Profile, sync, Trakt, Simkl and signing out." },
+  { "About",             SETTING_VERSION_I,            2,
+    "Version and image memory." },
 };
 #define SETTING_N_SECTIONS (int)(sizeof SECTIONS / sizeof *SECTIONS)
 
@@ -353,11 +369,17 @@ static int value[SETTING_N] = {
   0, 0,             /* version, space */
 };
 
+// Two levels: 0 is the list of sections, 1 is the options of section `focusSec`.
+// focusOp only means anything on level 1, and it always lies inside that section.
+static int level = 0;
+static int focusSec = 0;
 static int focusOp = 0;
 // A ONE-column list does not need focus.h: the column memory it exists to solve
-// has nothing to remember here, and the raw index lets "skip the section header"
-// be an addition instead of a row map.
+// has nothing to remember here.
 static float animFocus[SETTING_N];
+static float animSec[SETTING_N_SECTIONS];
+// One scroll per level, so coming back from a section finds the list where it was.
+static float scrollSec = 0.0f;
 static float scrollY = 0.0f;
 static int wantsExit = 0;
 static int requestMenu = 0;   // LEFT on a row LEFT cannot change
@@ -638,7 +660,11 @@ int settings_apply_blob(const char *json) {
   return changed;
 }
 
-int settings_start(void) { focusOp = 0; scrollY = 0.0f; wantsExit = 0; return 1; }
+int settings_start(void) {
+  level = 0; focusSec = 0; focusOp = 0;
+  scrollSec = 0.0f; scrollY = 0.0f; wantsExit = 0;
+  return 1;
+}
 void settings_shutdown(void) { }
 int settings_wants_exit(void) { return wantsExit; }
 int settings_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }
@@ -730,12 +756,14 @@ static int readOnly(int op) { return OPTIONS[op].kind == OP_READ; }
 static int mutable(int op)   { return OPTIONS[op].kind != OP_READ &&
                                       OPTIONS[op].kind != OP_ACTION && !inactive(op); }
 
-static int sectionCurrent(void) {
-  for (int s = 0; s < SETTING_N_SECTIONS; s++)
-    if (focusOp < SECTIONS[s].start + SECTIONS[s].n) return s;
-  return SETTING_N_SECTIONS - 1;
+static void openSection(int s) {
+  level = 1;
+  focusSec = s;
+  focusOp = SECTIONS[s].start;
+  scrollY = 0.0f;
 }
 
+// NULL when the row has nothing to add beyond its label and value.
 static const char *helpOption(int op) {
   if (inactive(op)) {
     if (op == SETTING_RAIL) return "Turn off the modern sidebar to choose between collapsed and fixed.";
@@ -761,23 +789,22 @@ static const char *helpOption(int op) {
     case SETTING_VERSION_I: return "Application version. This information cannot be changed.";
     case SETTING_WIDTH_DP: return "Sets the poster width on rows that use the customisable size.";
     case SETTING_RADIUS_DP: return "Controls how rounded the poster corners are.";
-    default: return "Use the left and right arrows to choose. The preference applies as the value changes.";
+    default: return NULL;
   }
 }
 
-// The vertical offset from the top of the list to row `op`, counting the headers
-// of the sections that came before.
-static float yOfOption(int op) {
-  float y = 0.0f;
-  for (int s = 0; s < SETTING_N_SECTIONS; s++) {
-    y += (s ? SETTING_SEC_GAP : 0.0f) + SETTING_SEC_HEADER;
-    for (int k = 0; k < SECTIONS[s].n; k++) {
-      int o = SECTIONS[s].start + k;
-      if (o == op) return y;
-      y += SETTING_LINE_H + SETTING_LINE_GAP;
-    }
-  }
-  return y;
+// Both levels are plain lists of rows: row i sits i rows down from the top.
+static float yOfRow(int i) { return (float)i * (SETTING_LINE_H + SETTING_LINE_GAP); }
+
+// Scrolls the minimum for row `i` to fit the window.
+static float scrollFor(float current, int i) {
+  float top = yOfRow(i);
+  float base = top + SETTING_LINE_H;
+  float target = current;
+  if (base - target > SETTING_BASE - SETTING_TOP) target = base - (SETTING_BASE - SETTING_TOP);
+  if (top - target < 0.0f) target = top;
+  if (target < 0.0f) target = 0.0f;
+  return target;
 }
 
 void settings_event(const SDL_Event *e) {
@@ -802,11 +829,28 @@ void settings_event(const SDL_Event *e) {
       }
       return;
     } }
-  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
-      k == SDLK_DELETE) { wantsExit = 1; return; }
+  int back = k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
+             k == SDLK_DELETE;
 
-  if (k == SDLK_DOWN)      { if (focusOp < SETTING_N - 1) focusOp++; }
-  else if (k == SDLK_UP)   { if (focusOp > 0)        focusOp--; }
+  // Level 0: the list of sections. OK or RIGHT opens one; LEFT is the way out to
+  // the side menu, as on every other list with no value to step.
+  if (level == 0) {
+    if (back) { wantsExit = 1; return; }
+    if (k == SDLK_DOWN)      { if (focusSec < SETTING_N_SECTIONS - 1) focusSec++; }
+    else if (k == SDLK_UP)   { if (focusSec > 0) focusSec--; }
+    else if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_RIGHT) openSection(focusSec);
+    else if (k == SDLK_LEFT) requestMenu = 1;
+    return;
+  }
+
+  // Level 1: one section's options. Back returns to the list of sections, with
+  // focus still on the section that was open.
+  if (back) { level = 0; return; }
+  int first = SECTIONS[focusSec].start;
+  int last  = first + SECTIONS[focusSec].n - 1;
+
+  if (k == SDLK_DOWN)      { if (focusOp < last)  focusOp++; }
+  else if (k == SDLK_UP)   { if (focusOp > first) focusOp--; }
   else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
     if (OPTIONS[focusOp].kind != OP_ACTION) return;
     if (focusOp == SETTING_TRAKT) { traktauth_begin(); return; }
@@ -825,14 +869,14 @@ void settings_event(const SDL_Event *e) {
     }
   }
   else if (k == SDLK_PAGEUP || k == SDLK_PAGEDOWN) {
-    int s = sectionCurrent() + (k == SDLK_PAGEDOWN ? 1 : -1);
-    if (s >= 0 && s < SETTING_N_SECTIONS) focusOp = SECTIONS[s].start;
+    int s = focusSec + (k == SDLK_PAGEDOWN ? 1 : -1);
+    if (s >= 0 && s < SETTING_N_SECTIONS) openSection(s);
   }
   else if (k == SDLK_LEFT || k == SDLK_RIGHT) {
     // A read-only item, or one switched off by its dependency, changes with nothing.
-    // LEFT there has no value to step, so it is the way out to the side menu —
+    // LEFT there has no value to step, so it goes back up to the list of sections —
     // on a value row it keeps stepping the value, which is what the row is for.
-    if (!mutable(focusOp)) { if (k == SDLK_LEFT) requestMenu = 1; return; }
+    if (!mutable(focusOp)) { if (k == SDLK_LEFT) level = 0; return; }
     const Option *o = &OPTIONS[focusOp];
     int dir = (k == SDLK_RIGHT) ? 1 : -1;
     if (o->kind == OP_NUMBER) {
@@ -852,23 +896,24 @@ void settings_event(const SDL_Event *e) {
 
 void settings_update(float dt, Uint32 now) {
   (void)now;
+  int reduced = settings_animations_reduced();
   for (int i = 0; i < SETTING_N; i++) {
-    float target = (i == focusOp) ? 1.0f : 0.0f;
-    animFocus[i] = settings_animations_reduced() ? target : anim_spring(animFocus[i], target, dt,
+    float target = (level == 1 && i == focusOp) ? 1.0f : 0.0f;
+    animFocus[i] = reduced ? target : anim_spring(animFocus[i], target, dt,
                             target > animFocus[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
-  // Scrolls the minimum for the focused row to fit, and brings the section header
-  // along when the row is its first — without that, entering a section shows the
-  // option without saying which group it belongs to.
-  float top = yOfOption(focusOp);
-  for (int s = 0; s < SETTING_N_SECTIONS; s++)
-    if (SECTIONS[s].start == focusOp) { top -= SETTING_SEC_HEADER; break; }
-  float base = yOfOption(focusOp) + SETTING_LINE_H;
-  float target = scrollY;
-  if (base - target > SETTING_BASE - SETTING_TOP) target = base - (SETTING_BASE - SETTING_TOP);
-  if (top - target < 0.0f)              target = top;
-  if (target < 0.0f) target = 0.0f;
-  scrollY = settings_animations_reduced() ? target : anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
+  for (int s = 0; s < SETTING_N_SECTIONS; s++) {
+    float target = (level == 0 && s == focusSec) ? 1.0f : 0.0f;
+    animSec[s] = reduced ? target : anim_spring(animSec[s], target, dt,
+                            target > animSec[s] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
+  if (level == 0) {
+    float target = scrollFor(scrollSec, focusSec);
+    scrollSec = reduced ? target : anim_spring(scrollSec, target, dt, NV_SPRING_SCROLL);
+  } else {
+    float target = scrollFor(scrollY, focusOp - SECTIONS[focusSec].start);
+    scrollY = reduced ? target : anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
+  }
 }
 
 // The text of a row's value. A static buffer because only one row is drawn at a
@@ -885,7 +930,7 @@ static const char *textValue(int op) {
 }
 
 static void drawLine(int op, float y, float f) {
-  if (y + SETTING_LINE_H < SETTING_TOP - 40.0f || y > SETTING_BASE + 40.0f) return;
+  if (y + SETTING_LINE_H < SETTING_TOP - 40.0f || y > NV_SCREEN_H) return;
   // It disappears before crossing the screen's title, like the detail page's
   // sections: text passing under text reads as a blur.
   float a = anim_clamp((y - (SETTING_TOP - 70.0f)) / 60.0f, 0.0f, 1.0f);
@@ -944,6 +989,29 @@ static void drawLine(int op, float y, float f) {
                        y + (SETTING_LINE_H - left.h) * 0.5f, aText * f);
   }
   txt_draw_alpha(val, valueDir - val.w, vy, aText);
+}
+
+// A section's button on level 0: the same surface as an option row, the title on
+// the left and a chevron on the right that says the row opens something.
+static void drawSection(int s, float y, float f) {
+  if (y + SETTING_LINE_H < SETTING_TOP - 40.0f || y > NV_SCREEN_H) return;
+  float a = anim_clamp((y - (SETTING_TOP - 70.0f)) / 60.0f, 0.0f, 1.0f);
+  if (a <= 0.005f) return;
+
+  GfxRect line = { SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H };
+  gfx_color(line, SETTING_RADIUS, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G, NV_COLOR_FOCUS_B,
+          (0.34f + 0.66f * f) * a);
+  if (s == focusSec)
+    gfx_rect(line, 0, GFX_RING, 0, NV_RING_FOCUS / SETTING_LINE_H, 0,
+             SETTING_RADIUS, 0.96f, 0.96f, 0.97f, a);
+
+  TxtLine t = txt_line_trim(TXT_CALLOUT, SECTIONS[s].title, 240, 240, 240, 255,
+                            SETTING_LIST_W - 420.0f);
+  txt_draw_alpha(t, SETTING_LIST_X + SETTING_PAD, y + (SETTING_LINE_H - t.h) * 0.5f, a);
+
+  TxtLine chev = txt_line(TXT_CAPTION2, "\xe2\x96\xb6", 220, 220, 220, 255);
+  txt_draw_alpha(chev, SETTING_LIST_X + SETTING_LIST_W - SETTING_PAD - chev.w,
+                 y + (SETTING_LINE_H - chev.h) * 0.5f, a * (0.45f + 0.55f * f));
 }
 
 // Where the QR should point: the address, with the code IN THE PATH when the
@@ -1007,10 +1075,6 @@ static void drawLink(const char *service, const char *code,
 
   if (failure && failure[0]) {
     l = txt_line(TXT_HEADLINE, failure, 236, 108, 108, 255);
-    txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
-    y += 70.0f;
-    l = txt_line(TXT_CAPTION, "OK to try again · Back to close",
-                  150, 152, 160, 255);
     txt_draw(l, (NV_SCREEN_W - l.w) * 0.5f, y);
     return;
   }
@@ -1080,65 +1144,68 @@ void settings_draw(Uint32 now) {
   // ~40fps). Do not put it back without first changing the clear colour.
   (void)screen;
 
-  TxtLine title = txt_line(TXT_TITLE1, "Settings", 255, 255, 255, 255);
-  txt_draw(title, SETTING_LIST_X, NV_MARGIN_Y);
+  txt_tracking(TXT_TITLE3, "Settings", 255, 255, 255,
+               SETTING_LIST_X, NV_DSC_Y, 1.0f, NV_DSC_TITLE_LS);
+  // The path, only inside a section: where in Settings the list below belongs.
+  if (level) {
+    char path[80];
+    snprintf(path, sizeof path, "Settings  \xe2\x80\xba  %s", SECTIONS[focusSec].title);
+    TxtLine l = txt_line(TXT_CAPTION, path, 178, 180, 186, 255);
+    txt_draw(l, SETTING_LIST_X, SETTING_PATH_Y); }
 
-  int sec = sectionCurrent();
-  char pos[80];
-  snprintf(pos, sizeof pos, "%s  ·  %d of %d", SECTIONS[sec].title,
-           focusOp - SECTIONS[sec].start + 1, SECTIONS[sec].n);
-  TxtLine context = txt_line(TXT_CAPTION, pos, 178, 180, 186, 255);
-  txt_draw(context, SETTING_LIST_X, NV_MARGIN_Y + title.h + 10.0f);
-
+  // The side panel: what the focused section holds, or what the focused option does.
   float hx = SETTING_LIST_X + SETTING_LIST_W + 52.0f;
   float hw = NV_SCREEN_W - NV_MARGIN_X - hx;
   if (hw > 240.0f) {
-    TxtLine kind = txt_line(TXT_CAPTION, inactive(focusOp) ? "Option unavailable"
-                        : readOnly(focusOp) ? "Information" : "Customise", 168, 171, 180, 255);
-    txt_draw(kind, hx, SETTING_TOP + SETTING_SEC_HEADER);
-    float hy = SETTING_TOP + SETTING_SEC_HEADER + kind.h + 22.0f;
-    hy += txt_block(TXT_HEADLINE, OPTIONS[focusOp].label, 237, 238, 242,
-                   hx, hy, hw, 40, 1, 3);
-    hy += 22.0f;
-    hy += txt_block(TXT_CAPTION, helpOption(focusOp), 183, 186, 194,
-                   hx, hy, hw, 32, 1, 7);
-    hy += 42.0f;
-    txt_block(TXT_CAPTION, "↑ ↓  Navigate\n← →  Change value\nBack  Leave settings",
-              155, 159, 169, hx, hy, hw, 34, 1, 4);
+    const char *kindText, *head, *help;
+    char count[32];
+    if (level == 0) {
+      snprintf(count, sizeof count, SECTIONS[focusSec].n == 1 ? "%d option" : "%d options",
+               SECTIONS[focusSec].n);
+      kindText = count;
+      head = SECTIONS[focusSec].title;
+      help = SECTIONS[focusSec].blurb;
+    } else {
+      kindText = inactive(focusOp) ? "Option unavailable"
+               : readOnly(focusOp) ? "Information" : "Customise";
+      head = OPTIONS[focusOp].label;
+      help = helpOption(focusOp);
+    }
+    TxtLine kind = txt_line(TXT_CAPTION, kindText, 168, 171, 180, 255);
+    txt_draw(kind, hx, SETTING_TOP);
+    float hy = SETTING_TOP + kind.h + 22.0f;
+    hy += txt_block(TXT_HEADLINE, head, 237, 238, 242, hx, hy, hw, 40, 1, 3);
+    if (help) {
+      hy += 22.0f;
+      txt_block(TXT_CAPTION, help, 183, 186, 194, hx, hy, hw, 32, 1, 7);
+    }
   }
 
+  int rows = level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
+  float scroll = level ? scrollY : scrollSec;
   gfx_crop(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
-               SETTING_LIST_W + NV_RING_FOCUS * 2, SETTING_BASE - SETTING_TOP);
-  float y = SETTING_TOP - scrollY;
-  for (int s = 0; s < SETTING_N_SECTIONS; s++) {
-    if (s) y += SETTING_SEC_GAP;
-    // The section header in a small grey face: it labels the group, it does not
-    // compete with the options' labels.
-    float aC = anim_clamp((y - (SETTING_TOP - 70.0f)) / 60.0f, 0.0f, 1.0f);
-    TxtLine ts = txt_line(TXT_CAPTION, SECTIONS[s].title, 150, 152, 160, 255);
-    if (aC > 0.005f && y < SETTING_BASE)
-      txt_draw_alpha(ts, SETTING_LIST_X + SETTING_PAD, y + SETTING_SEC_HEADER - ts.h - 10.0f, aC);
-    y += SETTING_SEC_HEADER;
-    for (int k = 0; k < SECTIONS[s].n; k++) {
-      int op = SECTIONS[s].start + k;
+               SETTING_LIST_W + NV_RING_FOCUS * 2, NV_SCREEN_H - SETTING_TOP);
+  for (int i = 0; i < rows; i++) {
+    float y = SETTING_TOP - scroll + yOfRow(i);
+    if (level) {
+      int op = SECTIONS[focusSec].start + i;
       drawLine(op, y, animFocus[op]);
-      y += SETTING_LINE_H + SETTING_LINE_GAP;
+    } else {
+      drawSection(i, y, animSec[i]);
     }
   }
   gfx_no_crop();
 
-  float total = yOfOption(SETTING_N - 1) + SETTING_LINE_H;
+  float total = yOfRow(rows - 1) + SETTING_LINE_H;
   float window = SETTING_BASE - SETTING_TOP;
   if (total > window) {
     float height = window * window / total;
-    float sy = SETTING_TOP + (window - height) * anim_clamp(scrollY / (total - window), 0, 1);
+    float sy = SETTING_TOP + (window - height) * anim_clamp(scroll / (total - window), 0, 1);
     gfx_color((GfxRect){ SETTING_LIST_X + SETTING_LIST_W + 18, SETTING_TOP, 3, window },
             0.5f, 0.60f, 0.62f, 0.66f, 0.14f);
     gfx_color((GfxRect){ SETTING_LIST_X + SETTING_LIST_W + 18, sy, 3, height },
             0.5f, 0.80f, 0.82f, 0.86f, 0.8f);
   }
-  TxtLine footer = txt_line(TXT_CAPTION, "PgUp / PgDn  Change section", 156, 159, 168, 255);
-  txt_draw(footer, SETTING_LIST_X, SETTING_BASE + 20);
 
   // Above everything: while a link is in progress, it is the screen's question.
   { TraState ta = traktauth_state();
