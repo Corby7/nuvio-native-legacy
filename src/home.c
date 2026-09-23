@@ -151,6 +151,7 @@ static float scrollY = 0.0f;
 static float velX[MAX_FILTER];
 static float velY = 0.0f;
 static int wantsExit = 0, requestOpen = 0, requestMenu = 0;
+static int requestPlay = -1;   // "Play on select": see home_requested_play
 static Uint32 okSince = 0;
 static int okPressing = 0;
 static int okLongFired = 0;
@@ -951,6 +952,13 @@ void home_event(const SDL_Event *e) {
           rowCatalog(focus.row, &c);
           if (hasItemFocus) ctx_set_anchor(ringFocus, ringFocusR);
           ctx_open_row(rows[focus.row].start + focus.column, &c); }
+      } else if (settings_cw_play() && focus.row >= 0 && focus.row < nRows &&
+                 !strcmp(rows[focus.row].key, "continue_watching") &&
+                 cat_item_exact(rows[focus.row].start + focus.column)) {
+        // "Play on select": the card plays instead of opening its page. The hold
+        // above is untouched, so the menu (details included) is still one long
+        // press away.
+        requestPlay = rows[focus.row].start + focus.column;
       } else {
         requestOpen = 1;
       }
@@ -3907,6 +3915,7 @@ const char *home_art(int i) { return (nBd && i >= 0 && i < nBd) ? bd[i] : NULL; 
 // Consumes the request to open: whoever reads it, clears it. That way OK counts once
 // only, even if the frame takes a while.
 int home_requested_open(void) { int v = requestOpen; requestOpen = 0; return v; }
+int home_requested_play(void) { int v = requestPlay; requestPlay = -1; return v; }
 
 // Consumes the request to open the side menu: whoever reads it, clears it.
 int home_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }

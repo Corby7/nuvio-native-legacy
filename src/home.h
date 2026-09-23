@@ -67,6 +67,9 @@ void home_shutdown(void);
 void home_record_return(int index_, double posSeg, double durationSeg);
 int  home_wants_exit(void);
 int  home_requested_open(void);   // OK pressed: consumes the request
+// OK on a Continue watching card with "Play on select" on: the catalogue index
+// to play, or -1. Consumed once, like the open.
+int  home_requested_play(void);
 int  home_requested_menu(void);    // LEFT in the first column: calls up the menu
 int home_requested_social(void);
 int home_requested_person_social(CatItem *output);

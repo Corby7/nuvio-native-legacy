@@ -68,7 +68,7 @@ typedef enum {
   SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME, SETTING_GRADIENT_CLASSIC,
   SETTING_SOCIAL,
   // Continue watching
-  SETTING_CW_ON, SETTING_CW_STYLE, SETTING_CW_LOGO, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
+  SETTING_CW_ON, SETTING_CW_STYLE, SETTING_CW_LOGO, SETTING_CW_PLAY, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
   SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN, SETTING_CW_ORDER,
   // Detail page
   SETTING_DET_BLUR_NOT_WATCHED, SETTING_DET_TRAILER, SETTING_DET_META_EXT, SETTING_DET_DATE_FULL,
@@ -211,6 +211,7 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Show \"Continue watching\"", V_ON, 2), // continueWatchingEnabled
   ESC("\"Continue watching\" style", V_CW, 3), // continueWatchingCardStyle
   ESC("Show logo",              V_ON, 2),   // local: the title's logo for its name
+  ESC("Play on select",         V_ON, 2),   // local: OK plays, skipping the detail
   ESC("Episode thumbnail",      V_ON, 2),   // useEpisodeThumbnailsInCw
   ESC("Blur next episode",  V_ON, 2),   // blurContinueWatchingNextUp
   ESC("Next from the furthest episode", V_ON, 2),// nextUpFromFurthestEpisode
@@ -290,7 +291,7 @@ static const char *KEY[] = {
   "socialRowEnabled",
   "continueWatchingEnabled", "continueWatchingCardStyle",
   // Local to this port: the web app has no such key, so the blob never touches it.
-  "continueWatchingTitleLogo",
+  "continueWatchingTitleLogo", "continueWatchingPlayOnSelect",
   "useEpisodeThumbnailsInCw", "blurContinueWatchingNextUp",
   "nextUpFromFurthestEpisode", "showUnairedNextUp", "continueWatchingSortMode",
   "blurUnwatchedEpisodes", "detailPageTrailerButtonEnabled",
@@ -328,7 +329,7 @@ static const struct { const char *title; int start, n; const char *blurb; } SECT
     "Poster shape and how the hero backdrop is drawn." },
   { "Home content",      SETTING_RAIL,                13,
     "The sidebar, the hero and what the Home rows show." },
-  { "Continue watching", SETTING_CW_ON,                8,
+  { "Continue watching", SETTING_CW_ON,                9,
     "Whether the resume row appears, how it looks and how it is sorted." },
   { "Detail page",       SETTING_DET_BLUR_NOT_WATCHED, 4,
     "Spoilers, the trailer button, metadata and release dates on a title's page." },
@@ -393,6 +394,7 @@ static int value[SETTING_N] = {
   0,                /* continue watching: on */
   0,                /* style: card */
   1,                /* show logo: off */
+  1,                /* play on select: off */
   0,                /* episode thumbnail: on */
   1,                /* blur next up: off */
   0,                /* next from the furthest episode: on */
@@ -500,6 +502,7 @@ int settings_discover_na_search(void)  { return value[SETTING_DISCOVER] == 0; }
 int settings_cw_on(void)           { return on(SETTING_CW_ON); }
 int settings_cw_style(void)           { return value[SETTING_CW_STYLE]; }
 int settings_cw_logo(void)            { return on(SETTING_CW_LOGO); }
+int settings_cw_play(void)            { return on(SETTING_CW_PLAY); }
 int settings_cw_thumb_episode(void)   { return on(SETTING_CW_THUMB); }
 int settings_cw_blur_next(void) { return on(SETTING_CW_BLUR_NEXT); }
 int settings_cw_do_episode_more_alto(void) { return on(SETTING_CW_FURTHEST); }
@@ -801,7 +804,7 @@ static int inactive(int op) {
     case SETTING_RAIL:         return settings_rail_modern();
     case SETTING_RAIL_BLUR:    return !settings_rail_modern();
     case SETTING_HERO_CATALOGS: return !settings_hero_on();
-    case SETTING_CW_STYLE: case SETTING_CW_THUMB: case SETTING_CW_FURTHEST:
+    case SETTING_CW_STYLE: case SETTING_CW_PLAY: case SETTING_CW_THUMB: case SETTING_CW_FURTHEST:
     case SETTING_CW_NOT_SHOWN: case SETTING_CW_ORDER:
       return !settings_cw_on();
     case SETTING_CW_BLUR_NEXT: return !settings_cw_on() || !settings_cw_thumb_episode();
@@ -864,6 +867,7 @@ static const char *helpOption(int op) {
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
     case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";
+    case SETTING_CW_PLAY: return "Pressing OK on a resume card plays it straight away, skipping the title's page. Hold OK for the other options.";
     case SETTING_CW_LOGO: return "Shows the title's logo in place of its name on the resume cards. A title with no logo keeps its name.";
     case SETTING_CW_FURTHEST: return "Picks the next episode from the furthest one marked as watched.";
     case SETTING_CW_BLUR_NEXT: case SETTING_DET_BLUR_NOT_WATCHED: return "Hides thumbnail detail to avoid spoilers for episodes you have not watched.";

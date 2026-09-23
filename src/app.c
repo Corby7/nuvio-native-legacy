@@ -805,6 +805,10 @@ void app_update(float dt, Uint32 now) {
   // episode is the item's own — a Continue watching card carries the one being
   // resumed.
   { int fromStart = 0, i = ctx_requested_play(&fromStart);
+    // "Play on select" takes the same road: OK on a Continue watching card, with
+    // the setting on, is the menu's Resume without the menu.
+    if (i < 0 && screen == SCREEN_HOME && !detail_is_open() && !player_is_open())
+      i = home_requested_play();
     if (i >= 0 && waitingSource != 2) {
       const CatItem *ci = cat_item(i);
       player_open(i, NULL);
