@@ -1,0 +1,4 @@
+<!-- The watched tick on an episode's thumbnail. Only the tick: detail.c draws the
+     white disc under it and tints this dark. Bold with round ends so it still reads
+     at the ~26px it is drawn at. Alpha is the glyph: do not flatten it onto a ground. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path d="M40 134 L102 196 L216 68" fill="none" stroke="#ffffff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round"/></svg>

@@ -2053,6 +2053,14 @@ static int publishEpisodes(const char *body, int targetItem, const char *title) 
   return n;
 }
 
+// Whether `targetItem` still holds the title the thread was started for. A catalogue
+// swap while the fetch is in flight moves the titles under their indices, and
+// writing through the old index hands this title's episodes and meta to another.
+static int stillTarget(int targetItem, const char *imdb) {
+  const CatItem *now = cat_item(targetItem);
+  return now && !strcmp(now->imdb, imdb);
+}
+
 static void *fetchEps(void *u) {
   int targetItem = epItem;
   const CatItem *orig = cat_item(targetItem);
@@ -2084,7 +2092,8 @@ static void *fetchEps(void *u) {
     if (!body) { threadEpAlive = 0; return NULL; }
     metaCacheStore(series, body);
   }
-  if (!isMovie) publishEpisodes(body, targetItem, it->title);
+  if (!isMovie && stillTarget(targetItem, it->imdb))
+    publishEpisodes(body, targetItem, it->title);
   // The SAME response carries the cast, the directing and the season list. Fetching
   // again for each would be three round trips to the same place.
   {
@@ -2172,7 +2181,7 @@ static void *fetchEps(void *u) {
               edit.seasons[j2] = tmp;
             } } }
     // It publishes text, genres and seasons before the image enrichment.
-    cat_update_item(targetItem, &edit);
+    if (stillTarget(targetItem, it->imdb)) cat_update_item(targetItem, &edit);
     mark("detail: basic meta on screen");
     { char idBase[24];
       const char *dp;
@@ -2184,7 +2193,7 @@ static void *fetchEps(void *u) {
     // API is keyed by it. Called before this, `edit.tmdb` is still 0 and the fetch
     // returned without a word — which is exactly how it failed the first time.
     if (!isMovie) episodeScores(edit.tmdb, targetItem);
-    cat_update_item(targetItem, &edit);
+    if (stillTarget(targetItem, it->imdb)) cat_update_item(targetItem, &edit);
     printf("[disc] %s: %d actors, dir='%s', %d seasons\n",
            edit.title, edit.nCast, edit.directing, edit.nSeasons);
     fflush(stdout);

@@ -21,7 +21,7 @@ command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found (brew insta
 OUT=deploy/app/art/icons
 SIZE="${NUVIO_ICON_PX:-128}"
 
-for name in instant reload close; do
+for name in instant reload close ep_watched; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "assets/icons/$name.svg" -o "$OUT/$name.png"
   echo "    $name.png <- assets/icons/$name.svg"
 done

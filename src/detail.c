@@ -101,6 +101,18 @@ static int  level = 0;
 static float skelProv, skelSup, skelStat;
 // When the current title's clock started, which NV_DETW2_SKEL_MS counts against.
 static Uint32 skelSince;
+// THE EPISODES CAN BE TAKEN AWAY UNDER THE PAGE. Every catalogue swap — a home row
+// growing, a search result or a filmography credit appended, discovery publishing —
+// zeroes every title's episode range and (for cat_set_all) the season list with it.
+// app.c asks for them only when the source target CHANGES, and a series that has
+// lost its episodes has no episode to change focus to, so the picker and the list
+// stayed gone until another title was opened. detail_update asks again instead,
+// a bounded number of times: the meta is cached, so a re-ask after a swap costs no
+// network, and a series that honestly has no episodes stops after the last try.
+#define EP_RETRY_MAX 3
+#define EP_RETRY_MS  3000u
+static int    epRetries;
+static Uint32 epRetryAt;
 // Declared here because detail_update drives the crossfades and sits above the
 // drawing that defines them. They are one question asked from two places — "will
 // there be something here, and is it worth holding the space" — and a second copy of
@@ -577,6 +589,8 @@ void detail_open(const HomeItem *it, int shared) {
   // otherwise inherit a wait the previous one had already served.
   skelProv = skelSup = skelStat = 0.0f;
   skelSince = SDL_GetTicks();
+  epRetries = 0;
+  epRetryAt = SDL_GetTicks();
   idx = it->index_;
   // The Trakt score, comments and related titles. Requested on OPENING and not while
   // drawing: the tabs only appear once the data arrives, and requesting while drawing
@@ -1414,6 +1428,16 @@ void detail_update(float dt, Uint32 now) {
   // It releases the episode request that was held because it arrived with another load
   // in flight.
   disc_episodes_pending();
+  // See EP_RETRY_MAX. The kind, as app.c asks: a kindless item is only a series
+  // BY its episodes, and those are what is missing.
+  { const CatItem *ci = cat_item(idx);
+    if (ci && !strcmp(ci->kind, "series") && cat_n_episodes(idx) == 0 &&
+        !disc_episodes_loading(idx) && epRetries < EP_RETRY_MAX &&
+        now - epRetryAt > EP_RETRY_MS) {
+      epRetries++;
+      epRetryAt = now;
+      disc_episodes(idx, 0);
+    } }
 
   // THE SEASON IS CHOSEN IN THE DROPDOWN, and nowhere else.
   //
@@ -2806,13 +2830,17 @@ static void episodeActions(const CatEp *ep, EpActions *o) {
     } }
 }
 
-static float episodeCopyX(void) {
-  return NV_DETP_X + NV_DETEP_THUMB_W + NV_DETEP_TEXT_GAP;
+// The thumbnail's scale on the row's focus spring `f`: grows from the gutter.
+static float episodeThumbScale(float f) {
+  return 1.0f + (NV_DETEP_THUMB_GROW - 1.0f) * f;
+}
+static float episodeCopyX(float f) {
+  return NV_DETP_X + NV_DETEP_THUMB_W * episodeThumbScale(f) + NV_DETEP_TEXT_GAP;
 }
 // Where the copy has to stop: short of the pill on the focused row, short of the
 // watched mark on the others.
 static float episodeCopyRight(const CatEp *ep, int focused) {
-  if (!focused) return NV_DETEP_RIGHT - NV_DETEP_CHECK - NV_DETEP_ACT_GAP;
+  if (!focused) return NV_DETEP_RIGHT;
   EpActions ac; episodeActions(ep, &ac);
   return ac.xStart - NV_DETEP_ACT_GAP;
 }
@@ -2828,7 +2856,7 @@ static float episodeInkH(int lines) {
 static int episodeFullLines(const CatEp *ep) {
   if (!ep || !ep->synopsis[0]) return 0;
   return txt_block_lines(TXT_DETWEB_EPD, ep->synopsis,
-                         episodeCopyRight(ep, 1) - episodeCopyX());
+                         episodeCopyRight(ep, 1) - episodeCopyX(1.0f));
 }
 // The row's height focused: its whole synopsis plus the air, never under the resting
 // height.
@@ -2932,8 +2960,9 @@ static void drawEpisodeRow(float y, float h, int c, float f, float a) {
              1, 1, 1, NV_DETEP_BAND_A * f * a);
   }
 
-  GfxRect th = { NV_DETP_X, mid - NV_DETEP_THUMB_H * 0.5f,
-                 NV_DETEP_THUMB_W, NV_DETEP_THUMB_H };
+  float sc = episodeThumbScale(f);
+  GfxRect th = { NV_DETP_X, mid - NV_DETEP_THUMB_H * sc * 0.5f,
+                 NV_DETEP_THUMB_W * sc, NV_DETEP_THUMB_H * sc };
   float radiusTh = NV_DETEP_THUMB_R / th.h;
   if (f > 0.01f) {
     float ring = NV_DETEP_RING;
@@ -2943,7 +2972,7 @@ static void drawEpisodeRow(float y, float h, int c, float f, float a) {
   { const CatItem *series = cat_item(idx);
     const char *art = (ep && ep->thumb[0]) ? ep->thumb
                        : (series && series->backdrop[0] ? series->backdrop : NULL);
-    GLuint t2 = art ? tex_get_width(art, NV_DETEP_THUMB_W) : 0;
+    GLuint t2 = art ? tex_get_width(art, NV_DETEP_THUMB_W * NV_DETEP_THUMB_GROW) : 0;
     if (t2) {
       gfx_tex_aspect_current = tex_aspect(art);
       gfx_rect(th, t2, GFX_CARD, 0, 0, 0, radiusTh, 0, 0, 0, rowA);
@@ -2957,6 +2986,17 @@ static void drawEpisodeRow(float y, float h, int c, float f, float a) {
     float min  = NV_CW_BAR_MINW / th.w;
     if (fill < min) fill = min;
     gfx_rect(th, 0, GFX_CW_BAR, 0, NV_CW_BAR_H / th.h, fill, radiusTh, 1, 1, 1, rowA);
+  }
+  // THE WATCHED MARK, in the thumbnail's top-right corner and scaling with it: a
+  // plain white disc with `ep_watched`, the bare tick, tinted dark on it.
+  if (ep && extras_ep_watched(ep->season, ep->episode)) {
+    float sc2 = th.w / NV_DETEP_THUMB_W, d = NV_DETEP_CHECK * sc2;
+    float in = NV_DETEP_CHECK_INSET * sc2, t = d * NV_DETEP_CHECK_TICK;
+    GfxRect st = { th.x + th.w - in - d, th.y + in, d, d };
+    GfxRect tk = { st.x + (d - t) * 0.5f, st.y + (d - t) * 0.5f, t, t };
+    gfx_color(st, 0.5f, 1, 1, 1, rowA);
+    gfx_icon_at(tk, "ep_watched", NV_DETEP_CHECK * NV_DETEP_CHECK_TICK,
+                0.08f, 0.08f, 0.08f, rowA);
   }
 
   // --- the right-hand column ---------------------------------------------------
@@ -2975,20 +3015,8 @@ static void drawEpisodeRow(float y, float h, int c, float f, float a) {
     if (ac.left.w > 0.0f)
       txt_draw_alpha(ac.left, ac.xStart, mid - ac.left.h * 0.5f, aAct);
   }
-  // THE WATCHED MARK. `ep_watched` is a disc with the tick KNOCKED OUT, so a light
-  // circle under a dark glyph shows the tick in the circle's colour: a dim disc with a
-  // grey tick. It is not dimmed with the row — at the row's rest opacity it would all
-  // but vanish, and it is already quiet by design.
-  if (ep && extras_ep_watched(ep->season, ep->episode) && f < 0.99f) {
-    float aChk = a * (1.0f - f);
-    GfxRect st = { NV_DETEP_RIGHT - NV_DETEP_CHECK, mid - NV_DETEP_CHECK * 0.5f,
-                   NV_DETEP_CHECK, NV_DETEP_CHECK };
-    gfx_color(st, 0.5f, 0.55f, 0.55f, 0.55f, aChk);
-    gfx_icon_at(st, "ep_watched", NV_DETEP_CHECK, 0.16f, 0.16f, 0.16f, aChk);
-  }
-
   // --- the copy, on baselines ----------------------------------------------------
-  float tx = episodeCopyX();
+  float tx = episodeCopyX(f);
   float right = episodeCopyRight(ep, focused);
   const char *syn = (ep && ep->synopsis[0]) ? ep->synopsis : NULL;
   int full = focused ? episodeFullLines(ep) : 0;
@@ -3032,7 +3060,7 @@ static void drawEpisodeRow(float y, float h, int c, float f, float a) {
       txt_draw_alpha(l, tx, yD, rowA * (1.0f - aFull));
     }
     if (aFull > 0.01f)
-      txt_block(TXT_DETWEB_EPD, syn, 225, 225, 225, tx, yD, right - tx,
+      txt_block(TXT_DETWEB_EPD, syn, 225, 225, 225, tx, yD, right - episodeCopyX(1.0f),
                 NV_DETEP_DESC_LD, rowA * aFull, 0);
   }
 }

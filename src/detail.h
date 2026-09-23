@@ -359,28 +359,31 @@ int  detail_requested_do_start(void);
 // NuvioWeb's horizontal rail of 600x395 cards,
 // which showed two and a half episodes and one synopsis at a time.
 //
-//   row      224 tall at rest, rows touching. The FOCUSED row grows to hold its whole
+//   row      236 tall at rest, rows touching. The FOCUSED row grows to hold its whole
 //            synopsis, and the rows under it move down on the focus spring.
 //   band     the focused row is lit by a white wash from the screen's left edge that
 //            DISSOLVES to the right (GFX_ROW_FADE) — no line where it stops
-//   thumb    288x162 (16:9), radius 12, at the gutter; focused: a 4px white ring
-//            and the Continue Watching bar along its base when there is progress
-//   copy     32 right of the thumbnail and centred on the row, on BASELINES: title
-//            -> meta 42, meta -> synopsis 44, synopsis leading 35. At rest the
+//   thumb    320x180 (16:9), radius 12, at the gutter; focused: grown by
+//            NV_DETEP_THUMB_GROW from the gutter, a 4px white ring, and the Continue
+//            Watching bar along its base when there is progress
+//   copy     56 right of the thumbnail (the focused one pushes its copy along) and
+//            centred on the row, on BASELINES: title -> meta 42, meta -> synopsis 44, synopsis leading 35. At rest the
 //            synopsis is one line; focused, all of it.
-//   right    at rest a watched mark; focused, "22 min left" and a Resume / Play pill
-//            that ends at NV_DETEP_RIGHT
+//   watched  a white disc with a bold dark tick in the thumbnail's top-right corner
+//   right    focused, "22 min left" and a Resume / Play pill that ends at
+//            NV_DETEP_RIGHT
 //   rest     every row but the focused one at NV_DETEP_DIM while the list has focus
-#define NV_DETEP_ROW_H       224.0f
+#define NV_DETEP_ROW_H       236.0f
 #define NV_DETEP_PADY         40.0f   // a grown row's air above and below its copy
-#define NV_DETEP_THUMB_W     288.0f
-#define NV_DETEP_THUMB_H     162.0f
+#define NV_DETEP_THUMB_W     320.0f
+#define NV_DETEP_THUMB_H     180.0f
+#define NV_DETEP_THUMB_GROW    1.10f  // the focused thumbnail's scale: 352x198
 #define NV_DETEP_THUMB_R      12.0f
 #define NV_DETEP_RING          4.0f
-#define NV_DETEP_TEXT_GAP     32.0f   // thumbnail -> copy
+#define NV_DETEP_TEXT_GAP     56.0f   // thumbnail -> copy
 #define NV_DETEP_BAND_A        0.08f  // the band is white at this alpha
 #define NV_DETEP_BAND_FADE     0.50f  // where across the screen the band starts to go
-#define NV_DETEP_RIGHT      1418.0f   // where the pill and the watched mark end
+#define NV_DETEP_RIGHT      (NV_SCREEN_W - NV_DETP_X)  // 1824: where the pill ends
 #define NV_DETEP_ACT_GAP      40.0f   // the copy's right edge -> the right-hand column
 // How lit a row is. DIM is every unfocused row while the list has the focus; REST is
 // every row while it does not (the picker is focused, or the page is scrolling in),
@@ -404,7 +407,9 @@ int  detail_requested_do_start(void);
 #define NV_DETEP_BTN_ICON     24.0f
 #define NV_DETEP_BTN_GAPI     14.0f   // icon -> label
 #define NV_DETEP_LEFT_GAP     24.0f   // "22 min left" -> the pill
-#define NV_DETEP_CHECK        42.0f   // the watched mark's diameter
+#define NV_DETEP_CHECK        34.0f   // the watched mark's diameter, on the thumbnail
+#define NV_DETEP_CHECK_INSET  11.0f   // from the thumbnail's top and right edges
+#define NV_DETEP_CHECK_TICK    0.66f  // the tick's box, as a fraction of the disc
 
 // THE TEXT STACK. Both captures give the same absolute coordinates for what is
 // BELOW the synopsis (the IMDb badge at y=938, the age-rating badge at y=999) and
