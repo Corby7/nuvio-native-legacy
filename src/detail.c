@@ -1257,7 +1257,7 @@ void detail_event(const SDL_Event *e) {
       int target = id[0] ? cat_index_by_imdb(id) : -1;
       if (target >= 0) reqOpen = target;
       else if (id[0]) disc_request_title(id);
-    } else if (focus.row == SEC_SEASONS) {
+    } else if (focus.row == SEC_SEASONS && sectionN(SEC_SEASONS) > 0) {
       // OK EXPANDS THE LIST; it no longer switches season on its own, because there is
       // no longer one control per season to switch to. The list opens with its focus on
       // the season already chosen, which is how the web shows you where you are.
@@ -1300,8 +1300,19 @@ void detail_event(const SDL_Event *e) {
       // no seasons and no episodes, and stopping on an empty row left the D-pad
       // unresponsive. It has to be sectionColumns and not sectionN: the trailers are
       // DRAWN but take no focus, and a film with no cast would land on them.
-      for (int r = 0; r < N_SECTIONS; r++)
-        if (sectionColumns(r) > 0) { focus.row = r; focus.column = 0; level = 1; break; }
+      //
+      // A SERIES WHOSE EPISODES ARE STILL IN FLIGHT lands on the picker all the same,
+      // on page 2 where the skeleton stands. The search above skips it while it has no
+      // columns, and a quick DOWN on opening went straight past to the tabs on page 3
+      // — so when the seasons arrived the picker was a page above you, and only UP and
+      // DOWN again brought it into view. Parked on the empty row, the picker appears
+      // focused where you are the moment the data lands; DOWN skips on past it and UP
+      // returns to the hero, as focus_move already does for an empty row.
+      if (isSeries() && sectionColumns(SEC_SEASONS) == 0 && disc_episodes_loading(idx)) {
+        focus.row = SEC_SEASONS; focus.column = 0; level = 1;
+      } else
+        for (int r = 0; r < N_SECTIONS; r++)
+          if (sectionColumns(r) > 0) { focus.row = r; focus.column = 0; level = 1; break; }
     }
     else if (k == SDLK_RIGHT) { if (button < nButtons() - 1) button++; }
     else if (k == SDLK_LEFT)  { if (button > 0) button--; }
@@ -2230,10 +2241,17 @@ static void heroWeb(float a, float offset) {
         // On a wide wordmark 6% is tens of pixels and a visible change of scale,
         // arriving in one frame. That is the snap at the end of the close; the
         // rows had the same defect and the same cause.
+        //
+        // THE FLIGHT SCROLLS WITH THE PAGE. `rises` carries the document's scroll as
+        // well as the rise, and taking it all back off left the mark pinned to the
+        // screen: a quick DOWN while it was still flying scrolled page 2 up under it,
+        // and it hung over the season picker until the flight ended and it vanished.
+        // Both ends are moved by scrollY, so at rest (scrollY 0) nothing changes.
         float p = detail_progress();
-        GfxRect rest = { r.x, baseLogo - rises - h, r.w, r.h };
+        GfxRect rest = { r.x, baseLogo - rises - scrollY - h, r.w, r.h };
+        float fromY = hl.y - scrollY;
         r.x = hl.x + (rest.x - hl.x) * p;
-        r.y = hl.y + (rest.y - hl.y) * p;
+        r.y = fromY + (rest.y - fromY) * p;
         r.w = hl.w + (rest.w - hl.w) * p;
         r.h = hl.h + (rest.h - hl.h) * p;
         aLogo = 1.0f;
