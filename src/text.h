@@ -118,6 +118,8 @@ typedef enum {
   TXT_NEXT_KICK,     // .player-next-episode-kicker         20 / 700, uppercase
   TXT_NEXT_TITLE,    // .player-next-episode-title          32 / 700
   TXT_NEXT_PILL,     // .player-next-episode-play/-dismiss  22 / 500
+  TXT_NEXT_PILL_MED, // the resting Not now label           19 / 500
+  TXT_NEXT_COUNT,    // the card's "Playing in 8s"          20 / 700
   TXT_ERAIL_META,    // .player-episode-detail-meta         22 / 700, uppercase
   TXT_ERAIL_TITLE,   // .player-episode-detail-title        44 / 800
   TXT_ERAIL_OVER,    // .player-episode-detail-overview     22 / 500

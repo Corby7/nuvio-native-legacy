@@ -295,7 +295,12 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_SKIP,       WEIGHT_MEDIUM },  // TXT_SKIP        .player-skip-intro-label
   { NV_FT_NEXT_KICK,  WEIGHT_BOLD   },  // TXT_NEXT_KICK   .player-next-episode-kicker
   { NV_FT_NEXT_TITLE, WEIGHT_BOLD   },  // TXT_NEXT_TITLE  .player-next-episode-title
-  { NV_FT_NEXT_PILL,  WEIGHT_MEDIUM },  // TXT_NEXT_PILL   the card's action pills
+  // Bold on both pills, against the Medium rule for dark ink on a light pill:
+  // the pair sit side by side, one inverted, and Medium on the white one read as
+  // a lighter label than its neighbour rather than the same weight.
+  { NV_FT_NEXT_PILL,  WEIGHT_BOLD   },  // TXT_NEXT_PILL   the card's action pills
+  { NV_FT_NEXT_PILL,  WEIGHT_MEDIUM },  // TXT_NEXT_PILL_MED the resting Not now
+  { NV_FT_NEXT_COUNT, WEIGHT_BOLD   },  // TXT_NEXT_COUNT  the card's countdown
   // The episode rail.
   { NV_FT_ERAIL_META,  WEIGHT_BOLD   }, // TXT_ERAIL_META   .player-episode-detail-meta
   { NV_FT_ERAIL_TITLE, WEIGHT_BOLD   }, // TXT_ERAIL_TITLE  .player-episode-detail-title

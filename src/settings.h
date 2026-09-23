@@ -35,6 +35,8 @@ int settings_dolby_atmos(void);
 int settings_subtitle_pref(void);
 // The player's seek bar colour (fill and playhead), from the Playback row.
 void settings_seek_color(float *r, float *g, float *b);
+// Seconds the Up next card counts down before it plays the next episode.
+int settings_next_countdown(void);
 // "Automatic", "4K", "1080p" or "720p" — the displayed label, so whatever picks
 // the video source shows exactly what the user chose.
 const char *settings_quality(void);

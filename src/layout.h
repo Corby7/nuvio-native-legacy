@@ -2056,25 +2056,42 @@
 // The next-episode card. Flat panel fill at the panel radius, no blur: every
 // other surface in the player dropped backdrop-filter, which is a per-frame
 // compositor cost paid on top of video decode, and this card was the last holdout.
-#define NV_NEXT_R          24.0f   // min(1.25vw,24)
-#define NV_NEXT_GAP        24.0f   // min(1.25vw,24)
-#define NV_NEXT_THUMB_W   300.0f   // min(15.63vw,300)
-#define NV_NEXT_THUMB_H   200.0f   // min(10.42vw,200)
-// The copy column is content-sized in the web app; here it is a number, because a
-// card that changes width with the episode's title would move under the eye every
-// time the next episode changes.
-#define NV_NEXT_COPY_W    420.0f
-#define NV_NEXT_PADY       20.0f   // min(1.04vw,20)
-#define NV_NEXT_PADR       24.0f   // min(1.25vw,24)
-#define NV_NEXT_PILL_PADX  20.0f   // min(1.04vw,20)
-#define NV_NEXT_PILL_PADY  12.0f   // min(0.63vw,12)
-// The same glyph, so the same correction: the box is twice the ink it shows.
-#define NV_NEXT_PILL_INK   18.0f   // clamp(14,0.94vw,18)
-#define NV_NEXT_PILL_ICON (NV_NEXT_PILL_INK * 2.0f)
-#define NV_FT_NEXT_KICK    20      // .player-next-episode-kicker 20 / 700, ls .08em
-#define NV_FT_NEXT_TITLE   32      // .player-next-episode-title  32 / 700
-#define NV_FT_NEXT_PILL    22      // the action pills            22 / 500
-#define NV_NEXT_KICK_TRACK  1.6f   // 0.08em at 20px
+#define NV_NEXT_R          20.0f
+#define NV_NEXT_PAD        24.0f   // the card's inset above and below its content
+// Left and right match, so the copy column ends as far from the card's edge as
+// the thumbnail starts from it.
+#define NV_NEXT_PADX       24.0f
+#define NV_NEXT_GAP        24.0f   // thumbnail to copy column
+// The thumbnail sits INSIDE the card's padding at 16:9 with its own radius — a
+// picture on the card, not the card's left end. Its height is the copy stack's:
+// caption, title, pills.
+#define NV_NEXT_THUMB_H   132.0f
+#define NV_NEXT_THUMB_W   (NV_NEXT_THUMB_H * 16.0f / 9.0f)
+#define NV_NEXT_THUMB_R    12.0f
+// The copy column is as wide as the wider of the title and the pill row, capped
+// so a long episode name trims instead of stretching the card across the frame.
+#define NV_NEXT_COPY_MAX  440.0f
+#define NV_NEXT_TITLE_Y    28.0f   // caption top to title top
+#define NV_NEXT_TITLE_DOT_GAP 12.0f // either side of the dot in "S1 E12 · Name"
+#define NV_NEXT_PILL_H     44.0f
+#define NV_NEXT_PILL_PADX  20.0f
+#define NV_NEXT_PILL_GAP   10.0f
+// play.png's triangle is not centred in half its box the way the skip glyph is:
+// its ink runs from 25% to 94% of the width (x 32..120 of 128). Layout therefore
+// counts the INK width and hangs the box so the ink starts on the text column —
+// assuming the 2x rule put the triangle's tip against the "P".
+#define NV_NEXT_PLAY_BOX   14.0f
+#define NV_NEXT_PLAY_INK_X 0.25f
+#define NV_NEXT_PLAY_INK_W (NV_NEXT_PLAY_BOX * 0.6875f)
+#define NV_NEXT_PILL_ICON_GAP 10.0f
+#define NV_NEXT_PILL_RING   1.5f   // the Not now outline, in px
+// The countdown along the card's base, the same 6px band the skip button carries.
+#define NV_NEXT_BAR         6.0f
+#define NV_FT_NEXT_KICK    17      // "UP NEXT"          17 / 700, ls .2em
+#define NV_FT_NEXT_COUNT   17      // "Playing in 8s"    17 / 700
+#define NV_FT_NEXT_TITLE   28      // "S1 E11 · Name"    28 / 700
+#define NV_FT_NEXT_PILL    19      // the action pills   19 / 700
+#define NV_NEXT_KICK_TRACK  3.4f   // 0.2em at 17px
 
 // THE PLAYER'S DROPDOWNS — the season pill here, the subtitle sheet's selects —
 // are the title page's, but see-through: over the picture and the veil a solid

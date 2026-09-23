@@ -53,6 +53,7 @@
 typedef enum {
   // Playback
   SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_SUBS, SETTING_SEEK_COLOR,
+  SETTING_NEXT_COUNTDOWN,
   // Layout da Home
   SETTING_LANDSCAPE, SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
   // Conteudo da Home
@@ -148,6 +149,7 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Dolby Atmos",                V_ON, 2),
   ESC("Subtitles",                  V_SUBS, 4),
   ESC("Seek bar colour",            V_SEEK, 6),
+  NUM("Next episode countdown",     5, 30, 5, " s"),
 
   ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
   ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
@@ -229,6 +231,8 @@ static const char *KEY[] = {
   "subtitlePreferredGroup",
   // Local to this port: the web app has no such key, so the blob never touches it.
   "seekBarColor",
+  // Local to this port as well: how long the Up next card waits before it plays.
+  "nextEpisodeCountdownSeconds",
   "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
   "heroBackdropArea", "heroBackdropScale",
   "collapseSidebar", "modernSidebar", "modernSidebarBlur",
@@ -268,7 +272,7 @@ typedef char checked_one_key_per_option[
 // grouping, not a navigation level: up/down crosses the headers without stopping
 // on them, as on the device. The titles are the web app's.
 static const struct { const char *title; int start, n; } SECTIONS[] = {
-  { "Playback",                     SETTING_QUALITY,           5 },
+  { "Playback",                     SETTING_QUALITY,           6 },
   { "Home layout",                    SETTING_LANDSCAPE,           4 },
   { "Home content",               SETTING_RAIL,               13 },
   { "Continue watching",           SETTING_CW_ON,           7 },
@@ -295,6 +299,7 @@ static int value[SETTING_N] = {
   // would ship the same complaint with a switch next to it.
   1,                /* subtitles: automatic (English) */
   0,                /* seek bar colour: violet */
+  15,               /* next episode countdown: 15 s */
 
   0,                /* landscape posters: ON (the owner's profile; factory: off) */
   0,                /* full-screen backdrop: ON (profile; factory: off) */
@@ -366,6 +371,7 @@ int settings_animations_reduced(void) { return value[SETTING_ANIM] == 1; }
 int settings_dolby_vision(void)        { return on(SETTING_DV); }
 int settings_dolby_atmos(void)         { return on(SETTING_ATMOS); }
 int settings_subtitle_pref(void)       { return value[SETTING_SUBS]; }
+int settings_next_countdown(void)    { return value[SETTING_NEXT_COUNTDOWN]; }
 void settings_seek_color(float *r, float *g, float *b) {
   int i = value[SETTING_SEEK_COLOR];
   if (i < 0 || i >= (int)(sizeof SEEK_RGB / sizeof *SEEK_RGB)) i = 0;
@@ -742,6 +748,7 @@ static const char *helpOption(int op) {
   }
   switch (op) {
     case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead.";
+    case SETTING_NEXT_COUNTDOWN: return "How long the Up next card waits before it plays the next episode.";
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
     case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";
