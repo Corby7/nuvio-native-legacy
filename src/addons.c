@@ -299,6 +299,8 @@ static char subId[64], subKind[16];
 static char subExtra[1800];
 static unsigned subGeneration;
 static void addons_fetch_subtitles_extra(const char *imdb, const char *kind, const char *extra);
+static void releaseFromId(const char *id, char *dst, size_t size, int *pct);
+static void providerOf(const char *url, const char *addonName, char *dst, size_t size);
 static pthread_mutex_t subLock = PTHREAD_MUTEX_INITIALIZER;
 
 int addons_n_subtitles(void) {
@@ -446,6 +448,9 @@ static void *fetchSubtitles(void *u) {
               if (h == nHosts && nHosts < 6) {
                 snprintf(hosts[nHosts].host, sizeof hosts[0].host, "%s", host);
                 hosts[nHosts++].n = 0;
+                // One raw entry per provider: what fields each one really carries.
+                data_log("addons.log", "sample from %s: %.*s", host,
+                         (int)(f - q < 900 ? f - q : 900), q);
               }
               if (h < nHosts) hosts[h].n++;
             } }
@@ -456,15 +461,28 @@ static void *fetchSubtitles(void *u) {
               js_text(q, f, "lang", l, sizeof l) &&
               (groupLanguage(l) == group || (extra >= 0 && groupLanguage(l) == extra)) &&
               js_text(q, f, "url", d->url, sizeof d->url)) {
-            js_text(q, f, "subtitleFileName", name, sizeof name);
-            if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);
+            // THE RELEASE NAME, wherever this provider keeps it: the public
+            // OpenSubtitles addon in subtitleFileName/movieReleaseName, OpenSubtitles
+            // V3 Pro in `title`, SubDL only inside its id ("[100%]<release>_20").
+            // Without it a row reads "Download 12" and cannot match the file.
+            { char idv[260] = "";
+              js_text(q, f, "subtitleFileName", name, sizeof name);
+              if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);
+              if (!name[0]) js_text(q, f, "title", name, sizeof name);
+              js_text(q, f, "id", idv, sizeof idv);
+              releaseFromId(idv, name[0] ? NULL : name, sizeof name, &d->matchPct); }
             snprintf(d->language, sizeof d->language, "%s", l);
             snprintf(d->release, sizeof d->release, "%s", name);
-            snprintf(d->source, sizeof d->source, "%s", addon[i].name);
-            { char m[4] = "";
+            providerOf(d->url, addon[i].name, d->source, sizeof d->source);
+            { char m[4] = "", mh[40] = "", b[8] = "";
               js_text(q, f, "m", m, sizeof m);
-              d->hashMatch = !strcmp(m, "h");
-              d->fpsMilli = (int)js_num(q, f, "fpsMilli", 0); }
+              // OpenSubtitles V3 Pro says it with the hash itself: null unless the
+              // subtitle was found by the file's hash.
+              js_text(q, f, "moviehash", mh, sizeof mh);
+              d->hashMatch = !strcmp(m, "h") || mh[0];
+              d->fpsMilli = (int)js_num(q, f, "fpsMilli", 0);
+              d->trusted = js_raw(q, f, "from_trusted", b, sizeof b) && !strcmp(b, "true");
+              d->aiTranslated = js_raw(q, f, "ai_translated", b, sizeof b) && !strcmp(b, "true"); }
             if (season > 0 && episode > 0)
               snprintf(d->label, sizeof d->label, "S%dE%d  \xc2\xb7  %s%s%.22s",
                        season, episode, nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
@@ -541,6 +559,48 @@ static void addons_fetch_subtitles_extra(const char *imdb, const char *kind, con
   if (pthread_create(&threadSub, NULL, fetchSubtitles, NULL) != 0) threadSubAlive = 0;
   else threadSubCreated = 1;
   pthread_mutex_unlock(&subLock);
+}
+
+// A subtitle id that carries the release, in the two shapes the providers use:
+// SubDL's "[100%]The.Film.2008.REMUX-GRP_20" (a match score, the release, an
+// index) and OpenSubtitles V3 Pro's "v3+|13404902|The.Film.2008.REMUX-GRP.mkv".
+// Writes the release into `dst` when `dst` is given, and the score into *pct
+// (-1 when there is none). A bare numeric id carries nothing.
+static void releaseFromId(const char *id, char *dst, size_t size, int *pct) {
+  const char *p = id, *bar;
+  size_t n;
+  *pct = -1;
+  if (!id || !*id) return;
+  if (p[0] == '[' && strstr(p, "%]")) {
+    *pct = atoi(p + 1);
+    p = strstr(p, "%]") + 2;
+    n = strlen(p);
+    // SubDL's trailing "_<index>".
+    { size_t k = n; while (k > 0 && isdigit((unsigned char)p[k - 1])) k--;
+      if (k > 0 && k < n && p[k - 1] == '_') n = k - 1; }
+  } else if ((bar = strrchr(p, '|'))) {
+    p = bar + 1;
+    n = strlen(p);
+  } else return;
+  if (dst && n > 0) snprintf(dst, size, "%.*s", (int)n, p);
+}
+
+// The provider a subtitle file comes from, by the host serving it. The names are
+// the ones the providers go by; anything else is shown as its bare host, so a
+// provider added in AIOStreams later still gets a truthful label.
+static void providerOf(const char *url, const char *addonName, char *dst, size_t size) {
+  const char *a = url ? strstr(url, "://") : NULL;
+  char host[64];
+  if (!a) { snprintf(dst, size, "%s", addonName); return; }
+  a += 3;
+  snprintf(host, sizeof host, "%.*s", (int)strcspn(a, "/:?"), a);
+  if (strstr(host, "opensubtitles"))    snprintf(dst, size, "OpenSubtitles");
+  else if (strstr(host, "subdl"))       snprintf(dst, size, "SubDL");
+  else if (strstr(host, "subsource"))   snprintf(dst, size, "SubSource");
+  else if (strstr(host, "podnapisi"))   snprintf(dst, size, "Podnapisi");
+  else if (strstr(host, "strem.io"))    snprintf(dst, size, "OpenSubtitles");  // the public addon's CDN
+  else if (!strncmp(host, "www.", 4))   snprintf(dst, size, "%s", host + 4);
+  else                                  snprintf(dst, size, "%s", host);
 }
 
 // encodeURIComponent, as buildExtraParams uses it: everything but the unreserved

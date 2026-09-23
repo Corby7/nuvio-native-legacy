@@ -102,8 +102,16 @@ typedef struct {
   // thousandths, 0 when unknown. tracks.c ranks on both.
   int  hashMatch;
   int  fpsMilli;
-  // The addon that answered ("AIOStreams", "SubDL"), for the sheet's detail line.
+  // The PROVIDER, for the sheet's detail line: "OpenSubtitles", "SubDL". Worked
+  // out from the file's host, because an aggregator (AIOStreams) merges several
+  // providers into one answer and names none of them; an unknown host is shown
+  // as itself, and a subtitle with no URL host falls back to the addon's name.
   char source[48];
+  // SubDL's own match score against the playing file's name ("[100%]" at the
+  // start of its id), -1 when the provider gives none.
+  int  matchPct;
+  // OpenSubtitles: uploaded by a trusted member / machine-translated.
+  int  trusted, aiTranslated;
 } Subtitle;
 
 void addons_fetch_subtitles(const char *imdb, const char *kind);

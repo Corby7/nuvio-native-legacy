@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 
 // The panel's measurements live in layout.h under NV_TRK_*.
 
@@ -206,6 +207,7 @@ static int wanted(const char *code, const char *remembered, int group) {
 
 static int hasWord(const char *s, const char *w);
 static int matchesPlaying(const char *release);
+static int subScore(const Subtitle *l);
 static int subActive(void);
 
 // A track that carries only signs and foreign dialogue: the file's FlagForced,
@@ -325,37 +327,26 @@ void tracks_auto(Uint32 now) {
 
   // Then the addon's. Its search is still out on most starts, so wait for it.
   //
-  // RANKED, not first-come. The first English result used to win, and on The
-  // Dark Knight all three English OpenSubtitles results were 2008 DVD-screener
-  // timings, one at 29.97 fps: a subtitle can be the right language and never
-  // line up with the film. What the entry says about its own timing decides:
-  //   +8  found by the file's hash — made for this exact file
-  //   +4  the same release group as the file (the sheet's "matches your file")
-  //   +2  timed at the video's frame rate; -4 at a different one
-  // Ties keep the addon's order. The score is logged with the choice.
+  // RANKED, not first-come — by subScore, the same order the sheet lists them in.
+  // The first English result used to win, and on The Dark Knight that was a 2008
+  // DVD-screener timing. Ties keep the addon's order; the score is logged.
   if (!expired && addons_subtitles_busy()) return;
-  { int best = -1, bestScore = -1000, video = video_frame_rate_milli();
+  { int best = -1, bestScore = -1000;
     for (i = 0; i < addons_n_subtitles(); i++) {
       const Subtitle *l = addons_subtitle(i);
-      int score = 0;
+      int score;
       if (!l || !wanted(l->language, remembered, group)) continue;
-      if (l->hashMatch) score += 8;
-      if (matchesPlaying(l->release)) score += 4;
-      if (video > 0 && l->fpsMilli > 0) {
-        int d = video - l->fpsMilli;
-        if (d < 0) d = -d;
-        score += d * 100 <= video ? 2 : -4;   // within 1%: 23.976 and 23.98 agree
-      }
+      score = subScore(l);
       if (score > bestScore) { best = i; bestScore = score; }
     }
     if (best >= 0) {
       const Subtitle *l = addons_subtitle(best);
       video_choose_subtitle(-1); subtitle_load(l->url);
       subExternal = embedded + best;
-      { char o[200]; snprintf(o, sizeof o, "chose addon %d (%s) score %d%s%s%s", best,
-                              l->language, bestScore, l->hashMatch ? " hash" : "",
+      { char o[300]; snprintf(o, sizeof o, "chose addon %d (%s, %s) score %d%s%s%s: %.120s", best,
+                              l->language, l->source, bestScore, l->hashMatch ? " hash" : "",
                               matchesPlaying(l->release) ? " same-release" : "",
-                              remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
+                              remembered[0] ? " (remembered for this show)" : "", l->release); autoLog(o); }
       autoDone = 1; return;
     } }
 
@@ -487,15 +478,43 @@ static void setLang(int i) {
   snprintf(langKey, sizeof langKey, "%s", langs[i].name);
 }
 
-// The Subtitle select's list: the rows of the combined list in language `li`, in
-// list order — the file's own first, then the addon's.
+// The Subtitle select's list: the rows of the combined list in language `li` —
+// the file's own first, in their order, then the addon's BEST FIRST by subScore,
+// the order the automatic choice uses. An aggregator returns well over a hundred,
+// and the one worth trying has to be at the top rather than found by scrolling.
+// A release offered twice (OpenSubtitles and SubDL both carry it) is listed once,
+// the higher-scoring copy — unless the other copy is the one playing, which then
+// stays so the sheet can mark it.
 static int langOptions(int li, int *out) {
-  int n = nSubtitles(), i, k = 0;
+  int n = nSubtitles(), embedded = video_n_subtitle(), act = subActive(), i, j, k = 0, first;
+  int score[OPT_MAX];
   if (li <= 0 || li >= nLangs) return 0;
   for (i = 0; i < n && k < OPT_MAX; i++) {
     char name[32];
     subLanguage(i, name, sizeof name);
-    if (!strcmp(name, langs[li].name)) out[k++] = i;
+    if (strcmp(name, langs[li].name)) continue;
+    if (i >= embedded) {
+      const Subtitle *l = addons_subtitle(i - embedded);
+      int dup = 0;
+      for (j = 0; l && l->release[0] && j < k; j++) {
+        const Subtitle *m = out[j] >= embedded ? addons_subtitle(out[j] - embedded) : NULL;
+        if (!m || strcasecmp(m->release, l->release)) continue;
+        // Keep the better copy, or whichever one is playing.
+        if (i == act || (out[j] != act && subScore(l) > score[j])) {
+          out[j] = i; score[j] = subScore(l);
+        }
+        dup = 1; break;
+      }
+      if (dup) continue;
+      score[k] = l ? subScore(l) : -1000;
+    } else score[k] = 1000;   // the file's own tracks lead, in the file's order
+    out[k++] = i;
+  }
+  // Stable insertion sort, descending: equal scores keep the addon's order.
+  for (first = 1; first < k; first++) {
+    int o = out[first], sc = score[first];
+    for (j = first; j > 0 && score[j - 1] < sc; j--) { out[j] = out[j - 1]; score[j] = score[j - 1]; }
+    out[j] = o; score[j] = sc;
   }
   return k;
 }
@@ -559,7 +578,16 @@ static int releaseGroup(const char *name, char *dst, size_t size) {
   const char *slash = strrchr(name, '/'), *dash, *end;
   size_t k = 0;
   if (slash) name = slash + 1;
+  // The last '.' starts an EXTENSION only when what follows looks like one —
+  // ".mkv", ".srt". SubDL's names carry none, and "…DTS-HD.MA.5.1.HEVC.REMUX-FraMeSToR"
+  // was cut at ".REMUX-FraMeSToR", which made its group "HD", out of "DTS-HD".
   end = strrchr(name, '.');
+  if (end) {
+    size_t k, n = strlen(end + 1);
+    int ext = n >= 2 && n <= 4;
+    for (k = 1; ext && end[k]; k++) if (!isalnum((unsigned char)end[k])) ext = 0;
+    if (!ext) end = NULL;
+  }
   if (!end) end = name + strlen(name);
   for (dash = end; dash > name && dash[-1] != '-'; dash--) {}
   if (dash == name) return 0;
@@ -570,6 +598,63 @@ static int releaseGroup(const char *name, char *dst, size_t size) {
   }
   dst[k] = 0;
   return k >= 2;
+}
+
+// A release that was never the film as released: cinema recordings and the
+// pre-release screeners. Their timing belongs to a different cut.
+static int releaseScreener(const char *r) {
+  static const char *const T[] = { "dvdscr", "screener", "scr", "cam", "camrip", "hdcam",
+                                   "ts", "hdts", "telesync", "tc", "telecine", "r5", NULL };
+  char low[160]; size_t k; int i;
+  for (k = 0; r[k] && k + 1 < sizeof low; k++) low[k] = (char)tolower((unsigned char)r[k]);
+  low[k] = 0;
+  for (i = 0; T[i]; i++) {
+    size_t n = strlen(T[i]); const char *p;
+    for (p = low; (p = strstr(p, T[i])); p++)
+      if ((p == low || !isalnum((unsigned char)p[-1])) && !isalnum((unsigned char)p[n])) return 1;
+  }
+  return 0;
+}
+
+// The disc/web family a name belongs to: 2 Blu-ray (REMUX, BluRay, BDRip), 1 web
+// (WEB-DL, WEBRip), 0 unknown. Subtitles cut for the same family usually share
+// the same master and so the same timing.
+static int releaseFamily(const char *r) {
+  if (hasWord(r, "remux") || hasWord(r, "bluray") || hasWord(r, "blu-ray") ||
+      hasWord(r, "bdrip") || hasWord(r, "brrip") || hasWord(r, "bdremux")) return 2;
+  if (hasWord(r, "web")) return 1;
+  return 0;
+}
+
+// HOW LIKELY A SUBTITLE IS TO STAY IN SYNC with the playing file, from what its
+// entry says. One number for both the automatic choice and the sheet's order:
+//   +8  found by the file's hash — made for this exact file
+//   +4  the same release group as the file
+//   +3  SubDL's own match against the file name at 100% (+2 at 90% or more)
+//   +2  timed at the video's frame rate          -4  at a different one
+//   +1  the same family as the file (Blu-ray / web)
+//   +1  a trusted uploader                       -3  machine-translated
+//   -4  a screener or cinema recording
+static int subScore(const Subtitle *l) {
+  const Stream *st = stream_n() > 0 ? stream_item(stream_current()) : NULL;
+  int score = 0, video = video_frame_rate_milli();
+  if (!l) return -1000;
+  if (l->hashMatch) score += 8;
+  if (matchesPlaying(l->release)) score += 4;
+  if (l->matchPct >= 100) score += 3; else if (l->matchPct >= 90) score += 2;
+  if (video > 0 && l->fpsMilli > 0) {
+    int d = video - l->fpsMilli;
+    if (d < 0) d = -d;
+    score += d * 100 <= video ? 2 : -4;   // within 1%: 23.976 and 23.98 agree
+  }
+  if (st && st->file[0] && l->release[0]) {
+    int a = releaseFamily(st->file), b = releaseFamily(l->release);
+    if (a && a == b) score += 1;
+  }
+  if (l->trusted) score += 1;
+  if (l->aiTranslated) score -= 3;
+  if (l->release[0] && releaseScreener(l->release)) score -= 4;
+  return score;
 }
 
 static int matchesPlaying(const char *release) {
@@ -606,14 +691,21 @@ static void optionText(int i, int ordinal, char *main, size_t mSize,
     const Subtitle *l = addons_subtitle(i - embedded);
     if (l && l->release[0]) snprintf(main, mSize, "%s", l->release);
     else snprintf(main, mSize, "Download %d", ordinal + 1);
-    // The same evidence the automatic choice ranks on, said on the row: an exact
-    // hash match, the same release, or a frame rate the film does not have.
+    // The PROVIDER, then the evidence the order is built on, strongest first —
+    // what makes the top row the top row, and what is wrong with the bottom ones.
     { int video = video_frame_rate_milli(), d = 0;
+      char why[96] = "";
       if (l && video > 0 && l->fpsMilli > 0) { d = video - l->fpsMilli; if (d < 0) d = -d; }
-      snprintf(sub, sSize, "%s%s", l && l->source[0] ? l->source : "Addon",
-               l && l->hashMatch ? "  \xc2\xb7  made for this file"
-               : l && matchesPlaying(l->release) ? "  \xc2\xb7  matches your file"
-               : d * 100 > video && d ? "  \xc2\xb7  different frame rate" : ""); }
+      if (!l) why[0] = 0;
+      else if (l->hashMatch) snprintf(why, sizeof why, "made for this file");
+      else if (matchesPlaying(l->release)) snprintf(why, sizeof why, "same release as your file");
+      else if (l->release[0] && releaseScreener(l->release)) snprintf(why, sizeof why, "screener timing");
+      else if (d && d * 100 > video) snprintf(why, sizeof why, "different frame rate");
+      else if (l->matchPct >= 0) snprintf(why, sizeof why, "%d%% name match", l->matchPct);
+      if (l && l->aiTranslated)
+        snprintf(why + strlen(why), sizeof why - strlen(why), "%sAI-translated", why[0] ? ", " : "");
+      snprintf(sub, sSize, "%s%s%s", l && l->source[0] ? l->source : "Addon",
+               why[0] ? "  \xc2\xb7  " : "", why); }
   }
 }
 
