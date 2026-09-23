@@ -834,6 +834,8 @@
 #define NV_FT_PLR_TIME  30
 // .player-controls-row .player-seek-delta — the signed jump, in its own pill.
 #define NV_FT_PLR_DELTA 24
+// The quick-seek readout at the screen's side ("+ 10 >") with the controls down.
+#define NV_FT_PLR_QUICK 44
 // The stats panel. The label is the quieter half of the pair, and the quality
 // badge is 0.75em of the value in the sheet (.player-stats-quality).
 #define NV_FT_PLR_STAT   22

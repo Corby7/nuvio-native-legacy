@@ -279,6 +279,27 @@ static float  seekPreview = 0.0f;
 static Uint32 seekAt = 0, seekEndAt = 0;
 static Uint32 settleAt = 0;
 static float  settleTarget = 0.0f;
+// THE QUICK SEEK: LEFT/RIGHT with the controls DOWN. Each press is a flat
+// PLR_QUICK_STEP_S — one press ten seconds, two twenty — with no ramp, because
+// here you count presses rather than hold. It rides the same preview and the same
+// single commit as the bar; what it adds is how it is SHOWN: "+ 20 >" at the side
+// of the frame and the bar with its time alone, not the whole transport.
+//
+// `quickDelta` is the burst's sum, kept apart from seekPreview - posSeg because
+// playback runs on underneath and would make "+ 10" count down while you read it.
+// It outlives the commit so the readout can linger; the next burst zeroes it.
+#define PLR_QUICK_STEP_S   10.0f
+// How long the readout and the bar stay after the LAST press: the commit goes out
+// at PLR_SEEK_COMMIT_MS, and the rest is time to see where it landed.
+#define PLR_QUICK_HOLD_MS  2000u
+// The quick layout's gap between the time and the bar under it.
+#define PLR_QUICK_TIME_GAP   14.0f
+// The quick layout's bottom scrim: just tall enough to seat the time and the bar.
+#define PLR_QUICK_GRADIENT  200.0f
+static Uint32 quickAt = 0;
+static float  quickDelta = 0.0f;
+static float  quickAnim = 0.0f;    // 0..1, the quick overlay's spring
+static float  quickPulse = 0.0f;   // 1 on each press, decays: the chevron's nudge
 static int    statsOpen = 0;   // the stream stats panel (#playerStatsOverlay)
 static float entry = 0.0f;       // 0..1 the screen's opening/closing fade
 static float entryV = 0.0f;      // its velocity: the opening runs on anim_spring2
@@ -981,6 +1002,7 @@ void player_shutdown(void) {
   statsOpen = 0;
   seekActive = 0; seekRepeats = 0; seekDir = 0;
   seekAt = seekEndAt = settleAt = 0;
+  quickAt = 0; quickDelta = 0.0f; quickAnim = 0.0f; quickPulse = 0.0f;
   startImage = 0;
   episodes_close();
   intro_off(); introIdx=introT=introE=-1;
@@ -1194,17 +1216,19 @@ static void togglePlaying(void) {
   barFocus = 0;
 }
 
-// A 10s jump with a limit. It only counts with the controls up: blind, an arrow
-// would be an invisible jump — with the buttons, whoever presses is looking at a
-// button that says «10 / 10».
+// The bar's seek, with the ramp. The controls-down arrows go through quickSeek.
 // Moves the TARGET. Nothing is sent to the pipeline here — see commitSeek.
+static void seekBegin(void) {
+  if (seekActive) return;
+  seekActive = 1;
+  seekPreview = posSeg;
+  seekRepeats = 0;
+  seekDir = 0;
+  quickDelta = 0.0f;
+}
+
 static void jump(int dir) {
-  if (!seekActive) {
-    seekActive = 1;
-    seekPreview = posSeg;
-    seekRepeats = 0;
-    seekDir = 0;
-  }
+  seekBegin();
   // A change of direction restarts the ramp, like the web app's
   // `direction !== this.seekPreviewDirection` — reversing is a correction, and
   // correcting at 120s a press would be unusable.
@@ -1214,6 +1238,19 @@ static void jump(int dir) {
   seekPreview = anim_clamp(seekPreview + dir * seekStepFor(seekRepeats),
                               0.0f, durationSeg);
   seekAt = SDL_GetTicks();
+}
+
+// The controls-down seek (see THE QUICK SEEK). The sum is taken from what the
+// clamp let through, so at the end of the film the readout stops with the bar.
+static void quickSeek(int dir) {
+  float from;
+  seekBegin();
+  from = seekPreview;
+  seekDir = dir;
+  seekPreview = anim_clamp(seekPreview + dir * PLR_QUICK_STEP_S, 0.0f, durationSeg);
+  quickDelta += seekPreview - from;
+  seekAt = quickAt = SDL_GetTicks();
+  quickPulse = 1.0f;
 }
 
 // Sends the burst's target to the pipeline, once.
@@ -1237,7 +1274,8 @@ void player_event(const SDL_Event *e) {
     return;
   }
 
-  // CONTROLS HIDDEN: any direction only wakes the interface. OK straight away
+  // CONTROLS HIDDEN: UP/DOWN wake the interface, LEFT/RIGHT skip (see THE QUICK
+  // SEEK). OK straight away
   // pauses/resumes without navigating anything — it is the device's gesture: one
   // press in the centre and the video obeys, with no steps in between.
   // THE ASPECT KEY works always, with the controls up or hidden. In the web app the
@@ -1258,7 +1296,17 @@ void player_event(const SDL_Event *e) {
     }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
       if (activateCard()) return;
+      // OK mid quick-seek is "go there now", as it is on the bar — pausing
+      // would throw the aim away.
+      if (seekActive) { commitSeek(); return; }
       togglePlaying(); wake(); return;
+    }
+    // LEFT/RIGHT SKIP ten seconds a press without raising the controls. Only once
+    // there is a picture: while the source opens there is nothing to skip through,
+    // and the arrows wake the controls as they used to.
+    if ((k == SDLK_LEFT || k == SDLK_RIGHT) && playbackReady() && !player_loading()) {
+      quickSeek(k == SDLK_RIGHT ? 1 : -1);
+      return;
     }
     if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT)
       wake();
@@ -1540,6 +1588,12 @@ void player_update(float dt, Uint32 now) {
   { float target = (visible && barFocus) ? 1.0f : 0.0f;
     focusBarAnim = anim_spring(focusBarAnim, target, dt,
                          target > focusBarAnim ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
+  // The quick overlay hands over to the full transport the moment the controls
+  // come up: the bar is shared, so it does not blink on the swap.
+  { int q = !visible && quickAt && now - quickAt < PLR_QUICK_HOLD_MS;
+    quickAnim = anim_spring(quickAnim, q ? 1.0f : 0.0f, dt,
+                            q ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+    quickPulse *= expf(-dt / 0.12f); }
 }
 
 // hh:mm:ss only when it passes an hour — "0:03:12" on a short episode reads as a
@@ -1996,6 +2050,39 @@ static void drawActionsEpisode(void){
 // the picture — the transport, its gradients, the prompts, the stats, the loading
 // logo — fades out on the sheet's own curve, so the list is the one thing to read.
 // The picture stays, and so do the subtitles: those are content, not chrome.
+// THE QUICK SEEK'S READOUT: "+ 20 >" at the right edge going forward,
+// "< − 20" at the left going back, centred on the frame's height. The chevron
+// nudges outward on each press so a press that does not change the number (the
+// film's end) still shows it was heard. Past a minute it switches to m:ss, the
+// transport's own format. A black copy 2px down stands in for a text shadow, the
+// way the button labels do it — there is no scrim at mid-height.
+static void drawQuickSeek(float q) {
+  int s = (int)(fabsf(quickDelta) + 0.5f), fwd = quickDelta > 0.0f;
+  char num[24], text[32];
+  if (q <= 0.005f || s == 0) return;
+  if (s < 60) snprintf(num, sizeof num, "%d", s);
+  else        fmtTime(num, sizeof num, (float)s, 0);
+  snprintf(text, sizeof text, "%s %s", fwd ? "+" : "\xe2\x88\x92", num);
+  { TxtLine l  = txt_line(TXT_PLR_QUICK, text, 255, 255, 255, 255);
+    TxtLine sh = txt_line(TXT_PLR_QUICK, text, 0, 0, 0, 255);
+    const float icon = 72.0f, gap = 2.0f, nudge = 10.0f * quickPulse;
+    const char *chev = fwd ? "chevron_right" : "chevron_left";
+    float cy = NV_SCREEN_H * 0.5f, ty = cy - (float)l.h * 0.5f, tx, ix;
+    if (fwd) {
+      ix = NV_SCREEN_W - PLR_MARGIN - icon * 0.5f;
+      tx = ix - icon * 0.5f - gap - (float)l.w;
+      ix += nudge;
+    } else {
+      ix = PLR_MARGIN + icon * 0.5f;
+      tx = ix + icon * 0.5f + gap;
+      ix -= nudge;
+    }
+    txt_draw_alpha(sh, tx, ty + 2.0f, q * 0.55f);
+    txt_draw_alpha(l, tx, ty, q);
+    iconFile(ix, cy + 2.0f, q * 0.55f, 0.0f, chev, icon);
+    iconFile(ix, cy, q, 1.0f, chev, icon); }
+}
+
 static float chrome = 1.0f;
 static void drawPlayer(Uint32 now);
 void player_draw_subtitle_over(void) {
@@ -2239,18 +2326,28 @@ static void drawPlayer(Uint32 now) {
   // half of the crossfade its title, bar and buttons sat over the title screen's own
   // synopsis and meta lines — two layers of type at once, neither readable.
   float a = anim * entry * (fromDetail ? late : 1.0f);
+  // THE QUICK SEEK'S ALPHA, and the bar's: the bar and its time are drawn at
+  // whichever of the two is higher, everything else at the controls' own.
+  float q = quickAnim * entry;
+  float ab = a > q ? a : q;
+  // How much of the transport's own layout applies — 0 with the quick overlay
+  // alone, 1 with the controls up. The bar, the time and the scrim blend on it.
+  float full = ab > 0.0f ? a / ab : 1.0f;
 
   // Two gradients, as in the web app: .player-controls-gradient-top (150px, 0.7 -> 0)
   // and .player-controls-gradient-bottom (200px, 0 -> 0.8). The bottom one supports
   // the title and the bar; the top one exists because the badges and the age rating
   // sit up there and without it they would disappear over a bright scene. Both follow
   // the controls' animation: fixed, they would leave a permanent shadow over every scene.
-  if (a > 0.005f) {
-    GfxRect veil = { 0, NV_SCREEN_H - PLR_GRADIENT_BOTTOM, NV_SCREEN_W, PLR_GRADIENT_BOTTOM };
+  if (ab > 0.005f) {
+    // The quick seek's bar and time are two thin lines at the very bottom; the
+    // transport's 600px scrim over them darkened half the frame for nothing.
+    float gh = PLR_QUICK_GRADIENT + (PLR_GRADIENT_BOTTOM - PLR_QUICK_GRADIENT) * full;
+    GfxRect veil = { 0, NV_SCREEN_H - gh, NV_SCREEN_W, gh };
     // GFX_VEIL_PLAYER carries the sheet's five stops itself, so the alpha here is 1
     // and not a density multiplier: scaling it would flatten the curve the mode
     // exists to reproduce. It still fades with the controls through `a`.
-    gfx_rect(veil, 0, GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, a);
+    gfx_rect(veil, 0, GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, ab);
     // The pool, hung from the top-right corner where the clock is.
     { GfxRect pool = { NV_SCREEN_W - PLR_POOL_W, 0, PLR_POOL_W, PLR_POOL_H };
       gfx_rect(pool, 0, GFX_VEIL_POOL, 0, 0, 0, 0.0f, 0, 0, 0, a); }
@@ -2266,7 +2363,8 @@ static void drawPlayer(Uint32 now) {
   // chrome looks like it owns. The subtitle line stays where it was — it IS
   // content, and it is lifted clear of this band anyway.
   drawActionsEpisode();
-  if (a <= 0.005f) return;   // playing clean: nothing more over the image
+  drawQuickSeek(q);
+  if (ab <= 0.005f) return;   // playing clean: nothing more over the image
 
   // The whole block slides together: title, bar and icons are ONE object that rises.
   // Animating each line on its own produces a staggering the device does not have.
@@ -2280,7 +2378,10 @@ static void drawPlayer(Uint32 now) {
   // spring overshoots and comes back, and on a block 200px tall that bounce reads as
   // a wobble.
   float eEnt  = 1.0f - (1.0f - entry) * (1.0f - entry) * (1.0f - entry);
-  float slideDown = (1.0f - anim) * PLR_SLIDE
+  // The quick seek holds the block up too, so the bar it shows sits where the
+  // full transport will put it if the controls come up over it.
+  float lift = anim > quickAnim ? anim : quickAnim;
+  float slideDown = (1.0f - lift) * PLR_SLIDE
               + (1.0f - eEnt) * PLR_SLIDE * 1.8f;
 
   // Anchored from the bottom up, in the order of the web app's
@@ -2295,6 +2396,10 @@ static void drawPlayer(Uint32 now) {
   float yRowTop = NV_SCREEN_H - PLR_PAD_BOTTOM - PLR_BTN_D + slideDown;
   float cyButtons = yRowTop + PLR_BTN_D * 0.5f;
   float yBar   = yRowTop - PLR_GAP_ROW - PLR_RAIL_H;
+  // THE QUICK SEEK'S LAYOUT is lower: the bar on the bottom inset and the time
+  // above it, so the pair stays out of the band the subtitles use.
+  // `full` (above) slides the bar and time between the two.
+  yBar += (NV_SCREEN_H - PLR_PAD_BOTTOM - PLR_RAIL_H + slideDown - yBar) * (1.0f - full);
 
   // --- the SCRUBBER ---------------------------------------------------------
   // .player-progress-shell, from the transport block at the end of components.css.
@@ -2335,7 +2440,7 @@ static void drawPlayer(Uint32 now) {
   // far apart as the sheet has them.
   float aRail = 0.26f + (0.34f - 0.26f) * fBar;
   GfxRect rail = { cx, yBar, cw, hRail };
-  gfx_color(rail, railRadius(cw, hRail), 1, 1, 1, aRail * a);
+  gfx_color(rail, railRadius(cw, hRail), 1, 1, 1, aRail * ab);
   // The pipeline's buffer: what is decoded ahead of the playhead. In the web app
   // (.player-progress-buffered) it is WHITE at 0.3 and it runs from ZERO, under the
   // fill — not a segment starting where the fill ends, which is what was here. The
@@ -2346,13 +2451,13 @@ static void drawPlayer(Uint32 now) {
     float bwid = cw * bufFrac;
     if (bwid > 0.5f)
       gfx_color((GfxRect){ cx, yBar, bwid, hRail }, railRadius(bwid, hRail),
-                1, 1, 1, 0.30f * a); }
+                1, 1, 1, 0.30f * ab); }
   // Half a pixel already counts: with the test at 1.0 the start of the film drew
   // nothing, and the bar seemed only to start moving after a while.
   { float fwid = cw * frac;
     if (fwid > 0.5f)
       gfx_color((GfxRect){ cx, yBar, fwid, hRail }, railRadius(fwid, hRail),
-                PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, a);
+                PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, ab);
     // THE PLAYHEAD. `transform: scale(0)` at rest and `scale(1)` when the shell has
     // focus, so the resting bar stays a hairline and the knob is what says the bar
     // is now the thing LEFT and RIGHT are driving. Centred on the track's middle,
@@ -2360,7 +2465,7 @@ static void drawPlayer(Uint32 now) {
     { float d = PLR_RAIL_KNOB * fBar;
       if (d > 0.5f)
         gfx_color((GfxRect){ cx + fwid - d * 0.5f, yBar + hRail * 0.5f - d * 0.5f, d, d },
-                  0.5f, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, a); } }
+                  0.5f, PLR_FILL_C, PLR_FILL_C, PLR_FILL_C, ab); } }
   // WHERE PLAYBACK STILL IS (.player-seek-origin): a 4px tick at the position the
   // film is actually at while you aim somewhere else. Without it a long hold gives
   // you a bar full of numbers and no way to tell how far you have strayed from
@@ -2370,7 +2475,7 @@ static void drawPlayer(Uint32 now) {
     float of = anim_clamp(posSeg / durationSeg, 0.0f, 1.0f);
     float oh = 22.0f, ow = 4.0f;
     GfxRect t = { cx + cw * of - ow * 0.5f, yBar + hRail * 0.5f - oh * 0.5f, ow, oh };
-    gfx_color(t, 0.5f, 1, 1, 1, 0.85f * a);
+    gfx_color(t, 0.5f, 1, 1, 1, 0.85f * ab);
   }
 
   // A film: the name only. A series: the name, then the episode line.
@@ -2551,7 +2656,8 @@ static void drawPlayer(Uint32 now) {
         int rounded = (int)(delta >= 0.0f ? delta + 0.5f : delta - 0.5f);
         // Empty at zero, like formatSeekDelta: seeking ten seconds forward and ten
         // back has moved you nowhere, and "+0:00" is a worse answer than silence.
-        if (pa > 0.004f && rounded != 0) {
+        // The quick seek has its own readout at the side; the pill is the bar's.
+        if (a > 0.005f && pa > 0.004f && rounded != 0) {
           char mag[24];
           fmtTime(mag, sizeof mag, (float)(rounded < 0 ? -rounded : rounded), 0);
           snprintf(pill, sizeof pill, "%s%s",
@@ -2571,8 +2677,9 @@ static void drawPlayer(Uint32 now) {
       le = txt_line(TXT_PLR_TIME,   t1,   255, 255, 255, 255);
       lt = txt_line(TXT_PLR_TIME_T, tail, 255, 255, 255, 255);
       ty = cyButtons - (float)le.h * 0.5f;
-      txt_draw_alpha(lt, right - lt.w,        ty, a * 0.60f);
-      txt_draw_alpha(le, right - lt.w - le.w, ty, a * 0.96f);
+      ty += (yBar - PLR_QUICK_TIME_GAP - (float)le.h - ty) * (1.0f - full);
+      txt_draw_alpha(lt, right - lt.w,        ty, ab * 0.60f);
+      txt_draw_alpha(le, right - lt.w - le.w, ty, ab * 0.96f);
     }
   }
 

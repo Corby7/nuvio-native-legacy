@@ -155,6 +155,8 @@ typedef enum {
   // The player's title block. APPENDED, for the same reason as every block above.
   TXT_PLR_EPCODE,    // "S1 E3" before the episode name      30 / 700
   TXT_PLR_EPNAME,    // the episode name                     30 / 500
+  // The quick-seek readout. APPENDED, like the rest.
+  TXT_PLR_QUICK,     // "+ 10" at the screen's side          44 / 700
   TXT_NFONTS
 } TxtStyle;
 
