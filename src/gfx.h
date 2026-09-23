@@ -413,7 +413,23 @@ typedef enum {
   //   uPar.x = where the fade begins, in 0..1 of the quad's width
   //   uColor = the wash's colour, and its full-strength alpha
   GFX_ROW_FADE = 38,
-  GFX_NMODES = 39
+  // GFX_LOGO — a title logo whose rectangle is ANIMATED, with its outer edge
+  // anti-aliased. Draw it through gfx_logo(), which sets the uniforms below.
+  //
+  // GFX_TEXT and GFX_BRAND end the art exactly at the quad's edge, and a quad edge
+  // is rasterised per whole pixel. TMDB logos are cropped tight, so the letters
+  // touch that edge — and a logo that grows slowly (the player's loading pulse:
+  // 4% over two seconds, a pixel every few frames) visibly creeps outward in
+  // one-pixel STEPS while everything inside it moves smoothly. This mode draws a
+  // quad a little larger than the art and fades the art's own rectangle out over
+  // one device pixel, which is the coverage a browser's transform gives it.
+  //
+  //   uCell  = the art's rectangle inside the enlarged quad (as gfx_tex_cell_current)
+  //   uPar   = the QUAD's size in device pixels
+  //   uFocus = 1 to tint by uColor like GFX_BRAND, 0 to keep the art's RGB like GFX_TEXT
+  //   uRadius = how much of the art to draw, from the left, 0..1 (a soft edge)
+  GFX_LOGO = 39,
+  GFX_NMODES = 40
 } GfxMode;
 
 typedef struct {
@@ -498,6 +514,14 @@ void gfx_crop(float x, float y, float w, float h);
 // texture's RGB and its alpha at the same time.
 void gfx_icons_dir(const char *dirArt);
 void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca);
+// A logo at a FRACTIONAL, moving rectangle, with its edge anti-aliased — see
+// GFX_LOGO. `brand` = 1 tints the alpha by the colour (GFX_BRAND), 0 keeps the
+// art's own colours (GFX_TEXT). For a static logo the plain modes are enough.
+void gfx_logo(GfxRect r, GLuint tex, int brand, float cr, float cg, float cb, float ca);
+// The same, drawing only the left `fill` (0..1) of the art, with a soft leading
+// edge — the player's loading logo filling up as the source opens.
+void gfx_logo_fill(GfxRect r, GLuint tex, int brand, float fill,
+                   float cr, float cg, float cb, float ca);
 
 // FOR AN ICON WHOSE RECT MOVES: decode at `wRequest` and draw at `r`.
 //

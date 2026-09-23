@@ -152,6 +152,9 @@ typedef enum {
   TXT_SRC_SIZE,      // the file size                      30 / 700
   TXT_SRC_TIER,      // BEST / GOOD / FAIR / POOR          17 / 700
   TXT_SRC_STATE,     // "Playing", on the availability line 20 / 700
+  // The player's title block. APPENDED, for the same reason as every block above.
+  TXT_PLR_EPCODE,    // "S1 E3" before the episode name      30 / 700
+  TXT_PLR_EPNAME,    // the episode name                     30 / 500
   TXT_NFONTS
 } TxtStyle;
 

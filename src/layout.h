@@ -824,6 +824,11 @@
 // .player-controls-overlay .player-meta-tertiary — the third line of the title
 // block, which is where the stream's own facts belong.
 #define NV_FT_PLR_META3 22
+// The episode line under the show's name: .player-subtitle at the legacy-webos
+// block's 30, set in TWO weights — the "S1 E3" code Bold and dimmed, the name
+// Medium and near white — so the eye lands on the name and the code reads as its
+// label, the same split the time readout uses.
+#define NV_FT_PLR_EP    30
 // .player-controls-row .player-time-label — both halves are the same body; only
 // the weight separates them.
 #define NV_FT_PLR_TIME  30

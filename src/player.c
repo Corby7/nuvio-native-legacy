@@ -45,6 +45,7 @@
 #include "intro.h"
 #include "home.h"
 #include "settings.h"
+#include "failures.h"
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
@@ -235,7 +236,11 @@ static float seekStepFor(int repeats) {
 // only exists for a series, and it is no longer the last entry, so the old
 // `PLR_NBTNS - (epT > 0 ? 0 : 1)` (which only ever worked because episodes
 // happened to be last) is gone in favour of the visible list below.
-enum { PLR_PLAY, PLR_CC, PLR_AUDIO, PLR_EPISODES,
+//
+// NEXT sits straight after play, as getControlDefinitions() puts "playNextEpisode":
+// it is the other half of "what plays now", and it only exists while there IS a
+// next episode.
+enum { PLR_PLAY, PLR_NEXT, PLR_CC, PLR_AUDIO, PLR_EPISODES,
        PLR_SOURCES, PLR_ASPECT, PLR_STATS, PLR_NBTNS };
 
 static int   is_open = 0, exiting = 0, requestedExit = 0;
@@ -283,6 +288,28 @@ static int     fromDetail = 0;
 static GfxRect flyFrom;
 static int     flying = 0;   // the last frame drew the logo on its flight path
 static Uint32 lastInput = 0;
+// When the screen opened: the loading logo's pulse counts from here, so it always
+// starts from rest instead of from wherever the clock happened to be.
+static Uint32 openedAt = 0;
+// THE LOADING LOGO AS A PROGRESS BAR, the way Stremio does it: the logo sits dim
+// and a bright copy fills it from the left as the source opens.
+//
+// There is no byte count to show — the pipeline reports no load progress, only
+// events — so the fill is STAGED on what the player can see:
+//   searching the addons for a source     creeps toward 0.40
+//   URL handed to the pipeline            creeps toward 0.60
+//   pipeline has a mediaId                creeps toward 0.92
+//   loadCompleted                         runs to 1.00
+// Within a stage it eases toward the ceiling and never reaches it, so it never
+// looks frozen, and each stage lifts the ceiling. The last 8% is kept for the
+// real finish: a fill that reached the end while the screen still waited would
+// be a lie the owner catches every time.
+static float  loadFill = 0.0f;
+// When loading ENDED with a picture: the fill runs home and the logo fades out
+// over the first frames instead of vanishing on the frame the video arrives.
+static Uint32 loadEndAt = 0;
+static int    wasLoading = 0;
+#define PLR_LOAD_OUTRO_MS 450u
 // The instant the PICTURE started (not the screen's opening: between the two there
 // is the source search, which can take seconds). Zero while there has been none.
 // The parental guide relies on this to appear ONCE, at the start, and disappear.
@@ -328,6 +355,85 @@ static double skipChunkEnd;   // which chunk the count belongs to
 static int    skipAutoHidden;
 static int introIdx=-1, introT=-1, introE=-1;
 static int resumeApplied, resumePct;
+
+static void fmtTime(char *b, size_t n, float seg, int negative);
+
+// --- THE FAILURE LOG ---------------------------------------------------------
+// What the player watches for, and when each is called a failure:
+//   source    no addon returned a source, or none of the best ones resolved
+//   load      the pipeline refused the URL, reported an error before the first
+//             frame, or took PLR_FAIL_LOAD_MS without finishing the load
+//   playback  a pipeline error after the picture started, the position frozen
+//             for PLR_FAIL_STALL_MS while playing, or endOfStream well short of
+//             the file's duration (a truncated or cut-off file)
+// Each is logged ONCE per playback (per source, for a source change).
+#define PLR_FAIL_LOAD_MS    45000u
+#define PLR_FAIL_SEARCH_MS  90000u
+#define PLR_FAIL_STALL_MS   20000u
+#define PLR_FAIL_NOTICE_MS   7000u
+static char   failNotice[200];
+static Uint32 failNoticeAt;
+static char   failLast[160];          // the last stage+reason logged, for dedupe
+static int    failErrSeen, failEosSeen;
+static Uint32 loadStartAt, stallAt;
+static float  stallPos;
+static int    failLoadLogged, failSearchLogged, failStallLogged;
+
+// The URL's HOST only. The rest of a debrid link is a signed token, which has no
+// business in a log file and says nothing about why the file failed.
+static void urlHost(const char *url, char *dst, size_t n) {
+  const char *p = url ? strstr(url, "://") : NULL;
+  size_t k = 0;
+  dst[0] = 0;
+  if (!p) return;
+  for (p += 3; *p && *p != '/' && *p != ':' && *p != '?' && k < n - 1; p++) dst[k++] = *p;
+  dst[k] = 0;
+}
+
+void player_report_failure(const char *stage, const char *reason) {
+  const CatItem *c = item();
+  const Stream *st = stream_n() > 0 ? stream_item(stream_current()) : NULL;
+  char key[160], line[1400], who[200], src[600] = "no source chosen";
+  snprintf(key, sizeof key, "%s|%s|%d", stage, reason, stream_current());
+  if (!strcmp(key, failLast)) return;
+  snprintf(failLast, sizeof failLast, "%s", key);
+
+  if (epT > 0)
+    snprintf(who, sizeof who, "%s S%dE%d (%s)", c ? c->title : "?", epT, epE,
+             c && c->imdb[0] ? c->imdb : "no id");
+  else
+    snprintf(who, sizeof who, "%s (%s)", c ? c->title : "?",
+             c && c->imdb[0] ? c->imdb : "no id");
+  if (st) {
+    char host[96], size[24] = "size ?";
+    const char *box = st->mp4 || strstr(st->url, ".mp4") ? "MP4"
+                    : (strstr(st->url, ".mkv") || strstr(st->file, ".mkv")) ? "MKV"
+                    : strstr(st->url, ".m3u8") ? "HLS" : "container ?";
+    urlHost(st->url, host, sizeof host);
+    if (st->sizeMB >= 1024) snprintf(size, sizeof size, "%.1f GB", st->sizeMB / 1024.0);
+    else if (st->sizeMB > 0) snprintf(size, sizeof size, "%ld MB", st->sizeMB);
+    snprintf(src, sizeof src, "%s%s%s | %s %s %s %s %s %s | %s | %s | host %s",
+             st->provider[0] ? st->provider : "?",
+             st->service[0] ? " / " : "", st->service,
+             st->res[0] ? st->res : "res ?", st->range[0] ? st->range : "SDR",
+             st->source, st->codec, st->audio, box, size,
+             st->file[0] ? st->file : st->label, host[0] ? host : "?");
+  }
+  snprintf(line, sizeof line, "%-8s | %s | %s | %s", stage, who, reason, src);
+  failure_log(line);
+
+  snprintf(failNotice, sizeof failNotice, "Playback problem logged Â· %s", reason);
+  failNoticeAt = SDL_GetTicks();
+}
+
+// Called on every open and every source change: the watches start over.
+static void failWatchReset(void) {
+  failErrSeen = video_error_count();
+  failEosSeen = video_eos_count();
+  loadStartAt = SDL_GetTicks();
+  stallAt = 0; stallPos = -1.0f;
+  failLoadLogged = failSearchLogged = failStallLogged = 0;
+}
 int player_index(void) { return idx; }
 const char *player_line_episode(void) { return lineEp; }
 void player_episode_current(int *t, int *e) { *t = epT; *e = epE; }
@@ -709,7 +815,9 @@ void player_open(int indexCatalog, const char *url) {
   button = PLR_PLAY;
   memset(focusB, 0, sizeof focusB);
   posSeg = 0.0f;
-  lastInput = SDL_GetTicks();
+  lastInput = openedAt = SDL_GetTicks();
+  loadFill = 0.0f; loadEndAt = 0; wasLoading = 1;
+  failLast[0] = 0; failWatchReset();
   waitingSource = (url == NULL);
   // An external subtitle belongs to the session that has just ended, not to this one.
   tracks_reset();
@@ -726,7 +834,10 @@ void player_open(int indexCatalog, const char *url) {
 
   // The episode's identity is independent of the focus in the navigation panel.
   player_set_episode(c ? c->season : 0, c ? c->episode : 0);
-  if (url && *url && !hasVideo) player_error_source();
+  if (url && *url && !hasVideo) {
+    player_report_failure("load", "the pipeline refused the URL");
+    player_error_source();
+  }
 }
 
 int player_is_open(void)    { return is_open; }
@@ -763,10 +874,17 @@ int player_wants_exit(void) { return requestedExit; }
 // the stream opened — which was the "you press play and it goes black".
 void player_set_source(const char *url) {
   if (!is_open || !url || !*url) return;
+  // A source CHANGE mid-playback starts a new load from empty; the first source
+  // of an opening carries on from the search stage it just finished.
+  if (!waitingSource) { loadFill = 0.0f; loadEndAt = 0; }
   waitingSource = 0;
   errorSource = 0;
+  failWatchReset();
   hasVideo = video_play(url);
-  if (!hasVideo) player_error_source();
+  if (!hasVideo) {
+    player_report_failure("load", "the pipeline refused the URL");
+    player_error_source();
+  }
   applyAspect();
 }
 
@@ -835,6 +953,7 @@ void player_shutdown(void) {
 static int rowButtons(int *out) {
   int n = 0;
   out[n++] = PLR_PLAY;
+  if (epT > 0 && player_next_episode()) out[n++] = PLR_NEXT;
   out[n++] = PLR_CC;
   out[n++] = PLR_AUDIO;
   if (epT > 0) out[n++] = PLR_EPISODES;
@@ -887,6 +1006,35 @@ static int streamFacts(char *dst, size_t n) {
     strncat(dst, f[i], n - strlen(dst) - 1);
   }
   return nf;
+}
+
+// THE PLAY BUTTON WHILE THE SOURCE OPENS: a dark disc with a thin rim, a dimmed
+// play glyph, and a bright quarter arc running round inside the rim — about one
+// turn a second. It replaces the white focus puck for as long as it spins: there
+// is nothing to play or pause yet, and a lit button would promise an action.
+//
+// gfx has no arc mode, so the arc is a run of overlapping round dots. At a 1.4px
+// step against a 5px dot the steps are invisible and the ends come out round,
+// which is the stroke-linecap the design's arc has.
+static void iconFile(float cx, float cy, float a, float luma,
+                     const char *name, float size);
+#define PLR_SPIN_ARC   1.55f   // radians, a little under a quarter turn
+#define PLR_SPIN_TURN  1100.0f // ms per revolution
+static void drawStartingButton(float cx, float cy, Uint32 now, float a) {
+  const float d = PLR_BTN_D, rArc = d * 0.5f - 9.0f, dot = 5.0f;
+  float head = (float)(now - openedAt) * (6.2831853f / PLR_SPIN_TURN);
+  int k, n = (int)(PLR_SPIN_ARC * rArc / 1.4f);
+  gfx_color((GfxRect){ cx - d * 0.5f, cy - d * 0.5f, d, d }, 0.5f,
+            0.16f, 0.16f, 0.17f, 0.92f * a);
+  gfx_rect((GfxRect){ cx - d * 0.5f, cy - d * 0.5f, d, d }, 0, GFX_RING_INSET, 0,
+           2.0f / d, 0, 0.5f, 1, 1, 1, 0.85f * a);
+  for (k = 0; k <= n; k++) {
+    float ang = head - PLR_SPIN_ARC * k / n;
+    gfx_color((GfxRect){ cx + cosf(ang) * rArc - dot * 0.5f,
+                         cy + sinf(ang) * rArc - dot * 0.5f, dot, dot },
+              0.5f, 1, 1, 1, a);
+  }
+  iconFile(cx, cy, a * 0.45f, 0.94f, "play", PLR_ICON_H * 0.6f);
 }
 
 static int offerNext(void) {
@@ -1095,6 +1243,10 @@ void player_event(const SDL_Event *e) {
     if (barFocus) { if (seekActive) commitSeek(); else togglePlaying(); wake(); return; }
     switch (button) {
       case PLR_PLAY:    togglePlaying(); break;
+      // The same request the card's Play pill makes; app.c picks it up.
+      case PLR_NEXT: { const CatEp *p = player_next_episode();
+                       if (p) { reqNextT = p->season; reqNextE = p->episode; } }
+                     break;
       case PLR_ASPECT: player_aspect_cycle(); break;
       // CC and AUDIO open the SAME sheet, but on different columns: pressing
       // "subtitles" and landing on audio made the two buttons look like one.
@@ -1206,6 +1358,65 @@ void player_update(float dt, Uint32 now) {
   // its allowance while the app was still looking for a source, and it would
   // disappear before the film appeared.
   if (!startImage && hasVideo && video_ready()) { startImage = now; wake(); }
+  // The loading fill's stage ceiling, and the ease toward it: slow inside a stage
+  // (tau 1.6s), brisk at the finish (tau 0.12s).
+  { int loading = player_loading();
+    float cap = waitingSource ? 0.40f
+              : (hasVideo && !video_active()) ? 0.60f
+              : loading ? 0.92f : 1.0f;
+    float tau = loading ? 1.6f : 0.12f;
+    loadFill += (cap - loadFill) * (1.0f - expf(-dt / tau));
+    if (wasLoading && !loading && player_has_video()) loadEndAt = now;
+    wasLoading = loading; }
+
+  // THE FAILURE WATCHES — see "THE FAILURE LOG" at the top of the file.
+  if (!exiting) {
+    char r[200], t1[24], t2[24];
+    int ec = video_error_count(), eo = video_eos_count();
+    if (ec != failErrSeen) {
+      char e[128];
+      failErrSeen = ec;
+      video_last_error(e, sizeof e);
+      snprintf(r, sizeof r, "pipeline error: %s", e);
+      player_report_failure(startImage ? "playback" : "load", r);
+    }
+    if (hasVideo && !video_ready() && !failLoadLogged && now - loadStartAt > PLR_FAIL_LOAD_MS) {
+      failLoadLogged = 1;
+      snprintf(r, sizeof r, "no picture after %us (%s)", PLR_FAIL_LOAD_MS / 1000u,
+               video_active() ? "pipeline loaded, loadCompleted never came"
+                              : "pipeline never took the media");
+      player_report_failure("load", r);
+    }
+    if (waitingSource && !failSearchLogged && now - loadStartAt > PLR_FAIL_SEARCH_MS) {
+      failSearchLogged = 1;
+      snprintf(r, sizeof r, "still looking for a source after %us",
+               PLR_FAIL_SEARCH_MS / 1000u);
+      player_report_failure("source", r);
+    }
+    // A STALL: playing, not aiming a seek, and the position has not moved. Paused
+    // or seeking resets it — neither is the file's fault.
+    if (startImage && hasVideo && playing && !seekActive && !settleAt) {
+      if (stallPos < 0.0f || fabsf(posSeg - stallPos) > 0.25f) { stallPos = posSeg; stallAt = now; }
+      else if (!failStallLogged && now - stallAt > PLR_FAIL_STALL_MS) {
+        failStallLogged = 1;
+        fmtTime(t1, sizeof t1, posSeg, 0);
+        snprintf(r, sizeof r, "stuck at %s for %us while playing", t1,
+                 PLR_FAIL_STALL_MS / 1000u);
+        player_report_failure("playback", r);
+      }
+    } else stallPos = -1.0f;
+    // The END, three minutes or more before the duration says it should come: a
+    // truncated file, or a source that cut the connection and called it done.
+    if (eo != failEosSeen) {
+      failEosSeen = eo;
+      if (durationSeg > 300.0f && posSeg < durationSeg - 180.0f) {
+        fmtTime(t1, sizeof t1, posSeg, 0);
+        fmtTime(t2, sizeof t2, durationSeg, 0);
+        snprintf(r, sizeof r, "ended early at %s of %s", t1, t2);
+        player_report_failure("playback", r);
+      }
+    }
+  }
   // A HANDOFF CLOSES LATER. At 0.02 the logo flying home is still 2% of the way from
   // the centre — ~10px on a wide wordmark — and the page's own copy then takes over in
   // place: a visible jump on the last frame. At 0.003 the gap is under a pixel.
@@ -1772,40 +1983,76 @@ void player_draw(Uint32 now) {
     }
   }
 
-  // An opening indicator: dots pulsing in the centre, over the darkened art.
-  // A spinner would need rotation in the shader; three dots in counterphase say the
-  // same thing with what already exists, and they read well from a distance.
+  // THE OPENING SCREEN: the title's logo in the middle of the darkened art, breathing.
+  //
+  // It used to be the logo above a ring of dots, "Opening source" and the episode
+  // line — a spinner stacked under an identity. The web app has no spinner here at
+  // all (.player-loading-identity): the logo itself pulses, scale 1 -> 1.04 over 2s
+  // and back (playerLoadingIdentityPulse), and that is the whole "still working"
+  // signal. The spinner itself moved onto the transport's play button, which
+  // turns while the source opens (drawStartingButton).
   flying = 0;
-  if (player_loading()) {
+  // THE OUTRO: once the picture is up, the logo stays a moment longer so its fill
+  // is SEEN to finish, then fades with the veil — 150ms to land, 300ms to go.
+  int loadingNow = player_loading();
+  float outro = 1.0f;
+  if (!loadingNow && loadEndAt && now - loadEndAt < PLR_LOAD_OUTRO_MS)
+    outro = 1.0f - anim_clamp(((float)(now - loadEndAt) - 150.0f) / 300.0f, 0.0f, 1.0f);
+  else if (!loadingNow) outro = 0.0f;
+  if (outro > 0.0f) {
     GfxRect dark = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-    int k;
-    gfx_color(dark, 0.0f, 0, 0, 0, 0.55f * entry);
+    gfx_color(dark, 0.0f, 0, 0, 0, 0.55f * entry * outro);
     // THE STAGING. The logo is the one thing the viewer was already looking at, so it
-    // leads; the spinner and the words are news, so they wait until it has nearly
-    // arrived and then rise the last few pixels into place. Arriving all at once the
-    // screen reads as a replacement; staged, it reads as the same title changing room.
+    // leads; anything new waits until it has nearly arrived and then rises the last
+    // few pixels into place.
     float rise = (1.0f - late) * 18.0f;
+    // THE WEB APP'S TIMING, exactly (.player-loading-identity):
+    //   playerLoadingIdentityFade   700ms linear, 400ms delay   opacity 0 -> 1
+    //   playerLoadingIdentityPulse 2000ms linear, 400ms delay,
+    //                              infinite alternate           scale 1 -> 1.04
+    // so a triangle wave: 2s growing, 2s shrinking, at constant speed. An eased
+    // curve was tried first and read as a different, softer animation than the
+    // web app's; the owner asked for the web's.
+    //
+    // The amplitude still rides `late`, so a logo flying in from the title screen
+    // lands on its exact rect before it grows, and settles before it flies home.
+    // Off with reduced animations.
+    float tAnim = (float)(now - openedAt) - 400.0f;
+    float fadeIn = anim_clamp(tAnim / 700.0f, 0.0f, 1.0f);
+    float wave = 0.0f;
+    if (!settings_animations_reduced() && tAnim > 0.0f) {
+      float ph = fmodf(tAnim, 4000.0f);
+      wave = late * (ph < 2000.0f ? ph / 2000.0f : (4000.0f - ph) / 2000.0f);
+    }
+    float pulse = 1.0f + 0.04f * wave;
     GLuint logo = 0;
-    float w = 520, h = 120, ar = 0.0f;
+    // .player-loading-logo at the TV block's size: min(33.33vw, 640px) wide,
+    // min(18.75vw, 360px) tall — 640 x 360 at 1080p. 520 x 160 was the ATV port's.
+    float w = 640, h = 120, ar = 0.0f;
     if (c && c->logo[0]) {
       // ON A HANDOFF, THE DETAIL'S TEXTURE. The page asked for this file with
       // tex_get_exact at the width it drew it; asking for another width here while
       // both screens draw would re-decode the PNG every frame (see the logo note in
       // detail.c). The same request is a cache hit, and 810 -> 520 is a downscale.
       logo = (fromDetail && flyFrom.w > 0.0f) ? tex_get_exact(c->logo, flyFrom.w)
-                                              : tex_get_width(c->logo, 520);
+                                              : tex_get_width(c->logo, 640);
       ar = tex_aspect(c->logo);
       h = ar > 0 ? w / ar : 120;
-      if (h > 160) { h = 160; w = h * ar; }
+      if (h > 360) { h = 360; w = h * ar; }
     }
     if (logo) {
-      GfxRect r = { (NV_SCREEN_W - w) * .5f, NV_SCREEN_H * .5f - h - 60, w, h };
-      float la = entry;
+      // Centred on the screen's middle, lifted a little: the transport occupies the
+      // bottom third while the source opens, and dead centre sat the logo visibly
+      // low against it.
+      GfxRect r = { (NV_SCREEN_W - w) * .5f, NV_SCREEN_H * .5f - h * .5f - 60, w, h };
+      // Coming from anywhere but the title screen the logo has nowhere to fly
+      // from, so it fades in on the web's clock instead.
+      float la = entry * fadeIn * outro;
       // THE FLIGHT: from the rect the title screen drew it at to the centre, on
       // `entry` itself, so it lands exactly as the art finishes covering the page. It
       // flies at full opacity — the fade is for things with nowhere to come from, and
       // the page's own copy is hidden for as long as this one is in the air.
-      if (fromDetail && flyFrom.w > 0.0f) {
+      if (loadingNow && fromDetail && flyFrom.w > 0.0f) {
         float p = entry;
         r.x = flyFrom.x + (r.x - flyFrom.x) * p;
         r.y = flyFrom.y + (r.y - flyFrom.y) * p;
@@ -1814,26 +2061,30 @@ void player_draw(Uint32 now) {
         la = 1.0f;
         flying = 1;
       }
-      gfx_rect(r, logo, tex_brand_dark(c->logo) ? GFX_BRAND : GFX_TEXT,
-               0, 0, 0, 0, .95f, .95f, .97f, la);
+      // Scaled about its own centre, which is the sheet's transform-origin.
+      { float pw = r.w * pulse, ph = r.h * pulse;
+        r.x -= (pw - r.w) * 0.5f; r.y -= (ph - r.h) * 0.5f; r.w = pw; r.h = ph; }
+      // GFX_LOGO and not GFX_TEXT/GFX_BRAND: those end the art on the quad's
+      // hard edge, and at this slow a scale the tight-cropped letters crept
+      // outward a whole pixel at a time — the pulse looked stepped.
+      //
+      // Two passes: the whole logo TRANSLUCENT, then the loaded part at full over
+      // it. The empty part keeps its own colours with the backdrop showing through
+      // — a flat grey silhouette was tried and the owner preferred this.
+      //
+      // The dimming rides `late`, so a logo flying in from the title screen
+      // arrives as bright as the page's copy it replaced and only then empties to
+      // show the progress — and flying home it brightens back before it lands.
+      { int brand = tex_brand_dark(c->logo);
+        gfx_logo(r, logo, brand, .95f, .95f, .97f, la * (1.0f - 0.68f * late));
+        gfx_logo_fill(r, logo, brand, loadFill, .95f, .95f, .97f, la); }
     } else {
+      // No logo: the name stands in for it, in the same place, on the same fade.
+      // Text cannot be scaled here, so it breathes in opacity instead.
       TxtLine t = txt_line_trim(TXT_PLR_TITLE,c?c->title:"Playing",240,241,244,255,680);
-      txt_draw_alpha(t,(NV_SCREEN_W-t.w)*.5f,NV_SCREEN_H*.5f-150+rise,entry*late);
-    }
-    // A ring with a luminous tail, animated with no new textures per frame.
-    for (k = 0; k < 12; k++) {
-      float ang = k * 6.2831853f / 12.0f + now * .006f;
-      float br = .18f + .82f * k / 11.0f;
-      GfxRect pt = {NV_SCREEN_W*.5f + cosf(ang)*24 - 4,
-                    NV_SCREEN_H*.5f + sinf(ang)*24 - 4 + rise,8,8};
-      gfx_color(pt,.5f,.95f,.95f,.97f,br*entry*late);
-    }
-    { TxtLine lc = txt_line(TXT_CALLOUT, "Opening source", 236, 237, 242, 255);
-      txt_draw_alpha(lc, NV_SCREEN_W * 0.5f - lc.w * 0.5f,
-                         NV_SCREEN_H * 0.5f + 50 + rise, 0.85f * entry * late); }
-    if (lineEp[0]) {
-      TxtLine le = txt_line_trim(TXT_PG_END,lineEp,196,198,204,255,680);
-      txt_draw_alpha(le,(NV_SCREEN_W-le.w)*.5f,NV_SCREEN_H*.5f+94+rise,entry*late);
+      float breathe = 1.0f - 0.20f * wave;
+      txt_draw_alpha(t,(NV_SCREEN_W-t.w)*.5f,NV_SCREEN_H*.5f-t.h*.5f-60+rise,
+                     entry*late*fadeIn*breathe*outro);
     }
   }
   if (errorSource) {
@@ -1868,6 +2119,27 @@ void player_draw(Uint32 now) {
     gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.88f * at);
     txt_draw_alpha(l, pil.x + (pw - l.w) * 0.5f,
                        pil.y + (ph - (float)l.h) * 0.5f, at);
+  }
+
+  // --- the FAILURE NOTICE ----------------------------------------------------
+  // A pill at the top centre, the aspect notice's plate at a quieter size, with
+  // an amber dot so it reads as a report and not as a mode change. It is drawn
+  // outside the controls' alpha for the same reason as that notice: most
+  // failures happen with the controls hidden, and a notice tied to them would
+  // be missed exactly when it matters. It only says THAT something was logged
+  // and the short reason — the full record is in the log.
+  if (failNoticeAt && now - failNoticeAt < PLR_FAIL_NOTICE_MS) {
+    float el = (float)(now - failNoticeAt), rest = (float)PLR_FAIL_NOTICE_MS - el;
+    float na = anim_clamp(el / 200.0f, 0.0f, 1.0f) * anim_clamp(rest / 300.0f, 0.0f, 1.0f)
+             * entry;
+    TxtLine l = txt_line_trim(TXT_PLR_STAT, failNotice, 255, 255, 255, 255, 1100);
+    float dot = 12.0f, padX = 28.0f, gap = 14.0f;
+    float pw = padX * 2.0f + dot + gap + (float)l.w, ph = (float)l.h + 28.0f;
+    GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 48.0f, pw, ph };
+    gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.90f * na);
+    gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
+              240 / 255.0f, 160 / 255.0f, 60 / 255.0f, na);
+    txt_draw_alpha(l, pil.x + padX + dot + gap, pil.y + (ph - (float)l.h) * 0.5f, na);
   }
 
   /* They stay when the controls disappear: they are content, not player chrome. */
@@ -2016,38 +2288,52 @@ void player_draw(Uint32 now) {
     gfx_color(t, 0.5f, 1, 1, 1, 0.85f * a);
   }
 
-  // A film: the name only. A series: the name followed by S/E and the episode's title.
-  // The file and the provider belong to the sources sheet, not to the transport.
+  // A film: the name only. A series: the name, then the episode line.
   float yMetaBase = yBar - PLR_GAP_BAR;
-  // THE STREAM'S FACTS, as the title block's third line.
+
+  // THE STREAM'S FACTS, right-aligned above the bar's far end — over the time
+  // readout, not under the title.
   //
-  // They used to be stacked under the clock in the opposite corner, which is the
-  // one place in the frame they had nothing to do with: the clock says what time it
-  // is, and "4K · Dolby Vision" says what you are watching. In the web app that
-  // corner holds the clock and nothing else, and the line under the title —
-  // .player-meta-tertiary, 22/500 at 50% white — is exactly the slot for a
-  // qualifier of the title above it. Moving them there costs nothing and puts the
-  // stream's facts next to the name of the thing they describe.
-  //
-  // Bottom of the stack because the web app's column runs title, subtitle,
-  // tertiary, and this block is built upwards from the bar.
+  // Under the title they made a third line in the block that names what is on
+  // screen, and "4K · Dolby Vision" is not part of the name: it read as a second
+  // episode subtitle. At the right end it sits on the same baseline band as the
+  // title block's last line, on the side of the frame that holds the other
+  // readings about the file (the clock, the time), and the left edge stays the
+  // title's alone.
   { char facts[80];
-    if (streamFacts(facts, sizeof facts) > 0) {
-      TxtLine lf = txt_line_trim(TXT_PLR_META3, facts, 255, 255, 255, 255, cw * .67f);
-      yMetaBase -= lf.h;
-      // 0.72, not the sheet's 0.50. .player-meta-tertiary is styled for a line of
-      // soft context (a year, a genre); this line is the opposite — it is the one
-      // thing on screen the owner reads to know whether they got the good version
-      // of the file, and at half white over a dark frame it was too faint to be
-      // trusted at a glance. It still sits under the title in the hierarchy.
-      txt_draw_alpha(lf, cx, yMetaBase, a * 0.72f);
-      yMetaBase -= PLR_META_GAP;
+    // Only with a picture: until then video_width() and the HDR flags still
+    // describe the PREVIOUS playback, and the line announced its 4K/Dolby Vision
+    // over a source that had not opened yet.
+    if (player_has_video() && streamFacts(facts, sizeof facts) > 0) {
+      TxtLine lf = txt_line_trim(TXT_PLR_META3, facts, 255, 255, 255, 255, cw * .30f);
+      // 0.72, not the sheet's 0.50: this is the line the owner reads to know
+      // whether they got the good version, and at half white it was too faint.
+      txt_draw_alpha(lf, cx + cw - lf.w, yMetaBase - lf.h, a * 0.72f);
     } }
-  if (lineEp[0]) {
-    TxtLine le=txt_line_trim(TXT_PLR_BODY,lineEp,218,220,224,255,cw*.67f);
-    yMetaBase-=le.h;
-    txt_draw_alpha(le,cx,yMetaBase,a);
-    yMetaBase-=PLR_META_GAP;
+
+  // THE EPISODE LINE, in two weights: "S1 E3" Bold at half white, then the name
+  // Medium and near white.
+  //
+  // It was "S1E3 · Name" as one grey 32px string, which gave the code and the name
+  // the same voice and made the line read as a filename under the title. Split, the
+  // code becomes the label and the name is what the eye lands on — the same
+  // division the time readout makes between the elapsed time and its " / total".
+  // The spaced "S1 E3" is easier to read at distance than the run-together "S1E3".
+  if (epT > 0) {
+    char code[24];
+    const char *name = strstr(lineEp, " \xc2\xb7 ");
+    name = name ? name + 4 : "";
+    snprintf(code, sizeof code, "S%d E%d", epT, epE);
+    { TxtLine lc = txt_line(TXT_PLR_EPCODE, code, 255, 255, 255, 255);
+      float gap = name[0] ? 16.0f : 0.0f;
+      TxtLine ln = name[0] ? txt_line_trim(TXT_PLR_EPNAME, name, 255, 255, 255, 255,
+                                           cw * .67f - lc.w - gap)
+                           : (TxtLine){ 0 };
+      float h = (float)(lc.h > ln.h ? lc.h : ln.h);
+      yMetaBase -= h;
+      txt_draw_alpha(lc, cx, yMetaBase, a * 0.55f);
+      if (ln.tex) txt_draw_alpha(ln, cx + lc.w + gap, yMetaBase, a * 0.92f);
+      yMetaBase -= PLR_META_GAP; }
   }
 
   // THE FILM'S NAME, IN TEXT. Here the player used to prefer the title's LOGO when
@@ -2086,13 +2372,22 @@ void player_draw(Uint32 now) {
       // the white circle, both on the same 180ms the circle fades in on. Switching
       // it on a boolean left one frame of white-on-white at the crossing.
       float luma = 0.94f + (0.13f - 0.94f) * f;
+      if (act == PLR_PLAY && player_loading()) {
+        drawStartingButton(bcx, cyButtons, now, a);
+        continue;
+      }
       buttonCircle(bcx, cyButtons, f, a);
       switch (act) {
         case PLR_PLAY:     iconPlayPause(bcx, cyButtons, a, playing, luma); break;
         case PLR_CC:       iconSubtitles(bcx, cyButtons, a, luma); break;
         case PLR_AUDIO:    iconAudio(bcx, cyButtons, a, luma); break;
+        case PLR_NEXT:     iconFile(bcx, cyButtons, a, luma, "skip_next", PLR_ICON_H); break;
         case PLR_EPISODES: iconFile(bcx, cyButtons, a, luma, "episodes", PLR_ICON_H); break;
-        case PLR_SOURCES:  iconFile(bcx, cyButtons, a, luma, "sources", PLR_ICON_H); break;
+        // The title screen's Sources glyph — Phosphor's cloud, filling on focus
+        // exactly as it does there — so the one action wears one icon everywhere.
+        case PLR_SOURCES:  iconFile(bcx, cyButtons, a, luma,
+                                    f > 0.5f ? "detail_source_filled" : "detail_source",
+                                    PLR_ICON_H); break;
         case PLR_STATS:    iconFile(bcx, cyButtons, a, luma, "stats", PLR_ICON_H); break;
         default:           iconAspect(bcx, cyButtons, a, luma); break;   // PLR_ASPECT
       }
@@ -2110,10 +2405,13 @@ void player_draw(Uint32 now) {
       float f = slot >= 0 ? focusB[button] : 0.0f;
       if (f > 0.004f) {
         static const char *NAMES[PLR_NBTNS] = {
-          "Play", "Subtitles", "Audio", "Episodes", "Sources", "Aspect Ratio",
-          "Stream stats" };
-        const char *name = button == PLR_PLAY ? (playing ? "Pause" : "Play")
-                                              : NAMES[button];
+          "Play", "Next episode", "Subtitles", "Audio", "Episodes", "Sources",
+          "Aspect Ratio", "Stream stats" };
+        // While the source opens, play has nothing to toggle yet: the design
+        // labels it "Starting…" until there is a picture.
+        const char *name = button != PLR_PLAY ? NAMES[button]
+                         : player_loading() ? "Starting\xe2\x80\xa6"
+                         : playing ? "Pause" : "Play";
         TxtLine label = txt_line(TXT_PLR_TIP, name, 255, 255, 255, 255);
         float lx = x0 + slot * step - label.w * 0.5f;
         float ly = cyButtons + PLR_BTN_D * 0.5f + PLR_BTN_TIP + (1.0f - f) * 4.0f;

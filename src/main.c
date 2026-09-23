@@ -899,7 +899,9 @@ int main(int argc, char **argv) {
       // running the binary by hand does not work (without the app's identity the
       // compositor refuses the surface and it dies silently). Without this there
       // is no way to MEASURE a frame on the device — only to look and guess.
-      { FILE *fp = fopen("/tmp/nuvio-fps.txt", "w");
+      // Through devPath: on the TV the app's /tmp is private and the ssh user
+      // cannot read it, so the file lives in the dev channel folder there.
+      { FILE *fp = fopen(devPath("nuvio-fps.txt"), "w");
         if (fp) {
           fprintf(fp, "drawable=%dx%d FPS=%.1f worst=%.1fms janks=%d"
                   " text=%.1fms/%d textures=%d %.1fMB"

@@ -994,6 +994,26 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  if (a <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uColor.rgb, a * uColor.a);\n"
   "}\n",
+
+  // GFX_LOGO — the art inside an enlarged quad, its rectangle's edge ramped over
+  // one device pixel. See the note in gfx.h.
+  "void main(){\n"
+  "  vec2 uv = uCell.xy + vUv * uCell.zw;\n"
+  "  vec4 g = texture2D(uTex, clamp(uv, 0.0, 1.0));\n"
+  // The art's size in device pixels, and each fragment's distance inside its
+  // edge in those pixels: +0.5 makes a pixel half-covered at the edge itself.
+  "  vec2 e = min(uv, 1.0 - uv) * (uPar / uCell.zw) + 0.5;\n"
+  "  float c = clamp(e.x, 0.0, 1.0) * clamp(e.y, 0.0, 1.0);\n"
+  // THE FILL: uRadius is how much of the art, from the left, is drawn (1 = all).
+  // Its leading edge is a 10px ramp that starts wholly off the art at 0 and ends
+  // wholly past it at 1, so neither end needs a special case.
+  "  float w = uPar.x / uCell.z;\n"
+  "  float f = clamp((uRadius * (w + 10.0) - uv.x * w) / 10.0, 0.0, 1.0);\n"
+  "  float a = g.a * c * f;\n"
+  "  if (a <= 0.002) discard;\n"
+  "  vec3 rgb = uFocus > 0.5 ? uColor.rgb : g.rgb;\n"
+  "  gl_FragColor = vec4(rgb, a * uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -1026,7 +1046,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_MENU_SCRIM   — likewise, full-bleed behind it */
   {0,0},   /* GFX_ERAIL_SCRIM  — a full-bleed vertical ramp: no SDF, no texture */
   {0,0},   /* GFX_SRC_VEIL     — two gradients in one fragment: no SDF, no texture */
-  {0,0}    /* GFX_ROW_FADE     — a horizontal ramp over a square band: no SDF */
+  {0,0},   /* GFX_ROW_FADE     — a horizontal ramp over a square band: no SDF */
+  {0,0}    /* GFX_LOGO         — the art rectangle's own edge ramp: no SDF */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -1387,6 +1408,25 @@ void gfx_icon_at(GfxRect r, const char *name, float wRequest,
   if (!t) return;
   gfx_tex_aspect_current = 0.0f;   // the file is already square
   gfx_rect(r, t, GFX_BRAND, 0, 0, 0, 0.0f, cr, cg, cb, ca);
+}
+
+void gfx_logo(GfxRect r, GLuint tex, int brand, float cr, float cg, float cb, float ca) {
+  gfx_logo_fill(r, tex, brand, 1.0f, cr, cg, cb, ca);
+}
+
+void gfx_logo_fill(GfxRect r, GLuint tex, int brand, float fill,
+                   float cr, float cg, float cb, float ca) {
+  // Two pixels of margin: the one-pixel ramp needs the pixel OUTSIDE the art's
+  // edge to exist as a fragment, and the second covers rounding at the far side.
+  const float m = 2.0f;
+  float scale = screenH > 0 ? (float)screenH / NV_SCREEN_H : 1.0f;
+  GfxRect q = { r.x - m, r.y - m, r.w + 2 * m, r.h + 2 * m };
+  if (!tex || r.w <= 0.0f || r.h <= 0.0f) return;
+  gfx_tex_cell_current = (GfxRect){ -m / r.w, -m / r.h, q.w / r.w, q.h / r.h };
+  if (fill <= 0.0f) return;
+  gfx_rect(q, tex, GFX_LOGO, brand ? 1.0f : 0.0f, q.w * scale, q.h * scale,
+           fill > 1.0f ? 1.0f : fill, cr, cg, cb, ca);
+  gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
 }
 
 void gfx_icon(GfxRect r, const char *name, float cr, float cg, float cb, float ca) {

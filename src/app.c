@@ -626,7 +626,16 @@ void app_update(float dt, Uint32 now) {
     mark(s ? "source chosen" : "no usable source");
     if (player_is_open() && !player_wants_exit()) {
       stream_set_current(sourceChosen);
-      if (s) player_set_source(s->url); else player_error_source();
+      if (s) player_set_source(s->url);
+      else {
+        char why[120];
+        if (stream_n() == 0) snprintf(why, sizeof why, "no addon returned a source");
+        else snprintf(why, sizeof why, "none of the best %d of %d sources resolved "
+                      "(dead links or debrid notices)", stream_n() < 8 ? stream_n() : 8,
+                      stream_n());
+        player_report_failure("source", why);
+        player_error_source();
+      }
     }
   }
 

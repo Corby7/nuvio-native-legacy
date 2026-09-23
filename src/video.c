@@ -148,6 +148,9 @@ void video_subtitle_style(const VideoSubtitleStyle *e) { (void)e; }
 void video_set_mp4(int m) { (void)m; }
 int  video_has_atmos(void) { return 0; }
 int  video_has_dolby_vision(void) { return 0; }
+int  video_error_count(void) { return 0; }
+void video_last_error(char *dst, unsigned n) { if (n) dst[0] = 0; }
+int  video_eos_count(void) { return 0; }
 const char *video_hdr(void) { return "none"; }
 int  video_width(void) { return 0; }
 int  video_height(void) { return 0; }
@@ -280,6 +283,19 @@ static const char *languageReadable(const char *c) {
 static char      media[64];
 static double    posSeg, durationSeg;
 static int       playing, ready, on;
+// The pipeline's last REAL error and how many there have been, plus the
+// endOfStream count — read by the player's failure log (video_error_count).
+static char            lastError[128];
+static pthread_mutex_t errLock = PTHREAD_MUTEX_INITIALIZER;
+static volatile int    errCount, eosCount;
+int  video_error_count(void) { return errCount; }
+int  video_eos_count(void)   { return eosCount; }
+void video_last_error(char *dst, unsigned n) {
+  if (!n) return;
+  pthread_mutex_lock(&errLock);
+  snprintf(dst, n, "%s", lastError);
+  pthread_mutex_unlock(&errLock);
+}
 
 // Looks for the key and requires what follows to be a NUMBER.
 //
@@ -564,7 +580,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     if (playing && !pauseRequested) mark("paused BY THE PIPELINE");
     playing = 0;
   }
-  if (strstr(p, "endOfStream")) { playing = 0; mark("endOfStream"); }
+  if (strstr(p, "endOfStream")) { playing = 0; mark("endOfStream"); eosCount++; }
 
   // A PIPELINE ERROR. There was no handling at all: when the uMS refused a seek or
   // lost the source, the app simply stopped and nobody knew why — "I skipped ahead
@@ -581,6 +597,21 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     snprintf(m, sizeof m, "pipeline error: %.60s", q);
     { char *n2; for (n2 = m; *n2; n2++) if (*n2 == '\n' || *n2 == '\r') *n2 = ' '; }
     mark(m);
+    // FOR THE PLAYER'S FAILURE LOG: the code and the text, clean of JSON. This
+    // runs on the LS2 thread, so it goes through the lock and the counter moves
+    // last — the player reads the text only after it sees the count change.
+    { const char *c = strstr(p, "errorCode");
+      const char *t = q + strlen("errorText");
+      char text[96] = "";
+      int code = c ? atoi(c + strcspn(c, "-0123456789")) : 0;
+      size_t k = 0;
+      while (*t == '"' || *t == ':' || *t == ' ') t++;
+      while (*t && *t != '"' && k < sizeof text - 1) text[k++] = *t++;
+      text[k] = 0;
+      pthread_mutex_lock(&errLock);
+      snprintf(lastError, sizeof lastError, "%s (code %d)", text[0] ? text : "unknown", code);
+      pthread_mutex_unlock(&errLock);
+      errCount++; }
     // THE PIPELINE DESTROYED. Measured twice on the owner's TV: ~71 s after a seek,
     // the uMS answers "com.webos.pipeline.<id> is not running" and the video simply
     // stops — the app did NOTHING, and that is what they described as "I skipped

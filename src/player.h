@@ -23,6 +23,12 @@ int player_requested_sources(void);
 int player_requested_next(int *season, int *episode);
 const CatEp *player_next_episode(void);
 void player_error_source(void);
+// RECORDS A PLAYBACK FAILURE in the failure log (failures.h) and puts a short
+// notice on screen. `stage` is where it died — "source", "load" or "playback" —
+// and `reason` what is known about why. The title, episode and the current
+// source's facts are added here. Repeats of the same failure in one playback
+// are logged once.
+void player_report_failure(const char *stage, const char *reason);
 
 // 1 when there is real video behind this session. The drawing uses this so it
 // does not paint the key art over the video plane.

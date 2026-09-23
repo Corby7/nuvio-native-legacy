@@ -165,6 +165,12 @@ extern const char *const VIDEO_SUB_COLORS_LABEL[VIDEO_SUB_NCOLORS];
 void video_subtitle_style(const VideoSubtitleStyle *e);
 
 // The truth about the stream, so the screen's badges do not lie.
+// THE FAILURE SIGNALS the player's log reads. A count and not a flag, so the
+// reader notices EACH new error by comparing against the count it last saw.
+// video_last_error is the most recent one as "text (code N)".
+int  video_error_count(void);
+void video_last_error(char *dst, unsigned n);
+int  video_eos_count(void);   // how many times the pipeline reported endOfStream
 int  video_has_atmos(void);
 // 1 only when the PIPELINE's hdrType says DolbyVision. The source's claim
 // (video_set_dv) deliberately does not count here: see the comment in

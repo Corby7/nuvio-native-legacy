@@ -320,6 +320,9 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_SRC_SIZE,  WEIGHT_BOLD    },   // TXT_SRC_SIZE
   { NV_FT_SRC_TIER,  WEIGHT_BOLD    },   // TXT_SRC_TIER
   { NV_FT_SRC_META,  WEIGHT_BOLD    },   // TXT_SRC_STATE
+  // The player's title block.
+  { NV_FT_PLR_EP,    WEIGHT_BOLD    },   // TXT_PLR_EPCODE
+  { NV_FT_PLR_EP,    WEIGHT_MEDIUM  },   // TXT_PLR_EPNAME
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
