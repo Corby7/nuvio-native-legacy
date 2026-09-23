@@ -879,6 +879,7 @@ static void rowCatalog(int r, CtxCatalog *out) {
   snprintf(out->base,  sizeof out->base,  "%s", rows[r].base);
   snprintf(out->kind,  sizeof out->kind,  "%s", rows[r].catKind);
   snprintf(out->catId, sizeof out->catId, "%s", rows[r].catId);
+  out->continueRow = !strcmp(rows[r].key, "continue_watching");
 }
 
 void home_event(const SDL_Event *e) {

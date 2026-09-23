@@ -776,10 +776,19 @@ void app_update(float dt, Uint32 now) {
   menu_update(dt, now);
   seeall_update(dt, now);
   ctx_update(dt, now);
-  { int i = ctx_requested_details();   /* opens over any screen: no hero to fly from */
-    if (i >= 0) {
+  { int i = ctx_requested_details();
+    HomeItem it;
+    // THE SAME ROAD AS OK ON THE CARD. The hold menu is opened from a home card,
+    // and that card is still the home's focused item underneath it — so the
+    // details go through openTitle, which picks the zoom out of the card on the
+    // home and the plain fade where a collection's grid covers it. Opening from a
+    // made-up centred rect, as this did, gave every title the same fade whatever
+    // it was opened from.
+    if (i >= 0 && screen == SCREEN_HOME && home_item_focused(&it) &&
+        it.index_ == i && it.art) {
+      openTitle(&it);
+    } else if (i >= 0) {
       const CatItem *ci = cat_item(i);
-      HomeItem it;
       memset(&it, 0, sizeof it);
       it.index_ = i;
       it.rect = (GfxRect){ NV_SCREEN_W * 0.5f - 124.0f, NV_SCREEN_H * 0.5f - 186.0f,

@@ -150,9 +150,11 @@ static void build(void) {
   memset(ops, 0, sizeof ops);
   if (!ci) return;
   going = inProgress(ci);
-  // A TITLE WITH PROGRESS LEADS WITH PLAYING IT, in the owner's mock order:
-  // Resume, Start from the beginning, the library and watched toggles, then the
-  // details. Anything else keeps details first, as it always had.
+  // DETAILS FIRST, ALWAYS — the owner's call. It used to drop below the library
+  // and watched toggles on a title with progress, which put the one option every
+  // card has in a different place depending on the card.
+  addOp("See details", "ctx_info", OP_DETAILS);
+  // A title with progress then offers to play it: Resume, Start from the beginning.
   if (going) {
     static char episode[24];
     addOp("Resume", "ctx_play", OP_RESUME);
@@ -161,8 +163,6 @@ static void build(void) {
       ops[nOps - 1].hint = episode;
     }
     addOp("Start from the beginning", "ctx_restart", OP_START_OVER);
-  } else {
-    addOp("See details", "ctx_info", OP_DETAILS);
   }
   // Without an IMDb id there is no supported remote endpoint for this action.
   // Do not offer a button that would only look like it works and would invent
@@ -190,7 +190,6 @@ static void build(void) {
     ops[nOps].icon = cat_history_state_item(i) == 1 ? "ctx_x" : "ctx_check";
     ops[nOps].action = OP_WATCHED; nOps++;
   }
-  if (going) addOp("See details", "ctx_info", OP_DETAILS);
   // THE ROW, LAST. It is the only option here that does not act on the title in
   // the header, so it goes below the three that do rather than between them.
   //
@@ -225,7 +224,13 @@ static void build(void) {
   }
   // LAST, and set apart by being the one that takes something away. It clears
   // the resume points here, on the account and on Trakt — see cwremove.h.
-  if (going) addOp("Remove from Continue watching", "ctx_hide", OP_REMOVE_CW);
+  //
+  // ANY CARD IN THE ROW, not only one with progress. A next-up card is at 0% —
+  // the episode after the last one watched, not started — so gating on progress
+  // left exactly those cards with no way out of the row. cw_remove's dismissal is
+  // what hides a next-up card, and it needs no progress to work.
+  if (going || row.continueRow)
+    addOp("Remove from Continue watching", "ctx_hide", OP_REMOVE_CW);
 }
 
 void ctx_open(int index_) { ctx_open_row(index_, NULL); }
@@ -330,6 +335,13 @@ static void apply(void) {
   }
   if (action == OP_DETAILS || action == OP_SEEALL || action == OP_RESUME ||
       action == OP_START_OVER || action == OP_REMOVE_CW) is_open = 0;
+  // The details bring a transition of their own — the zoom out of the card on the
+  // home, a fade elsewhere — and the menu easing out over it would be two
+  // animations at once. It goes in the same frame instead, scrim and all.
+  if (action == OP_DETAILS) {
+    anim = 0.0f;
+    memset(focusAnim, 0, sizeof focusAnim);
+  }
 }
 
 void ctx_event(const SDL_Event *e) {

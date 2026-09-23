@@ -16,7 +16,10 @@
 // THE CATALOGUE THE CARD'S ROW CAME FROM. It travels with the card because the
 // menu offers to open the WHOLE row as a grid, and a catalogue cannot be deduced
 // from an item: the same title sits in several rows at once.
-typedef struct { char title[96], base[600], kind[8], catId[96]; } CtxCatalog;
+// `continueRow` is set when the card sits in "Continue watching": a next-up card
+// there has no progress of its own, and without the flag the menu could not tell
+// it apart from a plain catalogue card and offered no way to remove it.
+typedef struct { char title[96], base[600], kind[8], catId[96]; int continueRow; } CtxCatalog;
 
 // `index` is the position in the global catalogue.
 // The long-press integration lives in home.c: it measures NV_HOLD_MS on KEYUP
