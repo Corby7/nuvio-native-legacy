@@ -871,6 +871,7 @@ void app_draw(Uint32 now) {
   episodes_draw();
   stream_sheet_draw(now);
   tracks_draw(now);
+  player_draw_subtitle_over();
 }
 
 // --- THE DEV CHANNEL, see app.h for why -------------------------------------

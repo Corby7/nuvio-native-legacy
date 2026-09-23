@@ -315,6 +315,9 @@ static int    wasLoading = 0;
 // is the source search, which can take seconds). Zero while there has been none.
 // The parental guide relies on this to appear ONCE, at the start, and disappear.
 static Uint32 startImage = 0;
+// How much of the player's chrome is showing, 0..1 — set while drawing (see
+// player_draw), read by the update that runs before it.
+static float chrome;
 // THE TWO MEDIA VARIABLES. All the rest of the file reads only from here — when the
 // real video comes in, they are the ones the decoder starts filling.
 static int   hasVideo = 0;
@@ -368,6 +371,9 @@ static void fmtTime(char *b, size_t n, float seg, int negative);
 //             for PLR_FAIL_STALL_MS while playing, or endOfStream well short of
 //             the file's duration (a truncated or cut-off file)
 // Each is logged ONCE per playback (per source, for a source change).
+// PLR_FAIL_SEARCH_MS is the exception: a search that slow is logged but gets no
+// notice, because it usually ends in a source that plays. If it does not, the
+// "source" failure above is logged and shown when the search gives up.
 #define PLR_FAIL_LOAD_MS    45000u
 #define PLR_FAIL_SEARCH_MS  90000u
 #define PLR_FAIL_STALL_MS   20000u
@@ -391,7 +397,7 @@ static void urlHost(const char *url, char *dst, size_t n) {
   dst[k] = 0;
 }
 
-void player_report_failure(const char *stage, const char *reason) {
+static void reportFailure(const char *stage, const char *reason, int notify) {
   const CatItem *c = item();
   const Stream *st = stream_n() > 0 ? stream_item(stream_current()) : NULL;
   char key[160], line[1400], who[200], src[600] = "no source chosen";
@@ -422,9 +428,13 @@ void player_report_failure(const char *stage, const char *reason) {
   }
   snprintf(line, sizeof line, "%-8s | %s | %s | %s", stage, who, reason, src);
   failure_log(line);
+  if (!notify) return;
 
-  snprintf(failNotice, sizeof failNotice, "Playback problem logged Â· %s", reason);
+  snprintf(failNotice, sizeof failNotice, "Playback problem logged · %s", reason);
   failNoticeAt = SDL_GetTicks();
+}
+void player_report_failure(const char *stage, const char *reason) {
+  reportFailure(stage, reason, 1);
 }
 
 // Called on every open and every source change: the watches start over.
@@ -434,6 +444,8 @@ static void failWatchReset(void) {
   loadStartAt = SDL_GetTicks();
   stallAt = 0; stallPos = -1.0f;
   failLoadLogged = failSearchLogged = failStallLogged = 0;
+  // A notice about the previous title or source is stale the moment a new one loads.
+  failNoticeAt = 0;
 }
 int player_index(void) { return idx; }
 const char *player_line_episode(void) { return lineEp; }
@@ -1420,7 +1432,7 @@ void player_update(float dt, Uint32 now) {
       failSearchLogged = 1;
       snprintf(r, sizeof r, "still looking for a source after %us",
                PLR_FAIL_SEARCH_MS / 1000u);
-      player_report_failure("source", r);
+      reportFailure("source", r, 0);
     }
     // A STALL: playing, not aiming a seek, and the position has not moved. Paused
     // or seeking resets it — neither is the file's fault.
@@ -1498,6 +1510,15 @@ void player_update(float dt, Uint32 now) {
   // word. With no pipeline at all (the Mac) there is no frame to wait for, and
   // the addon's subtitle is drawn by our own overlay anyway.
   if (!waitingSource && !errorSource && (startImage || !hasVideo)) tracks_auto(now);
+
+  // THE FILE'S OWN SUBTITLE IS LIFTED CLEAR of whatever takes the bottom of the
+  // screen: the transport while the controls are up, the subtitle Style bar while
+  // that is. The pipeline draws those cues, out of the overlay's reach, so the
+  // raise goes to it — the viewer's Height is left alone, and it comes off the
+  // moment the controls or the bar go. `chrome` is last frame's: under a sheet
+  // the controls are faded out even while `visible` holds.
+  { int up = tracks_style_shown() > 0.5f || (visible && chrome > 0.5f);
+    video_subtitle_lift(up ? NV_TRK_EMBED_LIFT : 0); }
 
   // Paused, the controls stay. Making them disappear would leave the user in front of
   // a still frame with no clue that it was they who paused.
@@ -1630,6 +1651,7 @@ static void drawSubtitleExternal(void){
   // With the chrome faded out under a sheet there is no transport to clear, so
   // the cue settles back to where it sits with the controls hidden.
   float gone=stream_sheet_shown();if(tracks_shown()>gone)gone=tracks_shown();
+  if(episodes_shown()>gone)gone=episodes_shown();
   float base=visible?700.f+300.f*gone:1000.f;
   if(nextCardUp())base=690.f;
   base-=(subStyle.position-3)*48.f;
@@ -1976,11 +1998,20 @@ static void drawActionsEpisode(void){
 // The picture stays, and so do the subtitles: those are content, not chrome.
 static float chrome = 1.0f;
 static void drawPlayer(Uint32 now);
+void player_draw_subtitle_over(void) {
+  if (!is_open || tracks_style_shown() <= 0.0f) return;
+  gfx_opacity_group = 1.0f;
+  drawSubtitleExternal();
+}
+
 void player_draw(Uint32 now) {
   if (!is_open) return;
-  // The audio and subtitle sheets take the screen the same way.
-  { float sheet = stream_sheet_shown(), tracks = tracks_shown();
-    chrome = 1.0f - (sheet > tracks ? sheet : tracks); }
+  // The audio and subtitle sheets, and the episode list, take the screen the
+  // same way.
+  { float sheet = stream_sheet_shown(), tracks = tracks_shown(), eps = episodes_shown();
+    if (tracks > sheet) sheet = tracks;
+    if (eps > sheet) sheet = eps;
+    chrome = 1.0f - sheet; }
   drawPlayer(now);
   gfx_opacity_group = 1.0f;
 }
@@ -2192,8 +2223,11 @@ static void drawPlayer(Uint32 now) {
   }
 
   /* They stay when the controls disappear: they are content, not player chrome. */
+  // While the subtitle Style bar is up the cue is drawn OVER it instead, by
+  // player_draw_subtitle_over: it is what the bar is styling, and under the bar's
+  // gradient it would be judged darker than it plays.
   gfx_opacity_group = 1.0f;
-  drawSubtitleExternal();
+  if (tracks_style_shown() <= 0.0f) drawSubtitleExternal();
   gfx_opacity_group = chrome;
   // The stats panel is DELIBERATELY outside the controls' alpha. You open it to
   // watch a number move — the buffer draining, the bitrate on a new source — and
@@ -2434,11 +2468,9 @@ static void drawPlayer(Uint32 now) {
         case PLR_AUDIO:    iconAudio(bcx, cyButtons, a, luma); break;
         case PLR_NEXT:     iconFile(bcx, cyButtons, a, luma, "skip_next", PLR_ICON_H); break;
         case PLR_EPISODES: iconFile(bcx, cyButtons, a, luma, "episodes", PLR_ICON_H); break;
-        // The title screen's Sources glyph — Phosphor's cloud, filling on focus
-        // exactly as it does there — so the one action wears one icon everywhere.
-        case PLR_SOURCES:  iconFile(bcx, cyButtons, a, luma,
-                                    f > 0.5f ? "detail_source_filled" : "detail_source",
-                                    PLR_ICON_H); break;
+        // Phosphor's stack in BOLD, the weight of every other glyph on this row,
+        // and like them it does not fill on focus: the puck is the focus.
+        case PLR_SOURCES:  iconFile(bcx, cyButtons, a, luma, "stack", PLR_ICON_H); break;
         case PLR_STATS:    iconFile(bcx, cyButtons, a, luma, "stats", PLR_ICON_H); break;
         default:           iconAspect(bcx, cyButtons, a, luma); break;   // PLR_ASPECT
       }

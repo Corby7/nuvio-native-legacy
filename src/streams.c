@@ -24,9 +24,6 @@ int stream_sheet_reload(void) { int r = reload; reload = 0; return r; }
 
 static int is_open = 0, focus = 0, choice = -1;
 static float anim = 0.0f, scroll = 0.0f;
-// THE SHEET'S TRAVEL, 0 = off the right edge of the screen, 1 = in place, and its
-// velocity. `anim` above is derived from it and is only the sheet's OPACITY.
-static float travel = 0.0f, velTravel = 0.0f;
 static float tipA[2];   // the header tooltips' fades: Reload, Close
 // The highlight's row, in ITEM units (2.4 = between the third and the fourth).
 // The highlight slides between rows instead of jumping: with a hard jump the
@@ -376,17 +373,11 @@ void stream_sheet_event(const SDL_Event *e) {
 }
 void stream_sheet_update(float dt, Uint32 now) {
   (void)now;
-  // IT COMES IN FROM THE RIGHT EDGE, its whole width, and leaves the same way. The
-  // second-order spring the title screen's own flight uses (NV_SPRING2_SCREEN): it
-  // starts from rest, so the sheet gathers speed off the edge instead of jumping,
-  // and a Back pressed mid-way turns round from wherever it has got to. It used to
-  // slide 6% of its width and fade, which read as appearing rather than arriving.
-  //
-  // The opacity runs AHEAD of the travel (x1.6), so the sheet is solid for most of
-  // the journey and it is the movement, not a fade, that the eye follows.
-  travel=anim_spring2_reduced(&velTravel,travel,is_open?1:0,dt,NV_SPRING2_SCREEN,
-                              settings_animations_reduced());
-  anim=anim_clamp(travel*1.6f,0.0f,1.0f);
+  // IT ARRIVES AS THE PLAYER'S OTHER PANELS DO — audio, subtitles, episodes: a
+  // short slide from the right (NV_TRK_SLIDE of its width) and a fade, on the
+  // screen spring. It used to haul its whole width in from the edge, which made
+  // it the one panel in the player that moved differently from the rest.
+  anim=anim_spring(anim,is_open?1:0,dt,NV_SPRING_SCREEN);
   { int k;
     for(k=0;k<2;k++)
       tipA[k]=anim_ramp(tipA[k],is_open && group==-1 && focus==k?1.0f:0.0f,dt,NV_SRC_TIP_MS); }
@@ -716,8 +707,8 @@ static void sheetRow(int row, float y, float cx, float cw, Uint32 now) {
 
 void stream_sheet_draw(Uint32 now) {
   if(anim<.005f) return;
-  // The sheet travels its whole width in from the right edge — see the update.
-  float slide=(1-travel)*NV_SRC_VEIL_W;
+  // The short slide the track menus use — see the update.
+  float slide=(1-anim)*NV_SRC_VEIL_W*NV_TRK_SLIDE;
   float x=NV_SCREEN_W-NV_SRC_VEIL_W+slide;
   float cx=NV_SCREEN_W-NV_SRC_PAD-NV_SRC_CONTENT_W+slide, cw=NV_SRC_CONTENT_W;
   int nf, row;

@@ -233,6 +233,12 @@ fi
 # directory is NOT writable by prisoner (measured — `test -w` says no). So the
 # installer is the only way in, which means the verification below is not a
 # nicety, it is the thing that stands between a deploy and a hope.
+# CLOSE BEFORE INSTALLING. Installed over a running app, the running binary can
+# block the swap — and an install interrupted in that state left the TV with the
+# old process dead but never reaped, the app "locked" and the installer refusing
+# every command as a duplicate until a full power cycle.
+echo "==> closing $APP_ID"
+"$ARESDIR/ares-launch" -d "$TV_DEV" --close "$APP_ID" >/dev/null 2>&1 || true
 echo "==> installing on $TV_DEV"
 "$ARESDIR/ares-install" -d "$TV_DEV" "$IPK"
 
@@ -240,10 +246,8 @@ echo "==> installing on $TV_DEV"
 # runs out the login fails, the TV falls back to an anonymous session and syncs
 # the wrong account — which looks like a bug in the app.
 #
-# Launching does NOT restart an app that is already running, it only brings it
-# to the front. Close first so what starts is actually this build.
+# The app was closed before the install, so this start is the new build.
 echo "==> launching"
-"$ARESDIR/ares-launch" -d "$TV_DEV" --close "$APP_ID" >/dev/null 2>&1 || true
 "$ARESDIR/ares-launch" -d "$TV_DEV" "$APP_ID"
 
 # ---------------------------------------------------------------- verifying
@@ -290,7 +294,15 @@ SSH="ssh -p ${TV_PORT:-9922} -i $TV_KEY -o StrictHostKeyChecking=no \
 
 echo "==> verifying"
 LOCAL=$(md5 -q nuvio-proto.arm 2>/dev/null || md5sum nuvio-proto.arm | cut -d' ' -f1)
-REMOTE=$($SSH "md5sum $APPDIR/nuvio-proto 2>/dev/null | cut -d' ' -f1" 2>/dev/null | tr -d '\r')
+# ares-install reports success before appInstallService has finished swapping
+# the file in: read straight away, the md5 is of the file mid-replacement and the
+# check cries "not swapped" over a deploy that lands a second later. So it asks
+# again for up to ten seconds before calling it.
+for try in 1 2 3 4 5; do
+  REMOTE=$($SSH "md5sum $APPDIR/nuvio-proto 2>/dev/null | cut -d' ' -f1" 2>/dev/null | tr -d '\r')
+  [ -z "$REMOTE" ] || [ "$REMOTE" = "$LOCAL" ] && break
+  sleep 2
+done
 if [ -z "$REMOTE" ]; then
   echo "    NOT VERIFIED: could not read the TV over ssh."
   echo "    If it asked for a passphrase, run:  ssh-add $TV_KEY"

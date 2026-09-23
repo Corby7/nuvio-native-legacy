@@ -1998,8 +1998,10 @@
 // It sits a clear 130px over the tiles, so the style is judged
 // against the picture and not against the bar's own shading.
 #define NV_TRK_PREVIEW_FLOOR 720.0f
-// The same raise for the EMBEDDED subtitle, in the uMS's own position steps
-// (-3..4), since the pipeline and not the overlay draws it.
+// The raise for the EMBEDDED subtitle, in the uMS's own position steps (-3..4),
+// since the pipeline and not the overlay draws it. The player applies it both
+// under the Style bar and while its own controls are up; 4 from the default is
+// as high as the uMS goes.
 #define NV_TRK_EMBED_LIFT      4
 
 // --- THE PLAYER'S TWO "JUMP AHEAD" PROMPTS -----------------------------------
@@ -2072,28 +2074,73 @@
 #define NV_FT_NEXT_PILL    22      // the action pills            22 / 500
 #define NV_NEXT_KICK_TRACK  1.6f   // 0.08em at 20px
 
-// --- THE PLAYER'S EPISODE RAIL -----------------------------------------------
-// It was a right-hand drawer of text rows, and the web app's own note says why it
-// stopped being one: a drawer hides the video and buries the single thing that
-// identifies an episode, its thumbnail. This is a bottom sheet — the frame stays
-// visible above it, the episodes are large 16:9 cards on a horizontal rail, and
-// the selected card's title and synopsis sit ABOVE the rail rather than being
-// clamped inside every row.
+// THE PLAYER'S DROPDOWNS — the season pill here, the subtitle sheet's selects —
+// are the title page's, but see-through: over the picture and the veil a solid
+// #222 read as a slab pasted on. The anchor's ground and the open menu's plate
+// both take this alpha; the focused option stays solid, it is what is read.
+#define NV_PLR_DD_A        0.78f
+
+// --- THE PLAYER'S EPISODE LIST -----------------------------------------------
+// A right-hand list over the track menus' veil. It was a bottom-sheet rail of
+// 400px cards ported from the web app, and that sheet covered the lower 62% of
+// the picture — subtitles included — to show four episodes at a time. In the
+// player the job is "find episode N" while the film keeps playing, which is a
+// list's job.
 //
-// It is also the one player menu that did NOT move to the right-hand geometry the
-// track menus and sources use, and deliberately: its content is pictures, not
-// text, and pictures need the width.
-#define NV_ERAIL_GUTTER   104.0f   // min(5.42vw,104)
-#define NV_ERAIL_CARD_W   400.0f   // min(20.8vw,400)
-#define NV_ERAIL_GAP       24.0f   // must match EPISODE_RAIL_GAP_PX in the web app
-#define NV_ERAIL_PAD_TOP   72.0f   // min(3.75vw,72)
-#define NV_ERAIL_PAD_BOT   48.0f   // min(2.5vw,48)
-#define NV_ERAIL_VIEW_PAD  16.0f   // min(0.83vw,16)
-#define NV_ERAIL_THUMB_R   16.0f   // min(0.83vw,16)
-#define NV_ERAIL_RING       4.0f   // min(0.21vw,4), the selected card's border
-#define NV_ERAIL_SCALE     1.06f   // .player-episode-item.selected
-#define NV_ERAIL_DETAIL_W 1120.0f  // min(58vw,1120)
-#define NV_ERAIL_DETAIL_MB  32.0f  // min(1.67vw,32)
+// The web app left its drawer for two reasons, and the rows answer both: every
+// row keeps its thumbnail, and only the FOCUSED row opens to show its synopsis,
+// so the text is read once instead of being clamped into every row.
+//
+// Drawn to the design board under the track menus' heading: the season pill on
+// the line their tabs use, rows that dim unless they are focused or playing, and
+// focus as a band across the whole row with the ring on the thumbnail alone.
+#define NV_EPL_W          780.0f   // the content column, set against the right margin
+#define NV_EPL_PAD         48.0f   // the column's right margin
+#define NV_EPL_VEIL_W    1100.0f
+#define NV_EPL_ROW_H      144.0f   // a closed row
+#define NV_EPL_ROW_GAP      4.0f
+#define NV_EPL_PADX        16.0f   // the band's left edge to the thumb
+#define NV_EPL_THUMB_W    208.0f
+#define NV_EPL_THUMB_H    117.0f
+#define NV_EPL_THUMB_R     12.0f
+// The focused thumb grows about its left edge, as the title page's episode
+// list does (NV_DETEP_THUMB_GROW), and the text beside it makes way.
+#define NV_EPL_THUMB_GROW   1.10f
+#define NV_EPL_TEXT_GAP    24.0f   // thumb -> the name
+#define NV_EPL_TEXT_GROW   12.0f   // and the extra the focused row adds to it
+// THE TEXT IS ONE BLOCK, centred in the row as the thumb is: the name, the
+// detail line under it, and on an open row the synopsis under that. Offsets are
+// from the block's top, measured on the lines' boxes.
+#define NV_EPL_SUB_DY      40.0f   // the detail line
+#define NV_EPL_SYN_DY      78.0f   // the synopsis
+#define NV_EPL_BLOCK_H     66.0f   // a closed row's block: the name and the detail line
+#define NV_EPL_PADY        20.0f   // an open row's air above and below its block
+#define NV_EPL_SYN_LINES    3
+#define NV_EPL_SYN_LD      28.0f   // 20px type x 1.4
+#define NV_EPL_BAND         0.09f  // the focused row's band, white at this alpha
+#define NV_EPL_BAND_LEAD   80.0f   // how far left of the column the band starts
+#define NV_EPL_BAND_FEATHER 260.0f // the run over which it fades in from nothing
+#define NV_EPL_DIM        128      // a resting row's name, as 0..255
+#define NV_EPL_DIM_SUB    104      // and its detail line
+#define NV_EPL_DIM_THUMB    0.55f  // and its thumbnail
+#define NV_EPL_CHECK       30.0f   // the watched disc on the thumb's corner
+#define NV_EPL_CHECK_TICK   0.55f  // the tick inside it, as a share of the disc
+#define NV_EPL_PROG_H       5.0f   // the playing episode's bar along the thumb's base
+#define NV_EPL_NEXT_H      36.0f   // the UP NEXT pill
+#define NV_EPL_NEXT_PADX   14.0f
+// The season pill, and the menu it opens.
+// The subtitle select's type and chevron at a compact height, and one width for
+// the pill and its menu, as the title page's picker and menu share theirs.
+#define NV_EPL_PILL_H      64.0f
+#define NV_EPL_PILL_W     300.0f
+#define NV_EPL_PILL_PADX   28.0f
+#define NV_EPL_PILL_CHEV   NV_TRK_CHEV
+#define NV_EPL_SMENU_ROW   64.0f   // an option; the plate and its padding are detail.h's
+#define NV_EPL_SMENU_VIS      8     // options in view before the menu scrolls
+// The list's window: from under the pill to the sources sheet's foot. Rows are
+// drawn past the bottom to the screen's edge; this is only the scroll's measure.
+#define NV_EPL_VIEW_TOP    (NV_TRK_TABS_Y + NV_EPL_PILL_H + 40.0f)
+#define NV_EPL_VIEW_BOTTOM (NV_SCREEN_H - NV_SRC_FOOT)
 #define NV_FT_ERAIL_META   22      // .player-episode-detail-meta     22 / 700, ls .06em
 #define NV_FT_ERAIL_TITLE  44      // .player-episode-detail-title    44 / 800
 #define NV_FT_ERAIL_OVER   22      // .player-episode-detail-overview 22 / 500

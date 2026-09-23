@@ -10,6 +10,11 @@
 #include "settings.h"
 #include "streams.h"
 #include "tabs.h"
+#include "catalog.h"
+#include "detail.h"
+#include "data.h"
+#include <sys/stat.h>
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -35,6 +40,8 @@ static int subExternal = -1;
 #define TRK_AUTO_MS 8000
 static int autoDone;
 static Uint32 autoSince;
+// Whether this playback has read its show's remembered language yet (below).
+static int memRead;
 
 // Called when a new playback session starts: the external subtitle belongs to
 // the session, not to the device. Without this the next title would open the
@@ -42,6 +49,7 @@ static Uint32 autoSince;
 void tracks_reset(void) {
   subExternal = -1; is_open = 0; subtitle_off();
   autoDone = 0; autoSince = 0;
+  memRead = 0;
 }
 
 // --- AUTOMATIC SELECTION -----------------------------------------------------
@@ -59,75 +67,203 @@ void tracks_reset(void) {
 // the first one where there is something worth deciding, or gives up at the
 // deadline; deciding at a fixed instant would mean deciding with half the
 // information on half the titles.
-// A track that is a PICTURE cannot be turned into text on this TV: no style, no
-// position, no size, and on a file whose only subtitles are PGS the choice shows
-// nothing at all. An UNKNOWN codec (not an MKV, or the header read failed) is
-// treated the same way — selecting it blind is how one ends up with a subtitle
-// that silently does nothing, which is the defect this whole path is fixing. The
-// addon's subtitle, which is text by definition, is the better answer in both
-// cases.
-static int embeddedText(const VideoTrack *t) {
-  if (!t || !t->codec[0]) return 0;
-  return !strstr(t->codec, "PGS") && !strstr(t->codec, "VOBSUB") &&
-         !strstr(t->codec, "DVBSUB");
+// THE DECISION LOG: one line per playback in subtitle-auto.log, in the data
+// folder — the one place on the TV that ssh can read, since the app's stdout goes
+// to a private /tmp. The automatic choice depends on what the file and the addon
+// report, and neither can be seen from the sofa; "no subtitle came on" has several
+// different causes, and this line says which one it was.
+static void autoLog(const char *outcome) {
+  char path[600], line[1600], tracksBuf[900] = "";
+  const CatItem *c = cat_item(player_index());
+  const Stream *st = stream_n() > 0 ? stream_item(stream_current()) : NULL;
+  int t = 0, e = 0, i, n = video_n_subtitle();
+  size_t k = 0;
+  struct stat sb;
+  time_t now = time(NULL);
+  struct tm lt;
+  FILE *f;
+  player_episode_current(&t, &e);
+  for (i = 0; i < n && k + 80 < sizeof tracksBuf; i++) {
+    const VideoTrack *v = video_subtitle(i);
+    k += (size_t)snprintf(tracksBuf + k, sizeof tracksBuf - k, "%s[%s/%s/%s]", i ? " " : "",
+                          v && v->language[0] ? v->language : "-",
+                          v && v->codec[0] ? v->codec : "-", v ? v->label : "?");
+  }
+  snprintf(line, sizeof line,
+           "%s S%dE%d | pref %d | file %s | embedded %d: %s | addon %d%s | %s",
+           c ? c->title : "?", t, e, settings_subtitle_pref(),
+           st && st->file[0] ? st->file : "?", n, n ? tracksBuf : "none",
+           addons_n_subtitles(), addons_subtitles_busy() ? " (still searching)" : "",
+           outcome);
+  printf("[subtitle] auto: %s\n", line);
+  fflush(stdout);
+  if (!data_path(path, sizeof path, "subtitle-auto.log")) return;
+  // Kept small: it answers "what happened on the last few titles", not a history.
+  if (stat(path, &sb) == 0 && sb.st_size > 64L * 1024L) remove(path);
+  if (!(f = fopen(path, "a"))) return;
+  localtime_r(&now, &lt);
+  { char stamp[32]; strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &lt);
+    fprintf(f, "%s | %s\n", stamp, line); }
+  fclose(f);
+}
+
+// --- THE LANGUAGE REMEMBERED PER SHOW ------------------------------------------
+//
+// What the viewer picks in the sheet — a language, or Off — is kept per SHOW
+// (per film for a film), in subtitle-shows.txt: "<imdb id> <language name>". The
+// next episode then starts in the language they chose for this series, not in the
+// device-wide default: English subtitles on one show and none on another is a
+// perfectly ordinary household. The web app keeps the same per-title language.
+//
+// The LANGUAGE, not the track: episode files differ in their tracks, and the
+// release that carried "English SDH" last week may carry only "English" now.
+static const char LANG_OFF[] = "Off";
+static const char LANG_UNKNOWN[] = "Unknown";
+#define MEM_FILE "subtitle-shows.txt"
+#define MEM_MAX  300
+// This playback's show and what it remembers, read once per playback: the sheet's
+// language order asks every frame, and the file does not change under us.
+static char memShow[24], memLang[32];
+
+static void showKey(char *dst, size_t size) {
+  const CatItem *c = cat_item(player_index());
+  const char *id = c ? c->imdb : "";
+  snprintf(dst, size, "%.*s", (int)strcspn(id, ":"), id);
+}
+
+// The remembered language for this playback's show, or "" for none.
+static const char *memLanguage(void) {
+  char path[600], line[96];
+  FILE *f;
+  if (memRead) return memLang;
+  memRead = 1;
+  memLang[0] = 0;
+  showKey(memShow, sizeof memShow);
+  if (!memShow[0] || !data_path(path, sizeof path, MEM_FILE) || !(f = fopen(path, "r")))
+    return memLang;
+  while (fgets(line, sizeof line, f)) {
+    char id[24], lang[32];
+    line[strcspn(line, "\r\n")] = 0;
+    // The name can hold a space ("Portuguese (BR)"), so it is the rest of the line.
+    if (sscanf(line, "%23s %31[^\n]", id, lang) == 2 && !strcmp(id, memShow))
+      snprintf(memLang, sizeof memLang, "%s", lang);   // the last line for a show wins
+  }
+  fclose(f);
+  return memLang;
+}
+
+// Records `lang` for this playback's show: the show's old line goes, the new one
+// is appended, and the oldest shows fall off past MEM_MAX.
+static void memRemember(const char *lang) {
+  char path[600], tmp[620], lines[MEM_MAX][96];
+  int n = 0, i, from;
+  FILE *f;
+  memLanguage();
+  if (!memShow[0] || !lang || !lang[0] || !strcmp(lang, LANG_UNKNOWN)) return;
+  snprintf(memLang, sizeof memLang, "%s", lang);
+  if (!data_path(path, sizeof path, MEM_FILE)) return;
+  if ((f = fopen(path, "r"))) {
+    char line[96];
+    size_t k = strlen(memShow);
+    while (fgets(line, sizeof line, f) && n < MEM_MAX) {
+      line[strcspn(line, "\r\n")] = 0;
+      if (!line[0] || (!strncmp(line, memShow, k) && line[k] == ' ')) continue;
+      snprintf(lines[n++], sizeof lines[0], "%s", line);
+    }
+    fclose(f);
+  }
+  from = n >= MEM_MAX ? n - MEM_MAX + 1 : 0;
+  snprintf(tmp, sizeof tmp, "%s.tmp", path);
+  if (!(f = fopen(tmp, "w"))) return;
+  for (i = from; i < n; i++) fprintf(f, "%s\n", lines[i]);
+  fprintf(f, "%s %s\n", memShow, lang);
+  fclose(f);
+  rename(tmp, path);
+}
+
+// A track that is a PICTURE (PGS, VobSub, DVB) cannot be restyled on this TV, and
+// on a file whose only subtitles are pictures the addon's text subtitle is the
+// better answer. An UNKNOWN codec is NOT treated as a picture: the codec comes
+// from the MKV header read, so every track of an MP4 has none — and MP4 carries
+// text subtitles only. Skipping unknowns is what left the file's own English
+// track off on every MP4.
+static int embeddedBitmap(const VideoTrack *t) {
+  return t && (strstr(t->codec, "PGS") || strstr(t->codec, "VOBSUB") ||
+               strstr(t->codec, "DVBSUB"));
+}
+
+// Whether a track in language `code` is the one wanted: the show's remembered
+// language by NAME when there is one, else the Settings row's group.
+static int wanted(const char *code, const char *remembered, int group) {
+  if (remembered[0]) return code && code[0] && !strcmp(video_language_name(code), remembered);
+  return addons_language_group(code) == group;
 }
 
 void tracks_auto(Uint32 now) {
-  // 0 off, 1 automatic, 2 Portuguese, 3 English.
+  // 0 off, 1 automatic, 2 Portuguese, 3 English. AUTOMATIC IS ENGLISH: it used to
+  // mean Portuguese first, a leftover from the app's first owner that handed an
+  // English viewer a Portuguese download whenever the addon had one.
   int pref = settings_subtitle_pref();
-  int want = pref == 2 ? 0 : pref == 3 ? 1 : -1;
-  int embedded = video_n_subtitle(), pass, i;
+  int group = pref == 2 ? 0 : 1;
+  int embedded = video_n_subtitle(), i, expired;
+  // What the viewer chose for this show last time outranks the device default,
+  // Off included. If that language is not on offer this time, the default takes
+  // over at the deadline rather than leaving the episode without any.
+  const char *memory = memLanguage();
+  char remembered[32];
 
-  if (autoDone || pref == 0) return;
+  if (autoDone) return;
+  if (!strcmp(memory, LANG_OFF)) { autoDone = 1; autoLog("remembered Off for this show"); return; }
   if (!autoSince) autoSince = now ? now : 1;
-  { int expired = now - autoSince >= TRK_AUTO_MS;
-    // The addon search is still out: its result is the one that works on a file
-    // with only PGS inside, so it is worth the wait.
-    if (!expired && addons_subtitles_busy()) return;
-    // The file HAS subtitles and no codec has been read yet — the MKV probe is
-    // still running. Choosing now would either skip a perfectly good text track
-    // or pick a PGS one; both are answered by waiting a moment.
-    if (!expired && embedded > 0) {
-      int known = 0;
-      for (i = 0; i < embedded; i++)
-        if (video_subtitle(i) && video_subtitle(i)->codec[0]) { known = 1; break; }
-      if (!known) return;
-    } }
+  expired = now - autoSince >= TRK_AUTO_MS;
+  if (memory[0] && !expired) snprintf(remembered, sizeof remembered, "%s", memory);
+  else {
+    remembered[0] = 0;
+    if (pref == 0) { autoDone = 1; return; }
+  }
 
-  for (pass = 0; pass < 2; pass++) {
-    int group = want >= 0 ? want : pass;
-    // THE FILE'S OWN FIRST. It needs no download, and the pipeline keeps it in
-    // sync with its own clock — our overlay syncs against a position the pipeline
-    // reports, which is the same thing one step removed.
-    for (i = 0; i < embedded; i++) {
-      const VideoTrack *t = video_subtitle(i);
-      if (!t || addons_language_group(t->language) != group) continue;
-      if (!embeddedText(t)) continue;
-      video_choose_subtitle(i); subtitle_off(); subExternal = -1;
-      printf("[subtitle] auto: embedded %d (%s)\n", i, t->label);
-      fflush(stdout);
-      autoDone = 1; return;
-    }
-    for (i = 0; i < addons_n_subtitles(); i++) {
-      const Subtitle *l = addons_subtitle(i);
-      if (!l || addons_language_group(l->language) != group) continue;
-      video_choose_subtitle(-1); subtitle_load(l->url);
-      subExternal = embedded + i;
-      printf("[subtitle] auto: addon %d (%s)\n", i, l->label);
-      fflush(stdout);
-      autoDone = 1; return;
-    }
-    // A named language does not fall back to the other one: being given
-    // Portuguese after asking for English is an answer to a question nobody put.
-    if (want >= 0) break;
+  // THE FILE'S OWN FIRST, before any download. It needs no network, and the
+  // pipeline keeps it in sync with its own clock.
+  //
+  // While the MKV header read is still out, a track's codec is not known yet and
+  // it could turn out to be a picture — so hold off a moment, unless the deadline
+  // has come, rather than pick one that silently shows nothing.
+  if (!expired && embedded > 0) {
+    int known = 0;
+    for (i = 0; i < embedded; i++)
+      if (video_subtitle(i) && video_subtitle(i)->codec[0]) { known = 1; break; }
+    if (!known && stream_n() > 0 && strstr(stream_item(stream_current())->file, ".mkv"))
+      return;
+  }
+  for (i = 0; i < embedded; i++) {
+    const VideoTrack *t = video_subtitle(i);
+    if (!t || !wanted(t->language, remembered, group) || embeddedBitmap(t)) continue;
+    video_choose_subtitle(i); subtitle_off(); subExternal = -1;
+    { char o[96]; snprintf(o, sizeof o, "chose embedded %d%s", i,
+                           remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
+    autoDone = 1; return;
+  }
+
+  // Then the addon's. Its search is still out on most starts, so wait for it.
+  if (!expired && addons_subtitles_busy()) return;
+  for (i = 0; i < addons_n_subtitles(); i++) {
+    const Subtitle *l = addons_subtitle(i);
+    if (!l || !wanted(l->language, remembered, group)) continue;
+    video_choose_subtitle(-1); subtitle_load(l->url);
+    subExternal = embedded + i;
+    { char o[128]; snprintf(o, sizeof o, "chose addon %d (%s)%s", i, l->language,
+                            remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
+    autoDone = 1; return;
   }
 
   // Nothing yet. Keep looking until the deadline — the addon list can still land
-  // — and then stop, so the search does not run for the whole film.
-  if (now - autoSince >= TRK_AUTO_MS) {
+  // — and then stop, so the search does not run for the whole film. The Settings
+  // language does not fall back to another: asked for English, being given
+  // Portuguese is an answer to a question nobody put.
+  if (expired) {
     autoDone = 1;
-    printf("[subtitle] auto: nothing to select\n");
-    fflush(stdout);
+    autoLog(memory[0] ? "nothing selected (remembered language not on offer either)"
+                      : "nothing selected");
   }
 }
 
@@ -166,8 +302,6 @@ static float styleAnim;
 // sinks to the bottom rather than landing in the middle under U.
 #define LANG_MAX 32
 #define OPT_MAX  (NV_TRACK_MAX + SUB_MAX)
-static const char LANG_OFF[] = "Off";
-static const char LANG_UNKNOWN[] = "Unknown";
 typedef struct { char name[32]; int count, active, rank; } Lang;
 static Lang langs[LANG_MAX];
 static int nLangs;
@@ -201,9 +335,10 @@ static int langRank(const char *name) {
   int pref = settings_subtitle_pref();
   int pt = !strncmp(name, "Portuguese", 10), en = !strcmp(name, "English");
   if (!strcmp(name, LANG_UNKNOWN)) return 3;
+  if (memRead && !strcmp(name, memLang)) return 0;
   if (pref == 2 && pt) return 0;
   if (pref == 3 && en) return 0;
-  if (pref == 1 && (pt || en)) return pt ? 0 : 1;
+  if (pref == 1 && en) return 0;
   return 2;
 }
 
@@ -551,6 +686,11 @@ static void applySubtitle(int i) {
   // included: turning the subtitle off and having it come back a frame later is
   // the app arguing with the person using it.
   autoDone = 1;
+  // ...and it is what this show will start with next time.
+  { char lang[32];
+    if (i < 0) snprintf(lang, sizeof lang, "%s", LANG_OFF);
+    else subLanguage(i, lang, sizeof lang);
+    memRemember(lang); }
   if (i < 0)             { video_choose_subtitle(-1); subtitle_off(); subExternal = -1; }
   else if (i < embedded) { video_choose_subtitle(i);  subtitle_off(); subExternal = -1; }
   else {
@@ -669,11 +809,6 @@ void tracks_update(float dt, Uint32 now) {
   anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
   styleAnim = anim_spring(styleAnim, is_open && mode == MODE_SUBTITLE && tab == TAB_STYLE
                           ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
-  // The file's own subtitle is drawn by the pipeline, out of the overlay's reach,
-  // so the Style bar lifts it there too — the viewer's Height is left alone and
-  // the raise comes off the moment the bar goes.
-  video_subtitle_lift(is_open && mode == MODE_SUBTITLE && tab == TAB_STYLE
-                      ? NV_TRK_EMBED_LIFT : 0);
 }
 
 float tracks_shown(void) { return anim < 0.01f ? 0.0f : anim; }
@@ -776,50 +911,68 @@ static void valueTail(TxtStyle vs, TxtStyle ts, const char *value, const char *t
   }
 }
 
-// A CARD'S GROUND, as the sources sheet lays one: a faint fill that lifts under
-// the cursor, with a thin ring inset. `open` is a select whose menu is down —
-// lifted, but no ring: the cursor is in the menu.
-static void cardGround(GfxRect r, float radiusPx, int focused, int open, float a) {
-  float rad = radiusPx / r.h;
-  gfx_color(r, rad, 1, 1, 1, (focused || open ? NV_SRC_CARD_FOCUS : NV_SRC_CARD_FILL) * a);
-  if (focused)
-    gfx_rect(r, 0, GFX_RING_INSET, 0, NV_SRC_CARD_RING / r.h, 0, rad, 1, 1, 1, 0.95f * a);
+// THE DROPDOWNS ARE THE TITLE PAGE'S season picker (drawSeason and
+// drawSeasonMenu in detail.c), so every dropdown in the app looks like one thing.
+//
+// The anchor: a full pill in #222 with a hair line at rest; focused, or with its
+// menu down, the ground lifts to rgb(48,48,48) and the ring goes INSIDE the edge.
+static void selectGround(GfxRect r, int focused, int open, float a) {
+  float f = focused || open ? 1.0f : 0.0f;
+  float luma = NV_DETWEB_REST + (NV_DETWEB_SEA_FOCUS_BG - NV_DETWEB_REST) * f;
+  gfx_color(r, NV_RADIUS_PILL, luma, luma, luma, NV_PLR_DD_A * a);
+  if (f < 0.99f)
+    gfx_rect(r, 0, GFX_RING, 0, NV_DETWEB_SEA_BORDER / r.h, 0, NV_RADIUS_PILL,
+             1, 1, 1, 0.10f * a);
+  else
+    gfx_rect(r, 0, GFX_RING_INSET, 0, NV_DETWEB_SEA_RING / r.h, 0, NV_RADIUS_PILL,
+             1, 1, 1, 0.96f * a);
+}
+
+// An option under the cursor: a pill inverted to #f5f5f5; its type goes to #111.
+static void optionGround(GfxRect r, float a) {
+  gfx_color(r, NV_RADIUS_PILL, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, a);
 }
 
 // A SELECT: what is in force, and the chevron that says OK opens it. No label —
 // "English · 3 subtitles" says what the picker is for.
 static void selectRow(GfxRect r, const char *value, const char *tail, int focused,
                       int open, float a) {
-  cardGround(r, NV_SRC_CARD_R, focused, open, a);
+  selectGround(r, focused, open, a);
   valueTail(TXT_TRK_VALUE, TXT_TRK_LABEL, value, tail, r.x + NV_TRK_SEL_PADX,
             r.y + r.h * 0.5f, r.w - NV_TRK_SEL_PADX * 2 - 16.0f - NV_TRK_CHEV,
-            255, 146, a);
-  { float c = focused ? 0.9f : 0.6f;
-    gfx_icon((GfxRect){ r.x + r.w - NV_TRK_SEL_PADX - NV_TRK_CHEV,
-                        r.y + (r.h - NV_TRK_CHEV) * 0.5f, NV_TRK_CHEV, NV_TRK_CHEV },
-             "chevron_down", c, c, c, a); }
+            255, 179, a);
+  gfx_icon((GfxRect){ r.x + r.w - NV_TRK_SEL_PADX - NV_TRK_CHEV,
+                      r.y + (r.h - NV_TRK_CHEV) * 0.5f, NV_TRK_CHEV, NV_TRK_CHEV },
+           "chevron_down", 0.702f, 0.702f, 0.702f, a);
 }
 
-// The OPEN menu: an opaque plate hung under the anchor, its width, in front of
-// whatever is below. Returns the first option's rect; *vis is how many fit.
+// The OPEN menu: a #222 plate with the title page's drop shadow, hung under the
+// anchor at its width, in front of whatever is below. Returns the first option's
+// rect; *vis is how many fit.
 static GfxRect menuPlate(GfxRect anchor, int n, float rowH, float limit, int cursor,
                          int *scroll, int *vis, float a) {
-  float top = anchor.y + anchor.h + NV_TRK_MENU_GAP;
-  int fit = (int)((limit - top - NV_TRK_MENU_PAD * 2 + NV_TRK_MENU_PAD) / (rowH + NV_TRK_MENU_PAD));
+  float top = anchor.y + anchor.h + NV_DETWEB_SEA_MENU_GAP;
+  int fit = (int)((limit - top - NV_DETWEB_SEA_MENU_PADY * 2) / rowH);
   GfxRect box;
+  float radius;
   if (fit < 1) fit = 1;
   *vis = n < fit ? n : fit;
   keepInView(cursor, n, *vis, scroll);
-  box = (GfxRect){ anchor.x, top, anchor.w,
-                   NV_TRK_MENU_PAD + *vis * (rowH + NV_TRK_MENU_PAD) };
-  gfx_color(box, NV_SRC_CARD_R / box.h, NV_TRK_MENU_BG, NV_TRK_MENU_BG, NV_TRK_MENU_BG, a);
-  gfx_rect(box, 0, GFX_RING_INSET, 0, 1.0f / box.h, 0, NV_SRC_CARD_R / box.h,
-           1, 1, 1, 0.08f * a);
-  return (GfxRect){ box.x + NV_TRK_MENU_PAD, box.y + NV_TRK_MENU_PAD,
-                    box.w - NV_TRK_MENU_PAD * 2, rowH };
+  box = (GfxRect){ anchor.x, top, anchor.w, NV_DETWEB_SEA_MENU_PADY * 2 + *vis * rowH };
+  // Normalised to the height: 32px keeps the title page's proportion on a plate
+  // this size rather than rounding it into a lozenge.
+  radius = 32.0f / box.h;
+  // NO DROP SHADOW here, unlike the title page's: GFX_SHADOW is only soft
+  // outside its quad, and a quad the plate's size left it a hard copy 8px lower
+  // whose corners showed square under the plate's round ones. Over a see-through
+  // plate it would also darken the plate itself.
+  gfx_color(box, radius, NV_DETWEB_REST, NV_DETWEB_REST, NV_DETWEB_REST, NV_PLR_DD_A * a);
+  gfx_rect(box, 0, GFX_RING, 0, 1.0f / box.h, 0, radius, 1, 1, 1, 0.08f * a);
+  return (GfxRect){ box.x + NV_DETWEB_SEA_MENU_PADX, box.y + NV_DETWEB_SEA_MENU_PADY,
+                    box.w - NV_DETWEB_SEA_MENU_PADX * 2, rowH };
 }
 
-#define FX_ROW(op, i) ((GfxRect){ (op).x, (op).y + (i) * ((op).h + NV_TRK_MENU_PAD), (op).w, (op).h })
+#define FX_ROW(op, i) ((GfxRect){ (op).x, (op).y + (i) * (op).h, (op).w, (op).h })
 
 // The Language select's menu.
 static void langList(GfxRect anchor, float limit, float a) {
@@ -831,12 +984,12 @@ static void langList(GfxRect anchor, float limit, float a) {
     GfxRect r = FX_ROW(op, i);
     float right = r.x + r.w - NV_TRK_SEL_PADX, yc = r.y + r.h * 0.5f;
     char tail[24] = "";
-    if (focused) cardGround(r, NV_TRK_OPT_R, 1, 0, a);
-    if (langs[c].active) right = onMark(right, yc, 0, 1, a) - 16.0f;
+    if (focused) optionGround(r, a);
+    if (langs[c].active) right = onMark(right, yc, focused, 1, a) - 16.0f;
     if (c > 0) snprintf(tail, sizeof tail, "%d", langs[c].count);
     valueTail(TXT_TRK_OPT, TXT_TRK_OPTSUB, langs[c].name, tail,
               r.x + NV_TRK_SEL_PADX, yc, right - r.x - NV_TRK_SEL_PADX,
-              255, 133, a);
+              focused ? 17 : 255, focused ? 90 : 133, a);
   }
 }
 
@@ -856,19 +1009,20 @@ static void optList(GfxRect anchor, float limit, int audio, float a) {
     int on = audio ? c == act : opts[c] == act;
     GfxRect r = FX_ROW(op, i);
     float right = r.x + r.w - NV_TRK_SEL_PADX, tx = r.x + NV_TRK_SEL_PADX;
-    if (focused) cardGround(r, NV_TRK_OPT_R, 1, 0, a);
-    if (on) right = onMark(right, r.y + r.h * 0.5f, 0, 1, a) - 16.0f;
+    int ink = focused ? 17 : 255, grey = focused ? 90 : 133;
+    if (focused) optionGround(r, a);
+    if (on) right = onMark(right, r.y + r.h * 0.5f, focused, 1, a) - 16.0f;
     if (audio) {
       const VideoTrack *t = video_audio(c);
       TxtLine l = txt_line_trim(TXT_TRK_OPT, t && t->label[0] ? t->label : "Track",
-                                255, 255, 255, 255, right - tx);
+                                ink, ink, ink, 255, right - tx);
       txt_draw_alpha(l, tx, r.y + (r.h - l.h) * 0.5f, a);
     } else {
       char main[128], sub[128];
       optionText(opts[c], c, main, sizeof main, sub, sizeof sub);
-      txt_draw_alpha(txt_line_trim(TXT_TRK_OPT, main, 255, 255, 255, 255, right - tx),
+      txt_draw_alpha(txt_line_trim(TXT_TRK_OPT, main, ink, ink, ink, 255, right - tx),
                      tx, r.y + 14.0f, a);
-      txt_draw_alpha(txt_line_trim(TXT_TRK_OPTSUB, sub, 133, 134, 136, 255, right - tx),
+      txt_draw_alpha(txt_line_trim(TXT_TRK_OPTSUB, sub, grey, grey, grey, 255, right - tx),
                      tx, r.y + 46.0f, a);
     }
   }
@@ -903,16 +1057,17 @@ static void drawPanel(float a, float away) {
 
     if (shown) {
       langOptions(li, opts);
-      if (ai >= 0) optionText(opts[ai], ai, value, sizeof value, detail, sizeof detail);
-      else snprintf(value, sizeof value, "Choose a subtitle");
-      selectRow(sub, value, NULL, zone == Z_SUBSEL && openSel == OPEN_NONE,
+      detail[0] = '\0';
+      if (ai >= 0) {
+        char *cut;
+        optionText(opts[ai], ai, value, sizeof value, detail, sizeof detail);
+        // Folded, the select says where the track comes from as its tail, the way
+        // the Language select carries its count: "Track 1 · Embedded". The format
+        // and the rest of the detail line stay in the open menu.
+        if ((cut = strstr(detail, "  \xc2\xb7  "))) *cut = '\0';
+      } else snprintf(value, sizeof value, "Choose a subtitle");
+      selectRow(sub, value, detail, zone == Z_SUBSEL && openSel == OPEN_NONE,
                 openSel == OPEN_SUB, a);
-      // Folded, the chosen track's detail line sits under its select — the one
-      // thing the pill has no room to say.
-      if (ai >= 0 && openSel == OPEN_NONE)
-        txt_draw_alpha(txt_line_trim(TXT_TRK_OPTSUB, detail, 133, 134, 136, 255,
-                                     cw - NV_TRK_SEL_PADX * 2),
-                       cx + NV_TRK_SEL_PADX, sub.y + sub.h + 14.0f, a);
     } else if (!nSubtitles()) {
       quiet(addons_subtitles_busy() ? "Searching OpenSubtitles\xe2\x80\xa6"
                                     : "No subtitles for this title.", cx, sub.y, cw, a);

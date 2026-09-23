@@ -82,12 +82,12 @@ typedef enum {
 } OptionId;
 
 static const char *V_QUALITY[] = { "Automatic", "4K", "1080p", "720p" };
-// Which subtitle the player turns on BY ITSELF when a title starts. "Automatic"
-// is the order the search already applies — Portuguese first, English after —
-// and the two named values pin it to one group with no fallback: whoever asks
-// for English and is given Portuguese has been answered a question they did not
-// ask. The groups are the ones addons.c filters by; there is no third, because
-// there is no third in the search either.
+// Which subtitle the player turns on BY ITSELF when a title starts: the file's
+// own track in that language first, an addon's download after. "Automatic" is
+// English — it was Portuguese-then-English, the app's first owner's order — and
+// the named values pin one language with no fallback: whoever asks for English
+// and is given Portuguese has been answered a question they did not ask. The
+// languages are the ones addons.c searches; there is no third in the search.
 static const char *V_SUBS[] = { "Off", "Automatic", "Portuguese", "English" };
 static const char *V_ON[]      = { "On", "Off" };
 static const char *V_ANIM[]      = { "Full", "Reduced" };
@@ -278,7 +278,7 @@ static int value[SETTING_N] = {
   // nothing ever selected a subtitle, on any title — and it is the behaviour the
   // owner reported as "subtitles are not really a thing here". A default of Off
   // would ship the same complaint with a switch next to it.
-  1,                /* subtitles: automatic (Portuguese, then English) */
+  1,                /* subtitles: automatic (English) */
 
   0,                /* landscape posters: ON (the owner's profile; factory: off) */
   0,                /* full-screen backdrop: ON (profile; factory: off) */

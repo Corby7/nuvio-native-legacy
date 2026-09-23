@@ -1738,19 +1738,10 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
                         : (focused ? "detail_watched_filled"     : "detail_watched"),
                ink, ink, ink, a);
     } else {
-      // SOURCES: a CLOUD, which is the shape this button has always had here — what
-      // was wrong with the old one was the DRAWING, not the idea. sources.png comes
-      // from neither of the sets the rest of the row uses; put beside the eye its
-      // stroke is half again as heavy and the shape is a different cloud altogether.
-      //
-      // This is Phosphor's "cloud" and "cloud-fill", the same family as the eye and
-      // the folder (the web's ic_detail_* are all Phosphor, 256 viewBox and all), so
-      // the four circles finally read as one set. And the pack ships the filled twin,
-      // so it fills on focus with the others.
-      //
-      // sources.png stays where it is: the PLAYER's source button still draws it, at
-      // 44px over video, where it is not sitting next to these.
-      gfx_icon(ig, focused ? "detail_source_filled" : "detail_source",
+      // SOURCES: Phosphor's "stack" in BOLD at rest — the player's Sources glyph
+      // (assets/icons/stack.svg), so the two buttons read as the same Sources — and
+      // "stack-fill" on focus, filling with the others.
+      gfx_icon(ig, focused ? "detail_stack_filled" : "detail_stack",
                ink, ink, ink, a);
     }
     return;

@@ -51,6 +51,9 @@ int  player_is_open(void);   // 1 while the screen exists, including during the 
 void player_event(const SDL_Event *e);
 void player_update(float dt, Uint32 now);
 void player_draw(Uint32 now);
+// The downloaded subtitle, drawn AFTER the track sheets while the subtitle Style
+// bar is up, so it sits over the bar's gradient; a no-op otherwise.
+void player_draw_subtitle_over(void);
 int  player_wants_exit(void);  // 1 as soon as Back was pressed
 void player_shutdown(void);
 // THE HANDOFF FROM THE TITLE SCREEN. Called right after player_open when Play/Resume

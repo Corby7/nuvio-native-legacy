@@ -492,7 +492,7 @@ void gfx_crop(float x, float y, float w, float h);
 // "menu_profile" / "menu_search" / "menu_settings", each with a "_fill" twin for
 // the row the user is on; "brand_wordmark"; and the title screen's three circular
 // buttons — "detail_library_add" / "detail_library_saved", "detail_watched" /
-// "detail_watched_off" and "detail_source" — each with a "_filled" twin for the
+// "detail_watched_off" and "detail_stack" — each with a "_filled" twin for the
 // FOCUSED state, which is NuvioWeb's `--series-icon-focused`. The plus is the one
 // exception and it is the sheet's: it has no solid form to fill into. The sources
 // sheet adds "instant", the bolt on a row that will play at once; it is a file and

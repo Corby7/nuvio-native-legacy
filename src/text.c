@@ -1155,8 +1155,11 @@ TxtLine txt_line_trim_family(TxtStyle style, const char *s, int r, int g,
   return txt_line_family(style, "\xe2\x80\xa6", r, g, b, a, family);
 }
 
-float txt_block(TxtStyle style, const char *s, int r, int g, int b,
-                float x, float y, float width, float leading, float alpha, int maxLines) {
+// The one wrapper behind txt_block and txt_block_trim. With `trim`, a block that
+// runs out of lines before it runs out of text ends its last line on an ellipsis.
+static float blockDraw(TxtStyle style, const char *s, int r, int g, int b,
+                       float x, float y, float width, float leading, float alpha,
+                       int maxLines, int trim) {
   if (!s || !*s) return 0.0f;
   char line[512]; line[0] = 0;
   float used = 0.0f;
@@ -1181,6 +1184,14 @@ float txt_block(TxtStyle style, const char *s, int r, int g, int b,
     // only being compared against a number. See widthOf.
     if (widthOf(style, attempt, TXT_FAMILY_INTER) > width && line[0]) {
       // it did not fit: close the current line and start again with the word
+      // THE LAST LINE, with text still to come: it takes the rest and is trimmed
+      // to the width, which is what puts the ellipsis on it.
+      if (trim && maxLines > 0 && nLines == maxLines - 1) {
+        char rest[1024];
+        snprintf(rest, sizeof rest, "%s %s", line, start);
+        txt_draw_alpha(txt_line_trim(style, rest, r, g, b, 255, width), x, y + used, alpha);
+        return used + leading;
+      }
       TxtLine l = txt_line(style, line, r, g, b, 255);
       txt_draw_alpha(l, x, y + used, alpha);
       used += leading; nLines++;
@@ -1196,6 +1207,15 @@ float txt_block(TxtStyle style, const char *s, int r, int g, int b,
     used += leading;
   }
   return used;
+}
+
+float txt_block(TxtStyle style, const char *s, int r, int g, int b,
+                float x, float y, float width, float leading, float alpha, int maxLines) {
+  return blockDraw(style, s, r, g, b, x, y, width, leading, alpha, maxLines, 0);
+}
+float txt_block_trim(TxtStyle style, const char *s, int r, int g, int b,
+                     float x, float y, float width, float leading, float alpha, int maxLines) {
+  return blockDraw(style, s, r, g, b, x, y, width, leading, alpha, maxLines, 1);
 }
 
 int txt_block_lines(TxtStyle style, const char *s, float width) {

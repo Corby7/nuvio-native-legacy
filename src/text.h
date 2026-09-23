@@ -270,6 +270,11 @@ float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
 float txt_block(TxtStyle style, const char *s, int r, int g, int b,
                 float x, float y, float width, float leading, float alpha, int maxLines);
 
+// The same, but a block cut short by maxLines ends its last line on an ellipsis
+// instead of stopping mid-sentence.
+float txt_block_trim(TxtStyle style, const char *s, int r, int g, int b,
+                     float x, float y, float width, float leading, float alpha, int maxLines);
+
 // How many lines txt_block would wrap `s` into at `width`, drawing nothing and
 // rasterising nothing. For a caller that has to size a box around the text before
 // it draws it.

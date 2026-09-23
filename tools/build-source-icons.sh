@@ -4,7 +4,8 @@
 #   bash tools/build-source-icons.sh
 #
 # The "Instant" bolt, and the header's Reload and Close. Also the subtitle Style
-# bar's Reset, which is Reload mirrored. The bolt cannot be a
+# bar's Reset, which is Reload mirrored. And the player's Sources button, the
+# stack, and the title screen's, detail_stack{,_filled}. The bolt cannot be a
 # character: the sheet draws in Inter, Inter has no U+26A1, and SDL_ttf renders .notdef without
 # complaining — which is the hollow box the addons' own emoji made whenever one
 # reached the screen intact. See the note in src/stream_parse.c.
@@ -22,7 +23,7 @@ command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found (brew insta
 OUT=deploy/app/art/icons
 SIZE="${NUVIO_ICON_PX:-128}"
 
-for name in instant reload reset close ep_watched; do
+for name in instant reload reset close ep_watched stack detail_stack detail_stack_filled; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "assets/icons/$name.svg" -o "$OUT/$name.png"
   echo "    $name.png <- assets/icons/$name.svg"
 done

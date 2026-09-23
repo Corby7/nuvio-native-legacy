@@ -422,36 +422,32 @@ static void *fetchSubtitles(void *u) {
       if (!body) continue;
       p = js_array(body, NULL, "subtitles");
       {
-        int group;
-        // One pass per group guarantees the PT -> EN order and stops twelve
-        // Portuguese results consuming the whole list before English.
-        // Six per language is a deliberate limit for D-pad navigation.
-        for (group = 0; group < 2; group++) {
-          const char *q = p;
-          int inGroup = 0, j;
-          for (j = 0; j < nFound; j++)
-            if (groupLanguage(found[j].language) == group) inGroup++;
-          while (q && nFound < SUB_MAX && inGroup < SUB_MAX / 2) {
-            const char *f = js_end(q);
-            char l[16] = "", name[120] = "";
-            Subtitle *d = &found[nFound];
-            if (episodeCorrect(q, f, season, episode) &&
-                js_text(q, f, "lang", l, sizeof l) && groupLanguage(l) == group &&
-                js_text(q, f, "url", d->url, sizeof d->url)) {
-              js_text(q, f, "subtitleFileName", name, sizeof name);
-              if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);
-              snprintf(d->language, sizeof d->language, "%s", l);
-              snprintf(d->release, sizeof d->release, "%s", name);
-              if (season > 0 && episode > 0)
-                snprintf(d->label, sizeof d->label, "S%dE%d  \xc2\xb7  %s%s%.22s",
-                         season, episode, nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
-              else
-                snprintf(d->label, sizeof d->label, "%s%s%.36s",
-                         nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
-              nFound++; inGroup++;
-            }
-            q = js_next(f);
+        // ENGLISH ONLY. Downloads used to be Portuguese then English, six of
+        // each — the app's first owner's pair — and the Portuguese half was a
+        // list nobody here reads, and the auto-selection's default besides. The
+        // file's own tracks are not filtered: this is only what gets FETCHED.
+        const int group = 1;
+        const char *q = p;
+        while (q && nFound < SUB_MAX) {
+          const char *f = js_end(q);
+          char l[16] = "", name[120] = "";
+          Subtitle *d = &found[nFound];
+          if (episodeCorrect(q, f, season, episode) &&
+              js_text(q, f, "lang", l, sizeof l) && groupLanguage(l) == group &&
+              js_text(q, f, "url", d->url, sizeof d->url)) {
+            js_text(q, f, "subtitleFileName", name, sizeof name);
+            if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);
+            snprintf(d->language, sizeof d->language, "%s", l);
+            snprintf(d->release, sizeof d->release, "%s", name);
+            if (season > 0 && episode > 0)
+              snprintf(d->label, sizeof d->label, "S%dE%d  \xc2\xb7  %s%s%.22s",
+                       season, episode, nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
+            else
+              snprintf(d->label, sizeof d->label, "%s%s%.36s",
+                       nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
+            nFound++;
           }
+          q = js_next(f);
         }
       }
       free(body);
