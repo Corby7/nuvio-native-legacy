@@ -2,6 +2,7 @@
 #include "text.h"
 #include "anim.h"
 #include "layout.h"
+#include <stddef.h>
 
 void dd_pill(GfxRect r, const char *label, const char *value,
              float focus, int active, float alpha) {
@@ -48,6 +49,58 @@ void dd_pill(GfxRect r, const char *label, const char *value,
     gfx_icon(ch, "chevron_down", luma, luma, luma, alpha); }
 }
 
+// "value · tail": the value in Medium, the dot NV_DD_SEL_DOT each side. Returns
+// the width; `draw` 0 only measures.
+static float selectCopy(const char *value, const char *tail, float x, float yc,
+                        float a, int draw) {
+  TxtLine lv = txt_line(TXT_DD_SEL, value, 255, 255, 255, 255);
+  float w = (float)lv.w;
+  if (draw) txt_draw_alpha(lv, x, yc - (float)lv.h * 0.5f, a);
+  if (tail && *tail) {
+    TxtLine ld = txt_line(TXT_DETWEB_SEA_EPS, "\xc2\xb7", 179, 179, 179, 255);
+    TxtLine lt = txt_line(TXT_DETWEB_SEA_EPS, tail, 179, 179, 179, 255);
+    if (draw) {
+      txt_draw_alpha(ld, x + w + NV_DD_SEL_DOT, yc - (float)ld.h * 0.5f, a);
+      txt_draw_alpha(lt, x + w + NV_DD_SEL_DOT * 2 + (float)ld.w,
+                     yc - (float)lt.h * 0.5f, a);
+    }
+    w += NV_DD_SEL_DOT * 2 + (float)ld.w + (float)lt.w;
+  }
+  return w;
+}
+
+void dd_select(GfxRect r, const char *value, const char *tail, float focus,
+               float alpha) {
+  float f = focus;
+  if (alpha <= 0.004f) return;
+  // #222 lifting to rgb(48,48,48); the hair line at rest, which the INSET ring
+  // replaces rather than sits on. GFX_RING strokes across the quad's edge and a
+  // pill's outline touches it top and bottom — see drawSeason in detail.c.
+  { float luma = anim_blend(0.133f, NV_DD_SEL_FOCUS_BG, f);
+    gfx_color(r, NV_RADIUS_PILL, luma, luma, luma, alpha); }
+  if (f < 0.99f)
+    gfx_rect(r, 0, GFX_RING, 0, NV_DD_SEL_BORDER / r.h, 0, NV_RADIUS_PILL,
+             1, 1, 1, 0.10f * (1.0f - f) * alpha);
+  if (f > 0.01f)
+    gfx_rect(r, 0, GFX_RING_INSET, 0, NV_DD_RING / r.h, 0, NV_RADIUS_PILL,
+             1, 1, 1, 0.96f * f * alpha);
+
+  selectCopy(value, tail, r.x + NV_DD_SEL_PADX, r.y + r.h * 0.5f, alpha, 1);
+  { GfxRect ch = { r.x + r.w - NV_DD_SEL_PADX - NV_DD_CHEV,
+                   r.y + (r.h - NV_DD_CHEV) * 0.5f, NV_DD_CHEV, NV_DD_CHEV };
+    gfx_icon(ch, "chevron_down", 0.702f, 0.702f, 0.702f, alpha); }
+}
+
+float dd_select_width(int n, DdLabel label, void *ctx) {
+  float widest = 0.0f;
+  int i;
+  for (i = 0; i < n; i++) {
+    float w = selectCopy(label(ctx, i), NULL, 0, 0, 0, 0);
+    if (w > widest) widest = w;
+  }
+  return NV_DD_SEL_PADX * 2 + widest + NV_DD_SEL_GAP + NV_DD_CHEV;
+}
+
 void dd_menu(GfxRect anchor, int n, int focus, DdLabel label, void *ctx,
              float alpha) {
   int vis, first, i;
@@ -62,11 +115,10 @@ void dd_menu(GfxRect anchor, int n, int focus, DdLabel label, void *ctx,
     // At 0.5 a box this tall rounds into a lozenge. Same trap as the season
     // menu's, and recorded there too.
     float radius = 64.0f / box.h;
-    // The drop shadow first, then the plate. GFX_SHADOW multiplies by uFocus
-    // and not by the colour's alpha, so it takes 1.0 there — passed the 0 that
-    // every other mode here takes, the blot comes out invisible.
-    { GfxRect sh = { box.x, box.y + 8.0f, box.w, box.h };
-      gfx_rect(sh, 0, GFX_SHADOW, 1.0f, 0, 0, radius, 0, 0, 0, 0.6f * alpha); }
+    // The drop shadow first, then the plate: `0 8px 32px rgba(0,0,0,.6)`.
+    // gfx_drop_shadow, NOT GFX_SHADOW — see GFX_DROP in gfx.h for the square
+    // corners that one left under the plate.
+    gfx_drop_shadow(box, 64.0f, 16.0f, 8.0f, 0.6f * alpha);
     gfx_color(box, radius, 0.133f, 0.133f, 0.133f, alpha);
     gfx_rect(box, 0, GFX_RING, 0, 1.0f / box.h, 0, radius, 1, 1, 1,
              0.08f * alpha);

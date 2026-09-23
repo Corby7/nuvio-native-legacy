@@ -1019,6 +1019,15 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  vec3 rgb = uFocus > 0.5 ? uColor.rgb : g.rgb;\n"
   "  gl_FragColor = vec4(rgb, a * uColor.a);\n"
   "}\n",
+
+  // GFX_DROP — zero at the quad's edge, half at the plate's edge one band in,
+  // full two bands in. See gfx.h for why GFX_SHADOW could not be reused.
+  "void main(){\n"
+  "  float d = sdf(vUv, uRadius, uAspect);\n"
+  "  float a = smoothstep(0.0, -2.0 * uPar.x, d);\n"
+  "  if (a <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, a * uColor.a);\n"
+  "}\n",
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -1052,7 +1061,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_ERAIL_SCRIM  — a full-bleed vertical ramp: no SDF, no texture */
   {0,0},   /* GFX_SRC_VEIL     — two gradients in one fragment: no SDF, no texture */
   {0,0},   /* GFX_ROW_FADE     — a horizontal ramp over a square band: no SDF */
-  {0,0}    /* GFX_LOGO         — the art rectangle's own edge ramp: no SDF */
+  {0,0},   /* GFX_LOGO         — the art rectangle's own edge ramp: no SDF */
+  {1,0}    /* GFX_DROP         — the inflated quad's own SDF */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -1299,6 +1309,18 @@ void gfx_skeleton(GfxRect r, float radius,
            (skelSweep - r.x) / r.w,   /* the band's centre, in the quad's x */
            half / r.w,                /* its half-width, likewise */
            radius, cr, cg, cb, ca);
+}
+
+void gfx_drop_shadow(GfxRect plate, float radiusPx, float blur, float dropY,
+                     float alpha) {
+  GfxRect q = { plate.x - blur, plate.y + dropY - blur,
+                plate.w + blur * 2.0f, plate.h + blur * 2.0f };
+  // The quad's corner is the plate's grown by the band, so the SDF's level sets
+  // run parallel to the plate's outline all the way out. Normalised to HEIGHT.
+  float r = (radiusPx + blur) / q.h;
+  if (q.h <= 0.0f || blur <= 0.0f) return;
+  if (r > 0.5f) r = 0.5f;
+  gfx_rect(q, 0, GFX_DROP, 0, blur / q.h, 0, r, 0, 0, 0, alpha);
 }
 
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) {

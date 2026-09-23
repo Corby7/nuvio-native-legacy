@@ -804,8 +804,12 @@ void tracks_event(const SDL_Event *e) {
   if (tab == TAB_TRACKS) eventTracks(k); else eventStyle(k);
 }
 
+// The cursor on the Tracks / Style tabs, 0..1 — see tab_draw.
+static float tabsLit;
 void tracks_update(float dt, Uint32 now) {
   (void)now;
+  { float t = zone == Z_TABS ? 1.0f : 0.0f;
+    tabsLit = anim_spring(tabsLit, t, dt, t > tabsLit ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
   anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
   styleAnim = anim_spring(styleAnim, is_open && mode == MODE_SUBTITLE && tab == TAB_STYLE
                           ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
@@ -886,8 +890,8 @@ static void drawHeader(float x, int count, float right, float a) {
 
   { float tabsW = tab_width("Tracks") + tab_width("Style") - NV_TAB_GAP;
     float px = x + (edge - tabsW - x) * right;
-    px += tab_draw(px, NV_TRK_TABS_Y, "Tracks", tab == TAB_TRACKS, zone == Z_TABS, a);
-    tab_draw(px, NV_TRK_TABS_Y, "Style", tab == TAB_STYLE, zone == Z_TABS, a); }
+    px += tab_draw(px, NV_TRK_TABS_Y, "Tracks", tab == TAB_TRACKS, tabsLit, a);
+    tab_draw(px, NV_TRK_TABS_Y, "Style", tab == TAB_STYLE, tabsLit, a); }
 }
 
 static void quiet(const char *s, float x, float y, float w, float a) {

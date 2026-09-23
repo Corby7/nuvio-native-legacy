@@ -1522,29 +1522,28 @@
 //                        with a 24 gutter), 2:3 poster = 268x402 radius 24 with a
 //                        4px border ON THE INSIDE, title 32/500 lh 1.18 at 16 from
 //                        the poster; row step 487.8 (455.8 + 32)
+// THE HEADER ABOVE IS HISTORY: the pills and the 110-tall pickers were replaced
+// on 2026-09-23 by the NV_LIB_TABS_Y / NV_LIB_SEL_Y block below, and the Library
+// now draws Discover's grid (NV_DSC_*). The card numbers that follow stay because
+// the collection grid (seeall.c) still measures itself against them.
+//
 // THESE ARE THE APP'S GRID. Every screen that lays posters out in a grid uses
 // this card, this gap and this row step — the Library, the Discover screen at
 // its own inset, and the collection grid (seeall.c). Moving between them should
 // be the same wall with different titles in it, and a grid re-measured per
 // screen is how that stops being true: the collection grid used to be 248-wide
 // posters 16 apart, which read as another app's screen.
-#define NV_LIB_X            96.0f
-#define NV_LIB_Y            48.0f
-#define NV_LIB_W          1728.0f
-#define NV_LIB_DIR        1824.0f
-#define NV_LIB_MODE_Y      136.0f
-#define NV_LIB_MODE_W      150.0f
-#define NV_LIB_MODE_H       56.0f
-#define NV_LIB_MODE_STEP  182.0f
-#define NV_LIB_PICK_Y      212.0f
-#define NV_LIB_PICK_W      840.0f
-#define NV_LIB_PICK_H      110.0f
-#define NV_LIB_PICK_STEP  888.0f
-#define NV_LIB_PICK_RADIUS    36.0f
-#define NV_LIB_PICK_PADX    28.0f
-#define NV_LIB_PICK_PADY    18.0f
-#define NV_LIB_EMPTY_Y     354.0f
-#define NV_LIB_GRID_Y     354.0f
+// The Library's header, which since 2026-09-23 is Discover's page with a tab
+// strip in it: the title where Discover's is, the Saved / Collection strip on
+// the line Discover's pickers take, and the title page's dropdowns under that.
+// The grid below is Discover's (NV_DSC_*), so only these few lines are its own.
+#define NV_LIB_TABS_Y      (NV_DSC_Y + NV_DSC_TITLE_H + NV_DSC_HEAD_GAP)   // 132
+#define NV_LIB_SEL_Y       (NV_LIB_TABS_Y + NV_LIB_TAB_H + 28.0f)          // 224
+#define NV_LIB_SEL_GAP      16.0f   // between the Type and Sort dropdowns
+#define NV_LIB_GRID_Y      (NV_LIB_SEL_Y + NV_DD_SEL_H + 64.0f)            // 368
+// Clip and dissolve, the same pair as NV_DSC_CLIP_TOP / NV_DSC_FADE below.
+#define NV_LIB_CLIP_TOP    (NV_LIB_SEL_Y + NV_DD_SEL_H)
+#define NV_LIB_FADE        (NV_LIB_GRID_Y - NV_LIB_CLIP_TOP)
 #define NV_LIB_COLUMNS         6
 #define NV_LIB_CARD_W      268.0f
 #define NV_LIB_CARD_GAP     24.0f
@@ -1590,6 +1589,17 @@
 // Six rows, then it scrolls. The web caps its menu at 540px, which is 6.4 of
 // these — and six is also what the season picker settled on.
 #define NV_DD_OPT_VIS         6
+// THE SELECT: the title page's season picker as an anchor on its own — one
+// line, the value 30/600 white with an optional grey tail, and the chevron. No
+// label over the value, which is what dd_pill has; the value has to say what
+// the picker is for. The player's subtitle selects are the same control.
+#define NV_DD_SEL_H        80.0f
+#define NV_DD_SEL_PADX     36.0f
+#define NV_DD_SEL_GAP      24.0f   // value -> chevron
+#define NV_DD_SEL_DOT      16.0f   // either side of the tail's dot
+#define NV_DD_SEL_BORDER    1.0f   // the hair line at rest
+#define NV_DD_SEL_FOCUS_BG  0.188f // rgb(48,48,48)
+#define NV_FT_DD_SEL        30
 
 // ---------------------------------------------------------------------------
 // The DISCOVER screen — READ OFF NuvioWeb's css/components.css (2026-09-19).
@@ -1897,6 +1907,14 @@
 #define NV_TAB_GAP          40.0f
 #define NV_TAB_LINE          3.0f
 #define NV_TAB_LINE_GAP     12.0f
+// The same strip at PAGE size, for the Library: the sheets' 22px words were
+// sized for a panel read from the side of the video, and on a full page under a
+// 48px title they read as a footnote.
+#define NV_FT_LIB_TAB       32
+#define NV_LIB_TAB_H        64.0f
+#define NV_LIB_TAB_GAP      56.0f
+#define NV_LIB_TAB_LINE      4.0f
+#define NV_LIB_TAB_LINE_GAP 14.0f
 
 // --- THE PLAYER'S TRACK MENUS -------------------------------------------------
 // The audio and subtitle panels, ported from the web app's "Track menus" block.

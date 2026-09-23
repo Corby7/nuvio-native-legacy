@@ -429,6 +429,8 @@ void stream_sheet_event(const SDL_Event *e) {
     else {choice=filtered(focus);if(choice>=0) is_open=0;}
   }
 }
+// The cursor on the provider tabs, 0..1 — see tab_draw.
+static float tabsLit;
 void stream_sheet_update(float dt, Uint32 now) {
   (void)now;
   // IT ARRIVES AS THE PLAYER'S OTHER PANELS DO — audio, subtitles, episodes: a
@@ -436,6 +438,8 @@ void stream_sheet_update(float dt, Uint32 now) {
   // screen spring. It used to haul its whole width in from the edge, which made
   // it the one panel in the player that moved differently from the rest.
   anim=anim_spring(anim,is_open?1:0,dt,NV_SPRING_SCREEN);
+  { float t=group==0?1.0f:0.0f;
+    tabsLit=anim_spring(tabsLit,t,dt,t>tabsLit?NV_SPRING_FOCUS:NV_SPRING_BLUR); }
   { int k;
     for(k=0;k<2;k++)
       tipA[k]=anim_ramp(tipA[k],is_open && group==-1 && focus==k?1.0f:0.0f,dt,NV_SRC_TIP_MS); }
@@ -719,11 +723,10 @@ static void drawRow(const Stream *s, float left, float w, float top, int playing
 
 // --- THE TABS -----------------------------------------------------------------
 //
-// Pills: the one in force filled white with dark ink, the others a faint fill and
-// a hairline. The filled pill is the filter, not the cursor — it stays white while
-// the cursor is on the list — so the CURSOR on the tabs is a ring outside the
-// white pill, the same ring the focused card wears.
-static void tabs(float left, float w, float y, int cursor, float a) {
+// tabs.c's words and underline. The underlined word is the filter; it lights up
+// white while the cursor is on the strip and greys back when it goes down to the
+// list — see tab_draw.
+static void tabs(float left, float w, float y, float lit, float a) {
   float widths[13], x;
   int i, from = 0;
   for (i = 0; i < nProviders; i++) widths[i] = tab_width(providers[i]);
@@ -735,7 +738,7 @@ static void tabs(float left, float w, float y, int cursor, float a) {
   x = left;
   for (i = from; i < nProviders; i++) {
     if (x + widths[i] - NV_TAB_GAP > left + w) break;
-    x += tab_draw(x, y, providers[i], i == filter, cursor, a);
+    x += tab_draw(x, y, providers[i], i == filter, lit, a);
   }
 }
 
@@ -836,7 +839,7 @@ void stream_sheet_draw(Uint32 now) {
     } }
 
   gfx_crop(cx,NV_SRC_TABS_Y,cw,NV_TAB_H);
-  tabs(cx,cw,NV_SRC_TABS_Y,group==0,anim);
+  tabs(cx,cw,NV_SRC_TABS_Y,tabsLit,anim);
   gfx_no_crop();
 
   // ROWS DISSOLVE AS THEY LEAVE THE TOP, the way Discover's grid and the episode

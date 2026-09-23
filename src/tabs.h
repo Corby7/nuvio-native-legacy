@@ -10,9 +10,15 @@
 // How wide tab `name` is, the gap after it included — for a caller that has to
 // work out which tabs fit before drawing any.
 float tab_width(const char *name);
-// One tab at (x, y), top of its NV_TAB_H line. `on` is the chosen tab, `cursor`
-// that the D-pad is on the strip (only meaningful on the chosen one). Returns the
-// width it took, the gap included.
-float tab_draw(float x, float y, const char *name, int on, int cursor, float a);
+// One tab at (x, y), top of its NV_TAB_H line. `on` is the chosen tab; `lit` is
+// the caller's 0..1 spring for the D-pad being on the strip — lit, the chosen
+// word is white with a solid rule, unlit it drops to grey with a faint one.
+// Returns the width it took, the gap included.
+float tab_draw(float x, float y, const char *name, int on, float lit, float a);
+
+// THE SAME STRIP AT PAGE SIZE, for a screen whose tabs are its top-level switch
+// (the Library). Bigger type; `lit` as above.
+float tab_page_width(const char *name);
+float tab_page_draw(float x, float y, const char *name, int on, float lit, float a);
 
 #endif

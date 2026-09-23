@@ -2804,11 +2804,9 @@ static void drawSeasonMenu(GfxRect anchor, float a) {
   // The drop shadow first, then the plate: `0 8px 32px rgba(0,0,0,.6)` under a menu
   // that sits on a still, without which the #222 plate and a dark thumbnail merge.
   //
-  // GFX_SHADOW multiplies by uFOCUS, not just by the colour's alpha (gfx.c:146). Passed
-  // the 0 that every other mode here takes for `focus`, the blot comes out completely
-  // invisible — profile.c is the only other caller and it passes its focus value.
-  { GfxRect sh = { box.x, box.y + 8.0f, box.w, box.h };
-    gfx_rect(sh, 0, GFX_SHADOW, 1.0f, 0, 0, radius, 0, 0, 0, 0.6f * a); }
+  // gfx_drop_shadow, NOT GFX_SHADOW: that one's edge is cut at its quad, and 8px
+  // under the plate its square bottom corners showed. See GFX_DROP in gfx.h.
+  gfx_drop_shadow(box, 64.0f, 16.0f, 8.0f, 0.6f * a);
   gfx_color(box, radius, NV_DETWEB_REST, NV_DETWEB_REST, NV_DETWEB_REST, a);
   gfx_rect(box, 0, GFX_RING, 0, 1.0f / box.h, 0, radius, 1, 1, 1, 0.08f * a);
 

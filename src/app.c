@@ -524,7 +524,7 @@ void app_update(float dt, Uint32 now) {
     } else if (screen == SCREEN_DISCOVER && dui_requested_open(&idx)) {
       if (dui_item_focused(&it)) openTitle(&it); else openByIndex(idx);
     } else if (screen == SCREEN_LIBRARY && library_requested_open(&idx)) {
-      openByIndex(idx);
+      if (library_item_focused(&it)) openTitle(&it); else openByIndex(idx);
     } else if (screen == SCREEN_PROFILE) {
       ProfileHighlight p;
       if (profile_item_selected(&p) && p.id[0]) {

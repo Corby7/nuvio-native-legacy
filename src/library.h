@@ -1,12 +1,12 @@
-// Library screen: tabs along the top and a grid of posters below.
+// Library screen: the owner's Saved and Collection sets in Discover's page — a
+// tab strip between the two sets, Type and Sort dropdowns, and Discover's grid.
 //
 // It is the only screen in the app where the content is the user's own SET, not
-// an editorial shelf. That is why the tabs are not decoration: "My List" and
-// "Purchased" exist on the device as account state and change during use, and
-// the screen has to stay readable when that set is empty.
+// an editorial shelf, so it has to stay readable when that set is empty.
 #ifndef NV_LIBRARY_H
 #define NV_LIBRARY_H
 #include <SDL2/SDL.h>
+#include "home.h"
 
 int  library_start(void);
 void library_event(const SDL_Event *e);
@@ -20,6 +20,9 @@ void library_shutdown(void);
 // *catalogIndex the item's index IN THE CATALOG (not its position in the grid —
 // the grid is filtered, and whoever opens the detail needs the real item).
 int  library_requested_open(int *indexCatalog);
+// The focused poster and the rectangle it occupies THIS frame, for the detail
+// screen's fly-in. 0 until a frame has been drawn with the focus in the grid.
+int  library_item_focused(HomeItem *out);
 
 // Account state, in memory. Exposed because the thing that marks a title is the
 // detail screen (the "+" button), not the library: without this the "My List"

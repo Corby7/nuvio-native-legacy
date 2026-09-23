@@ -329,6 +329,10 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_PLR_EP,    WEIGHT_BOLD    },   // TXT_PLR_EPCODE
   { NV_FT_PLR_EP,    WEIGHT_MEDIUM  },   // TXT_PLR_EPNAME
   { NV_FT_PLR_QUICK, WEIGHT_BOLD    },   // TXT_PLR_QUICK
+  { NV_FT_LIB_TAB,   WEIGHT_BOLD    },   // TXT_LIB_TAB
+  // MEDIUM, not the season picker's Bold: set 30 on an #222 pill, Bold read as
+  // shouting next to the page's other controls.
+  { NV_FT_DD_SEL,    WEIGHT_MEDIUM  },   // TXT_DD_SEL
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.

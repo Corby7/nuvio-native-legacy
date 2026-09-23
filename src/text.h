@@ -159,6 +159,9 @@ typedef enum {
   TXT_PLR_EPNAME,    // the episode name                     30 / 500
   // The quick-seek readout. APPENDED, like the rest.
   TXT_PLR_QUICK,     // "+ 10" at the screen's side          44 / 700
+  // The Library's page-size tab strip and the dropdown value. APPENDED.
+  TXT_LIB_TAB,       // Saved / Collection                   32 / 700
+  TXT_DD_SEL,        // a dd_select's value                  30 / 500
   TXT_NFONTS
 } TxtStyle;
 

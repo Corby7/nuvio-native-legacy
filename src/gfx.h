@@ -429,7 +429,19 @@ typedef enum {
   //   uFocus = 1 to tint by uColor like GFX_BRAND, 0 to keep the art's RGB like GFX_TEXT
   //   uRadius = how much of the art to draw, from the left, 0..1 (a soft edge)
   GFX_LOGO = 39,
-  GFX_NMODES = 40
+  // GFX_DROP — a drop shadow that fades to NOTHING at its own quad's edge. Draw it
+  // through gfx_drop_shadow(), which inflates the quad around the plate.
+  //
+  // GFX_SHADOW cannot do this job: its shape IS its quad and its falloff runs
+  // OUTWARD past the quad, where nothing is rasterised — so its edge is cut at
+  // ~90% black. Offset 8px under a menu plate, the square bottom corners of that
+  // cut showed below the plate's round ones. That was reported on the title
+  // page's season menu, "fixed" in the player by deleting the shadow, and came
+  // back on every dropdown that kept one.
+  //
+  //   uPar.x = the blur band, as a fraction of the quad's HEIGHT
+  GFX_DROP = 40,
+  GFX_NMODES = 41
 } GfxMode;
 
 typedef struct {
@@ -658,6 +670,13 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
               float parx, float pary, float radius,
               float cr, float cg, float cb, float ca);
 
+
+// A drop shadow for `plate`: its corner radius in px, how far the shadow feathers
+// out in px, how far it drops, and its darkness at the plate's edge x2. It draws
+// a quad `blur` bigger on every side and fades to zero at that quad's edge, so
+// no corner can show whatever the offset. Draw it BEFORE the plate.
+void gfx_drop_shadow(GfxRect plate, float radiusPx, float blur, float dropY,
+                     float alpha);
 
 // Atalhos legiveis para os casos comuns.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);

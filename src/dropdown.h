@@ -29,6 +29,16 @@ typedef const char *(*DdLabel)(void *ctx, int index);
 void dd_pill(GfxRect r, const char *label, const char *value,
              float focus, int active, float alpha);
 
+// THE SELECT: the title page's season picker as an anchor — one line, the value
+// in 30/500 white with `tail` after a dot in grey (NULL or "" for none), and the
+// chevron. `focus` 0..1 lifts the ground and brings the inset ring in, which is
+// also how it should be drawn while its menu is down. dd_menu opens under it.
+void dd_select(GfxRect r, const char *value, const char *tail, float focus,
+               float alpha);
+// The width a select needs to hold the WIDEST of `n` values without the anchor
+// resizing as the choice changes — the season picker's rule.
+float dd_select_width(int n, DdLabel label, void *ctx);
+
 // The open list: hung NV_DD_MENU_GAP under `anchor`, matching its width, and
 // scrolling once the options run past NV_DD_OPT_VIS rows.
 //

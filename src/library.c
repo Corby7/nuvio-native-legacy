@@ -1,88 +1,75 @@
-// The Library, aligned with the web app's screen (MEASURED live, on the owner's
-// profile).
+// The Library: the owner's own titles, in Discover's page.
 //
 // ------------------------------------------------------------------------
-// WHAT CHANGED, AND WHY
+// THE LAYOUT, AS OF 2026-09-23
 //
-// The port had three CENTRED pills ("My List" / "Purchased" / "Genres") and a
-// 6-column grid of 212. Measuring the web app's screen, the structure is
-// different and has FOUR bands, all left-aligned at x=96:
+//   "Library"            the page title where Discover's sits, with the source
+//                        and the count right-aligned against it
+//   Saved   Collection  the player sheets' tab strip at page size (tab_page_draw):
+//                        words, and a rule under the chosen one, lit while the
+//                        cursor is on it — not the two pills that were here
+//   [Type v] [Sort v]    the title page's dropdowns (dd_select + dd_menu), sized
+//                        to their widest option like the season picker
+//   the grid             Discover's: its card, its gaps, its 1.05 focus from the
+//                        top edge, its row-snapped scroll and its dissolve under
+//                        the header
 //
-//   .library-page-title    "Library" 56/600, letter-spacing 1, at (96,48)
-//   .library-page-source   a "NUVIO" badge 28/500 rgb(128,128,128) ls 4, on the RIGHT
-//   .library-view-mode-row y=136: 150x56 pills, radius 999, 21/400 — "Saved" and
-//                          "Cloud"; the chosen one bg #303030 border 2px #fff,
-//                          the others bg #222 border 2px #333
-//   .library-picker-row    y=212: TWO 840x110 pickers, radius 36 — "Type" and
-//                          "Sort" —, each with a 19/500 rgb(128) label and a
-//                          30/500 white value below it, and an arrow on the right
-//   .library-grid          6 columns of 268 (auto-fill with a minimum of 252 over
-//                          the 1728 usable, gutter 24), 2:3 poster = 268x402
-//                          radius 24 with a 4px border ON THE INSIDE, title
-//                          32/500 at 16 from the poster; row step 487.8
+// The strip is a switch between two SETS, not a filter on one, which is why it
+// is words above the controls rather than one more control beside them. The
+// dropdowns filter and order whichever set is on screen.
 //
-// The web app's two dimensions ("Saved/Cloud" and the Type filter) replace the
-// three invented tabs. "Genres" does not exist in the web app and has gone.
-//
-// Two decisions that came out of mistakes already made on other screens of this app:
-//
-//   1. The CHOSEN pill stays marked when the focus moves down into the grid. It
-//      was the same problem as the detail screen's season tabs: without the
-//      chosen state kept separate from the focus, the user loses sight of where
-//      they are.
-//   2. Scrolling moves the MINIMUM needed for the focused row to fit. Aligning
-//      the focused row to the top pushes the header off screen on the first move
-//      down.
+// THE FOCUS MOVES LIKE DISCOVER'S. Three zones, top to bottom; Back climbs one
+// zone at a time and only leaves from the strip; LEFT off the left edge of any
+// zone calls up the menu; an open dropdown owns the whole D-pad.
 #include "library.h"
 #include "trakt.h"
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
-#include "focus.h"
 #include "anim.h"
 #include "layout.h"
 #include "settings.h"
 #include "catalog.h"
+#include "dropdown.h"
+#include "tabs.h"
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
-// Focus rows: 0 = modes (Saved/Cloud), 1 = pickers (Type/Sort), 2.. = grid.
-#define LIB_FILTER_MODE   0
-#define LIB_FILTER_PICK   1
-#define LIB_FILTER_GRID  2
-#define LIB_MAX_LINES (FOCUS_MAX_ROWS - LIB_FILTER_GRID)
-#define LIB_GRID_BASE (NV_SCREEN_H - NV_MARGIN_Y)
-// How many px a poster takes to disappear as it rises under the header. A
-// scissor clip would solve it, but gfx_crop assumes a 1:1 target with the screen
-// and a retina Mac delivers double; the fade does not depend on the drawable.
-#define LIB_FADE       90.0f
+// "Saved" is Trakt's watchlist; "Collection" is Trakt's collection.
+enum { MODE_SAVED, MODE_COLLECTION, LIB_N_MODES };
+static const char *MODE_LABEL[LIB_N_MODES] = { "Saved", "Collection" };
 
-// "Saved" is the device's own list; "Cloud" is what came from Trakt.
-enum { MODE_SAVED, MODE_CLOUD, LIB_N_MODES };
-static const char *ROT_MODE[LIB_N_MODES] = { "Saved", "Collection" };
-
-// Seletor "Tipo": os mesmos valores do web.
+// The dropdowns carry no label over the value, so each value says what it is.
 enum { KIND_ALL, KIND_MOVIE, KIND_SERIES, LIB_N_KINDS };
-static const char *ROT_KIND[LIB_N_KINDS] = { "All", "Movies", "Series" };
-// The "Sort" picker.
+static const char *KIND_LABEL[LIB_N_KINDS] = { "All types", "Movies", "Series" };
 enum { ORDER_ADDED, ORDER_TITLE, ORDER_YEAR, LIB_N_ORDER };
-static const char *ROT_ORDER[LIB_N_ORDER] = { "List order", "Title: A to Z", "Year: newest first" };
+static const char *ORDER_LABEL[LIB_N_ORDER] = { "List order", "Title A to Z",
+                                                "Newest first" };
+
+enum { PICK_KIND, PICK_ORDER, PICK_N };
+enum { ZONE_TABS, ZONE_PICKERS, ZONE_GRID };
 
 static int mode = MODE_SAVED;
 static int kind = KIND_ALL;
 static int order = ORDER_ADDED;
-static int pickSel = 0;          // which of the two pickers has the focus
+static int zone;
+static int pickSel;
+// The open dropdown and the row inside it, which is NOT the value until OK —
+// the split Discover and the season picker use.
+static int menuOpen = -1;
+static int menuFocus;
+static int focus;                // index into filter[]
 
 static int filter[CAT_MAX];      // visible catalogue indices
 static int nFilter = 0;
 static int totalMode = 0;
-static Focus focus;
-static float animMode[LIB_N_MODES];
-static float animPick[2];
-static float animFocus[LIB_MAX_LINES][NV_LIB_COLUMNS];
-static float scrollY = 0.0f;
+static float animPick[PICK_N];
+static float animCard;           // one spring: only ever one card is focused
+static float animTabs;           // the cursor on the Saved / Collection strip
+static float scrollY;
 static int wantsExit = 0, request = -1, requestMenu = 0;
+static HomeItem itemFocus;
+static int hasItemFocus;
 
 // Account state. The real list is Trakt's, which marks ci->inList/inCollection
 // ON THE ITEM — there is no per-index table here any more: the catalogue is
@@ -90,23 +77,14 @@ static int wantsExit = 0, request = -1, requestMenu = 0;
 // next round. `bought` survives because there is no source for it yet.
 static char bought[CAT_MAX];
 
-static float heightLine(void) {
-  // poster + gap + titulo (32/500, lh 1.18 -> 37.8)
-  return NV_LIB_POSTER_H + NV_LIB_TITLE_GAP + 37.8f;
-}
-static float stepLine(void)  { return NV_LIB_LINE_STEP; }
-static float stepColumn(void) { return NV_LIB_CARD_W + NV_LIB_CARD_GAP; }
-static int   nLines(void)     { return (nFilter + NV_LIB_COLUMNS - 1) / NV_LIB_COLUMNS; }
-
 static int isSeries(const CatItem *ci) {
   return ci && (!strcmp(ci->kind, "series") || ci->nSeasons > 0
                 || ci->season > 0);
 }
 
-// Rebuilds the visible list and the focus map. Called on every change of mode,
-// type or order because the number of columns in the last row changes with the
-// filter, and a focus pointing at a column that no longer exists draws an empty
-// rectangle.
+// Rebuilds the visible list. Called on every change of mode, type or order, and
+// it puts the grid's focus back on the first poster: the old index points at a
+// different title in the new list.
 static void rebuild(void) {
   int n = cat_n();
   if (n > CAT_MAX) n = CAT_MAX;
@@ -115,18 +93,8 @@ static void rebuild(void) {
   for (int i = 0; i < n; i++) {
     const CatItem *ci = cat_item(i);
     if (!ci) continue;
-    // The two modes showed almost the SAME list: both included ci->inList, so
-    // switching pill changed practically nothing and the two had no reason to
-    // exist. The split is now Trakt's own, which separates the watchlist (what
-    // you intend to watch) from the collection (what you own) — they are
-    // different questions and each pill answers one.
-    //
-    // And it reads from the ITEM, no longer from an inList[] array indexed by
-    // position. That array was a known and documented mistake: the catalogue is
-    // REBUILT from the network on every discovery, so today's position 3 is a
-    // different title tomorrow — the "saved" mark migrated by itself to a film
-    // nobody saved. The mark has to live on the item, and it does
-    // (CatItem.inList / .inCollection, filled from Trakt's real list).
+    // Trakt's own split: the watchlist (what you intend to watch) against the
+    // collection (what you own). Read from the ITEM — see `bought` above.
     int enters = (mode == MODE_SAVED) ? ci->inList
                                       : (ci->inCollection || bought[i]);
     if (!enters) continue;
@@ -156,18 +124,10 @@ static void rebuild(void) {
     }
   }
 
-  int lines = nLines();
-  if (lines > LIB_MAX_LINES) lines = LIB_MAX_LINES;
-  int cols[FOCUS_MAX_ROWS];
-  cols[LIB_FILTER_MODE] = LIB_N_MODES;
-  cols[LIB_FILTER_PICK] = 2;
-  for (int r = 0; r < lines; r++) {
-    int rest = nFilter - r * NV_LIB_COLUMNS;
-    cols[LIB_FILTER_GRID + r] = rest > NV_LIB_COLUMNS ? NV_LIB_COLUMNS : rest;
-  }
-  focus_start(&focus, LIB_FILTER_GRID + lines, cols);
-  scrollY = 0.0f;
-  memset(animFocus, 0, sizeof animFocus);
+  focus = 0;
+  animCard = 0.0f;
+  // An empty grid cannot hold the focus.
+  if (!nFilter && zone == ZONE_GRID) zone = ZONE_PICKERS;
 }
 
 static int started;
@@ -178,18 +138,17 @@ int library_start(void) {
     started = 1;
   }
   mode = MODE_SAVED; kind = KIND_ALL; order = ORDER_ADDED;
-  pickSel = 0;
-  memset(animMode, 0, sizeof animMode);
+  zone = ZONE_TABS; pickSel = 0; menuOpen = -1;
   memset(animPick, 0, sizeof animPick);
+  animTabs = 1.0f;   // born on the strip, already lit
+  scrollY = 0.0f;
   wantsExit = 0; request = -1;
+  hasItemFocus = 0;
   rebuild();
-  // The focus is born on the mode bar: whoever comes in is still choosing the slice.
-  focus.row = LIB_FILTER_MODE;
-  focus.column = mode;
   return 1;
 }
 
-void library_shutdown(void) { }
+void library_shutdown(void) { hasItemFocus = 0; }
 
 int library_in_list(int i) {
   // The truth is the mark ON THE ITEM, which discovery fills from Trakt's
@@ -217,296 +176,252 @@ int library_requested_open(int *indexCatalog) {
   return 1;
 }
 
+int library_item_focused(HomeItem *out) {
+  if (!hasItemFocus || !out) return 0;
+  *out = itemFocus;
+  return 1;
+}
+
+// What option `i` of picker `p` reads as — the dropdown's label callback.
+static const char *optionLabel(void *ctx, int i) {
+  int p = *(int *)ctx;
+  if (p == PICK_KIND)  return (i >= 0 && i < LIB_N_KINDS) ? KIND_LABEL[i] : "";
+  return (i >= 0 && i < LIB_N_ORDER) ? ORDER_LABEL[i] : "";
+}
+static int optionsN(int p) { return p == PICK_KIND ? LIB_N_KINDS : LIB_N_ORDER; }
+static int optionCurrent(int p) { return p == PICK_KIND ? kind : order; }
+
+static int isOk(SDL_Keycode k) {
+  return k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE;
+}
+
 void library_event(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
-  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
-      k == SDLK_DELETE) { wantsExit = 1; return; }
+  int back = k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
+             k == SDLK_DELETE;
 
-  // Mode bar: left/right SWAPS the mode, and swapping rebuilds the focus map.
-  // That is why the mode changes HERE and not through focus_move — calling the
-  // two in the wrong order returned the focus to column 0 on every move.
-  if (focus.row == LIB_FILTER_MODE) {
-    if (k == SDLK_RIGHT && mode < LIB_N_MODES - 1) {
-      mode++; rebuild(); focus.row = LIB_FILTER_MODE; focus.column = mode; return;
-    }
-    if (k == SDLK_LEFT && mode > 0) {
-      mode--; rebuild(); focus.row = LIB_FILTER_MODE; focus.column = mode; return;
-    }
-    if (k == SDLK_LEFT) { requestMenu = 1; return; }
-    if (k == SDLK_DOWN || k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
-      focus.row = LIB_FILTER_PICK; focus.column = pickSel;
+  // AN OPEN LIST OWNS THE WHOLE D-PAD, as on Discover.
+  if (menuOpen >= 0) {
+    int count = optionsN(menuOpen);
+    if (k == SDLK_UP && menuFocus > 0) menuFocus--;
+    else if (k == SDLK_DOWN && menuFocus + 1 < count) menuFocus++;
+    else if (back || k == SDLK_LEFT || k == SDLK_RIGHT) menuOpen = -1;
+    else if (isOk(k)) {
+      int p = menuOpen;
+      menuOpen = -1;
+      if (menuFocus != optionCurrent(p)) {
+        if (p == PICK_KIND) kind = menuFocus; else order = menuFocus;
+        rebuild();
+      }
     }
     return;
   }
 
-  // Picker row: left/right moves BETWEEN the two; OK cycles the value of the one
-  // in focus. The web app opens a dropdown; on a D-pad, cycling in the picker
-  // itself saves the round trip down to the list and back.
-  if (focus.row == LIB_FILTER_PICK) {
-    if (k == SDLK_RIGHT && pickSel == 0) { pickSel = 1; focus.column = 1; return; }
-    if (k == SDLK_LEFT  && pickSel == 1) { pickSel = 0; focus.column = 0; return; }
-    if (k == SDLK_LEFT) { requestMenu = 1; return; }
-    if (k == SDLK_UP)   { focus.row = LIB_FILTER_MODE; focus.column = mode; return; }
-    if (k == SDLK_DOWN) { if (nFilter) focus_move_grid(&focus, 0, 1); return; }
-    if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
-      if (pickSel == 0) kind = (kind + 1) % LIB_N_KINDS;
-      else              order = (order + 1) % LIB_N_ORDER;
-      rebuild();
-      focus.row = LIB_FILTER_PICK; focus.column = pickSel;
+  if (back) {
+    // Back climbs to the strip, one zone at a time, and only leaves from there.
+    if (zone != ZONE_TABS) zone--;
+    else wantsExit = 1;
+    return;
+  }
+
+  if (zone == ZONE_TABS) {
+    // Left/right SWAP the set, like the sources sheet's strip; LEFT past the
+    // first word calls up the menu.
+    if (k == SDLK_RIGHT && mode < LIB_N_MODES - 1) { mode++; rebuild(); }
+    else if (k == SDLK_LEFT) {
+      if (mode > 0) { mode--; rebuild(); } else requestMenu = 1;
+    }
+    else if (k == SDLK_DOWN || isOk(k)) zone = ZONE_PICKERS;
+    return;
+  }
+
+  if (zone == ZONE_PICKERS) {
+    if (k == SDLK_LEFT) { if (pickSel > 0) pickSel--; else requestMenu = 1; }
+    else if (k == SDLK_RIGHT) { if (pickSel < PICK_N - 1) pickSel++; }
+    else if (k == SDLK_UP) zone = ZONE_TABS;
+    else if (k == SDLK_DOWN) { if (nFilter) { zone = ZONE_GRID; focus = 0; } }
+    else if (isOk(k)) {
+      // The list opens ON the current value.
+      menuOpen = pickSel;
+      menuFocus = optionCurrent(pickSel);
     }
     return;
   }
 
-  if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
-    int i = (focus.row - LIB_FILTER_GRID) * NV_LIB_COLUMNS + focus.column;
-    if (i >= 0 && i < nFilter) request = filter[i];
-    return;
-  }
-  // THE POSTER GRID, and a grid is what it is: see focus_move_grid. Dropping a
-  // row here used to land on whichever column the focus had last held in that
-  // row, which in a grid of equal-length rows is simply the wrong poster.
-  if (k == SDLK_RIGHT)     focus_move_grid(&focus, 1, 0);
-  else if (k == SDLK_LEFT) {
-    if (focus.column == 0) requestMenu = 1;
-    else focus_move_grid(&focus, -1, 0);
-  }
-  else if (k == SDLK_DOWN) focus_move_grid(&focus, 0, 1);
-  else if (k == SDLK_UP) {
-    if (focus.row == LIB_FILTER_GRID) { focus.row = LIB_FILTER_PICK; focus.column = pickSel; }
-    else focus_move_grid(&focus, 0, -1);
+  // THE GRID, moved exactly as Discover's.
+  int row = focus / NV_DSC_COLUMNS;
+  int lastRow = nFilter > 0 ? (nFilter - 1) / NV_DSC_COLUMNS : 0;
+  switch (k) {
+    case SDLK_LEFT:
+      if (focus % NV_DSC_COLUMNS) focus--;
+      else requestMenu = 1;
+      break;
+    case SDLK_RIGHT:
+      if (focus + 1 < nFilter && (focus + 1) % NV_DSC_COLUMNS) focus++;
+      break;
+    case SDLK_UP:
+      if (row == 0) zone = ZONE_PICKERS;
+      else focus -= NV_DSC_COLUMNS;
+      break;
+    case SDLK_DOWN:
+      if (row < lastRow) {
+        focus += NV_DSC_COLUMNS;
+        if (focus >= nFilter) focus = nFilter - 1;
+      }
+      break;
+    case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
+      if (focus >= 0 && focus < nFilter) request = filter[focus];
+      break;
+    default: break;
   }
 }
 
 void library_update(float dt, Uint32 now) {
   (void)now;
-  for (int a = 0; a < LIB_N_MODES; a++) {
-    float target = (focus.row == LIB_FILTER_MODE && focus.column == a) ? 1.0f : 0.0f;
-    animMode[a] = anim_spring(animMode[a], target, dt,
-                            target > animMode[a] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
-  }
-  for (int p = 0; p < 2; p++) {
-    float target = (focus.row == LIB_FILTER_PICK && focus.column == p) ? 1.0f : 0.0f;
+  for (int p = 0; p < PICK_N; p++) {
+    float target = ((zone == ZONE_PICKERS && pickSel == p) || menuOpen == p)
+                   ? 1.0f : 0.0f;
     animPick[p] = anim_spring(animPick[p], target, dt,
-                            target > animPick[p] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+                              target > animPick[p] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
-  int lines = nLines();
-  if (lines > LIB_MAX_LINES) lines = LIB_MAX_LINES;
-  for (int r = 0; r < lines; r++)
-    for (int c = 0; c < NV_LIB_COLUMNS; c++) {
-      float target = focus_index(&focus, LIB_FILTER_GRID + r, c) ? 1.0f : 0.0f;
-      animFocus[r][c] = anim_spring(animFocus[r][c], target, dt,
-                                 target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
-    }
+  { float target = (zone == ZONE_TABS) ? 1.0f : 0.0f;
+    animTabs = anim_spring(animTabs, target, dt,
+                           target > animTabs ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
+  { float target = (zone == ZONE_GRID) ? 1.0f : 0.0f;
+    animCard = anim_spring(animCard, target, dt,
+                           target > animCard ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
 
-  // Scrolls the MINIMUM for the focused row to fit whole in the usable area. With
-  // the focus on the header the target is 0 — going back to the top is part of
-  // going back to the bar.
-  float target = scrollY;
-  if (focus.row >= LIB_FILTER_GRID) {
-    float top = NV_LIB_GRID_Y + (focus.row - LIB_FILTER_GRID) * stepLine();
-    float base = top + heightLine();
-    if (base - target > LIB_GRID_BASE)  target = base - LIB_GRID_BASE;
-    if (top - target < NV_LIB_GRID_Y)  target = top - NV_LIB_GRID_Y;
-  } else {
-    target = 0.0f;
-  }
-  if (target < 0.0f) target = 0.0f;
-  // The poster grids' own rate — see NV_SPRING_GRID. This was 8, which is where
-  // "coming back into view is slow" started; it is NOT the critically damped
-  // spring, for the reason recorded against that constant.
+  // THE SCROLL SNAPS TO THE FOCUSED ROW — Discover's rule, for Discover's reason:
+  // one row of cards fits under the header, so the focused one goes to the top
+  // and nothing is ever sliced there. See dui_update.
+  float target = (zone == ZONE_GRID && nFilter > 0)
+                 ? (float)(focus / NV_DSC_COLUMNS) * NV_DSC_LINE_STEP : 0.0f;
   scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
 }
 
-// A mode pill. Chosen but unfocused it gets background #303030 and a white
-// border; focused it lightens and the text darkens. The two readings have to
-// stay distinct — that is the mistake the detail screen's season tabs already made.
-static void drawMode(int a, float f) {
-  GfxRect r = { NV_LIB_X + a * NV_LIB_MODE_STEP, NV_LIB_MODE_Y,
-                NV_LIB_MODE_W, NV_LIB_MODE_H };
-  int sel = (a == mode);
-  float radius = NV_RADIUS_PILL;
-  if (f > 0.02f) {
-    GfxRect b = { r.x - 2.0f, r.y - 2.0f, r.w + 4.0f, r.h + 4.0f };
-    gfx_color(b, radius, 0.961f, 0.961f, 0.961f, f);
-  }
-  float luma = sel ? 0.188f : 0.133f;        // #303030 contra #222
-  gfx_color(r, radius, luma, luma, luma, 1.0f);
-  if (sel && f < 0.98f)
-    gfx_rect(r, 0, GFX_RING, 0, 1.0f / r.h, 0, radius,
-             0.70f, 0.70f, 0.72f, 1.0f - f);
-  int color = 245;
-  TxtLine l = txt_line(TXT_CAPTION2, ROT_MODE[a], color, color, color, 255);
-  txt_draw_alpha(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f,
-                     sel ? 1.0f : 0.82f);
+// --- Drawing -----------------------------------------------------------------
+static GfxRect pickRect(int p) {
+  int kindCtx = PICK_KIND, orderCtx = PICK_ORDER;
+  float wKind = dd_select_width(LIB_N_KINDS, optionLabel, &kindCtx);
+  float wOrder = dd_select_width(LIB_N_ORDER, optionLabel, &orderCtx);
+  if (p == PICK_KIND) return (GfxRect){ NV_DSC_X, NV_LIB_SEL_Y, wKind, NV_DD_SEL_H };
+  return (GfxRect){ NV_DSC_X + wKind + NV_LIB_SEL_GAP, NV_LIB_SEL_Y, wOrder,
+                    NV_DD_SEL_H };
 }
 
-// The "Type" / "Sort" picker: a small grey label and a large white value, with
-// the arrow up against the right edge.
-static void drawPicker(int p, float f) {
-  GfxRect r = { NV_LIB_X + p * NV_LIB_PICK_STEP, NV_LIB_PICK_Y,
-                NV_LIB_PICK_W, NV_LIB_PICK_H };
-  float radius = NV_LIB_PICK_RADIUS / (NV_LIB_PICK_H * 0.5f) * 0.5f;
-  if (f > 0.02f) {
-    GfxRect b = { r.x - 2.0f, r.y - 2.0f, r.w + 4.0f, r.h + 4.0f };
-    gfx_color(b, radius, 0.961f, 0.961f, 0.961f, f);
-  }
-  float luma = anim_blend(0.133f, 0.188f, f);   // #222 -> #303030 no foco
-  gfx_color(r, radius, luma, luma, luma, 1.0f);
-
-  const char *rot = (p == 0) ? "Type" : "Sort";
-  const char *val = (p == 0) ? ROT_KIND[kind] : ROT_ORDER[order];
-  // 19/500 rgb(128,128,128) on top, 30/500 white below with 4 of slack.
-  TxtLine tr = txt_line(TXT_MINI, rot, 179, 179, 179, 255);
-  TxtLine tv = txt_line(TXT_CALLOUT, val, 255, 255, 255, 255);
-  float tx = r.x + NV_LIB_PICK_PADX;
-  float ty = r.y + NV_LIB_PICK_PADY;
-  txt_draw_alpha(tr, tx, ty, 0.95f);
-  txt_draw_alpha(tv, tx, ty + tr.h + 4.0f, 1.0f);
-
-  TxtLine seta = txt_line(TXT_CAPTION2, "OK: change", 196, 197, 202, 255);
-  txt_draw_alpha(seta, r.x + r.w - NV_LIB_PICK_PADX - seta.w,
-                     r.y + (r.h - seta.h) * 0.5f, 0.85f);
-}
-
-// Empty state: 46/500 white and 28/400 rgb(179,179,179), centred in the usable
-// width. A blank grid looks like a broken screen.
+// Empty state, centred under the header. A blank grid looks like a broken screen.
 static void drawEmpty(void) {
   const char *l1 = totalMode ? "No titles under this filter"
-      : mode == MODE_CLOUD ? "Your collection appears here" : "Your next session starts here";
+      : mode == MODE_COLLECTION ? "Your collection appears here"
+                                : "Your next session starts here";
   const char *l2 = totalMode
-      ? "Under Type, choose All. Check the filters in Settings too."
-      : mode == MODE_CLOUD
-        ? "The movies and series in your Trakt collection are gathered in this tab."
+      ? "Choose All types, or check the filters in Settings."
+      : mode == MODE_COLLECTION
+        ? "The movies and series in your Trakt collection are gathered here."
         : "Open a movie or series and choose Add to list to keep it.";
   TxtLine t1 = txt_line(TXT_TITLE2, l1, 255, 255, 255, 255);
-  TxtLine t2 = txt_line(TXT_CALLOUT, l2, 179, 179, 179, 255);
-  float cx = NV_LIB_X + NV_LIB_W * 0.5f;
-  float y = NV_LIB_EMPTY_Y + 190.0f;
-  gfx_icon((GfxRect){cx - 32.0f, y - 100.0f, 64.0f, 64.0f},
-             "menu_library", 0.70f, 0.70f, 0.72f, 1.0f);
-  txt_draw_alpha(t1, cx - t1.w * 0.5f, y, 0.96f);
-  txt_draw_alpha(t2, cx - t2.w * 0.5f, y + t1.h + 18.0f, 0.85f);
-  TxtLine hint = txt_line(TXT_CAPTION2,
-      "↑ Back to filters   ·   Back: menu", 179, 179, 179, 255);
-  txt_draw(hint, cx - hint.w * 0.5f, y + t1.h + t2.h + 58.0f);
+  TxtLine t2 = txt_line(TXT_SRCH_EMPTY, l2, 179, 179, 179, 255);
+  float cx = NV_DSC_X + NV_DSC_W * 0.5f;
+  float y  = NV_LIB_GRID_Y + 150.0f;
+  gfx_icon((GfxRect){ cx - 32.0f, y - 100.0f, 64.0f, 64.0f },
+           "menu_library", 0.70f, 0.70f, 0.72f, 1.0f);
+  txt_draw_alpha(t1, cx - (float)t1.w * 0.5f, y, 0.96f);
+  txt_draw_alpha(t2, cx - (float)t2.w * 0.5f, y + (float)t1.h + 18.0f, 0.85f);
+}
+
+// Discover's grid, card for card — see drawGrid in discoverui.c for why each
+// piece is the way it is. Only the data source differs.
+static void drawGrid(void) {
+  hasItemFocus = 0;
+  if (!nFilter) { drawEmpty(); return; }
+
+  gfx_crop(0.0f, NV_LIB_CLIP_TOP, NV_SCREEN_W, NV_DSC_GRID_BOTTOM - NV_LIB_CLIP_TOP);
+  // TWO PASSES: the focused card scales up and must sit over its neighbours.
+  for (int pass = 0; pass < 2; pass++)
+    for (int i = 0; i < nFilter; i++) {
+      int isFocus = (zone == ZONE_GRID && i == focus);
+      float f = isFocus ? animCard : 0.0f;
+      float top = NV_LIB_GRID_Y + (float)(i / NV_DSC_COLUMNS) * NV_DSC_LINE_STEP - scrollY;
+      float left = NV_DSC_X + (float)(i % NV_DSC_COLUMNS) * NV_DSC_CARD_STEP;
+      float edge = anim_edge(top, NV_LIB_CLIP_TOP, NV_LIB_FADE);
+      const CatItem *ci;
+      if ((pass == 1) != (f > 0.01f)) continue;
+      if (top > NV_SCREEN_H + 40.0f || top + NV_DSC_POSTER_H < -40.0f) continue;
+      if (edge <= 0.004f && !isFocus) continue;
+      if (!(ci = cat_item(filter[i]))) continue;
+      gfx_opacity_group = edge;
+
+      { float scale = anim_blend(1.0f, 1.0f + NV_DSC_FOCUS_SCALE, f);
+        float w = NV_DSC_CARD_W * scale, h = NV_DSC_POSTER_H * scale;
+        // `transform-origin: top`: only x is re-centred.
+        GfxRect card = { left - (w - NV_DSC_CARD_W) * 0.5f, top, w, h };
+        float radius = NV_DSC_POSTER_R / card.h;
+        const char *art = ci->poster[0] ? ci->poster
+                        : (ci->backdrop[0] ? ci->backdrop : NULL);
+        // The RESTING width, so the focus spring does not re-decode the poster.
+        GLuint tex = art ? tex_get_width(art, NV_DSC_CARD_W) : 0;
+        if (tex) {
+          gfx_tex_aspect_current = tex_aspect(art);
+          gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, 1);
+          gfx_tex_aspect_current = 0.0f;
+        } else {
+          gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
+                       NV_COLOR_SKELETON_B, 1.0f);
+        }
+        if (f > 0.01f)
+          gfx_rect(card, 0, GFX_RING_INSET, 0, NV_DSC_BORDER / card.h, 0,
+                   radius, 0.961f, 0.961f, 0.961f, f);
+
+        if (settings_labels_poster()) {
+          TxtLine tl = txt_line_trim(TXT_CALLOUT, ci->title, 255, 255, 255, 255,
+                                     NV_DSC_CARD_W);
+          txt_draw_alpha(tl, card.x, top + h + NV_DSC_TITLE_GAP, 0.98f);
+        }
+        gfx_opacity_group = 1.0f;
+
+        if (isFocus) {
+          itemFocus.index_ = filter[i];
+          itemFocus.rect   = card;
+          itemFocus.art    = ci->backdrop[0] ? ci->backdrop : ci->poster;
+          itemFocus.title  = ci->title;
+          itemFocus.genre  = ci->genre;
+          itemFocus.meta   = ci->meta;
+          hasItemFocus = 1;
+        }
+      }
+    }
+  gfx_opacity_group = 1.0f;
+  gfx_no_crop();
 }
 
 void library_draw(Uint32 now) {
   (void)now;
-  // An opaque background of its own: the library covers the whole screen and
-  // cannot rely on whoever drew before it.
-  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  // The screen has already been cleared with THIS VERY COLOUR by
-  // glClearColor/glClear in main.c before app_draw. Painting over it was one
-  // full-screen layer thrown away per frame — and the dominant cost on this GPU
-  // is fill rate (gfx.c records that TWO full-screen layers dropped the Mali-G71
-  // to ~40fps). Do not put it back without first changing the clear colour.
-  (void)screen;
+  // No background fill: main.c has already cleared to #0d0d0d, and a
+  // full-screen layer thrown away per frame is the dominant cost on this GPU.
+  txt_tracking(TXT_TITLE3, "Library", 255, 255, 255,
+               NV_DSC_X, NV_DSC_Y, 1.0f, NV_DSC_TITLE_LS);
+  // The context line, right-aligned against the title as on Discover. It names
+  // the REAL source — the list comes from Trakt, and without a Trakt credential
+  // it is local — and how many titles are on screen.
+  { char line[96];
+    snprintf(line, sizeof line, "%s  \xc2\xb7  %d %s",
+             trakt_active() ? "Trakt" : "Local", nFilter,
+             nFilter == 1 ? "title" : "titles");
+    float w = txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128, -1.0f, 0.0f, 0.0f, 4.0f);
+    txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128,
+                 NV_DSC_X + NV_DSC_W - w, NV_DSC_Y + 10.0f, 0.95f, 4.0f); }
 
-  TxtLine title = txt_line(TXT_TITLE2, "Library", 255, 255, 255, 255);
-  txt_draw(title, NV_LIB_X, NV_LIB_Y);
-  // The source badge, aligned to the right of the usable area. Deliberately
-  // tracked out: in the web app it has letter-spacing 4 and reads as a label,
-  // not as a word.
-  //
-  // THE BADGE STATES THE REAL SOURCE. It used to be hard-coded to "NUVIO", which
-  // is the app's name and not where the data comes from — the list comes from
-  // TRAKT, and the log confirms it ("[trakt] credential loaded", "[trakt]
-  // watchlist: 118"). A source badge that does not reflect the source belongs to
-  // the same family as the hard-coded "14" age rating and the demo cast:
-  // invented information wearing the face of data.
-  //
-  // Without a Trakt credential the library is local, and the badge says so.
-  { const char *source = trakt_active() ? "TRAKT" : "LOCAL";
-    float wBadge = txt_tracking(TXT_CALLOUT, source, 128, 128, 128,
-                               -1.0f, 0.0f, 0.0f, 4.0f);
-    txt_tracking(TXT_CALLOUT, source, 128, 128, 128,
-                 NV_LIB_DIR - wBadge, NV_LIB_Y + 10.0f, 0.9f, 4.0f); }
+  { float x = NV_DSC_X;
+    for (int m = 0; m < LIB_N_MODES; m++)
+      x += tab_page_draw(x, NV_LIB_TABS_Y, MODE_LABEL[m], m == mode, animTabs, 1.0f); }
 
-  for (int a = 0; a < LIB_N_MODES; a++) drawMode(a, animMode[a]);
-  {
-    char summary[160];
-    snprintf(summary, sizeof summary, "%d %s   ·   %s", nFilter,
-             nFilter == 1 ? "title" : "titles",
-             mode == MODE_SAVED ? "Your watchlist" : "Your Trakt collection");
-    TxtLine info = txt_line(TXT_CAPTION2, summary, 179, 179, 179, 255);
-    txt_draw(info, NV_LIB_DIR - info.w,
-                 NV_LIB_MODE_Y + (NV_LIB_MODE_H - info.h) * 0.5f);
-  }
-  for (int p = 0; p < 2; p++)           drawPicker(p, animPick[p]);
+  dd_select(pickRect(PICK_KIND), KIND_LABEL[kind], NULL, animPick[PICK_KIND], 1.0f);
+  dd_select(pickRect(PICK_ORDER), ORDER_LABEL[order], NULL, animPick[PICK_ORDER], 1.0f);
 
-  if (nFilter == 0) { drawEmpty(); return; }
-
-  int lines = nLines();
-  if (lines > LIB_MAX_LINES) lines = LIB_MAX_LINES;
-  float stepC = stepColumn(), stepL = stepLine();
-
-  // Two passes: the focused item scales by 2% and has to be drawn LAST,
-  // otherwise its right-hand neighbour clips its border.
-  for (int passe = 0; passe < 2; passe++)
-    for (int r = 0; r < lines; r++) {
-      float top = NV_LIB_GRID_Y + r * stepL - scrollY;
-      if (top > NV_SCREEN_H || top + heightLine() < -80.0f) continue;
-      // Whatever rises under the header fades out before crossing it: without
-      // the fade, poster and picker read one on top of the other.
-      float a = anim_clamp((top - (NV_LIB_PICK_Y + NV_LIB_PICK_H * 0.5f)) / LIB_FADE,
-                           0.0f, 1.0f);
-      if (a <= 0.005f) continue;
-
-      for (int c = 0; c < NV_LIB_COLUMNS; c++) {
-        int i = r * NV_LIB_COLUMNS + c;
-        if (i >= nFilter) break;
-        float f = animFocus[r][c];
-        if ((passe == 0) == (f > 0.01f)) continue;
-
-        // `.library-grid-card.focused { transform: scale(1.02) }` with the
-        // origin at the TOP — it is the only focus scale the web app has, and it
-        // is 2%, not the 14% that used to be here (a number from the tvOS Top
-        // Shelf tables).
-        float scale = 1.0f + NV_LIB_FOCUS_SCALE * f;
-        float bw = NV_LIB_CARD_W * scale, bh = NV_LIB_POSTER_H * scale;
-        float bx = NV_LIB_X + c * stepC - (bw - NV_LIB_CARD_W) * 0.5f;
-        GfxRect card = { bx, top, bw, bh };
-        // The SDF's radius is a fraction of the HEIGHT, not of the smaller side:
-        // `p = (uv-0.5)*vec2(asp,1.0)` makes one SDF unit h pixels on both axes.
-        // Dividing by the width rounded this poster half again too much. See the
-        // note on radiusInset in home.c.
-        float radius = 24.0f / NV_LIB_POSTER_H;
-
-        const CatItem *ci = cat_item(filter[i]);
-        const char *art = (ci && ci->poster[0]) ? ci->poster : NULL;
-        GLuint tex = art ? tex_get(art) : 0;
-        if (tex) {
-          gfx_tex_aspect_current = tex_aspect(art);
-          gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, a);
-          gfx_tex_aspect_current = 0.0f;
-        } else {
-          // A placeholder in the cards' colour: the poster is still decoding on
-          // another thread and the grid must not flash a hole.
-          // A VISIBLE skeleton, the same as the home's: #2C2C2C. See the note
-          // there — a placeholder in the background's tone reads as a broken
-          // card, not as loading.
-            gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
-                  NV_COLOR_SKELETON_B, a);
-        }
-        // The web app's focus border is 4px ON THE INSIDE of the poster (the card
-        // already reserves `border: 4px solid transparent`), and not a halo on
-        // the outside — "Android TV uses the inside focus border, not an outer
-        // halo", says the stylesheet's own comment.
-        if (f > 0.01f) {
-          gfx_rect(card, 0, GFX_RING, 0, NV_LIB_POSTER_BORDER / card.w,
-                   0, radius, 0.961f, 0.961f, 0.961f, f * a);
-        }
-
-        // Title 32/500, one line, cut with an ellipsis — the web app uses
-        // white-space:nowrap + text-overflow:ellipsis.
-        if (ci) {
-          TxtLine tl = txt_line_trim(TXT_CALLOUT, ci->title, 255, 255, 255, 255,
-                                        NV_LIB_CARD_W);
-          txt_draw_alpha(tl, NV_LIB_X + c * stepC,
-                             top + NV_LIB_POSTER_H + NV_LIB_TITLE_GAP, a * 0.98f);
-        }
-      }
-    }
+  drawGrid();
+  // LAST, over everything: an open list covers the grid under it.
+  if (menuOpen >= 0)
+    dd_menu(pickRect(menuOpen), optionsN(menuOpen), menuFocus, optionLabel,
+            &menuOpen, 1.0f);
 }
