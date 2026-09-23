@@ -34,6 +34,8 @@
 #include "tabs.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
+#include <stdlib.h>
 
 // "Saved" is Trakt's watchlist; "Collection" is Trakt's collection.
 enum { MODE_SAVED, MODE_COLLECTION, LIB_N_MODES };
@@ -42,16 +44,19 @@ static const char *MODE_LABEL[LIB_N_MODES] = { "Saved", "Collection" };
 // The dropdowns carry no label over the value, so each value says what it is.
 enum { KIND_ALL, KIND_MOVIE, KIND_SERIES, LIB_N_KINDS };
 static const char *KIND_LABEL[LIB_N_KINDS] = { "All types", "Movies", "Series" };
-enum { ORDER_ADDED, ORDER_TITLE, ORDER_YEAR, LIB_N_ORDER };
-static const char *ORDER_LABEL[LIB_N_ORDER] = { "List order", "Title A to Z",
-                                                "Newest first" };
+// "Added" is when the title went onto the Trakt list; "release" is its year.
+enum { ORDER_RECENT, ORDER_FIRST, ORDER_NEWEST, ORDER_OLDEST, ORDER_TITLE,
+       LIB_N_ORDER };
+static const char *ORDER_LABEL[LIB_N_ORDER] = {
+  "Recently added", "First added", "Newest releases", "Oldest releases",
+  "Title A\xe2\x80\x93Z" };
 
 enum { PICK_KIND, PICK_ORDER, PICK_N };
 enum { ZONE_TABS, ZONE_PICKERS, ZONE_GRID };
 
 static int mode = MODE_SAVED;
 static int kind = KIND_ALL;
-static int order = ORDER_ADDED;
+static int order = ORDER_RECENT;
 static int zone;
 static int pickSel;
 // The open dropdown and the row inside it, which is NOT the value until OK —
@@ -82,6 +87,34 @@ static int isSeries(const CatItem *ci) {
                 || ci->season > 0);
 }
 
+// The release year: Trakt's own for a list item, else the year `meta` opens with
+// ("2022 · 3 seasons"). 0 when neither says.
+static int yearOf(const CatItem *ci) {
+  if (ci->year > 0) return ci->year;
+  if (ci->meta[0] >= '0' && ci->meta[0] <= '9') return atoi(ci->meta);
+  return 0;
+}
+
+// 1 when `a` belongs AFTER `b` in the chosen order. A title with no date or no
+// year goes to the end in either direction: it has no place in the order, and
+// putting it first would bury the ones that do.
+static int after(const CatItem *a, const CatItem *b) {
+  if (!a || !b) return 0;
+  switch (order) {
+    case ORDER_RECENT: case ORDER_FIRST: {
+      long long x = a->added, y = b->added;
+      if (!x || !y) return !x && y;
+      return order == ORDER_RECENT ? x < y : x > y;
+    }
+    case ORDER_NEWEST: case ORDER_OLDEST: {
+      int x = yearOf(a), y = yearOf(b);
+      if (!x || !y) return !x && y;
+      return order == ORDER_NEWEST ? x < y : x > y;
+    }
+    default: return strcasecmp(a->title, b->title) > 0;
+  }
+}
+
 // Rebuilds the visible list. Called on every change of mode, type or order, and
 // it puts the grid's focus back on the first poster: the old index points at a
 // different title in the new list.
@@ -107,21 +140,14 @@ static void rebuild(void) {
     filter[nFilter++] = i;
   }
 
-  // Insertion sort — there are a few dozen items, once per change.
-  if (order != ORDER_ADDED) {
-    for (int i = 1; i < nFilter; i++) {
-      int v = filter[i], j = i - 1;
-      while (j >= 0) {
-        const CatItem *a = cat_item(filter[j]), *b = cat_item(v);
-        int larger;
-        if (order == ORDER_TITLE) larger = a && b && strcmp(a->title, b->title) > 0;
-        else /* ORDER_YEAR, descending */
-          larger = a && b && strcmp(a->meta, b->meta) < 0;
-        if (!larger) break;
-        filter[j + 1] = filter[j]; j--;
-      }
-      filter[j + 1] = v;
+  // Insertion sort — there are a few dozen items, once per change. Stable, so
+  // ties keep Trakt's own order.
+  for (int i = 1; i < nFilter; i++) {
+    int v = filter[i], j = i - 1;
+    while (j >= 0 && after(cat_item(filter[j]), cat_item(v))) {
+      filter[j + 1] = filter[j]; j--;
     }
+    filter[j + 1] = v;
   }
 
   focus = 0;
@@ -137,7 +163,7 @@ int library_start(void) {
     memset(bought, 0, sizeof bought);
     started = 1;
   }
-  mode = MODE_SAVED; kind = KIND_ALL; order = ORDER_ADDED;
+  mode = MODE_SAVED; kind = KIND_ALL; order = ORDER_RECENT;
   zone = ZONE_TABS; pickSel = 0; menuOpen = -1;
   memset(animPick, 0, sizeof animPick);
   animTabs = 1.0f;   // born on the strip, already lit

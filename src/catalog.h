@@ -120,6 +120,14 @@ typedef struct {
   // because the catalogue is rebuilt from the network — a per-index table would
   // point at a different title after the first refresh.
   int  inList, inCollection;
+  // When the title went onto that list, in ms since the epoch: Trakt's
+  // `listed_at` (watchlist) or `collected_at` / `last_collected_at` (collection).
+  // 0 for anything that did not come from a Trakt list. The Library sorts by it.
+  long long added;
+  // The release year from Trakt's own record, 0 when unknown. `meta` carries the
+  // year for catalogue items, but a Trakt list item arrives with `meta` empty —
+  // which left the Library's year sort with nothing to sort by.
+  int  year;
   // 24 AND NOT 16. The id of an item in "Continue watching" is COMPOSITE —
   // resumeLocal and the next-up resolver in discover.c write "<work>:<season>:
   // <episode>" here — and 16 bytes fit that only while the pieces stay short.

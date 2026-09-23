@@ -391,7 +391,7 @@ int cat_load(const char *dirArt) {
 // it is the sizeof that really protects, because adding a field to the struct
 // changes the layout without anyone remembering to bump the version by hand.
 #define CACHE_MAGIC  0x4E56434Bu   /* "NVCK" */
-#define CACHE_VERSION 1
+#define CACHE_VERSION 2
 
 typedef struct {
   unsigned magic, version, sizeItem, sizeRow;

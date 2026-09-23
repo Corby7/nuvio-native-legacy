@@ -802,7 +802,14 @@ int trakt_list(const char *which, CatItem *output, int max) {
           const char *fb = js_end(strchr(block, '{'));
           js_text(block, fb, "title", d->title, sizeof d->title);
           js_text(block, fb, "imdb", imdb, sizeof imdb);
+          d->year = (int)js_num(block, fb, "year", 0);
         }
+        // The date on the list item itself, outside the movie/show block. A
+        // collected show has no `collected_at`, only `last_collected_at`.
+        { char when[40] = "";
+          const char *key = !strcmp(which, "watchlist") ? "listed_at"
+                          : step ? "last_collected_at" : "collected_at";
+          if (js_text(p, f, key, when, sizeof when)) d->added = js_ms_iso(when); }
         if (imdb[0]) {
           snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
           snprintf(d->kind, sizeof d->kind, "%s", step ? "series" : "movie");
