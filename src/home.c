@@ -422,7 +422,13 @@ static float widthOf(KindRow t) {
     // the 360 that stood here. The card is a COMPOSED BITMAP (the catalogue's name
     // and its item count are lettering baked into the cover the account serves), so
     // 13% of extra width was 13% of extra enlargement applied to type.
-    case ROW_CATALOGS: return 318.0f;
+    //
+    // NOW LARGER THAN THE WEB, on purpose: 318 read as a strip of thumbnails beside
+    // the 419 "Continue watching" card. 384 sits just under it, and 384x216 is an
+    // exact 16:9 in whole pixels, so the box has no fractional edge to filter across.
+    // The type concern above is handled where the cover is decoded (drawShortcuts):
+    // the decode follows this width, so the lettering is resampled once, downward.
+    case ROW_CATALOGS: return 384.0f;
     default:               return settings_posters_landscape() ? NV_CARD_LAND_W
                                                               : NV_CARD_W;
   }
@@ -630,9 +636,9 @@ static float heightOf(KindRow t) {
     case ROW_SOCIAL: return 240.0f;
     case ROW_RETURN: return 178.0f;
     case ROW_TOP10: return NV_CARD_H;
-    // 318 * 0.5625, the 16:9 the web derives it at
-    // (`--home-landscape-poster-height`, components.css:6675). Was 203.
-    case ROW_CATALOGS: return 178.875f;
+    // 384 * 0.5625, the 16:9 the web derives it at
+    // (`--home-landscape-poster-height`, components.css:6675). See widthOf.
+    case ROW_CATALOGS: return 216.0f;
     default:               return settings_posters_landscape() ? NV_CARD_LAND_H
                                                               : NV_CARD_H;
   }
@@ -3017,10 +3023,14 @@ static void drawShortcuts(int r, float y) {
       // re-decode (the same pattern detail.c uses for its logo). An exact entry
       // moves in both directions, and would also fight tex_get_hero: colHeroArt
       // falls back to this very cover at 1920 when the collection has no hero.
-      float coverW = lw;
-      { float asp = art && art[0] ? tex_aspect(art) : 0.0f;
-        if (asp > 0.0f && asp * lh > coverW) coverW = asp * lh; }
-      coverW *= 1.0f + scaleOf(ROW_CATALOGS);
+      //
+      // SUPERSEDED IN PART: the cover is now STRETCHED to the card (FILL, below), not
+      // cropped, so the drawn width is the card's and nothing else. Keeping
+      // `asp * lh` decoded a wide cover at up to twice what reaches the screen, and
+      // on the exact path — no mipmaps — that 2:1 minify skipped every other texel of
+      // the lettering. The ceiling is the card at full focus: a 1:1 blit while the
+      // viewer is looking at it, a 5% reduction at rest.
+      float coverW = lw * (1.0f + scaleOf(ROW_CATALOGS));
       // AND EXACT, whenever the collection has a hero of its own.
       //
       // MEASURED on this row and this is the whole of it: a 360-wide card asked by
