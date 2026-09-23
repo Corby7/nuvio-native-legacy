@@ -2099,10 +2099,14 @@ static void drawNextCard(const CatEp *next) {
       if (pill[i].icon) {
         float g = (sel ? NV_TRK_FOCUS_INK : 226) / 255.0f;
         // Hung so the glyph's INK starts at tx — see NV_NEXT_PLAY_BOX.
-        gfx_icon((GfxRect){ tx - NV_NEXT_PLAY_BOX * NV_NEXT_PLAY_INK_X,
-                            py + (ph - NV_NEXT_PLAY_BOX) * 0.5f,
-                            NV_NEXT_PLAY_BOX, NV_NEXT_PLAY_BOX },
-                 pill[i].icon, g, g, g, entry);
+        // DECODED AT THE TRANSPORT'S SIZE, not its own. The cache keeps one
+        // texture per file at an exact width, and the transport draws this same
+        // play.png at PLR_ICON_H while paused: two widths in one frame re-decoded
+        // it every frame, and the transport's button came out blurry and jumping.
+        gfx_icon_at((GfxRect){ tx - NV_NEXT_PLAY_BOX * NV_NEXT_PLAY_INK_X,
+                               py + (ph - NV_NEXT_PLAY_BOX) * 0.5f,
+                               NV_NEXT_PLAY_BOX, NV_NEXT_PLAY_BOX },
+                    pill[i].icon, PLR_ICON_H, g, g, g, entry);
         tx += NV_NEXT_PLAY_INK_W + NV_NEXT_PILL_ICON_GAP;
       }
       txt_draw_alpha(l[i], tx + (lw[i] - (float)l[i].w) * 0.5f,
