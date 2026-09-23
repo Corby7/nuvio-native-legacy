@@ -96,6 +96,17 @@ static int    mkvPending;
 static int    sourceMp4;
 static double seekTarget;
 static Uint32 seekIn;
+// THE POSITION HOLD. video_fetch sets posSeg to the target at once, but until the
+// pipeline has actually moved, every currentTime it reports is still the OLD
+// position — and taking those snapped the bar back to where playback was, then
+// forward again when the seek landed. While `seekHold` is set, reports further than
+// SEEK_LAND_S from it are ignored; the first one that lands releases it, and so
+// does SEEK_HOLD_MS, so a seek that never lands cannot freeze the position.
+// Written on the main thread, read on the LS2 one; a stale read costs one report.
+#define SEEK_LAND_S   2.0
+#define SEEK_HOLD_MS  6000u
+static volatile double seekHold = -1.0;
+static volatile Uint32 seekHoldUntil;
 // Declared here because video_pump calls it before its definition. The Mac's clang
 // accepts the implicit declaration; the ARM gcc refuses — and the ARM is right.
 // Third time in this file.
@@ -636,6 +647,11 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     }
   }
   { double v = numberOf(p, "\"currentTime\":");
+    if (v >= 0 && seekHold >= 0.0) {
+      double d = v / 1000.0 - seekHold;
+      if ((d < 0 ? -d : d) <= SEEK_LAND_S || SDL_GetTicks() > seekHoldUntil) seekHold = -1.0;
+      else v = -1;
+    }
     if (v >= 0) {
       posSeg = v / 1000.0;
       // The first frame after a seek: the real start-up number.
@@ -1055,7 +1071,7 @@ void video_stop(void) {
   recovering = 0; resumeIn = posOnLoad = 0.0;
   audioOnLoad = subOnLoad = -1;
   subUrlOnLoad[0] = 0;
-  pauseRequested = 0; seekIn = 0; mkvPending = 0;
+  pauseRequested = 0; seekIn = 0; mkvPending = 0; seekHold = -1.0;
   if (on && media[0]) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", media);
     call("unload", b, soLog);
@@ -1088,6 +1104,8 @@ void video_fetch(double seconds) {
   posSeg = seconds;
   seekTarget = seconds;
   seekIn = SDL_GetTicks() + SEEK_IDLE_MS;
+  seekHoldUntil = seekIn + SEEK_HOLD_MS;
+  seekHold = seconds;
 }
 
 // Actually sends it. Called by video_pump when the rest period expires.
