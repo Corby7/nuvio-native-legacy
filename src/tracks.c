@@ -13,6 +13,7 @@
 #include "catalog.h"
 #include "detail.h"
 #include "data.h"
+#include "lang.h"
 #include <sys/stat.h>
 #include <time.h>
 #include <stdio.h>
@@ -42,6 +43,9 @@ static int autoDone;
 static Uint32 autoSince;
 // Whether this playback has read its show's remembered language yet (below).
 static int memRead;
+// The forced-subtitle fallback and the audio language run on clocks of their
+// own (see tracks_auto): the subtitle decision can be over long before either.
+static int forcedDone, audioDone, userChose;
 
 // Called when a new playback session starts: the external subtitle belongs to
 // the session, not to the device. Without this the next title would open the
@@ -50,6 +54,7 @@ void tracks_reset(void) {
   subExternal = -1; is_open = 0; subtitle_off();
   autoDone = 0; autoSince = 0;
   memRead = 0;
+  forcedDone = audioDone = userChose = 0;
 }
 
 // --- AUTOMATIC SELECTION -----------------------------------------------------
@@ -196,15 +201,83 @@ static int embeddedBitmap(const VideoTrack *t) {
 // language by NAME when there is one, else the Settings row's group.
 static int wanted(const char *code, const char *remembered, int group) {
   if (remembered[0]) return code && code[0] && !strcmp(video_language_name(code), remembered);
-  return addons_language_group(code) == group;
+  return group >= 0 && addons_language_group(code) == group;
+}
+
+static int hasWord(const char *s, const char *w);
+static int subActive(void);
+
+// A track that carries only signs and foreign dialogue: the file's FlagForced,
+// or the word in its name, which is how most releases say it.
+static int trackForced(const VideoTrack *t) {
+  return t && (t->forced || hasWord(t->label, "forced"));
+}
+
+// THE FORCED FALLBACK. With "Forced subtitles" on, a film whose subtitles end up
+// off still shows its forced track — the signs and the lines in another language
+// that the audio does not translate. It has to be in the AUDIO's language: a
+// forced English track under French audio is subtitles for a film nobody is
+// hearing. With no language on the audio, any forced track will do.
+//
+// Its own clock, because the forced FLAG arrives with the MKV header read, which
+// waits for 20 s of buffer and so can land well after the subtitle deadline. It
+// keeps looking for FORCED_WAIT_MS and stops the moment any subtitle is on or the
+// viewer has chosen one by hand.
+#define FORCED_WAIT_MS 60000
+static void forcedTick(Uint32 now) {
+  const VideoTrack *a;
+  int audio, i, n = video_n_subtitle();
+  if (forcedDone || !autoDone) return;
+  if (!settings_subtitle_forced() || userChose || subActive() >= 0) { forcedDone = 1; return; }
+  a = video_audio(video_audio_current());
+  audio = a ? lang_of(a->language) : -1;
+  for (i = 0; i < n; i++) {
+    const VideoTrack *t = video_subtitle(i);
+    if (!trackForced(t)) continue;
+    if (audio >= 0 && lang_of(t->language) != audio) continue;
+    video_choose_subtitle(i); subtitle_off(); subExternal = -1;
+    { char o[96]; snprintf(o, sizeof o, "forced fallback: embedded %d", i); autoLog(o); }
+    forcedDone = 1; return;
+  }
+  if (now - autoSince >= FORCED_WAIT_MS) forcedDone = 1;
+}
+
+// THE AUDIO LANGUAGE, once per playback. The pipeline plays the file's default
+// track; with a language set in Settings, the first track in it replaces that —
+// skipping commentary and audio description, which share the language and are
+// never what "English audio" means. Nothing in that language leaves the file's
+// choice alone. The switch restarts the decode for a moment, so it happens on the
+// first frame, before anyone has settled into the scene; a track the viewer picks
+// in the sheet ends it (userChose).
+static void audioTick(void) {
+  int want = settings_audio_language(), n = video_n_audio(), cur, i;
+  const VideoTrack *c;
+  if (audioDone) return;
+  if (want < 0 || userChose) { audioDone = 1; return; }
+  if (n < 1) return;                 // the track list has not arrived yet
+  audioDone = 1;
+  cur = video_audio_current();
+  c = video_audio(cur);
+  if (c && lang_of(c->language) == want &&
+      !hasWord(c->label, "commentary") && !hasWord(c->label, "description")) return;
+  for (i = 0; i < n; i++) {
+    const VideoTrack *t = video_audio(i);
+    if (!t || lang_of(t->language) != want) continue;
+    if (hasWord(t->label, "commentary") || hasWord(t->label, "description")) continue;
+    video_choose_audio(i);
+    printf("[audio] auto: track %d (%s) for %s\n", i, t->label, lang_name(want));
+    fflush(stdout);
+    return;
+  }
+  printf("[audio] auto: no %s track, keeping the file's\n", lang_name(want));
+  fflush(stdout);
 }
 
 void tracks_auto(Uint32 now) {
-  // 0 off, 1 automatic, 2 Portuguese, 3 English. AUTOMATIC IS ENGLISH: it used to
-  // mean Portuguese first, a leftover from the app's first owner that handed an
+  // -1 off; otherwise lang.h's index — "Automatic" is English. It used to mean
+  // Portuguese first, a leftover from the app's first owner that handed an
   // English viewer a Portuguese download whenever the addon had one.
-  int pref = settings_subtitle_pref();
-  int group = pref == 2 ? 0 : 1;
+  int group = settings_subtitle_language();
   int embedded = video_n_subtitle(), i, expired;
   // What the viewer chose for this show last time outranks the device default,
   // Off included. If that language is not on offer this time, the default takes
@@ -212,14 +285,15 @@ void tracks_auto(Uint32 now) {
   const char *memory = memLanguage();
   char remembered[32];
 
-  if (autoDone) return;
-  if (!strcmp(memory, LANG_OFF)) { autoDone = 1; autoLog("remembered Off for this show"); return; }
+  audioTick();
   if (!autoSince) autoSince = now ? now : 1;
+  if (autoDone) { forcedTick(now); return; }
+  if (!strcmp(memory, LANG_OFF)) { autoDone = 1; autoLog("remembered Off for this show"); return; }
   expired = now - autoSince >= TRK_AUTO_MS;
   if (memory[0] && !expired) snprintf(remembered, sizeof remembered, "%s", memory);
   else {
     remembered[0] = 0;
-    if (pref == 0) { autoDone = 1; return; }
+    if (group < 0) { autoDone = 1; return; }
   }
 
   // THE FILE'S OWN FIRST, before any download. It needs no network, and the
@@ -235,9 +309,13 @@ void tracks_auto(Uint32 now) {
     if (!known && stream_n() > 0 && strstr(stream_item(stream_current())->file, ".mkv"))
       return;
   }
+  // A FORCED track is never the answer here: asked for English subtitles, the
+  // viewer means the whole dialogue, and a forced English track shows only the
+  // signs. Forced tracks are the fallback's (forcedTick).
   for (i = 0; i < embedded; i++) {
     const VideoTrack *t = video_subtitle(i);
-    if (!t || !wanted(t->language, remembered, group) || embeddedBitmap(t)) continue;
+    if (!t || !wanted(t->language, remembered, group) || embeddedBitmap(t) ||
+        trackForced(t)) continue;
     video_choose_subtitle(i); subtitle_off(); subExternal = -1;
     { char o[96]; snprintf(o, sizeof o, "chose embedded %d%s", i,
                            remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
@@ -329,16 +407,14 @@ static void subLanguage(int i, char *dst, size_t size) {
   snprintf(dst, size, "%s", code && *code ? video_language_name(code) : LANG_UNKNOWN);
 }
 
-// 0 and 1 are the Settings preference ("Automatic" is Portuguese then English, the
-// order the addon search already uses); 2 is everything else; 3 is Unknown.
+// 0 is the show's remembered language or the Settings one ("Automatic" is
+// English); 2 is everything else; 3 is Unknown. The Settings language matches by
+// prefix, so Portuguese takes "Portuguese (BR)" along with it.
 static int langRank(const char *name) {
-  int pref = settings_subtitle_pref();
-  int pt = !strncmp(name, "Portuguese", 10), en = !strcmp(name, "English");
+  const char *pref = lang_name(settings_subtitle_language());
   if (!strcmp(name, LANG_UNKNOWN)) return 3;
   if (memRead && !strcmp(name, memLang)) return 0;
-  if (pref == 2 && pt) return 0;
-  if (pref == 3 && en) return 0;
-  if (pref == 1 && en) return 0;
+  if (pref[0] && !strncmp(name, pref, strlen(pref))) return 0;
   return 2;
 }
 
@@ -685,7 +761,7 @@ static void applySubtitle(int i) {
   // A choice made by hand ENDS the automatic one for this playback, "Off"
   // included: turning the subtitle off and having it come back a frame later is
   // the app arguing with the person using it.
-  autoDone = 1;
+  autoDone = 1; userChose = 1;
   // ...and it is what this show will start with next time.
   { char lang[32];
     if (i < 0) snprintf(lang, sizeof lang, "%s", LANG_OFF);
@@ -718,7 +794,7 @@ static void eventAudio(SDL_Keycode k) {
   if (k == SDLK_UP   && optFocus > 0)     optFocus--;
   if (k == SDLK_DOWN && optFocus < n - 1) optFocus++;
   // Choosing closes the sheet: the choice is the whole errand.
-  if (isOk(k) && n > 0) { autoDone = 1; video_choose_audio(optFocus); is_open = 0; }
+  if (isOk(k) && n > 0) { autoDone = 1; userChose = 1; video_choose_audio(optFocus); is_open = 0; }
 }
 
 static void eventLangList(SDL_Keycode k) {

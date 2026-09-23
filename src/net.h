@@ -6,6 +6,7 @@
 // the Mac it uses the system libcurl.
 #ifndef NV_NET_H
 #define NV_NET_H
+#include <stddef.h>
 
 // Downloads all of `url` into a fresh NUL-terminated buffer and returns it; the
 // caller frees it. NULL on any failure. BLOCKS — call from a thread of your
@@ -58,6 +59,10 @@ char *net_post(const char *url, int seconds, const char *const *headers,
 // "wrong parameter".
 char *net_post_st(const char *url, int seconds, const char *const *headers,
                      const char *body, int *status);
+// The same, as a DELETE with no body. Trakt answers a removed playback with 204,
+// so success is the status, never the (empty) body.
+char *net_delete_st(const char *url, int seconds, const char *const *headers,
+                    int *status);
 
 // GET with headers AND the HTTP code. For the same reason as the POST above:
 // reading a Supabase table has to tell "table does not exist" (404 with
@@ -68,6 +73,21 @@ char *net_post_st(const char *url, int seconds, const char *const *headers,
 // body is exactly what the caller wants to read.
 char *net_download_st(const char *url, int seconds, const char *const *headers,
                      int *status);
+
+// STREAMS a response instead of collecting it: every header line goes to
+// `onHeader` and every chunk of body to `onBody`, both with libcurl's own
+// signature, as they arrive. Returning less than asked from either aborts the
+// transfer. It exists for proxy.c, which relays a whole film and cannot hold it
+// in memory. Redirects are followed, so `onHeader` sees one block per response —
+// each begins with its "HTTP/" status line.
+//
+// Returns libcurl's result (0 = the transfer completed, whatever the HTTP code;
+// -1 = libcurl unavailable) and the final HTTP code in *status. BLOCKS for the
+// length of the transfer.
+int net_stream(const char *url, const char *const *headers, int headOnly,
+               size_t (*onHeader)(char *, size_t, size_t, void *),
+               size_t (*onBody)(char *, size_t, size_t, void *), void *u,
+               long *status);
 
 // Loads libcurl NOW, on the calling thread. It exists so startup can do this on
 // the main thread, before any network thread is born: `curl_global_init` is not

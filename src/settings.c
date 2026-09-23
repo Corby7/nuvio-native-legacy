@@ -22,6 +22,7 @@
 #include "sync.h"
 #include "profiles.h"
 #include "qr.h"
+#include "lang.h"
 #include "traktauth.h"
 #include "simklauth.h"
 #include "js.h"
@@ -56,8 +57,9 @@
 // MIDDLE is safe: the file is keyed, not positional (see settings_dir).
 typedef enum {
   // Playback
-  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_SUBS, SETTING_SEEK_COLOR,
-  SETTING_NEXT_COUNTDOWN,
+  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_AUDIO_LANG, SETTING_SUBS,
+  SETTING_SUBS_FORCED, SETTING_SEEK_COLOR, SETTING_NEXT_AUTOPLAY, SETTING_NEXT_COUNTDOWN,
+  SETTING_NEXT_MODE, SETTING_NEXT_SECONDS, SETTING_NEXT_PERCENT,
   // Layout da Home
   SETTING_LANDSCAPE, SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
   // Conteudo da Home
@@ -91,9 +93,31 @@ static const char *V_QUALITY[] = { "Automatic", "4K", "1080p", "720p" };
 // own track in that language first, an addon's download after. "Automatic" is
 // English — it was Portuguese-then-English, the app's first owner's order — and
 // the named values pin one language with no fallback: whoever asks for English
-// and is given Portuguese has been answered a question they did not ask. The
-// languages are the ones addons.c searches; there is no third in the search.
-static const char *V_SUBS[] = { "Off", "Automatic", "Portuguese", "English" };
+// and is given Portuguese has been answered a question they did not ask.
+// From "Portuguese" on, value k is lang.h's language k - 2 — the names below are
+// that table's, in its order, and the count is checked against it at startup.
+// Portuguese and English keep the values 2 and 3 they were stored as before.
+static const char *V_SUBS[] = { "Off", "Automatic",
+  "Portuguese", "English", "Spanish", "French", "German", "Italian", "Dutch",
+  "Polish", "Swedish", "Danish", "Norwegian", "Finnish", "Russian", "Ukrainian",
+  "Czech", "Hungarian", "Romanian", "Greek", "Turkish", "Arabic", "Hebrew",
+  "Hindi", "Japanese", "Korean", "Chinese", "Thai", "Vietnamese", "Indonesian" };
+#define N_SUBS (int)(sizeof V_SUBS / sizeof *V_SUBS)
+// The AUDIO track the player switches to by itself when the file has one in
+// this language. "File default" leaves the pipeline's own choice alone, which is
+// what the app always did. Value k is lang.h's language k - 1.
+static const char *V_AUDIO[] = { "File default",
+  "Portuguese", "English", "Spanish", "French", "German", "Italian", "Dutch",
+  "Polish", "Swedish", "Danish", "Norwegian", "Finnish", "Russian", "Ukrainian",
+  "Czech", "Hungarian", "Romanian", "Greek", "Turkish", "Arabic", "Hebrew",
+  "Hindi", "Japanese", "Korean", "Chinese", "Thai", "Vietnamese", "Indonesian" };
+#define N_AUDIO (int)(sizeof V_AUDIO / sizeof *V_AUDIO)
+typedef char subtitle_names_match_lang[(N_SUBS == LANG_COUNT + 2) ? 1 : -1];
+typedef char audio_names_match_lang[(N_AUDIO == LANG_COUNT + 1) ? 1 : -1];
+// When the Up next card appears: a fixed lead before the end, or a share of the
+// episode — the web app's nextEpisodeThresholdMode, same two modes, same default.
+// The credits marker brings the card up earlier in either mode.
+static const char *V_NEXT_MODE[] = { "Before the end", "Share watched" };
 // The player's seek bar: the fill and the playhead. Violet is the brand mark's
 // own colour and the default; White is what the bar was before. The RGB lives in
 // SEEK_RGB below, in the same order.
@@ -151,9 +175,15 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Maximum quality",           V_QUALITY, 4),
   ESC("Dolby Vision",               V_ON, 2),
   ESC("Dolby Atmos",                V_ON, 2),
-  ESC("Subtitles",                  V_SUBS, 4),
+  ESC("Audio language",             V_AUDIO, N_AUDIO),
+  ESC("Subtitles",                  V_SUBS, N_SUBS),
+  ESC("Forced subtitles",           V_ON, 2),
   ESC("Seek bar colour",            V_SEEK, 6),
+  ESC("Autoplay next episode",      V_ON, 2),
   NUM("Next episode countdown",     5, 30, 5, " s"),
+  ESC("Up next appears",            V_NEXT_MODE, 2),
+  NUM("Up next before the end",     0, 210, 30, " s"),
+  NUM("Up next at",                 90, 100, 1, "%"),
 
   ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
   ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
@@ -227,16 +257,28 @@ static const Option OPTIONS[SETTING_N] = {
 // counterpart.
 static const char *KEY[] = {
   "quality", "dolbyVision", "dolbyAtmos",
+  // Local to this port, like the subtitle row below: the account's player
+  // settings store the language as a code, and this row stores an index.
+  "audioPreferredLanguageIndex",
   // NOT "subtitleLanguage": that name exists in the web app's blob with values of
   // its own ("off", "eng", "system"), and sharing the name would have the account
   // feed a string this row cannot read on every sync. A name of this port's own
   // never matches in the blob, which is what keeps the row local — and, unlike a
   // "-" key, it is still written to settings.txt.
   "subtitlePreferredGroup",
+  // The web's useForcedSubtitles lives inside its subtitleStyle object, which
+  // the blob never flattens into this file; a name of the port's own.
+  "subtitleForcedFallback",
   // Local to this port: the web app has no such key, so the blob never touches it.
   "seekBarColor",
+  // The web's autoplayNextEpisode, under a name of the port's own for the same
+  // reason as the subtitle row: the account's copy is not this file's format.
+  "nextEpisodeAutoplay",
   // Local to this port as well: how long the Up next card waits before it plays.
   "nextEpisodeCountdownSeconds",
+  // nextEpisodeThresholdMode / ...MinutesBeforeEnd / ...Percent, in this port's
+  // units: an index, seconds and whole percent.
+  "nextEpisodeTriggerMode", "nextEpisodeSecondsBeforeEnd", "nextEpisodePercentWatched",
   "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
   "heroBackdropArea", "heroBackdropScale",
   "collapseSidebar", "modernSidebar", "modernSidebarBlur",
@@ -277,8 +319,8 @@ typedef char checked_one_key_per_option[
 // opens its options. The titles are the web app's; the blurb is what the side
 // panel says about a section before it is opened.
 static const struct { const char *title; int start, n; const char *blurb; } SECTIONS[] = {
-  { "Playback",          SETTING_QUALITY,              6,
-    "Quality, Dolby formats, subtitles and the player's seek bar and countdown." },
+  { "Playback",          SETTING_QUALITY,              12,
+    "Quality, Dolby formats, languages, the seek bar and what happens at the end of an episode." },
   { "Home layout",       SETTING_LANDSCAPE,            4,
     "Poster shape and how the hero backdrop is drawn." },
   { "Home content",      SETTING_RAIL,                13,
@@ -309,13 +351,19 @@ static const struct { const char *title; int start, n; const char *blurb; } SECT
 // today. All of them are changeable here, which was the point.
 static int value[SETTING_N] = {
   0, 0, 0,          /* quality, DV, Atmos */
+  0,                /* audio language: the file's default */
   // AUTOMATIC and not "Off". Off is what the app did before this row existed —
   // nothing ever selected a subtitle, on any title — and it is the behaviour the
   // owner reported as "subtitles are not really a thing here". A default of Off
   // would ship the same complaint with a switch next to it.
   1,                /* subtitles: automatic (English) */
+  1,                /* forced subtitles: off (the web's default) */
   0,                /* seek bar colour: violet */
+  0,                /* autoplay next episode: on */
   15,               /* next episode countdown: 15 s */
+  0,                /* up next appears: before the end (the web's default) */
+  120,              /* up next lead: 2 min, the web's default and the old fixed value */
+  99,               /* up next share: 99% (the web's default) */
 
   0,                /* landscape posters: ON (the owner's profile; factory: off) */
   0,                /* full-screen backdrop: ON (profile; factory: off) */
@@ -394,6 +442,18 @@ int settings_animations_reduced(void) { return value[SETTING_ANIM] == 1; }
 int settings_dolby_vision(void)        { return on(SETTING_DV); }
 int settings_dolby_atmos(void)         { return on(SETTING_ATMOS); }
 int settings_subtitle_pref(void)       { return value[SETTING_SUBS]; }
+int settings_subtitle_language(void) {
+  int p = value[SETTING_SUBS];
+  return p == 0 ? -1 : p == 1 ? LANG_ENGLISH : p - 2;
+}
+int settings_subtitle_forced(void)     { return on(SETTING_SUBS_FORCED); }
+int settings_audio_language(void)      { return value[SETTING_AUDIO_LANG] - 1; }
+int settings_next_autoplay(void)       { return on(SETTING_NEXT_AUTOPLAY); }
+double settings_next_lead(double durationSeg) {
+  if (value[SETTING_NEXT_MODE] == 1)
+    return durationSeg * (100 - value[SETTING_NEXT_PERCENT]) / 100.0;
+  return (double)value[SETTING_NEXT_SECONDS];
+}
 int settings_next_countdown(void)    { return value[SETTING_NEXT_COUNTDOWN]; }
 void settings_seek_color(float *r, float *g, float *b) {
   int i = value[SETTING_SEEK_COLOR];
@@ -745,6 +805,9 @@ static int inactive(int op) {
     case SETTING_DEPTH_POSTERS: case SETTING_DEPTH_CW: case SETTING_DEPTH_EPS:
     case SETTING_DEPTH_CAST: case SETTING_DEPTH_TRAILERS:
       return !settings_depth();
+    case SETTING_NEXT_COUNTDOWN: return !settings_next_autoplay();
+    case SETTING_NEXT_SECONDS:   return value[SETTING_NEXT_MODE] != 0;
+    case SETTING_NEXT_PERCENT:   return value[SETTING_NEXT_MODE] != 1;
     default: return 0;
   }
 }
@@ -774,11 +837,21 @@ static const char *helpOption(int op) {
         ? "Turn on Episode thumbnail to blur the next episode image."
         : "Turn on Continue watching to adjust the resume cards.";
     if (op == SETTING_EXPAND_DELAY) return "Turn on Expand poster on focus to adjust the delay.";
+    if (op == SETTING_NEXT_COUNTDOWN) return "Turn on Autoplay next episode to set the countdown.";
+    if (op == SETTING_NEXT_SECONDS) return "Set Up next appears to Before the end to use this.";
+    if (op == SETTING_NEXT_PERCENT) return "Set Up next appears to Share watched to use this.";
     return "Turn on Depth effect to customise this detail.";
   }
   switch (op) {
     case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead.";
     case SETTING_NEXT_COUNTDOWN: return "How long the Up next card waits before it plays the next episode.";
+    case SETTING_AUDIO_LANG: return "The audio track to switch to when the file has one in this language. File default keeps the file's own choice.";
+    case SETTING_SUBS: return "The subtitle turned on when a title starts: the file's own track first, then an addon's.";
+    case SETTING_SUBS_FORCED: return "When no subtitle is turned on, shows a forced track in the audio's language: signs and foreign dialogue only.";
+    case SETTING_NEXT_AUTOPLAY: return "Plays the next episode when the Up next countdown ends. Off, the card waits for you.";
+    case SETTING_NEXT_MODE: return "When the Up next card appears. The credits, when they are known, bring it up earlier.";
+    case SETTING_NEXT_SECONDS: return "How long before the end of an episode the Up next card appears.";
+    case SETTING_NEXT_PERCENT: return "How much of an episode has to be watched before the Up next card appears.";
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
     case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";

@@ -371,6 +371,7 @@ static int nextFocus = NEXT_PLAY;
 // the offer then, and it would be spent while nobody could see it.
 #define PLR_NEXT_MS (settings_next_countdown() * 1000.0f)
 static float nextElapsed;
+static void reportReset(void);   // see REPORTING WHILE IT PLAYS
 
 // THE SKIP BUTTON HIDES ITSELF after ten seconds — the web app's
 // SKIP_INTRO_COUNTDOWN_MS. An intro can run two minutes and the offer is answered
@@ -495,6 +496,7 @@ const CatEp *player_next_episode(void) {
   return best;
 }
 void player_error_source(void) { waitingSource = 0; errorSource = 1; visible = 1; playing = 0; }
+void player_start_over(void) { resumePct = 0; }
 void player_set_episode(int t, int e) {
   const CatItem *c = item();
   epT = t; epE = e; lineEp[0] = 0;
@@ -852,6 +854,7 @@ void player_open(int indexCatalog, const char *url) {
   fromDetail = 0; flyFrom = (GfxRect){ 0, 0, 0, 0 }; flying = 0;
   reqSources = errorSource = reqTracks = reqNextT = reqNextE = 0; startImage = 0;
   nextDismissed = 0; nextFocus = NEXT_PLAY; nextElapsed = 0;
+  reportReset();
   skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0;
   resumeApplied=0;
   button = PLR_PLAY;
@@ -1006,6 +1009,7 @@ void player_shutdown(void) {
     disc_rebuild();
   }
   if (hasVideo) video_stop();
+  reportReset();
   hasVideo = 0; waitingSource = 0; is_open = 0; exiting = 0; requestedExit = 0;
   statsOpen = 0;
   seekActive = 0; seekRepeats = 0; seekDir = 0;
@@ -1108,11 +1112,16 @@ static void drawStartingButton(float cx, float cy, Uint32 now, float a) {
   iconFile(cx, cy, a * 0.45f, 0.94f, "play", PLR_ICON_H * 0.6f);
 }
 
+// WHEN THE CARD COMES UP: the credits marker when there is one, else the lead the
+// Settings rows give — a fixed time before the end or a share of the episode,
+// the web app's two nextEpisodeThresholdMode values. The extra second covers a
+// lead of 0: the position stops a fraction short of the duration, and "at the
+// end" has to be reachable.
 static int offerNext(void) {
   const CatEp *p=player_next_episode();double end;int kind;
   if(!p||durationSeg<=1)return 0;
   if(intro_active(posSeg,&end,&kind)&&kind==INTRO_CREDITS)return 1;
-  return durationSeg-posSeg<=120.0f;
+  return durationSeg-posSeg<=settings_next_lead(durationSeg)+1.0;
 }
 
 // Is the card actually on screen? offerNext() alone is not that question any more,
@@ -1130,13 +1139,17 @@ static int playbackReady(void) { return startImage != 0 || !hasVideo; }
 
 // A little ahead of the card: the prefetch takes as long as the slowest addon,
 // and it should be in hand by the time the card offers Next.
+// A minute ahead of a longer lead: at 90% of an hour the card is up six minutes
+// before the end, and the sources should be there when it is.
 #define PLR_PREFETCH_S 180.0f
 const CatEp *player_prefetch_next(void) {
-  double end; int kind;
+  double end, ahead; int kind;
   if (!is_open || waitingSource || errorSource || !playbackReady()) return NULL;
   if (durationSeg <= 1.0f) return NULL;
+  ahead = settings_next_lead(durationSeg) + 60.0;
+  if (ahead < PLR_PREFETCH_S) ahead = PLR_PREFETCH_S;
   if (!(intro_active(posSeg, &end, &kind) && kind == INTRO_CREDITS) &&
-      durationSeg - posSeg > PLR_PREFETCH_S) return NULL;
+      durationSeg - posSeg > ahead) return NULL;
   return player_next_episode();
 }
 
@@ -1217,10 +1230,18 @@ static void skipTick(float dt) {
 
 // Advances the next-episode countdown and, when it runs out, asks for the next
 // episode exactly as OK on Play would. Called once a frame from player_update.
+//
+// With "Autoplay next episode" off the card still comes up, and waits: nothing
+// counts, and only Play now moves on — the web app's autoplayNextEpisode.
+// A playback that has REACHED ITS END still counts, although it no longer plays:
+// with a short lead the file can end inside the countdown, and a clock that
+// stopped there would leave the viewer on the last frame for good.
 static void nextTick(float dt) {
   const CatEp *p;
+  int ended = durationSeg > 1.0f && posSeg >= durationSeg - 1.0f;
   if (!nextCardUp()) { nextElapsed = 0; return; }
-  if (!playing || episodes_shown() > 0.0f || tracks_shown() > 0.0f ||
+  if (!settings_next_autoplay()) { nextElapsed = 0; return; }
+  if ((!playing && !ended) || episodes_shown() > 0.0f || tracks_shown() > 0.0f ||
       stream_sheet_shown() > 0.0f) return;
   nextElapsed += dt * 1000.0f;
   if (nextElapsed < PLR_NEXT_MS) return;
@@ -1463,6 +1484,64 @@ void player_event(const SDL_Event *e) {
   wake();
 }
 
+// --- REPORTING WHILE IT PLAYS ------------------------------------------------
+//
+// Trakt hears "watching now" when playback starts or resumes and "paused here"
+// when it pauses — not only the closing call in player_shutdown, which left the
+// owner's other devices blind for the whole film. A state has to hold for
+// PLR_REPORT_HOLD_MS before it is reported: a seek or a rebuffer drops `playing`
+// for a moment, and each blip would otherwise be a pause and a start on the wire.
+//
+// AND A CHECKPOINT of the local progress every PLR_CHECKPOINT_MS of playing, and
+// on every pause. The position used to be written only by player_shutdown, so a
+// TV switched off at the wall, or an app killed mid-film, came back at wherever
+// the title had last been closed properly. Local only, with the account marked
+// dirty: pushing mid-film would start a full sync cycle, the burst of HTTP the
+// app keeps away from an open player (app.c), and the next cycle pushes it.
+#define PLR_REPORT_HOLD_MS  2000u
+#define PLR_CHECKPOINT_MS  60000u
+static int    reported = -1;     // what Trakt was last told: 1 playing, 0 paused
+static int    heldState = -1;
+static Uint32 heldSince, checkpointAt;
+
+static void reportReset(void) { reported = heldState = -1; heldSince = checkpointAt = 0; }
+
+static int traktId(char *id, size_t size) {
+  const CatItem *ci = cat_item(idx);
+  if (!ci || !ci->imdb[0]) return 0;
+  if (epT > 0 && epE > 0)
+    snprintf(id, size, "%.*s:%d:%d", (int)strcspn(ci->imdb, ":"), ci->imdb, epT, epE);
+  else snprintf(id, size, "%s", ci->imdb);
+  return 1;
+}
+
+static void checkpoint(Uint32 now, const char *why) {
+  checkpointAt = now;
+  if (posSeg < 5.0f) return;   // nothing worth resuming yet
+  cat_save_progress_ep(idx, posSeg, durationSeg, epT, epE);
+  sync_dirty_progress();
+  printf("[player] checkpoint (%s) at %.0f/%.0f s\n", why, posSeg, durationSeg);
+  fflush(stdout);
+}
+
+static void reportPlayback(Uint32 now) {
+  char id[64];
+  int state = playing ? 1 : 0;
+  if (!hasVideo || !video_ready() || !startImage || durationSeg <= 1.0f ||
+      waitingSource || errorSource) return;
+  if (state != heldState) { heldState = state; heldSince = now; }
+  if (state != reported && now - heldSince >= PLR_REPORT_HOLD_MS) {
+    if (traktId(id, sizeof id)) {
+      if (state) trakt_scrobble_start(id, posSeg, durationSeg);
+      else if (reported == 1) trakt_scrobble_pause(id, posSeg, durationSeg);
+    }
+    if (!state && reported == 1) checkpoint(now, "paused");
+    reported = state;
+  }
+  if (!checkpointAt) checkpointAt = now;
+  if (state && now - checkpointAt >= PLR_CHECKPOINT_MS) checkpoint(now, "periodic");
+}
+
 void player_update(float dt, Uint32 now) {
   skipTick(dt);
   nextTick(dt);
@@ -1604,6 +1683,7 @@ void player_update(float dt, Uint32 now) {
   // word. With no pipeline at all (the Mac) there is no frame to wait for, and
   // the addon's subtitle is drawn by our own overlay anyway.
   if (!waitingSource && !errorSource && (startImage || !hasVideo)) tracks_auto(now);
+  reportPlayback(now);
 
   // THE FILE'S OWN SUBTITLE IS LIFTED CLEAR of whatever takes the bottom of the
   // screen: the transport while the controls are up, the subtitle Style bar while
@@ -2059,6 +2139,7 @@ static void drawNextCard(const CatEp *next) {
   // "UP NEXT · Playing in 8s". The caption stays quiet grey and the countdown
   // beside it is the one piece of the line in full white, because it is the one
   // that changes.
+  // With autoplay off there is no countdown to show: the kicker stands alone.
   { char count[32];
     int secs = (int)ceilf((PLR_NEXT_MS - nextElapsed) / 1000.0f);
     float kx;
@@ -2067,10 +2148,12 @@ static void drawNextCard(const CatEp *next) {
     snprintf(count, sizeof count, "Playing in %ds", secs);
     kx = cx + txt_tracking(TXT_NEXT_KICK, "UP NEXT", 150, 152, 158,
                            cx, ty0, entry, NV_NEXT_KICK_TRACK);
-    dot = txt_line(TXT_NEXT_COUNT, "·", 80, 82, 88, 255);
-    cl  = txt_line(TXT_NEXT_COUNT, count, 255, 255, 255, 255);
-    txt_draw_alpha(dot, kx + 6.0f, ty0, entry);
-    txt_draw_alpha(cl, kx + 6.0f + (float)dot.w + 10.0f, ty0, entry); }
+    if (settings_next_autoplay()) {
+      dot = txt_line(TXT_NEXT_COUNT, "·", 80, 82, 88, 255);
+      cl  = txt_line(TXT_NEXT_COUNT, count, 255, 255, 255, 255);
+      txt_draw_alpha(dot, kx + 6.0f, ty0, entry);
+      txt_draw_alpha(cl, kx + 6.0f + (float)dot.w + 10.0f, ty0, entry);
+    } }
 
   { float tx = cx, ty = ty0 + NV_NEXT_TITLE_Y;
     txt_draw_alpha(codeL, tx, ty, entry);
@@ -2116,7 +2199,8 @@ static void drawNextCard(const CatEp *next) {
 
   // THE COUNTDOWN along the card's base: the Continue Watching bar, white on a
   // faint track, cut by the card's own corner SDF so both ends round with it.
-  { float p = nextElapsed / PLR_NEXT_MS;
+  if (settings_next_autoplay()) {
+    float p = nextElapsed / PLR_NEXT_MS;
     if (p < 0.0f) p = 0.0f;
     if (p > 1.0f) p = 1.0f;
     gfx_rect((GfxRect){ x, y, w, h }, 0, GFX_CW_BAR, 0,

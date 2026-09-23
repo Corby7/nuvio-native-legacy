@@ -102,11 +102,11 @@ Source cropping works: a non-identity `source` region is accepted and applied
 (`[plane] source 480,270 960x540 -> destination 0,0 1920x1080`), which is what
 the zoom modes are built on.
 
-### Known limitation: no request headers
+### Request headers go through a loopback relay
 
-**A source that needs an HTTP header will not play.** The `load` payload carries
-a URI and nothing else, and the pipeline fetches it with its own GStreamer HTTP
-client:
+The `load` payload carries a URI and nothing else, and the pipeline fetches it
+with its own GStreamer HTTP client — so a source that authenticates with a
+header used to fail:
 
 ```
 GET /auth/test.mp4 auth=None ua='GStreamer souphttpsrc (compatible; LG NetCast.TV-2013)'
@@ -115,11 +115,13 @@ GET /auth/test.mp4 auth=None ua='GStreamer souphttpsrc (compatible; LG NetCast.T
 [video] ev {"error":{"errorCode":206,"errorText":"Media Authorized Error"}}
 ```
 
-That is measured, not theoretical. It affects debrid or proxied sources that
-authenticate with a header rather than a pre-signed URL. The web app hits the
-same wall — `<video>` cannot attach headers either — and works around it with a
-local proxy that injects them (`js/platform/webos/webosPlaybackProxy.js`); the
-same approach is the fix here.
+A stream whose addon sends `behaviorHints.proxyHeaders.request` now plays
+through `src/proxy.c`: a server on `127.0.0.1` that repeats each of the
+pipeline's requests upstream with those headers added, Range included. It is
+the web app's fix (`js/platform/webos/webosPlaybackProxy.js`) done in-process.
+Every relayed request logs one `[proxy]` line with the header *names* and the
+upstream status. Verified on the Mac by `tests/proxy.sh`; not yet watched on the
+C3 with a real header-protected source.
 
 Useful while debugging: `errorCode 404xx` encodes the HTTP status the pipeline
 got, so `40401` is a 401 and `40403` is a 403/404. That is the difference

@@ -794,6 +794,28 @@ static void *run(void *u) {
   return NULL;
 }
 
+int sync_delete_progress(const char *const *keys, int n) {
+  Jsw w;
+  char *r;
+  int st = 0, i, ok;
+  if (!session_loggedin()) return 1;
+  if (!keys || n <= 0) return 1;
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_key(&w, "p_keys");
+  jsw_arr_start(&w);
+  for (i = 0; i < n; i++) jsw_str(&w, keys[i]);
+  jsw_arr_end(&w);
+  jsw_obj_end(&w);
+  r = session_rpc("sync_delete_watch_progress", jsw_text_final(&w), &st);
+  jsw_free(&w);
+  ok = ok2xx(r, st);
+  printf("[sync] progress delete (%d key(s)) -> HTTP %d\n", n, st);
+  free(r);
+  return ok;
+}
+
 void sync_start(void) {
   if (threadAlive || !session_loggedin()) return;
   if (cloud_brake_active()) return;

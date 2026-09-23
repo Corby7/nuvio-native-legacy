@@ -25,12 +25,20 @@
 #define INFO_URL_FINAL    1048577
 #define OPT_POSTFIELDS      10015
 #define OPT_POST               47
+#define OPT_CUSTOMREQUEST   10036
 // CURLOPT_CONNECTTIMEOUT. Separate from OPT_TIMEOUT because the two measure
 // different things: a DEAD host spent the whole transfer budget on a connection
 // that was never going to complete, and that was the same number giving a slow
 // but LIVE server room to answer. With the connect ceiling on its own, an addon
 // that is down fails in CONNECT_SECONDS and the slow one keeps its full 8 s.
 #define OPT_CONNECTTIMEOUT     78
+// For net_stream: the response headers go to a callback of their own, and a
+// transfer that stops moving is cut by rate rather than by a total ceiling —
+// a film is two hours long, and a total timeout would end it.
+#define OPT_HEADERFUNCTION  20079
+#define OPT_HEADERDATA      10029
+#define OPT_LOW_SPEED_LIMIT    19
+#define OPT_LOW_SPEED_TIME     20
 // CURLINFO_RESPONSE_CODE = CURLINFO_LONG (0x200000) + 2.
 #define INFO_RESPONSE_CODE   2097154
 
@@ -372,13 +380,70 @@ int net_url_final(const char *url, int seconds, char *dst, unsigned size) {
   return (!r && end) ? 1 : 0;
 }
 
+int net_stream(const char *url, const char *const *header, int headOnly,
+               size_t (*onHeader)(char *, size_t, size_t, void *),
+               size_t (*onBody)(char *, size_t, size_t, void *), void *u,
+               long *status) {
+  void *c, *list = NULL;
+  int r, own;
+  if (status) *status = 0;
+  if (!url || !*url || !openHandle()) return -1;
+  c = handleTake(&own);
+  if (!c) return -1;
+  curl_setopt(c, OPT_URL, url);
+  curl_setopt(c, OPT_HEADERFUNCTION, onHeader);
+  curl_setopt(c, OPT_HEADERDATA, u);
+  curl_setopt(c, OPT_WRITEFUNCTION, onBody);
+  curl_setopt(c, OPT_WRITEDATA, u);
+  curl_setopt(c, OPT_FOLLOWLOCATION, (long)1);
+  curl_setopt(c, OPT_CONNECTTIMEOUT, (long)10);
+  // No OPT_TIMEOUT: see OPT_LOW_SPEED_TIME above. A minute under 1 byte/s is a
+  // dead upstream — or a player paused long enough that its socket stopped
+  // draining, and then the pipeline reconnects with a Range on resume anyway.
+  curl_setopt(c, OPT_LOW_SPEED_LIMIT, (long)1);
+  curl_setopt(c, OPT_LOW_SPEED_TIME, (long)60);
+  curl_setopt(c, OPT_NOSIGNAL, (long)1);
+  curl_setopt(c, OPT_SSL_VERIFYPEER, (long)0);
+  curl_setopt(c, OPT_SSL_VERIFYHOST, (long)0);
+  curl_setopt(c, OPT_USERAGENT, "Nuvio/1.0 (webOS)");
+  // NO OPT_ACCEPT_ENCODING, unlike every other call here: the bytes are relayed
+  // as they are, next to the upstream's Content-Length and Content-Range, and a
+  // body libcurl had decompressed would no longer match either.
+  if (headOnly) curl_setopt(c, OPT_NOBODY, (long)1);
+  if (header && slist_append) {
+    int k;
+    for (k = 0; header[k]; k++) list = slist_append(list, header[k]);
+    if (list) curl_setopt(c, OPT_HTTPHEADER, list);
+  }
+  r = curl_perform(c);
+  if (status && curl_getinfo) curl_getinfo(c, INFO_RESPONSE_CODE, status);
+  handleGive(c, own, list);
+  return r;
+}
+
 char *net_post(const char *url, int seconds, const char *const *header,
                   const char *body) {
   return net_post_st(url, seconds, header, body, NULL);
 }
 
+// A POST, or — with `method` — the same request under another verb (DELETE). The
+// handle is reset before it is lent again (handleTake), so the verb set here
+// cannot carry over into the next request that borrows it.
+static char *sendBody(const char *method, const char *url, int seconds,
+                      const char *const *header, const char *body, int *status);
+
 char *net_post_st(const char *url, int seconds, const char *const *header,
                      const char *body, int *status) {
+  return sendBody(NULL, url, seconds, header, body, status);
+}
+
+char *net_delete_st(const char *url, int seconds, const char *const *header,
+                    int *status) {
+  return sendBody("DELETE", url, seconds, header, NULL, status);
+}
+
+static char *sendBody(const char *method, const char *url, int seconds,
+                      const char *const *header, const char *body, int *status) {
   Bucket b = { NULL, 0, 0 };
   void *c, *list = NULL;
   int r, own;
@@ -395,8 +460,12 @@ char *net_post_st(const char *url, int seconds, const char *const *header,
   curl_setopt(c, OPT_SSL_VERIFYPEER, (long)0);
   curl_setopt(c, OPT_SSL_VERIFYHOST, (long)0);
   curl_setopt(c, OPT_USERAGENT, "Nuvio/1.0 (webOS)");
-  curl_setopt(c, OPT_POST, (long)1);
-  curl_setopt(c, OPT_POSTFIELDS, body ? body : "");
+  if (method) {
+    curl_setopt(c, OPT_CUSTOMREQUEST, method);
+  } else {
+    curl_setopt(c, OPT_POST, (long)1);
+    curl_setopt(c, OPT_POSTFIELDS, body ? body : "");
+  }
   if (slist_append) {
     int k, typed = 0;
     // JSON unless the caller says otherwise: the debrid APIs take form and

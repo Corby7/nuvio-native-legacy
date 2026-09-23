@@ -140,6 +140,22 @@ int main(void) {
                          "{\"request\":{\"a\":\"b\"}},\"bingeGroup\":\"torrentio|1080p\"}}]}",
                          "Fixture", &v);
     assert(c == 2 && !v[0].bingeGroup[0] && !strcmp(v[1].bingeGroup, "torrentio|1080p"));
+    assert(!v[0].headers[0] && !strcmp(v[1].headers, "a: b"));
+    free(v); }
+  // proxyHeaders.request becomes "Name: Value" lines for proxy.c. Connection
+  // headers, empty values, non-strings and anything with a line break are
+  // dropped — the web's normalizeHeaderEntries — and escapes are undone.
+  { Stream *v = NULL;
+    int c = stream_parse("{\"streams\":[{\"url\":\"https://e.invalid/1\",\"behaviorHints\":"
+                         "{\"proxyHeaders\":{\"request\":{\"Authorization\":\"Bearer x\\\"y\","
+                         "\"Range\":\"bytes=0-\",\"Host\":\"h\",\"X-Empty\":\"\",\"X-Num\":5,"
+                         "\"X-Obj\":{\"a\":\"b\"},\"X-Bad\":\"a\\r\\nInjected: 1\","
+                         "\"Referer\":\"https://site/\"},\"response\":{\"X-Resp\":\"no\"}}}},"
+                         "{\"url\":\"https://e.invalid/2\"}]}",
+                         "Fixture", &v);
+    assert(c == 2);
+    assert(!strcmp(v[0].headers, "Authorization: Bearer x\"y\nReferer: https://site/"));
+    assert(!v[1].headers[0]);
     free(v); }
 
   puts("PASS ASan/UBSan: parser in isolation, 100 sources, tokens, service, cache state and the tier.");

@@ -1526,6 +1526,17 @@ static int buildResume(CatItem *output, int max) {
     nJ++;
   }
 
+  // REMOVED FROM THE ROW by the owner (the hold menu), from every source at once:
+  // a deleted resume point can still come back as next up, or from a remote copy
+  // the delete did not reach. Anything watched after the removal stays.
+  { int w = 0, hidden = 0;
+    for (i = 0; i < nJ; i++) {
+      if (cat_cw_dismissed(joined[i].item->imdb, joined[i].ms)) { hidden++; continue; }
+      joined[w++] = joined[i];
+    }
+    nJ = w;
+    if (hidden) printf("[disc] continue watching: %d removed by the owner\n", hidden); }
+
   if (nJ > 1) qsort(joined, (size_t)nJ, sizeof *joined, candNewestFirst);
 
   // Deduplicate AFTER ordering, so the copy that survives is the most recent

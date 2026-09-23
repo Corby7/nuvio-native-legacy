@@ -3,6 +3,8 @@
 #include "net.h"
 #include "js.h"
 #include "mark.h"
+#include "lang.h"
+#include "settings.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -314,27 +316,10 @@ const Subtitle *addons_subtitle(int i) {
   return r;
 }
 
-// The languages this household cares about, in the order they should appear.
-// Bringing in the 70 OpenSubtitles returns would be a list impossible to walk
-// with a remote control.
-static const char *LANGUAGES_PT[] = {
-  "pob", "pt-br", "pt_br", "ptb", "br", "por", "pt"
-};
-static const char *LANGUAGES_EN[] = {
-  "eng", "en", "en-us", "en_us", "en-gb", "en_gb"
-};
-
-// 0 = Portuguese, 1 = English. The user asked explicitly for these two groups;
-// Spanish no longer comes in as a silent fallback. Regional variants are
-// normalised here, before taking up one of the TV's twelve rows.
-static int groupLanguage(const char *l) {
-  size_t i;
-  for (i = 0; i < sizeof LANGUAGES_PT / sizeof *LANGUAGES_PT; i++)
-    if (!strcasecmp(l, LANGUAGES_PT[i])) return 0;
-  for (i = 0; i < sizeof LANGUAGES_EN / sizeof *LANGUAGES_EN; i++)
-    if (!strcasecmp(l, LANGUAGES_EN[i])) return 1;
-  return -1;
-}
+// A code's language as lang.h's index: 0 Portuguese, 1 English, and the rest of
+// that table after them; -1 when it is none of them. Regional variants fold into
+// their language here, before taking up one of the TV's twelve rows.
+static int groupLanguage(const char *l) { return lang_of(l); }
 
 // The same answer, for whoever is OUTSIDE this file. The auto-selection in
 // tracks.c has to group an EMBEDDED track's language ("por", "eng", read from
@@ -349,7 +334,7 @@ static const char *nameLanguage(const char *c) {
       !strcasecmp(c, "pt_br") || !strcasecmp(c, "ptb") || !strcasecmp(c, "br"))
     return "Portuguese (BR)";
   if (!strcasecmp(c, "por") || !strcasecmp(c, "pt")) return "Portuguese";
-  if (groupLanguage(c) == 1) return "English";
+  if (groupLanguage(c) >= 0) return lang_name(groupLanguage(c));
   return c;
 }
 
@@ -425,18 +410,20 @@ static void *fetchSubtitles(void *u) {
       if (!body) continue;
       p = js_array(body, NULL, "subtitles");
       {
-        // ENGLISH ONLY. Downloads used to be Portuguese then English, six of
-        // each — the app's first owner's pair — and the Portuguese half was a
-        // list nobody here reads, and the auto-selection's default besides. The
-        // file's own tracks are not filtered: this is only what gets FETCHED.
-        const int group = 1;
+        // ENGLISH, plus the Subtitles row's language when it names another.
+        // Downloads used to be Portuguese then English, six of each — the app's
+        // first owner's pair — and a list in a language nobody here reads is
+        // one the remote has to walk past. The file's own tracks are not
+        // filtered: this is only what gets FETCHED.
+        const int group = LANG_ENGLISH, extra = settings_subtitle_language();
         const char *q = p;
         while (q && nFound < SUB_MAX) {
           const char *f = js_end(q);
           char l[16] = "", name[120] = "";
           Subtitle *d = &found[nFound];
           if (episodeCorrect(q, f, season, episode) &&
-              js_text(q, f, "lang", l, sizeof l) && groupLanguage(l) == group &&
+              js_text(q, f, "lang", l, sizeof l) &&
+              (groupLanguage(l) == group || (extra >= 0 && groupLanguage(l) == extra)) &&
               js_text(q, f, "url", d->url, sizeof d->url)) {
             js_text(q, f, "subtitleFileName", name, sizeof name);
             if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);

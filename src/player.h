@@ -16,6 +16,10 @@
 // With NULL, it waits for the source query; it does not fake a playback.
 void player_open(int indexCatalog, const char *url);
 void player_set_episode(int season, int episode);
+// PLAY FROM THE START: forgets the resume position player_set_episode just took
+// from the item, so the file opens at 0. Call it after player_set_episode, which
+// is what sets that position.
+void player_start_over(void);
 void player_episode_current(int *season, int *episode);
 int player_index(void);
 const char *player_line_episode(void);

@@ -1,0 +1,83 @@
+#include "cwremove.h"
+#include "catalog.h"
+#include "discover.h"
+#include "trakt.h"
+#include "sync.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+
+enum { CW_NONE, CW_PENDING, CW_CONFIRMED, CW_FAILURE };
+
+// The account's progress_key for every row this work may have, collected from
+// progress.txt BEFORE the lines are dropped: the account holds one row per
+// episode, and the file is the only place that says which episodes those were.
+#define CW_KEYS_MAX 24
+static char keyBuf[CW_KEYS_MAX][40];
+static const char *keys[CW_KEYS_MAX];
+static int nKeys;
+static char work[24];
+static volatile int state, alive;
+static pthread_t thread;
+
+static void stateWrite(int v) { __atomic_store_n(&state, v, __ATOMIC_RELEASE); }
+int cw_remove_state(void) { return __atomic_load_n(&state, __ATOMIC_ACQUIRE); }
+
+static void addKey(int season, int episode) {
+  int i;
+  char k[40];
+  if (season > 0 && episode > 0) snprintf(k, sizeof k, "%s_s%de%d", work, season, episode);
+  else snprintf(k, sizeof k, "%s", work);
+  for (i = 0; i < nKeys; i++) if (!strcmp(keyBuf[i], k)) return;
+  if (nKeys == CW_KEYS_MAX) return;
+  snprintf(keyBuf[nKeys], sizeof keyBuf[nKeys], "%s", k);
+  keys[nKeys] = keyBuf[nKeys];
+  nKeys++;
+}
+
+static void *run(void *u) {
+  int okTrakt, okAccount;
+  (void)u;
+  okTrakt = trakt_playback_remove(work);
+  okAccount = sync_delete_progress(keys, nKeys);
+  printf("[cw] removed %s: trakt %s, account %s\n", work,
+         okTrakt ? "ok" : "FAILED", okAccount ? "ok" : "FAILED");
+  fflush(stdout);
+  stateWrite(okTrakt && okAccount ? CW_CONFIRMED : CW_FAILURE);
+  // Built again once the remote copies are gone too. The dismissal already hides
+  // the card; this is what lets the row settle on what the sources now say.
+  disc_rebuild();
+  __atomic_store_n(&alive, 0, __ATOMIC_RELEASE);
+  return NULL;
+}
+
+int cw_remove(int index_) {
+  const CatItem *ci = cat_item(index_);
+  CatProgress regs[CAT_PROGRESS_MAX];
+  int i, n;
+  if (!ci || !ci->imdb[0]) return 0;
+  if (__atomic_load_n(&alive, __ATOMIC_ACQUIRE)) return 0;
+  snprintf(work, sizeof work, "%.*s", (int)strcspn(ci->imdb, ":"), ci->imdb);
+
+  nKeys = 0;
+  addKey(ci->season, ci->episode);
+  n = cat_progress_read(regs, CAT_PROGRESS_MAX);
+  for (i = 0; i < n; i++)
+    if (!strcmp(regs[i].imdb, work)) addKey(regs[i].season, regs[i].episode);
+
+  // The local half, now: the card leaves the row on the rebuild below without
+  // waiting on the network.
+  cat_cw_dismiss(work);
+  cat_progress_remove(work);
+  disc_rebuild();
+
+  stateWrite(CW_PENDING);
+  __atomic_store_n(&alive, 1, __ATOMIC_RELEASE);
+  if (pthread_create(&thread, NULL, run, NULL) != 0) {
+    __atomic_store_n(&alive, 0, __ATOMIC_RELEASE);
+    stateWrite(CW_FAILURE);
+    return 1;
+  }
+  pthread_detach(thread);
+  return 1;
+}

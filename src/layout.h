@@ -925,6 +925,18 @@
 // where it is: the continue-watching card really does use white in the web.
 #define NV_FRAME_RING      4.0f
 #define NV_FRAME_RING_C    0.9608f  // 245/255
+// THE HOLD ON A HOME CARD (home.c, holdShown and friends). Monochrome: the focus
+// ring steps back to NV_HOLD_DIM less of itself and a white sweep refills it
+// (GFX_RING_FILL), eased. The card is pressed in to NV_HOLD_PRESS_SCALE and, when
+// the menu opens, springs back past 1 on an under-damped spring while a white glow
+// widens and fades behind it. Let go early and the sweep drains back.
+#define NV_HOLD_DIM          0.65f
+#define NV_HOLD_DIM_K       25.0f     // the dimming's first-order spring
+#define NV_HOLD_DRAIN_S      0.15f
+#define NV_HOLD_PULSE_S      0.45f
+#define NV_HOLD_PRESS_SCALE  0.965f
+#define NV_HOLD_SPRING_W    26.0f     // rad/s
+#define NV_HOLD_SPRING_ZETA  0.42f    // < 1: it overshoots, once, visibly
 #define NV_FRAME_RING_A    1.0f
 
 // Area util explicita da home: a rail pode variar, mas o texto e o foco nunca

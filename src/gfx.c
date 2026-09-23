@@ -1026,7 +1026,60 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float d = sdf(vUv, uRadius, uAspect);\n"
   "  float a = smoothstep(0.0, -2.0 * uPar.x, d);\n"
   "  if (a <= 0.002) discard;\n"
-  "  gl_FragColor = vec4(0.0, 0.0, 0.0, a * uColor.a);\n"
+  "  gl_FragColor = vec4(uColor.rgb, a * uColor.a);\n"
+  "}\n",
+
+  // GFX_SCRIM_HOLE — the quad is the whole screen; uPar is its size in layout
+  // pixels, uCell the hole (x, y, w, h) in the same pixels and uRadius the hole's
+  // corner in pixels. A rounded-box SDF in pixel space, so the ramp is one pixel
+  // whatever the hole's aspect.
+  "void main(){\n"
+  "  vec2 p = vUv * uPar;\n"
+  "  vec2 h = uCell.zw * 0.5;\n"
+  "  float r = min(uRadius, min(h.x, h.y));\n"
+  "  vec2 q = abs(p - (uCell.xy + h)) - h + r;\n"
+  "  float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;\n"
+  // uFocus FEATHERS the edge outward by that many pixels: 0 is a crisp hole.
+  "  float a = smoothstep(-0.5, max(0.5, uFocus), d) * uColor.a;\n"
+  "  if (a <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(0.0, 0.0, 0.0, a);\n"
+  "}\n",
+
+  // GFX_RING_FILL — the ray from the centre through the fragment is taken to the
+  // rectangle's edge, and `s` is how far along the perimeter that hit lies,
+  // clockwise from top centre (y grows DOWN the screen). The rounding of the
+  // corners is ignored for the length: at a few percent of the edge nobody sees it.
+  //
+  // ONE HEAD, ALL THE WAY ROUND, CLOCKWISE FROM THE TOP-LEFT CORNER: `o` is the
+  // distance from that corner going clockwise. Top centre drew the eye to where it
+  // started; a corner reads as where the frame begins. The front is a long soft
+  // ramp, a fifth of the way round: at the eased top speed the head moves ~100px
+  // a frame, and against a short ramp the edge was seen stepping — the lit part
+  // brightens in rather than ending at a line.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+  "  float hx = 0.5 * uAspect, hy = 0.5;\n"
+  "  float per = 4.0 * (hx + hy);\n"
+  "  float s;\n"
+  "  if (abs(p.x) * hy > abs(p.y) * hx) {\n"
+  "    float y = p.y * hx / max(abs(p.x), 1e-4);\n"
+  "    s = p.x > 0.0 ? hx + (y + hy) : 3.0 * hx + 2.0 * hy + (hy - y);\n"
+  "  } else {\n"
+  "    float x = p.x * hy / max(abs(p.y), 1e-4);\n"
+  "    s = p.y > 0.0 ? hx + 2.0 * hy + (hx - x)\n"
+  "        : (x >= 0.0 ? x : 4.0 * hx + 2.0 * hy + (x + hx));\n"
+  "  }\n"
+  "  float o = mod(s - (per - hx), per);\n"
+  "  float soft = 0.2 * per;\n"
+  "  float a = clamp((uPar.x * (per + soft) - o) / soft, 0.0, 1.0);\n"
+  // The TAIL is soft too, or the start point is a hard seam against the unlit
+  // ring just behind it. The softness closes over the last 40% of the hold, so
+  // the ring still ends whole.
+  "  a *= clamp(o / (0.08 * per) + smoothstep(0.6, 1.0, uPar.x), 0.0, 1.0);\n"
+  "  if (a * m <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * a * m);\n"
   "}\n",
 };
 
@@ -1062,7 +1115,9 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_SRC_VEIL     — two gradients in one fragment: no SDF, no texture */
   {0,0},   /* GFX_ROW_FADE     — a horizontal ramp over a square band: no SDF */
   {0,0},   /* GFX_LOGO         — the art rectangle's own edge ramp: no SDF */
-  {1,0}    /* GFX_DROP         — the inflated quad's own SDF */
+  {1,0},   /* GFX_DROP         — the inflated quad's own SDF */
+  {0,0},   /* GFX_SCRIM_HOLE   — its own pixel-space SDF, not the quad's */
+  {1,0}    /* GFX_RING_FILL    — the rect's SDF, masked by perimeter progress */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -1321,6 +1376,26 @@ void gfx_drop_shadow(GfxRect plate, float radiusPx, float blur, float dropY,
   if (q.h <= 0.0f || blur <= 0.0f) return;
   if (r > 0.5f) r = 0.5f;
   gfx_rect(q, 0, GFX_DROP, 0, blur / q.h, 0, r, 0, 0, 0, alpha);
+}
+
+void gfx_glow(GfxRect plate, float radiusPx, float blur,
+              float cr, float cg, float cb, float alpha) {
+  GfxRect q = { plate.x - blur, plate.y - blur,
+                plate.w + blur * 2.0f, plate.h + blur * 2.0f };
+  float r = (radiusPx + blur) / q.h;
+  if (q.h <= 0.0f || blur <= 0.0f || alpha <= 0.002f) return;
+  if (r > 0.5f) r = 0.5f;
+  gfx_rect(q, 0, GFX_DROP, 0, blur / q.h, 0, r, cr, cg, cb, alpha);
+}
+
+void gfx_scrim_hole(GfxRect hole, float radiusPx, float featherPx, float alpha) {
+  GfxRect screen = { 0.0f, 0.0f, NV_SCREEN_W, NV_SCREEN_H };
+  GfxRect cell = gfx_tex_cell_current;
+  if (alpha <= 0.002f) return;
+  gfx_tex_cell_current = hole;
+  gfx_rect(screen, 0, GFX_SCRIM_HOLE, featherPx, NV_SCREEN_W, NV_SCREEN_H, radiusPx,
+           0, 0, 0, alpha);
+  gfx_tex_cell_current = cell;
 }
 
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) {

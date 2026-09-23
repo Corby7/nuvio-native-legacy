@@ -66,13 +66,12 @@
 // rectangle with a white ring around it; the owner's design is the plain #303030
 // stadium, no ring, and with the bar at 340 it no longer reads as a lozenge.
 #define NV_MENU_RADIUS_PILL  0.50f
-// THE GLINT. When focus lands on a row a light passes once across its pill, left
-// to right, on the tilted band GFX_SKELETON already draws for placeholders. ONCE:
-// a light that loops on the row you are resting on is a screensaver, not feedback.
-// It waits for the pill to fade in, so it crosses a pill and not an empty space.
-#define NV_MENU_GLINT_DELAY  90.0f
-#define NV_MENU_GLINT_MS    520.0f
-#define NV_MENU_GLINT_HALF   70.0f
+// ONE PILL THAT GLIDES. The focus is a single stadium that travels to the row you
+// move to, the way the selection moves in Apple's sidebars, instead of one pill
+// fading out while the next fades in. anim_spring2 for the travel: it leaves
+// softly and lands without overshoot, and it chases a held key without
+// restarting. At 24 rad/s one row's step is essentially settled in ~250 ms.
+#define NV_MENU_GLIDE_W      24.0f
 // A hairline of light around the focused pill, so the stadium reads as a lit
 // surface rather than a flat grey cut-out. Faint on purpose: the white ring the
 // port had was this at full strength, and that one shouted.
@@ -161,35 +160,28 @@ static int   changed   = 0;
 static float slides = 0.0f;
 static float expands = 0.0f;
 static float animFocus[NV_MENU_FOCUSES];
-static int    glintLine = -1;   // the row the glint was last started on
-static Uint32 glintAt   = 0;
-static Uint32 drawNow   = 0;    // menu_draw's clock, for the helpers under it
+static float  pillY = 0.0f, pillV = 0.0f;  // the gliding pill's top, and its speed
+static int    pillSnap = 1;                // place it without travel on the next update
 static void icon(int d, int filled, float cx, float cy, float s, float a);
 static void drawFooter(float px, float w, float alpha, float focus);
 static void drawGlass(float w, float alpha);
 
-// THE FOCUSED PILL: the faint lit edge, the #303030 stadium, and — while it is
-// running — the glint crossing it. `a` is the pill's opacity, `row` which focus it
-// belongs to, so only the row the glint was started on catches it.
-static void drawFocusPill(GfxRect pill, float a, int row) {
+// The top of the pill on focus `row`: a nav row, or the footer, which sits apart
+// at the bottom of the bar — the pill glides the whole gap to reach it.
+static float pillTop(int row) {
+  if (row == MENU_FOOTER) return NV_SCREEN_H - NV_MARGIN_Y - NV_MENU_FOOTER_H;
+  return (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f
+       + row * NV_MENU_LINE_H + (NV_MENU_LINE_H - NV_MENU_PILL_H) * 0.5f;
+}
+
+// THE FOCUS PILL: the faint lit edge and the #303030 stadium over it.
+static void drawFocusPill(GfxRect pill, float a) {
   GfxRect edge = { pill.x - NV_MENU_EDGE_PX, pill.y - NV_MENU_EDGE_PX,
                    pill.w + NV_MENU_EDGE_PX * 2, pill.h + NV_MENU_EDGE_PX * 2 };
-  float t = (row == glintLine)
-          ? ((float)(drawNow - glintAt) - NV_MENU_GLINT_DELAY) / NV_MENU_GLINT_MS
-          : -1.0f;
+  if (a <= 0.01f) return;
   gfx_color(edge, NV_MENU_RADIUS_PILL, 1, 1, 1, NV_MENU_EDGE_FOCUS_A * a);
-  if (t > 0.0f && t < 1.0f) {
-    // Travels from fully off the left end to fully off the right, eased so it
-    // accelerates in and settles out instead of crossing at a constant crawl.
-    float span = pill.w + NV_MENU_GLINT_HALF * 2.0f;
-    float cx = pill.x - NV_MENU_GLINT_HALF + span * anim_smooth(t);
-    gfx_rect(pill, 0, GFX_SKELETON, 0.0f, (cx - pill.x) / pill.w,
-             NV_MENU_GLINT_HALF / pill.w, NV_MENU_RADIUS_PILL,
-             NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G, NV_COLOR_FOCUS_B, a);
-  } else {
-    gfx_color(pill, NV_MENU_RADIUS_PILL, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G,
-              NV_COLOR_FOCUS_B, a);
-  }
+  gfx_color(pill, NV_MENU_RADIUS_PILL, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G,
+            NV_COLOR_FOCUS_B, a);
 }
 
 // Where the icon column is right now: the rail's midpoint collapsed, the open
@@ -255,7 +247,8 @@ int menu_start(void) {
 
 void menu_open(void) {
   if (is_open) return;
-  glintLine = -1;   // the first focus of every opening gets its glint
+  pillSnap = 1;   // it appears ON the current row; gliding in from the last one
+                  // the bar was closed on would read as a stale focus moving
   // The highlight always starts on the destination in force, never where it was
   // left last time: the bar is a map of where you are, and opening it with the
   // highlight on another item would tell the user they had already changed screen.
@@ -318,12 +311,14 @@ void menu_event(const SDL_Event *e) {
 }
 
 void menu_update(float dt, Uint32 now) {
+  (void)now;
   // Collapsed and settled costs nothing: no spring, no loop over the destinations.
   if (!is_open && slides < 0.002f) {
     if (slides != 0.0f) { slides = 0.0f; expands = 0.0f; }
     return;
   }
-  if (is_open && line != glintLine) { glintLine = line; glintAt = now; }
+  if (pillSnap) { pillY = pillTop(line); pillV = 0.0f; pillSnap = 0; }
+  else pillY = anim_spring2(&pillV, pillY, pillTop(line), dt, NV_MENU_GLIDE_W);
   float target = is_open ? 1.0f : 0.0f;
   float ms   = is_open ? NV_MENU_OPEN_MS : NV_MENU_CLOSE_MS;
   slides = anim_ramp(slides, target, dt, ms);
@@ -458,12 +453,6 @@ static void drawFooter(float px, float w, float alpha, float focus) {
 
   if (alpha <= 0.01f) return;
 
-  if (focus > 0.01f) {
-    GfxRect pill = { px + NV_MENU_PILL_PAD, y,
-                     w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_PILL_H };
-    drawFocusPill(pill, focus * alpha, MENU_FOOTER);
-  }
-
   av.x = cx - NV_MENU_AVATAR * 0.5f;
   av.y = cy - NV_MENU_AVATAR * 0.5f;
   av.w = av.h = NV_MENU_AVATAR;
@@ -527,7 +516,6 @@ static void drawFooter(float px, float w, float alpha, float focus) {
 }
 
 void menu_draw(Uint32 now) {
-  drawNow = now;
   // The fixed rail is always present, as in the legacy shell. The expanded
   // overlay only comes on stage when the menu has been asked for.
   // `collapseSidebar`: with the bar COLLAPSED the web app draws no rail at all —
@@ -569,32 +557,24 @@ void menu_draw(Uint32 now) {
   // `.home-brand-wordmark` are both opacity 0 until `.content-expanded`.
   drawBrand(px, w, expands * expands * entry);
 
+  // ONE pill, on the FOCUSED row, drawn before any row so every label sits over
+  // it as it passes. The web gives `.selected` no background of its own —
+  // `.home-sidebar.content-expanded .home-nav-item.selected` sets colour and
+  // weight, nothing more, and the only rule that paints --focus-bg wants
+  // `.focused` (or a hover). What tells you where you are is the FILLED glyph plus
+  // white text, exactly as in the browser.
+  //
+  // A DARK PILL, not a light pill with dark text. MEASURED against the reference:
+  // a focused item has background #303030 and text #FFFFFF — the --focus-bg token,
+  // which the web app's CSS also declares.
+  drawFocusPill((GfxRect){ px + NV_MENU_PILL_PAD, pillY,
+                           w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_PILL_H }, slides);
+
   float y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
   for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H) {
     float f = animFocus[i];
     float cy = y + NV_MENU_LINE_H * 0.5f;
     int current = (i == destination);
-
-    // ONE pill, and only on the FOCUSED row. The web gives `.selected` no
-    // background of its own — `.home-sidebar.content-expanded .home-nav-item
-    // .selected` sets colour and weight, nothing more, and the only rule that
-    // paints --focus-bg wants `.focused` (or a hover). The port drew a second,
-    // fainter pill under the current row; with the stadium shape the two read as
-    // one control half-lit, and the row you were on looked disabled rather than
-    // current. What tells you where you are is the FILLED glyph plus white text,
-    // exactly as in the browser.
-    if (f > 0.01f) {
-      GfxRect pill = { px + NV_MENU_PILL_PAD, y + (NV_MENU_LINE_H - NV_MENU_PILL_H) * 0.5f,
-                       w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_PILL_H };
-      // A DARK PILL, not a light pill with dark text, and no ring around it.
-      // MEASURED against the reference: a focused item has background #303030 and
-      // text #FFFFFF — the --focus-bg token, which the web app's CSS also
-      // declares. Ours inverted it (background #E4E4E9, dark text), and #E4E4E9
-      // was no system colour at all: neither white, nor the #F5F5F5 of
-      // --secondary-color. The white ring went with the owner's design; what is
-      // left of it is the faint lit edge and the glint (see drawFocusPill).
-      drawFocusPill(pill, f * slides, i);
-    }
 
     // Three states, and all three exist in the web app too: focused (white over
     // the dark pill), the destination in force (white, so the user can find where

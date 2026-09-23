@@ -26,6 +26,7 @@ typedef struct {
   char language[8];     // "por", "eng"... empty when the file does not tag it
   char name[48];      // Name, when present ("Forced", "SDH", "Full")
   char codec[24];     // CodecID ("S_TEXT/UTF8", "S_HDMV/PGS")
+  int  forced;        // FlagForced: signs and foreign dialogue only
 } MkvTrack;
 
 // Reads `url`'s header and fills `out`. Returns how many tracks it found, 0 when

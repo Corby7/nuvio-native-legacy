@@ -1092,3 +1092,109 @@ int cat_progress_read(CatProgress *out, int max) {
   if (n > 1) qsort(out, (size_t)n, sizeof *out, progressNewestFirst);
   return n;
 }
+
+// See the note on the declaration in catalog.h.
+void cat_progress_remove(const char *imdb) {
+  char path[600], tmp[600], line[256];
+  FILE *e, *s;
+  int i, n;
+  if (!imdb || !imdb[0] || !dirWriting[0]) return;
+  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
+  snprintf(tmp, sizeof tmp, "%s/progress.tmp", dirWriting);
+  e = fopen(path, "r");
+  if (e) {
+    s = fopen(tmp, "w");
+    if (!s) { fclose(e); return; }
+    while (fgets(line, sizeof line, e)) {
+      char id[24];
+      if (sscanf(line, "%23s", id) == 1 && sameTitle(id, imdb)) continue;
+      fputs(line, s);
+    }
+    fclose(e);
+    fclose(s);
+    rename(tmp, path);
+  }
+  // The items on screen as well, so the card's bar and "min left" go with it.
+  n = cat_n();
+  for (i = 0; i < n; i++)
+    if (sameTitle(items[i].imdb, imdb)) { items[i].progress = 0; items[i].remainingMin = 0; }
+}
+
+// THE REMOVED LIST, "cw-removed.txt": one line per work, "tt123<TAB>ms". Read by
+// the discovery thread and written from the UI thread, hence the lock; it is a
+// handful of lines, loaded once and kept in memory.
+#include <pthread.h>
+#define CW_REMOVED_MAX 128
+static struct { char imdb[24]; long long ms; } cwRemoved[CW_REMOVED_MAX];
+static int nCwRemoved, cwRemovedLoaded;
+static pthread_mutex_t lockCwRemoved = PTHREAD_MUTEX_INITIALIZER;
+
+static void cwRemovedLoad(void) {
+  char path[600], line[128];
+  FILE *fp;
+  if (cwRemovedLoaded || !dirWriting[0]) return;
+  cwRemovedLoaded = 1;
+  snprintf(path, sizeof path, "%s/cw-removed.txt", dirWriting);
+  fp = fopen(path, "r");
+  if (!fp) return;
+  while (fgets(line, sizeof line, fp) && nCwRemoved < CW_REMOVED_MAX) {
+    long long ms = 0;
+    if (sscanf(line, "%23s %lld", cwRemoved[nCwRemoved].imdb, &ms) == 2) {
+      cwRemoved[nCwRemoved].ms = ms;
+      nCwRemoved++;
+    }
+  }
+  fclose(fp);
+}
+
+void cat_cw_dismiss(const char *imdb) {
+  char path[600], tmp[600];
+  FILE *fp;
+  long long now = (long long)time(NULL) * 1000;
+  int i, found = -1;
+  if (!imdb || !imdb[0]) return;
+  pthread_mutex_lock(&lockCwRemoved);
+  cwRemovedLoad();
+  for (i = 0; i < nCwRemoved; i++)
+    if (sameTitle(cwRemoved[i].imdb, imdb)) { found = i; break; }
+  if (found < 0) {
+    // Full: the oldest removal goes. Anything that old has long since either been
+    // watched again or dropped out of every source by itself.
+    if (nCwRemoved == CW_REMOVED_MAX) {
+      memmove(&cwRemoved[0], &cwRemoved[1], sizeof cwRemoved[0] * (CW_REMOVED_MAX - 1));
+      nCwRemoved--;
+    }
+    found = nCwRemoved++;
+    snprintf(cwRemoved[found].imdb, sizeof cwRemoved[found].imdb, "%.*s",
+             (int)strcspn(imdb, ":"), imdb);
+  }
+  cwRemoved[found].ms = now;
+  if (dirWriting[0]) {
+    snprintf(path, sizeof path, "%s/cw-removed.txt", dirWriting);
+    snprintf(tmp, sizeof tmp, "%s/cw-removed.tmp", dirWriting);
+    fp = fopen(tmp, "w");
+    if (fp) {
+      for (i = 0; i < nCwRemoved; i++)
+        fprintf(fp, "%s\t%lld\n", cwRemoved[i].imdb, cwRemoved[i].ms);
+      fclose(fp);
+      rename(tmp, path);
+    }
+  }
+  pthread_mutex_unlock(&lockCwRemoved);
+}
+
+int cat_cw_dismissed(const char *imdb, long long whenMs) {
+  int i, v = 0;
+  if (!imdb || !imdb[0]) return 0;
+  pthread_mutex_lock(&lockCwRemoved);
+  cwRemovedLoad();
+  for (i = 0; i < nCwRemoved; i++)
+    if (sameTitle(cwRemoved[i].imdb, imdb)) {
+      // Watched again AFTER it was removed: it has earned its place back. An
+      // unknown instant (0) cannot prove that, so it stays hidden.
+      v = whenMs <= cwRemoved[i].ms;
+      break;
+    }
+  pthread_mutex_unlock(&lockCwRemoved);
+  return v;
+}

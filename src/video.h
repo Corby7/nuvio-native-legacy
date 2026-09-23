@@ -106,6 +106,10 @@ typedef struct {
   // detail: a PGS track cannot be restyled, repositioned or resized, so "why does
   // this subtitle ignore my settings" has its answer here.
   char codec[24];
+  // Matroska's FlagForced, from the same header read: a track that carries only
+  // signs and foreign dialogue. 0 on anything that is not an MKV — tracks.c also
+  // reads the word "Forced" in the label, which is how most releases say it.
+  int  forced;
 } VideoTrack;
 
 int  video_n_audio(void);

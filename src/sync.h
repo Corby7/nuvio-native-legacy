@@ -50,6 +50,11 @@ const char *sync_summary(void);   // one line for the settings screen
 // Marks a surface dirty: the next cycle pushes it. Call when the user changes
 // something locally.
 void sync_dirty_progress(void);
+// Deletes watch-progress rows from the ACCOUNT by their progress_key — the web's
+// keys, "tt123" for a film and "tt123_s2e5" for an episode (see pushProgress).
+// The account's own RPC, sync_delete_watch_progress, the one the web and Android
+// apps call. BLOCKS; 1 on success or when there is no session to delete from.
+int  sync_delete_progress(const char *const *keys, int n);
 void sync_dirty_addons(void);
 
 // The last instant a cycle finished successfully (SDL_GetTicks); 0 if never.

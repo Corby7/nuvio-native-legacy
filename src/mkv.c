@@ -94,6 +94,7 @@ static void readText(const unsigned char *p, long n, char *dst, size_t size) {
 #define ID_LANG_BCP47  0x22B59DUL     // LanguageBCP47 ("pt-BR"), newer
 #define ID_NAME        0x536EUL
 #define ID_CODECID     0x86UL
+#define ID_FLAGFORCED  0x55AAUL
 
 // Reads the TrackEntry elements inside an already-located Tracks.
 static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max) {
@@ -131,7 +132,8 @@ static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max)
               readText(v, fontSize, f.language, sizeof f.language);
           }
           else if (fid == ID_NAME)    readText(v, fontSize, f.name,  sizeof f.name);
-          else if (fid == ID_CODECID) readText(v, fontSize, f.codec, sizeof f.codec); }
+          else if (fid == ID_CODECID) readText(v, fontSize, f.codec, sizeof f.codec);
+          else if (fid == ID_FLAGFORCED) f.forced = readUint(v, fontSize) != 0; }
         q += fontSize;
       }
       if (f.number > 0) output[found++] = f;

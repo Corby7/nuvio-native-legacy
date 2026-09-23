@@ -74,6 +74,11 @@ typedef struct {
   // verification, by debrid_resolve.
   char infoHash[48];
   int  fileIdx;      // -1 when the addon did not say
+  // behaviorHints.proxyHeaders.request: headers the SERVER wants on the request
+  // for `url`, as "Name: Value" lines separated by '\n'. Empty for nearly every
+  // source. The pipeline cannot send them, so a stream that has them plays
+  // through proxy.c (see proxy.h).
+  char headers[1024];
 } Stream;
 
 // THE SEGMENTED BAR'S VALUE, and the bitrate it is worked out from.

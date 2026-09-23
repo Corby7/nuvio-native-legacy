@@ -441,7 +441,22 @@ typedef enum {
   //
   //   uPar.x = the blur band, as a fraction of the quad's HEIGHT
   GFX_DROP = 40,
-  GFX_NMODES = 41
+  // GFX_SCRIM_HOLE — a full-screen dim with ONE rounded rectangle left clear, for
+  // the home's hold menu: everything steps back except the held card. See
+  // gfx_scrim_hole. It replaces four bands around the card, which left the
+  // corners outside the card's rounded ring undimmed and, on the TV, a seam
+  // where two bands met on a fractional device pixel.
+  GFX_SCRIM_HOLE = 41,
+  // GFX_RING_FILL — GFX_COLOR's rounded rect, drawn only along the part of its
+  // PERIMETER already swept: from the top-left corner clockwise, all the way
+  // round, at an even speed along the edge (not by angle, which would race along
+  // a wide card's short sides), with a long soft front.
+  // The home draws it over the focus ring, before the art covers the middle, so
+  // what shows is the ring filling with colour as OK is held.
+  //
+  //   uPar.x = how much of the perimeter is filled, 0..1
+  GFX_RING_FILL = 42,
+  GFX_NMODES = 43
 } GfxMode;
 
 typedef struct {
@@ -677,9 +692,19 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
 // no corner can show whatever the offset. Draw it BEFORE the plate.
 void gfx_drop_shadow(GfxRect plate, float radiusPx, float blur, float dropY,
                      float alpha);
+// The same falloff in a COLOUR and with no drop: a glow round `plate`. Draw it
+// before the plate, like the shadow.
+void gfx_glow(GfxRect plate, float radiusPx, float blur,
+              float cr, float cg, float cb, float alpha);
 
 // Atalhos legiveis para os casos comuns.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
+// Dims the whole screen to black at `alpha`, except inside `hole` with corners of
+// `radiusPx` — in PIXELS, unlike gfx_color's radius. The hole's edge is
+// antialiased over one layout pixel, or ramps out over `featherPx` when larger:
+// the hold menu feathers it while the card's confirm glow is up, so the glow is
+// not dimmed along with everything else.
+void gfx_scrim_hole(GfxRect hole, float radiusPx, float featherPx, float alpha);
 // A LOADING PLACEHOLDER, with the shine on it. A DROP-IN for the gfx_color call
 // that drew the flat block: same rect, same radius, same colour, and no clock —
 // the sweep's position for this frame was set by gfx_new_frame.

@@ -306,6 +306,87 @@ void stream_rank(Stream *s, int runtimeSeconds) {
   s->tier = score >= 6 ? 3 : score >= 4 ? 2 : score >= 2 ? 1 : 0;
 }
 
+// The object named `key` inside [start,end): its '{' in *obj and its end in
+// *objEnd. 1 if found. Bounded, because strstr runs to the end of the DOCUMENT
+// and would otherwise find the next stream's object.
+static int objectIn(const char *start, const char *end, const char *key,
+                    const char **obj, const char **objEnd) {
+  char quoted[40];
+  const char *k, *o, *e;
+  snprintf(quoted, sizeof quoted, "\"%s\"", key);
+  k = strstr(start, quoted);
+  if (!k || k >= end) return 0;
+  o = k + strlen(quoted);
+  while (o < end && (*o == ' ' || *o == ':' || *o == '\t' || *o == '\n' || *o == '\r')) o++;
+  if (o >= end || *o != '{') return 0;
+  e = js_end(o);
+  if (!e || e > end) return 0;
+  *obj = o; *objEnd = e;
+  return 1;
+}
+
+// A JSON string starting at its opening quote. Copies it into dst (an escape
+// keeps only the character after the backslash, and a control character makes
+// the whole string unusable: a header value must never carry a line break) and
+// returns what follows the closing quote, or NULL.
+static const char *stringAt(const char *p, const char *end, char *dst, size_t size,
+                            int *clean) {
+  size_t n = 0;
+  *clean = 1;
+  if (p >= end || *p != '"') return NULL;
+  for (p++; p < end && *p != '"'; p++) {
+    char c = *p;
+    if (c == '\\' && p + 1 < end) {
+      c = *++p;
+      if (c == 'n' || c == 'r' || c == 't' || c == 'u' || c == 'b' || c == 'f') *clean = 0;
+    }
+    if ((unsigned char)c < ' ') *clean = 0;
+    if (n + 1 < size) dst[n++] = c; else *clean = 0;
+  }
+  dst[n] = 0;
+  return p < end ? p + 1 : NULL;
+}
+
+// behaviorHints.proxyHeaders.request, as "Name: Value" lines joined by '\n'.
+// The same filter as the web's normalizeHeaderEntries: no empty names or values,
+// nothing that breaks a line, and none of the headers that belong to the
+// connection itself — the relay sets those, and a second Range would break seeking.
+static void requestHeaders(const char *bh, const char *bhEnd, char *dst, size_t size) {
+  static const char *const HOP[] = { "connection", "content-length", "host",
+                                     "range", "transfer-encoding", NULL };
+  const char *ph, *phEnd, *rq, *rqEnd, *p;
+  size_t used = 0;
+  dst[0] = 0;
+  if (!objectIn(bh, bhEnd, "proxyHeaders", &ph, &phEnd)) return;
+  if (!objectIn(ph, phEnd, "request", &rq, &rqEnd)) return;
+  p = rq + 1;
+  for (;;) {
+    char name[128], value[900];
+    int cleanN, cleanV, k, hop = 0;
+    while (p < rqEnd && *p != '"' && *p != '}') p++;
+    if (p >= rqEnd || *p == '}') break;
+    p = stringAt(p, rqEnd, name, sizeof name, &cleanN);
+    if (!p) break;
+    while (p < rqEnd && (*p == ' ' || *p == ':' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+    if (p < rqEnd && *p == '"') {
+      p = stringAt(p, rqEnd, value, sizeof value, &cleanV);
+      if (!p) break;
+    } else {
+      // Not a string (a number, an object): skipped, as the web's String() of
+      // it would not be a header anyone meant to send.
+      while (p < rqEnd && *p != ',' && *p != '}') {
+        if (*p == '{' || *p == '[') p = js_end(p); else p++;
+      }
+      continue;
+    }
+    for (k = 0; HOP[k]; k++) if (!strcasecmp(name, HOP[k])) hop = 1;
+    if (!cleanN || !cleanV || !name[0] || !value[0] || hop || strchr(name, ':')) continue;
+    if (used + strlen(name) + strlen(value) + 4 >= size) break;
+    used += (size_t)snprintf(dst + used, size - used, "%s%s: %s",
+                             used ? "\n" : "", name, value);
+  }
+}
+
 int stream_parse(const char *json, const char *provider, Stream **output) {
   const char *p, *end;
   int n = 0, cap = 0;
@@ -347,8 +428,10 @@ int stream_parse(const char *json, const char *provider, Stream **output) {
         if (bh && bh < end) {
           const char *obj = strchr(bh + 15, '{');
           const char *objEnd = obj && obj < end ? js_end(obj) : NULL;
-          if (objEnd && objEnd <= end)
+          if (objEnd && objEnd <= end) {
             js_text(obj, objEnd, "bingeGroup", s.bingeGroup, sizeof s.bingeGroup);
+            requestHeaders(obj, objEnd, s.headers, sizeof s.headers);
+          }
         } }
       if (!s.description[0]) snprintf(s.description, sizeof s.description, "%s", title);
       if (!s.label[0]) snprintf(s.label, sizeof s.label, "%s", provider);

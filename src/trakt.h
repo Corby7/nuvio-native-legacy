@@ -57,6 +57,12 @@ void trakt_forget(void);
 // applied here, and each item is stamped with the `paused_at` instant.
 int  trakt_resume(CatItem *output, int max);
 
+// Deletes every Trakt resume point (/sync/playback) of the WORK `imdb` names —
+// all of a series' episodes. This is NOT the watch history: nothing is unmarked,
+// the title just stops being "in progress". BLOCKS; 1 when every delete landed
+// (or Trakt is not connected, so there was nothing to delete), 0 otherwise.
+int  trakt_playback_remove(const char *imdb);
+
 // Resolves art, synopsis and duration for `n` items that carry only an id and a
 // kind, in parallel, and returns how many survived — Cinemeta does not know
 // everything, and the ones it does not know are compacted out.
@@ -83,6 +89,11 @@ int  trakt_profile(ProfileData *output);
 // the "continue watching" on their other devices. Does not block: it goes out on
 // a thread.
 void trakt_mark(const char *imdb, double posSeg, double durationSeg);
+// "Watching now" (/scrobble/start) and "paused here" (/scrobble/pause), sent by
+// the player as playback starts, pauses and resumes. Same id form and the same
+// non-blocking queue as trakt_mark, which is the closing message of the three.
+void trakt_scrobble_start(const char *imdb, double posSeg, double durationSeg);
+void trakt_scrobble_pause(const char *imdb, double posSeg, double durationSeg);
 
 // The owner's watchlist ("My List") and collection ("Purchased"). `which` is
 // "watchlist" or "collection". BLOCKS — call from the discovery thread.

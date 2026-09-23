@@ -11,6 +11,7 @@
 #ifndef NV_CTXMENU_H
 #define NV_CTXMENU_H
 #include <SDL2/SDL.h>
+#include "gfx.h"
 
 // THE CATALOGUE THE CARD'S ROW CAME FROM. It travels with the card because the
 // menu offers to open the WHOLE row as a grid, and a catalogue cannot be deduced
@@ -31,10 +32,27 @@ void ctx_open_row(int index_, const CtxCatalog *row);
 // The row the owner asked to see in full, or 0. Consumed once: the router reads
 // it, opens the grid and the modal is already closed.
 int  ctx_requested_seeall(CtxCatalog *out);
+// THE CARD THE MENU OPENS BESIDE, in screen pixels: its outer edge, focus ring
+// included, and that edge's corner radius in pixels. Set it just before
+// ctx_open_row: the next open takes it and the panel draws next to that card
+// instead of centred, with the card left undimmed. An open with no anchor set
+// falls back to the centre of the screen.
+void ctx_set_anchor(GfxRect card, float radiusPx);
+// The same card as it is drawn THIS frame, while the menu is open. The scrim's
+// hole follows it — the card springs back out as the menu opens, past its resting
+// size — while the panel stays where the open put it. Call it from the home's
+// draw, which runs before ctx_draw in the same frame.
+// `glowPx` is how far the card's confirm glow reaches this frame (0 once it has
+// faded); the hole is feathered that far so the glow shows through.
+void ctx_track_card(GfxRect card, float radiusPx, float glowPx);
 int  ctx_is_open(void);
 void ctx_event(const SDL_Event *e);
 void ctx_update(float dt, Uint32 now);
 void ctx_draw(Uint32 now);
 // Index of the title whose detail the owner asked for, or -1. Consumed once.
 int  ctx_requested_details(void);
+// The title to PLAY, or -1, from "Resume" / "Start from the beginning" (only on
+// a title with progress). `fromStart` says which. Consumed once; the modal is
+// already closed.
+int  ctx_requested_play(int *fromStart);
 #endif

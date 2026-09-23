@@ -8,6 +8,7 @@
 #include "layout.h"
 #include "anim.h"
 #include "settings.h"
+#include "cwremove.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -22,18 +23,45 @@ extern void cat_history_set_id(const char *imdb, const char *kind, int watched);
 enum { CTX_OP_NONE, CTX_OP_LIST = 1, CTX_OP_HISTORY = 2 };
 enum { CTX_PENDING = 1, CTX_CONFIRMED = 2, CTX_FAILURE = 3 };
 
-// MEASURED on bundle 1.0.4: the dialog is 37.5vw wide (720 px at 1920).
-#define CTX_W      720.0f
-#define CTX_PAD     44.0f
-#define CTX_LINE   86.0f     // height of each button
-#define CTX_GAP     12.0f
-#define CTX_HEADER    148.0f     // title, states and group label
-#define CTX_STATUS_H 34.0f
-#define CTX_FOOTER  70.0f
+// THE OWNER'S DESIGN, not the web's centred dialog: a panel that opens BESIDE the
+// card that was held, so the thing the options act on stays in view. Measured off
+// the mock (2000px wide, scaled to 1920). Radii are in PIXELS here; gfx_color
+// takes a fraction of the shorter side, and pxRadius converts.
+#define CTX_W        560.0f
+#define CTX_PAD       20.0f
+#define CTX_BOTTOM    20.0f     // below the last row
+#define CTX_LINE      64.0f     // height of each row
+#define CTX_GAP        7.0f
+#define CTX_RADIUS    20.0f
+#define CTX_ICON      28.0f
+#define CTX_ICON_X    26.0f     // icon's left edge inside the row
+#define CTX_LABEL_X   84.0f     // label's left edge inside the row
+#define CTX_META_GAP  10.0f     // title to meta line
+#define CTX_HEAD_GAP  20.0f     // meta line to the first row
+#define CTX_CARD_GAP  32.0f     // card edge to panel edge
+#define CTX_BELOW     24.0f     // how far the panel runs past the card's bottom
+#define CTX_MARGIN    48.0f     // nearest the panel comes to a screen edge
+#define CTX_SLIDE     24.0f     // travel away from the card while it appears
+#define CTX_SCRIM      0.80f
+
+static float pxRadius(GfxRect r, float px) {
+  float m = r.w < r.h ? r.w : r.h;
+  return m > 0.0f ? px / m : 0.0f;
+}
 
 static int   is_open, idx = -1, focus, reqDetails = -1;
+// Resume / Start from the beginning: the title to play, and whether from 0.
+static int   reqPlay = -1, reqFromStart;
 // The row the card was in, and whether the owner asked to see all of it.
 static CtxCatalog row;
+// The card the panel sits beside. `anchorNext` is what the home handed over for
+// the NEXT open; `anchor` is what the open in progress took from it.
+static GfxRect anchor, anchorNext;
+static float   anchorR, anchorRNext;
+// Where the card is drawn now (ctx_track_card); the scrim's hole, not the panel's.
+static GfxRect hole;
+static float   holeR, holeFeather;
+static int     hasAnchor, hasAnchorNext;
 static int   reqSeeAll;
 static float anim;
 static int   operation, intent, stateOperation;
@@ -76,14 +104,30 @@ static int observeHold(void *u, SDL_Event *e) {
   return 0;
 }
 
-// Up to four: details, library, — only on films/series — watched, and the row
-// itself when it came from a catalogue.
-#define CTX_MAX 4
-static struct { const char *rot; int action; } ops[CTX_MAX];
+// Up to seven: resume and start over on a title with progress, details, library,
+// — only on films/series — watched, the row itself when it came from a catalogue,
+// and leaving Continue watching.
+#define CTX_MAX 7
+// `hint` is drawn at the row's right edge, dimmer: the episode Resume will play.
+static struct { const char *rot, *icon, *hint; int action; } ops[CTX_MAX];
 static int nOps;
 static float focusAnim[CTX_MAX];
 static int holdObserver;
-enum { OP_DETAILS, OP_LIST, OP_WATCHED, OP_SEEALL };
+enum { OP_DETAILS, OP_LIST, OP_WATCHED, OP_SEEALL, OP_RESUME, OP_START_OVER,
+       OP_REMOVE_CW };
+
+// IN PROGRESS by the player's own measure: player_set_episode resumes only between
+// 1% and 90%, so outside that window "Resume" would be a lie.
+static int inProgress(const CatItem *ci) {
+  return ci->progress > 0 && ci->progress < 90;
+}
+
+static void addOp(const char *rot, const char *icon, int action) {
+  if (nOps >= CTX_MAX) return;
+  ops[nOps].rot = rot; ops[nOps].icon = icon; ops[nOps].hint = NULL;
+  ops[nOps].action = action;
+  nOps++;
+}
 
 static int indexCurrent(void) {
   int n = cat_n();
@@ -101,9 +145,25 @@ static int indexCurrent(void) {
 static void build(void) {
   int i = indexCurrent();
   const CatItem *ci = i >= 0 ? cat_item(i) : NULL;
+  int going;
   nOps = 0;
+  memset(ops, 0, sizeof ops);
   if (!ci) return;
-  ops[nOps].rot = "See details";        ops[nOps].action = OP_DETAILS;  nOps++;
+  going = inProgress(ci);
+  // A TITLE WITH PROGRESS LEADS WITH PLAYING IT, in the owner's mock order:
+  // Resume, Start from the beginning, the library and watched toggles, then the
+  // details. Anything else keeps details first, as it always had.
+  if (going) {
+    static char episode[24];
+    addOp("Resume", "ctx_play", OP_RESUME);
+    if (!strcmp(ci->kind, "series") && ci->season > 0 && ci->episode > 0) {
+      snprintf(episode, sizeof episode, "S%d E%d", ci->season, ci->episode);
+      ops[nOps - 1].hint = episode;
+    }
+    addOp("Start from the beginning", "ctx_restart", OP_START_OVER);
+  } else {
+    addOp("See details", "ctx_info", OP_DETAILS);
+  }
   // Without an IMDb id there is no supported remote endpoint for this action.
   // Do not offer a button that would only look like it works and would invent
   // local state.
@@ -114,6 +174,7 @@ static void build(void) {
     else
       ops[nOps].rot = ci->inList ? "Remove from library"
                                   : "Add to library";
+    ops[nOps].icon = ci->inList ? "ctx_minus" : "ctx_plus";
     ops[nOps].action = OP_LIST; nOps++;
   }
   // The web app only offers "watched" on films and series — not on channels or
@@ -126,8 +187,10 @@ static void build(void) {
       ops[nOps].rot = cat_history_state_item(i) == 1
                         ? "Unmark as watched"
                         : "Mark as watched";
+    ops[nOps].icon = cat_history_state_item(i) == 1 ? "ctx_x" : "ctx_check";
     ops[nOps].action = OP_WATCHED; nOps++;
   }
+  if (going) addOp("See details", "ctx_info", OP_DETAILS);
   // THE ROW, LAST. It is the only option here that does not act on the title in
   // the header, so it goes below the three that do rather than between them.
   //
@@ -157,25 +220,46 @@ static void build(void) {
     } else {
       snprintf(label, sizeof label, "Browse the whole row");
     }
-    ops[nOps].rot = label; ops[nOps].action = OP_SEEALL; nOps++;
+    ops[nOps].rot = label; ops[nOps].action = OP_SEEALL;
+    ops[nOps].icon = "ctx_grid"; nOps++;
   }
+  // LAST, and set apart by being the one that takes something away. It clears
+  // the resume points here, on the account and on Trakt — see cwremove.h.
+  if (going) addOp("Remove from Continue watching", "ctx_hide", OP_REMOVE_CW);
 }
 
 void ctx_open(int index_) { ctx_open_row(index_, NULL); }
 
+void ctx_track_card(GfxRect card, float radiusPx, float glowPx) {
+  hole = card; holeR = radiusPx; holeFeather = glowPx;
+}
+
+void ctx_set_anchor(GfxRect card, float radiusPx) {
+  anchorNext = card; anchorRNext = radiusPx; hasAnchorNext = 1;
+}
+
 void ctx_open_row(int index_, const CtxCatalog *from) {
+  // Taken whether or not this open goes ahead, so a stale card never anchors a
+  // later open that did not set one.
+  int anchored = hasAnchorNext;
+  hasAnchorNext = 0;
   if (holdCancelled) {
     holdCancelled = 0;
     holdReady = 0;
     return;
   }
   if (index_ < 0 || index_ >= cat_n() || !cat_item(index_)) return;
+  hasAnchor = anchored;
+  if (anchored) {
+    anchor = anchorNext; anchorR = anchorRNext;
+    hole = anchor; holeR = anchorR; holeFeather = 0.0f;
+  }
   // The long press has already consumed the gesture on the home. Clearing the
   // sentinel here stops the following KEYUP being reused as a selection inside
   // the modal.
   holdReady = 0;
   swallowOk = holdActive;
-  idx = index_; focus = 0; is_open = 1; reqDetails = -1;
+  idx = index_; focus = 0; is_open = 1; reqDetails = -1; reqPlay = -1;
   memset(&row, 0, sizeof row);
   if (from) row = *from;
   reqSeeAll = 0;
@@ -188,6 +272,12 @@ void ctx_open_row(int index_, const CtxCatalog *from) {
 
 int ctx_is_open(void) { return is_open; }
 int ctx_requested_details(void) { int v = reqDetails; reqDetails = -1; return v; }
+int ctx_requested_play(int *fromStart) {
+  int v = reqPlay;
+  reqPlay = -1;
+  if (fromStart) *fromStart = reqFromStart;
+  return v;
+}
 int ctx_requested_seeall(CtxCatalog *out) {
   int v = reqSeeAll;
   reqSeeAll = 0;
@@ -201,11 +291,18 @@ static void apply(void) {
   int action;
   if (!ci || focus < 0 || focus >= nOps) return;
   action = ops[focus].action;
-  if (action != OP_DETAILS && operation != CTX_OP_NONE &&
-      stateOperation != CTX_FAILURE) return;
+  // Only the WRITES wait on one another; playing, opening and browsing never do.
+  if ((action == OP_LIST || action == OP_WATCHED || action == OP_REMOVE_CW) &&
+      operation != CTX_OP_NONE && stateOperation != CTX_FAILURE) return;
   switch (action) {
     case OP_DETAILS: reqDetails = idx; break;
     case OP_SEEALL:  reqSeeAll = 1;    break;
+    case OP_RESUME:      reqPlay = idx; reqFromStart = 0; break;
+    case OP_START_OVER:  reqPlay = idx; reqFromStart = 1; break;
+    // The card leaves the row at once (the local half of cw_remove is
+    // synchronous), so there is nothing left for the menu to show: it closes, and
+    // the remote deletes finish on their own thread.
+    case OP_REMOVE_CW:   cw_remove(current); break;
     case OP_LIST:
       // Capture the intent BEFORE any write. The same value goes on to the
       // POST and only reaches the local mirror after a 2xx response.
@@ -231,7 +328,8 @@ static void apply(void) {
       build();
       break;
   }
-  if (action == OP_DETAILS || action == OP_SEEALL) is_open = 0;
+  if (action == OP_DETAILS || action == OP_SEEALL || action == OP_RESUME ||
+      action == OP_START_OVER || action == OP_REMOVE_CW) is_open = 0;
 }
 
 void ctx_event(const SDL_Event *e) {
@@ -305,104 +403,151 @@ void ctx_update(float dt, Uint32 now) {
   }
 }
 
+// The meta line under the title: "Series · 2026 · S1 E3 · 55 min left". The time
+// left is the one piece drawn bright, as the thing a held card is most often held
+// for. Returns how many pieces it filled.
+static int metaPieces(const CatItem *ci, char out[4][32], int *bright) {
+  int n = 0, year = ci->year;
+  *bright = -1;
+  if (!strcmp(ci->kind, "series"))     snprintf(out[n++], 32, "Series");
+  else if (!strcmp(ci->kind, "movie")) snprintf(out[n++], 32, "Movie");
+  // A catalogue item carries its year only at the head of `meta` ("2022 · 3
+  // seasons"); `year` is filled for Trakt list items alone.
+  if (year <= 0 && ci->meta[0] >= '1' && ci->meta[0] <= '2' &&
+      ci->meta[1] >= '0' && ci->meta[1] <= '9' &&
+      ci->meta[2] >= '0' && ci->meta[2] <= '9' &&
+      ci->meta[3] >= '0' && ci->meta[3] <= '9')
+    year = (ci->meta[0] - '0') * 1000 + (ci->meta[1] - '0') * 100 +
+           (ci->meta[2] - '0') * 10 + (ci->meta[3] - '0');
+  if (year > 0) snprintf(out[n++], 32, "%d", year);
+  if (ci->season > 0 && ci->episode > 0)
+    snprintf(out[n++], 32, "S%d E%d", ci->season, ci->episode);
+  if (ci->remainingMin > 0) {
+    *bright = n;
+    snprintf(out[n++], 32, "%d min left", ci->remainingMin);
+  }
+  return n;
+}
+
 void ctx_draw(Uint32 now) {
   const CatItem *ci;
-  const char *states[2];
   const char *message = NULL;
-  float a = anim, height, x, y;
-  int i, nStates = 1;
+  float a = anim, height, x, y, cy;
+  int i;
   (void)now;
   // THE HINT USED TO BE DRAWN HERE TOO, centred at the bottom of the screen. ctx_draw
   // runs on EVERY screen, and this observer sees OK on every screen, so "Hold OK for
   // options" appeared over the detail and the episode list — where holding OK picks a
   // source and marks an episode watched, not this modal — and, on the home, next to
   // the card's own rail, the two bars filling at different rates. The home's rail is
-  // the one that names the thing it acts on, so it is the only one left.
+  // the only feedback left, and it is a bar with no words.
   if (a < 0.01f) return;
   ci = indexCurrent() >= 0 ? cat_item(indexCurrent()) : NULL;
   if (!ci) return;
 
-  if (stateOperation == CTX_PENDING)
-    message = operation == CTX_OP_LIST ? "Updating library..."
-                                        : (intent ? "Marking as watched..."
-                                                    : "Unmarking as watched...");
-  else if (stateOperation == CTX_CONFIRMED)
+  // The labels already say "Adding to library..." while a write is in flight, so
+  // the meta line only gives way to the outcome.
+  if (stateOperation == CTX_CONFIRMED)
     message = operation == CTX_OP_LIST ? "Library updated"
                                         : (intent ? "Marked as watched"
                                                     : "Unmarked as watched");
   else if (stateOperation == CTX_FAILURE)
     message = "Could not update. Try again.";
 
-  states[0] = ci->inList ? "In library" : "Not in library";
-  if (!strcmp(ci->kind, "movie") || !strcmp(ci->kind, "series")) {
-    { int history = cat_history_state_item(indexCurrent());
-      states[1] = history == 1 ? "Watched"
-                   : history == 0 ? "Not watched"
-                   : ci->progress > 0 ? "Progress saved"
-                   : "History not checked"; }
-    nStates = 2;
+  { TxtLine title = txt_line_trim(TXT_PANEL_TITLE, ci->title, 245, 246, 249, 255,
+                                  CTX_W - CTX_PAD * 2.0f);
+    TxtLine probe = txt_line(TXT_HERO_META, "Series", 150, 154, 163, 255);
+    float headH = (float)title.h + CTX_META_GAP + (float)probe.h + CTX_HEAD_GAP;
+    height = CTX_PAD + headH + CTX_BOTTOM +
+             (float)nOps * (CTX_LINE + CTX_GAP) - CTX_GAP;
+
+    // Beside the card, on its right; on its left when the right runs out of screen.
+    // Bottom-aligned just past the card, so the panel grows UP beside it, and kept
+    // on screen whichever row the card is in.
+    if (hasAnchor) {
+      int left = anchor.x + anchor.w + CTX_CARD_GAP + CTX_W > NV_SCREEN_W - CTX_MARGIN;
+      x = left ? anchor.x - CTX_CARD_GAP - CTX_W
+               : anchor.x + anchor.w + CTX_CARD_GAP;
+      if (x < CTX_MARGIN) x = CTX_MARGIN;
+      y = anchor.y + anchor.h + CTX_BELOW - height;
+      if (y > NV_SCREEN_H - CTX_MARGIN - height) y = NV_SCREEN_H - CTX_MARGIN - height;
+      if (y < CTX_MARGIN) y = CTX_MARGIN;
+      // Slides out from the card as it appears.
+      x += (left ? 1.0f : -1.0f) * (1.0f - a) * CTX_SLIDE;
+
+      // The scrim goes round the card, not over it: the held card stays lit and
+      // everything else steps back. One quad with a rounded hole cut exactly at
+      // the ring's outer edge (home.c hands over that edge and its corner).
+      gfx_scrim_hole(hole, holeR, holeFeather, CTX_SCRIM * a);
+    } else {
+      x = (NV_SCREEN_W - CTX_W) * 0.5f;
+      y = (NV_SCREEN_H - height) * 0.5f + (1.0f - a) * CTX_SLIDE;
+      gfx_color((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, 0.0f, 0, 0, 0, CTX_SCRIM * a);
+    }
+
+    // A hairline border: the same panel one pixel larger and a step lighter, under it.
+    { GfxRect panel = { x, y, CTX_W, height };
+      GfxRect edge = { x - 1.0f, y - 1.0f, CTX_W + 2.0f, height + 2.0f };
+      gfx_drop_shadow(panel, CTX_RADIUS, 40.0f, 12.0f, 0.5f * a);
+      gfx_color(edge, pxRadius(edge, CTX_RADIUS + 1.0f), 0.14f, 0.15f, 0.17f, a);
+      gfx_color(panel, pxRadius(panel, CTX_RADIUS), 0.055f, 0.059f, 0.071f, a); }
+
+    cy = y + CTX_PAD;
+    txt_draw_alpha(title, x + CTX_PAD, cy, a);
+    cy += (float)title.h + CTX_META_GAP;
+
+    if (message) {
+      int fail = stateOperation == CTX_FAILURE;
+      TxtLine t = txt_line_trim(TXT_HERO_META, message,
+                                fail ? 255 : 225, fail ? 138 : 228, fail ? 128 : 235, 255,
+                                CTX_W - CTX_PAD * 2.0f);
+      txt_draw_alpha(t, x + CTX_PAD, cy, a);
+    } else {
+      char pieces[4][32];
+      int bright, n = metaPieces(ci, pieces, &bright);
+      float mx = x + CTX_PAD, maxX = x + CTX_W - CTX_PAD;
+      for (i = 0; i < n; i++) {
+        int on = i == bright;
+        TxtLine t = txt_line(TXT_HERO_META, pieces[i],
+                             on ? 236 : 150, on ? 238 : 154, on ? 242 : 162, 255);
+        if (i > 0) {
+          TxtLine dot = txt_line(TXT_HERO_META, "\xc2\xb7", 96, 100, 108, 255);
+          mx += 14.0f;
+          txt_draw_alpha(dot, mx, cy, a);
+          mx += (float)dot.w + 14.0f;
+        }
+        if (mx + (float)t.w > maxX) break;
+        txt_draw_alpha(t, mx, cy, a);
+        mx += (float)t.w;
+      }
+    }
+    cy = y + CTX_PAD + headH;
   }
-
-  { GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-    gfx_color(screen, 0.0f, 0, 0, 0, 0.72f * a); }
-
-  height = CTX_PAD * 2.0f + CTX_HEADER +
-        (float)nOps * (CTX_LINE + CTX_GAP) - CTX_GAP + CTX_FOOTER;
-  x = (NV_SCREEN_W - CTX_W) * 0.5f;
-  y = (NV_SCREEN_H - height) * 0.5f;
-  // Rises from the bottom as it appears, like the app's other sheets.
-  y += (1.0f - a) * 40.0f;
-
-  { GfxRect p = { x, y, CTX_W, height };
-    gfx_color(p, 0.06f, 0.11f, 0.11f, 0.13f, 0.98f * a); }
-
-  { TxtLine t = txt_line(TXT_CAPTION2, "SELECTED TITLE", 174, 178, 188, 255);
-    txt_draw_alpha(t, x + CTX_PAD, y + CTX_PAD, a * 0.95f); }
-  { TxtLine t = txt_line_trim(TXT_HEADLINE, ci->title, 245, 248, 255, 255,
-                                 CTX_W - CTX_PAD * 2.0f);
-    txt_draw_alpha(t, x + CTX_PAD, y + CTX_PAD + 28.0f, a); }
-  { const char *subtitle = message ? message : "Title options";
-    TxtLine t = txt_line(TXT_DET_META2, subtitle, 150, 154, 163, 255);
-    txt_draw_alpha(t, x + CTX_PAD, y + CTX_PAD + 70.0f, a * 0.9f); }
-
-  { float sx = x + CTX_PAD;
-    float sy = y + CTX_PAD + 104.0f;
-    for (i = 0; i < nStates; i++) {
-      TxtLine t = txt_line(TXT_CAPTION2, states[i], 215, 218, 225, 255);
-      float sw = t.w + 24.0f;
-      gfx_color((GfxRect){ sx, sy, sw, CTX_STATUS_H }, 0.5f,
-              0.16f, 0.17f, 0.19f, 0.96f * a);
-      txt_draw_alpha(t, sx + 12.0f,
-                         sy + (CTX_STATUS_H - t.h) * 0.5f, a);
-      sx += sw + CTX_GAP;
-    } }
 
   for (i = 0; i < nOps; i++) {
-    float by = y + CTX_PAD + CTX_HEADER + (float)i * (CTX_LINE + CTX_GAP);
+    float by = cy + (float)i * (CTX_LINE + CTX_GAP);
     GfxRect r = { x + CTX_PAD, by, CTX_W - CTX_PAD * 2.0f, CTX_LINE };
     float f = focusAnim[i];
-    // The same language as the pills: the focused one INVERTS (light
-    // background, dark text), instead of a white ring over a light fill.
-    float luma = anim_blend(0.176f, 0.961f, f);
-    int color = i == focus ? 17 : 240;
-    gfx_color(r, 14.0f / CTX_LINE, luma, luma, luma, a);
-    { TxtLine t = txt_line(TXT_PLR_BODY, ops[i].rot, color, color, color, 255);
-      txt_draw_alpha(t, r.x + 44.0f,
-                         by + (CTX_LINE - t.h) * 0.5f, a); }
-    if (f > 0.02f) {
-      TxtLine seta = txt_line(TXT_CAPTION2, "▸", color, color, color, 255);
-      txt_draw_alpha(seta, r.x + 16.0f,
-                         by + (CTX_LINE - seta.h) * 0.5f, a * f);
-    }
+    // The focused row INVERTS into a full pill, like every other button in the
+    // app: a light capsule with dark ink.
+    // The others sit bare on the panel.
+    float ink = anim_blend(0.95f, 0.07f, f);
+    int c = (int)(ink * 255.0f + 0.5f);
+    if (f > 0.01f)
+      gfx_color(r, 0.5f, 0.945f, 0.949f, 0.957f, a * f);
+    if (ops[i].icon)
+      gfx_icon((GfxRect){ r.x + CTX_ICON_X, by + (CTX_LINE - CTX_ICON) * 0.5f,
+                          CTX_ICON, CTX_ICON },
+               ops[i].icon, ink, ink, ink, a);
+    { float room = r.w - CTX_LABEL_X - CTX_ICON_X;
+      if (ops[i].hint) {
+        int hc = (int)(anim_blend(0.62f, 0.36f, f) * 255.0f + 0.5f);
+        TxtLine h = txt_line(TXT_HERO_META, ops[i].hint, hc, hc, hc, 255);
+        float hx = r.x + r.w - CTX_ICON_X - (float)h.w;
+        txt_draw_alpha(h, hx, by + (CTX_LINE - h.h) * 0.5f, a);
+        room -= (float)h.w + 16.0f;
+      }
+      { TxtLine t = txt_line_trim(TXT_DET_BUTTON, ops[i].rot, c, c, c, 255, room);
+        txt_draw_alpha(t, r.x + CTX_LABEL_X, by + (CTX_LINE - t.h) * 0.5f, a); } }
   }
-
-  { const char *footer = stateOperation == CTX_PENDING
-                           ? "Back Close   Please wait..."
-                           : operation != CTX_OP_NONE
-                           ? "↑ ↓ Navigate   OK Close   Back Close"
-                           : "↑ ↓ Navigate   OK Select   Back Close";
-    TxtLine t = txt_line(TXT_CAPTION2, footer,
-                           155, 159, 169, 255);
-    txt_draw_alpha(t, x + CTX_PAD,
-                       y + height - CTX_PAD - t.h, a * 0.86f); }
 }

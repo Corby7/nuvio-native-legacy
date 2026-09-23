@@ -14,6 +14,8 @@
 # assets/icons/ holds the source, because the web app carries the same glyph
 # inline in a JavaScript string and has no file to point at.
 #
+# The ctx_* set is the home hold menu's row glyphs (src/ctxmenu.c).
+#
 # 128px is the raster size the rest of art/icons uses; the row draws it at 21.
 set -e
 cd "$(dirname "$0")/.."
@@ -23,7 +25,9 @@ command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found (brew insta
 OUT=deploy/app/art/icons
 SIZE="${NUVIO_ICON_PX:-128}"
 
-for name in instant reload reset close ep_watched stack detail_stack detail_stack_filled; do
+for name in instant reload reset close ep_watched stack detail_stack detail_stack_filled \
+            ctx_info ctx_plus ctx_minus ctx_check ctx_x ctx_grid \
+            ctx_play ctx_restart ctx_hide; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "assets/icons/$name.svg" -o "$OUT/$name.png"
   echo "    $name.png <- assets/icons/$name.svg"
 done

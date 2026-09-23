@@ -360,6 +360,23 @@ typedef struct {
 
 #define CAT_PROGRESS_MAX 64
 
+// Drops every progress.txt line for the WORK `imdb` names (an episode suffix is
+// ignored) and zeroes the progress of the matching items in memory. The first
+// half of "Remove from Continue watching"; the account and Trakt are cwremove.c's.
+void cat_progress_remove(const char *imdb);
+
+// "REMOVED FROM CONTINUE WATCHING", remembered with the instant it happened
+// (cw-removed.txt in the writing folder). Deleting the resume points is not
+// enough on its own: a series also comes back as a next-up card from its watch
+// history, and a remote delete that fails would bring the entry back on the next
+// build. The web app keeps the same list (ContinueWatchingPreferences.addRemovedKey).
+//
+// cat_cw_dismissed answers 1 while the work was last seen at or before its
+// removal — so watching it again brings it back, as it should. Thread-safe: the
+// discovery thread asks, the UI thread records.
+void cat_cw_dismiss(const char *imdb);
+int  cat_cw_dismissed(const char *imdb, long long whenMs);
+
 // Reads progress.txt into `out`, MOST RECENT FIRST, and returns how many. A
 // missing or unreadable file is 0 and not an error: a fresh install has no
 // history.

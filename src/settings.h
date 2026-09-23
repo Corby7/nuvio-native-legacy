@@ -34,6 +34,18 @@ int settings_dolby_atmos(void);
 // 2 Portuguese, 3 English — the file's own track first, a download after. Read by
 // tracks.c, which owns the selection.
 int settings_subtitle_pref(void);
+// The same row as a lang.h index: -1 for Off, English for Automatic.
+int settings_subtitle_language(void);
+// 1 when a forced track in the audio's language should come on whenever the
+// automatic selection turns no other subtitle on.
+int settings_subtitle_forced(void);
+// The preferred AUDIO language as a lang.h index, -1 for the file's default.
+int settings_audio_language(void);
+// 1 when the Up next countdown plays the next episode on its own.
+int settings_next_autoplay(void);
+// Seconds before the end at which the Up next card appears, for an episode of
+// `durationSeg` — from the fixed lead or the share-watched row, whichever is on.
+double settings_next_lead(double durationSeg);
 // The player's seek bar colour (fill and playhead), from the Playback row.
 void settings_seek_color(float *r, float *g, float *b);
 // Seconds the Up next card counts down before it plays the next episode.

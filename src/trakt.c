@@ -430,6 +430,63 @@ static void loadHistoryReal(const char *const *header) {
   free(body);
 }
 
+int trakt_playback_remove(const char *imdb) {
+  const char *header[4];
+  char auth[200], key[140], work[24], url[96];
+  char *body;
+  const char *p;
+  int ok = 1, found = 0;
+  if (!on) return 1;
+  if (!imdb || imdb[0] != 't') return 0;
+  snprintf(work, sizeof work, "%.*s", (int)strcspn(imdb, ":"), imdb);
+  snprintf(auth, sizeof auth, "Authorization: Bearer %s", token);
+  snprintf(key, sizeof key, "trakt-api-key: %s", client);
+  header[0] = auth;
+  header[1] = "trakt-api-version: 2";
+  header[2] = key;
+  header[3] = NULL;
+  body = net_download_headers("https://api.trakt.tv/sync/playback", 25, header);
+  if (!body) { printf("[trakt] playback remove %s: no response\n", work); return 0; }
+  // Every resume point of the WORK goes: all of a series' episodes, not only the
+  // one on the card, or the next build would surface the one before it.
+  p = strchr(body, '[');
+  p = p ? p + 1 : NULL;
+  while (p && *p) {
+    const char *f, *block;
+    char id[24] = "";
+    while (*p && (unsigned char)*p <= ' ') p++;
+    if (*p != '{') break;
+    f = js_end(p);
+    block = strstr(p, "\"show\"");
+    if (!block || block > f) block = strstr(p, "\"movie\"");
+    if (block && block < f) {
+      const char *fb = js_end(strchr(block, '{'));
+      js_text(block, fb, "imdb", id, sizeof id);
+    }
+    if (id[0] && !strcmp(id, work)) {
+      // The playback's own id sits at the top of the entry; the nested ones are
+      // under "ids", which the quoted key does not match.
+      long long pid = (long long)js_num(p, f, "id", 0.0);
+      if (pid > 0) {
+        int status = 0;
+        char *r;
+        snprintf(url, sizeof url, "https://api.trakt.tv/sync/playback/%lld", pid);
+        r = net_delete_st(url, 20, header, &status);
+        free(r);
+        found++;
+        // 404 is "already gone", which is what was asked for.
+        if (!(status >= 200 && status < 300) && status != 404) ok = 0;
+        printf("[trakt] playback remove %s #%lld -> HTTP %d\n", work, pid, status);
+      }
+    }
+    p = js_next(f);
+  }
+  free(body);
+  if (!found) printf("[trakt] playback remove %s: nothing on Trakt\n", work);
+  fflush(stdout);
+  return ok;
+}
+
 int trakt_resume(CatItem *output, int max) {
   const char *header[4];
   char auth[200], key[140];
@@ -856,25 +913,38 @@ int trakt_list(const char *which, CatItem *output, int max) {
   return n;
 }
 
-// --- gravar progresso -------------------------------------------------------
+// --- recording progress: the scrobble -----------------------------------------
+//
+// THREE MESSAGES, ONE ORDERED QUEUE. /scrobble/start says "watching now" — what
+// Trakt shows on the profile and what the owner's other devices see while this TV
+// plays. /scrobble/pause keeps the point reached. /scrobble/stop at 90% or more
+// records the watch. The player sends start on play, pause on pause, and the
+// closing pause-or-stop on the way out (trakt_mark).
+//
+// A queue and not the single thread-with-a-flag that was here: with only the
+// closing call that flag was enough, but a start still in flight when the viewer
+// pauses would have DROPPED the pause, and a pause in flight on exit would have
+// dropped the stop — the one message that marks the episode watched. Events are
+// sent one at a time, in the order they happened. Four slots: they come seconds
+// apart, and when they do pile up the oldest is the one that no longer matters.
+enum { SCROBBLE_START, SCROBBLE_PAUSE, SCROBBLE_END };
+#define BRAND_QUEUE 4
+typedef struct { char id[64]; double pos, duration; int action; } Brand;
+static pthread_mutex_t lockBrand = PTHREAD_MUTEX_INITIALIZER;
+static Brand brandQueue[BRAND_QUEUE];
+static int nBrand, threadBrandAlive;
 
-static char brandId[64];
-static double brandPos, brandDuration;
-static pthread_t threadBrand;
-static int threadBrandAlive;
-
-static void *sendBrand(void *u) {
-  const char *header[4];
+static void sendOneBrand(const Brand *b) {
+  const char *header[4], *path, *verb;
   char auth[200], key[140], body[400], *r;
   char id[24];
   int t = 0, e = 0;
   const char *dp;
   double pct;
-  (void)u;
-  snprintf(id, sizeof id, "%s", brandId);
+  snprintf(id, sizeof id, "%s", b->id);
   dp = strchr(id, ':');
   if (dp) { sscanf(dp + 1, "%d:%d", &t, &e); *(char *)dp = 0; }
-  pct = 100.0 * brandPos / brandDuration;
+  pct = 100.0 * b->pos / b->duration;
   if (pct < 0.0) pct = 0.0;
   if (pct > 100.0) pct = 100.0;
 
@@ -894,22 +964,62 @@ static void *sendBrand(void *u) {
              "{\"movie\":{\"ids\":{\"imdb\":\"%s\"}},\"progress\":%.2f}",
              id, pct);
 
-  r = net_post(pct >= 90 ? "https://api.trakt.tv/scrobble/stop" :
-                             "https://api.trakt.tv/scrobble/pause", 20, header, body);
-  printf("[trakt] %s %s %.1f%% -> %s\n", pct>=90?"stop":"pause",brandId,pct,r?"ok":"failed");
+  if (b->action == SCROBBLE_START) { path = "start"; verb = "start"; }
+  else if (b->action == SCROBBLE_END && pct >= 90) { path = "stop"; verb = "stop"; }
+  else { path = "pause"; verb = "pause"; }
+  { char url[64];
+    snprintf(url, sizeof url, "https://api.trakt.tv/scrobble/%s", path);
+    r = net_post(url, 20, header, body); }
+  printf("[trakt] %s %s %.1f%% -> %s\n", verb, b->id, pct, r ? "ok" : "failed");
   fflush(stdout);
   free(r);
-  threadBrandAlive = 0;
-  return NULL;
+}
+
+static void *sendBrand(void *u) {
+  (void)u;
+  for (;;) {
+    Brand b;
+    pthread_mutex_lock(&lockBrand);
+    if (!nBrand) { threadBrandAlive = 0; pthread_mutex_unlock(&lockBrand); return NULL; }
+    b = brandQueue[0];
+    memmove(brandQueue, brandQueue + 1, (size_t)(nBrand - 1) * sizeof *brandQueue);
+    nBrand--;
+    pthread_mutex_unlock(&lockBrand);
+    // Checked per message, not per batch: a sign-out between two of them must
+    // stop the rest from going to the departing account.
+    if (on) sendOneBrand(&b);
+  }
+}
+
+static void scrobble(const char *imdb, double posSeg, double durationSeg, int action) {
+  pthread_t thread;
+  if (!on || !imdb || !*imdb || durationSeg <= 1.0) return;
+  pthread_mutex_lock(&lockBrand);
+  if (nBrand == BRAND_QUEUE) {
+    memmove(brandQueue, brandQueue + 1, (size_t)(BRAND_QUEUE - 1) * sizeof *brandQueue);
+    nBrand--;
+  }
+  snprintf(brandQueue[nBrand].id, sizeof brandQueue[nBrand].id, "%s", imdb);
+  brandQueue[nBrand].pos = posSeg;
+  brandQueue[nBrand].duration = durationSeg;
+  brandQueue[nBrand].action = action;
+  nBrand++;
+  if (!threadBrandAlive) {
+    threadBrandAlive = 1;
+    if (pthread_create(&thread, NULL, sendBrand, NULL) != 0) { threadBrandAlive = 0; nBrand = 0; }
+    else pthread_detach(thread);
+  }
+  pthread_mutex_unlock(&lockBrand);
 }
 
 void trakt_mark(const char *imdb, double posSeg, double durationSeg) {
-  if (!on || !imdb || !*imdb || durationSeg <= 1.0 || threadBrandAlive) return;
-  snprintf(brandId, sizeof brandId, "%s", imdb);
-  brandPos = posSeg; brandDuration = durationSeg;
-  threadBrandAlive = 1;
-  if (pthread_create(&threadBrand, NULL, sendBrand, NULL) != 0) threadBrandAlive = 0;
-  else pthread_detach(threadBrand);
+  scrobble(imdb, posSeg, durationSeg, SCROBBLE_END);
+}
+void trakt_scrobble_start(const char *imdb, double posSeg, double durationSeg) {
+  scrobble(imdb, posSeg, durationSeg, SCROBBLE_START);
+}
+void trakt_scrobble_pause(const char *imdb, double posSeg, double durationSeg) {
+  scrobble(imdb, posSeg, durationSeg, SCROBBLE_PAUSE);
 }
 
 // --- WATCHLIST: writing and reading -------------------------------------------

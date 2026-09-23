@@ -4,6 +4,8 @@
 #include "mark.h"
 #include "mkv.h"
 #include "js.h"
+#include "data.h"
+#include <sys/stat.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -343,6 +345,26 @@ static long msSinceRequest(void) {
 static double bufferSeg;
 
 
+// TRACKS.LOG: what the pipeline REPORTED a file holds, next to what the file's own
+// header SAYS it holds (readMkv), one entry per title. In the data folder and not
+// /tmp: since webOS 11 the app's /tmp is private and ssh cannot read it, and this
+// is the file that answers "why is the subtitle I know is there not in the list".
+// Kept under 256 KB by starting over, like subtitle-auto.log.
+static void tracksLog(const char *kind, const char *text) {
+  char path[600];
+  struct stat sb;
+  time_t now = time(NULL);
+  struct tm lt;
+  FILE *f;
+  if (!data_path(path, sizeof path, "tracks.log")) return;
+  if (stat(path, &sb) == 0 && sb.st_size > 256L * 1024L) remove(path);
+  if (!(f = fopen(path, "a"))) return;
+  localtime_r(&now, &lt);
+  { char stamp[32]; strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &lt);
+    fprintf(f, "%s | %s | %s\n", stamp, kind, text); }
+  fclose(f);
+}
+
 static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   const char *p = lsPayload(m);
   unsigned mySession = (unsigned)(uintptr_t)u;
@@ -399,16 +421,11 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
         o = fo ? strchr(fo, '{') : NULL;
       }
     }
-    // DIAGNOSTIC: it dumps the RAW sourceInfo once per title. The TV does not
-    // return a subtitle language on the owner's files (they all come out as
-    // "Subtitle N"), and without seeing the real JSON any fix is a guess — it could
-    // be a different field name, or the pipeline may genuinely not tag them.
-    // Read it with: sshpass ... scp root@TV:/tmp/nuvio-tracks.json .
-    { static int evicted;
-      if (!evicted) {
-        FILE *fd = fopen("/tmp/nuvio-tracks.json", "w");
-        if (fd) { fputs(p, fd); fclose(fd); evicted = 1; }
-      } }
+    // DIAGNOSTIC: the RAW sourceInfo, on every title, into tracks.log in the data
+    // folder (see tracksLog). What the pipeline says a file holds is the one thing
+    // the sheet cannot be checked against from the sofa — measured: a UHD remux
+    // that carries a dozen PGS tracks came back as ONE subtitle tagged "ms".
+    tracksLog("sourceInfo", p);
 
     q = strstr(p, "\"subtitleTrackInfo\"");
     if (q) {
@@ -450,11 +467,16 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     // Range and reads the Matroska Tracks element; when it comes back, it matches
     // by trackNum and rewrites the labels. It does not block playback: if it fails,
     // or if the file is not an MKV, what was already there stays.
-    { int missing = 0, i;
-      for (i = 0; i < nSub; i++) if (!trackSub[i].language[0]) missing = 1;
-      // IT ONLY NOTES IT DOWN. What fires it is video_pump, once the buffer is
-      if (missing && !sourceMp4) mkvPending = 1;
-      else if (missing) mark("mkv: source is MP4, probe skipped"); }
+    //
+    // ON EVERY MKV WITH SUBTITLES, not only when a language is missing. The
+    // pipeline's languages cannot be taken on trust either: measured on a UHD
+    // remux, it reported one subtitle tagged "ms" where the file carries English
+    // PGS tracks, and a language that is present but wrong never set this off.
+    // The header also supplies what the pipeline never does — the codec, the name
+    // and the forced flag.
+    { // IT ONLY NOTES IT DOWN. What fires it is video_pump, once the buffer is
+      if (nSub > 0 && !sourceMp4) mkvPending = 1;
+      else if (nSub > 0) mark("mkv: source is MP4, probe skipped"); }
   }
 
   if (strstr(p, "videoInfo")) {
@@ -820,6 +842,7 @@ static void *readMkv(void *arg) {
     // knowing whether the file is not an MKV, whether the Range failed or whether
     // the header runs past the 2 MB we downloaded.
     mark("mkv: no track read (not an MKV, or Range failed)");
+    tracksLog("mkv header", "no track read (not an MKV, Range refused, or the header runs past the chunk)");
     threadMkvAlive = 0; return NULL;
   }
 
@@ -833,11 +856,24 @@ static void *readMkv(void *arg) {
   // by order. The two lists do not arrive in the same order (this TV's sourceInfo
   // started at 42, 40, 41, 32...), and matching by position would swap the
   // languages around — worse than having no language at all.
+  // The header's view, whole, beside the pipeline's sourceInfo in tracks.log: the
+  // two lists side by side are what tells "the pipeline lists only some tracks"
+  // from "the pipeline lists them under the wrong language or number".
+  { char line[3000]; size_t k = 0;
+    line[0] = 0;
+    for (j = 0; j < n && k + 120 < sizeof line; j++)
+      k += (size_t)snprintf(line + k, sizeof line - k, "%s#%d kind=%d lang=%s codec=%s%s%s%s",
+                            j ? " ; " : "", fx[j].number, fx[j].kind,
+                            fx[j].language[0] ? fx[j].language : "-",
+                            fx[j].codec[0] ? fx[j].codec : "-",
+                            fx[j].forced ? " forced" : "",
+                            fx[j].name[0] ? " name=" : "", fx[j].name);
+    tracksLog("mkv header", line); }
+
   for (i = 0; i < nSub; i++) {
-    // NO `continue` on a track that already has a language. That guard was correct
-    // when the language was the only thing this loop harvested; the CodecID is
-    // wanted for EVERY subtitle, including the ones the pipeline had already
-    // labelled, so the skip now lives on the language write itself just below.
+    // NO `continue` on a track that already has a language: the CodecID is wanted
+    // for EVERY subtitle, and the pipeline's language is no longer trusted over
+    // the file's (see the probe's trigger in onEvent).
     int haveLang = trackSub[i].language[0] != 0;
     for (j = 0; j < n; j++) {
       if (fx[j].number != trackSub[i].number) continue;
@@ -847,11 +883,21 @@ static void *readMkv(void *arg) {
       // no field for it.
       if (fx[j].codec[0])
         snprintf(trackSub[i].codec, sizeof trackSub[i].codec, "%s", fx[j].codec);
-      if (!haveLang && fx[j].language[0] && strcmp(fx[j].language, "und")) {
+      trackSub[i].forced = fx[j].forced;
+      // THE FILE'S LANGUAGE WINS over the pipeline's when the file names one: it
+      // is what the muxer wrote, and the pipeline has been caught reporting a
+      // different one. "und" names nothing, and then the pipeline's stays.
+      if (fx[j].language[0] && strcmp(fx[j].language, "und") &&
+          (!haveLang || strcasecmp(trackSub[i].language, fx[j].language))) {
+        if (haveLang) {
+          char m[96];
+          snprintf(m, sizeof m, "mkv: track %d is %s, the pipeline said %s",
+                   trackSub[i].number, fx[j].language, trackSub[i].language);
+          mark(m);
+        }
         snprintf(trackSub[i].language, sizeof trackSub[i].language, "%s", fx[j].language);
         matched++;
       }
-      if (haveLang) break;   // the label below is already the pipeline's; leave it
       // The track's NAME ("Forced", "SDH", "Full") is what separates two subtitles
       // in the SAME language. Without it the owner sees "Portuguese" three times
       // and chooses in the dark — and that is precisely the list they complained about.
@@ -868,6 +914,10 @@ static void *readMkv(void *arg) {
   { char m[64];
     snprintf(m, sizeof m, "mkv: %d tracks read, %d subtitles with a language", n, matched);
     mark(m); }
+  { char m[96];
+    snprintf(m, sizeof m, "%d pipeline subtitles, %d header tracks, %d languages set from the header",
+             nSub, n, matched);
+    tracksLog("mkv result", m); }
   printf("[mkv] %d subtitles gained a language\n", matched);
   fflush(stdout);
   threadMkvAlive = 0;

@@ -138,6 +138,11 @@ static int editorial(KindRow t) {
 static Focus focus;
 static HomeItem itemFocus;      // filled in while drawing, read by the transition
 static int  hasItemFocus = 0;
+// The focused card's OUTER edge, ring included: the continue watching ring sits
+// NV_RING_FOCUS outside the card, a framed poster's inside it. The hold menu cuts
+// its scrim here, so the ring is neither dimmed nor haloed.
+static GfxRect ringFocus;
+static float   ringFocusR;   // its corner, in pixels
 static float animFocus[MAX_FILTER][MAX_CARDS];
 static float scrollX[MAX_FILTER];
 static float scrollY = 0.0f;
@@ -151,6 +156,14 @@ static int okPressing = 0;
 static int okLongFired = 0;
 static int okConsumeRelease = 0;
 static float okHold = 0.0f;
+// THE HOLD'S FEEDBACK, drawn on the focused card's ring. okHold is the raw clock;
+// these are what the eye gets:
+//   holdShown  how far round the white sweep has gone — okHold EASED while the
+//              button is down, draining back over NV_HOLD_DRAIN_S if let go early
+//   holdDim    how far the ring has stepped back to make room for the sweep
+//   holdPulse  1 the instant the menu opens, fading: the glow that confirms it
+//   holdScale  the card pressed IN while held, springing back past 1 on success
+static float holdShown, holdDim, holdPulse, holdScale = 1.0f, holdScaleV;
 
 // --- hero-carrossel ---
 static int heroCurrent = 0, heroPrevious = 0;
@@ -950,6 +963,7 @@ void home_event(const SDL_Event *e) {
       } else if (duration >= NV_HOLD_MS) {
         { CtxCatalog c;
           rowCatalog(focus.row, &c);
+          if (hasItemFocus) ctx_set_anchor(ringFocus, ringFocusR);
           ctx_open_row(rows[focus.row].start + focus.column, &c); }
       } else {
         requestOpen = 1;
@@ -1540,8 +1554,37 @@ void home_update(float dt, Uint32 now) {
                               (NV_HOLD_MS - NV_HOLD_FEEDBACK_MS), 0.0f, 1.0f);
   } else if (!okPressing)
     okHold = 0.0f;
+  { int pressing = okPressing && okHold > 0.0f && focus_can_press_long();
+    // Slow out of the gate and ACCELERATING all the way to the end (a cubic
+    // ease-in): the hold builds up and lands, where a linear sweep reads as a
+    // progress bar. Half the hold covers an eighth of the ring.
+    if (pressing) { float t = okHold; holdShown = t * t * t; }
+    else if (holdShown > 0.0f)
+      holdShown = anim_clamp(holdShown - dt / NV_HOLD_DRAIN_S, 0.0f, 1.0f);
+    holdDim = motionReduced ? (pressing || holdShown > 0.0f ? 1.0f : 0.0f)
+                            : anim_spring(holdDim, pressing || holdShown > 0.0f ? 1.0f : 0.0f,
+                                          dt, NV_HOLD_DIM_K);
+    holdPulse = anim_clamp(holdPulse - dt / NV_HOLD_PULSE_S, 0.0f, 1.0f);
+    // An UNDER-damped spring, unlike anim_spring2: the bounce past 1 on release
+    // is the point. Stepped at 240Hz so a slow frame cannot blow it up.
+    if (motionReduced) { holdScale = 1.0f; holdScaleV = 0.0f; }
+    else {
+      float target = pressing ? NV_HOLD_PRESS_SCALE : 1.0f, left = dt;
+      while (left > 0.0f) {
+        float s = left > 1.0f / 240.0f ? 1.0f / 240.0f : left;
+        float w = NV_HOLD_SPRING_W;
+        holdScaleV += (w * w * (target - holdScale) - 2.0f * NV_HOLD_SPRING_ZETA * w * holdScaleV) * s;
+        holdScale += holdScaleV * s;
+        left -= s;
+      }
+    } }
   if (okPressing && okHold >= 1.0f && !okLongFired) {
     okLongFired = 1;
+    // Complete: the sweep has closed the ring, so the ring is whole and white
+    // again with nothing left to draw over it. What marks the moment is the glow
+    // and the card springing back out.
+    holdShown = 0.0f; holdDim = 0.0f;
+    if (!motionReduced) holdPulse = 1.0f;
     okConsumeRelease = 1;
     okPressing = 0;
     okSince = 0;
@@ -1549,6 +1592,8 @@ void home_update(float dt, Uint32 now) {
     // fires once at the threshold and consumes the following KEYUP.
     { CtxCatalog c;
       rowCatalog(focus.row, &c);
+      // The card as it was last drawn, ring included, so the menu opens beside it.
+      if (hasItemFocus) ctx_set_anchor(ringFocus, ringFocusR);
       ctx_open_row(rows[focus.row].start + focus.column, &c); }
   }
 
@@ -3305,6 +3350,13 @@ void home_draw(Uint32 now) {
           // the scale was zero, would lift it by artH*(scale-1)/2 and walk it back
           // towards the row title.
           float px = cx - w * 0.5f, py = cardY;
+          // PRESSED IN while OK is held, about the card's centre — this is a push,
+          // not the focus growth that pins the top.
+          if (holdScale != 1.0f && focus_index(&focus, r, c)) {
+            float nw = w * holdScale, nh = h * holdScale;
+            px += (w - nw) * 0.5f; py += (h - nh) * 0.5f;
+            w = nw; h = nh;
+          }
 
           if (passe == 0) {
             // No shadow. It existed to separate the card from the background, but over
@@ -3517,6 +3569,31 @@ void home_draw(Uint32 now) {
           float pad = framed ? NV_CARD_PAD * scale : 0.0f;
           GfxRect art = frameOf(card, pad);
           float radiusA = framed ? radiusArt(art.w, art.h) : radius;
+          if (focus_index(&focus, r, c)) {
+            // The same two boxes the ring below is drawn in, and their corners.
+            if (framed) {
+              float in = NV_CARD_PAD - NV_FRAME_RING;
+              if (in < 0.0f) in = 0.0f;
+              in *= scale;
+              ringFocus = frameOf(card, in);
+              ringFocusR = radiusFocus(ringFocus.h, in) * ringFocus.h;
+            } else {
+              ringFocus = (GfxRect){ px - NV_RING_FOCUS, py - NV_RING_FOCUS,
+                                     w + NV_RING_FOCUS * 2, h + NV_RING_FOCUS * 2 };
+              ringFocusR = radius * h + NV_RING_FOCUS;
+            }
+          }
+          // The hold's ring: dimmed while the sweep refills it in white.
+          int held = focus_index(&focus, r, c);
+          float ringA = held ? 1.0f - NV_HOLD_DIM * holdDim : 1.0f;
+          float sweep = held ? holdShown : 0.0f;
+          // The glow that confirms it, BEHIND the card: it widens as it fades.
+          float glowPx = 10.0f + 28.0f * (1.0f - holdPulse);
+          if (held && holdPulse > 0.0f)
+            gfx_glow(ringFocus, ringFocusR, glowPx,
+                     1.0f, 1.0f, 1.0f, 0.55f * holdPulse * holdPulse);
+          if (ctx_is_open() && held)
+            ctx_track_card(ringFocus, ringFocusR, holdPulse > 0.0f ? glowPx * holdPulse : 0.0f);
           if (f > 0.01f) {
             if (framed) {
               // The frame's own border, lit to #F5F5F5 (NV_FRAME_RING_C), and
@@ -3541,7 +3618,12 @@ void home_draw(Uint32 now) {
               GfxRect frame = frameOf(card, in);
               gfx_color(frame, radiusFocus(frame.h, in),
                         NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
-                        NV_FRAME_RING_A * f);
+                        NV_FRAME_RING_A * f * ringA);
+              if (sweep > 0.0f)
+                gfx_rect(frame, 0, GFX_RING_FILL, 0, sweep, 0,
+                         radiusFocus(frame.h, in),
+                         NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
+                         NV_FRAME_RING_A * f);
             } else {
               // 4 px of #FFFFFF, OUTSIDE the art. MEASURED on the reference device
               // (TCL, same card, same row): 4 solid px, x 102->105 with no ramp, and
@@ -3559,7 +3641,11 @@ void home_draw(Uint32 now) {
               // "border doesn't apply" — it was there, just not on the corners.
               float rPx = radius * h + NV_RING_FOCUS;
               gfx_color(border, rPx / (h + NV_RING_FOCUS * 2.0f),
-                        1.0f, 1.0f, 1.0f, f);
+                        1.0f, 1.0f, 1.0f, f * ringA);
+              if (sweep > 0.0f)
+                gfx_rect(border, 0, GFX_RING_FILL, 0, sweep, 0,
+                         rPx / (h + NV_RING_FOCUS * 2.0f),
+                         1.0f, 1.0f, 1.0f, f);
             }
           }
           // A CARD WITH NO ART: a solid surface, not emptiness. Without this the card
@@ -3790,23 +3876,10 @@ void home_draw(Uint32 now) {
                       (1.0f - NV_DIM_UNFOCUSED) * (1.0f - f));
           }
 
-          // Progressive feedback for the gesture, without duplicating the context menu.
-          // The bar only appears while the same item is under pressure; once the
-          // threshold is reached, ctxmenu has already opened and the release is consumed.
-          if (okPressing && okHold > 0.0f &&
-              focus_can_press_long() && focus_index(&focus, r, c)) {
-            float bx = art.x + NV_HOME_TEXT_GUTTER;
-            float bw = art.w - NV_HOME_TEXT_GUTTER * 2.0f;
-            GfxRect rail = { bx, art.y + art.h - 12.0f, bw, 4.0f };
-            gfx_color(rail, 0.5f, 0.18f, 0.19f, 0.22f, 0.92f);
-            gfx_color((GfxRect){ bx, rail.y, bw * okHold, rail.h },
-                    0.5f, 0.92f, 0.93f, 0.96f, 1.0f);
-            TxtLine hint = txt_line(TXT_MINI,
-                                      okHold >= 1.0f ? "Release to open options"
-                                                     : "Hold for options",
-                                      225, 228, 235, 255);
-            txt_draw_alpha(hint, bx, art.y + art.h - 38.0f, 0.92f);
-          }
+          // The hold's feedback is the focus ring filling with colour (holdFill,
+          // above, where the ring is drawn). It used to be a bar along the card's
+          // base; the ring is the thing already saying "this card", so it says
+          // "this card, and something is coming" without adding a shape.
         }
       }
     }

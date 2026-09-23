@@ -43,6 +43,7 @@
 #include "trakt.h"
 #include "tracks.h"
 #include "episodes.h"
+#include "proxy.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -54,6 +55,13 @@
 static int waitingSource;
 static pthread_t threadSource;
 static _Atomic int sourceChosen = -2;   // release/acquire entre verificacao e UI
+
+// Hands a chosen source to the player. A source that needs request headers goes
+// through the loopback relay, because the pipeline cannot send them (proxy.h).
+static void playSource(const Stream *s) {
+  static char local[4200];
+  player_set_source(proxy_wrap(s->url, s->headers, local, sizeof local));
+}
 
 static ProfileData profilePending;
 static int profileSuccess;
@@ -656,7 +664,7 @@ void app_update(float dt, Uint32 now) {
     mark(s ? "source chosen" : "no usable source");
     if (player_is_open() && !player_wants_exit()) {
       stream_set_current(sourceChosen);
-      if (s) player_set_source(s->url);
+      if (s) playSource(s);
       else {
         char why[120];
         if (stream_n() == 0) snprintf(why, sizeof why, "no addon returned a source");
@@ -687,7 +695,7 @@ void app_update(float dt, Uint32 now) {
       player_set_episode(t,e);
       if (s->url[0]) {
         stream_set_current(source);
-        player_set_source(s->url);
+        playSource(s);
       } else {
         // A torrent: its url only exists once the debrid has resolved it, and
         // that blocks, so it goes through the same thread as the automatic walk
@@ -777,6 +785,24 @@ void app_update(float dt, Uint32 now) {
       it.genre = ci ? ci->genre : NULL;
       it.meta   = ci ? ci->meta : NULL;
       detail_open(&it, 0);
+    } }
+  // RESUME / START FROM THE BEGINNING, from the hold menu on a card with progress.
+  // The same road Play takes on the title screen, without the title screen: the
+  // player opens in its "opening source" state and the source walk follows. The
+  // episode is the item's own — a Continue watching card carries the one being
+  // resumed.
+  { int fromStart = 0, i = ctx_requested_play(&fromStart);
+    if (i >= 0 && waitingSource != 2) {
+      const CatItem *ci = cat_item(i);
+      player_open(i, NULL);
+      player_set_episode(ci ? ci->season : 0, ci ? ci->episode : 0);
+      if (fromStart) player_start_over();
+      // The series' episode list, for the next-episode card and the episode
+      // sheet; the title screen fetches it on open, and this path never opened it.
+      if (ci && !strcmp(ci->kind, "series")) disc_episodes(i, 0);
+      mark(fromStart ? "hold menu: start over" : "hold menu: resume");
+      fetchForPlayer();
+      waitingSource = 1;
     } }
   // THE WHOLE ROW, asked for from the poster's menu. It is the one path left to
   // the grid from a catalogue row now that the "See all" card at the end of the
