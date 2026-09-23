@@ -218,6 +218,12 @@ static float seekStepFor(int repeats) {
 #define PG_LIST_PADX     20.0f
 #define PG_LINE_H        42.0f
 #define PG_LINE_GAP       4.0f
+// Either side of the "·" between category and severity. The web app's separator
+// is " · " — a space each side — and the port drew the dot bare, so the three
+// parts ran together ("Profanity·Severe"). A fixed gap rather than a space glyph:
+// the space's width depends on the font's metrics, and a little more than one
+// space is what keeps the dot reading as a separator from the sofa.
+#define PG_SEP_GAP       10.0f
 // The veil became the web app's two scrims — GFX_VEIL_PLAYER along the base and
 // GFX_VEIL_POOL in the clock's corner. They exist so the text reads over the image:
 // without them a bright scene wipes out the title's name.
@@ -2945,8 +2951,8 @@ static void drawPlayer(Uint32 now) {
         lg = txt_line(TXT_PG_SEV, parental_severity(i), 255, 255, 255, 255);
         cy = yl + (lin - lr.h) * 0.5f;
         x  = xt - dx;
-        txt_draw_alpha(lr, x, cy, ag * 0.94f);  x += lr.w;
-        txt_draw_alpha(ls, x, yl + (lin - ls.h) * 0.5f, ag * 0.35f); x += ls.w;
+        txt_draw_alpha(lr, x, cy, ag * 0.94f);  x += lr.w + PG_SEP_GAP;
+        txt_draw_alpha(ls, x, yl + (lin - ls.h) * 0.5f, ag * 0.35f); x += ls.w + PG_SEP_GAP;
         txt_draw_alpha(lg, x, yl + (lin - lg.h) * 0.5f, ag * 0.62f);
       }
     }
