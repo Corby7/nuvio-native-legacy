@@ -161,9 +161,13 @@ int  detail_requested_do_start(void);
 // owner's reference has the title's logo there with the picker beside it; the logo
 // was tried under the picker and dropped — the hero one page up already names the
 // title, and without it the list gets four rows instead of three and a half.
-#define NV_DETEP_TOP          80.0f   // the page's top -> the picker
+// FOUR ROWS, NOT THREE AND A HALF. The list is whatever the page has left under the
+// picker, and at 80 + 56 around it (with 236 rows) that was 864px: 3.66 rows, so
+// the fourth was always cut and, once the focused row grew, only three showed. At
+// 56 + 24 and 228 rows it is 920px, four at rest with room to spare.
+#define NV_DETEP_TOP          56.0f   // the page's top -> the picker
 #define NV_DETP_TEMP_Y      (NV_DETP_P2 + NV_DETEP_TOP)
-#define NV_DETEP_LIST_GAP     56.0f   // the picker's base -> the first row
+#define NV_DETEP_LIST_GAP     24.0f   // the picker's base -> the first row
 // WHERE THE EPISODE LIST STARTS, and it runs to the page's end (NV_DETP_P3). The rows
 // scroll inside that window and are clipped to it, so page 3 never shows a row.
 #define NV_DETP_EP_Y        (NV_DETP_TEMP_Y + NV_DETWEB_SEA_H + NV_DETEP_LIST_GAP)
@@ -373,7 +377,7 @@ int  detail_requested_do_start(void);
 //   right    focused, "22 min left" and a Resume / Play pill that ends at
 //            NV_DETEP_RIGHT
 //   rest     every row but the focused one at NV_DETEP_DIM while the list has focus
-#define NV_DETEP_ROW_H       236.0f
+#define NV_DETEP_ROW_H       228.0f  // 24px of air above and below the 180 thumbnail
 #define NV_DETEP_PADY         40.0f   // a grown row's air above and below its copy
 #define NV_DETEP_THUMB_W     320.0f
 #define NV_DETEP_THUMB_H     180.0f

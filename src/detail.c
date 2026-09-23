@@ -197,6 +197,11 @@ static float scrollY = 0.0f;         // the document's VERTICAL scroll
 static float velSec[N_SECTIONS];
 static float velY = 0.0f;
 static int season = 0;            // the CHOSEN season (not the focused one)
+// The next-up landing (landOnNextUp): whether the owner picked a season by hand,
+// whether the list has been entered since the title opened, and the row it landed
+// on — which is held at the TOP of the list until the focus moves off it.
+static int seasonByHand, epLanded, epLandedAt = -1;
+static void syncColumns(void);
 // The season picker's dropdown. `seasonMenuOpen` is the listbox being expanded and
 // `seasonMenuFocus` the row inside it — which is NOT `season`: the list opens on the
 // chosen one and moving through it changes nothing until OK.
@@ -601,6 +606,7 @@ void detail_open(const HomeItem *it, int shared) {
   // series whose first loaded episode is from season 4 opened with "Season 1" lit —
   // the label contradicted the list just below it.
   season = 0;
+  seasonByHand = 0; epLanded = 0; epLandedAt = -1;
   { const CatEp *e0 = epOfSeason(seasonNow(), 0);
     const CatItem *ci0 = cat_item(idx);
     if (e0 && ci0) {
@@ -734,6 +740,59 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
 int detail_ep_focus(int *temp, int *eps) {
   if (!is_open) return 0;
   return episodeTarget(temp, eps, NULL);
+}
+
+// THE EPISODE LIST OPENS ON WHAT IS NEXT UP, not on the season's first episode — on
+// a series half watched, that was ten presses of DOWN to reach the episode the Play
+// button already names. It is the same answer episodeTarget gives Play (resume, then
+// first unwatched).
+//
+// IT IS PLACED BEFORE THE FOCUS GETS THERE, as soon as the episodes and the progress
+// are known. Placed on the step into the list instead, the list sat on episode 1
+// while it was merely in view below the picker and then jumped the moment it took
+// the focus. Now it is already standing on the episode, and stepping in only
+// focuses it (through the row's remembered column, as focus_move does anyway).
+//
+// Once per opening, and never after the focus has been in the list: after that it
+// keeps the row the owner left it on. The season follows the episode only while
+// nobody has chosen one in the picker — a season picked by hand is a statement.
+//
+// 1 when it is settled (placed, or nothing to place); 0 to try again next frame.
+static int landOnNextUp(void) {
+  const CatItem *ci = cat_item(idx);
+  int k, c, n, t = 0, e = 0, origin = 0;
+  if (!ci || !isSeries()) return 1;
+  episodeTarget(&t, &e, &origin);
+  // A real resume or next only. Before Trakt answers there is neither, and the list
+  // stays at the top until there is.
+  if (origin < 2) return 0;
+  if (t != seasonNow()) {
+    if (seasonByHand) return 1;
+    for (k = 0; k < ci->nSeasons && k < nSeasonsOf(); k++)
+      if (ci->seasons[k] == t) break;
+    if (k >= ci->nSeasons || k >= nSeasonsOf()) return !disc_episodes_loading(idx);
+    season = k;
+    syncColumns();
+  }
+  n = nEpsOfSeason(seasonNow());
+  for (c = 0; c < n; c++) {
+    const CatEp *ep = epOfSeason(seasonNow(), c);
+    if (ep && ep->season == t && ep->episode == e) break;
+  }
+  if (c >= n) return !disc_episodes_loading(idx);
+  focus.columnRemembered[SEC_EPISODES] = c;
+  epLandedAt = c;
+  // Straight there, not scrolled to: the list should OPEN on this episode, and a
+  // spring from the top would run through every watched one on the way.
+  // Clamped the way detail_update clamps it, or near the season's end the list
+  // would snap past its bottom and then visibly spring back.
+  { float max = sectionN(SEC_EPISODES) * NV_DETEP_ROW_H - NV_DETEP_LIST_H
+              + episodeFullH(c) - NV_DETEP_ROW_H;
+    float y = c * NV_DETEP_ROW_H;
+    if (y > max) y = max;
+    scrollSec[SEC_EPISODES] = y > 0.0f ? y : 0.0f; }
+  velSec[SEC_EPISODES] = 0.0f;
+  return 1;
 }
 
 int detail_settled(void) {
@@ -1115,6 +1174,7 @@ void detail_event(const SDL_Event *e) {
           seasonMenuOpen = 0;
           if (seasonMenuFocus != season) {
             season = seasonMenuFocus;
+            seasonByHand = 1;
             goToSeason(season);
           }
           return;
@@ -1340,6 +1400,9 @@ void detail_event(const SDL_Event *e) {
   else if (k == SDLK_LEFT)  focus_move(&focus, -1, 0);
   else if (k == SDLK_DOWN)  focus_move(&focus, 0, 1);
   else if (k == SDLK_UP)    { if (!focus_move(&focus, 0, -1)) level = 0; }
+  // In the list before the progress arrived: from here on it is the owner's list, and
+  // a late landing would pull it out from under them.
+  if (focus.row == SEC_EPISODES && level >= 1) epLanded = 1;
 }
 
 // The item's width and each row's horizontal step. A season and an information tab
@@ -1436,6 +1499,7 @@ static void syncColumns(void) {
 void detail_update(float dt, Uint32 now) {
   if (!is_open) return;
   syncColumns();
+  if (!epLanded && !(level >= 1 && focus.row == SEC_EPISODES)) epLanded = landOnNextUp();
   // It releases the episode request that was held because it arrived with another load
   // in flight.
   disc_episodes_pending();
@@ -1566,7 +1630,10 @@ void detail_update(float dt, Uint32 now) {
       if (r == SEC_EPISODES) {
         float max = sectionN(r) * NV_DETEP_ROW_H - NV_DETEP_LIST_H
                   + episodeFullH(focus.column) - NV_DETEP_ROW_H;
-        target = (focus.column - 1) * NV_DETEP_ROW_H;
+        // Second in the window, EXCEPT the row landOnNextUp put the focus on: that one
+        // is where the list opens, and the watched episode above it is not wanted.
+        if (focus.column != epLandedAt) epLandedAt = -1;
+        target = (focus.column - (epLandedAt >= 0 ? 0 : 1)) * NV_DETEP_ROW_H;
         if (target > max) target = max;
       }
       else {
