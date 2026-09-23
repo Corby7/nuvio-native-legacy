@@ -827,6 +827,12 @@ void player_open(int indexCatalog, const char *url) {
   prefsRead();
   toastAte = 0;
   hasVideo = (url && *url && video_play(url));
+  // The saved style has to REACH THE PIPELINE, not just this file's copy of it.
+  // It only ever went over when a setting was changed, so every title opened with
+  // the file's own subtitles in the TV's defaults — and anything that adjusts the
+  // pipeline's subtitle waited for a change that never came. Sent after play so it
+  // carries the new media id; the pipeline reapplies it once the load completes.
+  video_subtitle_style(&subStyle);
   applyAspect();
 
   const CatItem *c = item();
@@ -1621,9 +1627,15 @@ static void drawSubtitleExternal(void){
   // instead of 48, and the web app's 40/36 gaps instead of 12/32), which left the
   // cue a dozen pixels under the title. 700 restores roughly the clearance that
   // value was chosen for.
-  float base=visible?700.f:1000.f;
+  // With the chrome faded out under a sheet there is no transport to clear, so
+  // the cue settles back to where it sits with the controls hidden.
+  float gone=stream_sheet_shown();if(tracks_shown()>gone)gone=tracks_shown();
+  float base=visible?700.f+300.f*gone:1000.f;
   if(nextCardUp())base=690.f;
   base-=(subStyle.position-3)*48.f;
+  // Kept clear of the Style bar's tiles while it is up, on the bar's own curve.
+  { float bar=tracks_style_shown();
+    if(bar>0.f&&base>NV_TRK_PREVIEW_FLOOR)base+=(NV_TRK_PREVIEW_FLOOR-base)*bar; }
   float y=base-total;
   for(int i=0;i<n;i++){
     TxtLine l=color[i];float x=(NV_SCREEN_W-l.w)*.5f;
@@ -1958,9 +1970,22 @@ static void drawActionsEpisode(void){
   else if(skipUp(NULL,&kind)) drawSkipIntro(kind);
 }
 
+// THE SHEET TAKES THE SCREEN. With Sources open, everything the player draws over
+// the picture — the transport, its gradients, the prompts, the stats, the loading
+// logo — fades out on the sheet's own curve, so the list is the one thing to read.
+// The picture stays, and so do the subtitles: those are content, not chrome.
+static float chrome = 1.0f;
+static void drawPlayer(Uint32 now);
 void player_draw(Uint32 now) {
-  (void)now;
   if (!is_open) return;
+  // The audio and subtitle sheets take the screen the same way.
+  { float sheet = stream_sheet_shown(), tracks = tracks_shown();
+    chrome = 1.0f - (sheet > tracks ? sheet : tracks); }
+  drawPlayer(now);
+  gfx_opacity_group = 1.0f;
+}
+static void drawPlayer(Uint32 now) {
+  (void)now;
   const CatItem *c = item();
 
   // --- the video frame ---
@@ -2014,6 +2039,7 @@ void player_draw(Uint32 now) {
   // and back (playerLoadingIdentityPulse), and that is the whole "still working"
   // signal. The spinner itself moved onto the transport's play button, which
   // turns while the source opens (drawStartingButton).
+  gfx_opacity_group = chrome;   // the frame and the hole above are not chrome
   flying = 0;
   // THE OUTRO: once the picture is up, the logo stays a moment longer so its fill
   // is SEEN to finish, then fades with the veil — 150ms to land, 300ms to go.
@@ -2166,7 +2192,9 @@ void player_draw(Uint32 now) {
   }
 
   /* They stay when the controls disappear: they are content, not player chrome. */
+  gfx_opacity_group = 1.0f;
   drawSubtitleExternal();
+  gfx_opacity_group = chrome;
   // The stats panel is DELIBERATELY outside the controls' alpha. You open it to
   // watch a number move — the buffer draining, the bitrate on a new source — and
   // tying it to a bar that hides itself after four seconds would mean holding the

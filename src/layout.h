@@ -1879,84 +1879,128 @@
 // GFX_PROFILE_BG shader, because both of its layers derive from that one colour.
 #define NV_PSEL_BG_MS         520.0f
 
+// --- THE PLAYER SHEETS' TABS (tabs.c) ------------------------------------------
+// A word, and a 3px rule under the chosen one, the rule sitting NV_TAB_LINE_GAP
+// under the capitals. The strip lines up with the heading's left edge — there is
+// no pill padding to indent it any more.
+#define NV_TAB_H            50.0f
+#define NV_TAB_GAP          40.0f
+#define NV_TAB_LINE          3.0f
+#define NV_TAB_LINE_GAP     12.0f
+
 // --- THE PLAYER'S TRACK MENUS -------------------------------------------------
 // The audio and subtitle panels, ported from the web app's "Track menus" block.
 // Same resolution rule as the font sizes up at NV_FT_TRK_*: each `min(X vw, Y px)`
 // is evaluated at 1920.
 //
-// THE PANEL IS DESCRIBED AS CONTENT + FEATHER, and the order matters. The feather
-// is DEAD SPACE — the panel's left third is a ramp the text never enters — so the
-// stylesheet writes the width as `calc(content + feather)` precisely so that
-// retuning the feather slides the fade without moving the text column. Written
-// the other way round (a width with the feather carved out of it) every change to
-// the ramp would silently renarrow the type.
-//
-//   panel x = 1920 - 730 = 1190      content x = 1190 + 326 = 1516
-//   content w = 730 - 326 - 64 = 340
-#define NV_TRK_FEATHER     326.0f  // --player-menu-feather  min(17vw,330)
-#define NV_TRK_PANEL_W     730.0f  // --player-subtitle-panel-width min(38vw,730)
-#define NV_TRK_PAD_TOP      80.0f  // min(4.17vw,80)
-#define NV_TRK_PAD_RIGHT    64.0f  // min(3.33vw,64)
-// The hidden state is `transform: translateX(6%)` of the panel's own width. It is
-// a SHORT travel on purpose: these menus fade as much as they slide, and a panel
-// that flies the full 730 reads as a drawer being hauled out rather than a layer
-// resolving. 6% of 730 = 43.8.
+// THE SIDE PANEL WEARS THE SOURCES SHEET'S SHELL: the same veil, the same 712px
+// column against the right edge, the heading at the same height and the tabs on
+// the same line. They are the player's two sheets of choices, and opening one
+// after the other should look like the same furniture with different contents.
+// THE VEIL IS THE SOURCES SHEET'S ramp and ink, over a narrower run: the curve
+// is the same, it simply reaches full strength sooner, as the column it carries
+// is narrower — a subtitle row is a short name and a line of detail, not a source
+// card with a row of badges.
+#define NV_TRK_VEIL_W      820.0f
+// Where the veil starts to clear downwards, as a fraction of the screen's height.
+// The selects and their menus sit in the top half; below that the veil only has
+// to take the edge off, not hold type up.
+#define NV_TRK_VEIL_CLEAR   0.50f
+#define NV_TRK_CONTENT_W   560.0f
+#define NV_TRK_PAD          48.0f   // the content's right margin
+#define NV_TRK_FOOT         48.0f   // clear space under an expanded list
+#define NV_TRK_TITLE_Y      72.0f
+#define NV_TRK_TABS_Y      160.0f
+#define NV_TRK_TOP         244.0f   // the first row's top edge
+// A short slide rather than the sources sheet's full-width travel: this sheet is
+// reopened constantly mid-film, and a drawer hauled across the picture every time
+// is a lot of motion for one track change.
 #define NV_TRK_SLIDE        0.06f
 
-// The ink under the whole panel, rgba(11,13,16). Not black: at full strength over
-// dark video a true black is a hole, and this is the same lifted black the web app
-// uses for --player-menu-focus-ink.
+
+// rgba(11,13,16): a lifted black, not a true one — at full strength over dark
+// video a true black is a hole. The player's hot buttons ink with it.
 #define NV_TRK_INK_R       0.0431f
 #define NV_TRK_INK_G       0.0510f
 #define NV_TRK_INK_B       0.0627f
 
 // FOCUS IS AN INVERSION, not an outline: the row fills with white and its type
-// goes dark. The web app keeps both halves as variables specifically so the
-// treatment can be softened in one place, and the same applies here.
-#define NV_TRK_FOCUS_FILL   1.000f  // --player-menu-focus-fill #ffffff
-#define NV_TRK_FOCUS_INK      11    // --player-menu-focus-ink  #0b0d10, as 0..255
-// The sub-label on a focused row: rgba(11,13,16,0.62) over white, flattened to the
-// grey it composites to. Blending it for real would need the row's fill read back.
-#define NV_TRK_FOCUS_INK_SUB 104    // 255 - 0.62*(255-11)
+// goes dark. From three metres a thin ring on a dark row is the easiest thing on
+// the screen to lose, and focus is the one thing the sheet must not lose.
+#define NV_TRK_FOCUS_FILL   1.000f
+#define NV_TRK_FOCUS_INK      11    // #0b0d10, as 0..255
+// The sub-label on a focused row: rgba(11,13,16,0.62) over white, flattened.
+#define NV_TRK_FOCUS_INK_SUB 104
+#define NV_TRK_ROW_FILL     0.06f
+// A select whose list is open: lifted, not inverted — the cursor is in the list.
+#define NV_TRK_ROW_OWNER    0.16f
 
-// The rows. A select row is label + value + caret; an option row is main + sub +
-// the selected dot.
-#define NV_TRK_ROW_H        68.0f  // 18px padding twice, over a 26px value
-#define NV_TRK_ROW_R        16.0f  // min(0.83vw,16)
-#define NV_TRK_ROW_PAD      22.0f  // min(1.15vw,22)
-#define NV_TRK_OPT_H        62.0f  // 14px padding twice, over a 24px main
-#define NV_TRK_OPT_R        12.0f  // min(0.63vw,12)
-#define NV_TRK_OPT_PAD      20.0f  // min(1.04vw,20)
-#define NV_TRK_OPT_GAP       4.0f  // min(0.21vw,4)
-#define NV_TRK_STACK_GAP    12.0f  // min(0.63vw,12)
-#define NV_TRK_TITLE_GAP    32.0f  // .player-dialog-title margin-bottom
-// The title's LINE BOX, 46 x line-height 1.05. It has to be a constant for the
-// reason the NV_LD_* block gives: the height SDL_ttf hands back depends on which
-// glyphs are in the string, and the two panels are titled "Audio" and "Subtitles"
-// — measuring the word would stand the select row at a different height in each.
-#define NV_LD_TRK_TITLE     48.0f
-// The selected marker is a DOT, not a tick: at 12px a glyph is a smudge, and the
-// row already says what it is in words.
-#define NV_TRK_DOT          12.0f  // min(0.63vw,12)
-// The caret: a 14px box stroked on two sides and turned 45 degrees, which is how
-// the sheet draws it so it inherits the row's ink on inversion.
-#define NV_TRK_CARET        14.0f  // min(0.73vw,14)
-#define NV_TRK_CARET_TH      3.0f  // min(0.16vw,3)
+// THE TRACKS TAB IS TWO SELECTS, stacked: Language, then Subtitle. They are
+// drawn as the SOURCES SHEET'S CARDS — the same corner, the same faint fill that
+// lifts under the cursor with a thin inset ring — because the two sheets sit in
+// the same place in the same player. The detail screen's pill picker, tried
+// first, belonged to a different screen and looked it.
+#define NV_TRK_SEL_H        72.0f
+#define NV_TRK_SEL_GAP      12.0f
+#define NV_TRK_SEL_PADX     24.0f
+#define NV_TRK_CHEV         24.0f
+#define NV_TRK_MENU_GAP      8.0f   // a select's base -> its open menu's top
+#define NV_TRK_MENU_PAD      8.0f
+#define NV_TRK_LANG_H       64.0f
+#define NV_TRK_OPT_H        84.0f   // a subtitle option: its name and a detail line
+#define NV_TRK_OPT_R        12.0f
+// The open menu's plate is opaque: it stands in front of the select below it.
+#define NV_TRK_MENU_BG      0.105f
+// The playing row's marker: a DOT and the word ON. At 12px a tick glyph is a smudge.
+#define NV_TRK_DOT          12.0f
 
-// The style rail's steppers: 56x56 rounded to 14, on rgba(255,255,255,0.12).
-#define NV_TRK_STEP_W       56.0f
-#define NV_TRK_STEP_H       56.0f
-#define NV_TRK_STEP_R       14.0f
-#define NV_TRK_STEP_BG      0.12f
-// THE STYLE ROW IS THE ONE ROW THAT DOES NOT INVERT, and the web app's own comment
-// says why: the row is a stepper CONTAINER, not a target. Its label sits between
-// the two buttons, so filling the row white turns that label dark-on-light while
-// the buttons beside it stay light-on-dark — two focus states on one row. A quiet
-// surface marks the active row instead, and the type never changes colour.
-#define NV_TRK_STYLE_FOCUS  0.10f  // rgba(255,255,255,0.10)
-#define NV_TRK_STYLE_SUB    138    // rgba(255,255,255,0.52) over the panel's ink
-// While a select is expanded the style rail is still visible but not reachable.
-#define NV_TRK_DIM          0.35f
+// --- THE STYLE BAR -------------------------------------------------------------
+// The Style tab is NOT the side panel. A style is judged by where the subtitle
+// actually lands, at its real width, and a panel over the right half would squeeze
+// the preview into the left half and misstate both. So the tab hands the screen
+// back to the picture and keeps its controls along the bottom: a row of tiles, one
+// per setting, and under it the choices for the focused tile.
+// Measured off the design at 1920: a 48px margin each side — the header's own
+// right margin. The chips sit 28px off the bottom edge, lower than the design's
+// 56: the TV cannot raise its own embedded subtitle any further, so the bar
+// goes down to clear it instead.
+#define NV_TRK_BAR_X        48.0f
+#define NV_TRK_BAR_BOTTOM   28.0f
+#define NV_TRK_ROWS_GAP     20.0f   // tiles -> chips
+// The transport scrim's run. It starts well above the tiles because its first
+// stretch is nearly clear — it only reaches 0.18 a third of the way down — and a
+// shorter run would make the ramp steep enough to see its steps.
+#define NV_TRK_SCRIM_Y     540.0f
+// The top-right pool behind the header once the panel's veil has gone.
+#define NV_TRK_POOL_W      900.0f
+#define NV_TRK_POOL_H      420.0f
+#define NV_TRK_BOX_R        12.0f   // tiles and chips share one corner
+#define NV_TRK_LIGHT       0.94f    // the focused tile's, and the chosen chip's, face
+#define NV_TRK_TILE_H       82.0f
+#define NV_TRK_TILE_GAP     16.0f
+#define NV_TRK_TILE_PADX    20.0f
+// A resting tile or chip is the SOURCES CARD'S fill, with a faint edge: the two
+// sheets' resting surfaces read as the same material.
+#define NV_TRK_TILE_FILL    NV_SRC_CARD_FILL
+#define NV_TRK_TILE_LINE    0.08f
+#define NV_TRK_TILE_OWNER   0.10f   // the tile whose choices the cursor is in
+#define NV_TRK_TILE_OWNER_LINE 0.16f
+#define NV_TRK_TILE_RING     2.0f   // the grey edge round the focused tile's face
+#define NV_TRK_CHIP_H       58.0f
+#define NV_TRK_CHIP_PAD     26.0f
+#define NV_TRK_CHIP_GAP     20.0f
+#define NV_TRK_CHIP_FILL    NV_SRC_CARD_FILL
+#define NV_TRK_CHIP_LINE    0.10f
+#define NV_TRK_RESET_ICON   20.0f
+// The preview's lowest line may not sink below this while the bar is up: the
+// Height setting can put the subtitle 144px lower than the default, which is
+// straight through the tiles.
+// It sits a clear 130px over the tiles, so the style is judged
+// against the picture and not against the bar's own shading.
+#define NV_TRK_PREVIEW_FLOOR 720.0f
+// The same raise for the EMBEDDED subtitle, in the uMS's own position steps
+// (-3..4), since the pipeline and not the overlay draws it.
+#define NV_TRK_EMBED_LIFT      4
 
 // --- THE PLAYER'S TWO "JUMP AHEAD" PROMPTS -----------------------------------
 // Skip intro and the next-episode card. They SHARE an anchor, and that is the
@@ -2176,7 +2220,10 @@
 // Unfocused cards are a faint fill and NO border: with a ring on every card the
 // list became boxes of boxes, the chips' outlines inside the cards' outlines.
 #define NV_SRC_CARD_FILL    0.05f
-#define NV_SRC_CARD_FOCUS   0.09f
+#define NV_SRC_CARD_FOCUS   0.18f
+// The card that is playing is the most solid of all, focused or not: it is the
+// one the list is measured against, and it stays pinned under the tabs.
+#define NV_SRC_CARD_PLAYING 0.23f
 // The ink is THE PAGE'S OWN #0d0d0d — the colour the title screen's vignette ramps
 // to on the left, behind the episode list — at the ramp's full depth. It was TRUE
 // BLACK, which read as a black slab over the title rather than the same darkness the
@@ -2202,14 +2249,7 @@
 #define NV_SRC_TIP_GAP      12.0f  // the header pill's bottom -> the label's top
 #define NV_SRC_TIP_MS      140.0f
 #define NV_SRC_TIP_RISE      4.0f
-// THE TABS ARE PILLS. They were bare text over an underline, because pill tabs
-// once had the same shape as the rows below and read as one more source. With
-// the rows now cards, a 50px pill and a 130px card no longer look alike.
-#define NV_SRC_TAB_H        50.0f
-#define NV_SRC_TAB_PADX     26.0f  // ink to the pill's edge, each side
-#define NV_SRC_TAB_GAP      12.0f  // between one pill and the next
-#define NV_SRC_TAB_RING      2.5f  // the cursor's ring, when the cursor is on the tabs
-#define NV_SRC_TAB_RING_OUT  5.0f  // ... and how far outside the pill it sits
+// The tabs are tabs.c's words-and-underline strip, on NV_SRC_TABS_Y.
 #define NV_SRC_TOP         244.0f  // the first row's top edge
 #define NV_SRC_FOOT         32.0f  // clear space below the last row
 #if NV_SRC_CARDS

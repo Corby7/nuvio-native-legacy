@@ -8,49 +8,15 @@
 #include "layout.h"
 #include "subtitle.h"
 #include "settings.h"
+#include "streams.h"
+#include "tabs.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
-// The panel's own measurements live in layout.h under NV_TRK_*, with the web
-// app's selector beside each one. What is left here is the row PITCH, which is a
-// height plus its gap and belongs to the drawing rather than to the stylesheet.
-#define FX_OPT_PITCH   (NV_TRK_OPT_H + NV_TRK_OPT_GAP)
-// The style row: the stepper's height with its padding, and the stack's gap.
-#define FX_STYLE_H     72.0f
-#define FX_STYLE_PITCH (FX_STYLE_H + 8.0f)
-// .player-select-menu max-height: min(72vh, 820px) -> 777.6 at 1080.
-#define FX_MENU_MAX    778.0f
+// The panel's measurements live in layout.h under NV_TRK_*.
 
-
-// 3 and not 2: the subtitle sheet has the LIST and the STYLE, and FX_COL_STYLE
-// is index 2. With two slots the style column wrote past the end of the array.
-static int is_open, column, focus[3];
-// WHICH ROW OF THE STACK HAS THE FOCUS while no list is expanded. The panel is
-// one narrow column now, so the old left/right walk between two side-by-side
-// columns is gone: 0 is the select, 1..FX_N_STYLE are the style rows beneath it.
-static int row;
-// Is the select's list expanded? It is what lets the panel be one narrow column
-// instead of a pair of wide lists — a long subtitle list only takes screen while
-// it is actually being read. BOTH panels open collapsed, on the select itself.
-static int openSelect;
-// WHICH OF A STYLE ROW'S TWO BUTTONS has the focus: 0 = minus, 1 = plus. The
-// steppers are the targets, not the row that holds them — the row is a container,
-// which is why it takes a quiet surface and never the inverted fill.
-//
-// It defaults to PLUS, and is put back to plus on every move between rows. Landing
-// on minus would make the first press of OK undo rather than advance, and on a row
-// like Delay or Size the direction you want first is nearly always up.
-static int stepFocus = 1;
-// SCROLL PER COLUMN, in ROWS (not in pixels): the sheet drew every track from
-// the top and the panel has a limited height — with many subtitles the last
-// ones fell outside the panel and off the screen. The focus reached them, the
-// eyes did not. Storing how many rows have been scrolled is enough because the
-// row height is fixed.
-static int scroll[3];
-// How many rows fit in the panel. Computed while drawing (it depends on the
-// height chosen there) and read by the key handling, which runs before.
-static int visible = 8;
-static void adjustScroll(void);
+static int is_open;
 static float anim;
 // Which EXTERNAL subtitle (OpenSubtitles) is in force, as an index into the
 // combined list — or -1 when the active one is embedded or there is none.
@@ -165,185 +131,527 @@ void tracks_auto(Uint32 now) {
   }
 }
 
-// SEPARATE SHEETS: 0 = AUDIO only, 1 = SUBTITLE (list + style).
+// --- THE SHEET'S STATE ---------------------------------------------------------
 //
-// They used to be ONE sheet with the two columns side by side, by my decision:
-// "two screens would force you to leave and come back to check the pair". The
-// owner asked for them separate, and the reference agrees — the TCL has a
-// subtitle overlay of its own (SubtitleSelectionOverlay), with the style picker
-// inside it. Comparing audio+subtitle at once was a case nobody asked for.
-static int mode;
-// Column inside the SUBTITLE sheet: 0 = list, 1 = style.
-#define FX_COL_STYLE 2
-#define FX_N_STYLE   9
+// SEPARATE SHEETS: audio is one list; subtitles has the two tabs. The TCL's own
+// SubtitleSelectionOverlay is the reference for keeping them apart — comparing
+// audio and subtitle at once was a case nobody asked for.
+enum { MODE_AUDIO, MODE_SUBTITLE };
+enum { TAB_TRACKS, TAB_STYLE };
+// Where the D-pad is. The tab row is shared; the rest belongs to one layout each.
+// Audio has only its list, which is Z_SUBSEL's list held permanently open.
+enum { Z_TABS, Z_LANGSEL, Z_SUBSEL, Z_TILE, Z_CHIP };
+static int mode, tab, zone;
+// Which select's list is unfolded: 0 none, 1 Language, 2 Subtitle. An open list
+// owns every key until OK or BACK folds it.
+enum { OPEN_NONE, OPEN_LANG, OPEN_SUB };
+static int openSel;
+// The CHOSEN language, held BY NAME, not by index. The list is rebuilt from what
+// the pipeline and the addon have reported so far, and the addon's answer lands
+// seconds after the sheet can be open: a new language sorted in above it would
+// otherwise swap the choice for a different language under you.
+static char langKey[32];
+// The cursors inside the open lists, and how far each list is scrolled — in rows,
+// not pixels: the pitch is fixed.
+static int langCursor, optFocus, langScroll, optScroll;
+static int tileFocus, chipFocus;
+// The Style bar's own curve, so the switch between the two layouts is a crossfade
+// rather than a cut.
+static float styleAnim;
 
-static int nLines(int col);
+// --- LANGUAGES -----------------------------------------------------------------
+//
+// The Language select's list. "Off" leads, then the languages the Settings row prefers,
+// then the rest alphabetically, and "Unknown" — tracks the file never tagged —
+// sinks to the bottom rather than landing in the middle under U.
+#define LANG_MAX 32
+#define OPT_MAX  (NV_TRACK_MAX + SUB_MAX)
+static const char LANG_OFF[] = "Off";
+static const char LANG_UNKNOWN[] = "Unknown";
+typedef struct { char name[32]; int count, active, rank; } Lang;
+static Lang langs[LANG_MAX];
+static int nLangs;
 
-void tracks_open(void) { tracks_open_at(0); }
+static int nSubtitles(void) { return video_n_subtitle() + addons_n_subtitles(); }
 
-// Opens ALREADY ON THE COLUMN the button asked for. The player has an audio
-// icon and a subtitle icon, and both opened this sheet the same way, with the
-// focus on audio: pressing "subtitles" and landing on audio makes the two
-// buttons look like the same button — which is exactly what the owner reported.
-// The panel is still ONE panel, with the two columns side by side (comparing
-// the chosen pair is why it exists); what changes is where the focus starts.
-void tracks_open_at(int col) {
-  int n;
-  is_open = 1;
-  mode = (col == 1) ? 1 : 0;
-  column = mode;                 // audio -> col 0; subtitle -> col 1
-  // Both panels open COLLAPSED, on the select itself — the list is one press away
-  // and the panel opens showing what is currently chosen rather than a wall of
-  // options.
-  openSelect = 0;
-  row = 0;
-  stepFocus = 1;
-  focus[0] = video_audio_current();
-  // The subtitle may be off (-1); the column's first row is always "Off", so
-  // the list index is shifted by one.
-  focus[1] = (subExternal >= 0 ? subExternal : video_subtitle_current()) + 1;
-  // Clamp on both columns. The subtitle list GROWS during the session (the
-  // OpenSubtitles ones arrive later) and the audio one only exists after
-  // sourceInfo: storing an older index and reopening without checking puts the
-  { int c; for (c = 0; c < 3; c++) {
-      n = nLines(c);
-      if (focus[c] >= n) focus[c] = n > 0 ? n - 1 : 0;
-      if (focus[c] < 0)  focus[c] = 0;
-    scroll[c] = 0;
-    } }
+// The playing row as an index into the combined list, -1 when off.
+static int subActive(void) {
+  return subExternal >= 0 ? subExternal : video_subtitle_current();
 }
 
-int tracks_is_open(void) { return is_open; }
-
-static int nSubtitles(void) {
-  int n = video_n_subtitle() + addons_n_subtitles();
-  return n;
+// The language of row `i` of the combined list — embedded first, then addon — by
+// the same name table the track labels are written with, so the column and the
+// labels cannot disagree about what a code is called.
+static void subLanguage(int i, char *dst, size_t size) {
+  int embedded = video_n_subtitle();
+  const char *code = NULL;
+  if (i < embedded) {
+    const VideoTrack *t = video_subtitle(i);
+    code = t ? t->language : NULL;
+  } else {
+    const Subtitle *l = addons_subtitle(i - embedded);
+    code = l ? l->language : NULL;
+  }
+  snprintf(dst, size, "%s", code && *code ? video_language_name(code) : LANG_UNKNOWN);
 }
 
-static int nLines(int col) {
-  if (col == FX_COL_STYLE) return FX_N_STYLE;
-  if (col == 0) { int n = video_n_audio(); return n; }
-  return nSubtitles() + 1;   // +1 for the "Off" row
+// 0 and 1 are the Settings preference ("Automatic" is Portuguese then English, the
+// order the addon search already uses); 2 is everything else; 3 is Unknown.
+static int langRank(const char *name) {
+  int pref = settings_subtitle_pref();
+  int pt = !strncmp(name, "Portuguese", 10), en = !strcmp(name, "English");
+  if (!strcmp(name, LANG_UNKNOWN)) return 3;
+  if (pref == 2 && pt) return 0;
+  if (pref == 3 && en) return 0;
+  if (pref == 1 && (pt || en)) return pt ? 0 : 1;
+  return 2;
 }
 
-// --- STYLE COLUMN ------------------------------------------------------------
-//
-// Eight "label: value" rows. OK cycles the value and applies it AT ONCE — the
-// customisations below use only methods present in the firmware. The last row
-// restores the whole set without needing dozens of presses on the remote.
-// SHORT LABELS, because the panel is now one 340px column and the centre of a
-// style row — what is left between the two steppers — is 168px of it. That is the
-// same 168 the web app leaves itself, and its own labels ("Delay", "Bold",
-// "Outline") are cut to fit it.
-//
-// Row 1 said "OpenSubtitles source" and always had: valueStyle draws
-// TXT_FAMILIES_LABEL there, which is the subtitle FONT (Inter / LG / Droid) and
-// has nothing to do with where the file came from. The row has been lying since it
-// was written; it is called "Font" now.
-static const char *const ST_ROT[FX_N_STYLE] = {
-  "Size", "Font", "Colour", "Opacity", "Background", "Position", "Border", "Delay",
-  "Reset"
-};
-static const char *const ST_BACKGROUND[5] = { "None", "Dark 25%", "Dark 50%",
-                                          "Dark 75%", "Dark 100%" };
-static const char *const ST_BORDER[3] = { "None", "Outline", "Shadow" };
-static const char *const ST_OPACITY[4]  = { "100%", "75%", "50%", "25%" };
+static int langBefore(const Lang *l, const Lang *r) {
+  if (l->rank != r->rank) return l->rank < r->rank;
+  return strcasecmp(l->name, r->name) < 0;
+}
 
-static void valueStyle(int line, char *dst, size_t size) {
-  const VideoSubtitleStyle *e = player_sub_style();
-  switch (line) {
-    case 0: snprintf(dst, size, "%d%%", e->size); break;
-    case 1: snprintf(dst, size, "%s", TXT_FAMILIES_LABEL[e->family >= 0 && e->family < TXT_FAMILY_N ? e->family : 0]); break;
-    case 2: snprintf(dst, size, "%s", VIDEO_SUB_COLORS_LABEL[e->color % VIDEO_SUB_NCOLORS]); break;
-    case 3: snprintf(dst, size, "%s", ST_OPACITY[e->opacity > 3 ? 3 : e->opacity]); break;
-    case 4: snprintf(dst, size, "%s", ST_BACKGROUND[e->background > 4 ? 4 : e->background]); break;
-    // The uMS accepts -3..4; the sheet shows 1..8 because "position -3" says
-    // nothing to whoever is looking at the screen.
-    case 5: snprintf(dst, size, "%d of 8", e->position + 1); break;
-    case 6: snprintf(dst, size, "%s", ST_BORDER[e->border > 2 ? 2 : e->border]); break;
-    case 7: {
-      int a = e->delayMs;
-      if (!a) snprintf(dst, size, "0 s");
-      else    snprintf(dst, size, "%+.2f s", a / 1000.0f);
-      break; }
-    default: snprintf(dst, size, "Apply"); break;
+// Rebuilt on every key and every frame: it is at most a couple of dozen rows,
+// and a cached copy is one more thing that can go stale when the addon lands.
+static void buildLangs(void) {
+  int n = nSubtitles(), act = subActive(), i, j;
+  snprintf(langs[0].name, sizeof langs[0].name, "%s", LANG_OFF);
+  langs[0].count = 0; langs[0].active = act < 0; langs[0].rank = -1;
+  nLangs = 1;
+  for (i = 0; i < n; i++) {
+    char name[32];
+    subLanguage(i, name, sizeof name);
+    for (j = 1; j < nLangs && strcmp(langs[j].name, name); j++) {}
+    if (j == nLangs) {
+      if (nLangs == LANG_MAX) continue;
+      snprintf(langs[j].name, sizeof langs[j].name, "%s", name);
+      langs[j].count = 0; langs[j].active = 0; langs[j].rank = langRank(name);
+      nLangs++;
+    }
+    langs[j].count++;
+    if (i == act) langs[j].active = 1;
+  }
+  for (i = 2; i < nLangs; i++) {
+    Lang v = langs[i];
+    for (j = i; j > 1 && langBefore(&v, &langs[j - 1]); j--) langs[j] = langs[j - 1];
+    langs[j] = v;
   }
 }
 
-// A step of `dir` (+1 or -1) around a ring of `n`. C's % keeps the sign of the
-// left operand, so (0 - 1) % 8 is 0 and not 7: stepping backwards off the start
-// of any of these lists would stick rather than wrap without the addend.
-static int ring(int v, int dir, int n) { return ((v + dir) % n + n) % n; }
+static int langChosen(void) {
+  int i;
+  for (i = 0; i < nLangs; i++) if (!strcmp(langs[i].name, langKey)) return i;
+  return 0;
+}
 
-// The steppers either side of the value, and OK, all arrive here. `dir` is +1 or
-// -1; the rows that are not a ring (size, delay) clamp-and-wrap at their ends,
-// and the last row is an action rather than a value, so both directions do the
-// same thing to it.
-static void stepStyle(int line, int dir) {
+static void setLang(int i) {
+  if (i < 0) i = 0;
+  if (i >= nLangs) i = nLangs - 1;
+  snprintf(langKey, sizeof langKey, "%s", langs[i].name);
+}
+
+// The Subtitle select's list: the rows of the combined list in language `li`, in
+// list order — the file's own first, then the addon's.
+static int langOptions(int li, int *out) {
+  int n = nSubtitles(), i, k = 0;
+  if (li <= 0 || li >= nLangs) return 0;
+  for (i = 0; i < n && k < OPT_MAX; i++) {
+    char name[32];
+    subLanguage(i, name, sizeof name);
+    if (!strcmp(name, langs[li].name)) out[k++] = i;
+  }
+  return k;
+}
+
+// The option in language `li` that is playing, or -1.
+static int activeOption(int li) {
+  int opts[OPT_MAX], n = langOptions(li, opts), act = subActive(), k;
+  for (k = 0; k < n; k++) if (opts[k] == act) return k;
+  return -1;
+}
+
+// --- A TRACK ROW'S WORDING -----------------------------------------------------
+//
+// The language select has already said the language, so a subtitle row never
+// repeats it. What is left to say is what actually tells two rows apart: for the
+// file's own tracks, the name the file gives them and whether they are text or a
+// picture; for the addon's, the release they were cut for and whether that is
+// the release playing.
+
+// The CodecID, shortened for reading. `bitmap` comes back 1 for the formats that
+// are PICTURES: those cannot be restyled, moved or resized, so every Style setting
+// silently does nothing on one — the row says so before it is chosen.
+static const char *codecShort(const char *codec, int *bitmap) {
+  *bitmap = 0;
+  if (!codec || !codec[0]) return NULL;
+  if (strstr(codec, "PGS"))    { *bitmap = 1; return "PGS"; }
+  if (strstr(codec, "VOBSUB")) { *bitmap = 1; return "VobSub"; }
+  if (strstr(codec, "DVBSUB")) { *bitmap = 1; return "DVB"; }
+  if (strstr(codec, "WEBVTT")) return "WebVTT";
+  if (strstr(codec, "ASS"))    return "ASS";
+  if (strstr(codec, "SSA"))    return "SSA";
+  if (strstr(codec, "UTF8"))   return "SRT";
+  return NULL;
+}
+
+// What an embedded label says BESIDES its language. The labels were written for
+// one mixed list, so they lead with it ("English  ·  SDH").
+static const char *labelRest(const char *label, const char *lang) {
+  static const char SEP[] = "  \xc2\xb7  ";
+  size_t n = strlen(lang);
+  if (strncmp(label, lang, n)) return label;
+  if (!label[n]) return "";
+  if (!strncmp(label + n, SEP, sizeof SEP - 1)) return label + n + sizeof SEP - 1;
+  return label;
+}
+
+// Case-blind substring test. strcasestr is a GNU extension the device's glibc
+// only declares under _GNU_SOURCE.
+static int hasWord(const char *s, const char *w) {
+  size_t n = strlen(w);
+  for (; *s; s++) if (!strncasecmp(s, w, n)) return 1;
+  return 0;
+}
+
+// The release GROUP: the tag after the last '-' of the name, before the
+// extension — "ETHEL" in "Silo.S02E04.2160p.WEB.h265-ETHEL.mkv". It is the one
+// token that identifies the encode. Two files from the same group share cuts and
+// frame rate, which is what decides whether a subtitle stays in sync; resolution
+// and source do not, since a group's 1080p and 2160p come from the same master.
+static int releaseGroup(const char *name, char *dst, size_t size) {
+  const char *slash = strrchr(name, '/'), *dash, *end;
+  size_t k = 0;
+  if (slash) name = slash + 1;
+  end = strrchr(name, '.');
+  if (!end) end = name + strlen(name);
+  for (dash = end; dash > name && dash[-1] != '-'; dash--) {}
+  if (dash == name) return 0;
+  for (; dash < end && k + 1 < size; dash++) {
+    char c = *dash;
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) break;
+    dst[k++] = c;
+  }
+  dst[k] = 0;
+  return k >= 2;
+}
+
+static int matchesPlaying(const char *release) {
+  const Stream *st = stream_n() > 0 ? stream_item(stream_current()) : NULL;
+  char a[32], b[32];
+  if (!st || !release || !release[0] || !st->file[0]) return 0;
+  if (!releaseGroup(release, a, sizeof a) || !releaseGroup(st->file, b, sizeof b)) return 0;
+  return !strcasecmp(a, b);
+}
+
+// The main line and the detail line for row `i` of the combined list. `ordinal`
+// is its place among its language's rows, for a track that has no name at all.
+static void optionText(int i, int ordinal, char *main, size_t mSize,
+                       char *sub, size_t sSize) {
+  int embedded = video_n_subtitle();
+  char lang[32];
+  subLanguage(i, lang, sizeof lang);
+  if (i < embedded) {
+    const VideoTrack *t = video_subtitle(i);
+    const char *rest = t ? labelRest(t->label, lang) : "";
+    int bitmap;
+    const char *fmt = codecShort(t ? t->codec : NULL, &bitmap);
+    // The names that are a KIND of subtitle are worth a word of explanation; the
+    // rest ("Full", "Commentary", a translator's name) say what they say.
+    if (!strcasecmp(rest, "sdh") || hasWord(rest, "sdh"))
+      snprintf(main, mSize, "SDH  \xc2\xb7  with sound descriptions");
+    else if (!strcasecmp(rest, "forced") || hasWord(rest, "forced"))
+      snprintf(main, mSize, "Forced  \xc2\xb7  foreign dialogue only");
+    else if (rest[0]) snprintf(main, mSize, "%s", rest);
+    else snprintf(main, mSize, "Track %d", ordinal + 1);
+    snprintf(sub, sSize, "Embedded%s%s%s", fmt ? "  \xc2\xb7  " : "", fmt ? fmt : "",
+             bitmap ? "  \xc2\xb7  image, can't be restyled" : "");
+  } else {
+    const Subtitle *l = addons_subtitle(i - embedded);
+    if (l && l->release[0]) snprintf(main, mSize, "%s", l->release);
+    else snprintf(main, mSize, "Download %d", ordinal + 1);
+    snprintf(sub, sSize, "OpenSubtitles%s",
+             l && matchesPlaying(l->release) ? "  \xc2\xb7  matches your file" : "");
+  }
+}
+
+// --- STYLE ---------------------------------------------------------------------
+//
+// Eight tiles, one per setting. Every change applies AT ONCE — the viewer has to
+// SEE the subtitle change in order to choose it.
+#define FX_N_TILE 8
+enum { ST_SIZE, ST_FONT, ST_COLOUR, ST_OPACITY, ST_BACKGROUND, ST_POSITION,
+       ST_EDGE, ST_DELAY };
+static const char *const ST_LABEL[FX_N_TILE] = {
+  "SIZE", "FONT", "COLOUR", "OPACITY", "BACKGROUND", "HEIGHT", "EDGE", "DELAY"
+};
+static const char *const ST_BACKGROUND_LABEL[5] = { "None", "Dark 25%", "Dark 50%",
+                                                    "Dark 75%", "Solid" };
+static const char *const ST_EDGE_LABEL[3] = { "None", "Outline", "Shadow" };
+static const char *const ST_OPACITY_LABEL[4] = { "100%", "75%", "50%", "25%" };
+// The three settings with too many values to lay out as chips get a pair of
+// steppers instead, worded as what they do rather than as "-" and "+".
+static const char *const ST_STEP_LABEL[FX_N_TILE][2] = {
+  [ST_SIZE]     = { "Smaller", "Larger" },
+  [ST_POSITION] = { "Lower",   "Higher" },
+  [ST_DELAY]    = { "Earlier", "Later"  },
+};
+#define ST_DEFAULT ((VideoSubtitleStyle){ 120, 0, 0, 3, 1, 0, 0, TXT_FAMILY_INTER })
+
+static int tileStepper(int t) { return t == ST_SIZE || t == ST_POSITION || t == ST_DELAY; }
+
+// How many choices a tile has, the RESET chip not included.
+static int tileChoices(int t) {
+  switch (t) {
+    case ST_FONT:       return TXT_FAMILY_N;
+    case ST_COLOUR:     return VIDEO_SUB_NCOLORS;
+    case ST_OPACITY:    return 4;
+    case ST_BACKGROUND: return 5;
+    case ST_EDGE:       return 3;
+    default:            return 2;
+  }
+}
+
+static const char *choiceLabel(int t, int c) {
+  switch (t) {
+    case ST_FONT:       return TXT_FAMILIES_LABEL[c];
+    case ST_COLOUR:     return VIDEO_SUB_COLORS_LABEL[c];
+    case ST_OPACITY:    return ST_OPACITY_LABEL[c];
+    case ST_BACKGROUND: return ST_BACKGROUND_LABEL[c];
+    case ST_EDGE:       return ST_EDGE_LABEL[c];
+    default:            return ST_STEP_LABEL[t][c];
+  }
+}
+
+// The value a chip tile holds now, or -1 for a stepper tile.
+static int tileCurrent(int t) {
+  const VideoSubtitleStyle *e = player_sub_style();
+  switch (t) {
+    case ST_FONT:       return e->family >= 0 && e->family < TXT_FAMILY_N ? e->family : 0;
+    case ST_COLOUR:     return e->color % VIDEO_SUB_NCOLORS;
+    case ST_OPACITY:    return e->opacity > 3 ? 3 : e->opacity;
+    case ST_BACKGROUND: return e->background > 4 ? 4 : e->background;
+    case ST_EDGE:       return e->border > 2 ? 2 : e->border;
+    default:            return -1;
+  }
+}
+
+static void tileValue(int t, char *dst, size_t size) {
+  const VideoSubtitleStyle *e = player_sub_style();
+  switch (t) {
+    case ST_SIZE: snprintf(dst, size, "%d%%", e->size); break;
+    // The uMS takes -3..4 and the overlay moves 48px a step. Said in pixels from
+    // the default, because "position 5 of 8" does not tell you which way is up.
+    case ST_POSITION:
+      if (e->position == 3) snprintf(dst, size, "Default");
+      else snprintf(dst, size, "%s%d px", e->position > 3 ? "+" : "\xe2\x88\x92",
+                    (e->position > 3 ? e->position - 3 : 3 - e->position) * 48);
+      break;
+    case ST_DELAY:
+      if (!e->delayMs) snprintf(dst, size, "0.0 s");
+      else snprintf(dst, size, "%s%.2f s", e->delayMs > 0 ? "+" : "\xe2\x88\x92",
+                    (e->delayMs > 0 ? e->delayMs : -e->delayMs) / 1000.0f);
+      break;
+    default: snprintf(dst, size, "%s", choiceLabel(t, tileCurrent(t))); break;
+  }
+}
+
+// Size, Position and Delay STOP at their ends rather than wrapping: on a stepper
+// worded "Larger", one more press landing on the smallest size is a surprise.
+static void stepTile(int t, int dir) {
   VideoSubtitleStyle *e = player_sub_style();
-  switch (line) {
-    case 0:
+  switch (t) {
+    case ST_SIZE:
       e->size += 10 * dir;
-      if (e->size > 200) e->size = 50;
-      if (e->size < 50)  e->size = 200;
+      if (e->size > 200) e->size = 200;
+      if (e->size < 50)  e->size = 50;
       break;
-    case 1: e->family     = ring(e->family,     dir, TXT_FAMILY_N); break;
-    case 2: e->color      = ring(e->color,      dir, VIDEO_SUB_NCOLORS); break;
-    case 3: e->opacity    = ring(e->opacity,    dir, 4); break;
-    case 4: e->background = ring(e->background, dir, 5); break;
-    case 5: e->position   = ring(e->position,   dir, 8); break;
-    case 6: e->border     = ring(e->border,     dir, 3); break;
-    // -5 s to +5 s in 250 ms steps, wrapping round. A smaller step would take
-    // dozens of presses to get anywhere on a remote control.
-    case 7:
+    case ST_POSITION:
+      e->position += dir;
+      if (e->position > 7) e->position = 7;
+      if (e->position < 0) e->position = 0;
+      break;
+    // -5 s to +5 s in 250 ms steps. A smaller step would take dozens of presses
+    // to get anywhere on a remote control.
+    case ST_DELAY:
       e->delayMs += 250 * dir;
-      if (e->delayMs >  5000) e->delayMs = -5000;
-      if (e->delayMs < -5000) e->delayMs =  5000;
+      if (e->delayMs >  5000) e->delayMs =  5000;
+      if (e->delayMs < -5000) e->delayMs = -5000;
       break;
-    default:
-      *e = (VideoSubtitleStyle){ 120, 0, 0, 3, 1, 0, 0, TXT_FAMILY_INTER };
-      break;
+    default: break;
   }
   player_sub_style_changed();
 }
 
-
-// The label of row `i` of the subtitle column. Up to video_n_subtitle() they
-// are the embedded ones; after that come the OpenSubtitles ones.
-static const char *labelSubtitle(int i, const char **brand) {
-  int embedded = video_n_subtitle();
-  *brand = NULL;
-  if (i < embedded) {
-    const VideoTrack *f = video_subtitle(i);
-    return f ? f->label : "";
+static void setTile(int t, int v) {
+  VideoSubtitleStyle *e = player_sub_style();
+  switch (t) {
+    case ST_FONT:       e->family = v; break;
+    case ST_COLOUR:     e->color = v; break;
+    case ST_OPACITY:    e->opacity = v; break;
+    case ST_BACKGROUND: e->background = v; break;
+    case ST_EDGE:       e->border = v; break;
+    default: return;
   }
-  { const Subtitle *l = addons_subtitle(i - embedded);
-    if (!l) return "";
-    *brand = "OpenSubtitles";
-    return l->label; }
+  player_sub_style_changed();
 }
 
-static void apply(void) {
-  // A choice made by hand ENDS the automatic one for this playback, "None"
+static void resetStyle(void) {
+  *player_sub_style() = ST_DEFAULT;
+  player_sub_style_changed();
+}
+
+// Where the chip row's focus lands on the way down: the value in force, so OK
+// there is a no-op rather than a change; on a stepper, the forward one — the
+// direction you want first is nearly always up.
+static void enterChips(void) {
+  int c = tileCurrent(tileFocus);
+  chipFocus = c >= 0 ? c : 1;
+  zone = Z_CHIP;
+}
+
+// --- OPENING AND CHOOSING ------------------------------------------------------
+
+void tracks_open(void) { tracks_open_at(0); }
+
+// Opens ALREADY ON THE SHEET the button asked for: pressing "subtitles" and
+// landing on audio made the two buttons look like the same button.
+//
+// The subtitle sheet opens on Tracks with both selects folded, the cursor on the
+// Subtitle select when a subtitle is on — switching to another version of the
+// same language is the commonest errand — and on Language when none is.
+void tracks_open_at(int col) {
+  is_open = 1;
+  mode = col == 1 ? MODE_SUBTITLE : MODE_AUDIO;
+  tab = TAB_TRACKS;
+  styleAnim = 0.0f;
+  openSel = OPEN_NONE;
+  langScroll = optScroll = 0;
+  tileFocus = 0; chipFocus = 0;
+  if (mode == MODE_AUDIO) {
+    int n = video_n_audio();
+    optFocus = video_audio_current();
+    if (optFocus >= n) optFocus = n - 1;
+    if (optFocus < 0) optFocus = 0;
+    zone = Z_SUBSEL;
+    return;
+  }
+  buildLangs();
+  { int i, li = 0;
+    for (i = 0; i < nLangs; i++) if (langs[i].active) { li = i; break; }
+    setLang(li);
+    zone = li > 0 ? Z_SUBSEL : Z_LANGSEL; }
+}
+
+int tracks_is_open(void) { return is_open; }
+
+static void applySubtitle(int i) {
+  int embedded = video_n_subtitle();
+  // A choice made by hand ENDS the automatic one for this playback, "Off"
   // included: turning the subtitle off and having it come back a frame later is
   // the app arguing with the person using it.
   autoDone = 1;
-  if (column == 0) {
-    video_choose_audio(focus[0]);
+  if (i < 0)             { video_choose_subtitle(-1); subtitle_off(); subExternal = -1; }
+  else if (i < embedded) { video_choose_subtitle(i);  subtitle_off(); subExternal = -1; }
+  else {
+    const Subtitle *l = addons_subtitle(i - embedded);
+    // Only mark as active if there was something to apply: without the URL the
+    // uMS gets nothing, and the sheet would say "active" about nothing.
+    if (l) { video_choose_subtitle(-1); subtitle_load(l->url); subExternal = i; }
+  }
+}
+
+static int isBack(SDL_Keycode k) {
+  return k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE;
+}
+static int isOk(SDL_Keycode k) { return k == SDLK_RETURN || k == SDLK_KP_ENTER; }
+
+// The Subtitle select exists only once a language is chosen that has tracks.
+static int subSelShown(void) {
+  int opts[OPT_MAX];
+  return langChosen() > 0 && langOptions(langChosen(), opts) > 0;
+}
+
+static void eventAudio(SDL_Keycode k) {
+  int n = video_n_audio();
+  if (isBack(k)) { is_open = 0; return; }
+  if (k == SDLK_UP   && optFocus > 0)     optFocus--;
+  if (k == SDLK_DOWN && optFocus < n - 1) optFocus++;
+  // Choosing closes the sheet: the choice is the whole errand.
+  if (isOk(k) && n > 0) { autoDone = 1; video_choose_audio(optFocus); is_open = 0; }
+}
+
+static void eventLangList(SDL_Keycode k) {
+  if (isBack(k)) { openSel = OPEN_NONE; return; }
+  if (k == SDLK_UP   && langCursor > 0)          langCursor--;
+  if (k == SDLK_DOWN && langCursor < nLangs - 1) langCursor++;
+  if (!isOk(k)) return;
+  openSel = OPEN_NONE;
+  setLang(langCursor);
+  // Off is the whole answer. A language turns on its track — the one already
+  // playing if it is this language, else its first — and hands the cursor to the
+  // Subtitle select just below, where its other versions are.
+  if (langCursor == 0) { applySubtitle(-1); zone = Z_LANGSEL; return; }
+  { int opts[OPT_MAX], n = langOptions(langCursor, opts);
+    if (n > 0 && activeOption(langCursor) < 0) applySubtitle(opts[0]);
+    zone = n > 0 ? Z_SUBSEL : Z_LANGSEL; }
+}
+
+static void eventSubList(SDL_Keycode k) {
+  int opts[OPT_MAX], n = langOptions(langChosen(), opts);
+  if (isBack(k)) { openSel = OPEN_NONE; return; }
+  if (k == SDLK_UP   && optFocus > 0)     optFocus--;
+  if (k == SDLK_DOWN && optFocus < n - 1) optFocus++;
+  // Choosing the subtitle closes the sheet: it is the end of the errand.
+  if (isOk(k) && optFocus < n) { applySubtitle(opts[optFocus]); openSel = OPEN_NONE; is_open = 0; }
+}
+
+static void eventTracks(SDL_Keycode k) {
+  if (openSel == OPEN_LANG) { eventLangList(k); return; }
+  if (openSel == OPEN_SUB)  { eventSubList(k);  return; }
+  if (isBack(k)) { is_open = 0; return; }
+  if (zone == Z_TABS) {
+    if (k == SDLK_RIGHT) tab = TAB_STYLE;
+    else if (k == SDLK_DOWN) zone = Z_LANGSEL;
+    return;
+  }
+  if (k == SDLK_UP) { zone = zone == Z_SUBSEL ? Z_LANGSEL : Z_TABS; return; }
+  if (k == SDLK_DOWN) { if (zone == Z_LANGSEL && subSelShown()) zone = Z_SUBSEL; return; }
+  if (!isOk(k)) return;
+  // OK unfolds the select with the cursor on what is in force, so a second OK
+  // changes nothing.
+  if (zone == Z_LANGSEL) {
+    langCursor = langChosen(); langScroll = 0; openSel = OPEN_LANG;
   } else {
-    int i = focus[1] - 1;
-    int embedded = video_n_subtitle();
-    if (i < 0)        { video_choose_subtitle(-1); subtitle_off(); subExternal = -1; }
-    else if (i < embedded) { video_choose_subtitle(i);  subtitle_off(); subExternal = -1; }
-    else {
-      const Subtitle *l = addons_subtitle(i - embedded);
-      // Only mark as active if there was something to apply: without the URL
-      // the uMS gets nothing, and the sheet would say "active" about nothing.
-      if (l) {
-        /* The font and the 16 sizes are ours now, not the webOS firmware's. */
-        video_choose_subtitle(-1); subtitle_load(l->url); subExternal = i;
-      }
-    }
+    int a = activeOption(langChosen());
+    optFocus = a >= 0 ? a : 0; optScroll = 0; openSel = OPEN_SUB;
+  }
+}
+
+static void eventStyle(SDL_Keycode k) {
+  int nChips = tileChoices(tileFocus) + 1;    // + Reset to defaults
+  if (zone == Z_TABS) {
+    if (isBack(k)) { is_open = 0; return; }
+    if (k == SDLK_LEFT) tab = TAB_TRACKS;
+    else if (k == SDLK_DOWN || isOk(k)) zone = Z_TILE;
+    return;
+  }
+  if (zone == Z_TILE) {
+    if (isBack(k)) { is_open = 0; return; }
+    if (k == SDLK_UP) zone = Z_TABS;
+    else if (k == SDLK_LEFT  && tileFocus > 0)             tileFocus--;
+    else if (k == SDLK_RIGHT && tileFocus < FX_N_TILE - 1) tileFocus++;
+    else if (k == SDLK_DOWN || isOk(k)) enterChips();
+    return;
+  }
+  // Z_CHIP
+  if (isBack(k) || k == SDLK_UP) { zone = Z_TILE; return; }
+  if (k == SDLK_LEFT  && chipFocus > 0)          chipFocus--;
+  if (k == SDLK_RIGHT && chipFocus < nChips - 1) chipFocus++;
+  if (isOk(k)) {
+    if (chipFocus == nChips - 1) resetStyle();
+    else if (tileStepper(tileFocus)) stepTile(tileFocus, chipFocus ? 1 : -1);
+    else setTile(tileFocus, chipFocus);
   }
 }
 
@@ -351,320 +659,378 @@ void tracks_event(const SDL_Event *e) {
   SDL_Keycode k;
   if (!is_open || e->type != SDL_KEYDOWN) return;
   k = e->key.keysym.sym;
-
-  // --- The expanded list owns every key until it is dismissed ----------------
-  // Including BACK, which collapses the list rather than closing the panel: a
-  // list you opened by pressing OK is a thing you should be able to back out of
-  // without losing the panel behind it.
-  if (openSelect) {
-    column = mode;
-    if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE) {
-      openSelect = 0;
-      return;
-    }
-    if (k == SDLK_UP)   { if (focus[column] > 0) focus[column]--; adjustScroll(); return; }
-    if (k == SDLK_DOWN) { if (focus[column] < nLines(column) - 1) focus[column]++;
-                          adjustScroll(); return; }
-    if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
-      apply();
-      // Choosing closes the panel outright, as it always has: the choice is the
-      // whole errand, and dropping back to a collapsed select would make every
-      // track change two presses instead of one.
-      is_open = 0;
-      return;
-    }
-    return;
-  }
-
-  // --- The collapsed stack --------------------------------------------------
-  if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE) { is_open = 0; return; }
-  // Every move between rows puts the focus back on the PLUS. Carrying the side
-  // across rows would mean the button under the cursor depends on where you came
-  // from, which is not something you can see on screen.
-  // The style rail belongs to the SUBTITLE panel. Audio's stack is the select and
-  // nothing else, so there is nowhere below row 0 to go — without this the focus
-  // walked off into rows that are never drawn, and the panel looked like it had
-  // lost the cursor.
-  if (k == SDLK_UP)   { if (row > 0) row--; stepFocus = 1; return; }
-  if (k == SDLK_DOWN) { if (mode && row < FX_N_STYLE) row++; stepFocus = 1; return; }
-  // LEFT/RIGHT WALK THE TWO BUTTONS. They are separate targets, each with its own
-  // ring, so the keys move the focus between them rather than acting on the value
-  // — OK is what acts. On the select row there is nothing either side to reach.
-  if (k == SDLK_LEFT)  { if (row > 0) stepFocus = 0; return; }
-  if (k == SDLK_RIGHT) { if (row > 0) stepFocus = 1; return; }
-  if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
-    if (!row) { openSelect = 1; column = mode; adjustScroll(); return; }
-    // OK presses the button that is focused, and applies at once without closing:
-    // the owner needs to SEE the subtitle change in order to choose it.
-    stepStyle(row - 1, stepFocus ? 1 : -1);
-    return;
-  }
+  if (mode == MODE_AUDIO) { eventAudio(k); return; }
+  buildLangs();
+  if (tab == TAB_TRACKS) eventTracks(k); else eventStyle(k);
 }
 
 void tracks_update(float dt, Uint32 now) {
   (void)now;
   anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
+  styleAnim = anim_spring(styleAnim, is_open && mode == MODE_SUBTITLE && tab == TAB_STYLE
+                          ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
+  // The file's own subtitle is drawn by the pipeline, out of the overlay's reach,
+  // so the Style bar lifts it there too — the viewer's Height is left alone and
+  // the raise comes off the moment the bar goes.
+  video_subtitle_lift(is_open && mode == MODE_SUBTITLE && tab == TAB_STYLE
+                      ? NV_TRK_EMBED_LIFT : 0);
 }
 
-// Brings the focused row inside the visible window, moving the MINIMUM: only
-// when the focus passes one of the edges. Always scrolling to centre would make
-// the whole list move on every keypress, which on a D-pad is disorienting.
-static void adjustScroll(void) {
-  int n = nLines(column), f = focus[column], *r = &scroll[column];
-  if (visible < 1) return;
-  if (f < *r) *r = f;
-  else if (f >= *r + visible) *r = f - visible + 1;
-  if (*r > n - visible) *r = n - visible;
-  if (*r < 0) *r = 0;
+float tracks_shown(void) { return anim < 0.01f ? 0.0f : anim; }
+
+float tracks_style_shown(void) {
+  float s = styleAnim * anim;
+  return s < 0.01f ? 0.0f : s;
 }
 
-// The label and sub-label of row `i` of the list currently in the select.
-static void listRow(int i, const char **main, const char **sub) {
-  *sub = NULL;
-  if (!mode) {
-    const VideoTrack *f = video_audio(i);
-    *main = f ? f->label : "";
-    *sub  = f ? f->language : NULL;
-    return;
+
+// --- DRAWING -------------------------------------------------------------------
+
+// Keeps the cursor inside the window, moving the MINIMUM: only when it passes one
+// of the edges. Always scrolling to centre would make the whole list move on
+// every keypress, which on a D-pad is disorienting.
+static void keepInView(int f, int n, int visible, int *scroll) {
+  if (visible < 1) visible = 1;
+  if (f < *scroll) *scroll = f;
+  else if (f >= *scroll + visible) *scroll = f - visible + 1;
+  if (*scroll > n - visible) *scroll = n - visible;
+  if (*scroll < 0) *scroll = 0;
+}
+
+static void ringAround(GfxRect b, float radiusPx, float a) {
+  float g = NV_RING_FOCUS;
+  GfxRect r = { b.x - g, b.y - g, b.w + g * 2, b.h + g * 2 };
+  gfx_rect(r, 0, GFX_RING_INSET, 0, g / r.h, 0, (radiusPx + g) / r.h,
+           1, 1, 1, 0.96f * a);
+}
+
+// The playing mark: a dot, and ON beside it when there is room to say it.
+// Returns the x it starts at, so what sits to its left can stop short of it.
+static float onMark(float right, float cy, int focused, int word, float a) {
+  int c = focused ? NV_TRK_FOCUS_INK : 245;
+  float x = right, d = NV_TRK_DOT;
+  if (word) {
+    TxtLine on = txt_line(TXT_ERAIL_PILL, "ON", c, c, c, 255);
+    x -= on.w;
+    txt_draw_alpha(on, x, cy - on.h * 0.5f, a);
+    x -= 10.0f;
   }
-  if (!i) { *main = "None"; return; }
-  *main = labelSubtitle(i - 1, sub);
-  if (!*sub) *sub = "Embedded";
+  x -= d;
+  gfx_color((GfxRect){ x, cy - d * 0.5f, d, d }, 0.5f, c / 255.0f, c / 255.0f, c / 255.0f, a);
+  return x;
 }
 
-// Which row of the list is the one actually playing.
-static int listActive(int i) {
-  if (!mode) return i == video_audio_current();
-  return subExternal >= 0 ? i - 1 == subExternal : i - 1 == video_subtitle_current();
-}
-
-// What the COLLAPSED select shows: the active row, which is the only thing the
-// row has space to say. Not the focused one — a select that reports whatever the
-// cursor is resting on is describing the list, not the state.
-static void selectValue(char *dst, size_t size) {
-  int n = nLines(mode), i;
-  for (i = 0; i < n; i++) {
-    if (!listActive(i)) continue;
-    { const char *main, *sub;
-      listRow(i, &main, &sub);
-      snprintf(dst, size, "%s", main && *main ? main : "Track"); }
-    return;
+// THE HEADER, measured off the sources sheet: the heading at NV_TRK_TITLE_Y with
+// its count centred on the heading's capitals, and — on the subtitle sheet — the
+// tabs on NV_TRK_TABS_Y. `x` is the column's left edge.
+//
+// `right` (0..1) is the Style tab's pull: there the panel has gone and the header
+// stands alone over the picture, so it goes flush to the screen's right margin —
+// heading and tabs each set right — and the count fades out: it counts tracks,
+// and there are no tracks on that tab.
+static void drawHeader(float x, int count, float right, float a) {
+  const char *name = mode == MODE_SUBTITLE ? "Subtitles" : "Audio";
+  TxtLine title = txt_line(TXT_PANEL_TITLE, name, 240, 241, 243, 255);
+  float edge = NV_SCREEN_W - NV_TRK_PAD, ty = NV_TRK_TITLE_Y;
+  float tx = x + (edge - title.w - x) * right;
+  txt_draw_alpha(title, tx, ty, a);
+  if (count >= 0 && right < 0.99f) {
+    char n[48];
+    float capT = txt_cap_inset(TXT_PANEL_TITLE), capC = txt_cap_inset(TXT_SRC_COUNT);
+    float mid = ty + (capT + txt_baseline(TXT_PANEL_TITLE)) * 0.5f;
+    float by = mid - (capC + txt_baseline(TXT_SRC_COUNT)) * 0.5f;
+    if (mode == MODE_SUBTITLE)
+      snprintf(n, sizeof n, "%d available%s", count,
+               addons_subtitles_busy() ? "  \xc2\xb7  searching" : "");
+    else
+      snprintf(n, sizeof n, "%d track%s", count, count == 1 ? "" : "s");
+    txt_draw_alpha(txt_line(TXT_SRC_COUNT, n, 132, 135, 142, 255),
+                   tx + (float)title.w + 18.0f, by, a * (1.0f - right));
   }
-  snprintf(dst, size, "%s", mode ? "Off" : "Default");
+  if (mode != MODE_SUBTITLE) return;
+
+  { float tabsW = tab_width("Tracks") + tab_width("Style") - NV_TAB_GAP;
+    float px = x + (edge - tabsW - x) * right;
+    px += tab_draw(px, NV_TRK_TABS_Y, "Tracks", tab == TAB_TRACKS, zone == Z_TABS, a);
+    tab_draw(px, NV_TRK_TABS_Y, "Style", tab == TAB_STYLE, zone == Z_TABS, a); }
 }
 
-// A row's ground. Focus is an INVERSION — the row fills with white and its type
-// goes dark — rather than a ring around it. It is the whole reason the panel can
-// drop every border and still read: an outline needs a box to sit on, and the
-// boxes are what made the old sheet look like a form.
-static void rowFill(GfxRect r, float radiusPx, int focused, float a) {
+static void quiet(const char *s, float x, float y, float w, float a) {
+  txt_block(TXT_TRK_OPTSUB, s, 133, 134, 136, x + NV_TRK_SEL_PADX, y + 16.0f,
+            w - NV_TRK_SEL_PADX * 2, 26.0f, a, 3);
+}
+
+// "value · tail" on one line, the tail in grey, the pair centred on `yc`. The
+// value gives way first: a long release name is trimmed so the tail — the part
+// that says what KIND of thing it is — always survives.
+static void valueTail(TxtStyle vs, TxtStyle ts, const char *value, const char *tail,
+                      float x, float yc, float room, int ink, int grey, float a) {
+  TxtLine dot = txt_line(ts, "\xc2\xb7", grey, grey, grey, 255);
+  TxtLine lt = txt_line(ts, tail && *tail ? tail : "", grey, grey, grey, 255);
+  float tw = tail && *tail ? 12.0f * 2 + dot.w + lt.w : 0.0f;
+  TxtLine lv = txt_line_trim(vs, value, ink, ink, ink, 255, room - tw > 60.0f ? room - tw : 60.0f);
+  txt_draw_alpha(lv, x, yc - lv.h * 0.5f, a);
+  if (tw > 0.0f) {
+    txt_draw_alpha(dot, x + lv.w + 12.0f, yc - dot.h * 0.5f, a);
+    txt_draw_alpha(lt, x + lv.w + 24.0f + dot.w, yc - lt.h * 0.5f, a);
+  }
+}
+
+// A CARD'S GROUND, as the sources sheet lays one: a faint fill that lifts under
+// the cursor, with a thin ring inset. `open` is a select whose menu is down —
+// lifted, but no ring: the cursor is in the menu.
+static void cardGround(GfxRect r, float radiusPx, int focused, int open, float a) {
   float rad = radiusPx / r.h;
-  if (focused) gfx_color(r, rad, NV_TRK_FOCUS_FILL, NV_TRK_FOCUS_FILL, NV_TRK_FOCUS_FILL, a);
-  else         gfx_color(r, rad, 1.0f, 1.0f, 1.0f, 0.06f * a);
+  gfx_color(r, rad, 1, 1, 1, (focused || open ? NV_SRC_CARD_FOCUS : NV_SRC_CARD_FILL) * a);
+  if (focused)
+    gfx_rect(r, 0, GFX_RING_INSET, 0, NV_SRC_CARD_RING / r.h, 0, rad, 1, 1, 1, 0.95f * a);
 }
 
-// The select row: label, value and the caret, on one line.
-static void selectDraw(float x, float y, float w, int focused, float a) {
-  char value[96];
-  int lr = focused ? 121 : 145, lg = focused ? 122 : 146, lb = focused ? 124 : 148;
-  int vr = focused ? NV_TRK_FOCUS_INK : 255;
-  TxtLine label, val;
-  float caretY;
-
-  rowFill((GfxRect){ x, y, w, NV_TRK_ROW_H }, NV_TRK_ROW_R, focused, a);
-  selectValue(value, sizeof value);
-  label = txt_line(TXT_TRK_LABEL, mode ? "Subtitles" : "Track", lr, lg, lb, 255);
-  txt_draw_alpha(label, x + NV_TRK_ROW_PAD,
-                 y + (NV_TRK_ROW_H - label.h) * 0.5f, a);
-
-  // The value is right-aligned and trimmed to what is left after the label, its
-  // gap and the caret. Without the trim a long track name runs under the caret
-  // and out through the panel's right padding.
-  { float used = NV_TRK_ROW_PAD * 2 + label.w + 20.0f + NV_TRK_CARET + 12.0f;
-    float room = w - used;
-    if (room < 40.0f) room = 40.0f;
-    val = txt_line_trim(TXT_TRK_VALUE, value, vr, vr, vr, 255, room);
-    txt_draw_alpha(val, x + w - NV_TRK_ROW_PAD - NV_TRK_CARET - 12.0f - val.w,
-                   y + (NV_TRK_ROW_H - val.h) * 0.5f, a); }
-
-  // The caret. The web app rotates it 180 degrees when the list is open; this
-  // one cannot — it is a PNG whose shape lives in its alpha, and nothing in the
-  // draw path turns a quad. The open state is carried by the list sitting
-  // directly under the row instead, which is the thing the rotation was pointing
-  // at anyway.
-  caretY = y + (NV_TRK_ROW_H - NV_TRK_CARET) * 0.5f;
-  { float c = focused ? NV_TRK_FOCUS_INK / 255.0f : 0.5f;
-    gfx_icon((GfxRect){ x + w - NV_TRK_ROW_PAD - NV_TRK_CARET, caretY,
-                        NV_TRK_CARET, NV_TRK_CARET },
+// A SELECT: what is in force, and the chevron that says OK opens it. No label —
+// "English · 3 subtitles" says what the picker is for.
+static void selectRow(GfxRect r, const char *value, const char *tail, int focused,
+                      int open, float a) {
+  cardGround(r, NV_SRC_CARD_R, focused, open, a);
+  valueTail(TXT_TRK_VALUE, TXT_TRK_LABEL, value, tail, r.x + NV_TRK_SEL_PADX,
+            r.y + r.h * 0.5f, r.w - NV_TRK_SEL_PADX * 2 - 16.0f - NV_TRK_CHEV,
+            255, 146, a);
+  { float c = focused ? 0.9f : 0.6f;
+    gfx_icon((GfxRect){ r.x + r.w - NV_TRK_SEL_PADX - NV_TRK_CHEV,
+                        r.y + (r.h - NV_TRK_CHEV) * 0.5f, NV_TRK_CHEV, NV_TRK_CHEV },
              "chevron_down", c, c, c, a); }
 }
 
-// The expanded list. `y` is where it starts and `limit` the panel's floor.
-static void menuDraw(float x, float y, float w, float limit, float a) {
-  float h = limit - y;
-  int n = nLines(mode), i, r, end;
-
-  if (h > FX_MENU_MAX) h = FX_MENU_MAX;
-  if (h < FX_OPT_PITCH + 16.0f) return;
-  gfx_color((GfxRect){ x, y, w, h }, NV_TRK_ROW_R / h, 1.0f, 1.0f, 1.0f, 0.04f * a);
-
-  // adjustScroll works on `column`, which the key handler also sets — but it runs
-  // before the first draw of a freshly opened list, so it is pinned here too.
-  column = mode;
-  visible = (int)((h - 16.0f + NV_TRK_OPT_GAP) / FX_OPT_PITCH);
-  if (visible < 1) visible = 1;
-  adjustScroll();
-
-  if (!n) {
-    txt_block(TXT_TRK_OPTSUB, "No track available from this source.",
-              133, 134, 136, x + NV_TRK_OPT_PAD, y + 8.0f + 14.0f,
-              w - NV_TRK_OPT_PAD * 2, 26.0f, a, 2);
-    return;
-  }
-
-  r = scroll[mode]; end = r + visible;
-  if (end > n) end = n;
-  // The list is clipped to its own box: the bottom row of a list longer than the
-  // window has to be CUT to read as "there is more below", not laid past the end
-  // of the panel where it would sit on raw video.
-  gfx_crop(x, y, w, h);
-  for (i = r; i < end; i++) {
-    float ry = y + 8.0f + (i - r) * FX_OPT_PITCH;
-    int focused = i == focus[mode];
-    const char *main, *sub;
-    int mc = focused ? NV_TRK_FOCUS_INK : 255;
-    int sc = focused ? NV_TRK_FOCUS_INK_SUB : 133;
-    TxtLine lm;
-    float textW = w - NV_TRK_OPT_PAD * 2 - NV_TRK_DOT - 12.0f;
-
-    listRow(i, &main, &sub);
-    if (focused)
-      gfx_color((GfxRect){ x + 8.0f, ry, w - 16.0f, NV_TRK_OPT_H },
-                NV_TRK_OPT_R / NV_TRK_OPT_H,
-                NV_TRK_FOCUS_FILL, NV_TRK_FOCUS_FILL, NV_TRK_FOCUS_FILL, a);
-
-    lm = txt_line_trim(TXT_TRK_OPT, main, mc, mc, mc, 255, textW);
-    if (sub && *sub) {
-      txt_draw_alpha(lm, x + 8.0f + NV_TRK_OPT_PAD, ry + 8.0f, a);
-      txt_draw_alpha(txt_line_trim(TXT_TRK_OPTSUB, sub, sc, sc, sc, 255, textW),
-                     x + 8.0f + NV_TRK_OPT_PAD, ry + 34.0f, a);
-    } else {
-      txt_draw_alpha(lm, x + 8.0f + NV_TRK_OPT_PAD,
-                     ry + (NV_TRK_OPT_H - lm.h) * 0.5f, a);
-    }
-
-    // Selected is a DOT, not a tick: at 12px a glyph is a smudge, and the row
-    // has already said what it is in words.
-    if (listActive(i)) {
-      float d = NV_TRK_DOT, dy = ry + (NV_TRK_OPT_H - d) * 0.5f;
-      float c = focused ? NV_TRK_FOCUS_INK / 255.0f : 0.961f;
-      gfx_color((GfxRect){ x + w - 8.0f - NV_TRK_OPT_PAD - d, dy, d, d },
-                0.5f, c, c, c, a);
-    }
-  }
-  gfx_no_crop();
+// The OPEN menu: an opaque plate hung under the anchor, its width, in front of
+// whatever is below. Returns the first option's rect; *vis is how many fit.
+static GfxRect menuPlate(GfxRect anchor, int n, float rowH, float limit, int cursor,
+                         int *scroll, int *vis, float a) {
+  float top = anchor.y + anchor.h + NV_TRK_MENU_GAP;
+  int fit = (int)((limit - top - NV_TRK_MENU_PAD * 2 + NV_TRK_MENU_PAD) / (rowH + NV_TRK_MENU_PAD));
+  GfxRect box;
+  if (fit < 1) fit = 1;
+  *vis = n < fit ? n : fit;
+  keepInView(cursor, n, *vis, scroll);
+  box = (GfxRect){ anchor.x, top, anchor.w,
+                   NV_TRK_MENU_PAD + *vis * (rowH + NV_TRK_MENU_PAD) };
+  gfx_color(box, NV_SRC_CARD_R / box.h, NV_TRK_MENU_BG, NV_TRK_MENU_BG, NV_TRK_MENU_BG, a);
+  gfx_rect(box, 0, GFX_RING_INSET, 0, 1.0f / box.h, 0, NV_SRC_CARD_R / box.h,
+           1, 1, 1, 0.08f * a);
+  return (GfxRect){ box.x + NV_TRK_MENU_PAD, box.y + NV_TRK_MENU_PAD,
+                    box.w - NV_TRK_MENU_PAD * 2, rowH };
 }
 
-// One style row: [-] label / value [+]. The steppers are drawn on every row, not
-// only the focused one — they are what says the row is adjustable, and a control
-// that only appears once you are on it cannot tell you that.
-static void styleDraw(int line, float x, float y, float w, int focused, float a) {
-  char value[64];
-  float sw = NV_TRK_STEP_W, sh = NV_TRK_STEP_H;
-  float sy = y + (FX_STYLE_H - sh) * 0.5f;
-  float centreX = x + 16.0f + sw + 14.0f;
-  float centreW = w - 32.0f - sw * 2 - 28.0f;
-  TxtLine lm, lv;
+#define FX_ROW(op, i) ((GfxRect){ (op).x, (op).y + (i) * ((op).h + NV_TRK_MENU_PAD), (op).w, (op).h })
 
-  // No inversion here, and no colour change on the type either — see
-  // NV_TRK_STYLE_FOCUS. The row only gains a quiet surface when it is the one
-  // the D-pad is on.
-  if (focused)
-    gfx_color((GfxRect){ x, y, w, FX_STYLE_H }, NV_TRK_ROW_R / FX_STYLE_H,
-              1.0f, 1.0f, 1.0f, NV_TRK_STYLE_FOCUS * a);
-  valueStyle(line, value, sizeof value);
+// The Language select's menu.
+static void langList(GfxRect anchor, float limit, float a) {
+  int i, vis;
+  GfxRect op = menuPlate(anchor, nLangs, NV_TRK_LANG_H, limit, langCursor,
+                         &langScroll, &vis, a);
+  for (i = 0; i < vis; i++) {
+    int c = langScroll + i, focused = c == langCursor;
+    GfxRect r = FX_ROW(op, i);
+    float right = r.x + r.w - NV_TRK_SEL_PADX, yc = r.y + r.h * 0.5f;
+    char tail[24] = "";
+    if (focused) cardGround(r, NV_TRK_OPT_R, 1, 0, a);
+    if (langs[c].active) right = onMark(right, yc, 0, 1, a) - 16.0f;
+    if (c > 0) snprintf(tail, sizeof tail, "%d", langs[c].count);
+    valueTail(TXT_TRK_OPT, TXT_TRK_OPTSUB, langs[c].name, tail,
+              r.x + NV_TRK_SEL_PADX, yc, right - r.x - NV_TRK_SEL_PADX,
+              255, 133, a);
+  }
+}
 
-  // The two steppers are drawn on EVERY row and always the same: they are what
-  // says the row is adjustable, and a control that only appears once you are on
-  // it cannot tell you that.
-  //
-  // The focused one takes the app's 4px ring, OUTSIDE its box — the one number in
-  // NV_RING_FOCUS that the home card, the episode card and the detail button all
-  // share.
-  //
-  // It is a RING and not a white rounded rect behind the button: the button's own
-  // fill is rgba(255,255,255,0.12), so a solid plate under it would show straight
-  // through the translucent face and the whole 56px square would read as white
-  // rather than as a ring around it. GFX_RING_INSET puts the band strictly inside
-  // the enlarged quad's edge, which is exactly a 4px ring sitting outside the
-  // button, and leaves the middle untouched.
-  { TxtLine minus = txt_line(TXT_TRK_STEP, "-", 255, 255, 255, 255);
-    TxtLine plus  = txt_line(TXT_TRK_STEP, "+", 255, 255, 255, 255);
-    GfxRect a1 = { x + 16.0f, sy, sw, sh };
-    GfxRect a2 = { x + w - 16.0f - sw, sy, sw, sh };
-    int i;
-    for (i = 0; i < 2; i++) {
-      GfxRect b = i ? a2 : a1;
-      gfx_color(b, NV_TRK_STEP_R / sh, 1.0f, 1.0f, 1.0f, NV_TRK_STEP_BG * a);
-      if (focused && stepFocus == i) {
-        float g = NV_RING_FOCUS;
-        GfxRect ring = { b.x - g, b.y - g, b.w + g * 2, b.h + g * 2 };
-        gfx_rect(ring, 0, GFX_RING_INSET, 0, g / ring.h, 0,
-                 (NV_TRK_STEP_R + g) / ring.h, 1, 1, 1, 0.96f * a);
-      }
+// The Subtitle select's menu — and, with `audio`, the Audio sheet's list, which
+// is the same menu held open under its heading.
+static void optList(GfxRect anchor, float limit, int audio, float a) {
+  int opts[OPT_MAX], n, act, i, vis;
+  float rowH = audio ? NV_TRK_LANG_H : NV_TRK_OPT_H;
+  GfxRect op;
+  if (audio) { n = video_n_audio(); act = video_audio_current(); }
+  else { n = langOptions(langChosen(), opts); act = subActive(); }
+  if (!n) { quiet("No track available from this source.", anchor.x,
+                  anchor.y + anchor.h, anchor.w, a); return; }
+  op = menuPlate(anchor, n, rowH, limit, optFocus, &optScroll, &vis, a);
+  for (i = 0; i < vis; i++) {
+    int c = optScroll + i, focused = c == optFocus;
+    int on = audio ? c == act : opts[c] == act;
+    GfxRect r = FX_ROW(op, i);
+    float right = r.x + r.w - NV_TRK_SEL_PADX, tx = r.x + NV_TRK_SEL_PADX;
+    if (focused) cardGround(r, NV_TRK_OPT_R, 1, 0, a);
+    if (on) right = onMark(right, r.y + r.h * 0.5f, 0, 1, a) - 16.0f;
+    if (audio) {
+      const VideoTrack *t = video_audio(c);
+      TxtLine l = txt_line_trim(TXT_TRK_OPT, t && t->label[0] ? t->label : "Track",
+                                255, 255, 255, 255, right - tx);
+      txt_draw_alpha(l, tx, r.y + (r.h - l.h) * 0.5f, a);
+    } else {
+      char main[128], sub[128];
+      optionText(opts[c], c, main, sizeof main, sub, sizeof sub);
+      txt_draw_alpha(txt_line_trim(TXT_TRK_OPT, main, 255, 255, 255, 255, right - tx),
+                     tx, r.y + 14.0f, a);
+      txt_draw_alpha(txt_line_trim(TXT_TRK_OPTSUB, sub, 133, 134, 136, 255, right - tx),
+                     tx, r.y + 46.0f, a);
     }
-    txt_draw_alpha(minus, a1.x + (sw - minus.w) * 0.5f, a1.y + (sh - minus.h) * 0.5f, a);
-    txt_draw_alpha(plus,  a2.x + (sw - plus.w)  * 0.5f, a2.y + (sh - plus.h)  * 0.5f, a); }
+  }
+}
 
-  if (centreW < 40.0f) centreW = 40.0f;
-  lm = txt_line_trim(TXT_TRK_OPT, ST_ROT[line], 255, 255, 255, 255, centreW);
-  lv = txt_line_trim(TXT_TRK_OPTSUB, value,
-                     NV_TRK_STYLE_SUB, NV_TRK_STYLE_SUB + 1, NV_TRK_STYLE_SUB + 3,
-                     255, centreW);
-  txt_draw_alpha(lm, centreX + (centreW - lm.w) * 0.5f, y + 10.0f, a);
-  txt_draw_alpha(lv, centreX + (centreW - lv.w) * 0.5f, y + 40.0f, a);
+// THE SIDE PANEL: audio, and the subtitle sheet's Tracks tab, in the sources
+// sheet's shell. It leaves the way it came — sliding right and fading — as the
+// Style bar comes up.
+static void drawPanel(float a, float away) {
+  float slide = (1.0f - anim + away) * NV_TRK_VEIL_W * NV_TRK_SLIDE;
+  float cx = NV_SCREEN_W - NV_TRK_PAD - NV_TRK_CONTENT_W + slide, cw = NV_TRK_CONTENT_W;
+  float limit = NV_SCREEN_H - NV_TRK_FOOT;
+  if (a < 0.01f) return;
+  gfx_rect((GfxRect){ NV_SCREEN_W - NV_TRK_VEIL_W + slide, 0, NV_TRK_VEIL_W, NV_SCREEN_H },
+           0, GFX_SRC_VEIL, 0, 1, NV_TRK_VEIL_CLEAR, 0,
+           NV_SRC_INK_R, NV_SRC_INK_G, NV_SRC_INK_B, a * NV_SRC_VEIL_A);
+
+  if (mode == MODE_AUDIO) {
+    drawHeader(cx, video_n_audio(), 0.0f, a);
+    // The audio sheet has no tabs; its list hangs where they would be.
+    optList((GfxRect){ cx, NV_TRK_TABS_Y - NV_TRK_MENU_GAP, cw, 0 }, limit, 1, a);
+    return;
+  }
+  { int li = langChosen(), ai = activeOption(li), opts[OPT_MAX], shown = subSelShown();
+    GfxRect lang = { cx, NV_TRK_TOP, cw, NV_TRK_SEL_H };
+    GfxRect sub = { cx, NV_TRK_TOP + NV_TRK_SEL_H + NV_TRK_SEL_GAP, cw, NV_TRK_SEL_H };
+    char count[24] = "", value[128], detail[128];
+    if (li > 0) snprintf(count, sizeof count, "%d subtitle%s", langs[li].count,
+                         langs[li].count == 1 ? "" : "s");
+    selectRow(lang, li > 0 ? langs[li].name : "Subtitles off", count,
+              zone == Z_LANGSEL && openSel == OPEN_NONE, openSel == OPEN_LANG, a);
+
+    if (shown) {
+      langOptions(li, opts);
+      if (ai >= 0) optionText(opts[ai], ai, value, sizeof value, detail, sizeof detail);
+      else snprintf(value, sizeof value, "Choose a subtitle");
+      selectRow(sub, value, NULL, zone == Z_SUBSEL && openSel == OPEN_NONE,
+                openSel == OPEN_SUB, a);
+      // Folded, the chosen track's detail line sits under its select — the one
+      // thing the pill has no room to say.
+      if (ai >= 0 && openSel == OPEN_NONE)
+        txt_draw_alpha(txt_line_trim(TXT_TRK_OPTSUB, detail, 133, 134, 136, 255,
+                                     cw - NV_TRK_SEL_PADX * 2),
+                       cx + NV_TRK_SEL_PADX, sub.y + sub.h + 14.0f, a);
+    } else if (!nSubtitles()) {
+      quiet(addons_subtitles_busy() ? "Searching OpenSubtitles\xe2\x80\xa6"
+                                    : "No subtitles for this title.", cx, sub.y, cw, a);
+    }
+
+    // The open menu LAST, in front of the select below it.
+    if (openSel == OPEN_LANG) langList(lang, limit, a);
+    if (openSel == OPEN_SUB)  optList(sub, limit, 0, a); }
+}
+
+// THE STYLE BAR, drawn to the design: the picture keeps the screen, and the
+// controls sit low along the bottom on the episode rail's ramp — a row of tiles,
+// one per setting, and under it the choices for the focused tile, with Reset at
+// the far end. The preview subtitle lands above them.
+
+// A hairline-edged box: the design's resting tile and chip.
+static void quietBox(GfxRect r, float fill, float line, float a) {
+  float rad = NV_TRK_BOX_R / r.h;
+  gfx_color(r, rad, 1, 1, 1, fill * a);
+  gfx_rect(r, 0, GFX_RING_INSET, 0, 1.5f / r.h, 0, rad, 1, 1, 1, line * a);
+}
+
+// The focused tile and the chosen chip: a light face with dark ink.
+static void lightBox(GfxRect r, float a) {
+  float rad = NV_TRK_BOX_R / r.h;
+  gfx_color(r, rad, NV_TRK_LIGHT, NV_TRK_LIGHT, NV_TRK_LIGHT, a);
+}
+
+static void drawBar(float a) {
+  float drop = (1.0f - styleAnim) * 40.0f, x = NV_TRK_BAR_X;
+  float w = NV_SCREEN_W - NV_TRK_BAR_X * 2;
+  float tw = (w - NV_TRK_TILE_GAP * (FX_N_TILE - 1)) / FX_N_TILE;
+  float chipY = NV_SCREEN_H - NV_TRK_BAR_BOTTOM - NV_TRK_CHIP_H + drop;
+  float tileY = chipY - NV_TRK_ROWS_GAP - NV_TRK_TILE_H;
+  int i;
+  if (a < 0.01f) return;
+  // THE TRANSPORT'S OWN SCRIM, not the episode rail's. The rail's ramp climbs to
+  // 0.72 in its first fifth, which over a short run is a dark band with a visible
+  // start; this one is shallow segments from a true zero to 0.88, so there is no
+  // line to find, and it is the shading the player already puts under its bar.
+  // No flat dim over the rest: the picture is what the preview is judged against.
+  gfx_rect((GfxRect){ 0, NV_TRK_SCRIM_Y, NV_SCREEN_W, NV_SCREEN_H - NV_TRK_SCRIM_Y }, 0,
+           GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, a);
+
+  // The tiles: a spaced-capitals label over the value. The focused one turns
+  // light, with the ‹ › that say it has a set of values under it.
+  for (i = 0; i < FX_N_TILE; i++) {
+    GfxRect r = { x + i * (tw + NV_TRK_TILE_GAP), tileY, tw, NV_TRK_TILE_H };
+    int focused = zone == Z_TILE && i == tileFocus;
+    int owner = zone == Z_CHIP && i == tileFocus;
+    int ink = focused ? NV_TRK_FOCUS_INK : 255, lab = focused ? 92 : 128;
+    float vx = r.x + NV_TRK_TILE_PADX, room = tw - NV_TRK_TILE_PADX * 2;
+    char v[32];
+    if (focused) {
+      lightBox(r, a);
+      gfx_rect(r, 0, GFX_RING_INSET, 0, NV_TRK_TILE_RING / r.h, 0, NV_TRK_BOX_R / r.h,
+               0.55f, 0.56f, 0.58f, a);
+    } else quietBox(r, owner ? NV_TRK_TILE_OWNER : NV_TRK_TILE_FILL,
+                    owner ? NV_TRK_TILE_OWNER_LINE : NV_TRK_TILE_LINE, a);
+    txt_tracking(TXT_CWC_KICKER, ST_LABEL[i], lab, lab, lab + 2, r.x + NV_TRK_TILE_PADX,
+                 r.y + 14.0f, a, 1.5f);
+    tileValue(i, v, sizeof v);
+    if (focused) {
+      TxtLine lt = txt_line(TXT_TRK_OPT, "\xe2\x80\xb9", ink, ink, ink, 255);
+      TxtLine gt = txt_line(TXT_TRK_OPT, "\xe2\x80\xba", ink, ink, ink, 255);
+      float vy = r.y + 44.0f;
+      txt_draw_alpha(lt, vx, vy, a);
+      txt_draw_alpha(gt, r.x + r.w - NV_TRK_TILE_PADX - gt.w, vy, a);
+      vx += lt.w + 12.0f; room -= lt.w + gt.w + 24.0f;
+    }
+    txt_draw_alpha(txt_line_trim(TXT_TRK_OPT, v, ink, ink, ink, 255, room),
+                   vx, r.y + 44.0f, a);
+  }
+
+  // The choices for the focused tile. The value in force is LIGHT; the cursor
+  // is the ring — the two can differ, and both need showing. Reset sits at the
+  // far end with its icon, quieter than the choices.
+  { int n = tileChoices(tileFocus), cur = tileCurrent(tileFocus);
+    float cx = x;
+    for (i = 0; i <= n; i++) {
+      int reset = i == n, sel = !reset && i == cur;
+      int focused = zone == Z_CHIP && i == chipFocus;
+      int ink = sel ? NV_TRK_FOCUS_INK : reset ? 176 : 235;
+      const char *s = reset ? "Reset to defaults" : choiceLabel(tileFocus, i);
+      // The value in force is set BOLD as well as light: the fill says which, the
+      // weight keeps saying it where the fill is hard to see against a bright frame.
+      TxtLine l = txt_line(sel ? TXT_ERAIL_PILL : TXT_TRK_OPTSUB, s, ink, ink,
+                           ink + (reset ? 2 : 0), 255);
+      float icon = reset ? NV_TRK_RESET_ICON + 10.0f : 0.0f;
+      GfxRect r = { cx, chipY, l.w + icon + NV_TRK_CHIP_PAD * 2, NV_TRK_CHIP_H };
+      if (reset) r.x = x + w - r.w;
+      if (sel) lightBox(r, a); else quietBox(r, NV_TRK_CHIP_FILL, NV_TRK_CHIP_LINE, a);
+      if (focused) ringAround(r, NV_TRK_BOX_R, a);
+      if (reset) {
+        float c = 176 / 255.0f;
+        gfx_icon((GfxRect){ r.x + NV_TRK_CHIP_PAD, r.y + (r.h - NV_TRK_RESET_ICON) * 0.5f,
+                            NV_TRK_RESET_ICON, NV_TRK_RESET_ICON }, "reset", c, c, c, a);
+      }
+      txt_draw_alpha(l, r.x + NV_TRK_CHIP_PAD + icon, r.y + (r.h - l.h) * 0.5f, a);
+      cx += r.w + NV_TRK_CHIP_GAP;
+    } }
 }
 
 void tracks_draw(Uint32 now) {
-  float a, px, cx, cw, y, limit;
-  TxtLine title;
   (void)now;
   if (anim < .01f) return;
-  a = anim;
-
-  // The backdrop ramps the SAME WAY the panel's feather does — see GFX_MENU_SCRIM
-  // in gfx.h for what happens when it does not.
-  gfx_rect((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, 0, GFX_MENU_SCRIM,
-           0, 0, 0, 0, 0, 0, 0, a);
-
-  // The panel slides a SHORT way and fades, rather than flying in its own width.
-  px = NV_SCREEN_W - NV_TRK_PANEL_W + (1.0f - a) * NV_TRK_PANEL_W * NV_TRK_SLIDE;
-  gfx_rect((GfxRect){ px, 0, NV_TRK_PANEL_W, NV_SCREEN_H }, 0, GFX_MENU_FEATHER,
-           0, NV_TRK_FEATHER / NV_TRK_PANEL_W, 0, 0,
-           NV_TRK_INK_R, NV_TRK_INK_G, NV_TRK_INK_B, a);
-
-  cx = px + NV_TRK_FEATHER;
-  cw = NV_TRK_PANEL_W - NV_TRK_FEATHER - NV_TRK_PAD_RIGHT;
-  limit = NV_SCREEN_H - 48.0f;
-
-  title = txt_line(TXT_TRK_TITLE, mode ? "Subtitles" : "Audio", 255, 255, 255, 255);
-  txt_draw_alpha(title, cx, NV_TRK_PAD_TOP, a);
-  y = NV_TRK_PAD_TOP + NV_LD_TRK_TITLE + NV_TRK_TITLE_GAP;
-
-  selectDraw(cx, y, cw, !openSelect && !row, a);
-  y += NV_TRK_ROW_H + NV_TRK_STACK_GAP;
-
-  if (openSelect) {
-    menuDraw(cx, y, cw, limit, a);
-    return;
-  }
-
-  // The style rail. Subtitles only: the audio panel's stack ends at the select.
-  if (!mode) return;
-  { int i;
-    for (i = 0; i < FX_N_STYLE; i++) {
-      float ry = y + i * FX_STYLE_PITCH;
-      if (ry + FX_STYLE_H > limit) break;
-      styleDraw(i, cx, ry, cw, row == i + 1, a);
-    } }
+  if (mode == MODE_SUBTITLE) buildLangs();
+  drawPanel(anim * (1.0f - styleAnim), styleAnim);
+  if (mode != MODE_SUBTITLE) return;
+  drawBar(anim * styleAnim);
+  // THE HEADER STAYS PUT across the two tabs. The panel under it leaves for the
+  // Style bar, but the heading and the tabs are how you get back — moving them to
+  // the other corner of the screen made the switch look like a different sheet.
+  // With the veil gone, the player's own top-right pool keeps them readable.
+  { float slide = (1.0f - anim) * NV_TRK_VEIL_W * NV_TRK_SLIDE;
+    float cx = NV_SCREEN_W - NV_TRK_PAD - NV_TRK_CONTENT_W + slide;
+    if (styleAnim > 0.01f)
+      gfx_rect((GfxRect){ NV_SCREEN_W - NV_TRK_POOL_W, 0, NV_TRK_POOL_W, NV_TRK_POOL_H },
+               0, GFX_VEIL_POOL, 0, 0, 0, 0.0f, 0, 0, 0, anim * styleAnim);
+    drawHeader(cx, nSubtitles(), styleAnim, anim); }
 }

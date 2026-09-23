@@ -114,6 +114,10 @@ const VideoTrack *video_audio(int i);
 const VideoTrack *video_subtitle(int i);
 int  video_audio_current(void);
 int  video_subtitle_current(void);   // -1 = off
+// A language code as a name for the screen: "eng" -> "English", "pob" ->
+// "Portuguese (BR)", an unknown code in capitals, "" for none. The returned
+// pointer may be a shared buffer — copy it before asking again.
+const char *video_language_name(const char *code);
 
 void video_choose_audio(int i);
 void video_choose_subtitle(int i);   // -1 turns it off
@@ -163,6 +167,11 @@ extern const char *const VIDEO_SUB_COLORS_LABEL[VIDEO_SUB_NCOLORS];
 // load: the pipeline is born again with each video and does not carry the
 // previous setting.
 void video_subtitle_style(const VideoSubtitleStyle *e);
+// Raises the EMBEDDED subtitle by `steps` of the uMS's position scale on top of the
+// viewer's own setting, without changing that setting; 0 puts it back. The pipeline
+// draws those cues, so this is the only way to move them. Cheap to call every
+// frame: it only reaches the pipeline when the value changes.
+void video_subtitle_lift(int steps);
 
 // The truth about the stream, so the screen's badges do not lie.
 // THE FAILURE SIGNALS the player's log reads. A count and not a flag, so the

@@ -1,4 +1,5 @@
 #include "streams.h"
+#include "tabs.h"
 #include <pthread.h>
 #include "net.h"
 #include "gfx.h"
@@ -351,6 +352,7 @@ void stream_sheet_open(void) {
   scroll=0;
 }
 int stream_sheet_is_open(void) { return is_open; }
+float stream_sheet_shown(void) { return anim; }
 void stream_sheet_event(const SDL_Event *e) {
   if(!is_open || e->type!=SDL_KEYDOWN) return;
   SDL_Keycode k=e->key.keysym.sym;
@@ -673,45 +675,43 @@ static void drawRow(const Stream *s, float left, float w, float top, int playing
 // the cursor is on the list — so the CURSOR on the tabs is a ring outside the
 // white pill, the same ring the focused card wears.
 static void tabs(float left, float w, float y, int cursor, float a) {
-  float widths[13], total = 0, x;
+  float widths[13], x;
   int i, from = 0;
-  for (i = 0; i < nProviders; i++) {
-    widths[i] = (float)txt_line(TXT_SRC_TAB, providers[i], 255, 255, 255, 255).w
-                + 2 * NV_SRC_TAB_PADX;
-    total += widths[i] + NV_SRC_TAB_GAP;
-  }
+  for (i = 0; i < nProviders; i++) widths[i] = tab_width(providers[i]);
   // Scroll only as far as it takes to bring the active tab into view: the strip
   // keeps its left edge whenever it fits, which is the common case.
-  if (total > w) {
-    float upTo = 0;
-    for (i = 0; i <= filter && i < nProviders; i++) upTo += widths[i] + NV_SRC_TAB_GAP;
-    while (upTo > w && from < filter) { upTo -= widths[from] + NV_SRC_TAB_GAP; from++; }
-  }
+  { float upTo = 0;
+    for (i = 0; i <= filter && i < nProviders; i++) upTo += widths[i];
+    while (upTo > w && from < filter) { upTo -= widths[from]; from++; } }
   x = left;
   for (i = from; i < nProviders; i++) {
-    int on = i == filter;
-    int c = on ? 22 : 176;
-    GfxRect r = { x, y, widths[i], NV_SRC_TAB_H };
-    TxtLine l;
-    if (x + widths[i] > left + w) break;
-    if (on) {
-      gfx_color(r, 0.5f, .94f, .94f, .95f, a);
-      if (cursor) {
-        GfxRect o = { x - NV_SRC_TAB_RING_OUT, y - NV_SRC_TAB_RING_OUT,
-                      widths[i] + 2 * NV_SRC_TAB_RING_OUT,
-                      NV_SRC_TAB_H + 2 * NV_SRC_TAB_RING_OUT };
-        gfx_rect(o, 0, GFX_RING_INSET, 0, NV_SRC_TAB_RING / o.h, 0, 0.5f,
-                 1, 1, 1, 0.95f * a);
-      }
-    } else {
-      gfx_color(r, 0.5f, 1, 1, 1, 0.05f * a);
-      gfx_rect(r, 0, GFX_RING_INSET, 0, 1.5f / NV_SRC_TAB_H, 0, 0.5f,
-               1, 1, 1, 0.10f * a);
-    }
-    l = txt_line(TXT_SRC_TAB, providers[i], c, c, c + 2, 255);
-    txt_draw_alpha(l, x + NV_SRC_TAB_PADX, capCentre(TXT_SRC_TAB, y, NV_SRC_TAB_H), a);
-    x += widths[i] + NV_SRC_TAB_GAP;
+    if (x + widths[i] - NV_TAB_GAP > left + w) break;
+    x += tab_draw(x, y, providers[i], i == filter, cursor, a);
   }
+}
+
+// ONE ROW: its card (or band) and its content, with its top edge at `y`.
+static void sheetRow(int row, float y, float cx, float cw, Uint32 now) {
+  int i=filtered(row), sel=group==1 && focus==row;
+  // The row's own box, softened over NV_SRC_BAND_LEAD at its left end — see the
+  // note in layout.h. It stops next to the first chip and never reaches the
+  // picture.
+#if NV_SRC_CARDS
+  { GfxRect card={cx,y,cw,NV_SRC_CARD_H};
+    float rad=NV_SRC_CARD_R/NV_SRC_CARD_H;
+    gfx_color(card,rad,1,1,1,(i==current?NV_SRC_CARD_PLAYING:
+                              sel?NV_SRC_CARD_FOCUS:NV_SRC_CARD_FILL)*anim);
+    if(sel) gfx_rect(card,0,GFX_RING_INSET,0,NV_SRC_CARD_RING/NV_SRC_CARD_H,0,
+                     rad,1,1,1,0.95f*anim); }
+  drawRow(&list[i],cx+NV_SRC_CARD_PADX,cw-2*NV_SRC_CARD_PADX,
+          y+(NV_SRC_CARD_H-NV_SRC_ROW_H)*0.5f,i==current,sel,now,
+          anim*(sel||i==current?1.0f:NV_SRC_DIM));
+#else
+  if(sel) gfx_rect((GfxRect){cx-NV_SRC_BAND_LEAD,y,NV_SRC_BAND_W,NV_SRC_ROW_H},
+                   0,GFX_MENU_FEATHER,0,NV_SRC_BAND_FADE/NV_SRC_BAND_W,0,0,
+                   1,1,1,NV_SRC_FOCUS_FILL*anim);
+  drawRow(&list[i],cx,cw,y,i==current,sel,now,anim*(sel?1.0f:NV_SRC_DIM));
+#endif
 }
 
 void stream_sheet_draw(Uint32 now) {
@@ -785,8 +785,7 @@ void stream_sheet_draw(Uint32 now) {
       }
     } }
 
-  gfx_crop(cx-NV_SRC_TAB_RING_OUT,NV_SRC_TABS_Y-NV_SRC_TAB_RING_OUT,
-           cw+2*NV_SRC_TAB_RING_OUT,NV_SRC_TAB_H+2*NV_SRC_TAB_RING_OUT);
+  gfx_crop(cx,NV_SRC_TABS_Y,cw,NV_TAB_H);
   tabs(cx,cw,NV_SRC_TABS_Y,group==0,anim);
   gfx_no_crop();
 
@@ -794,7 +793,7 @@ void stream_sheet_draw(Uint32 now) {
   // list do (anim_edge): across the air between the tabs' focus ring and the first
   // row, a row going up fades to nothing, so it is gone before the clip would cut it
   // against the tabs. The clip therefore starts at the tabs' base, not at the list.
-  const float fadeTop=NV_SRC_TABS_Y+NV_SRC_TAB_H+NV_SRC_TAB_RING_OUT;
+  const float fadeTop=NV_SRC_TABS_Y+NV_TAB_H;
   // It runs to the SCREEN's bottom edge, not NV_SRC_FOOT above it. Clipped there,
   // the card under the last whole one was cut off 32px short of the edge with
   // nothing below it — a line drawn by the layout's padding, not by anything on
@@ -802,36 +801,30 @@ void stream_sheet_draw(Uint32 now) {
   // ends with that air under it.
   gfx_crop(x,fadeTop,NV_SRC_VEIL_W,NV_SCREEN_H-fadeTop);
   nf=nFiltered();
-  for(row=0;row<nf;row++) {
-    float y=NV_SRC_TOP+row*NV_SRC_ROW-scroll;
-    float edge=anim_edge(y,fadeTop,NV_SRC_TOP-fadeTop);
-    int i,sel;
-    if(y+NV_SRC_ROW<fadeTop || y>NV_SCREEN_H) continue;
-    if(edge<=0.004f) continue;
-    gfx_opacity_group=edge;
-    i=filtered(row); sel=group==1 && focus==row;
-    // The row's own box, softened over NV_SRC_BAND_LEAD at its left end — see the
-    // note in layout.h. It stops next to the first chip and never reaches the
-    // picture.
+  // THE PLAYING CARD STICKS UNDER THE TABS. Once the list has scrolled it past the
+  // first row's place it stays there, so what is on screen is always in view
+  // while you look for something else; the rows going up dissolve into the air
+  // under it instead of under the tabs.
+  { int pin=-1;
+    const float pinBottom=NV_SRC_TOP+NV_SRC_CARD_H;
 #if NV_SRC_CARDS
-    { GfxRect card={cx,y,cw,NV_SRC_CARD_H};
-      float rad=NV_SRC_CARD_R/NV_SRC_CARD_H;
-      gfx_color(card,rad,1,1,1,(sel?NV_SRC_CARD_FOCUS:NV_SRC_CARD_FILL)*anim);
-      if(sel) gfx_rect(card,0,GFX_RING_INSET,0,NV_SRC_CARD_RING/NV_SRC_CARD_H,0,
-                       rad,1,1,1,0.95f*anim); }
-    drawRow(&list[i],cx+NV_SRC_CARD_PADX,cw-2*NV_SRC_CARD_PADX,
-            y+(NV_SRC_CARD_H-NV_SRC_ROW_H)*0.5f,i==current,sel,now,
-            anim*(sel?1.0f:NV_SRC_DIM));
-#else
-    if(sel) gfx_rect((GfxRect){cx-NV_SRC_BAND_LEAD,y,NV_SRC_BAND_W,NV_SRC_ROW_H},
-                     0,GFX_MENU_FEATHER,0,NV_SRC_BAND_FADE/NV_SRC_BAND_W,0,0,
-                     1,1,1,NV_SRC_FOCUS_FILL*anim);
-    drawRow(&list[i],cx,cw,y,i==current,sel,now,anim*(sel?1.0f:NV_SRC_DIM));
+    for(row=0;row<nf;row++)
+      if(filtered(row)==current) { if(row*NV_SRC_ROW<scroll) pin=row; break; }
 #endif
-    // PUT IT BACK before anything else is drawn: a group opacity left set bleeds
-    // onto every later draw call in the frame.
-    gfx_opacity_group=1.0f;
-  }
+    for(row=0;row<nf;row++) {
+      float y=NV_SRC_TOP+row*NV_SRC_ROW-scroll;
+      float edge=pin>=0 ? anim_edge(y,pinBottom,NV_SRC_TOP+NV_SRC_ROW-pinBottom)
+                        : anim_edge(y,fadeTop,NV_SRC_TOP-fadeTop);
+      if(row==pin) continue;
+      if(y+NV_SRC_ROW<fadeTop || y>NV_SCREEN_H) continue;
+      if(edge<=0.004f) continue;
+      gfx_opacity_group=edge;
+      sheetRow(row,y,cx,cw,now);
+      // PUT IT BACK before anything else is drawn: a group opacity left set bleeds
+      // onto every later draw call in the frame.
+      gfx_opacity_group=1.0f;
+    }
+    if(pin>=0) sheetRow(pin,NV_SRC_TOP,cx,cw,now); }
   if(!nf) {
     const char *msg=addons_state()==ADD_SEARCHING?"Fetching sources from the addons\xE2\x80\xA6":"No direct source available. Use Reload to try again.";
     txt_block(TXT_SRC_TEXT,msg,166,169,176,cx,NV_SRC_TOP+28.0f,cw,32.0f,anim,3);

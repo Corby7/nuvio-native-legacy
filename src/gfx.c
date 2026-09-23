@@ -981,6 +981,11 @@ static const char *FS_BODY[GFX_NMODES] = {
   "    a2 = 0.30 * (1.0 - clamp(length(p) / 0.72, 0.0, 1.0));\n"
   "  }\n"
   "  float oa = a2 + a1 * (1.0 - a2);\n"
+  // uPar.y > 0 CLEARS THE VEIL DOWNWARDS from that height (0 = top, as vUv.y
+  // runs) to a fifth of its strength at the base. The subtitle sheet's controls
+  // live in the top half of the screen; the sources sheet's list runs its full
+  // height and passes 0, which leaves this out.
+  "  if (uPar.y > 0.0) oa *= mix(1.0, 0.2, smoothstep(uPar.y, 1.0, vUv.y));\n"
   "  vec3 lift = uColor.rgb;\n"
   "  vec3 oc = oa > 0.0005\n"
   "          ? (lift * a2 + uColor.rgb * a1 * (1.0 - a2)) / oa\n"

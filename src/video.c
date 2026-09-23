@@ -141,10 +141,12 @@ const VideoTrack *video_audio(int i) { (void)i; return 0; }
 const VideoTrack *video_subtitle(int i) { (void)i; return 0; }
 int  video_audio_current(void) { return 0; }
 int  video_subtitle_current(void) { return -1; }
+const char *video_language_name(const char *c) { return c ? c : ""; }
 void video_choose_audio(int i) { (void)i; }
 void video_choose_subtitle(int i) { (void)i; }
 void video_subtitle_external(const char *u) { (void)u; }
 void video_subtitle_style(const VideoSubtitleStyle *e) { (void)e; }
+void video_subtitle_lift(int steps) { (void)steps; }
 void video_set_mp4(int m) { (void)m; }
 int  video_has_atmos(void) { return 0; }
 int  video_has_dolby_vision(void) { return 0; }
@@ -280,6 +282,7 @@ static const char *languageReadable(const char *c) {
     cx[k] = 0;
     return cx; }
 }
+const char *video_language_name(const char *code) { return languageReadable(code); }
 static char      media[64];
 static double    posSeg, durationSeg;
 static int       playing, ready, on;
@@ -1244,6 +1247,25 @@ void video_choose_subtitle(int i) {
 static VideoSubtitleStyle style = { 120, 0, 0, 3, 1, 0, 0, 0 };
 static int hasStyle;
 
+// The embedded subtitle's height: the viewer's Height setting plus `lift`, the
+// temporary raise the subtitle Style bar asks for so the cue clears its tiles.
+static int lift;
+static void sendPosition(void) {
+  char b[128];
+  int p = style.position + lift;
+  if (p < 0) p = 0;
+  if (p > 7) p = 7;
+  // The sheet offers 0..7; the uMS wants -3..4.
+  snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", media, p - 3);
+  call("setSubtitlePosition", b, soLog);
+}
+
+void video_subtitle_lift(int steps) {
+  if (steps == lift) return;
+  lift = steps;
+  if (on && media[0] && hasStyle) sendPosition();
+}
+
 static void applyStyle(void) {
   char b[256];
   if (!on || !media[0] || !hasStyle) return;
@@ -1271,10 +1293,7 @@ static void applyStyle(void) {
     call("setSubtitleBackgroundColor", b, soLog);
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"bgOpacity\":%d}", media, op);
     call("setSubtitleBackgroundOpacity", b, soLog); }
-  // A folha oferece 0..7; o uMS quer -3..4.
-  { int p = style.position; if (p < 0) p = 0; if (p > 7) p = 7;
-    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"position\":%d}", media, p - 3);
-    call("setSubtitlePosition", b, soLog); }
+  sendPosition();
   // CHECKED ON SCREEN: "uniform" draws an outline around the letters. "none" is the
   // borderless one. The uMS's return value is no proof here — it answered
   // returnValue:true even to values I invented.

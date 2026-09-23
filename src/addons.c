@@ -441,6 +441,7 @@ static void *fetchSubtitles(void *u) {
               js_text(q, f, "subtitleFileName", name, sizeof name);
               if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);
               snprintf(d->language, sizeof d->language, "%s", l);
+              snprintf(d->release, sizeof d->release, "%s", name);
               if (season > 0 && episode > 0)
                 snprintf(d->label, sizeof d->label, "S%dE%d  \xc2\xb7  %s%s%.22s",
                          season, episode, nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);

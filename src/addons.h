@@ -81,6 +81,10 @@ typedef struct {
   char label[64];   // "Portugues (BR)  ·  Silo.S01E05.WEB"
   char language[8];
   char url[600];
+  // The file the subtitle was cut for ("Silo.S02E04.2160p.WEB.h265-ETHEL.srt"),
+  // whole: the label keeps only its first characters, and the release group that
+  // says whether it will stay in sync is at the END.
+  char release[120];
 } Subtitle;
 
 void addons_fetch_subtitles(const char *imdb, const char *kind);

@@ -134,6 +134,9 @@ void stream_prefer(int index);
 // --- source sheet (the list that rises over the player/detail screen) ---
 void stream_sheet_open(void);
 int  stream_sheet_is_open(void);
+// How far in the sheet is, 0..1, on its own opening curve — what the screen
+// behind it fades its chrome out by.
+float stream_sheet_shown(void);
 void stream_sheet_event(const SDL_Event *e);
 void stream_sheet_update(float dt, Uint32 now);
 void stream_sheet_draw(Uint32 now);
