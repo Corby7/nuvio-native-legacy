@@ -708,6 +708,14 @@
 // crossing the row fires no change at all; and short enough that stopping on a card
 // and seeing the background respond feels immediate.
 #define NV_HERO_IDLE_MS    220
+// HOW LONG A CARD HAS TO KEEP THE FOCUS BEFORE ITS DETAIL PAGE IS FETCHED AHEAD.
+//
+// The detail screen's meta lines are filled by two requests (/meta and the extras
+// sheet) that used to start on OK, so the page opened and then rearranged itself as
+// they answered. Asked for here, they have usually answered by the time OK is pressed.
+// Longer than the hero's rest: both fetchers run one request at a time, and a walk
+// along a row should not queue a request per poster it passes.
+#define NV_HOME_PREFETCH_MS 400
 // HOW LONG THE COPY WAITS FOR THE TITLE'S LOGO before coming in without it.
 //
 // The logo is a CDN file; the description is already in the catalogue and costs

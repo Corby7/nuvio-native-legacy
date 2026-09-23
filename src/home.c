@@ -1423,6 +1423,21 @@ static void syncRows(void) {
 // after the one under the focus is the likeliest place to stop, and two ahead
 // covers the held key. A wrong guess costs a file in the disk cache and nothing
 // else: no texture, no slot, no budget.
+// THE DETAIL PAGE'S DATA, asked for while the card rests under the focus — the same
+// two requests app.c and detail_open make on OK, on the same terms, so opening the
+// title finds them answered (or in flight) and both calls there become no-ops.
+// A wrong guess costs one request: disc_episodes keeps only the latest pending
+// title and returns at once for one it already has, and extras_request replaces the
+// sheet it holds, which nothing on the home reads.
+static void prefetchDetail(int i) {
+  const CatItem *ci = cat_item(i);
+  int series;
+  if (!ci || !ci->imdb[0]) return;
+  series = ci->kind[0] ? !strcmp(ci->kind, "series") : cat_n_episodes(i) > 0;
+  if (series || ci->nCast == 0) disc_episodes(i, 0);
+  extras_request(ci->imdb, series, ci->tmdb);
+}
+
 static void warmHero(int target, int previous) {
   const CatItem *ci;
   const char *art;
@@ -1644,6 +1659,15 @@ void home_update(float dt, Uint32 now) {
       heroWanted = next;
       heroSwapIn = now + NV_HERO_INTERVAL_MS;
     }
+    // Its own clock and not heroPendingIn: that one is back-dated on a change of row
+    // kind, which would fire a prefetch on every step of a vertical walk.
+    { static int pfTarget = -1, pfDone = -1;
+      static Uint32 pfSince = 0;
+      if (target != pfTarget) { pfTarget = target; pfSince = now; }
+      if (target >= 0 && target != pfDone && now - pfSince >= NV_HOME_PREFETCH_MS) {
+        pfDone = target;
+        prefetchDetail(target);
+      } }
   }
   // The expansion's clock. It resets on every movement; it counts only with the focus
   // still.
