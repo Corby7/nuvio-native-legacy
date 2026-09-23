@@ -2158,7 +2158,7 @@
 #define NV_EPL_SMENU_VIS      8     // options in view before the menu scrolls
 // The list's window: from under the pill to the sources sheet's foot. Rows are
 // drawn past the bottom to the screen's edge; this is only the scroll's measure.
-#define NV_EPL_VIEW_TOP    (NV_TRK_TABS_Y + NV_EPL_PILL_H + 40.0f)
+#define NV_EPL_VIEW_TOP    (NV_TRK_TABS_Y + NV_EPL_PILL_H + 20.0f)
 #define NV_EPL_VIEW_BOTTOM (NV_SCREEN_H - NV_SRC_FOOT)
 #define NV_FT_ERAIL_META   22      // .player-episode-detail-meta     22 / 700, ls .06em
 #define NV_FT_ERAIL_TITLE  44      // .player-episode-detail-title    44 / 800
@@ -2285,6 +2285,13 @@
 #define NV_SRC_CARD_RING     2.5f
 // Unfocused cards are a faint fill and NO border: with a ring on every card the
 // list became boxes of boxes, the chips' outlines inside the cards' outlines.
+// EVERY CARD STANDS ON A DARK GROUND OF ITS OWN, the sheet's ink, under the white
+// film. Over the veil alone the film was all a card had, and at the first chip
+// the veil is only ~0.70: a lit backdrop came through, the 5% white turned it
+// milky, and the unfocused rows' grey type sat on grey. The ground makes a card
+// read as a dark surface wherever it lies, and the white film on top still does
+// the ranking (idle < focused < playing).
+#define NV_SRC_CARD_BASE    0.55f
 #define NV_SRC_CARD_FILL    0.05f
 #define NV_SRC_CARD_FOCUS   0.18f
 // The card that is playing is the most solid of all, focused or not: it is the
@@ -2368,7 +2375,12 @@
 // find a box inside boxes. Dimming the other eleven leaves exactly one row at
 // full strength, and a 4K chip that is white on one row and grey on the rest
 // says "this one" before any shape is read.
-#define NV_SRC_DIM         0.50f
+//
+// 0.72 and not 0.50: the unfocused rows' type is ALREADY a dimmer grey (drawRow's
+// `sel ?` colours), and halving it again on top left ~73/255 on a dark card —
+// hard to read, not merely quieter. The focused card still has the ring and the
+// brighter film, which is what actually says "this one".
+#define NV_SRC_DIM         0.72f
 // What reaches the screen, directly: the band carries the fill at full strength
 // across the whole content column. 0.055 was the original and it was a hint
 // rather than a state — the focused row was legible mostly because its type was

@@ -748,6 +748,7 @@ static void sheetRow(int row, float y, float cx, float cw, Uint32 now) {
 #if NV_SRC_CARDS
   { GfxRect card={cx,y,cw,NV_SRC_CARD_H};
     float rad=NV_SRC_CARD_R/NV_SRC_CARD_H;
+    gfx_color(card,rad,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,NV_SRC_CARD_BASE*anim);
     gfx_color(card,rad,1,1,1,(i==current?NV_SRC_CARD_PLAYING:
                               sel?NV_SRC_CARD_FOCUS:NV_SRC_CARD_FILL)*anim);
     if(sel) gfx_rect(card,0,GFX_RING_INSET,0,NV_SRC_CARD_RING/NV_SRC_CARD_H,0,
