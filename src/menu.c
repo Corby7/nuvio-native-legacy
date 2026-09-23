@@ -7,7 +7,7 @@
 // --focus-bg, the Phosphor glyph set with its filled variant on the selected
 // row, the brand lockup at the top, and the frosted plate the whole thing sits
 // on. Where the two apps disagree it is noted at the spot, and there are only
-// three places: the brand (hung off the icon column), the footer (the
+// three places: the icon column (further into the pill), the footer (the
 // web puts the account at the TOP of the list, this app keeps it at the bottom
 // where the D-pad expects it) and the fixed rail (in the web the collapsed bar
 // takes no width at all, here it is a permanent 144 band).
@@ -40,22 +40,24 @@
 // which are drawn thin, on a 256 grid — 38 read as a smaller icon than the web's,
 // not merely a smaller box.
 #define NV_MENU_ICON      44.0f
-// The icon's centre is the same at both widths: on the device the icon does NOT
-// move when the bar opens, only the label comes in beside it. If the icon slid
-// along, the opening would become a sideways shove instead of a reveal.
-//
 // THE RAIL'S MIDPOINT, and a DELIBERATE departure from the web: `.home-nav-item`
 // there has `padding: 0 36px` and a 44 icon, so the glyph sits at 36..80, left of
 // centre — which is invisible in the browser, where the collapsed bar has width 0
 // and the icons are only ever seen inside the open panel. Here the rail is a
 // permanent 144 band and every glyph in it read as pushed against the left edge.
-// Everything in the bar hangs off this one axis: the glyphs, the brand mark and
-// the footer's avatar.
+// The glyphs and the footer's avatar hang off this one axis.
 #define NV_MENU_ICON_CX  (NV_MENU_W_ICON * 0.5f)
-// The web's 32 gap, measured from the CENTRED icon instead of its left-aligned
-// one: 72 + 22 + 32. Moving the icon without moving this would have closed the
-// gap to 18 and set the label against the glyph.
-#define NV_MENU_LABEL_X  (NV_MENU_ICON_CX + NV_MENU_ICON * 0.5f + 32.0f)
+// THE OPEN PANEL'S AXIS. At the rail's 72 the glyph sat only 26 inside the pill,
+// hugging its left end; the owner's design has it ~40 in, which puts the centre at
+// 24 + 42 + 22. The icons drift from one axis to the other with `expands`, so the
+// move is part of the opening rather than a jump.
+#define NV_MENU_ICON_CX_OPEN  88.0f
+// The gap after the glyph, from whichever axis the glyph is on — a label that did
+// not travel with its icon would close the gap and sit against it. 36 and not the
+// web's 32: the owner's design measures ~37, and at 28px type the web's 32 read
+// as the word leaning on the glyph.
+#define NV_MENU_LABEL_GAP  (NV_MENU_ICON * 0.5f + 36.0f)
+#define NV_MENU_LABEL_W    (NV_MENU_W_IS_OPEN - NV_MENU_ICON_CX_OPEN - NV_MENU_LABEL_GAP - 28.0f)
 // --legacy-sidebar-padding is `48px 24px`: 24 each side, and the pill fills what
 // is left of the box.
 #define NV_MENU_PILL_PAD   24.0f
@@ -64,6 +66,18 @@
 // rectangle with a white ring around it; the owner's design is the plain #303030
 // stadium, no ring, and with the bar at 340 it no longer reads as a lozenge.
 #define NV_MENU_RADIUS_PILL  0.50f
+// THE GLINT. When focus lands on a row a light passes once across its pill, left
+// to right, on the tilted band GFX_SKELETON already draws for placeholders. ONCE:
+// a light that loops on the row you are resting on is a screensaver, not feedback.
+// It waits for the pill to fade in, so it crosses a pill and not an empty space.
+#define NV_MENU_GLINT_DELAY  90.0f
+#define NV_MENU_GLINT_MS    520.0f
+#define NV_MENU_GLINT_HALF   70.0f
+// A hairline of light around the focused pill, so the stadium reads as a lit
+// surface rather than a flat grey cut-out. Faint on purpose: the white ring the
+// port had was this at full strength, and that one shouted.
+#define NV_MENU_EDGE_PX      1.5f
+#define NV_MENU_EDGE_FOCUS_A 0.14f
 // How much the content on the right darkens with the bar open. MEASURED on
 // `.home-shell::before`: rgba(0,0,0,0.5).
 #define NV_MENU_VEIL        0.50f
@@ -110,9 +124,8 @@
 
 // THE BRAND. `.home-brand-wrap` is a ROW, 80 tall: a 54x54 mark, a 32 gap and a
 // 54-tall wordmark, all `object-fit: contain` under --legacy-sidebar-padding's 48
-// of top inset. The row hangs off the ICON COLUMN's left edge, as in the owner's
-// design: the mark sits straight above the glyphs and the wordmark runs out to the
-// right, rather than the lockup floating centred in the bar.
+// of top inset. The row is CENTRED in the bar rather than pinned to the web's 36
+// left inset, on the owner's call.
 //
 // NV_MENU_BRAND_WORD is the wordmark's CAP HEIGHT, not a box, because the file was
 // trimmed to its ink: it ships 221x108 with the letters in y30..70, so the web's
@@ -148,9 +161,42 @@ static int   changed   = 0;
 static float slides = 0.0f;
 static float expands = 0.0f;
 static float animFocus[NV_MENU_FOCUSES];
+static int    glintLine = -1;   // the row the glint was last started on
+static Uint32 glintAt   = 0;
+static Uint32 drawNow   = 0;    // menu_draw's clock, for the helpers under it
 static void icon(int d, int filled, float cx, float cy, float s, float a);
 static void drawFooter(float px, float w, float alpha, float focus);
 static void drawGlass(float w, float alpha);
+
+// THE FOCUSED PILL: the faint lit edge, the #303030 stadium, and — while it is
+// running — the glint crossing it. `a` is the pill's opacity, `row` which focus it
+// belongs to, so only the row the glint was started on catches it.
+static void drawFocusPill(GfxRect pill, float a, int row) {
+  GfxRect edge = { pill.x - NV_MENU_EDGE_PX, pill.y - NV_MENU_EDGE_PX,
+                   pill.w + NV_MENU_EDGE_PX * 2, pill.h + NV_MENU_EDGE_PX * 2 };
+  float t = (row == glintLine)
+          ? ((float)(drawNow - glintAt) - NV_MENU_GLINT_DELAY) / NV_MENU_GLINT_MS
+          : -1.0f;
+  gfx_color(edge, NV_MENU_RADIUS_PILL, 1, 1, 1, NV_MENU_EDGE_FOCUS_A * a);
+  if (t > 0.0f && t < 1.0f) {
+    // Travels from fully off the left end to fully off the right, eased so it
+    // accelerates in and settles out instead of crossing at a constant crawl.
+    float span = pill.w + NV_MENU_GLINT_HALF * 2.0f;
+    float cx = pill.x - NV_MENU_GLINT_HALF + span * anim_smooth(t);
+    gfx_rect(pill, 0, GFX_SKELETON, 0.0f, (cx - pill.x) / pill.w,
+             NV_MENU_GLINT_HALF / pill.w, NV_MENU_RADIUS_PILL,
+             NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G, NV_COLOR_FOCUS_B, a);
+  } else {
+    gfx_color(pill, NV_MENU_RADIUS_PILL, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G,
+              NV_COLOR_FOCUS_B, a);
+  }
+}
+
+// Where the icon column is right now: the rail's midpoint collapsed, the open
+// panel's axis expanded, and the same smoothing the width uses in between.
+static float iconAxis(void) {
+  return anim_blend(NV_MENU_ICON_CX, NV_MENU_ICON_CX_OPEN, anim_smooth(expands));
+}
 
 // The frosted plate the bar sits on, `.home-sidebar::before` in GL. The blur is
 // LIVE — it is whatever app_draw has already put behind this strip — so it has to
@@ -209,6 +255,7 @@ int menu_start(void) {
 
 void menu_open(void) {
   if (is_open) return;
+  glintLine = -1;   // the first focus of every opening gets its glint
   // The highlight always starts on the destination in force, never where it was
   // left last time: the bar is a map of where you are, and opening it with the
   // highlight on another item would tell the user they had already changed screen.
@@ -271,12 +318,12 @@ void menu_event(const SDL_Event *e) {
 }
 
 void menu_update(float dt, Uint32 now) {
-  (void)now;
   // Collapsed and settled costs nothing: no spring, no loop over the destinations.
   if (!is_open && slides < 0.002f) {
     if (slides != 0.0f) { slides = 0.0f; expands = 0.0f; }
     return;
   }
+  if (is_open && line != glintLine) { glintLine = line; glintAt = now; }
   float target = is_open ? 1.0f : 0.0f;
   float ms   = is_open ? NV_MENU_OPEN_MS : NV_MENU_CLOSE_MS;
   slides = anim_ramp(slides, target, dt, ms);
@@ -310,7 +357,7 @@ static void icon(int d, int filled, float cx, float cy, float s, float a) {
 }
 
 // THE BRAND LOCKUP, `.home-brand-wrap`: mark and wordmark side by side on one
-// row, hung off the icon column (see the constants).
+// row, the row centred in the bar (see the constants).
 //
 // The two go through different modes. GFX_CARD would drop the mark's alpha and
 // paint a black box behind it; GFX_BRAND would flatten its gradient into one
@@ -320,11 +367,15 @@ static void icon(int d, int filled, float cx, float cy, float s, float a) {
 //
 // Both are `object-fit: contain`, so the widths come from the files' real aspects:
 // hard-coding them would deform the logo if the art were ever swapped. And BOTH
-// have to be loaded before either is drawn, so the lockup never shows half-built.
+// have to be loaded before either is drawn — the row is centred on their combined
+// width, so drawing the mark while the wordmark is still decoding would centre it
+// alone and then shunt it left when the word arrived.
 //
-// The row rides on `px`, the panel's edge, like the glyphs under it; the crop in
-// menu_draw hides whatever of the wordmark the widening bar has not reached yet.
-static void drawBrand(float px, float alpha) {
+// `w` is the panel's CURRENT width, not its open one: the row is centred in the
+// bar, so while the bar is widening the logo travels with it. Centring on the open
+// width instead would park it off the right edge for the first half of the
+// animation and then have it appear already in place, which reads as a pop.
+static void drawBrand(float px, float w, float alpha) {
   GLuint tMark = 0, tWord = 0;
   float apMark = 0.0f, apWord = 0.0f;
   float cy = NV_MENU_BRAND_Y + NV_MENU_BRAND_H * 0.5f;
@@ -360,7 +411,7 @@ static void drawBrand(float px, float alpha) {
   // width, and a mark that were wider than tall would do the opposite.
   wMark = (apMark < 1.0f) ? NV_MENU_BRAND * apMark : NV_MENU_BRAND;
   wWord = NV_MENU_BRAND_WORD * apWord;
-  x = px + NV_MENU_ICON_CX - NV_MENU_ICON * 0.5f;
+  x = px + (w - (wMark + NV_MENU_BRAND_GAP + wWord)) * 0.5f;
 
   gfx_tex_aspect_current = 0.0f;
   gfx_rect((GfxRect){x, cy - NV_MENU_BRAND * 0.5f, wMark, NV_MENU_BRAND},
@@ -399,7 +450,7 @@ static void drawFooter(float px, float w, float alpha, float focus) {
   // Above the safe area, not stuck to the bottom: on a TV the last 60px may be
   // off the panel (overscan), and the user's name is precisely what disappears first.
   float y = NV_SCREEN_H - NV_MARGIN_Y - NV_MENU_FOOTER_H;
-  float cx = px + NV_MENU_ICON_CX;
+  float cx = px + iconAxis();
   float cy = y + NV_MENU_FOOTER_H * 0.5f;
   float cr, cg, cb;
   char start[4];
@@ -410,8 +461,7 @@ static void drawFooter(float px, float w, float alpha, float focus) {
   if (focus > 0.01f) {
     GfxRect pill = { px + NV_MENU_PILL_PAD, y,
                      w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_PILL_H };
-    gfx_color(pill, NV_MENU_RADIUS_PILL, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G,
-            NV_COLOR_FOCUS_B, focus * alpha);
+    drawFocusPill(pill, focus * alpha, MENU_FOOTER);
   }
 
   av.x = cx - NV_MENU_AVATAR * 0.5f;
@@ -468,15 +518,16 @@ static void drawFooter(float px, float w, float alpha, float focus) {
       int c = (int)(anim_blend(0.702f, 1.0f, focus) * 255.0f + 0.5f);
       TxtLine name = txt_line_trim(TXT_MENU_ITEM, p ? p->name : "Your account",
                                       c, c, c, 255,
-                                      NV_MENU_W_IS_OPEN - NV_MENU_LABEL_X - 28.0f);
+                                      NV_MENU_LABEL_W);
       // The name alone, CENTRED on the row. There used to be a "Switch user"
       // caption under it, which is why the name sat a line high; with the caption
       // gone that offset would leave it hanging above the avatar it belongs to.
-      txt_draw_alpha(name, px + NV_MENU_LABEL_X, cy - name.h * 0.5f, aText);
+      txt_draw_alpha(name, cx + NV_MENU_LABEL_GAP, cy - name.h * 0.5f, aText);
     } }
 }
 
 void menu_draw(Uint32 now) {
+  drawNow = now;
   // The fixed rail is always present, as in the legacy shell. The expanded
   // overlay only comes on stage when the menu has been asked for.
   // `collapseSidebar`: with the bar COLLAPSED the web app draws no rail at all —
@@ -516,7 +567,7 @@ void menu_draw(Uint32 now) {
 
   // The brand comes in with the width, like the labels do: `.home-brand-mark` and
   // `.home-brand-wordmark` are both opacity 0 until `.content-expanded`.
-  drawBrand(px, expands * expands * entry);
+  drawBrand(px, w, expands * expands * entry);
 
   float y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
   for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H) {
@@ -540,10 +591,9 @@ void menu_draw(Uint32 now) {
       // text #FFFFFF — the --focus-bg token, which the web app's CSS also
       // declares. Ours inverted it (background #E4E4E9, dark text), and #E4E4E9
       // was no system colour at all: neither white, nor the #F5F5F5 of
-      // --secondary-color. The white ring went with the owner's design: the
-      // stadium alone carries the focus there.
-      gfx_color(pill, NV_MENU_RADIUS_PILL, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G,
-              NV_COLOR_FOCUS_B, f * slides);
+      // --secondary-color. The white ring went with the owner's design; what is
+      // left of it is the faint lit edge and the glint (see drawFocusPill).
+      drawFocusPill(pill, f * slides, i);
     }
 
     // Three states, and all three exist in the web app too: focused (white over
@@ -554,7 +604,7 @@ void menu_draw(Uint32 now) {
     float luma  = anim_blend(current ? 1.0f : 0.702f, 1.0f, f);
     float aIcon = slides * anim_blend(current ? 1.0f : 0.5f, 1.0f, f);
 
-    icon(i, current, px + NV_MENU_ICON_CX, cy, NV_MENU_ICON, aIcon);
+    icon(i, current, px + iconAxis(), cy, NV_MENU_ICON, aIcon);
 
     // The label comes in with the width, not before it: `expands` squared holds
     // the word back until the bar really has room, otherwise it is born squashed
@@ -565,8 +615,8 @@ void menu_draw(Uint32 now) {
       // `.home-nav-item.selected` is `font-weight: bold`; the rest inherit 400.
       TxtLine l = txt_line_trim(current ? TXT_MENU_SEL : TXT_MENU_ITEM, LABELS[i],
                                    c, c, c, 255,
-                                   NV_MENU_W_IS_OPEN - NV_MENU_LABEL_X - 28);
-      txt_draw_alpha(l, px + NV_MENU_LABEL_X, cy - l.h * 0.5f, aRot);
+                                   NV_MENU_LABEL_W);
+      txt_draw_alpha(l, px + iconAxis() + NV_MENU_LABEL_GAP, cy - l.h * 0.5f, aRot);
     }
   }
 
