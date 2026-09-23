@@ -119,5 +119,28 @@ int main(void) {
                      "HDR10+.H.265-BlackTV.mkv", "https://example.invalid/j.mkv");
       assert(!strcmp(s.codec, "HEVC") && !strcmp(s.audio, "ATMOS 5.1")); } }
 
+  // --- TORRENTS AND bingeGroup -------------------------------------------------
+  // A bare torrent survives the parser with no url (streams.c drops it when
+  // there is no debrid key); externalUrl still never becomes a link.
+  { Stream *v = NULL;
+    int c = stream_parse("{\"streams\":[{\"infoHash\":\"abc\",\"fileIdx\":2},"
+                         "{\"externalUrl\":\"https://example.invalid\"},"
+                         "{\"name\":\"x\",\"clientResolve\":{\"infoHash\":\"def\"}},"
+                         "{\"url\":\"https://example.invalid/a.mp4\"}]}", "Fixture", &v);
+    assert(c == 3);
+    assert(!v[0].url[0] && !strcmp(v[0].infoHash, "abc") && v[0].fileIdx == 2);
+    assert(!v[1].url[0] && !strcmp(v[1].infoHash, "def") && v[1].fileIdx == -1);
+    assert(v[2].url[0] && !v[2].infoHash[0]);
+    free(v); }
+  // bingeGroup comes from THIS stream's behaviorHints, never the next stream's,
+  // and not from a nested object inside it.
+  { Stream *v = NULL;
+    int c = stream_parse("{\"streams\":[{\"url\":\"https://e.invalid/1\"},"
+                         "{\"url\":\"https://e.invalid/2\",\"behaviorHints\":{\"proxyHeaders\":"
+                         "{\"request\":{\"a\":\"b\"}},\"bingeGroup\":\"torrentio|1080p\"}}]}",
+                         "Fixture", &v);
+    assert(c == 2 && !v[0].bingeGroup[0] && !strcmp(v[1].bingeGroup, "torrentio|1080p"));
+    free(v); }
+
   puts("PASS ASan/UBSan: parser in isolation, 100 sources, tokens, service, cache state and the tier.");
 }

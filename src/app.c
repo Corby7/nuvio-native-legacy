@@ -35,6 +35,7 @@
 #include "settings.h"
 #include "player.h"
 #include "streams.h"
+#include "sourcepref.h"
 #include "extras.h"
 #include "video.h"
 #include "addons.h"
@@ -101,12 +102,18 @@ static void requestProfile(void) {
 
 // Verification makes one request per candidate source and blocks; on a thread of
 // its own the screen carries on at 60fps showing "Opening source".
+// The row picked in the sheet when it still has to be resolved (a torrent),
+// or -1 for the automatic walk.
+static int sourcePicked = -1;
 static void *chooseSource(void *u) {
+  int t = 0, e = 0;
   (void)u;
+  player_episode_current(&t, &e);
+  if (sourcePicked >= 0) { sourceChosen = stream_verify_one(sourcePicked, t, e); return NULL; }
   // Up to 8: in a typical list of 12, the first ones are usually from the same
   // provider and fail together when the file is not cached. Testing only a few
   // returned "no source works" with good sources just further down.
-  sourceChosen = stream_first_good(8);
+  sourceChosen = stream_first_good(8, t, e);
   return NULL;
 }
 #include "catalog.h"
@@ -606,6 +613,14 @@ void app_update(float dt, Uint32 now) {
   // The search fired by Play has finished: now VERIFY the sources, in order, until
   // one leads to the file — and only then switch the video on.
   if (waitingSource == 1 && addons_state() != ADD_SEARCHING) {
+    // THE SOURCE REMEMBERED FOR THIS TITLE GOES TO THE FRONT OF THE QUEUE.
+    // Here and not on the button: the list only exists once the addons have
+    // answered, and every path that asks for a source passes through here —
+    // Play/Resume on the title page, a new episode from the sheet, and the next
+    // episode. Nothing remembered gives -1, and the walk runs as it always did.
+    { const CatItem *ci = cat_item(player_index());
+      stream_prefer(ci && ci->imdb[0] ? sourcepref_pick(ci->imdb) : -1); }
+    sourcePicked = -1;
     waitingSource = 2;
     sourceChosen = -2;
     if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) {
@@ -647,12 +662,28 @@ void app_update(float dt, Uint32 now) {
     if (s) {
       waitingSource=0;
       int title=player_is_open()?player_index():detail_index(), t=0,e=0;
+      // REMEMBER THE PICK, and only a manual one: what the automatic rule
+      // chooses never becomes a preference (sourcepref.h).
+      { const CatItem *ci = cat_item(title);
+        if (ci && ci->imdb[0]) sourcepref_store(ci->imdb, s); }
       if (player_is_open()) { player_episode_current(&t,&e); player_shutdown(); }
       else detail_ep_focus(&t,&e);
       player_open(title,NULL);
       player_set_episode(t,e);
-      stream_set_current(source);
-      player_set_source(s->url);
+      if (s->url[0]) {
+        stream_set_current(source);
+        player_set_source(s->url);
+      } else {
+        // A torrent: its url only exists once the debrid has resolved it, and
+        // that blocks, so it goes through the same thread as the automatic walk
+        // and the same hand-over below.
+        sourcePicked = source;
+        waitingSource = 2;
+        sourceChosen = -2;
+        if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) {
+          waitingSource = 0; player_error_source();
+        }
+      }
     }
   }
   if (waitingSource != 2 && player_requested_sources()) {

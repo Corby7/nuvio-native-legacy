@@ -12,6 +12,7 @@
 #include <math.h>
 #include "addons.h"
 #include "mark.h"
+#include "debrid.h"
 
 static Stream *list;
 static int n = 0;
@@ -54,12 +55,29 @@ Uint32 stream_age_ms(void) {
   return receivedIn ? SDL_GetTicks() - receivedIn : 0xFFFFFFFFu;
 }
 
+static pthread_mutex_t seeLock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned listGen;
+static int preferred = -1;
+
+void stream_prefer(int i) { preferred = i >= 0 && i < n ? i : -1; }
+
 void stream_set_list(const Stream *l, int count) {
+  int i, k = 0, debrid = debrid_active();
   receivedIn = SDL_GetTicks();
   Stream *new = l && count > 0 ? malloc(sizeof(Stream) * (size_t)count) : NULL;
   if (l && count > 0 && !new) return;
-  if (new) memcpy(new, l, sizeof(Stream) * (size_t)count);
-  free(list); list = new; n = new ? count : 0; current = -1;
+  // A torrent with no url stays only when there is a debrid to resolve it;
+  // otherwise it is a row that can never play.
+  for (i = 0; i < count && new; i++)
+    if (l[i].url[0] || debrid) new[k++] = l[i];
+  if (new && count - k) printf("[source] %d torrents dropped: no debrid key\n", count - k);
+  // Under the verification lock: a check in flight copies its row under it and
+  // writes a resolved url back under it, only while the list is still this one.
+  pthread_mutex_lock(&seeLock);
+  free(list); list = new; n = new ? k : 0; current = -1;
+  listGen++;
+  pthread_mutex_unlock(&seeLock);
+  preferred = -1;
   focus = 0;
   // A NEW LIST IS A NEW TITLE, so the runtime goes with the old one. Keeping it
   // would divide this title's file sizes by the last title's length and print a
@@ -136,25 +154,40 @@ static int addressOfWarning(const char *u) {
 // have chosen — only without waiting for the earlier ones to fail one by one.
 #define SEE_THREADS 4
 
-typedef struct { int idx; int ok; } Check;
+typedef struct {
+  int idx, ok;
+  char url[4096], hash[48];
+  int fileIdx;
+} Check;
 static Check *checks;
-static int nChecks, nextCheck;
-static pthread_mutex_t seeLock = PTHREAD_MUTEX_INITIALIZER;
+static int nChecks, nextCheck, checkSeason, checkEpisode;
+static unsigned checkGen;
 
 static void *threadVerify(void *u) {
   (void)u;
   for (;;) {
     int mine, i;
     char end[900];
+    Check *c;
     pthread_mutex_lock(&seeLock);
     if (nextCheck >= nChecks) { pthread_mutex_unlock(&seeLock); return NULL; }
     mine = nextCheck++;
     pthread_mutex_unlock(&seeLock);
-    i = checks[mine].idx;
-    if (!list[i].url[0]) continue;
+    c = &checks[mine];
+    i = c->idx;
+    if (!c->url[0] && c->hash[0]) {
+      // A link fresh out of the debrid needs no second trip below. It stays in
+      // the check until the batch is over; stream_first_good writes it into the
+      // list, and only if the list is still the one it was taken from.
+      if (debrid_resolve(c->hash, c->fileIdx, checkSeason, checkEpisode,
+                         c->url, sizeof c->url)) c->ok = 1;
+      else printf("[source] %d torrent did not resolve on the debrid\n", i);
+      continue;
+    }
+    if (!c->url[0]) continue;
     // 10 s and not 20: in parallel the timeout stops adding up, but it is still
     // the time the owner waits for the slowest one.
-    if (!net_url_final(list[i].url, 10, end, sizeof end)) {
+    if (!net_url_final(c->url, 10, end, sizeof end)) {
       printf("[source] %d did not resolve\n", i);
       continue;
     }
@@ -162,23 +195,71 @@ static void *threadVerify(void *u) {
       printf("[source] %d is a warning (%.60s)\n", i, end);
       continue;
     }
-    checks[mine].ok = 1;
+    c->ok = 1;
   }
 }
 
-int stream_first_good(int attempts) {
+// Checks the rows in `used`, in parallel, and returns the first that passed IN
+// THE ORDER GIVEN. A torrent's resolved url is written back into the list.
+static int verify(const int *used, int nu, int season, int episode) {
+  int chosen = -1, q;
+  checks = calloc((size_t)nu, sizeof(Check));
+  if (!checks) return -1;
+  // Each check copies its row UNDER THE LOCK: out of it, stream_set_list may
+  // swap the list at any moment.
+  pthread_mutex_lock(&seeLock);
+  checkGen = listGen;
+  for (q = 0; q < nu; q++) {
+    int i = used[q];
+    checks[q].idx = i;
+    if (i < 0 || i >= n) continue;
+    snprintf(checks[q].url, sizeof checks[q].url, "%s", list[i].url);
+    snprintf(checks[q].hash, sizeof checks[q].hash, "%s", list[i].infoHash);
+    checks[q].fileIdx = list[i].fileIdx;
+  }
+  pthread_mutex_unlock(&seeLock);
+  nChecks = nu; nextCheck = 0; checkSeason = season; checkEpisode = episode;
+  { pthread_t threads[SEE_THREADS];
+    int created = 0;
+    for (q = 0; q < SEE_THREADS && q < nu; q++)
+      if (pthread_create(&threads[created], NULL, threadVerify, NULL) == 0) created++;
+    if (!created) threadVerify(NULL);   // no threads: in series, same result
+    for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
+  }
+  // The first one that passed, in the order given.
+  for (q = 0; q < nu; q++)
+    if (checks[q].ok) { chosen = checks[q].idx; break; }
+  if (chosen >= 0) {
+    pthread_mutex_lock(&seeLock);
+    if (checkGen != listGen || chosen >= n) chosen = -1;   // the list moved on
+    else if (!list[chosen].url[0])
+      snprintf(list[chosen].url, sizeof list[chosen].url, "%s", checks[q].url);
+    pthread_mutex_unlock(&seeLock);
+  }
+  free(checks); checks = NULL; nChecks = 0;
+  return chosen;
+}
+
+int stream_first_good(int attempts, int season, int episode) {
   int *used, nu = 0;
   int total = stream_n();
   int chosen = -1;
   if (total < 1) return -1;
   if (attempts < 1) attempts = 1;
   if (attempts > total) attempts = total;
-  used = calloc((size_t)attempts, sizeof *used);
+  used = calloc((size_t)attempts + 1, sizeof *used);
   if (!used) return -1;
 
-  // Selects the best `attempts` ones, IN SCORE ORDER — the same order the
-  // serial loop walked.
-  while (nu < attempts) {
+  // THE PREFERRED ONE GOES FIRST, ahead of the score: it is the source the
+  // person picked by hand for this title, and it can sit anywhere in the list —
+  // the best `attempts` by score might never reach it. It goes in as a
+  // CANDIDATE, not a decision: it is checked like the others, and when it does
+  // not resolve the score order carries on right behind it.
+  if (preferred >= 0 && preferred < total) used[nu++] = preferred;
+
+  // Then the best `attempts` ones, IN SCORE ORDER — the same order the serial
+  // loop walked.
+  while (nu < attempts + (preferred >= 0 && preferred < total)) {
     int best = -1, i, j;
     long largerP = 0;
     for (i = 0; i < total; i++) {
@@ -194,26 +275,19 @@ int stream_first_good(int attempts) {
   if (nu < 1) { free(used); return -1; }
 
   mark("source: check start");
-  checks = calloc((size_t)nu, sizeof(Check));
-  if (!checks) { free(used); return -1; }
-  { int q;
-    for (q = 0; q < nu; q++) checks[q].idx = used[q];
-    nChecks = nu; nextCheck = 0;
-    { pthread_t threads[SEE_THREADS];
-      int created = 0;
-      for (q = 0; q < SEE_THREADS && q < nu; q++)
-        if (pthread_create(&threads[created], NULL, threadVerify, NULL) == 0) created++;
-      if (!created) threadVerify(NULL);   // no threads: in series, same result
-      for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
-    }
-    // The first one that passed, in score order.
-    for (q = 0; q < nu; q++)
-      if (checks[q].ok) { chosen = checks[q].idx; break; }
-  }
+  chosen = verify(used, nu, season, episode);
   mark(chosen >= 0 ? "source: check ok" : "source: check returned nothing");
-  free(checks); checks = NULL; nChecks = 0; free(used);
+  free(used);
   if (chosen >= 0) printf("[source] %d ok\n", chosen);
   return chosen;
+}
+
+int stream_verify_one(int index, int season, int episode) {
+  int r;
+  if (index < 0 || index >= stream_n()) return -1;
+  r = verify(&index, 1, season, episode);
+  printf("[source] picked %d %s\n", index, r >= 0 ? "ok" : "did not resolve");
+  return r;
 }
 
 int stream_automatic(void) {

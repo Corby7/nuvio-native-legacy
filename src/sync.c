@@ -1,5 +1,7 @@
 #include "sync.h"
 #include "watchedep.h"
+#include "debrid.h"
+#include "sourcepref.h"
 #include "session.h"
 #include "cloud.h"
 #include "profiles.h"
@@ -189,6 +191,9 @@ static void pullCredentials(void) {
   r = session_rpc("sync_pull_provider_credentials", jsw_text_final(&w), &st);
   jsw_free(&w);
   if (!ok2xx(r, st)) { free(r); return; }
+  // The debrid keys are re-read whole on every successful pull: a key the
+  // account no longer has (removed, or another profile's) must stop resolving.
+  debrid_forget();
 
   // Trakt, debrid and mdblist share the SAME RPCs, separated only by the
   // `provider` field. One read serves all three.
@@ -214,10 +219,14 @@ static void pullCredentials(void) {
       if (js_text(cred, cred + strlen(cred), "api_key", mdbKey, sizeof mdbKey))
         hasMdb = 1;
     }
-    // debrid:* is deliberately NOT applied today: the debrid keys this app uses
-    // already come embedded in the addon's URL (see addons.h), so applying the
-    // loose key would change nothing and would give the false impression that
-    // the app talks to the provider on its own.
+    else if (!strncmp(provider, "debrid:", 7)) {
+      // The loose key resolves torrents that arrive with no url (debrid.c).
+      // Addons with the key embedded in their URL are not affected: those
+      // streams already come with a url.
+      char k[200];
+      if (js_text(cred, cred + strlen(cred), "api_key", k, sizeof k))
+        debrid_set_key(provider + 7, k);
+    }
   }
   free(r);
 }
@@ -967,6 +976,9 @@ void sync_forget_user(void) {
   // Which episodes were watched belongs to the account that is leaving: kept,
   // it would tell the next person which episodes of their series are done.
   watchedep_forget();
+  debrid_forget();
+  // Which source someone picks, with which audio, is as personal as their list.
+  sourcepref_forget();
   data_erase(FILE_PROGRESS);
 
   // The boxes the thread fills too: a cycle that finished just before the

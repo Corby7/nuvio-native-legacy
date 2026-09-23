@@ -64,6 +64,16 @@ typedef struct {
   int  p2p;
   float mbps;        // the video bitrate; see stream_sheet_runtime
   int  tier;         // 0 POOR, 1 FAIR, 2 GOOD, 3 BEST — the segmented bar
+
+  // behaviorHints.bingeGroup: the label an addon puts on every stream it
+  // considers THE SAME SOURCE from one episode to the next. What sourcepref.c
+  // matches a remembered choice by first. Empty is common.
+  char bingeGroup[128];
+  // A torrent with NO url, only its hash (Torrentio/Comet with no debrid key in
+  // the addon URL). Kept only while debrid_active(); `url` is filled at
+  // verification, by debrid_resolve.
+  char infoHash[48];
+  int  fileIdx;      // -1 when the addon did not say
 } Stream;
 
 // THE SEGMENTED BAR'S VALUE, and the bitrate it is worked out from.
@@ -107,9 +117,19 @@ int  stream_automatic(void);
 Uint32 stream_age_ms(void);
 
 // Walks the sources in the rule's order and returns the first whose link
-// resolves to REAL content, testing up to `attempts` of them. -1 if none will
-// do. BLOCKS — call from a thread of your own.
-int  stream_first_good(int attempts);
+// resolves to REAL content, testing up to `attempts` of them (plus the preferred
+// one, which goes first). -1 if none will do. A torrent row is resolved through
+// the debrid here, and `season`/`episode` (0,0 for a film) pick its file.
+// BLOCKS — call from a thread of your own.
+int  stream_first_good(int attempts, int season, int episode);
+// The same check for ONE row: the one the person picked in the sheet. Returns
+// `index` when it resolves, -1 when not. BLOCKS.
+int  stream_verify_one(int index, int season, int episode);
+
+// THE SOURCE TO TRY FIRST: the one remembered for this title (sourcepref.c).
+// An index in the CURRENT list, or -1 for none. A new list resets it — an index
+// into the previous list would point at some other source of the next episode.
+void stream_prefer(int index);
 
 // --- source sheet (the list that rises over the player/detail screen) ---
 void stream_sheet_open(void);

@@ -43,6 +43,7 @@
 #include "streams.h"
 #include "subtitle.h"
 #include "intro.h"
+#include "watchedep.h"
 #include "home.h"
 #include "settings.h"
 #include "failures.h"
@@ -897,12 +898,30 @@ int  player_has_video(void) { return hasVideo && video_ready(); }
 int  player_loading(void) { return waitingSource || (hasVideo && !video_ready()); }
 int  player_controls_visible(void) { return visible; }
 
+// HAS THE TITLE BEEN WATCHED TO THE END? One answer for the whole player.
+//
+// It used to be two. The "Up next" card declares the episode over at the credits
+// or in the last 120 s (offerNext), while closing only rounded up in the last
+// 60 s. In an 18-minute episode the card comes up at 89%, and accepting the next
+// episode the app itself offered saved 89%: Trakt only marks at 90%, so nothing
+// was marked and the episode stayed unwatched (upstream issue #100). The last
+// 60 s stay in, for a title with no credits marker too short for 120 s to mean
+// anything.
+static int watchedToEnd(double pos, double dur) {
+  double credits = intro_credits_start();
+  if (dur <= 1.0) return 0;
+  if (pos >= dur - 60.0) return 1;
+  if (credits > 0 && pos >= credits) return 1;
+  return dur - pos <= 120.0;
+}
+
 void player_shutdown(void) {
   // Save BEFORE stopping: video_stop unloads the pipeline and the position goes with
-  // it. A title almost at the end counts as watched in full — going back to a card
+  // it. A title watched to the end counts as watched in full — going back to a card
   // saying "2 min left" when it has actually finished is worse than rounding.
   if (hasVideo && video_ready() && durationSeg > 1.0f) {
-    float pos = posSeg >= durationSeg - 60.0f ? durationSeg : posSeg;
+    int done = watchedToEnd(posSeg, durationSeg);
+    float pos = done ? durationSeg : posSeg;
     const CatItem *ci = cat_item(idx);
     home_record_return(idx, pos, durationSeg);
     cat_save_progress_ep(idx, pos, durationSeg,epT,epE);
@@ -913,6 +932,10 @@ void player_shutdown(void) {
       if (epT > 0 && epE > 0) snprintf(id, sizeof id, "%.*s:%d:%d", (int)strcspn(ci->imdb,":"),ci->imdb, epT, epE);
       else snprintf(id, sizeof id, "%s", ci->imdb);
       trakt_mark(id, pos, durationSeg);
+      // The episode list's check mark is a separate record from the progress bar,
+      // and nothing here wrote it: it only appeared after the next Trakt read.
+      // Set it now; that read corrects it if the server refused.
+      if (done && epT > 0 && epE > 0) watchedep_set(ci->imdb, epT, epE, 1);
       // And to the ACCOUNT. Trakt and the account are two different destinations: not
       // every user turns Trakt on, and the official app's progress comes from the account.
       sync_dirty_progress();

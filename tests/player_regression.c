@@ -1,4 +1,5 @@
 #include "streams.h"
+#include "debrid.h"
 #include "catalog.h"
 #include "episodes.h"
 #include "player.h"
@@ -82,7 +83,24 @@ static void testar(void) {
   assert(stream_n()==40 && stream_automatic()==37 && stream_item(40)==NULL);
   stream_set_list(NULL,0);assert(stream_n()==0 && stream_automatic()==-1);
   n=stream_parse("{\"streams\":[{\"infoHash\":\"abc\"},{\"externalUrl\":\"https://example.invalid\"},{\"url\":\"https://example.invalid/a.mp4\",\"title\":\"4K [DV] Atmos\"}]}","Fixture",&v);
-  assert(n==1 && v[0].mp4 && v[0].dolbyVision && v[0].height==2160);free(v);
+  // The bare torrent survives the PARSER, with no url; externalUrl still does not.
+  assert(n==2 && !v[0].url[0] && !strcmp(v[0].infoHash,"abc") && v[0].fileIdx==-1);
+  assert(v[1].mp4 && v[1].dolbyVision && v[1].height==2160);
+  // ...and the LIST drops it while there is no debrid key to resolve it.
+  stream_set_list(v,n);free(v);
+  assert(stream_n()==1 && stream_item(0)->url[0]);
+  debrid_set_key("torbox","k");
+  n=stream_parse("{\"streams\":[{\"infoHash\":\"abc\",\"fileIdx\":3}]}","Fixture",&v);
+  stream_set_list(v,n);free(v);
+  assert(stream_n()==1 && stream_item(0)->fileIdx==3);
+  debrid_forget();stream_set_list(NULL,0);
+  // AIOStreams keeps the hash inside clientResolve.
+  n=stream_parse("{\"streams\":[{\"name\":\"x\",\"clientResolve\":{\"infoHash\":\"def\"}},{\"infoHash\":\"ghi\"}]}","Fixture",&v);
+  assert(n==2 && !strcmp(v[0].infoHash,"def") && !strcmp(v[1].infoHash,"ghi"));free(v);
+  // bingeGroup is read inside THIS stream's behaviorHints, never borrowed from
+  // the next stream's.
+  n=stream_parse("{\"streams\":[{\"url\":\"https://e.invalid/1\"},{\"url\":\"https://e.invalid/2\",\"behaviorHints\":{\"proxyHeaders\":{\"request\":{\"a\":\"b\"}},\"bingeGroup\":\"torrentio|1080p\"}}]}","Fixture",&v);
+  assert(n==2 && !v[0].bingeGroup[0] && !strcmp(v[1].bingeGroup,"torrentio|1080p"));free(v);
   char longa[4500];memset(longa,'a',sizeof longa);memcpy(longa,"https://example.invalid/",24);longa[4090]=0;
   snprintf(json,sizeof json,"{\"streams\":[{\"url\":\"%s\",\"name\":\"DV/HDR 4K MP4\"}]}",longa);
   n=stream_parse(json,"Fixture",&v);assert(n==1 && strlen(v[0].url)==4090 && v[0].dolbyVision);free(v);

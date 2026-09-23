@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <dlfcn.h>
 
 // libcurl constants written out by hand: there is no curl.h in the device's
@@ -397,8 +398,12 @@ char *net_post_st(const char *url, int seconds, const char *const *header,
   curl_setopt(c, OPT_POST, (long)1);
   curl_setopt(c, OPT_POSTFIELDS, body ? body : "");
   if (slist_append) {
-    int k;
-    list = slist_append(list, "Content-Type: application/json");
+    int k, typed = 0;
+    // JSON unless the caller says otherwise: the debrid APIs take form and
+    // multipart bodies, and a second Content-Type would go out next to theirs.
+    for (k = 0; header && header[k]; k++)
+      if (!strncasecmp(header[k], "Content-Type:", 13)) typed = 1;
+    if (!typed) list = slist_append(list, "Content-Type: application/json");
     for (k = 0; header && header[k]; k++) list = slist_append(list, header[k]);
     if (list) curl_setopt(c, OPT_HTTPHEADER, list);
   }

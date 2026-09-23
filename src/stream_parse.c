@@ -319,13 +319,37 @@ int stream_parse(const char *json, const char *provider, Stream **output) {
     end = js_end(p);
     if (!end || end <= p) break;
     js_text(p, end, "url", s.url, sizeof s.url);
-    // Do not expose torrents/externalUrl as direct links, and never play a truncated URL.
-    if ((!strncmp(s.url, "http://", 7) || !strncmp(s.url, "https://", 8)) &&
+    s.fileIdx = -1;
+    // A bare torrent: no http url, an infoHash (at the top, or inside
+    // clientResolve as AIOStreams sends it). Its url is made later, by the
+    // debrid, and streams.c drops the row when there is no debrid to make it.
+    // The bounds matter: strstr runs to the end of the DOCUMENT, and without
+    // `< end` a stream would take the next one's hash.
+    if (strncmp(s.url, "http://", 7) && strncmp(s.url, "https://", 8)) {
+      const char *cr = strstr(p, "\"clientResolve\"");
+      s.url[0] = 0;
+      if (!js_text(p, end, "infoHash", s.infoHash, sizeof s.infoHash) && cr && cr < end)
+        js_text(cr, end, "infoHash", s.infoHash, sizeof s.infoHash);
+      s.fileIdx = (int)js_num(p, end, "fileIdx", -1);
+    }
+    // Do not expose externalUrl as a direct link, and never play a truncated URL.
+    if ((s.infoHash[0] || !strncmp(s.url, "http://", 7) || !strncmp(s.url, "https://", 8)) &&
         strlen(s.url) < sizeof s.url - 1) {
       js_text(p, end, "name", s.label, sizeof s.label);
       js_text(p, end, "description", s.description, sizeof s.description);
       js_text(p, end, "title", title, sizeof title);
       js_text(p, end, "filename", s.file, sizeof s.file);
+      // behaviorHints.bingeGroup, looked for INSIDE this stream's behaviorHints
+      // and not loose: a stream without behaviorHints would otherwise inherit
+      // the next stream's group, and the symptom would be the app remembering
+      // the wrong source on the next episode.
+      { const char *bh = strstr(p, "\"behaviorHints\"");
+        if (bh && bh < end) {
+          const char *obj = strchr(bh + 15, '{');
+          const char *objEnd = obj && obj < end ? js_end(obj) : NULL;
+          if (objEnd && objEnd <= end)
+            js_text(obj, objEnd, "bingeGroup", s.bingeGroup, sizeof s.bingeGroup);
+        } }
       if (!s.description[0]) snprintf(s.description, sizeof s.description, "%s", title);
       if (!s.label[0]) snprintf(s.label, sizeof s.label, "%s", provider);
       snprintf(s.provider, sizeof s.provider, "%s", provider);
