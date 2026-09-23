@@ -158,5 +158,17 @@ int main(void) {
     assert(!v[1].headers[0]);
     free(v); }
 
+  // videoHash and videoSize, for the subtitle search (addons_subtitles_file).
+  { Stream *v = NULL;
+    int c = stream_parse("{\"streams\":[{\"url\":\"https://e.invalid/1\",\"behaviorHints\":"
+                         "{\"videoHash\":\"8e245d9679d31e12\",\"videoSize\":57812312345,"
+                         "\"filename\":\"The.Dark.Knight.2008.REMUX-FraMeSToR.mkv\"}},"
+                         "{\"url\":\"https://e.invalid/2\"}]}", "Fixture", &v);
+    assert(c == 2);
+    assert(!strcmp(v[0].videoHash, "8e245d9679d31e12") && v[0].videoSize == 57812312345LL);
+    assert(!strcmp(v[0].file, "The.Dark.Knight.2008.REMUX-FraMeSToR.mkv"));
+    assert(!v[1].videoHash[0] && v[1].videoSize == 0);
+    free(v); }
+
   puts("PASS ASan/UBSan: parser in isolation, 100 sources, tokens, service, cache state and the tier.");
 }

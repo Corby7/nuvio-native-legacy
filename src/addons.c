@@ -5,6 +5,7 @@
 #include "mark.h"
 #include "lang.h"
 #include "settings.h"
+#include "data.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -142,6 +143,9 @@ int addons_set_list(const AddonRemote *new, int n) {
     addon[accepted].subtitle = 1;
     accepted++;
   }
+  for (; i < n; i++)
+    if (new[i].url[0] && new[i].active)
+      data_log("addons.log", "app DROPPED '%s' (past the app's %d-addon cap)", new[i].name, ADD_MAX);
   if (accepted == 0) {
     printf("[addons] account had only disabled addons; keeping the local list\n");
     return 0;
@@ -291,7 +295,10 @@ static int nSubs;
 static pthread_t threadSub;
 static int threadSubAlive, threadSubCreated, subStop;
 static char subId[64], subKind[16];
+// The file extra for subId (addons_subtitles_file), already URL-encoded; "" for none.
+static char subExtra[1800];
 static unsigned subGeneration;
+static void addons_fetch_subtitles_extra(const char *imdb, const char *kind, const char *extra);
 static pthread_mutex_t subLock = PTHREAD_MUTEX_INITIALIZER;
 
 int addons_n_subtitles(void) {
@@ -384,30 +391,35 @@ static int episodeCorrect(const char *obj, const char *end, int season, int epis
 static void *fetchSubtitles(void *u) {
   (void)u;
   for (;;) {
-    Subtitle found[SUB_MAX] = {{0}};
-    char id[64], kind[16];
+    // On the heap: 200 of them are ~180 KB, too much for a thread's stack.
+    Subtitle *found = calloc(SUB_MAX, sizeof *found);
+    char id[64], kind[16], extra[sizeof subExtra];
     unsigned generation;
     int nFound = 0, season, episode, i;
 
+    if (!found) { pthread_mutex_lock(&subLock); threadSubAlive = 0;
+                  pthread_mutex_unlock(&subLock); return NULL; }
     pthread_mutex_lock(&subLock);
-    if (subStop) { threadSubAlive = 0; pthread_mutex_unlock(&subLock); return NULL; }
+    if (subStop) { threadSubAlive = 0; pthread_mutex_unlock(&subLock); free(found); return NULL; }
     snprintf(id, sizeof id, "%s", subId);
     snprintf(kind, sizeof kind, "%s", subKind);
+    snprintf(extra, sizeof extra, "%s", subExtra);
     generation = subGeneration;
     pthread_mutex_unlock(&subLock);
     episodeRequest(id, &season, &episode);
 
     for (i = 0; i < nAddon && nFound < SUB_MAX; i++) {
-      char url[900], *body;
+      char url[2600], *body;
       const char *p;
     // An addon that does not declare subtitles is not queried: AIOStreams would
     // answer empty and so would Xperience, two round trips with no return.
       if (!addon[i].subtitle) continue;
-      snprintf(url, sizeof url, "%s/subtitles/%s/%s.json",
-               addon[i].base, kind, id);
+      // The Stremio path for an extra is one more segment: /subtitles/<type>/<id>/<extra>.json
+      snprintf(url, sizeof url, "%s/subtitles/%s/%s%s%s.json",
+               addon[i].base, kind, id, extra[0] ? "/" : "", extra);
       body = net_download(url, 25);
       if (requestChanged(generation)) { free(body); break; }
-      if (!body) continue;
+      if (!body) { data_log("addons.log", "subtitles %s from '%s': no answer", id, addon[i].name); continue; }
       p = js_array(body, NULL, "subtitles");
       {
         // ENGLISH, plus the Subtitles row's language when it names another.
@@ -417,8 +429,27 @@ static void *fetchSubtitles(void *u) {
         // filtered: this is only what gets FETCHED.
         const int group = LANG_ENGLISH, extra = settings_subtitle_language();
         const char *q = p;
-        while (q && nFound < SUB_MAX) {
+        int seen = 0, before = nFound, nHosts = 0, h;
+        // Where each file is served from, tallied for the log: an aggregator
+        // merges several providers into one answer, and the host is the one
+        // thing that still says which provider a row came from.
+        struct { char host[48]; int n; } hosts[6];
+        // Walks the WHOLE answer, full list or not, so the log says how much there was.
+        while (q) {
           const char *f = js_end(q);
+          seen++;
+          { char u[600] = "", host[48] = "";
+            if (js_text(q, f, "url", u, sizeof u) && strstr(u, "://")) {
+              const char *a = strstr(u, "://") + 3;
+              snprintf(host, sizeof host, "%.*s", (int)strcspn(a, "/:?"), a);
+              for (h = 0; h < nHosts && strcmp(hosts[h].host, host); h++) {}
+              if (h == nHosts && nHosts < 6) {
+                snprintf(hosts[nHosts].host, sizeof hosts[0].host, "%s", host);
+                hosts[nHosts++].n = 0;
+              }
+              if (h < nHosts) hosts[h].n++;
+            } }
+          if (nFound >= SUB_MAX) { q = js_next(f); continue; }
           char l[16] = "", name[120] = "";
           Subtitle *d = &found[nFound];
           if (episodeCorrect(q, f, season, episode) &&
@@ -429,6 +460,11 @@ static void *fetchSubtitles(void *u) {
             if (!name[0]) js_text(q, f, "movieReleaseName", name, sizeof name);
             snprintf(d->language, sizeof d->language, "%s", l);
             snprintf(d->release, sizeof d->release, "%s", name);
+            snprintf(d->source, sizeof d->source, "%s", addon[i].name);
+            { char m[4] = "";
+              js_text(q, f, "m", m, sizeof m);
+              d->hashMatch = !strcmp(m, "h");
+              d->fpsMilli = (int)js_num(q, f, "fpsMilli", 0); }
             if (season > 0 && episode > 0)
               snprintf(d->label, sizeof d->label, "S%dE%d  \xc2\xb7  %s%s%.22s",
                        season, episode, nameLanguage(l), name[0] ? "  \xc2\xb7  " : "", name);
@@ -439,14 +475,24 @@ static void *fetchSubtitles(void *u) {
           }
           q = js_next(f);
         }
+        { char tally[400] = ""; size_t tk = 0;
+          for (h = 0; h < nHosts && tk + 60 < sizeof tally; h++)
+            tk += (size_t)snprintf(tally + tk, sizeof tally - tk, "%s%s x%d", h ? ", " : "",
+                                   hosts[h].host, hosts[h].n);
+          data_log("addons.log", "subtitles %s from '%s': %d read, %d kept%s | %s", id, addon[i].name,
+                   seen, nFound - before, nFound >= SUB_MAX ? " (list FULL)" : "", tally); }
       }
       free(body);
     }
+    for (; i < nAddon; i++)
+      if (addon[i].subtitle)
+        data_log("addons.log", "subtitles %s from '%s': NOT ASKED (list full)", id, addon[i].name);
 
     pthread_mutex_lock(&subLock);
-    if (subStop) { threadSubAlive = 0; pthread_mutex_unlock(&subLock); return NULL; }
-    if (generation != subGeneration) { pthread_mutex_unlock(&subLock); continue; }
-    memcpy(subs, found, sizeof found);
+    if (subStop) { threadSubAlive = 0; pthread_mutex_unlock(&subLock); free(found); return NULL; }
+    if (generation != subGeneration) { pthread_mutex_unlock(&subLock); free(found); continue; }
+    memcpy(subs, found, SUB_MAX * sizeof *found);
+    free(found);
     nSubs = nFound;
     threadSubAlive = 0;
     pthread_mutex_unlock(&subLock);
@@ -457,6 +503,12 @@ static void *fetchSubtitles(void *u) {
 }
 
 void addons_fetch_subtitles(const char *imdb, const char *kind) {
+  addons_fetch_subtitles_extra(imdb, kind, "");
+}
+
+// addons_fetch_subtitles with the file extra already decided: "" for a new title
+// (the previous file's hash is not this title's), the playing file's for a restart.
+static void addons_fetch_subtitles_extra(const char *imdb, const char *kind, const char *extra) {
   int series, merge = 0;
   char id[64], tp[16];
   if (!nAddon || !imdb || !*imdb) return;
@@ -474,6 +526,7 @@ void addons_fetch_subtitles(const char *imdb, const char *kind) {
   }
   snprintf(subId, sizeof subId, "%s", id);
   snprintf(subKind, sizeof subKind, "%s", tp);
+  snprintf(subExtra, sizeof subExtra, "%s", extra);
   subGeneration++;
   nSubs = 0;
   if (threadSubAlive) { pthread_mutex_unlock(&subLock); return; }
@@ -488,6 +541,58 @@ void addons_fetch_subtitles(const char *imdb, const char *kind) {
   if (pthread_create(&threadSub, NULL, fetchSubtitles, NULL) != 0) threadSubAlive = 0;
   else threadSubCreated = 1;
   pthread_mutex_unlock(&subLock);
+}
+
+// encodeURIComponent, as buildExtraParams uses it: everything but the unreserved
+// characters is %XX. 0 when it does not fit.
+static int encodeComponent(const char *src, char *dst, size_t size) {
+  static const char HEX[] = "0123456789ABCDEF";
+  size_t k = 0;
+  for (; *src; src++) {
+    unsigned char c = (unsigned char)*src;
+    if (isalnum(c) || strchr("-_.!~*'()", c)) {
+      if (k + 1 >= size) return 0;
+      dst[k++] = (char)c;
+    } else {
+      if (k + 3 >= size) return 0;
+      dst[k++] = '%'; dst[k++] = HEX[c >> 4]; dst[k++] = HEX[c & 15];
+    }
+  }
+  dst[k] = 0;
+  return 1;
+}
+
+void addons_subtitles_file(const char *videoHash, long long videoSize, const char *filename) {
+  char extra[sizeof subExtra], part[1400], id[64], kind[16];
+  size_t k = 0;
+  extra[0] = 0;
+  // Same order and same omissions as the web's buildExtraParams: an empty value
+  // is left out, and a size is sent only when there is one.
+  if (videoHash && *videoHash && encodeComponent(videoHash, part, sizeof part))
+    k += (size_t)snprintf(extra + k, sizeof extra - k, "videoHash=%s", part);
+  if (videoSize > 0 && k < sizeof extra)
+    k += (size_t)snprintf(extra + k, sizeof extra - k, "%svideoSize=%lld", k ? "&" : "", videoSize);
+  if (filename && *filename && k < sizeof extra) {
+    // The name only: an addon's filename is sometimes a path inside the torrent.
+    const char *base = strrchr(filename, '/');
+    base = base ? base + 1 : filename;
+    if (encodeComponent(base, part, sizeof part))
+      k += (size_t)snprintf(extra + k, sizeof extra - k, "%sfilename=%s", k ? "&" : "", part);
+  }
+  if (k >= sizeof extra) return;   // truncated would be a wrong extra: send none
+  pthread_mutex_lock(&subLock);
+  if (!subId[0] || !strcmp(extra, subExtra)) { pthread_mutex_unlock(&subLock); return; }
+  snprintf(subExtra, sizeof subExtra, "%s", extra);
+  snprintf(id, sizeof id, "%s", subId);
+  snprintf(kind, sizeof kind, "%s", subKind);
+  // Clearing subId makes addons_fetch_subtitles take this as a new request — and
+  // it would then forget the extra, so it is put back straight after.
+  subId[0] = 0;
+  pthread_mutex_unlock(&subLock);
+  printf("[subtitles] searching for the playing file%s%s\n",
+         videoHash && *videoHash ? " (hash)" : "", filename && *filename ? " (name)" : "");
+  fflush(stdout);
+  addons_fetch_subtitles_extra(id, kind, extra);
 }
 
 // ONE THREAD PER SOURCE ADDON.

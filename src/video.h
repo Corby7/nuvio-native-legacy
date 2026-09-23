@@ -122,6 +122,10 @@ int  video_subtitle_current(void);   // -1 = off
 // "Portuguese (BR)", an unknown code in capitals, "" for none. The returned
 // pointer may be a shared buffer — copy it before asking again.
 const char *video_language_name(const char *code);
+// The video's frame rate in thousandths (23976 for 23.976 fps), 0 until the
+// pipeline has said. tracks.c compares it with an addon subtitle's own frame rate:
+// a subtitle timed at 29.97 cannot follow a 23.976 film.
+int video_frame_rate_milli(void);
 
 void video_choose_audio(int i);
 void video_choose_subtitle(int i);   // -1 turns it off

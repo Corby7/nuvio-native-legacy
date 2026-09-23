@@ -79,6 +79,13 @@ typedef struct {
   // source. The pipeline cannot send them, so a stream that has them plays
   // through proxy.c (see proxy.h).
   char headers[1024];
+  // behaviorHints.videoHash / videoSize: the OpenSubtitles hash of the file and
+  // its size in bytes, as Torrentio and AIOStreams send them. Passed to the
+  // subtitle addons with the filename, which is what lets OpenSubtitles answer
+  // with subtitles timed for THIS file (addons_subtitles_file). Empty / 0 when the
+  // addon did not say.
+  char videoHash[24];
+  long long videoSize;
 } Stream;
 
 // THE SEGMENTED BAR'S VALUE, and the bitrate it is worked out from.

@@ -431,6 +431,7 @@ int stream_parse(const char *json, const char *provider, Stream **output) {
           if (objEnd && objEnd <= end) {
             js_text(obj, objEnd, "bingeGroup", s.bingeGroup, sizeof s.bingeGroup);
             requestHeaders(obj, objEnd, s.headers, sizeof s.headers);
+            js_text(obj, objEnd, "videoHash", s.videoHash, sizeof s.videoHash);
           }
         } }
       if (!s.description[0]) snprintf(s.description, sizeof s.description, "%s", title);
@@ -451,6 +452,7 @@ int stream_parse(const char *json, const char *provider, Stream **output) {
       s.dolbyAtmos = token(text, "atmos");
       s.mp4 = token(text, "mp4") || contains(s.url, ".mp4");
       double bytes = js_num(p, end, "videoSize", 0);
+      if (bytes > 0) s.videoSize = (long long)bytes;
       if (bytes > 0) s.sizeMB = (long)(bytes / (1024.0 * 1024.0));
       else {
         const char *u = strstr(text, " GB");

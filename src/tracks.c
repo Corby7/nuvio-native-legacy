@@ -205,6 +205,7 @@ static int wanted(const char *code, const char *remembered, int group) {
 }
 
 static int hasWord(const char *s, const char *w);
+static int matchesPlaying(const char *release);
 static int subActive(void);
 
 // A track that carries only signs and foreign dialogue: the file's FlagForced,
@@ -323,16 +324,40 @@ void tracks_auto(Uint32 now) {
   }
 
   // Then the addon's. Its search is still out on most starts, so wait for it.
+  //
+  // RANKED, not first-come. The first English result used to win, and on The
+  // Dark Knight all three English OpenSubtitles results were 2008 DVD-screener
+  // timings, one at 29.97 fps: a subtitle can be the right language and never
+  // line up with the film. What the entry says about its own timing decides:
+  //   +8  found by the file's hash — made for this exact file
+  //   +4  the same release group as the file (the sheet's "matches your file")
+  //   +2  timed at the video's frame rate; -4 at a different one
+  // Ties keep the addon's order. The score is logged with the choice.
   if (!expired && addons_subtitles_busy()) return;
-  for (i = 0; i < addons_n_subtitles(); i++) {
-    const Subtitle *l = addons_subtitle(i);
-    if (!l || !wanted(l->language, remembered, group)) continue;
-    video_choose_subtitle(-1); subtitle_load(l->url);
-    subExternal = embedded + i;
-    { char o[128]; snprintf(o, sizeof o, "chose addon %d (%s)%s", i, l->language,
-                            remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
-    autoDone = 1; return;
-  }
+  { int best = -1, bestScore = -1000, video = video_frame_rate_milli();
+    for (i = 0; i < addons_n_subtitles(); i++) {
+      const Subtitle *l = addons_subtitle(i);
+      int score = 0;
+      if (!l || !wanted(l->language, remembered, group)) continue;
+      if (l->hashMatch) score += 8;
+      if (matchesPlaying(l->release)) score += 4;
+      if (video > 0 && l->fpsMilli > 0) {
+        int d = video - l->fpsMilli;
+        if (d < 0) d = -d;
+        score += d * 100 <= video ? 2 : -4;   // within 1%: 23.976 and 23.98 agree
+      }
+      if (score > bestScore) { best = i; bestScore = score; }
+    }
+    if (best >= 0) {
+      const Subtitle *l = addons_subtitle(best);
+      video_choose_subtitle(-1); subtitle_load(l->url);
+      subExternal = embedded + best;
+      { char o[200]; snprintf(o, sizeof o, "chose addon %d (%s) score %d%s%s%s", best,
+                              l->language, bestScore, l->hashMatch ? " hash" : "",
+                              matchesPlaying(l->release) ? " same-release" : "",
+                              remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
+      autoDone = 1; return;
+    } }
 
   // Nothing yet. Keep looking until the deadline — the addon list can still land
   // — and then stop, so the search does not run for the whole film. The Settings
@@ -581,8 +606,14 @@ static void optionText(int i, int ordinal, char *main, size_t mSize,
     const Subtitle *l = addons_subtitle(i - embedded);
     if (l && l->release[0]) snprintf(main, mSize, "%s", l->release);
     else snprintf(main, mSize, "Download %d", ordinal + 1);
-    snprintf(sub, sSize, "OpenSubtitles%s",
-             l && matchesPlaying(l->release) ? "  \xc2\xb7  matches your file" : "");
+    // The same evidence the automatic choice ranks on, said on the row: an exact
+    // hash match, the same release, or a frame rate the film does not have.
+    { int video = video_frame_rate_milli(), d = 0;
+      if (l && video > 0 && l->fpsMilli > 0) { d = video - l->fpsMilli; if (d < 0) d = -d; }
+      snprintf(sub, sSize, "%s%s", l && l->source[0] ? l->source : "Addon",
+               l && l->hashMatch ? "  \xc2\xb7  made for this file"
+               : l && matchesPlaying(l->release) ? "  \xc2\xb7  matches your file"
+               : d * 100 > video && d ? "  \xc2\xb7  different frame rate" : ""); }
   }
 }
 

@@ -82,7 +82,12 @@ void addons_prefetch(const char *id, const char *kind);
 // most in languages that are of no interest — which is why the list is FILTERED
 // by language before it reaches the screen: 70 rows to scroll through would be
 // worse than none.
-#define SUB_MAX 12
+// Room for an AGGREGATOR's whole answer. It was 12, and AIOStreams — which merges
+// OpenSubtitles V3 Pro, SubDL and the rest into ONE list — filled all twelve with
+// its first English entries: the other providers' subtitles were cut off unread,
+// and the ranking in tracks.c had nothing to choose between. 64 was still full on
+// The Dark Knight in English alone; 200 is ~180 KB, on the heap.
+#define SUB_MAX 200
 
 typedef struct {
   char label[64];   // "Portugues (BR)  ·  Silo.S01E05.WEB"
@@ -92,9 +97,25 @@ typedef struct {
   // whole: the label keeps only its first characters, and the release group that
   // says whether it will stay in sync is at the END.
   char release[120];
+  // What OpenSubtitles says about the match: "m":"h" when it was found by the
+  // file's hash (made for this exact file), and the frame rate it was timed at in
+  // thousandths, 0 when unknown. tracks.c ranks on both.
+  int  hashMatch;
+  int  fpsMilli;
+  // The addon that answered ("AIOStreams", "SubDL"), for the sheet's detail line.
+  char source[48];
 } Subtitle;
 
 void addons_fetch_subtitles(const char *imdb, const char *kind);
+// THE FILE the subtitles are for: its OpenSubtitles hash, its size in bytes and
+// its name, sent to the subtitle addons as the extra
+// "videoHash=…&videoSize=…&filename=…" — byte for byte what the web app sends
+// (subtitleRepository.js buildExtraParams). Without it the search answers for the
+// TITLE, with subtitles cut for whatever release each uploader had, and those
+// drift; with it OpenSubtitles can answer for this exact file. Call once the
+// source is chosen: a different file restarts the search for the current title.
+// A new title (addons_fetch_subtitles) forgets the previous file.
+void addons_subtitles_file(const char *videoHash, long long videoSize, const char *filename);
 int  addons_n_subtitles(void);
 const Subtitle *addons_subtitle(int i);
 // 1 while the search is still running. Needed to tell "found none" from "not back

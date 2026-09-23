@@ -58,8 +58,12 @@ static _Atomic int sourceChosen = -2;   // release/acquire entre verificacao e U
 
 // Hands a chosen source to the player. A source that needs request headers goes
 // through the loopback relay, because the pipeline cannot send them (proxy.h).
+//
+// And it tells the subtitle search which FILE is now playing, so OpenSubtitles
+// can answer with subtitles timed for it rather than for the title in general.
 static void playSource(const Stream *s) {
   static char local[4200];
+  addons_subtitles_file(s->videoHash, s->videoSize, s->file);
   player_set_source(proxy_wrap(s->url, s->headers, local, sizeof local));
 }
 

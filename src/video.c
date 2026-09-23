@@ -155,6 +155,7 @@ const VideoTrack *video_subtitle(int i) { (void)i; return 0; }
 int  video_audio_current(void) { return 0; }
 int  video_subtitle_current(void) { return -1; }
 const char *video_language_name(const char *c) { return c ? c : ""; }
+int video_frame_rate_milli(void) { return 0; }
 void video_choose_audio(int i) { (void)i; }
 void video_choose_subtitle(int i) { (void)i; }
 void video_subtitle_external(const char *u) { (void)u; }
@@ -219,6 +220,9 @@ static int       fontX = -1, fontY, fontW, fontH, dstX = -1, dstY, dstW, dstH;
 // The stream's characteristics, taken from the videoInfo event of the uMS
 // subscription. The ACB needs them to describe the video to the display pipeline.
 static int       vidW = 1920, vidH = 1080, vidRate = 30;
+// The same rate unrounded, in thousandths; 0 = not reported yet.
+static int       vidRateMilli;
+int video_frame_rate_milli(void) { return vidRateMilli; }
 static long      vidBits;
 static char      vidScan[24] = "progressive";
 // The real hdrType the uMS reports for the layer that reached the decoder. This
@@ -375,6 +379,9 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   if (strstr(p, "sourceInfo")) {
     const char *q;
     nAudio = nSub = 0;
+    // videoTrackInfo carries the frame rate already, a moment before videoInfo.
+    { double fr = numberOf(p, "\"frameRate\":");
+      if (fr > 0) vidRateMilli = (int)(fr * 1000.0 + 0.5); }
     vidAtmos = 0;
     // It walks audioTrackInfo item by item. The sourceInfo is a single object, so
     // walking the "{"s after the array's key is enough here.
@@ -492,7 +499,8 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     // rather than a missing measurement. Flagging it makes video_pump resend the
     // pair with the right size, on the drawing thread.
     if (vidW != wasW || vidH != wasH) windowDirty = 1;
-    v = numberOf(p, "\"frameRate\":");  if (v > 0) vidRate = (int)v;
+    v = numberOf(p, "\"frameRate\":");
+    if (v > 0) { vidRate = (int)v; vidRateMilli = (int)(v * 1000.0 + 0.5); }
     v = numberOf(p, "\"bitRate\":");    if (v > 0) vidBits = (long)v;
     { const char *q = strstr(p, "\"scanType\":\"");
       if (q) { const char *f; q += 12; f = strchr(q, '"');

@@ -38,6 +38,16 @@ char *data_read(const char *name);
 
 int data_erase(const char *name);
 
+// Appends one timestamped line to `name` in the data folder, printf-style, and
+// starts the file over past 256 KB. For the diagnostic logs ssh has to be able to
+// read — the app's own stdout goes to a private /tmp since webOS 11. Safe from any
+// thread: one fopen/fprintf/fclose per line.
+void data_log(const char *name, const char *fmt, ...)
+#ifdef __GNUC__
+  __attribute__((format(printf, 2, 3)))
+#endif
+  ;
+
 // A STABLE identifier for this installation, generated on the first run and
 // saved. The web sync sends this in `p_origin_client_id` so the server does not
 // hand the device back the write it just made itself — without a stable id

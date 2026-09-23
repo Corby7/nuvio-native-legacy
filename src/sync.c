@@ -113,6 +113,21 @@ static void pullAddons(void) {
     free(r);
     return;
   }
+  // ADDONS.LOG: every row the account sent, in order, with what became of it —
+  // the only way to see from outside why an installed addon never shows up.
+  { int row = 0;
+    for (p = js_root_array(r); p; p = js_next(js_end(p)), row++) {
+      const char *f = js_end(p), *u = strstr(p, "\"url\"");
+      char name[64] = "", b[16];
+      size_t len = 0;
+      js_text(p, f, "name", name, sizeof name);
+      if (u && u < f) { u = strchr(u + 5, '"'); if (u && u < f) { const char *e = u + 1;
+        while (e < f && *e != '"') { if (*e == '\\') e++; e++; } len = (size_t)(e - u - 1); } }
+      data_log("addons.log", "account #%d '%s' url %zu bytes %s -> %s", row, name, len,
+               js_raw(p, f, "enabled", b, sizeof b) && !strcmp(b, "false") ? "disabled" : "enabled",
+               row >= SY_ADD_MAX ? "DROPPED (past the account cap)"
+               : len >= sizeof addonsRemote[0].url ? "DROPPED (URL too long)" : "read");
+    } }
   for (p = js_root_array(r); p && k < SY_ADD_MAX; p = js_next(js_end(p))) {
     const char *f = js_end(p);
     char b[16];

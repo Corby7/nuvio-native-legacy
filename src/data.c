@@ -5,6 +5,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <stdarg.h>
 
 static char dir[512];
 static char clientId[64];
@@ -178,4 +179,24 @@ const char *data_client_id(void) {
     snprintf(line, sizeof line, "%s\n", clientId);
     data_write("client.txt", line); }
   return clientId;
+}
+
+void data_log(const char *name, const char *fmt, ...) {
+  char path[600], stamp[32];
+  struct stat sb;
+  time_t now = time(NULL);
+  struct tm lt;
+  va_list ap;
+  FILE *f;
+  if (!data_path(path, sizeof path, name)) return;
+  if (stat(path, &sb) == 0 && sb.st_size > 256L * 1024L) remove(path);
+  if (!(f = fopen(path, "a"))) return;
+  localtime_r(&now, &lt);
+  strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &lt);
+  fprintf(f, "%s | ", stamp);
+  va_start(ap, fmt);
+  vfprintf(f, fmt, ap);
+  va_end(ap);
+  fputc('\n', f);
+  fclose(f);
 }
