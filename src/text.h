@@ -162,6 +162,9 @@ typedef enum {
   // The Library's page-size tab strip and the dropdown value. APPENDED.
   TXT_LIB_TAB,       // Saved / Collection                   32 / 700
   TXT_DD_SEL,        // a dd_select's value                  30 / 500
+  // The sidebar's row labels. APPENDED, like everything above.
+  TXT_MENU_ITEM,     // .home-nav-label                      28 / 400
+  TXT_MENU_SEL,      // .home-nav-item.selected              28 / bold
   TXT_NFONTS
 } TxtStyle;
 

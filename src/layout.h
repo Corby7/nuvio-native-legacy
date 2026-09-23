@@ -16,9 +16,9 @@
 #define NV_LEGACY_RAIL_W        144.0f
 // The bar's OPEN width. It lives here and not in menu.c because main.c sizes the
 // backdrop's grab from it: the strip has to be as wide as the menu ever gets.
-// It stays at 392 and not at .home-sidebar's 340: the web app has no "Profile and
-// Stats" row, and that label does not fit 340 without being cut.
-#define NV_MENU_W_IS_OPEN       392.0f
+// .home-sidebar's 340. It was 392 while the row read "Profile and Stats", which
+// did not fit; the row is "Profile" now and the bar is the web's width again.
+#define NV_MENU_W_IS_OPEN       340.0f
 #define NV_LEGACY_CONTENT_X     248.0f
 #define NV_LEGACY_CONTENT_RIGHT 104.0f
 // The real rule, measured in both states: the content ALWAYS has a 104 inset, and
@@ -1600,6 +1600,8 @@
 #define NV_DD_SEL_BORDER    1.0f   // the hair line at rest
 #define NV_DD_SEL_FOCUS_BG  0.188f // rgb(48,48,48)
 #define NV_FT_DD_SEL        30
+// .home-nav-label: clamp(24px, 1.45vw, 32px), which is 28 at 1920.
+#define NV_FT_MENU          28
 
 // ---------------------------------------------------------------------------
 // The DISCOVER screen — READ OFF NuvioWeb's css/components.css (2026-09-19).

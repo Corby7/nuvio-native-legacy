@@ -333,6 +333,8 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   // MEDIUM, not the season picker's Bold: set 30 on an #222 pill, Bold read as
   // shouting next to the page's other controls.
   { NV_FT_DD_SEL,    WEIGHT_MEDIUM  },   // TXT_DD_SEL
+  { NV_FT_MENU,      WEIGHT_REGULAR },   // TXT_MENU_ITEM
+  { NV_FT_MENU,      WEIGHT_BOLD    },   // TXT_MENU_SEL
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.

@@ -7,7 +7,7 @@
 // --focus-bg, the Phosphor glyph set with its filled variant on the selected
 // row, the brand lockup at the top, and the frosted plate the whole thing sits
 // on. Where the two apps disagree it is noted at the spot, and there are only
-// three places: the open width (this app has a longer label), the footer (the
+// three places: the brand (hung off the icon column), the footer (the
 // web puts the account at the TOP of the list, this app keeps it at the bottom
 // where the D-pad expects it) and the fixed rail (in the web the collapsed bar
 // takes no width at all, here it is a permanent 144 band).
@@ -59,12 +59,11 @@
 // --legacy-sidebar-padding is `48px 24px`: 24 each side, and the pill fills what
 // is left of the box.
 #define NV_MENU_PILL_PAD   24.0f
-// A ROUNDED RECTANGLE, not the web's stadium. --legacy-sidebar-item-radius is 64
-// on a 104 row — past half the height, so a browser caps it into a full pill.
-// Kept at the port's 0.20 on the owner's call: with the icons centred, a stadium
-// as wide as this panel reads as a lozenge floating around the row rather than as
-// the row being highlighted.
-#define NV_MENU_RADIUS_PILL  0.20f
+// THE WEB'S STADIUM. --legacy-sidebar-item-radius is 64 on a 104 row — past half
+// the height, so a browser caps it into a full pill. The port had a 0.20 rounded
+// rectangle with a white ring around it; the owner's design is the plain #303030
+// stadium, no ring, and with the bar at 340 it no longer reads as a lozenge.
+#define NV_MENU_RADIUS_PILL  0.50f
 // How much the content on the right darkens with the bar open. MEASURED on
 // `.home-shell::before`: rgba(0,0,0,0.5).
 #define NV_MENU_VEIL        0.50f
@@ -111,10 +110,9 @@
 
 // THE BRAND. `.home-brand-wrap` is a ROW, 80 tall: a 54x54 mark, a 32 gap and a
 // 54-tall wordmark, all `object-fit: contain` under --legacy-sidebar-padding's 48
-// of top inset. The lockup stays ONE ROW here, exactly as in the web — the only
-// departure is that the row is CENTRED in the bar rather than pinned to the web's
-// 36 left inset, because this rail is a permanent band and a left-hung logo read
-// as a sixth nav item that had lost its pill.
+// of top inset. The row hangs off the ICON COLUMN's left edge, as in the owner's
+// design: the mark sits straight above the glyphs and the wordmark runs out to the
+// right, rather than the lockup floating centred in the bar.
 //
 // NV_MENU_BRAND_WORD is the wordmark's CAP HEIGHT, not a box, because the file was
 // trimmed to its ink: it ships 221x108 with the letters in y30..70, so the web's
@@ -128,7 +126,7 @@
 
 // Labels and order checked against the reference. "Search" is the noun, not the
 // verb: the other entries are nouns too, and a verb among them read as odd.
-static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Profile and Stats", "Settings" };
+static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Profile", "Settings" };
 
 // FOOTER: who is using the app, and the door to switching. It is one EXTRA focus
 // item, at index MENU_N — it deliberately did not go into the enum, because
@@ -295,7 +293,7 @@ void menu_update(float dt, Uint32 now) {
 // entry, and the CSS swaps one for the other on `.selected` — that swap is the
 // selected row's main signal, and drawing the outline in both states loses it.
 // The paths were taken from that file and rasterised into art/icons; only
-// "Profile and Stats" had to be chosen, because the web has no such row (its
+// "Profile" had to be chosen, because the web has no such row (its
 // account entry is the avatar itself, which is this bar's footer).
 //
 // The colour is always WHITE and the state rides on the alpha: the CSS does the
@@ -312,7 +310,7 @@ static void icon(int d, int filled, float cx, float cy, float s, float a) {
 }
 
 // THE BRAND LOCKUP, `.home-brand-wrap`: mark and wordmark side by side on one
-// row, the row centred in the bar (see the constants).
+// row, hung off the icon column (see the constants).
 //
 // The two go through different modes. GFX_CARD would drop the mark's alpha and
 // paint a black box behind it; GFX_BRAND would flatten its gradient into one
@@ -322,15 +320,11 @@ static void icon(int d, int filled, float cx, float cy, float s, float a) {
 //
 // Both are `object-fit: contain`, so the widths come from the files' real aspects:
 // hard-coding them would deform the logo if the art were ever swapped. And BOTH
-// have to be loaded before either is drawn — the row is centred on their combined
-// width, so drawing the mark while the wordmark is still decoding would centre it
-// alone and then shunt it left when the word arrived.
+// have to be loaded before either is drawn, so the lockup never shows half-built.
 //
-// `w` is the panel's CURRENT width, not its open one: the row is centred in the
-// bar, so while the bar is widening the logo travels with it. Centring on the open
-// width instead would park it off the right edge for the first half of the
-// animation and then have it appear already in place, which reads as a pop.
-static void drawBrand(float px, float w, float alpha) {
+// The row rides on `px`, the panel's edge, like the glyphs under it; the crop in
+// menu_draw hides whatever of the wordmark the widening bar has not reached yet.
+static void drawBrand(float px, float alpha) {
   GLuint tMark = 0, tWord = 0;
   float apMark = 0.0f, apWord = 0.0f;
   float cy = NV_MENU_BRAND_Y + NV_MENU_BRAND_H * 0.5f;
@@ -366,7 +360,7 @@ static void drawBrand(float px, float w, float alpha) {
   // width, and a mark that were wider than tall would do the opposite.
   wMark = (apMark < 1.0f) ? NV_MENU_BRAND * apMark : NV_MENU_BRAND;
   wWord = NV_MENU_BRAND_WORD * apWord;
-  x = px + (w - (wMark + NV_MENU_BRAND_GAP + wWord)) * 0.5f;
+  x = px + NV_MENU_ICON_CX - NV_MENU_ICON * 0.5f;
 
   gfx_tex_aspect_current = 0.0f;
   gfx_rect((GfxRect){x, cy - NV_MENU_BRAND * 0.5f, wMark, NV_MENU_BRAND},
@@ -416,10 +410,6 @@ static void drawFooter(float px, float w, float alpha, float focus) {
   if (focus > 0.01f) {
     GfxRect pill = { px + NV_MENU_PILL_PAD, y,
                      w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_PILL_H };
-    GfxRect ring = { pill.x - NV_RING_FOCUS, pill.y - NV_RING_FOCUS,
-                     pill.w + NV_RING_FOCUS * 2, pill.h + NV_RING_FOCUS * 2 };
-    float radius = (pill.h * NV_MENU_RADIUS_PILL + NV_RING_FOCUS) / ring.h;
-    gfx_color(ring, radius, 1, 1, 1, focus * alpha);
     gfx_color(pill, NV_MENU_RADIUS_PILL, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G,
             NV_COLOR_FOCUS_B, focus * alpha);
   }
@@ -476,7 +466,7 @@ static void drawFooter(float px, float w, float alpha, float focus) {
       // use on the rail. The port had 150,152,160 here — a blue-tinted grey that
       // is in none of the theme's tokens.
       int c = (int)(anim_blend(0.702f, 1.0f, focus) * 255.0f + 0.5f);
-      TxtLine name = txt_line_trim(TXT_BODY, p ? p->name : "Your account",
+      TxtLine name = txt_line_trim(TXT_MENU_ITEM, p ? p->name : "Your account",
                                       c, c, c, 255,
                                       NV_MENU_W_IS_OPEN - NV_MENU_LABEL_X - 28.0f);
       // The name alone, CENTRED on the row. There used to be a "Switch user"
@@ -526,7 +516,7 @@ void menu_draw(Uint32 now) {
 
   // The brand comes in with the width, like the labels do: `.home-brand-mark` and
   // `.home-brand-wordmark` are both opacity 0 until `.content-expanded`.
-  drawBrand(px, w, expands * expands * entry);
+  drawBrand(px, expands * expands * entry);
 
   float y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
   for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H) {
@@ -545,16 +535,13 @@ void menu_draw(Uint32 now) {
     if (f > 0.01f) {
       GfxRect pill = { px + NV_MENU_PILL_PAD, y + (NV_MENU_LINE_H - NV_MENU_PILL_H) * 0.5f,
                        w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_PILL_H };
-      // A DARK PILL with a white ring, not a light pill with dark text.
+      // A DARK PILL, not a light pill with dark text, and no ring around it.
       // MEASURED against the reference: a focused item has background #303030 and
       // text #FFFFFF — the --focus-bg token, which the web app's CSS also
       // declares. Ours inverted it (background #E4E4E9, dark text), and #E4E4E9
       // was no system colour at all: neither white, nor the #F5F5F5 of
-      // --secondary-color.
-      { GfxRect ring = { pill.x - NV_RING_FOCUS, pill.y - NV_RING_FOCUS,
-                         pill.w + NV_RING_FOCUS * 2, pill.h + NV_RING_FOCUS * 2 };
-        float radius = (pill.h * NV_MENU_RADIUS_PILL + NV_RING_FOCUS) / ring.h;
-        gfx_color(ring, radius, 1, 1, 1, f * slides); }
+      // --secondary-color. The white ring went with the owner's design: the
+      // stadium alone carries the focus there.
       gfx_color(pill, NV_MENU_RADIUS_PILL, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G,
               NV_COLOR_FOCUS_B, f * slides);
     }
@@ -575,7 +562,9 @@ void menu_draw(Uint32 now) {
     float aRot = expands * expands * entry;
     if (aRot > 0.01f) {
       int c = (int)(luma * 255.0f + 0.5f);
-      TxtLine l = txt_line_trim(TXT_BODY, LABELS[i], c, c, c, 255,
+      // `.home-nav-item.selected` is `font-weight: bold`; the rest inherit 400.
+      TxtLine l = txt_line_trim(current ? TXT_MENU_SEL : TXT_MENU_ITEM, LABELS[i],
+                                   c, c, c, 255,
                                    NV_MENU_W_IS_OPEN - NV_MENU_LABEL_X - 28);
       txt_draw_alpha(l, px + NV_MENU_LABEL_X, cy - l.h * 0.5f, aRot);
     }
