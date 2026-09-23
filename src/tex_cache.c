@@ -67,6 +67,12 @@ typedef struct {
   // separates a BLACK logo (achromatic, the wrong TMDB variant) from a dark but
   // colourful BRAND logo (red, wine), which must pass through untouched.
   int chroma;
+  // The box the VISIBLE pixels occupy, as fractions of the image (x0, y0, x1, y1).
+  // Logos arrive with any amount of transparent margin — metahub and TMDB crop
+  // nothing — so sizing one by its file draws the padding, not the mark. Only
+  // meaningful when boxKnown is set; a memset slot reads as unknown.
+  float box[4];
+  int boxKnown;
 } Item;
 
 #define NV_TEX_THREADS 2
@@ -880,6 +886,34 @@ static int threadDecode(void *arg) {
       if (n > 0) { lumaMedia = (int)(sum / n); chromaMedia = (int)(sumC / n); }
     }
 
+    // THE VISIBLE BOX, for tex_content_box. Each edge is found by walking in from
+    // that side until a pixel is solid enough to count, so opaque art (every
+    // poster) answers on its first row and column and costs next to nothing; only
+    // art with a transparent margin pays for the margin. Alpha below 24 is a soft
+    // shadow or glow, not the mark, and is left outside the box.
+    float boxArt[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+    int boxOk = 0;
+    if (conv && conv->format->BytesPerPixel == 4 && conv->w > 0 && conv->h > 0) {
+      const unsigned char *px = (const unsigned char *)conv->pixels;
+      int W = conv->w, H = conv->h, pitch = conv->pitch;
+      #define NV_SOLID(xx, yy) (px[(size_t)(yy) * pitch + (size_t)(xx) * 4 + 3] >= 24)
+      int y0 = 0, y1 = H - 1, x0 = 0, x1 = W - 1, xx, found;
+      for (found = 0; y0 < H && !found; y0 += !found)
+        for (xx = 0; xx < W; xx++) if (NV_SOLID(xx, y0)) { found = 1; break; }
+      if (found) {
+        for (found = 0; y1 > y0 && !found; y1 -= !found)
+          for (xx = 0; xx < W; xx++) if (NV_SOLID(xx, y1)) { found = 1; break; }
+        for (found = 0; x0 < W && !found; x0 += !found)
+          for (int yy = y0; yy <= y1; yy++) if (NV_SOLID(x0, yy)) { found = 1; break; }
+        for (found = 0; x1 > x0 && !found; x1 -= !found)
+          for (int yy = y0; yy <= y1; yy++) if (NV_SOLID(x1, yy)) { found = 1; break; }
+        boxArt[0] = (float)x0 / W;       boxArt[1] = (float)y0 / H;
+        boxArt[2] = (float)(x1 + 1) / W; boxArt[3] = (float)(y1 + 1) / H;
+        boxOk = 1;
+      }
+      #undef NV_SOLID
+    }
+
     // THE FAILURE HAS TO SHOW. Without a log, an image that never decodes becomes a
     // silent loop: the drawing asks every frame, the thread tries every frame, and
     // the only symptom is "that card has no art". That is how metahub's WEBP went
@@ -895,6 +929,8 @@ static int threadDecode(void *arg) {
     } else if (items[idx].state == PENDING) {
       items[idx].luma = lumaMedia;
       items[idx].chroma = chromaMedia;
+      memcpy(items[idx].box, boxArt, sizeof boxArt);
+      items[idx].boxKnown = boxOk;
       items[idx].sup = conv;
       if (conv) { items[idx].srcW = srcW; items[idx].srcH = srcH; }
       if (conv) {
@@ -1268,6 +1304,22 @@ int tex_failed(const char *path) {
   // 60 s tier that used to be dead code is exactly the one that recovers art
   // lost to a network blip.
   if (i >= 0 && items[i].state == FAILED && items[i].failures >= 4) r = 1;
+  SDL_UnlockMutex(mtx);
+  return r;
+}
+
+int tex_content_box(const char *path, float box[4]) {
+  int r = 0;
+  unsigned long h;
+  int i;
+  if (!path || !*path) return 0;
+  h = hashPath(path);
+  SEARCH_MEASURE(i, path, h);
+  // Same as tex_aspect: the box belongs to the resident texture, not to the state.
+  if (i >= 0 && items[i].h > 0 && items[i].boxKnown) {
+    memcpy(box, items[i].box, sizeof items[i].box);
+    r = 1;
+  }
   SDL_UnlockMutex(mtx);
   return r;
 }

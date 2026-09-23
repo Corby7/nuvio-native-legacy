@@ -3,8 +3,10 @@
 #include "text.h"
 #include "anim.h"
 #include "settings.h"
+#include "tex_cache.h"
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 // HALF-LEADING: the gap CSS leaves above a line inside its own line box, which is
 // what the port has to add once it stacks boxes rather than glyphs. Without it
@@ -113,12 +115,53 @@ void resume_draw(const CatItem *ci, GfxRect r) {
     base -= box + NV_CW_SUB_GAP * scale;
   }
 
-  // The title wraps to NV_CW_TITLE_LINES. txt_block always draws, so the height
-  // comes from a measuring pass first — txt_block_dir with a negative x breaks
-  // the same lines and returns what they use without putting them on screen. The
-  // lines it rasterises are exactly the ones the drawing pass then asks for, so
-  // the second call is a cache hit and the double pass costs two lookups.
-  {
+  // THE LOGO IN THE TITLE'S PLACE, when Settings asks for it. It is placed by
+  // its VISIBLE box (tex_content_box), not the file's: logos arrive with any
+  // amount of transparent margin, and placing the file put that margin between
+  // the mark and the episode name. The quad is the whole texture, stretched so
+  // the visible part lands exactly on the target box — the margin falls outside
+  // it and is transparent, so nothing needs cropping.
+  //
+  // While the logo is still on its way the space stays empty rather than
+  // flashing the name first; only a logo the cache has given up on (or none at
+  // all) falls back to the name.
+  //
+  // Asked for at the card's RESTING width, with room for the focus scale: `r.w`
+  // grows while the card takes focus, and a width that moves would promote the
+  // entry and decode it again mid-animation (see the note on wAsk in home.c).
+  int logo = settings_cw_logo() && ci->logo[0] && !tex_failed(ci->logo);
+  if (logo) {
+    // The subtitle's line box carries half-leading above its glyphs, but the
+    // mark's visible edge has none: without this the logo sat on the text.
+    if (sub) base -= NV_CW_LOGO_GAP * scale;
+    GLuint t = tex_get_width(ci->logo, NV_HIGHLIGHT_W * NV_CW_LOGO_MAXW * 1.1f);
+    float ap = t ? tex_aspect(ci->logo) : 0.0f;
+    float vb[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+    float used = NV_CW_LOGO_WAIT_H * scale;
+    if (ap > 0.0f) {
+      tex_content_box(ci->logo, vb);
+      float bw = vb[2] - vb[0], bh = vb[3] - vb[1];
+      float av = ap * bw / bh;                      // the visible mark's aspect
+      float hL = sqrtf(NV_CW_LOGO_AREA / av) * scale, wL = hL * av;
+      float maxH = NV_CW_LOGO_H * scale, maxW = r.w * NV_CW_LOGO_MAXW;
+      if (hL > maxH) { hL = maxH; wL = hL * av; }
+      if (wL > maxW) { wL = maxW; hL = wL / av; }
+      float qw = wL / bw, qh = hL / bh;
+      GfxRect rl = { x - vb[0] * qw, base - hL - vb[1] * qh, qw, qh };
+      // GFX_BRAND/GFX_TEXT and not GFX_CARD, for the reason the open card in
+      // home.c gives: the card mode crops and throws the alpha away.
+      GfxMode m = tex_brand_dark(ci->logo) ? GFX_BRAND : GFX_TEXT;
+      gfx_tex_aspect_current = 0.0f;
+      gfx_rect(rl, t, m, 0, 0, 0, 0.0f, 1, 1, 1, 1.0f);
+      used = hL;
+    }
+    base -= used;
+  } else {
+    // The title wraps to NV_CW_TITLE_LINES. txt_block always draws, so the height
+    // comes from a measuring pass first — txt_block_dir with a negative x breaks
+    // the same lines and returns what they use without putting them on screen. The
+    // lines it rasterises are exactly the ones the drawing pass then asks for, so
+    // the second call is a cache hit and the double pass costs two lookups.
     float lead = NV_CW_TITLE_LH * scale;
     float used = txt_block_dir(TXT_CWC_TITLE, ci->title, 255, 255, 255,
                                -1.0f, 0.0f, width, lead, 1.0f, NV_CW_TITLE_LINES);

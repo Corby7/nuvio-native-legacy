@@ -125,6 +125,13 @@ int  tex_failed(const char *path);
 // default.
 int  tex_brand_dark(const char *path);
 
+// Where the VISIBLE pixels sit, as fractions of the image: box = {x0, y0, x1, y1}.
+// Logos come with arbitrary transparent margins, so two marks drawn in the same
+// box can end up very different sizes on screen; this is what lets a caller size
+// the mark and not the file. Answers 0 (box untouched) until the texture exists,
+// or when the art has nothing solid in it.
+int  tex_content_box(const char *path, float box[4]);
+
 // Call once per frame, on the drawing thread: uploads to the GPU whatever the
 // decode thread has finished. Returns how many it uploaded.
 int tex_pump(int max_per_frame);

@@ -92,6 +92,7 @@ int   settings_discover_na_search(void); // searchDiscoverEnabled (derived)
 // --- LAYOUT: continue watching ----------------------------------------------
 int   settings_cw_on(void);          // continueWatchingEnabled
 int   settings_cw_style(void);          // 0 card, 1 wide, 2 poster
+int   settings_cw_logo(void);           // local: logo in place of the title
 int   settings_cw_thumb_episode(void);  // useEpisodeThumbnailsInCw
 int   settings_cw_blur_next(void);// blurContinueWatchingNextUp
 int   settings_cw_do_episode_more_alto(void); // nextUpFromFurthestEpisode

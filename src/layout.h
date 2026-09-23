@@ -657,6 +657,22 @@
 // `-webkit-line-clamp: 2`. One line ate real titles on a card this narrow, and
 // the block grows UPWARD into the scrim, so the second line costs nothing below.
 #define NV_CW_TITLE_LINES      2
+// "Show logo" (Settings > Continue watching): the title's logo in the title's
+// place, sized by its VISIBLE pixels (tex_content_box) so transparent margins in
+// the file do not shrink one mark and not another.
+//
+// Sized by AREA, not by height: at a fixed height a 10:1 wordmark is a thin strip
+// across the card and a 1.5:1 stacked logo is a block, and they read as two
+// different sizes. Equal area makes them weigh the same; the caps keep a stacked
+// logo from going taller than two title lines and a long wordmark off the
+// remaining-time corner. NV_CW_LOGO_AREA is a 3.2:1 mark at 46px tall.
+#define NV_CW_LOGO_AREA  6770.0f   // px² at the resting card width
+#define NV_CW_LOGO_H       64.0f   // height cap
+#define NV_CW_LOGO_MAXW     0.62f  // width cap, of the card's width
+// Held while the logo is still on its way, so the kicker only moves a little
+// when it lands: the height of the typical 3.2:1 mark above.
+#define NV_CW_LOGO_WAIT_H  46.0f
+#define NV_CW_LOGO_GAP      6.0f   // extra room above the episode name
 // Full-bleed against the base, 6px tall, with a visible track behind the fill.
 // It was a 4px line inset by the copy's margin and floating 10px up, with no
 // track at all.
