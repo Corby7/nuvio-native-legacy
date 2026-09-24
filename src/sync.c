@@ -1,3 +1,4 @@
+#include "mark.h"
 #include "sync.h"
 #include "watchedep.h"
 #include "debrid.h"
@@ -37,6 +38,10 @@ static int dirtyProgress, dirtyAddons;
 // would rewrite the addon list in the middle of a frame already reading from it.
 static AddonRemote addonsRemote[SY_ADD_MAX];
 static int nAddonsRemote, hasAddonsRemote;
+// The raw bodies behind the addon list and the home's row order, handed to the
+// main thread like collectionsBlob — see "THE LAST ACCOUNT STATE" below.
+static char *addonsBlob, *homeBlob;
+static int  hasHomeBlob;
 
 static char traktToken[300];
 static int  hasTraktRemote;
@@ -90,6 +95,8 @@ static int ok2xx(const char *r, int st) { return r && st >= 200 && st < 300; }
 
 // ---------------------------------------------------------------- addons
 
+static int parseAddons(const char *r, AddonRemote *out, int max);
+
 static void pullAddons(void) {
   char query[400], owner[80];
   char *r;
@@ -128,33 +135,43 @@ static void pullAddons(void) {
                row >= SY_ADD_MAX ? "DROPPED (past the account cap)"
                : len >= sizeof addonsRemote[0].url ? "DROPPED (URL too long)" : "read");
     } }
-  for (p = js_root_array(r); p && k < SY_ADD_MAX; p = js_next(js_end(p))) {
+  k = parseAddons(r, addonsRemote, SY_ADD_MAX);
+  free(addonsBlob);
+  addonsBlob = r;               // ownership passes to the box; do not free here
+  nAddonsRemote = k;
+  hasAddonsRemote = 1;
+}
+
+// The account's addon rows -> `out`. Separate from the pull because the same
+// body is parsed again at startup, from the copy kept on disk.
+static int parseAddons(const char *r, AddonRemote *out, int max) {
+  const char *p;
+  int k = 0;
+  for (p = js_root_array(r); p && k < max; p = js_next(js_end(p))) {
     const char *f = js_end(p);
     char b[16];
-    memset(&addonsRemote[k], 0, sizeof addonsRemote[k]);
+    memset(&out[k], 0, sizeof out[k]);
     // THE SAME TRAP AS THE COLLECTIONS, and here it costs a whole addon: js_text
     // refuses silently when the value does not fit, and addons that keep their
     // configuration inside the URL run well past this field's 600 bytes. Without
     // this line the addon would simply not exist for the app, with not a word in
     // the log to say why.
-    if (!js_text(p, f, "url", addonsRemote[k].url, sizeof addonsRemote[k].url)) {
+    if (!js_text(p, f, "url", out[k].url, sizeof out[k].url)) {
       char name[64] = "";
       js_text(p, f, "name", name, sizeof name);
       printf("[sync] addon '%s' SKIPPED: its URL does not fit in %d bytes\n",
-             name[0] ? name : "(unnamed)", (int)sizeof addonsRemote[k].url);
+             name[0] ? name : "(unnamed)", (int)sizeof out[k].url);
       continue;
     }
-    js_text(p, f, "name", addonsRemote[k].name, sizeof addonsRemote[k].name);
+    js_text(p, f, "name", out[k].name, sizeof out[k].name);
     // Absent counts as ON: that is how the web app reads it, and an addon that
     // disappears because of a field the server did not send is worse than an
     // extra one.
-    addonsRemote[k].active = js_raw(p, f, "enabled", b, sizeof b)
-                         ? (strcmp(b, "false") != 0) : 1;
+    out[k].active = js_raw(p, f, "enabled", b, sizeof b)
+                    ? (strcmp(b, "false") != 0) : 1;
     k++;
   }
-  free(r);
-  nAddonsRemote = k;
-  hasAddonsRemote = 1;
+  return k;
 }
 
 static void pushAddons(void) {
@@ -687,11 +704,13 @@ static int pullCollections(const char *body) {
 //    "custom_title":"","is_collection":bool,"collection_id":""}
 // and the key is addon_id + "_" + type + "_" + catalog_id, identical to the one
 // discover builds for every declared catalogue.
+//
+// Fetched on the sync thread, APPLIED on the main one (applyHomeCatalog, from
+// sync_step or the startup restore), like the collections.
 static int pullHomeCatalog(const char *body) {
   static const char *FUNC = "sync_pull_home_catalog_settings";
   char *r;
-  int st = 0, n = 0, nCollection = 0;
-  const char *root, *item;
+  int st = 0;
   if (alreadyMissing(FUNC)) return 0;
   r = session_rpc(FUNC, body, &st);
   if (!ok2xx(r, st)) {
@@ -702,13 +721,23 @@ static int pullHomeCatalog(const char *body) {
     free(r);
     return 0;
   }
+  free(homeBlob);
+  homeBlob = r;                 // ownership passes to the box; do not free here
+  hasHomeBlob = 1;
+  return 1;
+}
+
+// The row order in `r` -> discover's preferences. The number of rows it placed;
+// 0 leaves the preferences exactly as they were.
+static int applyHomeCatalog(const char *r) {
+  int n = 0, nCollection = 0;
+  const char *root, *item;
   root = js_root_array(r);
-  if (!root) { free(r); return 0; }
+  if (!root) return 0;
   // The body is [{"settings_json":{... ,"items":[...]}}].
   item = js_array(root, js_end(root), "items");
   if (!item) {
     printf("[sync] home catalog settings: no \"items\"\n");
-    free(r);
     return 0;
   }
   disc_prefs_begin();
@@ -747,7 +776,6 @@ static int pullHomeCatalog(const char *body) {
   // does not show them yet".
   if (nCollection)
     printf("[sync] %d collection(s) placed in the home order\n", nCollection);
-  free(r);
   return n;
 }
 
@@ -777,11 +805,7 @@ static void pullSoRead(void) {
 
   snprintf(body, sizeof body,
            "{\"p_profile_id\":%d,\"p_platform\":\"home_catalog_shared\"}", profile);
-  hasCatHome = pullHomeCatalog(body) > 0;
-  // The home was already assembled in the manifest's order. With the owner's
-  // order in hand the rows are rebuilt — and now the ones that fit are the ones
-  // they chose, not the first ones the addon happened to declare.
-  if (hasCatHome) disc_rebuild();
+  hasCatHome = pullHomeCatalog(body);
 }
 
 // ---------------------------------------------------------------- cycle
@@ -856,6 +880,66 @@ int sync_periodic(unsigned nowMs) {
   return 1;
 }
 
+// --- THE LAST ACCOUNT STATE, KEPT ON DISK --------------------------------------
+//
+// MEASURED on the C3 (2026-09-24): the home was built TWICE on every launch.
+// The first build ran with no addons (the package ships none) and the
+// manifest's row order; ~1.1 s later the sync delivered the account's addons,
+// row order and collections, and each of the three called disc_rebuild — so the
+// real home arrived at ~5.5 s, after a second round of every catalogue request.
+// The same three triggers fired on EVERY periodic cycle too, rebuilding the home
+// every few minutes although nothing had changed.
+//
+// Now the last body of each is written to the data folder (per profile) and
+// applied before the first build, and a sync rebuilds only when a body differs
+// from the one already applied. The first launch after signing in still builds
+// twice; every one after that builds once.
+static char *lastAddons, *lastHome, *lastCollections;
+
+static void stateName(char *dst, size_t size, const char *what) {
+  snprintf(dst, size, "account-p%d-%s.json", profiles_active(), what);
+}
+
+// 1 when `body` differs from what was applied last (and becomes the new last,
+// on disk too); 0 when it is the same text.
+static int stateChanged(char **last, const char *what, const char *body) {
+  char name[64];
+  if (*last && !strcmp(*last, body)) return 0;
+  free(*last);
+  *last = strdup(body);
+  stateName(name, sizeof name, what);
+  data_write(name, body);
+  return 1;
+}
+
+static char *stateRead(char **last, const char *what) {
+  char name[64];
+  free(*last);
+  stateName(name, sizeof name, what);
+  *last = data_read(name);
+  return *last;
+}
+
+void sync_restore(void) {
+  const char *body;
+  if (!session_loggedin()) return;
+  if ((body = stateRead(&lastAddons, "addons"))) {
+    static AddonRemote saved[SY_ADD_MAX];
+    int n = parseAddons(body, saved, SY_ADD_MAX);
+    if (n > 0) addons_set_list(saved, n);
+    // The list is the one the build is about to use: nothing to rebuild for.
+    addons_took_change();
+  }
+  if ((body = stateRead(&lastHome, "home-catalog"))) applyHomeCatalog(body);
+  if ((body = stateRead(&lastCollections, "collections"))) col_load_account(body);
+  mark("account state restored");
+}
+
+static void stateForget(void) {
+  free(lastAddons); free(lastHome); free(lastCollections);
+  lastAddons = lastHome = lastCollections = NULL;
+}
+
 void sync_step(unsigned nowMs) {
   if (!threadAlive || !threadReady) return;
   threadAlive = 0;
@@ -864,18 +948,38 @@ void sync_step(unsigned nowMs) {
   if (hasAddonsRemote) {
     addons_set_list(addonsRemote, nAddonsRemote);
     hasAddonsRemote = 0;
+    if (addonsBlob) stateChanged(&lastAddons, "addons", addonsBlob);
+    free(addonsBlob);
+    addonsBlob = NULL;
     // The home was assembled BEFORE this list arrived, so with no addons at all:
     // zero manifests read, zero catalogues, and the home falling back to the
     // packaged catalogue. Now that there is a list, the rows are rebuilt.
-    if (addons_took_change()) disc_rebuild();
+    if (addons_took_change()) { mark("rebuild: addons changed"); disc_rebuild(); }
   }
   if (hasCollectionsBlob && collectionsBlob) {
     // Main thread: this is the only place the collection list can be rewritten
     // without racing the drawing code.
-    if (col_load_account(collectionsBlob) > 0) disc_rebuild();
+    if (stateChanged(&lastCollections, "collections", collectionsBlob) &&
+        col_load_account(collectionsBlob) > 0) {
+      mark("rebuild: collections");
+      disc_rebuild();
+    }
     free(collectionsBlob);
     collectionsBlob = NULL;
     hasCollectionsBlob = 0;
+  }
+  if (hasHomeBlob && homeBlob) {
+    // The home was built in whatever order it had. With the owner's order in
+    // hand — and only if it is not the order already applied — the rows are
+    // rebuilt, so the ones that fit are the ones they chose, not the first ones
+    // the addon happened to declare.
+    if (stateChanged(&lastHome, "home-catalog", homeBlob) && applyHomeCatalog(homeBlob) > 0) {
+      mark("rebuild: home catalog order");
+      disc_rebuild();
+    }
+    free(homeBlob);
+    homeBlob = NULL;
+    hasHomeBlob = 0;
   }
   if (hasTraktRemote) {
     // Only on the TRANSITION to active: the pull repeats on every cycle, and
@@ -883,7 +987,7 @@ void sync_step(unsigned nowMs) {
     // minutes. Going from "no credential" to "credential" is the one moment
     // the "continue watching" row can exist and does not.
     int wasOn = trakt_active();
-    if (trakt_set(traktToken, cloud_trakt_client()) && !wasOn) disc_rebuild();
+    if (trakt_set(traktToken, cloud_trakt_client()) && !wasOn) { mark("rebuild: trakt on"); disc_rebuild(); }
     hasTraktRemote = 0;
   }
   // extras.c fetches the TMDB fact sheet with disc_key_tmdb(), so this key landing
@@ -1034,6 +1138,19 @@ void sync_forget_user(void) {
   free(settingsBlob);
   settingsBlob = NULL;
   hasSettingsBlob = 0;
+  free(addonsBlob); addonsBlob = NULL;
+  free(homeBlob);   homeBlob = NULL; hasHomeBlob = 0;
+  // The saved account state goes too, for every profile: the addon rows carry
+  // debrid keys inside their URLs.
+  stateForget();
+  { static const char *const WHAT[] = { "addons", "home-catalog", "collections" };
+    char name[64];
+    int p, w;
+    for (p = 0; p <= 16; p++)
+      for (w = 0; w < 3; w++) {
+        snprintf(name, sizeof name, "account-p%d-%s.json", p, WHAT[w]);
+        data_erase(name);
+      } }
   applySettings = 1;
   snprintf(summary, sizeof summary, "no account");
   printf("[sync] user data erased from this device\n");

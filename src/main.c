@@ -630,8 +630,12 @@ int main(int argc, char **argv) {
   mark_start();
   // BEFORE tex_start and app_start, which are what create the network threads.
   net_prepare();
+  // The data folder is chosen BEFORE gfx_start, which keeps its compiled shader
+  // programs there (see gfx.c). data_start depends on nothing drawn.
+  data_start(dirArt);
   mark("gfx_start");
   if (!gfx_start()) return 1;
+  mark("gfx_start done");
   // fonts/ sits next to art/: drop the last component of the art path
   char dirRec[512];
   snprintf(dirRec, sizeof dirRec, "%s", dirArt);
@@ -659,7 +663,6 @@ int main(int argc, char **argv) {
   // The account comes BEFORE the UI: app_start decides between opening on the home
   // and opening on login, and to decide it needs to know whether there is a stored
   // session.
-  data_start(dirArt);
   cloud_configure(dirArt);
   session_start();
   profiles_load_active();
@@ -689,6 +692,8 @@ int main(int argc, char **argv) {
   // showing yesterday's for two seconds.
   trakt_load(dirArt);
   disc_tmdb(dirArt);
+  // After addons_load, so the account's list is the one that stands.
+  sync_restore();
   disc_start();
   // Half resolution: the snapshot only appears darkened and at the edges.
   int hasSnap = gfx_snap_start((int)NV_SCREEN_W / 2, (int)NV_SCREEN_H / 2);

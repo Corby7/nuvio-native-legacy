@@ -44,6 +44,12 @@ typedef enum {
 // immediately. Idempotent while a cycle is in progress.
 void sync_start(void);
 
+// Applies the account state the last sync saved — addon list, the home's row
+// order, collections — so the FIRST build already has it. Call on the main
+// thread after app_start and before disc_start. Without a session it does
+// nothing.
+void sync_restore(void);
+
 SyncState  sync_state(void);
 const char *sync_summary(void);   // one line for the settings screen
 
