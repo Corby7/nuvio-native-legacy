@@ -13,6 +13,11 @@
 #include <SDL2/SDL.h>
 
 int  settings_start(void);
+// COMING BACK to the screen within a few minutes: what the viewer left — the
+// typed text, the results, the focus and the scroll — stays, and only the
+// requests the last visit left pending are cleared. app.c decides which of the
+// two a visit is (swapScreen).
+void settings_resume(void);
 
 // Folder the settings are read from and written to. Call once, at startup.
 void settings_dir(const char *dir);

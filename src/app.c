@@ -237,17 +237,40 @@ static void idOfTarget(const CatItem *ci, char *dst, size_t n) {
     snprintf(dst, n, "%s", ci->imdb);
 }
 
+// A SCREEN LEFT A MOMENT AGO IS RESUMED, NOT RESTARTED. Every visit used to zero
+// the screen: Search -> Library -> Search lost the typed text and the results,
+// and so did Search -> Discover -> Back, the one route that exists precisely to
+// come back. On a remote the text is the expensive part — five presses a letter.
+//
+// Text from two navigations and half an hour ago IS rubbish rather than memory,
+// which is what the zeroing was for; the window below is where one becomes the
+// other. Another profile, or another account, always starts fresh.
+#define NV_SCREEN_KEEP_MS 300000u
+static Uint32 leftAt[SCREEN_DISCOVER + 1];
+static int leftProfile[SCREEN_DISCOVER + 1];
+static void leaveScreen(void) {
+  leftAt[screen] = SDL_GetTicks();
+  if (!leftAt[screen]) leftAt[screen] = 1;
+  leftProfile[screen] = profiles_active();
+}
+static int screenKept(Screen s) {
+  return leftAt[s] && SDL_GetTicks() - leftAt[s] < NV_SCREEN_KEEP_MS &&
+         leftProfile[s] == profiles_active();
+}
+static void forgetScreens(void) { memset(leftAt, 0, sizeof leftAt); }
+
 static void swapScreen(Screen new) {
+  int kept;
   if (new == screen) return;
+  leaveScreen();
   screen = new;
-  // Each screen zeroes its own state when it is opened: coming back to the search
-  // with the text from two navigations ago would be rubbish, not useful memory.
+  kept = screenKept(new);
   switch (screen) {
-    case SCREEN_SEARCH:      search_start();      break;
-    case SCREEN_DISCOVER:   dui_start();         break;
-    case SCREEN_LIBRARY: library_start(); break;
-    case SCREEN_PROFILE:     profile_open(); requestProfile(); break;
-    case SCREEN_SETTINGS:    settings_start();    break;
+    case SCREEN_SEARCH:   if (kept) search_resume();   else search_start();   break;
+    case SCREEN_DISCOVER: dui_start();         break;
+    case SCREEN_LIBRARY:  if (kept) library_resume();  else library_start();  break;
+    case SCREEN_PROFILE:  profile_open(); requestProfile(); break;
+    case SCREEN_SETTINGS: if (kept) settings_resume(); else settings_start(); break;
     default: break;
   }
 }
@@ -431,6 +454,7 @@ void app_update(float dt, Uint32 now) {
   // as though it were the person's.
   if (!session_loggedin()) {
     invalidateProfile();
+    forgetScreens();
     screen = SCREEN_LOGIN;
     login_start();
     return;
@@ -523,7 +547,7 @@ void app_update(float dt, Uint32 now) {
   // press doing nothing. swapScreen would call dui_start a second time, so the
   // check is made here and the screen set directly.
   if (screen == SCREEN_SEARCH && search_requested_discover()) {
-    if (dui_start()) screen = SCREEN_DISCOVER;
+    if (dui_start()) { leaveScreen(); screen = SCREEN_DISCOVER; }
   }
 
   // Back out of Discover returns to the SEARCH screen, not to the home: it is

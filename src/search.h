@@ -12,6 +12,11 @@
 #include "home.h"
 
 int  search_start(void);
+// COMING BACK to the screen within a few minutes: what the viewer left — the
+// typed text, the results, the focus and the scroll — stays, and only the
+// requests the last visit left pending are cleared. app.c decides which of the
+// two a visit is (swapScreen).
+void search_resume(void);
 void search_event(const SDL_Event *e);
 void search_update(float dt, Uint32 now);
 void search_draw(Uint32 now);

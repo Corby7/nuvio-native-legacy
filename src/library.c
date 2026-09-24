@@ -174,6 +174,25 @@ int library_start(void) {
   return 1;
 }
 
+void library_resume(void) {
+  char was[32] = "";
+  wantsExit = 0; request = -1;
+  hasItemFocus = 0;
+  // Rebuilt, because the watchlist may have changed while the screen was away
+  // (the title page's "+"). rebuild() puts the focus on the first card; the one
+  // the viewer left is found again by id, since its index may have moved.
+  if (focus >= 0 && focus < nFilter) {
+    const CatItem *ci = cat_item(filter[focus]);
+    if (ci) snprintf(was, sizeof was, "%s", ci->imdb);
+  }
+  rebuild();
+  if (was[0])
+    for (int i = 0; i < nFilter; i++) {
+      const CatItem *ci = cat_item(filter[i]);
+      if (ci && !strcmp(ci->imdb, was)) { focus = i; break; }
+    }
+}
+
 void library_shutdown(void) { hasItemFocus = 0; }
 
 int library_in_list(int i) {

@@ -733,6 +733,7 @@ int settings_start(void) {
   scrollSec = 0.0f; scrollY = 0.0f; wantsExit = 0;
   return 1;
 }
+void settings_resume(void) { wantsExit = 0; requestMenu = 0; }
 void settings_shutdown(void) { }
 int settings_wants_exit(void) { return wantsExit; }
 int settings_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }

@@ -572,6 +572,19 @@ int search_start(void) {
   return 1;
 }
 
+void search_resume(void) {
+  wantsExit = 0; request = -1; requestDiscover = 0; requestMenu = 0;
+  hasItemFocus = 0;
+  // A keyboard left up by the last visit is not the viewer's: text input is
+  // global to the window (ime.h), and it would eat the D-pad on the way in.
+  ime_close();
+  historyLoad();
+  // The results hold CATALOGUE INDICES, and a rebuild while the screen was away
+  // moves them. Filtering the same query again keeps the focused title (refilter
+  // looks for it) and points every card at the right one.
+  refilter();
+}
+
 void search_shutdown(void) {
   hasItemFocus = 0;
   // The keyboard must not outlive the screen. See ime.h: text input is global to

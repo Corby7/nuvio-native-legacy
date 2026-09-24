@@ -9,6 +9,11 @@
 #include "home.h"
 
 int  library_start(void);
+// COMING BACK to the screen within a few minutes: what the viewer left — the
+// typed text, the results, the focus and the scroll — stays, and only the
+// requests the last visit left pending are cleared. app.c decides which of the
+// two a visit is (swapScreen).
+void library_resume(void);
 void library_event(const SDL_Event *e);
 void library_update(float dt, Uint32 now);
 void library_draw(Uint32 now);
