@@ -13,11 +13,13 @@
 #include "anim.h"
 #include "layout.h"
 #include "settings.h"
+#include "homerows.h"
 #include "catalog.h"
 #include "collections.h"
 #include "discover.h"
 #include "badges.h"
 #include "extras.h"
+#include "trailers.h"
 #include "director.h"
 #include <strings.h>
 // Declared by hand rather than including detail.h: that header includes THIS one
@@ -1016,7 +1018,9 @@ static int subscriptionPrefs(void) {
        | (settings_cw_style() << 1)
        | (settings_posters_landscape() ? 8 : 0)
        | (settings_labels_poster() ? 16 : 0)
-       | (settings_social_row() ? 32 : 0);
+       | (settings_social_row() ? 32 : 0)
+       | (homerows_trakt_watchlist() ? 64 : 0)
+       | (homerows_trakt_recs() ? 128 : 0);
 }
 // THE KNOWN CURATION. It no longer decides the ORDER — the account's list does —
 // and is left with two jobs: supplying the display name and the special kind of
@@ -1035,6 +1039,23 @@ static const char *const CURATED_NAME[]={"Continue watching","Among friends","Re
   "Picked for You · Series","Top 100 · Movies","Top 100 · Series",
   "Awards","Directors","Genres"};
 #define CURATED_N (sizeof CURATED_ID / sizeof CURATED_ID[0])
+
+// 1 when the owner hid the collection this group belongs to. The account keys a
+// collection by its ID and the Home groups by TITLE, so the answer has to go
+// through the folders. Every pass below that adds a collection row by group —
+// pinned, curated, leftover — asks this first: only the account-order pass
+// checked, and the others brought a hidden collection straight back.
+static int groupHidden(const char *group) {
+  int i;
+  for (i = 0; i < col_n(); i++) {
+    const ColFolder *f = col_folder(i);
+    char key[192];
+    if (!f || !f->groupId[0] || strcmp(f->group, group)) continue;
+    snprintf(key, sizeof key, "collection_%s", f->groupId);
+    if (disc_prefs_hidden(key)) return 1;
+  }
+  return 0;
+}
 
 // Applies the display name and special kind to a catalogue row, if the curation
 // recognises it. It does not touch the position: that was already decided by the
@@ -1120,6 +1141,9 @@ static void syncRows(void) {
     // Same rule for the friends' feed: turning it off REMOVES the row. The
     // catalogue can still carry it — it was built while the option was on, or
     if (!strcmp(cf->key, "social_activity") && !settings_social_row()) continue;
+    // The opt-in Trakt rows likewise: the cached catalogue may still carry them.
+    if (!strcmp(cf->key, "trakt_watchlist") && !homerows_trakt_watchlist()) continue;
+    if (!strcmp(cf->key, "trakt_recommendations") && !homerows_trakt_recs()) continue;
     snprintf(rows[destination].title, sizeof rows[destination].title, "%s", cf->title);
     // "Continue watching" is the only landscape one: it is the profile's
     // `continueWatchingCardStyle: "card"`. Everything else is a 2:3 poster.
@@ -1176,6 +1200,7 @@ static void syncRows(void) {
       char key[192];
       int already=0;
       if(!folder||!folder->group[0]||!col_group_pinned(folder->group))continue;
+      if(groupHidden(folder->group))continue;
       snprintf(key,sizeof key,"collection_%s",folder->group);
       for(int j=0;j<destination;j++) if(!strcmp(rows[j].key,key)){already=1;break;}
       if(already)continue;
@@ -1248,6 +1273,7 @@ static void syncRows(void) {
     for(size_t s=0;s<CURATED_N && destination<MAX_FILTER;s++) {
       if(ids[s][0]=='@') {
         Row v={0};int already=0;
+        if(groupHidden(ids[s]+1))continue;
         v.n=col_group(ids[s]+1,v.folders,MAX_CARDS);
         if(!v.n)continue;
         v.kind=ROW_CATALOGS;
@@ -1285,6 +1311,7 @@ static void syncRows(void) {
       const ColFolder *folder=col_folder(i);
       int groupWatched=0;
       if(!folder||!folder->group[0])continue;
+      if(groupHidden(folder->group))continue;
       for(int j=0;j<destination;j++) {
         char key[192];snprintf(key,sizeof key,"collection_%s",folder->group);
         if(!strcmp(rows[j].key,key)){groupWatched=1;break;}
@@ -1450,6 +1477,11 @@ static void prefetchDetail(int i) {
   series = ci->kind[0] ? !strcmp(ci->kind, "series") : cat_n_episodes(i) > 0;
   if (series || ci->nCast == 0) disc_episodes(i, 0);
   extras_request(ci->imdb, series, ci->tmdb);
+  // IMDb's trailers too: the hero's trailer button waits on them, and asked for
+  // only on OK they landed a beat after the page had finished opening — the button
+  // popped in late. trailers.c keeps what it has fetched, so this is also what
+  // makes returning to a card instant.
+  trailers_request(ci->imdb);
 }
 
 static void warmHero(int target, int previous) {

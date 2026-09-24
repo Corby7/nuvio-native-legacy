@@ -73,6 +73,11 @@ int  trakt_playback_remove(const char *imdb);
 // lock.
 int  trakt_decorate_batch(CatItem *output, int n);
 
+// The words only — synopsis, "year · runtime", score — for items whose art is
+// already right (the Trakt watchlist and recommendations rows). Keeps every item,
+// known to Cinemeta or not. BLOCKS; safe beside trakt_decorate_batch.
+int  trakt_describe_batch(CatItem *output, int n);
+
 // The recent activity of the owner's FRIENDS. It uses Trakt's official social
 // feed (/users/me/friends/activities), keeping the normal title and art in the
 // CatItem and the social data in the presentation fields: `country` = the
@@ -98,6 +103,11 @@ void trakt_scrobble_pause(const char *imdb, double posSeg, double durationSeg);
 // The owner's watchlist ("My List") and collection ("Purchased"). `which` is
 // "watchlist" or "collection". BLOCKS — call from the discovery thread.
 int  trakt_list(const char *which, CatItem *output, int max);
+
+// The owner's personalized recommendations (/recommendations), movies and shows
+// taken in turn, up to `max` in all. Titles already on the watchlist or in the
+// collection are left out by Trakt. BLOCKS — call from the discovery thread.
+int  trakt_recommendations(CatItem *output, int max);
 
 // Adds the title to, or removes it from, the owner's WATCHLIST. Does not block.
 // The read state already arrives in CatItem.inList, filled in by trakt_list

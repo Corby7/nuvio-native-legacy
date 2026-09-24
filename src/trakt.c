@@ -136,6 +136,41 @@ int trakt_load(const char *dirArt) {
   return on;
 }
 
+// The WORDS of a Cinemeta /meta body — name, synopsis, score, "year · runtime" —
+// into `d`, leaving its art alone. decorate() takes the art as well; describe()
+// takes only this.
+static void wordsOf(CatItem *d, const char *body) {
+  if (!d->title[0]) js_text(body, NULL, "name", d->title, sizeof d->title);
+  js_text(body, NULL, "description", d->synopsis, sizeof d->synopsis);
+  // THE IMDb SCORE, off the same body. It was never read here, so every Continue
+  // watching (and Library) item reached the hero with score 0 and the mark and
+  // number simply did not draw — while the same title in any catalogue row had
+  // them. Stored in tenths like the rest of the catalogue; see discover.c.
+  { double score = js_num(body, NULL, "imdbRating", 0.0);
+    if (score > 0.0 && d->score <= 0) {
+      int n10 = (int)(score * 10.0 + 0.5);
+      if (n10 > 99) n10 /= 10;      // it already came multiplied
+      d->score = n10;
+    } }
+  { char r[24] = "", year[24] = "";
+    js_text(body, NULL, "runtime", r, sizeof r);
+    js_text(body, NULL, "releaseInfo", year, sizeof year);
+    // Both dash spellings, as in discover.c (ofMeta): the en dash Cinemeta writes
+    // and the ASCII hyphen other addons do.
+    { char *tr = strstr(year, "\xe2\x80\x93"); if (!tr) tr = strchr(year, '-'); if (tr) *tr = 0; }
+    snprintf(d->meta, sizeof d->meta, "%.20s%s%.20s", year,
+             (year[0] && r[0]) ? "  \xc2\xb7  " : "", r);
+    // Minutes remaining, for the card's caption. Trakt gives the percentage and
+    // Cinemeta the duration; crossing the two is the only way to have this
+    // without downloading the file.
+    if (d->progress > 0 && d->progress < 100) {
+      int total = atoi(r);
+      if (total > 0) d->remainingMin = total - (total * d->progress) / 100;
+    } else if (d->progress == 0) {
+      d->remainingMin = atoi(r);
+    } }
+}
+
 // Art and synopsis by IMDb id. Trakt returns only identifiers and progress; the
 // one with images is Cinemeta, which is the same index the addons use — so what
 // appears on screen is what a source can be requested for.
@@ -156,18 +191,7 @@ static int decorate(CatItem *d, const char *kind) {
   ok = js_text(body, NULL, "poster", d->poster, sizeof d->poster);
   js_text(body, NULL, "background", d->backdrop, sizeof d->backdrop);
   js_text(body, NULL, "logo", d->logo, sizeof d->logo);
-  if (!d->title[0]) js_text(body, NULL, "name", d->title, sizeof d->title);
-  js_text(body, NULL, "description", d->synopsis, sizeof d->synopsis);
-  // THE IMDb SCORE, off the same body. It was never read here, so every Continue
-  // watching (and Library) item reached the hero with score 0 and the mark and
-  // number simply did not draw — while the same title in any catalogue row had
-  // them. Stored in tenths like the rest of the catalogue; see discover.c.
-  { double score = js_num(body, NULL, "imdbRating", 0.0);
-    if (score > 0.0 && d->score <= 0) {
-      int n10 = (int)(score * 10.0 + 0.5);
-      if (n10 > 99) n10 /= 10;      // it already came multiplied
-      d->score = n10;
-    } }
+  wordsOf(d, body);
   // The same rewrite discover.c does on this same field, and it was missing here:
   // these are the history and watchlist items, which fill Continue watching and
   // the Library — the rows the hero sits above. See cat_backdrop_shrink.
@@ -217,28 +241,29 @@ static int decorate(CatItem *d, const char *kind) {
     // than the backdrop's, though — this one is drawn at 640, not 1920.
     cat_backdrop_shrink(d->thumbEp, sizeof d->thumbEp, CAT_BACKDROP_THUMB_W);
   }
-  { char r[24] = "", year[24] = "";
-    js_text(body, NULL, "runtime", r, sizeof r);
-    js_text(body, NULL, "releaseInfo", year, sizeof year);
-    // Both dash spellings, as in discover.c (ofMeta): the en dash Cinemeta writes
-    // and the ASCII hyphen other addons do.
-    { char *tr = strstr(year, "\xe2\x80\x93"); if (!tr) tr = strchr(year, '-'); if (tr) *tr = 0; }
-    snprintf(d->meta, sizeof d->meta, "%.20s%s%.20s", year,
-             (year[0] && r[0]) ? "  \xc2\xb7  " : "", r);
-    // Minutes remaining, for the card's caption. Trakt gives the percentage and
-    // Cinemeta the duration; crossing the two is the only way to have this
-    // without downloading the file.
-    if (d->progress > 0 && d->progress < 100) {
-      int total = atoi(r);
-      if (total > 0) d->remainingMin = total - (total * d->progress) / 100;
-    } else if (d->progress == 0) {
-      d->remainingMin = atoi(r);
-    } }
   snprintf(d->genre, sizeof d->genre, "%s",
            strcmp(kind, "series") ? "Movie" : "TV Show");
   snprintf(d->age_rating, sizeof d->age_rating, "14");
   free(body);
   return ok;
+}
+
+// Only the words, for items whose ART must stay as it is. The Trakt lists build
+// their posters from metahub's /medium/ (see listArt — /small/ is WebP, which this
+// TV cannot decode), and Cinemeta's own `poster` is exactly that /small/ URL, so
+// decorate() would trade a picture that draws for one that does not. Always 1:
+// a title Cinemeta does not know keeps its card, just without a synopsis.
+static int describe(CatItem *d, const char *kind) {
+  char url[300], series[24], *body, *dp;
+  snprintf(series, sizeof series, "%s", d->imdb);
+  dp = strchr(series, ':');
+  if (dp) *dp = 0;
+  snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA, kind, series);
+  body = net_download(url, 8);
+  if (!body) return 1;
+  wordsOf(d, body);
+  free(body);
+  return 1;
 }
 
 // There are up to 8 GETs to Cinemeta, one per history item, and they used to be
@@ -252,6 +277,7 @@ static int decorate(CatItem *d, const char *kind) {
 #define TK_THREADS 3
 
 typedef struct { CatItem *d; char kind[8]; int ok; } TaskDecorate;
+static int (*decorateFn)(CatItem *, const char *) = decorate;
 static TaskDecorate *decorateTasks;
 static int decorateN, decorateNext;
 static pthread_mutex_t decorateLock = PTHREAD_MUTEX_INITIALIZER;
@@ -264,7 +290,7 @@ static void *threadDecorate(void *u) {
     if (decorateNext >= decorateN) { pthread_mutex_unlock(&decorateLock); return NULL; }
     mine = decorateNext++;
     pthread_mutex_unlock(&decorateLock);
-    decorateTasks[mine].ok = decorate(decorateTasks[mine].d, decorateTasks[mine].kind);
+    decorateTasks[mine].ok = decorateFn(decorateTasks[mine].d, decorateTasks[mine].kind);
   }
 }
 
@@ -281,8 +307,25 @@ static void *threadDecorate(void *u) {
 //
 // It is NOT reentrant — the task queue is file-static, for the same reason the
 // rest of this module's batches are — so the callers hold discover.c's lock.
+// The queue above is file-static, so one batch runs at a time. The Trakt rows
+// are described on discover's SECOND Trakt thread while the first may be
+// decorating Continue watching; this lock is what lets them share the queue.
+static pthread_mutex_t batchLock = PTHREAD_MUTEX_INITIALIZER;
+
+static int runBatch(CatItem *output, int n, int (*fn)(CatItem *, const char *));
+
 int trakt_decorate_batch(CatItem *output, int n) {
+  return runBatch(output, n, decorate);
+}
+
+int trakt_describe_batch(CatItem *output, int n) {
+  return runBatch(output, n, describe);
+}
+
+static int runBatch(CatItem *output, int n, int (*fn)(CatItem *, const char *)) {
   if (n <= 0) return 0;
+  pthread_mutex_lock(&batchLock);
+  decorateFn = fn;
   decorateTasks = calloc((size_t)n, sizeof(TaskDecorate));
   if (decorateTasks) {
     pthread_t threads[TK_THREADS];
@@ -305,9 +348,10 @@ int trakt_decorate_batch(CatItem *output, int n) {
     // No memory for the queue: in series, on this very thread.
     int r, w;
     for (r = 0, w = 0; r < n; r++)
-      if (decorate(&output[r], output[r].kind)) { if (w != r) output[w] = output[r]; w++; }
+      if (fn(&output[r], output[r].kind)) { if (w != r) output[w] = output[r]; w++; }
     n = w;
   }
+  pthread_mutex_unlock(&batchLock);
   return n;
 }
 
@@ -826,6 +870,41 @@ int trakt_profile(ProfileData *d) {
   return 1;
 }
 
+// The fields every Trakt card shares, from the IMDb id alone.
+static void listArt(CatItem *d, const char *imdb, int series) {
+  snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
+  snprintf(d->kind, sizeof d->kind, "%s", series ? "series" : "movie");
+  // Art WITHOUT a query: the metahub URLs are deterministic from the
+  // IMDb id (verified, 200 on everything tested). One query per item cost
+  // ~0.3 s and limited the list to ten; this way it can be as long as the
+  // owner's list, and the image is only downloaded when it appears on
+  // screen — tex_cache already does that.
+  snprintf(d->poster, sizeof d->poster,
+           // "medium" and not "small", and the difference is NOT size:
+           // metahub serves poster/small as image/WEBP and poster/medium
+           // as image/jpeg. THIS TV's libSDL2_image loads libjpeg,
+           // libpng16 and libtiff through dlopen and does NOT load
+           // libwebp — the only format error string inside it is "WEBP
+           // images are not supported". (libwebp.so.7 does exist on the
+           // system; it is SDL2_image that was not built against it.)
+           //
+           // The effect of small: EVERY card coming from Trakt
+           // (watchlist, collection, the whole Library) never decoded —
+           // and worse, the cache does not store failure, so every frame
+           // tried again and burned a decode slot. It was the biggest
+           // cause of "not all the posters show up".
+           //
+           // Cost: 105 KB against 31 KB. Cheap, for the art to exist.
+           "https://images.metahub.space/poster/medium/%s/img", imdb);
+  snprintf(d->backdrop, sizeof d->backdrop,
+           "https://images.metahub.space/background/medium/%s/img", imdb);
+  snprintf(d->logo, sizeof d->logo,
+           "https://images.metahub.space/logo/medium/%s/img", imdb);
+  snprintf(d->genre, sizeof d->genre, "%s",
+           series ? "TV Show" : "Movie");
+  snprintf(d->age_rating, sizeof d->age_rating, "14");
+}
+
 int trakt_list(const char *which, CatItem *output, int max) {
   const char *header[4];
   char auth[200], key[140], url[160], *body;
@@ -868,39 +947,9 @@ int trakt_list(const char *which, CatItem *output, int max) {
                           : step ? "last_collected_at" : "collected_at";
           if (js_text(p, f, key, when, sizeof when)) d->added = js_ms_iso(when); }
         if (imdb[0]) {
-          snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
-          snprintf(d->kind, sizeof d->kind, "%s", step ? "series" : "movie");
           if (!strcmp(which, "watchlist")) d->inList = 1;
           else                            d->inCollection = 1;
-          // Art WITHOUT a query: the metahub URLs are deterministic from the
-          // IMDb id (verified, 200 on everything tested). One query per item cost
-          // ~0.3 s and limited the list to ten; this way it can be as long as the
-          // owner's list, and the image is only downloaded when it appears on
-          // screen — tex_cache already does that.
-          snprintf(d->poster, sizeof d->poster,
-                   // "medium" and not "small", and the difference is NOT size:
-                   // metahub serves poster/small as image/WEBP and poster/medium
-                   // as image/jpeg. THIS TV's libSDL2_image loads libjpeg,
-                   // libpng16 and libtiff through dlopen and does NOT load
-                   // libwebp — the only format error string inside it is "WEBP
-                   // images are not supported". (libwebp.so.7 does exist on the
-                   // system; it is SDL2_image that was not built against it.)
-                   //
-                   // The effect of small: EVERY card coming from Trakt
-                   // (watchlist, collection, the whole Library) never decoded —
-                   // and worse, the cache does not store failure, so every frame
-                   // tried again and burned a decode slot. It was the biggest
-                   // cause of "not all the posters show up".
-                   //
-                   // Cost: 105 KB against 31 KB. Cheap, for the art to exist.
-                   "https://images.metahub.space/poster/medium/%s/img", imdb);
-          snprintf(d->backdrop, sizeof d->backdrop,
-                   "https://images.metahub.space/background/medium/%s/img", imdb);
-          snprintf(d->logo, sizeof d->logo,
-                   "https://images.metahub.space/logo/medium/%s/img", imdb);
-          snprintf(d->genre, sizeof d->genre, "%s",
-                   step ? "TV Show" : "Movie");
-          snprintf(d->age_rating, sizeof d->age_rating, "14");
+          listArt(d, imdb, step);
           n++;
         }
       }
@@ -909,6 +958,60 @@ int trakt_list(const char *which, CatItem *output, int max) {
     free(body);
   }
   printf("[trakt] %s: %d\n", which, n);
+  fflush(stdout);
+  return n;
+}
+
+int trakt_recommendations(CatItem *output, int max) {
+  const char *header[4];
+  char auth[200], key[140], url[200], *body;
+  CatItem *byKind[2];
+  int got[2] = { 0, 0 }, per, step, i, n = 0;
+  if (!on || max < 1) return 0;
+  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) return 0;
+  per = max / 2 > 0 ? max / 2 : 1;
+  byKind[0] = calloc((size_t)per, sizeof(CatItem));
+  byKind[1] = calloc((size_t)per, sizeof(CatItem));
+  if (!byKind[0] || !byKind[1]) { free(byKind[0]); free(byKind[1]); return 0; }
+
+  // What the owner already listed or owns is left out by Trakt itself, as on the
+  // web: a recommendation for something already on the watchlist row says nothing.
+  for (step = 0; step < 2; step++) {
+    const char *p;
+    snprintf(url, sizeof url,
+             "https://api.trakt.tv/recommendations/%s?limit=%d"
+             "&ignore_collected=true&ignore_watchlisted=true",
+             step ? "shows" : "movies", per);
+    body = net_download_headers(url, 25, header);
+    if (!body) continue;
+    p = strchr(body, '[');
+    p = p ? p + 1 : NULL;
+    // Unlike /sync/watchlist, each element IS the movie or show — there is no
+    // wrapper holding it under a "movie"/"show" key.
+    while (p && *p && got[step] < per) {
+      const char *f;
+      char imdb[24] = "";
+      CatItem *d = &byKind[step][got[step]];
+      while (*p && (unsigned char)*p <= ' ') p++;
+      if (*p != '{') break;
+      f = js_end(p);
+      memset(d, 0, sizeof *d);
+      js_text(p, f, "title", d->title, sizeof d->title);
+      js_text(p, f, "imdb", imdb, sizeof imdb);
+      d->year = (int)js_num(p, f, "year", 0);
+      if (imdb[0]) { listArt(d, imdb, step); got[step]++; }
+      p = js_next(f);
+    }
+    free(body);
+  }
+  // Trakt ranks each type on its own, so both rankings are kept by taking them in
+  // turn rather than one type after the other.
+  for (i = 0; i < per && n < max; i++) {
+    if (i < got[0]) output[n++] = byKind[0][i];
+    if (i < got[1] && n < max) output[n++] = byKind[1][i];
+  }
+  free(byKind[0]); free(byKind[1]);
+  printf("[trakt] recommendations: %d\n", n);
   fflush(stdout);
   return n;
 }

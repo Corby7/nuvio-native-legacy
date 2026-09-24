@@ -131,6 +131,13 @@ void sync_push_tracker(const char *tracker, const char *access, const char *refr
                        long lifetimeSeconds, const char *trackerUserId,
                        const char *username);
 
+// The account's home row order as last applied (the body a pull returns), or
+// NULL. Main thread. The Home rows editor starts from it.
+const char *sync_home_blob(void);
+// Replaces that body — on disk too — after the editor committed an order, so a
+// restart before the next pull starts from the edit.
+void sync_home_store(const char *body);
+
 void sync_shutdown(void);
 
 #endif

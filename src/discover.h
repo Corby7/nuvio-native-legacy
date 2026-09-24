@@ -34,6 +34,10 @@ void disc_start(void);
 void disc_prefs_begin(void);
 void disc_prefs_add(const char *key, int enabled, const char *customTitle);
 void disc_prefs_end(void);
+// Inserts a key at position `index` of the order (clamped to the end). For rows
+// the account's blob does not carry — the Trakt rows, see homerows.h — merged in
+// between add and end.
+void disc_prefs_insert(int index, const char *key, int enabled);
 
 // The owner's order, read back RAW so the home can assemble it.
 //
@@ -45,6 +49,13 @@ int         disc_prefs_n(void);
 const char *disc_prefs_key(int i);
 int         disc_prefs_hidden(const char *key);
 const char *disc_prefs_title(const char *key);   // NULL when not renamed
+
+// The catalogues the addons declared in the last build, for the Home rows editor.
+// `title` is the formatted row name; `nameAddon` is the addon's display name.
+typedef struct {
+  char key[192], title[96], kind[8], id[96], nameAddon[64];
+} DiscDecl;
+int disc_decls_copy(DiscDecl *out, int max);
 
 // Asks for the rows to be built AGAIN, once whatever is running has finished.
 // Call it when the addon list changes — the account's list arrives from the sync

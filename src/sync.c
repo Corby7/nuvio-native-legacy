@@ -14,6 +14,7 @@
 #include "discover.h"
 #include "extras.h"
 #include "collections.h"
+#include "homerows.h"
 #include "js.h"
 #include "jsw.h"
 #include <stdio.h>
@@ -41,6 +42,8 @@ static int nAddonsRemote, hasAddonsRemote;
 // The raw bodies behind the addon list and the home's row order, handed to the
 // main thread like collectionsBlob — see "THE LAST ACCOUNT STATE" below.
 static char *addonsBlob, *homeBlob;
+// homerows_generation() when the body in homeBlob was requested.
+static unsigned homeGeneration;
 static int  hasHomeBlob;
 
 static char traktToken[300];
@@ -711,6 +714,9 @@ static int pullHomeCatalog(const char *body) {
   static const char *FUNC = "sync_pull_home_catalog_settings";
   char *r;
   int st = 0;
+  // Taken BEFORE the request: an edit committed while it is in flight bumps the
+  // counter, and this body then carries the order from before that edit.
+  unsigned generationAtPull = homerows_generation();
   if (alreadyMissing(FUNC)) return 0;
   r = session_rpc(FUNC, body, &st);
   if (!ok2xx(r, st)) {
@@ -723,6 +729,7 @@ static int pullHomeCatalog(const char *body) {
   }
   free(homeBlob);
   homeBlob = r;                 // ownership passes to the box; do not free here
+  homeGeneration = generationAtPull;
   hasHomeBlob = 1;
   return 1;
 }
@@ -768,6 +775,8 @@ static int applyHomeCatalog(const char *r) {
     disc_prefs_add(key, js_flag(item, f, "enabled", 1), title);
     n++;
   }
+  // The Trakt rows are not in the account's blob; they keep their place here.
+  homerows_merge_trakt();
   disc_prefs_end();
   // The owner's collections take part in the SAME ordering in the web app, and
   // this app has nowhere to get their contents from yet. Counting them and
@@ -896,6 +905,7 @@ int sync_periodic(unsigned nowMs) {
 // twice; every one after that builds once.
 static char *lastAddons, *lastHome, *lastCollections;
 
+
 static void stateName(char *dst, size_t size, const char *what) {
   snprintf(dst, size, "account-p%d-%s.json", profiles_active(), what);
 }
@@ -918,6 +928,11 @@ static char *stateRead(char **last, const char *what) {
   stateName(name, sizeof name, what);
   *last = data_read(name);
   return *last;
+}
+
+const char *sync_home_blob(void) { return lastHome; }
+void sync_home_store(const char *body) {
+  if (body && *body) stateChanged(&lastHome, "home-catalog", body);
 }
 
 void sync_restore(void) {
@@ -967,6 +982,17 @@ void sync_step(unsigned nowMs) {
     free(collectionsBlob);
     collectionsBlob = NULL;
     hasCollectionsBlob = 0;
+  }
+  // A pull that started before the last edit on the Home rows screen, or one
+  // that lands while that edit is still on its way to the account, holds the
+  // order from BEFORE it. Applying it would undo the edit on screen; the next
+  // cycle brings the account's copy with the edit in.
+  if (hasHomeBlob && homeBlob &&
+      (homeGeneration != homerows_generation() || homerows_push_in_flight())) {
+    printf("[sync] home catalog pull predates a local edit; not applied\n");
+    free(homeBlob);
+    homeBlob = NULL;
+    hasHomeBlob = 0;
   }
   if (hasHomeBlob && homeBlob) {
     // The home was built in whatever order it had. With the owner's order in

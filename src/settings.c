@@ -26,6 +26,7 @@
 #include "traktauth.h"
 #include "simklauth.h"
 #include "js.h"
+#include "homerows.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -329,6 +330,10 @@ static const struct { const char *title; int start, n; const char *blurb; } SECT
     "Poster shape and how the hero backdrop is drawn." },
   { "Home content",      SETTING_RAIL,                13,
     "The sidebar, the hero and what the Home rows show." },
+  // No options of its own: `start` is SETTING_N, the marker openSection reads to
+  // open the Home rows list (level 2) instead of a list of options.
+  { "Home rows",         SETTING_N,                    0,
+    "The order of the Home rows and which of them show. Saved to your account, so the web app follows it." },
   { "Continue watching", SETTING_CW_ON,                9,
     "Whether the resume row appears, how it looks and how it is sorted." },
   { "Detail page",       SETTING_DET_BLUR_NOT_WATCHED, 4,
@@ -425,7 +430,12 @@ static int value[SETTING_N] = {
 
 // Two levels: 0 is the list of sections, 1 is the options of section `focusSec`.
 // focusOp only means anything on level 1, and it always lies inside that section.
+// Level 2 is the Home rows list, which has rows of its own instead of options.
 static int level = 0;
+static int rowFocus, rowHolding;   // level 2: the focused row; 1 while it is picked up
+static float rowScroll;
+static float rowAnim[512];
+static void leaveRows(void);
 static int focusSec = 0;
 static int focusOp = 0;
 // A ONE-column list does not need focus.h: the column memory it exists to solve
@@ -729,12 +739,13 @@ int settings_apply_blob(const char *json) {
 }
 
 int settings_start(void) {
+  leaveRows();
   level = 0; focusSec = 0; focusOp = 0;
   scrollSec = 0.0f; scrollY = 0.0f; wantsExit = 0;
   return 1;
 }
 void settings_resume(void) { wantsExit = 0; requestMenu = 0; }
-void settings_shutdown(void) { }
+void settings_shutdown(void) { leaveRows(); }
 int settings_wants_exit(void) { return wantsExit; }
 int settings_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }
 
@@ -764,8 +775,8 @@ static const char *textRead(int op) {
   }
   if (op == SETTING_TRAKT) {
     switch (traktauth_state()) {
-      case TRA_ON:     return "conectado";
-      case TRA_REQUESTING:    return "preparando…";
+      case TRA_ON:     return "connected";
+      case TRA_REQUESTING:    return "preparing…";
       case TRA_WAITING: return "waiting";
       case TRA_ERROR:       return "failed";
       default:             return "connect";
@@ -773,8 +784,8 @@ static const char *textRead(int op) {
   }
   if (op == SETTING_SIMKL) {
     switch (simklauth_state()) {
-      case SMK_ON:     return "conectado";
-      case SMK_REQUESTING:    return "preparando…";
+      case SMK_ON:     return "connected";
+      case SMK_REQUESTING:    return "preparing…";
       case SMK_WAITING: return "waiting";
       case SMK_ERROR:       return "failed";
       default:             return "connect";
@@ -830,7 +841,26 @@ static int readOnly(int op) { return OPTIONS[op].kind == OP_READ; }
 static int mutable(int op)   { return OPTIONS[op].kind != OP_READ &&
                                       OPTIONS[op].kind != OP_ACTION && !inactive(op); }
 
+static int isRowsSection(int s) { return SECTIONS[s].start == SETTING_N; }
+
+// Leaving the Home rows list is when its edit applies: one rebuild and one push
+// for the whole session in the list, not one per key press.
+static void leaveRows(void) {
+  if (level != 2) return;
+  rowHolding = 0;
+  homerows_commit();
+  level = 0;
+}
+
 static void openSection(int s) {
+  leaveRows();
+  if (isRowsSection(s)) {
+    level = 2;
+    focusSec = s;
+    rowFocus = 0; rowHolding = 0; rowScroll = 0.0f;
+    homerows_open();
+    return;
+  }
   level = 1;
   focusSec = s;
   focusOp = SECTIONS[s].start;
@@ -931,6 +961,30 @@ void settings_event(const SDL_Event *e) {
     return;
   }
 
+  // Level 2: the Home rows. OK picks a row up and puts it down; up and down move
+  // the focus, or the row while it is held; left and right show or hide it.
+  if (level == 2) {
+    int n = homerows_n();
+    if (back) {
+      // Back while holding only puts the row down: leaving the list mid-move
+      // would apply an order the person did not finish choosing.
+      if (rowHolding) rowHolding = 0; else leaveRows();
+      return;
+    }
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { if (n) rowHolding = !rowHolding; }
+    else if (k == SDLK_UP || k == SDLK_DOWN) {
+      int dir = k == SDLK_DOWN ? 1 : -1;
+      if (rowHolding) rowFocus = homerows_move(rowFocus, dir);
+      else if (rowFocus + dir >= 0 && rowFocus + dir < n) rowFocus += dir;
+    }
+    else if ((k == SDLK_LEFT || k == SDLK_RIGHT) && !rowHolding && n) homerows_toggle(rowFocus);
+    else if ((k == SDLK_PAGEUP || k == SDLK_PAGEDOWN) && !rowHolding) {
+      int s = focusSec + (k == SDLK_PAGEDOWN ? 1 : -1);
+      if (s >= 0 && s < SETTING_N_SECTIONS) openSection(s);
+    }
+    return;
+  }
+
   // Level 1: one section's options. Back returns to the list of sections, with
   // focus still on the section that was open.
   if (back) { level = 0; return; }
@@ -995,9 +1049,18 @@ void settings_update(float dt, Uint32 now) {
     animSec[s] = reduced ? target : anim_spring(animSec[s], target, dt,
                             target > animSec[s] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
+  { int n = homerows_n() < 512 ? homerows_n() : 512;
+    for (int i = 0; i < n; i++) {
+      float target = (level == 2 && i == rowFocus) ? 1.0f : 0.0f;
+      rowAnim[i] = reduced ? target : anim_spring(rowAnim[i], target, dt,
+                              target > rowAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+    } }
   if (level == 0) {
     float target = scrollFor(scrollSec, focusSec);
     scrollSec = reduced ? target : anim_spring(scrollSec, target, dt, NV_SPRING_SCROLL);
+  } else if (level == 2) {
+    float target = scrollFor(rowScroll, rowFocus);
+    rowScroll = reduced ? target : anim_spring(rowScroll, target, dt, NV_SPRING_SCROLL);
   } else {
     float target = scrollFor(scrollY, focusOp - SECTIONS[focusSec].start);
     scrollY = reduced ? target : anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
@@ -1075,6 +1138,50 @@ static void drawLine(int op, float y, float f) {
     txt_draw_alpha(dir, xDir - dir.w, y + (SETTING_LINE_H - dir.h) * 0.5f, aText * f);
     txt_draw_alpha(left, valueDir - val.w - 16.0f - left.w,
                        y + (SETTING_LINE_H - left.h) * 0.5f, aText * f);
+  }
+  txt_draw_alpha(val, valueDir - val.w, vy, aText);
+}
+
+// A Home row on level 2: the option row's surface, the row's name on the left and
+// whether it shows on the right. A held row trades the left/right arrows for
+// up/down ones — the gesture that works on it has changed, and the arrows are the
+// instruction.
+static void drawHomeRow(int i, float y, float f) {
+  if (y + SETTING_LINE_H < SETTING_TOP - 40.0f || y > NV_SCREEN_H) return;
+  float a = anim_clamp((y - (SETTING_TOP - 70.0f)) / 60.0f, 0.0f, 1.0f);
+  if (a <= 0.005f) return;
+  int shown = homerows_enabled(i);
+  int over = homerows_over_cap(i);
+  int held = rowHolding && i == rowFocus;
+
+  GfxRect line = { SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H };
+  gfx_color(line, SETTING_RADIUS, NV_COLOR_FOCUS_R, NV_COLOR_FOCUS_G, NV_COLOR_FOCUS_B,
+            (held ? 1.0f : 0.34f + 0.66f * f) * a);
+  if (i == rowFocus)
+    gfx_rect(line, 0, GFX_RING, 0, NV_RING_FOCUS / SETTING_LINE_H, 0,
+             SETTING_RADIUS, 0.96f, 0.96f, 0.97f, a);
+
+  // A hidden row, or one past the cap, reads as muted: it is in the order but
+  // not on the Home.
+  float aText = a * (shown && !over ? 1.0f : 0.6f);
+  TxtLine rot = txt_line_trim(TXT_CALLOUT, homerows_title(i), 240, 240, 240, 255,
+                              SETTING_LIST_W - 420.0f);
+  txt_draw_alpha(rot, SETTING_LIST_X + SETTING_PAD,
+                 y + (SETTING_LINE_H - rot.h) * 0.5f, aText);
+
+  const char *v = held ? "Moving" : !shown ? "Hidden" : over ? "Won't fit" : "Shown";
+  TxtLine val = txt_line_trim(TXT_CALLOUT, v, 220, 220, 220, 255, 310.0f);
+  float xDir = SETTING_LIST_X + SETTING_LIST_W - SETTING_PAD;
+  float valueDir = xDir - 36.0f;
+  float vy = y + (SETTING_LINE_H - val.h) * 0.5f;
+  if (f > 0.02f) {
+    TxtLine after = txt_line(TXT_CAPTION2, held ? "\xe2\x96\xbc" : "\xe2\x96\xb6",
+                             220, 220, 220, 255);
+    TxtLine before = txt_line(TXT_CAPTION2, held ? "\xe2\x96\xb2" : "\xe2\x97\x80",
+                              220, 220, 220, 255);
+    txt_draw_alpha(after, xDir - after.w, y + (SETTING_LINE_H - after.h) * 0.5f, aText * f);
+    txt_draw_alpha(before, valueDir - val.w - 16.0f - before.w,
+                   y + (SETTING_LINE_H - before.h) * 0.5f, aText * f);
   }
   txt_draw_alpha(val, valueDir - val.w, vy, aText);
 }
@@ -1247,12 +1354,27 @@ void settings_draw(Uint32 now) {
   if (hw > 240.0f) {
     const char *kindText, *head, *help;
     char count[32];
+    static char kindRow[96];
     if (level == 0) {
       snprintf(count, sizeof count, SECTIONS[focusSec].n == 1 ? "%d option" : "%d options",
                SECTIONS[focusSec].n);
-      kindText = count;
+      kindText = isRowsSection(focusSec) ? "Order and visibility" : count;
       head = SECTIONS[focusSec].title;
       help = SECTIONS[focusSec].blurb;
+    } else if (level == 2) {
+      const char *source = homerows_source(rowFocus);
+      if (source[0]) snprintf(kindRow, sizeof kindRow, "%s  \xc2\xb7  %s",
+                              homerows_kind(rowFocus), source);
+      else snprintf(kindRow, sizeof kindRow, "%s", homerows_kind(rowFocus));
+      kindText = homerows_n() ? kindRow : "Home rows";
+      head = homerows_n() ? homerows_title(rowFocus) : "Nothing to list yet";
+      help = !homerows_n()
+           ? "The rows appear here once the Home has loaded your addons' catalogues."
+           : rowHolding
+           ? "Up and down move the row. OK puts it down."
+           : homerows_over_cap(rowFocus)
+           ? "Shown, but past the Home's row limit, so it does not appear. Hide a row above it, or move this one up."
+           : "OK picks the row up to move it. Left or right shows or hides it. Changes apply when you leave this list.";
     } else {
       kindText = inactive(focusOp) ? "Option unavailable"
                : readOnly(focusOp) ? "Information" : "Customise";
@@ -1269,13 +1391,15 @@ void settings_draw(Uint32 now) {
     }
   }
 
-  int rows = level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
-  float scroll = level ? scrollY : scrollSec;
+  int rows = level == 2 ? homerows_n() : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
+  float scroll = level == 2 ? rowScroll : level ? scrollY : scrollSec;
   gfx_crop(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
                SETTING_LIST_W + NV_RING_FOCUS * 2, NV_SCREEN_H - SETTING_TOP);
   for (int i = 0; i < rows; i++) {
     float y = SETTING_TOP - scroll + yOfRow(i);
-    if (level) {
+    if (level == 2) {
+      drawHomeRow(i, y, i < 512 ? rowAnim[i] : 0.0f);
+    } else if (level) {
       int op = SECTIONS[focusSec].start + i;
       drawLine(op, y, animFocus[op]);
     } else {

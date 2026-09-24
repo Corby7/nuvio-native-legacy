@@ -7,6 +7,7 @@
 #include "js.h"
 #include "trakt.h"
 #include "settings.h"
+#include "homerows.h"
 #include "watchedep.h"
 #include <stdio.h>
 #include <string.h>
@@ -741,6 +742,21 @@ typedef struct {
 static Decl decls[DECL_MAX];
 static int  nDecl;
 
+// A copy for the Home rows editor, on the main thread. A build in flight may be
+// rewriting the array; the worst that does is one stale name in a list the
+// person is about to read, and the next opening has the fresh one.
+int disc_decls_copy(DiscDecl *out, int max) {
+  int i, n = nDecl < max ? nDecl : max;
+  for (i = 0; i < n; i++) {
+    snprintf(out[i].key, sizeof out[i].key, "%s", decls[i].key);
+    snprintf(out[i].title, sizeof out[i].title, "%s", decls[i].title);
+    snprintf(out[i].kind, sizeof out[i].kind, "%s", decls[i].kind);
+    snprintf(out[i].id, sizeof out[i].id, "%s", decls[i].id);
+    snprintf(out[i].nameAddon, sizeof out[i].nameAddon, "%s", decls[i].nameAddon);
+  }
+  return n;
+}
+
 // The manifest's name for one catalogue, or "" when no installed addon declares
 // it. Matched on the ADDRESS and the ID; `kind` only breaks a tie.
 //
@@ -830,6 +846,23 @@ const char *disc_prefs_title(const char *key) {
   for (i = 0; i < nPrefTitle; i++)
     if (!strcmp(prefTitle[i].key, key)) return prefTitle[i].title;
   return NULL;
+}
+
+void disc_prefs_insert(int index, const char *key, int enabled) {
+  if (!key || !*key || nPrefOrder >= PREF_MAX) return;
+  if (index < 0) index = 0;
+  if (index > nPrefOrder) index = nPrefOrder;
+  memmove(prefOrder[index + 1], prefOrder[index], 192 * (size_t)(nPrefOrder - index));
+  snprintf(prefOrder[index], 192, "%s", key);
+  nPrefOrder++;
+  if (!enabled && nPrefOff < PREF_MAX) snprintf(prefOff[nPrefOff++], 352, "%s", key);
+}
+
+// Where `key` sits in the owner's order; -1 when the order does not name it.
+static int prefIndex(const char *key) {
+  int i;
+  for (i = 0; i < nPrefOrder; i++) if (!strcmp(prefOrder[i], key)) return i;
+  return -1;
 }
 
 void disc_prefs_end(void) {
@@ -1584,6 +1617,9 @@ typedef struct {
 typedef struct {
   CatItem *items;
   int n, cap;
+  // The opt-in home rows, as windows into `items`: the watchlist is the head of
+  // it (fetched first), the recommendations its tail. 0 when the row is off.
+  int nWatch, recStart, nRecs;
 } TraktLast;
 
 static int buildResume(CatItem *output, int max);
@@ -1600,12 +1636,58 @@ static void *traktFirst(void *u) {
   return NULL;
 }
 
+static int byAddedDesc(const void *a, const void *b) {
+  long long x = ((const CatItem *)a)->added, y = ((const CatItem *)b)->added;
+  return x < y ? 1 : x > y ? -1 : 0;
+}
+
 static void *traktLast(void *u) {
   TraktLast *t = (TraktLast *)u;
+  int nWatch;
   if (!t->items) return NULL;
-  t->n = trakt_list("watchlist", t->items, t->cap);
+  nWatch = trakt_list("watchlist", t->items, t->cap);
+  t->n = nWatch;
   t->n += trakt_list("collection", t->items + t->n, t->cap - t->n);
+  // Trakt serves the watchlist movies first and then the shows; as a row it reads
+  // best newest-first, as on the web. The library sorts on its own, so reordering
+  // in place costs it nothing.
+  if (homerows_trakt_watchlist() && nWatch > 0) {
+    qsort(t->items, (size_t)nWatch, sizeof(CatItem), byAddedDesc);
+    t->nWatch = nWatch;
+  }
+  if (homerows_trakt_recs() && t->n < t->cap) {
+    t->recStart = t->n;
+    t->nRecs = trakt_recommendations(t->items + t->n,
+                                     t->cap - t->n < 40 ? t->cap - t->n : 40);
+    t->n += t->nRecs;
+  }
+  // The lists carry an id, a title and a year — no synopsis, no runtime, no
+  // score — so the hero under the logo and the detail page had nothing to say
+  // about these titles. One Cinemeta /meta per card fills that in, for the cards
+  // the rows can show (the home stops a row at 200). This thread is joined last,
+  // after every catalogue, so the requests run beside the rest of the build.
+  if (t->nWatch > 0)
+    trakt_describe_batch(t->items, t->nWatch < 200 ? t->nWatch : 200);
+  if (t->nRecs > 0)
+    trakt_describe_batch(t->items + t->recStart, t->nRecs);
   return NULL;
+}
+
+// A Trakt row's name: the account's custom title when the web gave it one, the
+// web's default otherwise.
+static void traktRowFilter(CatRow *f, const char *key, const char *title,
+                           int start, int n) {
+  int t;
+  memset(f, 0, sizeof *f);
+  snprintf(f->key, sizeof f->key, "%s", key);
+  snprintf(f->title, sizeof f->title, "%s", title);
+  for (t = 0; t < nPrefTitle; t++)
+    if (!strcmp(prefTitle[t].key, key)) {
+      snprintf(f->title, sizeof f->title, "%s", prefTitle[t].title);
+      break;
+    }
+  snprintf(f->kind, sizeof f->kind, "movie");
+  f->start = start; f->n = n;
 }
 
 static void *build(void *u) {
@@ -1615,6 +1697,11 @@ static void *build(void *u) {
   CatItem *lote = malloc(sizeof(CatItem) * (size_t)cap);
   int n = 0;
   int nResume = 0, nSocial = 0;
+  // Slots kept free for the opt-in Trakt rows: they land after every catalogue
+  // has been read, and a catalogue loop that had filled the array would leave
+  // them nowhere to go.
+  int traktSlots = (homerows_trakt_watchlist() ? 1 : 0)
+                 + (homerows_trakt_recs() ? 1 : 0);
   (void)u;
   if (!lote) { searching = 0; return NULL; }
 
@@ -1640,7 +1727,8 @@ static void *build(void *u) {
   pthread_t thFirst, thLast;
   int okFirst, okLast;
   memset(&first, 0, sizeof first);
-  last.n = 0; last.cap = 800;
+  memset(&last, 0, sizeof last);
+  last.cap = 800;
   last.items = malloc(sizeof(CatItem) * (size_t)last.cap);
   okFirst = pthread_create(&thFirst, NULL, traktFirst, &first) == 0;
   okLast  = pthread_create(&thLast,  NULL, traktLast,  &last)  == 0;
@@ -1804,7 +1892,7 @@ static void *build(void *u) {
           // REBUILD from scratch, starting after what Trakt already put in the
           // array.
           n = nBase; nFilter = nFilterBase;
-          for (k = 0; k < nTasks && nFilter < CAT_FILTER_MAX; k++) {
+          for (k = 0; k < nTasks && nFilter < CAT_FILTER_MAX - traktSlots; k++) {
             const Decl *d = tasks[k].d;
             int got, isReady;
             pthread_mutex_lock(&catLock);
@@ -1886,9 +1974,40 @@ static void *build(void *u) {
   // The rows that go LAST, from thread B.
   if (okLast) pthread_join(thLast, NULL);
   if (last.n > 0) {
+    int base = n;
     ENSURES(last.n);
+    if (last.n > cap - n) last.n = cap - n;   // the realloc failed
     memcpy(lote + n, last.items, sizeof(CatItem) * (size_t)last.n);
     n += last.n;
+    // The opt-in Trakt rows go where the owner's order puts them (see
+    // homerows.h): before the first catalogue row the order places after them.
+    // With no position in the order, right after "Continue watching" and the
+    // friends' feed. Their slots were kept free above, so nRowsBuilt + 2 fits.
+    { CatRow rowsTrakt[2];
+      int nt = 0, t, k;
+      if (last.nWatch > 0 && last.nWatch <= last.n)
+        traktRowFilter(&rowsTrakt[nt++], "trakt_watchlist", "Watchlist",
+                       base, last.nWatch);
+      if (last.nRecs > 0 && last.recStart + last.nRecs <= last.n)
+        traktRowFilter(&rowsTrakt[nt++], "trakt_recommendations",
+                       "Recommended for You", base + last.recStart, last.nRecs);
+      for (t = 0; t < nt && nRowsBuilt < CAT_FILTER_MAX; t++) {
+        int mine = prefIndex(rowsTrakt[t].key), at = 0;
+        for (k = 0; k < nRowsBuilt; k++)
+          if (!strcmp(filtersBuilt[k].key, "continue_watching") ||
+              !strcmp(filtersBuilt[k].key, "social_activity")) at = k + 1;
+        if (mine >= 0)
+          for (k = at; k < nRowsBuilt; k++) {
+            int theirs = prefIndex(filtersBuilt[k].key);
+            if (theirs < 0 || theirs > mine) break;
+            at = k + 1;
+          }
+        memmove(filtersBuilt + at + 1, filtersBuilt + at,
+                sizeof(CatRow) * (size_t)(nRowsBuilt - at));
+        filtersBuilt[at] = rowsTrakt[t];
+        nRowsBuilt++;
+      }
+    }
   }
   free(last.items);
 #undef ENSURES
