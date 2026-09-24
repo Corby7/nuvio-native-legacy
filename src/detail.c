@@ -37,6 +37,7 @@
 #include "layout.h"
 #include "catalog.h"
 #include "trakt.h"   // trakt_active(), for the library tooltip's wording
+#include "video.h"   // video_launch_youtube(), for the trailer cards
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -162,9 +163,9 @@ void detail_regions(void) {
   }
   fflush(stdout);
 }
-// The most buttons the row ever has: the primary plus three circles, which is what a
-// FILM shows (see nButtons).
-#define N_BUTTONS 4
+// The most buttons the row ever has: the primary plus four circles, which is what a
+// FILM with a trailer shows (see nButtons).
+#define N_BUTTONS 5
 // The tooltip's `transition: opacity 140ms` — one value per button, because moving
 // the focus CROSSFADES: the label you are leaving fades out while the new one fades
 // in, and a single shared opacity would make it blink to zero and back instead.
@@ -1127,14 +1128,25 @@ static int sectionN(int r) {
 // per title.
 //
 // This file drew THREE in both cases.
-static int nButtons(void) { return isSeries() ? 3 : 4; }
+//
+// THE TRAILER is the last circle, where NuvioWeb puts it, and only when there is one
+// to play and the "Trailer button" setting is on (detailPageTrailerButtonEnabled).
+// It arrives with the extras, seconds after the page opens, so the row can grow by
+// one while you look at it; the focus never sits on it before it exists.
+static int hasTrailerButton(void) {
+  return settings_button_trailer() && extras_n_trailers() > 0;
+}
+static int nButtons(void) {
+  return (isSeries() ? 3 : 4) + hasTrailerButton();
+}
 
 // Which ACTION sits at position `n` in the row. The actions have fixed numbers (0
-// primary, 1 list, 2 watched, 3 sources) because detail_event decides by them; what
+// primary, 1 list, 2 watched, 3 sources, 4 trailer) because detail_event decides by them; what
 // changes with the type is which positions exist. Without this translation, on a
 // series the second circular button (which is the sources one) would fire "mark as
 // watched".
-enum { ACTION_PRIMARY = 0, ACTION_LIST = 1, ACTION_WATCHED = 2, ACTION_SOURCES = 3 };
+enum { ACTION_PRIMARY = 0, ACTION_LIST = 1, ACTION_WATCHED = 2, ACTION_SOURCES = 3,
+       ACTION_TRAILER = 4 };
 static int actionIn(int n) {
   if (n >= 2 && isSeries()) return n + 1;   // a series skips the eye
   return n;
@@ -1306,9 +1318,18 @@ void detail_event(const SDL_Event *e) {
         reqMark = 1;
       } else if (action == ACTION_WATCHED) {
         reqWatched = 1;
+      } else if (action == ACTION_TRAILER) {
+        // The first one: extras.c keeps only Trailers and Teasers, in TMDB's order.
+        video_launch_youtube(extras_trailer_yt(0));
       } else {
         reqSources = 1;
       }
+    } else if (focus.row == SEC_TRAILERS) {
+      // OK PLAYS THE TRAILER in the TV's own YouTube app. This port has no YouTube
+      // player; handing the id to the app that does is the only route that keeps
+      // working when YouTube changes its stream protection (see video.h).
+      if (focus.column < extras_n_trailers())
+        video_launch_youtube(extras_trailer_yt(focus.column));
     } else if (focus.row == SEC_RELATED) {
       // A FILM: "More like this" is a section of its own. The same destination as the
       // series path — it opens from the catalogue when we already have meta, otherwise
@@ -1461,14 +1482,7 @@ static float xItem(int r, int c) {
 // same pattern as the home's syncRows(), for the same reason: what fills the catalogue
 // is another thread.
 // How many of a section's columns accept FOCUS. It is not always the same as sectionN,
-// which says how many are DRAWN.
-//
-// Trailers are the case: the cards appear, but take no focus. This port has no YouTube
-// player, and the rule already written twice in this code — the trailer button removed
-// from the hero, the YouTube glyph swapped on the third circular button — is that a
-// control which promises what it cannot deliver is worse than its absence.
-// Skipping the row hides nothing: going down from the Cast to the Details, the
-// scrolling passes over the trailers and they are visible on the way.
+// which says how many are DRAWN. Today every section focuses all it draws.
 static int sectionColumns(int r) {
   // TRAILERS ARE FOCUSABLE. They were left out of the focus for a while, on the
   // argument that this port does not play YouTube and a control that promises what it
@@ -1477,8 +1491,8 @@ static int sectionColumns(int r) {
   //
   // The owner asked for the opposite, and is right in this case: skipping the whole row
   // stops you even WALKING THROUGH the trailers to read their names, and "I can't
-  // navigate the trailers" is a bigger defect than an OK with no effect. The card still
-  // has no action on OK while there is no player.
+  // navigate the trailers" is a bigger defect than an OK with no effect. OK now opens
+  // the trailer in the TV's YouTube app (video_launch_youtube).
   return sectionN(r);
 }
 
@@ -1804,6 +1818,11 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
       gfx_icon(ig, seen ? (focused ? "detail_watched_off_filled" : "detail_watched_off")
                         : (focused ? "detail_watched_filled"     : "detail_watched"),
                ink, ink, ink, a);
+    } else if (icon == ACTION_TRAILER) {
+      // TRAILER: NuvioWeb's `renderTrailerGlyph` pair, ic_detail_trailer{,_filled}.svg
+      // rasterised at 128 like the others, the solid twin on focus.
+      gfx_icon(ig, focused ? "detail_trailer_filled" : "detail_trailer",
+               ink, ink, ink, a);
     } else {
       // SOURCES: Phosphor's "stack" in BOLD at rest — the player's Sources glyph
       // (assets/icons/stack.svg), so the two buttons read as the same Sources — and
@@ -1909,6 +1928,7 @@ static const char *tooltipOf(int action) {
     // from the play button. This port keeps it, so the label is this port's, written
     // to the same shape as the others.
     case ACTION_SOURCES: return "Sources";
+    case ACTION_TRAILER: return "Play trailer";
   }
   return NULL;
 }
@@ -3192,11 +3212,8 @@ static void drawTabInfo(float x, float y, int i, float f, float a) {
 // the type in grey. The thumbnail comes from img.youtube.com by a predictable URL, and
 // tex_get downloads and caches it by itself — there is no network code here.
 //
-// IT IS NOT FOCUSABLE, and that is a decision, not an omission: this app has no YouTube
-// player. The same rule already removed the trailer button from the hero (detail.c) and
-// the YouTube glyph from the third circular button (gfx.c) — a control that promises
-// what it cannot deliver is worse than its absence. The card takes part in the
-// composition so the page does not lie about what the film has; open, it does not.
+// It takes focus, and OK hands the video to the TV's YouTube app: this port has no
+// YouTube player of its own (see video_launch_youtube in video.h).
 static void drawTrailer(float x, float y, int c, float a) {
   const char *mini = extras_trailer_thumb(c);
   GfxRect v = { x, y, NV_DETF_TR_W, NV_DETF_TR_VIDEO_H };

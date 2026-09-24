@@ -157,11 +157,9 @@ const char *extras_profile_release(void);      // "2026-01-15"
 
 // TRAILERS. Only what can be shown: the YouTube id, the name and a thumbnail.
 //
-// THERE IS NO WAY TO PLAY THEM. The web app opens a YouTube iframe; this port
-// has neither a player nor a stream extractor, and the decision already
-// recorded in detail.c and gfx.c was to remove the trailer button rather than
-// leave a control that promises what it cannot deliver. The same rule holds
-// here: the card takes part in the composition, but takes no focus while
+// They play in the TV's own YouTube app: OK on a card calls
+// video_launch_youtube with the id. This port has no YouTube player or stream
+// extractor of its own; the web app's iframe has no equivalent here.
 #define EX_TRAILER_MAX 6
 int         extras_n_trailers(void);
 const char *extras_trailer_yt(int i);        // the video id ("dQw4w9WgXcQ")

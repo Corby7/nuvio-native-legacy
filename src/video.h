@@ -39,6 +39,14 @@
 // Failing here is not fatal: the app carries on without video.
 int  video_start(void);
 
+// Hands a YouTube video to the TV's own YouTube app (applicationManager/launch,
+// contentTarget "v=<id>"). It is how trailers play: this port has no YouTube
+// player and no stream extractor, and the TV's app does 4K/HDR without either.
+// It goes out through luna-send-pub (see video.c for why), asynchronously — a
+// refusal lands in the failure log. 0 when the request could not even leave (an
+// id that is not a YouTube id, or no thread).
+int  video_launch_youtube(const char *videoId);
+
 // Starts playing. `url` is http(s):// or file://. Do NOT send
 // mediaTransportType: the transport comes from the URL's prefix, and sending the
 // field makes the load accept, return a mediaId and never fetch the file — a

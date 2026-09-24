@@ -5,6 +5,7 @@
 #include "mkv.h"
 #include "js.h"
 #include "data.h"
+#include "failures.h"
 #include <sys/stat.h>
 #include <stdio.h>
 #include <string.h>
@@ -125,6 +126,10 @@ static unsigned  session;
 // On the Mac there is no bus and no video plane. The stubs let the rest of the app
 // compile and run the same, only with no moving image.
 int  video_start(void) { return 0; }
+int  video_launch_youtube(const char *id) {
+  printf("[video] would launch YouTube v=%s\n", id ? id : ""); fflush(stdout);
+  return 0;
+}
 int  video_play(const char *u) { (void)u; return 0; }
 void video_pump(void) {}
 void video_stop(void) {}
@@ -718,6 +723,59 @@ static void callCtx(const char *method, const char *load, Filter cb,
   snprintf(uri, sizeof uri, "luna://com.webos.media/%s", method);
   if (!lsCall(bus, uri, load, cb, ctx, &token, ERROR))
     printf("[video] %s failed\n", method);
+}
+
+// --- trailers: handed to the TV's YouTube app ---------------------------------
+// THE LAUNCH GOES THROUGH /usr/bin/luna-send-pub, and not through LS2 from here,
+// because every in-process route was MEASURED shut on the C3:
+//   - on `bus`: "Not permitted to send to com.webos.applicationManager." The
+//     name com.webos.media.client.* only carries the `private` group
+//     (client-permissions.d/com.webos.media.perm.json).
+//   - registering the app id: "Attempted to register for a service name that
+//     already exists" (-1028) — SDL already holds it for the window.
+//   - the app id plus "-trailer" or ".trailer": "Invalid permissions" (-1027).
+// luna-send-pub has a system role of its own (roles.d/com.webos.lunasendpub.
+// role.json: type devmode, outbound "*"), and from the app it gets through.
+// Over ssh it prints nothing, even for a service that does not exist — test it
+// from the app, not from a shell.
+//
+// On a thread of its own: luna-send-pub waits for the reply, and the drawing
+// must not. A refusal lands in the failure log (tools/failures.sh).
+static void *viaLunaSendPub(void *arg) {
+  char cmd[320], out[256]; size_t n = 0; FILE *f;
+  snprintf(cmd, sizeof cmd,
+           "/usr/bin/luna-send-pub -w 5000 -n 1 "
+           "luna://com.webos.applicationManager/launch '%s' 2>&1", (char *)arg);
+  free(arg);
+  out[0] = 0;
+  f = popen(cmd, "r");
+  if (f) { n = fread(out, 1, sizeof out - 1, f); out[n] = 0; pclose(f); }
+  printf("[video] luna-send-pub: %s\n", out); fflush(stdout);
+  if (!strstr(out, "\"returnValue\":true")) {
+    char line[320];
+    snprintf(line, sizeof line, "trailer: luna-send-pub launch: %.260s",
+             n ? out : (f ? "(no output)" : "(popen failed)"));
+    failure_log(line);
+  }
+  return NULL;
+}
+
+int video_launch_youtube(const char *id) {
+  char b[192], *copy; const char *c; pthread_t t;
+  // A YouTube id is 11 characters of [A-Za-z0-9_-]. Checking it keeps whatever
+  // TMDB sent from being spliced raw into the JSON — or into the shell command.
+  if (!id || !id[0] || strlen(id) > 15) return 0;
+  for (c = id; *c; c++)
+    if (!isalnum((unsigned char)*c) && *c != '_' && *c != '-') return 0;
+  snprintf(b, sizeof b,
+           "{\"id\":\"youtube.leanback.v4\","
+           "\"params\":{\"contentTarget\":\"v=%s\"}}", id);
+  printf("[video] launch YouTube v=%s\n", id); fflush(stdout);
+  copy = strdup(b);
+  if (!copy) return 0;
+  if (pthread_create(&t, NULL, viaLunaSendPub, copy) != 0) { free(copy); return 0; }
+  pthread_detach(t);
+  return 1;
 }
 
 // THERE IS NO SECOND-SERVICE CALL ANY MORE. There used to be a generic `callIn`
