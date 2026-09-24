@@ -5,6 +5,8 @@
 #include <string.h>
 #include <strings.h>
 #include <dlfcn.h>
+#include <time.h>
+#include "data.h"
 
 // libcurl constants written out by hand: there is no curl.h in the device's
 // SDK, and pulling in the whole header for half a dozen numbers does not pay
@@ -41,6 +43,14 @@
 #define OPT_LOW_SPEED_TIME     20
 // CURLINFO_RESPONSE_CODE = CURLINFO_LONG (0x200000) + 2.
 #define INFO_RESPONSE_CODE   2097154
+// For the timing log: CURLINFO_LONG + 26, and CURLINFO_DOUBLE (0x300000) + 3,
+// 4, 5 and 33 — total, name lookup, connect and TLS done, each in seconds from
+// the start of the transfer.
+#define INFO_NUM_CONNECTS    2097178
+#define INFO_TOTAL_TIME      3145731
+#define INFO_NAMELOOKUP_TIME 3145732
+#define INFO_CONNECT_TIME    3145733
+#define INFO_APPCONNECT_TIME 3145761
 
 // Seconds to ESTABLISH the connection (DNS + TCP + TLS), not the ceiling for
 // the transfer. MEASURED on the Mac: a good connection completes the whole
@@ -57,6 +67,8 @@ static int   (*curl_global)(long);
 static void *(*slist_append)(void *, const char *);
 static void  (*slist_free)(void *);
 static int   (*curl_getinfo)(void *, int, ...);
+static void *(*share_init)(void);
+static int   (*share_setopt)(void *, int, ...);
 static int    ready;
 
 // `cap`: optional byte ceiling for THIS transfer; 0 = no ceiling. It exists
@@ -93,66 +105,153 @@ static size_t receive(void *data, size_t size, size_t count, void *u) {
   return bytes;
 }
 
-// --- ONE HANDLE PER THREAD, REUSED -------------------------------------------
+// --- A POOL OF HANDLES, LENT TO WHICHEVER THREAD ASKS -----------------------
 //
 // Every request used to open and close its own handle, and everything libcurl
 // keeps INSIDE the handle went with it: the open connection, the DNS cache and
-// the TLS session. Startup makes ~32 requests and the four artwork threads make
-// hundreds, nearly all against the same few hosts (v3-cinemeta.strem.io,
-// api.trakt.tv, api.themoviedb.org, images.metahub.space) — and each one paid
-// for DNS, TCP and a handshake again. On a 2019 TV over Wi-Fi that is the cost
-// that dominates.
+// the TLS session. Startup makes ~75 requests, nearly all against the same few
+// hosts (v3-cinemeta.strem.io, api.trakt.tv, api.themoviedb.org, the addons),
+// and each one paid for DNS, TCP and a handshake again.
 //
-// The handle lives on the THREAD and not in a shared pool because a libcurl
-// easy handle is NOT safe across threads; one per thread buys the reuse without
-// a single lock.
+// WHY A POOL AND NOT ONE HANDLE PER THREAD, which is what this was before.
+// Almost every screen starts a thread of its own for its requests — detail
+// extras, person, parental guide, director, the stream addons, subtitles,
+// search — and a per-thread handle is born cold and dies with that thread.
+// MEASURED on the TV (2026-09-24): one cold start opened 27 connections, 17 of
+// them to cinemeta alone, and every title opened 8 more; a new connection costs
+// 60-150 ms there against ~40 ms for a reused one. The pool outlives the threads,
+// so the next thread borrows a handle whose connection is still open.
 //
-// The key's destructor is what closes the handle when the thread dies. It is
-// required, not a detail: half the threads here are detached (search, director,
-// parental guide, intro, subtitle, the login pollers) and nobody joins them, so
-// there is no outside moment at which to clean up.
-static pthread_key_t handleKey;
-static int handleKeyReady;
+// WHY NOT CURL_LOCK_DATA_CONNECT, the share that looks made for this: libcurl
+// documents that sharing CONNECTIONS between concurrent threads is unsupported.
+// A handle, by contrast, may move between threads freely as long as only one
+// uses it at a time — and a handle only ever sits with the thread that took it.
+//
+// The pool prefers a handle that last talked to the same host, because that is
+// the one holding the open connection. Each handle keeps a few connections of
+// its own (libcurl's default is 5), so a handle that served cinemeta and then
+// trakt stays warm for both.
+#define POOL_MAX   16
+#define POOL_HOSTS  4
+// What the pool knows about one handle, carried BY the handle (CURLOPT_PRIVATE)
+// so it travels with it while a thread has it borrowed.
+typedef struct { void *h; char host[POOL_HOSTS][80]; } Pooled;
+static Pooled *idle[POOL_MAX];
+static int nIdle;
+static int pooled;
+static pthread_mutex_t poolLock = PTHREAD_MUTEX_INITIALIZER;
+#define OPT_PRIVATE  10103
+#define INFO_PRIVATE 1048597
 
-static void handleGone(void *h) {
-  if (h && curl_cleanup) curl_cleanup(h);
+// THE PART THAT IS SAFE TO SHARE ACROSS THREADS: the DNS cache and the TLS
+// sessions. A handle the pool cannot warm (none idle for that host) still skips
+// the lookup and RESUMES the TLS session instead of a full handshake. The locks
+// are per data kind, because libcurl takes the share's own lock while holding
+// the DNS one.
+#define OPT_SHARE             10100
+#define OPT_DNS_CACHE_TIMEOUT    92
+static void *share;
+static pthread_mutex_t shareLocks[8];
+static void shareLock(void *h, int data, int access, void *u) {
+  (void)h; (void)access; (void)u;
+  pthread_mutex_lock(&shareLocks[data & 7]);
+}
+static void shareUnlock(void *h, int data, void *u) {
+  (void)h; (void)u;
+  pthread_mutex_unlock(&shareLocks[data & 7]);
 }
 
-// This thread's handle, cleared and ready to take the options. `own` comes back
-// 1 when the handle is disposable and the caller has to close it; 0 when it
-// belongs to the thread and outlives the request.
-static void *handleTake(int *own) {
-  void *h;
+// "https://host:port/path" -> "host:port". Empty when there is no scheme.
+static void hostOf(const char *url, char *dst, size_t size) {
+  const char *p = url ? strstr(url, "://") : NULL;
+  size_t n = 0;
+  dst[0] = 0;
+  if (!p) return;
+  p += 3;
+  while (p[n] && p[n] != '/' && p[n] != '?' && p[n] != '#') n++;
+  if (n >= size) n = size - 1;
+  memcpy(dst, p, n);
+  dst[n] = 0;
+}
+
+// A handle ready to take the options, borrowed for `url`. `own` comes back 1
+// when the handle is disposable and the caller has to close it (no pool); 0 when
+// it goes back to the pool in handleGive.
+static void *handleTake(const char *url, int *own) {
+  char host[80];
+  Pooled *p = NULL;
+  int i, k, pick = -1;
   *own = 1;
-  if (!handleKeyReady) return curl_init();
-  h = pthread_getspecific(handleKey);
-  if (h) {
-    // Clears the options and KEEPS the connection, the DNS cache and the TLS
-    // session — which is exactly what we are here to keep. Without this reset
-    // the handle would reach the next request still carrying net_url_final's
-    // OPT_RANGE, or the headers of a Trakt call.
-    curl_reset(h);
-    *own = 0;
-    return h;
+  if (!pooled) return curl_init();
+  hostOf(url, host, sizeof host);
+  pthread_mutex_lock(&poolLock);
+  // Newest first: the handle returned last is the likeliest to still hold a
+  // live connection, the server not having timed it out yet.
+  for (i = nIdle - 1; i >= 0 && pick < 0; i--)
+    for (k = 0; k < POOL_HOSTS; k++)
+      if (host[0] && !strcmp(idle[i]->host[k], host)) { pick = i; break; }
+  // No handle knows this host: any idle one will do, since its DNS cache and TLS
+  // sessions are shared anyway and it adds this host to its connections.
+  if (pick < 0 && nIdle > 0) pick = nIdle - 1;
+  if (pick >= 0) {
+    p = idle[pick];
+    memmove(&idle[pick], &idle[pick + 1], (nIdle - pick - 1) * sizeof idle[0]);
+    nIdle--;
   }
-  h = curl_init();
-  if (!h) return NULL;
-  // A fresh handle is already clean and needs no reset. If there is nowhere to
-  // store it, it stays disposable and the request happens all the same.
-  if (pthread_setspecific(handleKey, h) == 0) *own = 0;
-  return h;
+  pthread_mutex_unlock(&poolLock);
+  if (p) {
+    // Clears the options and KEEPS the connections — which is exactly what we
+    // are here to keep. Without this reset the handle would reach the next
+    // request still carrying net_url_final's OPT_RANGE, or the headers of a
+    // Trakt call.
+    curl_reset(p->h);
+  } else {
+    p = calloc(1, sizeof *p);
+    if (!p) return curl_init();
+    p->h = curl_init();
+    if (!p->h) { free(p); return NULL; }
+  }
+  *own = 0;
+  // The reset cleared this along with everything else, so it goes back every time.
+  curl_setopt(p->h, OPT_PRIVATE, p);
+  if (share) curl_setopt(p->h, OPT_SHARE, share);
+  // libcurl forgets a lookup after 60 s. The hosts here do not move in minutes,
+  // and a connection to an address that did move fails and is opened again.
+  curl_setopt(p->h, OPT_DNS_CACHE_TIMEOUT, (long)300);
+  return p->h;
 }
 
 // Closes the request. `list` is the header list, which libcurl does NOT own: it
 // only holds a pointer to it, so it has to be unhooked from the handle BEFORE
-// being freed. With a disposable handle that was implicit, because the handle
-// died first; with a handle that survives the request it is not, and the next
-// curl_easy_reset would be the only thing standing between a dangling pointer
-// and a request that reuses it.
-static void handleGive(void *h, int own, void *list) {
+// being freed — the handle outlives the request, and the next curl_easy_reset
+// would be the only thing standing between a dangling pointer and a request that
+// reuses it.
+static void handleGive(void *h, int own, void *list, const char *url) {
+  Pooled *p = NULL, *evict = NULL;
+  char host[80];
+  int k;
   if (h && list && curl_setopt) curl_setopt(h, OPT_HTTPHEADER, (void *)0);
   if (list && slist_free) slist_free(list);
-  if (own && h && curl_cleanup) curl_cleanup(h);
+  if (!h) return;
+  if (!own && curl_getinfo) curl_getinfo(h, INFO_PRIVATE, (char **)&p);
+  if (own || !p) { if (curl_cleanup) curl_cleanup(h); return; }
+  // This host first, the ones it already knew after: the handle keeps several
+  // connections, and the oldest name is the one libcurl drops first.
+  hostOf(url, host, sizeof host);
+  for (k = 0; k < POOL_HOSTS && strcmp(p->host[k], host); k++) {}
+  if (k == POOL_HOSTS) k = POOL_HOSTS - 1;
+  memmove(p->host[1], p->host[0], k * sizeof p->host[0]);
+  snprintf(p->host[0], sizeof p->host[0], "%s", host);
+  pthread_mutex_lock(&poolLock);
+  // Full: the oldest idle handle goes, its connections the likeliest dead.
+  if (nIdle == POOL_MAX) {
+    evict = idle[0];
+    memmove(&idle[0], &idle[1], (POOL_MAX - 1) * sizeof idle[0]);
+    nIdle--;
+  }
+  idle[nIdle++] = p;
+  pthread_mutex_unlock(&poolLock);
+  if (evict) { curl_cleanup(evict->h); free(evict); }
 }
 
 // LOADING LIBCURL, ONCE ONLY AND UNDER A LOCK.
@@ -205,29 +304,99 @@ static int openHandle(void) {
   *(void **)(&slist_append) = dlsym(h, "curl_slist_append");
   *(void **)(&slist_free)   = dlsym(h, "curl_slist_free_all");
   *(void **)(&curl_getinfo) = dlsym(h, "curl_easy_getinfo");
+  *(void **)(&share_init)   = dlsym(h, "curl_share_init");
+  *(void **)(&share_setopt) = dlsym(h, "curl_share_setopt");
   if (!curl_init || !curl_setopt || !curl_perform) {
     printf("[net] libcurl is missing the expected symbols\n");
     pthread_mutex_unlock(&openLock);
     return 0;
   }
   if (curl_global) curl_global(3 /* CURL_GLOBAL_DEFAULT */);
-  // The per-thread handle depends on curl_easy_reset. Without it there is no
-  // way to return the handle to a clean state between one request and the next,
-  // and reusing it would carry the previous request's options along — a Trakt
-  // header on an artwork request, one request's Range into the following one.
-  // In that case the module goes back to what it did before: a handle per
-  // request. Slower, and correct.
-  if (curl_reset && curl_cleanup &&
-      pthread_key_create(&handleKey, handleGone) == 0)
-    handleKeyReady = 1;
-  else
-    printf("[net] no curl_easy_reset: one handle per request\n");
+  // The pool depends on curl_easy_reset. Without it there is no way to return
+  // a handle to a clean state between one request and the next, and reusing it
+  // would carry the previous request's options along — a Trakt header on an
+  // artwork request, one request's Range into the following one. In that case
+  // the module goes back to a handle per request. Slower, and correct.
+  if (curl_reset && curl_cleanup && curl_getinfo) pooled = 1;
+  else printf("[net] no curl_easy_reset: one handle per request\n");
+  // 1 = CURLSHOPT_SHARE, 3/4 = LOCKFUNC/UNLOCKFUNC; data 3 = DNS, 4 = SSL_SESSION.
+  // Without the share every handle simply keeps its own caches.
+  if (share_init && share_setopt && (share = share_init())) {
+    int k;
+    for (k = 0; k < 8; k++) pthread_mutex_init(&shareLocks[k], NULL);
+    share_setopt(share, 3, shareLock);
+    share_setopt(share, 4, shareUnlock);
+    share_setopt(share, 1, 3);
+    share_setopt(share, 1, 4);
+  }
   ready = 1;
   pthread_mutex_unlock(&openLock);
   return 1;
 }
 
 void net_prepare(void) { openHandle(); }
+
+// --- THE TIMING LOG ------------------------------------------------------------
+//
+// One line per request in data_dir()/net-timing.log, ONLY while a file named
+// `net-timing` exists in that folder. It exists because "is the connection being
+// reused" cannot be seen from outside: the app log sits in the TV's private /tmp,
+// and the cost this module fights — DNS, TCP and TLS paid again — never shows up
+// as an error, only as a slower screen. The data folder is readable over ssh.
+//
+// Line: start ms (monotonic, since the first request) | total ms | new
+// connections opened (0 = reused one) | dns | tcp | tls ms | host.
+//
+// The flag is looked at on the first request after data_start has chosen a
+// folder, never again: touching the file needs a relaunch.
+static pthread_mutex_t timingLock = PTHREAD_MUTEX_INITIALIZER;
+static FILE *timingFile;
+static int timingChecked;
+static double timingZero;
+
+static double nowMs(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return t.tv_sec * 1000.0 + t.tv_nsec / 1e6;
+}
+
+// The start stamp of a request; 0 when the log is off, so a disabled log costs
+// one unlocked read.
+static double timingStart(void) {
+  if (timingChecked && !timingFile) return 0;
+  return nowMs();
+}
+
+static void timingEnd(void *c, double start, const char *url) {
+  long fresh = 0;
+  double total = 0, dns = 0, tcp = 0, tls = 0;
+  char host[120];
+  if (!start || !curl_getinfo) return;
+  pthread_mutex_lock(&timingLock);
+  if (!timingChecked && data_dir()[0]) {
+    char flag[600], path[600];
+    FILE *probe;
+    timingChecked = 1;
+    if (data_path(flag, sizeof flag, "net-timing") && (probe = fopen(flag, "r"))) {
+      fclose(probe);
+      if (data_path(path, sizeof path, "net-timing.log"))
+        timingFile = fopen(path, "w");
+      timingZero = start;
+    }
+  }
+  if (timingFile) {
+    curl_getinfo(c, INFO_NUM_CONNECTS, &fresh);
+    curl_getinfo(c, INFO_TOTAL_TIME, &total);
+    curl_getinfo(c, INFO_NAMELOOKUP_TIME, &dns);
+    curl_getinfo(c, INFO_CONNECT_TIME, &tcp);
+    curl_getinfo(c, INFO_APPCONNECT_TIME, &tls);
+    fprintf(timingFile, "%.0f %.0f %ld %.0f %.0f %.0f %s\n", start - timingZero,
+            total * 1000, fresh, dns * 1000, tcp * 1000, tls * 1000,
+            net_url_public(url, host, sizeof host));
+    fflush(timingFile);
+  }
+  pthread_mutex_unlock(&timingLock);
+}
 
 char *net_download_bin(const char *url, int seconds, long *size) {
   return net_download_internal(url, seconds, size, NULL, 0);
@@ -275,10 +444,11 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   Bucket b = { NULL, 0, 0 };
   void *c, *list = NULL;
   int r, own;
+  double t0;
   if (status) *status = 0;
   if (!url || !*url || !openHandle()) return NULL;
   b.cap = cap;
-  c = handleTake(&own);
+  c = handleTake(url, &own);
   if (!c) return NULL;
   curl_setopt(c, OPT_URL, url);
   curl_setopt(c, OPT_WRITEFUNCTION, receive);
@@ -302,7 +472,9 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
     for (k = 0; header[k]; k++) list = slist_append(list, header[k]);
     if (list) curl_setopt(c, OPT_HTTPHEADER, list);
   }
+  t0 = timingStart();
   r = curl_perform(c);
+  timingEnd(c, t0, url);
   // THE HTTP STATUS, and not just libcurl's error code. MEASURED: on one pass
   // through the home the log had 93 "decode failed" and ZERO "[net] failure" —
   // that is, curl_easy_perform returned 0 (TRANSPORT success) for responses
@@ -326,7 +498,7 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
     // whoever happened to make the call.
     if (http == 401 && notify401) notify401(url);
     if (!r && http >= 400 && !status) {
-      handleGive(c, own, list);
+      handleGive(c, own, list, url);
       free(b.p);
       // REDACTED, and not the 60 characters that used to be here: those were
       // enough to include the path segment that carries a debrid key or a JWT.
@@ -336,7 +508,7 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
       fflush(stdout);
       return NULL;
     } }
-  handleGive(c, own, list);
+  handleGive(c, own, list, url);
   // 23 = CURLE_WRITE_ERROR. When there is a ceiling, it is the EXPECTED result:
   // the receiver returns fewer bytes on purpose to cut the connection as soon
   // as it fills. In that case what has arrived is exactly what was wanted —
@@ -354,8 +526,9 @@ int net_url_final(const char *url, int seconds, char *dst, unsigned size) {
   void *c;
   char *end = NULL;
   int r, own;
+  double t0;
   if (!url || !*url || !openHandle() || !curl_getinfo) return 0;
-  c = handleTake(&own);
+  c = handleTake(url, &own);
   if (!c) return 0;
   curl_setopt(c, OPT_URL, url);
   curl_setopt(c, OPT_WRITEFUNCTION, receive);
@@ -370,12 +543,14 @@ int net_url_final(const char *url, int seconds, char *dst, unsigned size) {
   // A tiny piece instead of a HEAD: several debrid servers answer HEAD with 405
   // or lie in the redirect, but do honour Range.
   curl_setopt(c, OPT_RANGE, "0-64");
+  t0 = timingStart();
   r = curl_perform(c);
+  timingEnd(c, t0, url);
   if (!r) curl_getinfo(c, INFO_URL_FINAL, &end);
   // The address comes out of the handle, so it has to be COPIED before the
   // handle is given back: on a reused handle the next curl_easy_reset frees it.
   if (!r && end) snprintf(dst, size, "%s", end);
-  handleGive(c, own, NULL);
+  handleGive(c, own, NULL, url);
   free(b.p);
   return (!r && end) ? 1 : 0;
 }
@@ -388,7 +563,7 @@ int net_stream(const char *url, const char *const *header, int headOnly,
   int r, own;
   if (status) *status = 0;
   if (!url || !*url || !openHandle()) return -1;
-  c = handleTake(&own);
+  c = handleTake(url, &own);
   if (!c) return -1;
   curl_setopt(c, OPT_URL, url);
   curl_setopt(c, OPT_HEADERFUNCTION, onHeader);
@@ -417,7 +592,7 @@ int net_stream(const char *url, const char *const *header, int headOnly,
   }
   r = curl_perform(c);
   if (status && curl_getinfo) curl_getinfo(c, INFO_RESPONSE_CODE, status);
-  handleGive(c, own, list);
+  handleGive(c, own, list, url);
   return r;
 }
 
@@ -447,9 +622,10 @@ static char *sendBody(const char *method, const char *url, int seconds,
   Bucket b = { NULL, 0, 0 };
   void *c, *list = NULL;
   int r, own;
+  double t0;
   if (status) *status = 0;
   if (!url || !*url || !openHandle()) return NULL;
-  c = handleTake(&own);
+  c = handleTake(url, &own);
   if (!c) return NULL;
   curl_setopt(c, OPT_URL, url);
   curl_setopt(c, OPT_WRITEFUNCTION, receive);
@@ -476,7 +652,9 @@ static char *sendBody(const char *method, const char *url, int seconds,
     for (k = 0; header && header[k]; k++) list = slist_append(list, header[k]);
     if (list) curl_setopt(c, OPT_HTTPHEADER, list);
   }
+  t0 = timingStart();
   r = curl_perform(c);
+  timingEnd(c, t0, url);
   // The code comes out BEFORE the cleanup: after it the handle no longer exists.
   // It is read whether or not the caller wanted it, because the 401 listener has
   // to be told either way — see net_notify_401.
@@ -486,7 +664,7 @@ static char *sendBody(const char *method, const char *url, int seconds,
     if (status) *status = (int)code;
     if (code == 401 && notify401) notify401(url);
   }
-  handleGive(c, own, list);
+  handleGive(c, own, list, url);
   // A TRANSPORT failure (r != 0) is still NULL — there was no response at all.
   // The body of a 4xx, by contrast, IS returned: it is where PostgREST explains
   // what was missing.

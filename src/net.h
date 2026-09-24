@@ -1,9 +1,9 @@
 // Simple HTTP(S) fetching, into memory.
 //
 // Uses the DEVICE's libcurl via dlopen. Writing TLS by hand was out of the
-// question and the SDK ships no libcurl to link against — but
-// /usr/lib/libcurl.so.5 exists on the TV, and the addons only speak https. On
-// the Mac it uses the system libcurl.
+// question and the SDK ships no libcurl to link against — but the TV has one
+// (the C3 on webOS 11: /usr/lib/libcurl.so.4, curl 8.7.1 with OpenSSL 3 and
+// HTTP/2), and the addons only speak https. On the Mac it uses the system libcurl.
 #ifndef NV_NET_H
 #define NV_NET_H
 #include <stddef.h>
