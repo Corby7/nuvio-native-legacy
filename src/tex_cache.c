@@ -492,10 +492,13 @@ static void sanitizeCached(const char *path, long n) {
   free(body);
 }
 
+static int slowBusy(const char *url);
+static void slowAdd(const char *url);
+
 // Downloads the URL into the cache, if it is not already there. Returns 1 if there
 // is a usable file at the end. It runs on the decode thread, so blocking here costs
-// no frames.
-static int ensureLocal(const char *url, char *dst, size_t size) {
+// no frames. `seconds` is the ceiling for the download; see the slow lane.
+static int ensureLocalWithin(const char *url, char *dst, size_t size, int seconds) {
   FILE *f;
   char *body;
   long n = 0;
@@ -510,8 +513,11 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
            if (n > 512) { sanitizeCached(dst, n); return 1; } }
   // 8 s and not 25: this is an IMAGE. At 25 s, two dead URLs held both decode
   // threads for almost a minute and the whole screen stopped receiving art —
-  // repeatedly, because nothing stores the failure.
-  body = net_download_bin(url, 8, &n);
+  // repeatedly, because nothing stores the failure. What runs out of time here
+  // goes to the slow lane, which has the patience this path cannot afford.
+  if (seconds <= 8 && slowBusy(url)) return 0;   // already being fetched there
+  body = net_download_bin(url, seconds, &n);
+  if (!body && seconds <= 8 && net_timed_out()) slowAdd(url);
   // THIS BRANCH WAS MUTE. Measured on one pass through the home: 93 "decode
   // failed" with ZERO "[net] failure" in the log — every failure came through here,
   // with curl reporting success and a body too short to be an image. Without the
@@ -568,6 +574,106 @@ static int ensureLocal(const char *url, char *dst, size_t size) {
   }
   free(body);
   return 1;
+}
+
+static int ensureLocal(const char *url, char *dst, size_t size) {
+  return ensureLocalWithin(url, dst, size, 8);
+}
+
+// --- THE SLOW LANE -----------------------------------------------------------
+//
+// For art that is ALIVE BUT SLOW. The Discover covers come from btttr.cc, which
+// renders each collage on request: MEASURED 2026-09-24, ~30 s to a 200 with a
+// 33 KB WebP, from the Mac and from the TV alike. The 8 s ceiling above cut
+// every attempt short, the four attempts ran out, and those cards stayed blank
+// for good — although one successful download would have lasted forever in the
+// disk cache.
+//
+// Raising the ceiling for everyone would bring back what it exists to prevent:
+// the four net threads parked on slow URLs while the rest of the screen waits.
+// So only a download that TIMED OUT (not one that was refused) comes here, to
+// two threads of its own with a long ceiling, once per URL per session. When the
+// file lands, the item's backoff is cleared so the card asks again at once
+// instead of on its next retry, or never, if its attempts were spent.
+//
+// Two threads and not more: the renderer slowed down further when asked for
+// several covers at once, and the lane's whole job is to be patient.
+#define NV_TEX_SLOW_MAX 32
+#define NV_TEX_SLOW_SECONDS 120
+#define NV_TEX_SLOW_THREADS 2
+enum { SLOW_QUEUED = 1, SLOW_RUNNING, SLOW_DONE };
+static struct { unsigned long h; int state; char url[512]; } slow[NV_TEX_SLOW_MAX];
+static int nSlow;
+static SDL_mutex *mtxSlow;
+static SDL_cond  *condSlow;
+
+static int slowBusy(const char *url) {
+  unsigned long h = hashPath(url);
+  int i, busy = 0;
+  if (!mtxSlow) return 0;
+  SDL_LockMutex(mtxSlow);
+  for (i = 0; i < nSlow; i++)
+    if (slow[i].h == h && slow[i].state != SLOW_DONE) { busy = 1; break; }
+  SDL_UnlockMutex(mtxSlow);
+  return busy;
+}
+
+static void slowAdd(const char *url) {
+  unsigned long h = hashPath(url);
+  int i;
+  if (!mtxSlow) return;
+  SDL_LockMutex(mtxSlow);
+  // Once per session: a URL that also fails with two minutes to answer is not
+  // going to be rescued by a third.
+  for (i = 0; i < nSlow; i++) if (slow[i].h == h) { SDL_UnlockMutex(mtxSlow); return; }
+  if (nSlow < NV_TEX_SLOW_MAX) {
+    slow[nSlow].h = h;
+    slow[nSlow].state = SLOW_QUEUED;
+    snprintf(slow[nSlow].url, sizeof slow[0].url, "%s", url);
+    nSlow++;
+    printf("[tex] slow art, retrying with %d s: %.70s\n", NV_TEX_SLOW_SECONDS, url);
+    fflush(stdout);
+    SDL_CondSignal(condSlow);
+  }
+  SDL_UnlockMutex(mtxSlow);
+}
+
+static int threadSlow(void *arg) {
+  (void)arg;
+  for (;;) {
+    char url[512], local[600];
+    int i, pick = -1, ok;
+    SDL_LockMutex(mtxSlow);
+    for (;;) {
+      if (!running) { SDL_UnlockMutex(mtxSlow); return 0; }
+      for (i = 0; i < nSlow && pick < 0; i++) if (slow[i].state == SLOW_QUEUED) pick = i;
+      if (pick >= 0) break;
+      SDL_CondWait(condSlow, mtxSlow);
+    }
+    slow[pick].state = SLOW_RUNNING;
+    snprintf(url, sizeof url, "%s", slow[pick].url);
+    SDL_UnlockMutex(mtxSlow);
+
+    ok = ensureLocalWithin(url, local, sizeof local, NV_TEX_SLOW_SECONDS);
+    printf("[tex] slow art %s: %.70s\n", ok ? "arrived" : "failed again", url);
+    fflush(stdout);
+    SDL_LockMutex(mtxSlow);
+    slow[pick].state = SLOW_DONE;
+    SDL_UnlockMutex(mtxSlow);
+    // Shut down while this thread was on the network: items[] and its mutex are
+    // being torn down, and nobody is left to draw the card anyway.
+    if (!running) return 0;
+    if (ok) {
+      // Every entry for this URL (one per decode ceiling) may retry now.
+      SDL_LockMutex(mtx);
+      for (i = 0; i < nMax; i++)
+        if (items[i].state == FAILED && !strcmp(items[i].path, url)) {
+          items[i].failures = 0;
+          items[i].tryIn = 0;
+        }
+      SDL_UnlockMutex(mtx);
+    }
+  }
 }
 
 // --- THE PREFETCH LANE -------------------------------------------------------
@@ -1035,6 +1141,13 @@ int tex_start(int max_items) {
     // The prefetch lane: one thread, parked on the socket like the others. See
     // threadPrefetch for why it is one and not four.
     thrPre = SDL_CreateThread(threadPrefetch, "nv-warm", NULL);
+    mtxSlow = SDL_CreateMutex(); condSlow = SDL_CreateCond();
+    // DETACHED, unlike every other thread here: one may be two minutes into a
+    // download, and shutdown must not wait for it. See threadSlow's exit checks.
+    for (k = 0; k < NV_TEX_SLOW_THREADS; k++) {
+      SDL_Thread *t = SDL_CreateThread(threadSlow, "nv-slow", NULL);
+      if (t) SDL_DetachThread(t);
+    }
     thr = thrs[0]; }
   return thr != NULL;
 }
@@ -1051,6 +1164,14 @@ void tex_shutdown(void) {
     SDL_LockMutex(mtxPre);
     SDL_CondBroadcast(condPre);
     SDL_UnlockMutex(mtxPre);
+  }
+  // The slow lane is detached and never waited for; this only wakes the idle ones
+  // so they see `running` and leave. Its mutex is never destroyed, because one of
+  // them may still be downloading.
+  if (mtxSlow) {
+    SDL_LockMutex(mtxSlow);
+    SDL_CondBroadcast(condSlow);
+    SDL_UnlockMutex(mtxSlow);
   }
   // Wait for BOTH threads. Waiting only for the first left the other decoding into
   // items[] while the loop below was already freeing the surfaces.

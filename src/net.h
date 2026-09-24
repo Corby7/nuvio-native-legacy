@@ -18,6 +18,11 @@ char *net_download(const char *url, int seconds);
 // would lie.
 char *net_download_bin(const char *url, int seconds, long *n);
 
+// 1 when THIS thread's last net_download* call failed because it ran out of
+// time, as opposed to a refusal or a dead host. A server that answers slowly is
+// worth asking again with more patience; one that refuses is not.
+int net_timed_out(void);
+
 // With headers. `headers` is a NULL-terminated array of ready-made lines
 // ("Authorization: Bearer x"). It exists because of Trakt, which requires the
 // token and the application key in headers — there is no way to pass them in

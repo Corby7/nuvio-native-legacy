@@ -438,6 +438,10 @@ static char *net_download_internal(const char *url, int seconds, long *size,
   return net_download_internal2(url, seconds, size, header, NULL, cap);
 }
 
+// Whether this thread's last download ran out of time — see net_timed_out.
+static __thread int timedOut;
+int net_timed_out(void) { return timedOut; }
+
 static char *net_download_internal2(const char *url, int seconds, long *size,
                                   const char *const *header, int *status,
                                   long cap) {
@@ -446,6 +450,7 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   int r, own;
   double t0;
   if (status) *status = 0;
+  timedOut = 0;
   if (!url || !*url || !openHandle()) return NULL;
   b.cap = cap;
   c = handleTake(url, &own);
@@ -475,6 +480,7 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   t0 = timingStart();
   r = curl_perform(c);
   timingEnd(c, t0, url);
+  timedOut = r == 28;   // CURLE_OPERATION_TIMEDOUT
   // THE HTTP STATUS, and not just libcurl's error code. MEASURED: on one pass
   // through the home the log had 93 "decode failed" and ZERO "[net] failure" —
   // that is, curl_easy_perform returned 0 (TRANSPORT success) for responses
