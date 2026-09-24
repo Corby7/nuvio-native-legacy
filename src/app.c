@@ -224,6 +224,55 @@ static void openByIndex(int i) {
   openTitle(&it);
 }
 
+// A title with NO CARD ON SCREEN to grow out of — a "See all" grid that is
+// leaving, the hold menu over a grid. It comes in centred, the size of a poster;
+// the detail covers the screen straight afterwards anyway.
+static void openCentred(int i) {
+  const CatItem *ci = cat_item(i);
+  HomeItem it;
+  memset(&it, 0, sizeof it);
+  it.index_ = i;
+  it.rect = (GfxRect){ NV_SCREEN_W * 0.5f - 124.0f, NV_SCREEN_H * 0.5f - 186.0f,
+                       248.0f, 372.0f };
+  it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
+  it.title = ci ? ci->title : NULL;
+  it.genre = ci ? ci->genre : NULL;
+  it.meta  = ci ? ci->meta : NULL;
+  detail_open(&it, 0);
+}
+
+// ONE TITLE OPENS PER FRAME, AND IN ONE PLACE. A title can be asked for from
+// eight roads — a card on any screen, a credit or "More like this" on the title
+// page, a meta fetch landing, the hold menu, a grid — and each used to call
+// detail_open on the spot, at its own point in app_update. Two landing in the
+// same frame (a meta fetch from an earlier press arriving as the viewer presses
+// another card) opened both, and since the title page now remembers the title
+// it is replaced from, the first became a stray step on the Back stack.
+//
+// Every road now only states what it wants; runOpen carries out the last
+// request of the frame, which is the freshest press. How the title arrives
+// (out of the card, plain, centred) is part of the request, because only the
+// road knows whether it has a card on screen.
+typedef enum { OPEN_BY_INDEX, OPEN_CARD, OPEN_CENTRED } OpenHow;
+static struct { int pending; OpenHow how; int index; HomeItem card; } wantOpen;
+static void requestOpen(OpenHow how, int index, const HomeItem *card) {
+  if (wantOpen.pending && wantOpen.index != index)
+    printf("[app] open of %d superseded by %d\n", wantOpen.index, index);
+  wantOpen.pending = 1;
+  wantOpen.how = how;
+  wantOpen.index = index;
+  if (card) wantOpen.card = *card;
+}
+static void runOpen(void) {
+  if (!wantOpen.pending) return;
+  wantOpen.pending = 0;
+  switch (wantOpen.how) {
+    case OPEN_CARD:    openTitle(&wantOpen.card);    break;
+    case OPEN_CENTRED: openCentred(wantOpen.index);  break;
+    default:           openByIndex(wantOpen.index);  break;
+  }
+}
+
 // Builds the id the addons expect. For a series it is
 // "tt1234567:season:episode"; without those two numbers the answer comes back
 // EMPTY with HTTP 200, and that is why addons_fetch hard-coded ":1:1" — which
@@ -421,13 +470,13 @@ static void markWatchedIfRequested(void) {
 
 static void swapOfTitleIfRequested(void) {
   int target = detail_requested_open();
-  if (target >= 0) { openByIndex(target); return; }
+  if (target >= 0) { requestOpen(OPEN_BY_INDEX, target, NULL); return; }
   // A title that came from OUTSIDE the catalogue: discovery fetched the meta on a
   // thread and says so here once it has gone in. Opening it on the network thread
   // would mean touching the screen from another thread; this is the only place
   // that opens a title.
   { int new = disc_title_ready();
-    if (new >= 0) openByIndex(new); }
+    if (new >= 0) requestOpen(OPEN_BY_INDEX, new, NULL); }
 }
 
 void app_update(float dt, Uint32 now) {
@@ -575,6 +624,8 @@ void app_update(float dt, Uint32 now) {
   // does not want to change tab.
   if (menu_requested_swap()) {
     invalidateProfile();
+    // A title asked for this frame belongs to the profile being left.
+    wantOpen.pending = 0;
     screen = SCREEN_CHOICE_PROFILE;
     profilesel_start();
     return;
@@ -598,24 +649,27 @@ void app_update(float dt, Uint32 now) {
     int idx = -1;
     HomeItem it;
     if (screen == SCREEN_HOME && home_requested_open()) {
-      if (home_item_focused(&it)) openTitle(&it);
+      if (home_item_focused(&it)) requestOpen(OPEN_CARD, it.index_, &it);
     } else if (screen == SCREEN_SEARCH && search_requested_open(&idx)) {
-      if (search_item_focused(&it)) openTitle(&it); else openByIndex(idx);
+      if (search_item_focused(&it)) requestOpen(OPEN_CARD, it.index_, &it);
+      else requestOpen(OPEN_BY_INDEX, idx, NULL);
     } else if (screen == SCREEN_DISCOVER && dui_requested_open(&idx)) {
-      if (dui_item_focused(&it)) openTitle(&it); else openByIndex(idx);
+      if (dui_item_focused(&it)) requestOpen(OPEN_CARD, it.index_, &it);
+      else requestOpen(OPEN_BY_INDEX, idx, NULL);
     } else if (screen == SCREEN_LIBRARY && library_requested_open(&idx)) {
-      if (library_item_focused(&it)) openTitle(&it); else openByIndex(idx);
+      if (library_item_focused(&it)) requestOpen(OPEN_CARD, it.index_, &it);
+      else requestOpen(OPEN_BY_INDEX, idx, NULL);
     } else if (screen == SCREEN_PROFILE) {
       ProfileHighlight p;
       if (profile_item_selected(&p) && p.id[0]) {
         idx = cat_index_by_imdb(p.id);
-        if (idx >= 0) openByIndex(idx); else disc_request_title(p.id);
+        if (idx >= 0) requestOpen(OPEN_BY_INDEX, idx, NULL); else disc_request_title(p.id);
       }
     } else if (screen == SCREEN_SOCIAL) {
       SocialItemSelected s;
       if (social_item_selected(&s) && s.imdb[0]) {
         idx=cat_index_by_imdb(s.imdb);
-        if(idx>=0)openByIndex(idx); else disc_request_title(s.imdb);
+        if (idx >= 0) requestOpen(OPEN_BY_INDEX, idx, NULL); else disc_request_title(s.imdb);
       }
     }
   }
@@ -934,18 +988,9 @@ void app_update(float dt, Uint32 now) {
     // it was opened from.
     if (i >= 0 && screen == SCREEN_HOME && home_item_focused(&it) &&
         it.index_ == i && it.art) {
-      openTitle(&it);
+      requestOpen(OPEN_CARD, i, &it);
     } else if (i >= 0) {
-      const CatItem *ci = cat_item(i);
-      memset(&it, 0, sizeof it);
-      it.index_ = i;
-      it.rect = (GfxRect){ NV_SCREEN_W * 0.5f - 124.0f, NV_SCREEN_H * 0.5f - 186.0f,
-                           248.0f, 372.0f };
-      it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
-      it.title = ci ? ci->title : NULL;
-      it.genre = ci ? ci->genre : NULL;
-      it.meta   = ci ? ci->meta : NULL;
-      detail_open(&it, 0);
+      requestOpen(OPEN_CENTRED, i, NULL);
     } }
   // RESUME / START FROM THE BEGINNING, from the hold menu on a card with progress.
   // The same road Play takes on the title screen, without the title screen: the
@@ -977,23 +1022,11 @@ void app_update(float dt, Uint32 now) {
     if (ctx_requested_seeall(&c) && c.base[0] && c.catId[0])
       seeall_open(c.base, c.kind, c.catId, c.title); }
   // A title chosen in the grid: opens the detail, as though it had come from the home.
+  // The grid has no source rectangle for the transition to grow out of: the card
+  // is on the screen that is leaving.
   { int idx = seeall_requested_open();
-    if (idx >= 0) {
-      const CatItem *ci = cat_item(idx);
-      // The grid has no source rectangle for the transition to grow out of: the
-      // card is on the screen that is leaving. It comes in centred, the size of a
-      // poster — the detail covers the screen straight afterwards anyway.
-      HomeItem it;
-      memset(&it, 0, sizeof it);
-      it.index_ = idx;
-      it.rect = (GfxRect){ NV_SCREEN_W * 0.5f - 124.0f, NV_SCREEN_H * 0.5f - 186.0f,
-                           248.0f, 372.0f };
-      it.art   = ci ? (ci->poster[0] ? ci->poster : ci->backdrop) : NULL;
-      it.title = ci ? ci->title : NULL;
-      it.genre = ci ? ci->genre : NULL;
-      it.meta   = ci ? ci->meta : NULL;
-      detail_open(&it, 0);
-    } }
+    if (idx >= 0) requestOpen(OPEN_CENTRED, idx, NULL); }
+  runOpen();
   switch (screen) {
     case SCREEN_SEARCH:      search_update(dt, now);      break;
     case SCREEN_DISCOVER:   dui_update(dt, now);         break;
