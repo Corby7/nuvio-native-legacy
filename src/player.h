@@ -15,6 +15,12 @@
 //
 // With NULL, it waits for the source query; it does not fake a playback.
 void player_open(int indexCatalog, const char *url);
+// Opens a TRAILER of title `catalogIndex`: the same screen, but the file is not
+// the title — no progress, no Trakt scrobble, no resume, no next episode, and
+// no Sources or subtitles (those would be the film's). `name` goes under the
+// title ("Official Trailer"). Back returns to wherever it was opened from.
+void player_open_trailer(int indexCatalog, const char *url, const char *name);
+int  player_is_trailer(void);
 void player_set_episode(int season, int episode);
 // PLAY FROM THE START: forgets the resume position player_set_episode just took
 // from the item, so the file opens at 0. Call it after player_set_episode, which

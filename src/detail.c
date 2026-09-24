@@ -37,7 +37,8 @@
 #include "layout.h"
 #include "catalog.h"
 #include "trakt.h"   // trakt_active(), for the library tooltip's wording
-#include "video.h"   // video_launch_youtube(), for the trailer cards
+#include "video.h"   // video_launch_youtube(), the trailers' fallback
+#include "trailers.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -172,6 +173,8 @@ void detail_regions(void) {
 // Index 0 is the primary, which never has a tooltip, and is simply never raised.
 static float tipA[N_BUTTONS];
 static int  reqPlay = 0, reqMark = 0, reqSources = 0;
+// Which IMDb trailer OK asked for, -1 for none. The router plays it (app.c).
+static int  reqTrailer = -1;
 // Mark as WATCHED. Separate from reqMark, which is "add to the list".
 static int  reqWatched = 0;
 static int  reqOfStart = 0;         // the "Play from the start" button
@@ -701,7 +704,9 @@ static void openState(const HomeItem *it, int shared) {
   // drawing: the tabs only appear once the data arrives, and requesting while drawing
   // would make the tab bar appear with the title already on screen.
   { const CatItem *ci = cat_item(idx);
-    if (ci && ci->imdb[0]) extras_request(ci->imdb, isSeries(), ci->tmdb); }
+    if (ci && ci->imdb[0]) extras_request(ci->imdb, isSeries(), ci->tmdb);
+    // IMDb's trailers, which play in the app. Not gated on Trakt like the above.
+    if (ci && ci->imdb[0]) trailers_request(ci->imdb); }
   // The marked tab has to be the season the episodes carry. Always starting at 0, a
   // series whose first loaded episode is from season 4 opened with "Season 1" lit —
   // the label contradicted the list just below it.
@@ -1116,6 +1121,23 @@ static float heightSection(int r) {
   return 0.0f;
 }
 
+// THE TRAILERS ON THIS PAGE: IMDb's when it has any for THIS title, since they
+// play in the app; otherwise TMDB's YouTube list, which opens the YouTube app.
+// The id check keeps a list that belongs to the previous title off the page for
+// the moment before the new request clears it.
+static int inAppTrailers(void) {
+  const CatItem *ci = cat_item(idx);
+  return trailers_n() > 0 && ci &&
+         !strncmp(ci->imdb, trailers_title(), strlen(trailers_title()));
+}
+static int nTrailerCards(void) {
+  return inAppTrailers() ? trailers_n() : extras_n_trailers();
+}
+static void playTrailerCard(int i) {
+  if (inAppTrailers()) { if (i < trailers_n()) reqTrailer = i; }
+  else if (i < extras_n_trailers()) video_launch_youtube(extras_trailer_yt(i));
+}
+
 static int sectionN(int r) {
   const CatItem *ci = cat_item(idx);
   switch (r) {
@@ -1178,7 +1200,7 @@ static int sectionN(int r) {
     // no tab and no section there was no way to reach it.
     case SEC_TRAILERS:
       if (isSeries()) return 0;
-      return extras_n_trailers();
+      return nTrailerCards();
     case SEC_RELATED: {
       int n;
       if (isSeries()) return 0;
@@ -1233,7 +1255,7 @@ static int sectionN(int r) {
 // It arrives with the extras, seconds after the page opens, so the row can grow by
 // one while you look at it; the focus never sits on it before it exists.
 static int hasTrailerButton(void) {
-  return settings_button_trailer() && extras_n_trailers() > 0;
+  return settings_button_trailer() && (inAppTrailers() || extras_n_trailers() > 0);
 }
 static int nButtons(void) {
   return (isSeries() ? 3 : 4) + hasTrailerButton();
@@ -1419,17 +1441,15 @@ void detail_event(const SDL_Event *e) {
       } else if (action == ACTION_WATCHED) {
         reqWatched = 1;
       } else if (action == ACTION_TRAILER) {
-        // The first one: extras.c keeps only Trailers and Teasers, in TMDB's order.
-        video_launch_youtube(extras_trailer_yt(0));
+        // IMDb's main trailer in the app; failing that, TMDB's first in YouTube.
+        playTrailerCard(0);
       } else {
         reqSources = 1;
       }
     } else if (focus.row == SEC_TRAILERS) {
-      // OK PLAYS THE TRAILER in the TV's own YouTube app. This port has no YouTube
-      // player; handing the id to the app that does is the only route that keeps
-      // working when YouTube changes its stream protection (see video.h).
-      if (focus.column < extras_n_trailers())
-        video_launch_youtube(extras_trailer_yt(focus.column));
+      // OK PLAYS THE TRAILER: IMDb's in the app, or YouTube's in the TV's YouTube
+      // app when IMDb had none (see trailers.h and video.h).
+      playTrailerCard(focus.column);
     } else if (focus.row == SEC_RELATED) {
       // A FILM: "More like this" is a section of its own. The same destination as the
       // series path — it opens from the catalogue when we already have meta, otherwise
@@ -2036,7 +2056,9 @@ static const char *tooltipOf(int action) {
     // from the play button. This port keeps it, so the label is this port's, written
     // to the same shape as the others.
     case ACTION_SOURCES: return "Sources";
-    case ACTION_TRAILER: return "Play trailer";
+    // Saying so when the trailer LEAVES the app: YouTube opens over Nuvio.
+    case ACTION_TRAILER:
+      return inAppTrailers() ? "Play trailer" : "Play trailer on YouTube";
   }
   return NULL;
 }
@@ -3323,7 +3345,7 @@ static void drawTabInfo(float x, float y, int i, float f, float a) {
 // It takes focus, and OK hands the video to the TV's YouTube app: this port has no
 // YouTube player of its own (see video_launch_youtube in video.h).
 static void drawTrailer(float x, float y, int c, float a) {
-  const char *mini = extras_trailer_thumb(c);
+  const char *mini = inAppTrailers() ? trailers_thumb(c) : extras_trailer_thumb(c);
   GfxRect v = { x, y, NV_DETF_TR_W, NV_DETF_TR_VIDEO_H };
   float radius = NV_DETF_TR_RADIUS / NV_DETF_TR_VIDEO_H;   // a fraction of the SMALLER side
   GLuint tex = (mini && mini[0]) ? tex_get_width(mini, NV_DETF_TR_W) : 0;
@@ -3345,10 +3367,20 @@ static void drawTrailer(float x, float y, int c, float a) {
     gfx_color(disk, 0.5f, 0.0f, 0.0f, 0.0f, a * 0.48f);
     gfx_rect(tri, 0, GFX_PLAY, 0, 0, 0, 0.0f, 1, 1, 1, a); }
 
-  { TxtLine ln = txt_line_trim(TXT_ROW_TITLE, extras_trailer_name(c),
-                                  245, 248, 255, 255, NV_DETF_TR_W);
+  { TxtLine ln = txt_line_trim(TXT_ROW_TITLE,
+                               inAppTrailers() ? trailers_name(c) : extras_trailer_name(c),
+                               245, 248, 255, 255, NV_DETF_TR_W);
     txt_draw_alpha(ln, x, y + NV_DETF_TR_NAME_DY, a); }
-  { TxtLine lt = txt_line(TXT_CAPTION2, "YouTube", 179, 179, 179, 255);
+  // The grey line says what OK will do: the kind and length for a trailer that
+  // plays here, "YouTube" for one that opens the YouTube app.
+  { char kind[40] = "YouTube";
+    if (inAppTrailers()) {
+      int sec = trailers_seconds(c);
+      if (sec > 0) snprintf(kind, sizeof kind, "%s \xc2\xb7 %d:%02d",
+                            trailers_kind(c), sec / 60, sec % 60);
+      else snprintf(kind, sizeof kind, "%s", trailers_kind(c));
+    }
+    TxtLine lt = txt_line(TXT_CAPTION2, kind, 179, 179, 179, 255);
     txt_draw_alpha(lt, x, y + NV_DETF_TR_KIND_DY, a * 0.9f); }
 }
 
@@ -4365,6 +4397,7 @@ void detail_draw(Uint32 now) {
 
 int detail_index(void) { return idx; }
 int detail_requested_play(void) { int v = reqPlay; reqPlay = 0; return v; }
+int detail_requested_trailer(void) { int v = reqTrailer; reqTrailer = -1; return v; }
 int detail_requested_open(void) { int v = reqOpen; reqOpen = -1; return v; }
 int detail_requested_watched(void) { int v = reqWatched; reqWatched = 0; return v; }
 int detail_requested_mark(void)     { int v = reqMark;     reqMark = 0;     return v; }

@@ -34,6 +34,7 @@
 #include "social.h"
 #include "settings.h"
 #include "player.h"
+#include "trailers.h"
 #include "streams.h"
 #include "sourcepref.h"
 #include "extras.h"
@@ -622,6 +623,15 @@ void app_update(float dt, Uint32 now) {
       }
       waitingSource = 1;
     }
+    // A TRAILER: IMDb's MP4 is the URL already, so there is no source search and
+    // `waitingSource` is left alone. Back closes the player onto this page.
+    { int t = detail_requested_trailer();
+      if (t >= 0 && waitingSource != 2 && !player_is_open() && trailers_url(t)[0]) {
+        GfxRect from = { 0, 0, 0, 0 };
+        player_open_trailer(detail_index(), trailers_url(t), trailers_name(t));
+        detail_logo_rect(&from);
+        player_open_from_detail(from);
+      } }
     if (detail_requested_mark()) {
       // Toggles on Trakt AND in the local mirror. The starting state comes from
       // ci->inList, which discovery filled from the real watchlist; without it

@@ -353,6 +353,13 @@ static int   waitingSource = 0;   // opened with no URL, waiting for the addon t
 static float posSeg = 0.0f;
 static float durationSeg = PLR_DURATION_DEFAULT;
 
+// A TRAILER SESSION (player_open_trailer). The same screen and pipeline as a
+// film, minus everything that treats the file as the title itself: no progress
+// saved, no Trakt scrobble, no resume, no next episode, no skip-intro, no
+// Sources or subtitles (both would be the FILM's). `trailerName` is the line
+// under the title.
+static int  trailerMode;
+static char trailerName[96];
 static char lineEp[220];          // "T1, E1 · <sinopse curta>", montada na abertura
 
 static const CatItem *item(void) { return cat_item(idx); }
@@ -435,8 +442,11 @@ static void urlHost(const char *url, char *dst, size_t n) {
 
 static void reportFailure(const char *stage, const char *reason, int notify) {
   const CatItem *c = item();
-  const Stream *st = stream_n() > 0 ? stream_item(stream_current()) : NULL;
+  // A trailer's source is IMDb's MP4, not the film's stream list: describing the
+  // film's current source here would blame a file that was never opened.
+  const Stream *st = (stream_n() > 0 && !trailerMode) ? stream_item(stream_current()) : NULL;
   char key[160], line[1400], who[200], src[600] = "no source chosen";
+  if (trailerMode) snprintf(src, sizeof src, "trailer: %s (IMDb MP4)", trailerName);
   snprintf(key, sizeof key, "%s|%s|%d", stage, reason, stream_current());
   if (!strcmp(key, failLast)) return;
   snprintf(failLast, sizeof failLast, "%s", key);
@@ -493,6 +503,7 @@ int player_requested_next(int *t,int *e) {
 }
 const CatEp *player_next_episode(void) {
   const CatEp *best=NULL;
+  if (trailerMode) return NULL;
   for(int i=0;i<cat_n_episodes(idx);i++) {
     const CatEp *p=cat_episode(idx,i);if(!p)continue;
     if(p->season<epT||(p->season==epT&&p->episode<=epE))continue;
@@ -507,6 +518,7 @@ void player_set_episode(int t, int e) {
   const CatItem *c = item();
   epT = t; epE = e; lineEp[0] = 0;
   resumePct = 0;
+  if (trailerMode) { epT = epE = 0; intro_off(); return; }
   if (c && c->progress > 0 && c->progress < 90 &&
       (strcmp(c->kind,"series") || (t==c->season && e==c->episode))) resumePct=c->progress;
   if (!c || strcmp(c->kind, "series")) { epT = epE = 0; intro_off(); return; }
@@ -848,7 +860,7 @@ void player_aspect_cycle(void) {
   toastAte = SDL_GetTicks() + PLR_TOAST_MS;
 }
 
-void player_open(int indexCatalog, const char *url) {
+static void openSession(int indexCatalog, const char *url) {
   int n = cat_n(); if (n < 1) n = 1;
   idx = ((indexCatalog % n) + n) % n;
   is_open = 1; exiting = 0; requestedExit = 0; barFocus = 0;
@@ -896,6 +908,24 @@ void player_open(int indexCatalog, const char *url) {
     player_error_source();
   }
 }
+
+void player_open(int indexCatalog, const char *url) {
+  trailerMode = 0; trailerName[0] = 0;
+  openSession(indexCatalog, url);
+}
+
+void player_open_trailer(int indexCatalog, const char *url, const char *name) {
+  trailerMode = 1;
+  snprintf(trailerName, sizeof trailerName, "%s", name && name[0] ? name : "Trailer");
+  // A progressive MP4 with no Dolby Vision. Both are the LAST SOURCE's claims
+  // otherwise, and a DV claim left over from a film costs the trailer its picture
+  // for NV_DV_DEADLINE_MS.
+  video_set_dv(0);
+  video_set_mp4(1);
+  openSession(indexCatalog, url);
+}
+
+int player_is_trailer(void) { return is_open && trailerMode; }
 
 int player_is_open(void)    { return is_open; }
 
@@ -975,7 +1005,7 @@ void player_shutdown(void) {
   // Save BEFORE stopping: video_stop unloads the pipeline and the position goes with
   // it. A title watched to the end counts as watched in full — going back to a card
   // saying "2 min left" when it has actually finished is worse than rounding.
-  if (hasVideo && video_ready() && durationSeg > 1.0f) {
+  if (hasVideo && video_ready() && durationSeg > 1.0f && !trailerMode) {
     int done = watchedToEnd(posSeg, durationSeg);
     float pos = done ? durationSeg : posSeg;
     const CatItem *ci = cat_item(idx);
@@ -1035,10 +1065,10 @@ static int rowButtons(int *out) {
   int n = 0;
   out[n++] = PLR_PLAY;
   if (epT > 0 && player_next_episode()) out[n++] = PLR_NEXT;
-  out[n++] = PLR_CC;
+  if (!trailerMode) out[n++] = PLR_CC;
   out[n++] = PLR_AUDIO;
   if (epT > 0) out[n++] = PLR_EPISODES;
-  out[n++] = PLR_SOURCES;
+  if (!trailerMode) out[n++] = PLR_SOURCES;
   out[n++] = PLR_ASPECT;
   out[n++] = PLR_STATS;
   return n;
@@ -1534,7 +1564,7 @@ static void reportPlayback(Uint32 now) {
   char id[64];
   int state = playing ? 1 : 0;
   if (!hasVideo || !video_ready() || !startImage || durationSeg <= 1.0f ||
-      waitingSource || errorSource) return;
+      waitingSource || errorSource || trailerMode) return;
   if (state != heldState) { heldState = state; heldSince = now; }
   if (state != reported && now - heldSince >= PLR_REPORT_HOLD_MS) {
     if (traktId(id, sizeof id)) {
@@ -1688,7 +1718,8 @@ void player_update(float dt, Uint32 now) {
   // mediaId, and selecting one of the FILE's tracks would be dropped without a
   // word. With no pipeline at all (the Mac) there is no frame to wait for, and
   // the addon's subtitle is drawn by our own overlay anyway.
-  if (!waitingSource && !errorSource && (startImage || !hasVideo)) tracks_auto(now);
+  if (!waitingSource && !errorSource && (startImage || !hasVideo) && !trailerMode)
+    tracks_auto(now);
   reportPlayback(now);
 
   // THE FILE'S OWN SUBTITLE IS LIFTED CLEAR of whatever takes the bottom of the
@@ -2702,6 +2733,13 @@ static void drawPlayer(Uint32 now) {
       txt_draw_alpha(lc, cx, yMetaBase, a * 0.55f);
       if (ln.tex) txt_draw_alpha(ln, cx + lc.w + gap, yMetaBase, a * 0.92f);
       yMetaBase -= PLR_META_GAP; }
+  } else if (trailerMode) {
+    // The trailer's own name where a series puts its episode, in the same voice.
+    TxtLine ln = txt_line_trim(TXT_PLR_EPNAME, trailerName, 255, 255, 255, 255,
+                               cw * .67f);
+    yMetaBase -= ln.h;
+    txt_draw_alpha(ln, cx, yMetaBase, a * 0.92f);
+    yMetaBase -= PLR_META_GAP;
   }
 
   // THE FILM'S NAME, IN TEXT. Here the player used to prefer the title's LOGO when

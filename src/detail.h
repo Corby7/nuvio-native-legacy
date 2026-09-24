@@ -50,6 +50,8 @@ int  detail_index(void);
 // The season and episode in focus (1 = there is an episode; 0 = a title with none).
 int  detail_ep_focus(int *season, int *episode);
 int  detail_requested_play(void);   // consumes the request
+// The IMDb trailer (trailers.h index) OK asked to play, -1 for none; consumes it.
+int  detail_requested_trailer(void);
 
 // The index of the title the screen asked to OPEN in place of the current one, or
 // -1. It consumes the request. It comes from two places: a credit in an actor's
