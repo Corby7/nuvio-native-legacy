@@ -39,6 +39,7 @@
 #include "trakt.h"   // trakt_active(), for the library tooltip's wording
 #include "video.h"   // video_launch_youtube(), the trailers' fallback
 #include "trailers.h"
+#include "tabs.h"    // the Library's underlined tab strip, at page size
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -73,6 +74,10 @@
 #define COM_CARD_H   466.0f
 #define COM_PAD       28.0f
 #define COM_CARD_GAP  25.0f   // MEDIDO
+// The comment card's surface and corner. Opaque, one step up from the page's
+// #0D0D0D, and the poster's corner so the page has one radius.
+#define COM_SURFACE   0.125f
+#define COM_RADIUS    24.0f
 
 #define N_SECTIONS    8
 #define N_CAST    6
@@ -124,26 +129,35 @@ static int pendingMeta(void);
 static int pendingExtras(void);
 static int holdFor(int have, int pending);
 
-// A person's card over the title screen. It is not one more `level` because it is
-// not a state of the SAME page: it is another screen, which appears and leaves whole.
-static int  personIs_open;
-static int  personFocus;
-// The first visible ROW of the filmography. The grid has 6 per row and two rows fit
-// on screen; without this the rest of the credits was cut off with no warning.
-static int  personLine;
+// THE CAST PAGE's state. `castSel` is the face the person column describes: the
+// focused row while the list has focus, and the last one focused when it does not,
+// so the column does not empty the moment the focus goes up to the tabs or across
+// to the posters. `castAlso` is the focus being IN the "Also in" row, at
+// `alsoFocus`; the list keeps its column underneath, so LEFT out of the row lands
+// back on the same face.
+static int  castSel, castAlso, alsoFocus;
+static float alsoScroll, velAlso;
+// Each "Also in" poster's focus spring, which grows it the way a home row does.
+static float alsoAnim[PES_MAX];
+// The same for the "More like this" posters (drawRelated shows at most 7).
+static float relAnim[8];
+// BACK TO THE PREVIOUS TITLE fades the page in from the ground, 0..1, rather than
+// replaying the opening. While it runs every spring on the page SNAPS (`snap` in
+// detail_update), so the restored page arrives already scrolled to the card that
+// was pressed instead of flying in and then scrolling down from the hero to it.
+static float popFade = 1.0f;
+#define NV_DET_POP_FADE_MS 220.0f
+// The dwell before a profile is asked for (NV_DETCP_DWELL_MS): the face it is
+// timing and when the focus landed on it.
+static long  castAsked;
+static int   castSelSeen = -1;
+static Uint32 castSelAt;
 static int  reqOpen = -1;
 // The focus INSIDE the "More like this" tab, which is a vertical list of its own and
 // not one of focus.c's horizontal rows.
 static int  relFocus;
 // The season chosen in the per-episode ratings panel (an index into extras).
 static int  ratTemp;
-#define PES_PHOTO_W   280.0f
-#define PES_PHOTO_H   420.0f
-#define PES_COL_X    (NV_DETP_X + PES_PHOTO_W + 56.0f)
-#define PES_CARD_W   212.0f
-#define PES_CARD_H   318.0f
-#define PES_CARD_GAP  32.0f
-#define PES_PER_LINE  6
 
 static int  button = 0;      // the focused button on the hero
 // --- the region recorder, see detail.h --------------------------------------
@@ -212,6 +226,8 @@ static void syncColumns(void);
 static int seasonMenuOpen = 0;
 // The unfocused episode rows' opacity, NV_DETEP_DIM or NV_DETEP_REST (see update).
 static float epListA = NV_DETEP_REST;
+// The same for the cast list's rows, NV_DETCP_DIM or NV_DETCP_REST.
+static float castListA = NV_DETCP_REST;
 static int seasonMenuFocus = 0;
 // Where the anchor landed this frame. The list is drawn in a pass of its own after
 // every section, because it hangs over the episode row below it — drawn in place it
@@ -221,6 +237,10 @@ static GfxRect seasonMenuAt;
 // puts under "Trakt ratings". On a film it does not exist and it stays at 0.
 static int commentEp = 0;
 static int tabInfo = 0;              // the chosen information tab
+// The tab strip's lit spring: 1 while the focus is on it (tab_page_draw's `lit`).
+static float tabsLit;
+// How far the backdrop has gone to black under the cast page, 0..1.
+static float castDark;
 
 // The web app's four sections, with the GROUP's top in document coordinates — and
 // not a stack of summed heights, which was the Apple TV app's model. The positions
@@ -291,9 +311,10 @@ static float docEnd = NV_DETP_P3 + NV_SCREEN_H;
 static const char *headerOf(int r) {
   if (isSeries()) return NULL;
   switch (r) {
-    case SEC_CAST:   return "Cast";
+    // The cast page draws its own "CAST  19 credited" line.
+    case SEC_CAST:   return NULL;
     case SEC_TRAILERS:     return "Trailers";
-    case SEC_RELATED: return "Recommendations";
+    case SEC_RELATED: return "More like this";
     // No section header: the section itself already opens with "trakt Comments" and
     // the subtitle "Trakt ratings". With both, TWO stacked titles came out saying the
     // same thing.
@@ -319,12 +340,102 @@ static void goToSeason(int c) {
   if (focus.row == SEC_EPISODES) focus.column = 0;
 }
 
+// THE CAST, from TMDB's full list when it has arrived and from the catalogue's six
+// until then. Both are in TMDB's billing order, so the list GROWS under the focus
+// rather than reshuffling: the face you are on stays the face you are on.
+static long titleTmdb(void) {
+  const CatItem *ci = cat_item(idx);
+  return ci ? ci->tmdb : 0;
+}
+static int castFull(void) { return cast_n(titleTmdb()) > 0; }
+// Whether the SEC_CAST slot is showing the cast page: always on a film, and on a
+// series while "Cast & crew" is the chosen tab. Defined with the tabs.
+static int castPageOn(void);
+// "More like this"'s focused card; defined with its drawing.
+static int relIndex(void);
+static int castN(void) {
+  const CatItem *ci = cat_item(idx);
+  int n = castFull() ? cast_n(titleTmdb()) : (ci ? ci->nCast : 0);
+  return n < N_ITEMS ? n : N_ITEMS;
+}
+static const char *castName(int i) {
+  const CatItem *ci = cat_item(idx);
+  if (castFull()) return cast_name(i);
+  return (ci && i >= 0 && i < ci->nCast) ? ci->cast[i].name : "";
+}
+static const char *castRole(int i) {
+  const CatItem *ci = cat_item(idx);
+  if (castFull()) return cast_role(i);
+  return (ci && i >= 0 && i < ci->nCast) ? ci->cast[i].role : "";
+}
+static const char *castPhoto(int i) {
+  const CatItem *ci = cat_item(idx);
+  if (castFull()) return cast_photo(i);
+  return (ci && i >= 0 && i < ci->nCast) ? ci->cast[i].photo : "";
+}
+static long castPerson(int i) {
+  const CatItem *ci = cat_item(idx);
+  if (castFull()) return cast_person(i);
+  return (ci && i >= 0 && i < ci->nCast) ? ci->cast[i].tmdb : 0;
+}
+
 // A film with no cast yet, with the meta in flight. It is the only case where an
 // empty section takes up height (see recalcLayout) and gets a skeleton.
 static int castLoading(void) {
-  const CatItem *ci = cat_item(idx);
-  return !isSeries() && ci && ci->nCast == 0 && disc_episodes_loading(idx);
+  return !isSeries() && castN() == 0 && disc_episodes_loading(idx);
 }
+
+// "ALSO IN" — the focused person's filmography WITHOUT the title being looked at:
+// it is the one credit that is not news on this page. `alsoAt` maps the row's
+// position to person.c's index. Both read the person the column is showing, so they
+// answer 0 until that person's profile is in.
+static int alsoMap(int *out, int max) {
+  int i, k = 0, n;
+  long self = titleTmdb();
+  const char *kind = isSeries() ? "tv" : "movie";
+  if (!person_ready(castPerson(castSel))) return 0;
+  n = person_n_credits();
+  for (i = 0; i < n && k < max; i++) {
+    if (self > 0 && person_credit_tmdb(i) == self &&
+        !strcmp(person_credit_kind(i), kind)) continue;
+    if (out) out[k] = i;
+    k++;
+  }
+  return k;
+}
+static int alsoN(void) { return alsoMap(NULL, PES_MAX); }
+static int alsoAt(int j) {
+  int m[PES_MAX], n = alsoMap(m, PES_MAX);
+  return (j >= 0 && j < n) ? m[j] : -1;
+}
+// Opens credit `i` of the current person. What actually swaps is the router (app.c)
+// — only the request leaves here. The page is remembered with the poster that was
+// pressed, so Back from that title comes back to this row.
+static void openCredit(int i) {
+  const char *id;
+  int target;
+  if (i < 0) return;
+  id = person_credit_imdb(i);
+  target = id[0] ? cat_index_by_imdb(id) : -1;
+  if (target >= 0) reqOpen = target;
+  // Not in the catalogue: it fetches the meta and opens when it arrives. The credit
+  // almost never carries an imdb_id, so the normal route is through the TMDB id.
+  else if (id[0]) disc_request_title(id);
+  else if (person_credit_tmdb(i) > 0)
+    disc_request_title_tmdb(person_credit_tmdb(i), person_credit_kind(i));
+}
+
+// The cast page's height from its header line down. On a series it runs to page 3's
+// end; on a film it is a page of its own under the episode page's top inset.
+static float castPageH(void) {
+  return NV_SCREEN_H - (NV_DETP_EL_Y - NV_DETP_P3);
+}
+// A FILM'S CAST PAGE WEARS PAGE 3's HEAD: the "Cast & crew" strip at the episode
+// page's inset, the list where a series puts it. Without it the film's cast was the
+// one section of the page with no title — Trailers, More like this and Movie Details
+// all carry a headline — and read as though its header had gone missing. This is the
+// strip's offset above the cast page's own top (its "CAST  N credited" line).
+#define CAST_HEAD_DY (NV_DETP_EL_Y - NV_DETP_TAB_Y)
 
 static void recomputeLayout(void) {
   int r;
@@ -375,6 +486,14 @@ static void recomputeLayout(void) {
     if (sectionN(SEC_COMMENTS) > 0) {
       float end = y + heightSection(SEC_COMMENTS) + NV_DETF_PAD_END;
       if (end > docEnd) docEnd = end;
+      // Under the CAST PAGE, which fills page 3, the Trakt section is page 4: it
+      // snaps there like the pages above it, and the document is at least that page
+      // long so the snap is not clamped short of it.
+      if (castPageOn()) {
+        snapSec[SEC_COMMENTS] = NV_DETP_P3 + NV_SCREEN_H;
+        if (docEnd < NV_DETP_P3 + 2.0f * NV_SCREEN_H)
+          docEnd = NV_DETP_P3 + 2.0f * NV_SCREEN_H;
+      }
     }
     return;
   }
@@ -390,6 +509,14 @@ static void recomputeLayout(void) {
       if (sectionN(r) <= 0 && !(r == SEC_CAST && castLoading())) continue;
       if (headerOf(r)) {
         contentSec[r] = y + NV_DETF_HEADER_H + NV_DETF_HEADER_GAP;
+        y = contentSec[r];
+      }
+      // The cast page is a PAGE: its top snaps to the top of the screen, the way a
+      // series' page 3 does, instead of parking at 33% with half of it below the
+      // screen — and it carries page 3's head (CAST_HEAD_DY) above the list.
+      if (r == SEC_CAST) {
+        snapSec[r] = y;
+        contentSec[r] = y + (NV_DETP_EL_Y - NV_DETP_P3);
         y = contentSec[r];
       }
       h = heightSection(r);
@@ -420,7 +547,7 @@ typedef enum { TAB_CAST, TAB_RATINGS, TAB_RELATED, TAB_COLLECTION,
 // series measured had neither a collection nor comments). Removing the two would be
 // hiding what the app already knows how to show.
 static const char *TAB_LABEL[TAB_NFIXAS] = {
-  "Cast and Crew", "Ratings", "Recommendations", "Collection", "Comments"
+  "Cast & crew", "Ratings", "More like this", "Collection", "Comments"
 };
 
 // The open title's IMDb score, 0 when there is none.
@@ -463,6 +590,7 @@ static int tabIdOf(int c) {
     if (tabAvailable(id) && v++ == c) return id;
   return TAB_CAST;
 }
+static int castPageOn(void) { return !isSeries() || tabIdOf(tabInfo) == TAB_CAST; }
 static int nTabsInfo(void) {
   int n = 0;
   for (int id = 0; id < TAB_NFIXAS; id++) if (tabAvailable(id)) n++;
@@ -593,7 +721,7 @@ static void txt_weight(TxtLine l, float x, float y, float a, float thickness) {
 // walks back through the chain, and the remote's Back is the only way to do it.
 //
 // Each entry is where the viewer WAS on that page — the row and column, the
-// season, the tab, the cast member's filmography if it was open — so Back returns
+// season, the tab, the "Also in" poster that was pressed — so Back returns
 // to the card that was pressed, not to the top of the page. The title is kept by
 // IMDb id and not by index: a disc_rebuild while the stack is deep reorders the
 // catalogue, and an index would reopen a different film.
@@ -602,17 +730,10 @@ typedef struct {
   char imdb[32];
   int level, season, seasonByHand, tabInfo, relFocus, ratTemp, commentEp;
   Focus focus;
-  int personOpen, personFocus, personLine;
-  long personTmdb;
-  char personName[64], personPhoto[512];
+  int castSel, castAlso, alsoFocus;
 } DetailPast;
 static DetailPast history[DETAIL_HISTORY_MAX];
 static int nHistory;
-// The cast member whose filmography is open, so it can be asked for again on the
-// way back: person.c holds ONE person, and the title opened from the filmography
-// may have opened another.
-static long personTmdbNow;
-static char personNameNow[64], personPhotoNow[512];
 
 static void historyPush(void) {
   const CatItem *ci = cat_item(idx);
@@ -629,10 +750,7 @@ static void historyPush(void) {
   p->level = level; p->season = season; p->seasonByHand = seasonByHand;
   p->tabInfo = tabInfo; p->relFocus = relFocus; p->ratTemp = ratTemp;
   p->commentEp = commentEp; p->focus = focus;
-  p->personOpen = personIs_open; p->personFocus = personFocus;
-  p->personLine = personLine; p->personTmdb = personTmdbNow;
-  snprintf(p->personName, sizeof p->personName, "%s", personNameNow);
-  snprintf(p->personPhoto, sizeof p->personPhoto, "%s", personPhotoNow);
+  p->castSel = castSel; p->castAlso = castAlso; p->alsoFocus = alsoFocus;
 }
 
 static void openState(const HomeItem *it, int shared);
@@ -665,13 +783,13 @@ static int historyPop(void) {
     for (r = 0; r < FOCUS_MAX_ROWS; r++)
       focus.columnRemembered[r] = p.focus.columnRemembered[r];
     syncColumns();
-    if (p.personOpen && p.personTmdb > 0) {
-      person_request(p.personTmdb, p.personName, p.personPhoto);
-      personTmdbNow = p.personTmdb;
-      snprintf(personNameNow, sizeof personNameNow, "%s", p.personName);
-      snprintf(personPhotoNow, sizeof personPhotoNow, "%s", p.personPhoto);
-      personIs_open = 1; personFocus = p.personFocus; personLine = p.personLine;
-    }
+    // The person comes back from person.c's cache, so the poster that was pressed
+    // is there to land on. castSelSeen matches, so the dwell does not reset the row.
+    castSel = castSelSeen = p.castSel; castAlso = p.castAlso; alsoFocus = p.alsoFocus;
+    // IN PLACE, not opened: the flight is over (t = 1), and the page fades up from
+    // the ground with its springs snapping to where the viewer left it.
+    t = 1.0f; velT = 0.0f;
+    popFade = settings_animations_reduced() ? 1.0f : 0.0f;
     return 1;
   }
   return 0;
@@ -690,7 +808,9 @@ static void openState(const HomeItem *it, int shared) {
   item = *it;
   sharedOrigin = shared;
   is_open = 1; exiting = 0; level = 0; button = 0;
-  t = 0.0f; velT = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; personIs_open = 0;
+  t = 0.0f; velT = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; tabsLit = 0.0f; castDark = 0.0f; popFade = 1.0f;
+  castSel = castAlso = alsoFocus = 0; castSelSeen = -1; castAsked = 0;
+  alsoScroll = velAlso = 0.0f;
   relFocus = 0; reqOpen = -1; ratTemp = 0;
   // Every held slot starts closed for the new title, and the clock on them starts
   // HERE rather than at the first draw — a title opened from another title would
@@ -1110,7 +1230,7 @@ static float heightSection(int r) {
     // The list's WINDOW, not its rows: they scroll inside it.
     case SEC_EPISODES:  return NV_DETEP_LIST_H;
     case SEC_TABS_INFO:  return NV_DETP_TAB_H;
-    case SEC_CAST:     return NV_DETF_EL_HEIGHT;
+    case SEC_CAST:     return castPageH();
     case SEC_TRAILERS:     return NV_DETF_TR_HEIGHT;
     case SEC_RELATED: return 318.0f + 46.0f;   // poster + title/year
     // + the header: without it the next section ("Movie Details") was stacked using
@@ -1139,7 +1259,6 @@ static void playTrailerCard(int i) {
 }
 
 static int sectionN(int r) {
-  const CatItem *ci = cat_item(idx);
   switch (r) {
     // ONE COLUMN, because the row is now a single DROPDOWN and not a chip per season.
     // The seasons themselves are counted by nSeasonsOf(); this is what the D-pad walks,
@@ -1157,7 +1276,10 @@ static int sectionN(int r) {
       if (q <= 0) return 0;
       return q < N_ITEMS ? q : N_ITEMS;
     }
-    // A single tab = the bar hidden, like the web app's `tabItems.length > 1`.
+    // A SINGLE TAB STILL SHOWS, which is a departure from the web app's
+    // `tabItems.length > 1`: the owner's call. On a series with no ratings the strip
+    // is just "Cast & crew", and it is what names page 3 — without it the cast page
+    // opened with nothing above it saying what it was.
     // A FILM HAS NO TABS: the film page stacks the sections with headers of their own,
     // so the tab bar does not come in. Without this guard a film ended up with both at
     // once — the bar AND the headers.
@@ -1165,7 +1287,7 @@ static int sectionN(int r) {
       int n;
       if (!isSeries()) return 0;
       n = nTabsInfo();
-      return n > 1 ? n : 0;
+      return n;
     }
     // THE BOTTOM ROW IS THE CHOSEN TAB, not "the cast". This slot draws the cast,
     // "More like this" posters, score cards, the collection or the comments —
@@ -1188,7 +1310,9 @@ static int sectionN(int r) {
         // column is left, so the focus can land on the row and the page can scroll to
         // the cards.
         case TAB_COMMENTS:  n = isSeries() ? 2 : 1; break;
-        default:               n = (ci && ci->nCast > 0) ? ci->nCast : 0;
+        // The WHOLE cast: it is a scrolling list now, not a row that had to stop at
+        // the web's 18 before it ran off the screen.
+        default:               return castN();
       }
       return n < NV_DETF_EL_MAX ? n : NV_DETF_EL_MAX;
     }
@@ -1276,19 +1400,9 @@ static int actionIn(int n) {
 void detail_event(const SDL_Event *e) {
   if (exiting) return;
 
-  // THE PERSON'S CARD eats the events while it is open. It is another screen and not a
-  // section of this one: letting the title screen carry on responding underneath would
-  // make the arrow move two things at once.
-  //
-  // The `return` at the end of this block is what makes that hold. It already existed,
-  // but the brace that opened it enclosed the two blocks below TOO — the arrows in
-  // "Ratings" and the navigation/OK of "More like this" and "Collection" sat inside
-  // `if (personIs_open)` requiring `!personIs_open`, that is, they never ran. That is
-  // why you could neither move nor open anything in the recommendations: the code was
-  // written and was unreachable.
-  // THE SEASON LIST eats the events while it is expanded, the same way the person's
-  // card does. It is a listbox over the page: letting the arrows reach the page
-  // underneath would scroll the document behind an open menu.
+  // THE SEASON LIST eats the events while it is expanded. It is a listbox over the
+  // page: letting the arrows reach the page underneath would scroll the document
+  // behind an open menu.
   if (seasonMenuOpen) {
     if (e->type != SDL_KEYDOWN) return;
     { int n = nSeasonsOf();
@@ -1315,57 +1429,42 @@ void detail_event(const SDL_Event *e) {
       } }
   }
 
-  if (personIs_open) {
-    if (e->type != SDL_KEYDOWN) return;
-    { int n = person_n_credits();
-      switch (e->key.keysym.sym) {
-        case SDLK_LEFT:  if (personFocus > 0) personFocus--; return;
-        case SDLK_RIGHT: if (personFocus + 1 < n) personFocus++; return;
-        case SDLK_UP:
-          if (personFocus >= PES_PER_LINE) personFocus -= PES_PER_LINE;
-          if (personFocus / PES_PER_LINE < personLine) personLine--;
+  // THE CAST PAGE. The list is VERTICAL, like the episode list: UP and DOWN walk the
+  // faces and only leave past either end (UP from the first to the tabs, DOWN from
+  // the last to whatever is below). RIGHT, or OK, crosses into the focused person's
+  // "Also in" row, which is walked like a catalogue row; LEFT from its first poster,
+  // or Back, returns to the same face.
+  if (e->type == SDL_KEYDOWN && level >= 1 && focus.row == SEC_CAST &&
+      castPageOn() && castN() > 0) {
+    SDL_Keycode k = e->key.keysym.sym;
+    int nAlso = alsoN();
+    if (castAlso) {
+      switch (k) {
+        case SDLK_RIGHT: if (alsoFocus + 1 < nAlso) alsoFocus++; return;
+        case SDLK_LEFT:
+          if (alsoFocus > 0) alsoFocus--; else castAlso = 0;
           return;
-        case SDLK_DOWN:
-          if (personFocus + PES_PER_LINE < n) personFocus += PES_PER_LINE;
-          // The grid SCROLLS when the focus passes the second visible row. Two rows fit
-          // on screen; the third onwards comes in pushing.
-          if (personFocus / PES_PER_LINE > personLine + 1) personLine++;
-          return;
-        case SDLK_AC_BACK: personIs_open = 0; return;
+        case SDLK_ESCAPE: case SDLK_AC_BACK: case SDLK_BACKSPACE: case SDLK_DELETE:
+          castAlso = 0; return;
         case SDLK_RETURN:
-        case SDLK_KP_ENTER: {
-          // Opens the title, when it is one the catalogue already has meta for.
-          // What actually swaps is the router (app.c) — only the request leaves here.
-          //
-          // A credit that is NOT in the catalogue opens nothing, on purpose: with no
-          // meta there are no episodes, no cast and no source, and an empty detail
-          // screen is worse than the button not responding. Fetching meta on demand is
-          // separate work.
-          const char *id = person_credit_imdb(personFocus);
-          int target = id[0] ? cat_index_by_imdb(id) : -1;
-          // The panel STAYS open until the title replaces the page: detail_open
-          // remembers it with the page, so Back from that title comes back to this
-          // filmography, at this credit.
-          if (target >= 0) reqOpen = target;
-          // Not in the catalogue: it fetches the meta and opens when it arrives. What
-          // finishes the job is the router, which already follows the result.
-          // The credit almost never carries an imdb_id, so the normal route is through
-          // the TMDB id.
-          else if (id[0]) disc_request_title(id);
-          else if (person_credit_tmdb(personFocus) > 0)
-            disc_request_title_tmdb(person_credit_tmdb(personFocus),
-                                   person_credit_kind(personFocus));
-          return; }
-        default: break;
-      } }
-    if (e->key.keysym.scancode == NV_SCANCODE_BACK) personIs_open = 0;
-    return;
+        case SDLK_KP_ENTER:
+          if (!e->key.repeat && alsoFocus < nAlso) openCredit(alsoAt(alsoFocus));
+          return;
+        default: return;   // UP and DOWN stay in the row: the list is not under them
+      }
+    }
+    if (k == SDLK_RIGHT) { if (nAlso > 0) { castAlso = 1; alsoFocus = 0; } return; }
+    if (k == SDLK_LEFT) return;
+    if (k == SDLK_DOWN && focus.column + 1 < focus.nColumns[SEC_CAST]) {
+      focus.column++; return;
+    }
+    if (k == SDLK_UP && focus.column > 0) { focus.column--; return; }
   }
     // The "More like this" tab is a VERTICAL LIST inside the cast row.
   // While it is open, up/down move within it instead of changing row — it is the same
   // as the web app does, where the list has focus of its own.
   // In the per-episode ratings panel, left/right change SEASON.
-  if (e->type == SDL_KEYDOWN && focus.row == SEC_CAST && !personIs_open &&
+  if (e->type == SDL_KEYDOWN && focus.row == SEC_CAST &&
       tabIdOf(tabInfo) == TAB_RATINGS && isSeries() &&
       extras_n_seasons() > 0) {
     int nt = extras_n_seasons();
@@ -1374,7 +1473,7 @@ void detail_event(const SDL_Event *e) {
   }
 
   // "More like this" and "Collection" are the SAME vertical list, only the source differs.
-  if (e->type == SDL_KEYDOWN && focus.row == SEC_CAST && !personIs_open &&
+  if (e->type == SDL_KEYDOWN && focus.row == SEC_CAST &&
       (tabIdOf(tabInfo) == TAB_RELATED || tabIdOf(tabInfo) == TAB_COLLECTION)) {
     int col = (tabIdOf(tabInfo) == TAB_COLLECTION);
     int n = col ? extras_n_collection() : extras_n_related();
@@ -1464,21 +1563,10 @@ void detail_event(const SDL_Event *e) {
       // the season already chosen, which is how the web shows you where you are.
       seasonMenuOpen = 1;
       seasonMenuFocus = season;
-    } else if (focus.row == SEC_CAST && tabIdOf(tabInfo) == TAB_CAST) {
-      // OK on a face opens the person's FILMOGRAPHY. It is the web app's
-      // `openCastDetail` (metaDetailsScreen.js:6165); here OK on the cast did nothing.
-      const CatItem *ci = cat_item(idx);
-      if (ci && focus.column < ci->nCast && ci->cast[focus.column].tmdb > 0) {
-        person_request(ci->cast[focus.column].tmdb,
-                     ci->cast[focus.column].name,
-                     ci->cast[focus.column].photo);
-        personTmdbNow = ci->cast[focus.column].tmdb;
-        snprintf(personNameNow, sizeof personNameNow, "%s", ci->cast[focus.column].name);
-        snprintf(personPhotoNow, sizeof personPhotoNow, "%s", ci->cast[focus.column].photo);
-        personIs_open = 1;
-        personFocus = 0;
-        personLine = 0;
-      }
+    } else if (focus.row == SEC_CAST && castPageOn()) {
+      // OK on a face does what RIGHT does: the filmography is already beside it, so
+      // there is no deeper screen to open — only the row to step into.
+      if (alsoN() > 0) { castAlso = 1; alsoFocus = 0; }
     } else if (focus.row == SEC_TABS_INFO) {
       tabInfo = focus.column;
     } else if (focus.row == SEC_EPISODES) {
@@ -1593,7 +1681,7 @@ static float xItem(int r, int c) {
     }
     if (r == SEC_DETAILS)  { continue; }   // a single column: always at NV_DETP_X
     if (r == SEC_SEASONS) continue;   // one column: the picker is the row
-    else x += widthTabInfo(k) + NV_DETP_TAB_SEP * 2 + 9.0f;  // 9 = the "|"'s width
+    else x += widthTabInfo(k);
   }
   return x;
 }
@@ -1640,6 +1728,9 @@ static void syncColumns(void) {
 
 void detail_update(float dt, Uint32 now) {
   if (!is_open) return;
+  // Read before the ramp advances, so the frame that finishes the fade still snaps.
+  int snap = settings_animations_reduced() || popFade < 1.0f;
+  popFade = anim_ramp(popFade, 1.0f, dt, NV_DET_POP_FADE_MS);
   syncColumns();
   if (!epLanded && !(level >= 1 && focus.row == SEC_EPISODES)) epLanded = landOnNextUp();
   // It releases the episode request that was held because it arrived with another load
@@ -1681,6 +1772,53 @@ void detail_update(float dt, Uint32 now) {
     }
   }
 
+  // THE TAB STRIP CHOOSES AS IT MOVES, as the Library's does: with an underline
+  // marking the chosen tab, a cursor on a different word would need a second mark.
+  if (level >= 1 && focus.row == SEC_TABS_INFO && focus.column != tabInfo)
+    tabInfo = focus.column;
+  { float target = (level >= 1 && focus.row == SEC_TABS_INFO) ? 1.0f : 0.0f;
+    tabsLit = snap ? target : anim_spring(tabsLit, target, dt, NV_SPRING_FOCUS); }
+  // THE CAST PAGE IS ON A DARK GROUND, as in the owner's mockup: the backdrop that
+  // stays faintly behind the other pages goes out while the page is in view.
+  { int near = level >= 1 && castPageOn() && castN() > 0 &&
+               fabsf(scrollY - snapSec[SEC_CAST]) < NV_SCREEN_H * 0.5f;
+    castDark = snap ? (float)near
+             : anim_spring(castDark, near ? 1.0f : 0.0f, dt, NV_SPRING_PAGE); }
+
+  // THE CAST PAGE. The full cast is asked for as soon as the title's TMDB id is known
+  // (photosOfCast resolves it after the meta), and the person column follows the
+  // focused face once the focus has rested on it for NV_DETCP_DWELL_MS.
+  cast_request(titleTmdb(), isSeries());
+  if (level >= 1 && focus.row == SEC_CAST && castPageOn()) castSel = focus.column;
+  if (castSel >= castN()) castSel = castN() > 0 ? castN() - 1 : 0;
+  if (castSel != castSelSeen) {
+    castSelSeen = castSel; castSelAt = now;
+    castAlso = 0; alsoFocus = 0; alsoScroll = 0.0f; velAlso = 0.0f;
+    memset(alsoAnim, 0, sizeof alsoAnim);
+  }
+  { int on = level >= 1 && (focus.row == SEC_RELATED ||
+             (focus.row == SEC_CAST && tabIdOf(tabInfo) == TAB_RELATED));
+    for (int j = 0; j < 8; j++) {
+      float target = (on && j == relIndex()) ? 1.0f : 0.0f;
+      relAnim[j] = snap ? target : anim_spring(relAnim[j], target, dt,
+                               target > relAnim[j] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+    } }
+  for (int j = 0; j < PES_MAX; j++) {
+    float target = (level >= 1 && castAlso && j == alsoFocus) ? 1.0f : 0.0f;
+    alsoAnim[j] = snap ? target : anim_spring(alsoAnim[j], target, dt,
+                              target > alsoAnim[j] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
+  // Only once the page is within a screen of view: every title opens on a cast tab,
+  // and a profile nobody scrolls down to see is a TMDB round trip for nothing.
+  if (castPageOn() && level >= 1 && fabsf(scrollY - snapSec[SEC_CAST]) < NV_SCREEN_H) {
+    long who = castPerson(castSel);
+    if (who > 0 && who != castAsked && now - castSelAt >= NV_DETCP_DWELL_MS) {
+      person_request(who);
+      castAsked = who;
+    }
+  }
+  if (castAlso && alsoN() == 0) castAlso = 0;
+
   // AFTER syncColumns, not before: the stacking asks sectionN who has content, and
   // sectionN looks at data that arrives from the network. Recalculating with the
   // previous frame's count would leave the layout one frame behind — visible as a jolt
@@ -1700,7 +1838,8 @@ void detail_update(float dt, Uint32 now) {
                     exiting ? NV_SPRING2_SCREEN_OUT : NV_SPRING2_SCREEN);
   // A stiffness of its own: the web app takes 0.8s to fade the backdrop out
   // (cubic-bezier .4,0,.2,1), and the NV_SPRING_SCREEN spring settles in ~330ms.
-  pg = anim_spring(pg, level >= 1 ? 1.0f : 0.0f, dt, NV_SPRING_PAGE);
+  pg = snap && popFade < 1.0f ? (level >= 1 ? 1.0f : 0.0f)
+                              : anim_spring(pg, level >= 1 ? 1.0f : 0.0f, dt, NV_SPRING_PAGE);
   // LET GO WHERE THE FADE ENDS, which is now a number the ramp itself names rather
   // than one guessed near zero. At NV_DETAIL_EXIT_CUT the backdrop's opacity is
   // exactly 0, so there is nothing on screen to pop — and the spring's tail below
@@ -1711,8 +1850,11 @@ void detail_update(float dt, Uint32 now) {
 
   for (int r = 0; r < N_SECTIONS; r++)
     for (int c = 0; c < sectionN(r) && c < N_ITEMS; c++) {
-      float target = (level >= 1 && focus_index(&focus, r, c)) ? 1.0f : 0.0f;
-      animFocus[r][c] = anim_spring(animFocus[r][c], target, dt,
+      // A face stays lit only while the list has the focus: in the "Also in" row it
+      // is the poster that is focused, and the face drops to its selected state.
+      float target = (level >= 1 && focus_index(&focus, r, c) &&
+                      !(r == SEC_CAST && castAlso)) ? 1.0f : 0.0f;
+      animFocus[r][c] = snap ? target : anim_spring(animFocus[r][c], target, dt,
                                  target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
@@ -1722,6 +1864,24 @@ void detail_update(float dt, Uint32 now) {
   epListA = anim_spring(epListA, (level >= 1 && focus.row == SEC_EPISODES)
                                    ? NV_DETEP_DIM : NV_DETEP_REST,
                         dt, NV_SPRING_BLUR);
+  castListA = anim_spring(castListA, (level >= 1 && focus.row == SEC_CAST)
+                                       ? NV_DETCP_DIM : NV_DETCP_REST,
+                          dt, NV_SPRING_BLUR);
+
+  // "Also in" scrolls like the catalogue rows: only as far as the focused poster
+  // needs, with 24px of slack at the edges, on the rows' own second-order spring.
+  { float target = alsoScroll;
+    if (castAlso) {
+      float step = NV_DETCP_POSTER_W + NV_DETCP_POSTER_GAP;
+      float x = alsoFocus * step, w = NV_DETCP_POSTER_W;
+      float view = NV_SCREEN_W - NV_DETP_X - NV_DETCP_PANEL_X;
+      if (alsoFocus == 0) target = 0.0f;
+      else if (x + w > target + view - 24.0f) target = x + w - view + 24.0f;
+      else if (x < target + 24.0f)             target = x - 24.0f;
+      if (target < 0.0f) target = 0.0f;
+    }
+    alsoScroll = anim_spring2_reduced(&velAlso, alsoScroll, target, dt,
+                                      NV_SPRING2_SCROLL, snap); }
 
   // The hero tooltip's fade. It is a RAMP and not a spring because the sheet gives it
   // a duration (140ms, linear-ish) and not a settle — the same reason the menu's veil
@@ -1769,7 +1929,13 @@ void detail_update(float dt, Uint32 now) {
       // second in the window, so the one you came from stays in sight above it.
       // The rows above the focused one are at rest height; the focused one is grown
       // to its whole synopsis, and that is what the bottom of the list has to allow.
-      if (r == SEC_EPISODES) {
+      // The cast list likewise: the focused face second in the window.
+      if (r == SEC_CAST && castPageOn()) {
+        float max = sectionN(r) * NV_DETCP_ROW_H - (castPageH() - NV_DETCP_HEAD_H);
+        target = (focus.column - 1) * NV_DETCP_ROW_H;
+        if (target > max) target = max;
+      }
+      else if (r == SEC_EPISODES) {
         float max = sectionN(r) * NV_DETEP_ROW_H - NV_DETEP_LIST_H
                   + episodeFullH(focus.column) - NV_DETEP_ROW_H;
         // Second in the window, EXCEPT the row landOnNextUp put the focus on: that one
@@ -1794,14 +1960,13 @@ void detail_update(float dt, Uint32 now) {
       // rather than the second-order one the horizontal rows use (see velSec), which
       // eases in. A vertical list read row by row wants the row you asked for to be
       // there at once, not to gather speed on the way.
-      if (r == SEC_EPISODES) {
-        scrollSec[r] = settings_animations_reduced()
+      if (r == SEC_EPISODES || (r == SEC_CAST && castPageOn())) {
+        scrollSec[r] = snap
                      ? target : anim_spring(scrollSec[r], target, dt, NV_SPRING_GRID);
         velSec[r] = 0.0f;
       } else
       scrollSec[r] = anim_spring2_reduced(&velSec[r], scrollSec[r], target, dt,
-                                          NV_SPRING2_SCROLL,
-                                          settings_animations_reduced());
+                                          NV_SPRING2_SCROLL, snap);
     } }
 
   // --- VERTICAL scroll ------------------------------------------------------
@@ -1829,8 +1994,7 @@ void detail_update(float dt, Uint32 now) {
     if (targetY > maxY) targetY = maxY;
     if (targetY < 0.0f) targetY = 0.0f;
   }
-  scrollY = anim_spring2_reduced(&velY, scrollY, targetY, dt, NV_SPRING2_SCROLL,
-                                settings_animations_reduced());
+  scrollY = anim_spring2_reduced(&velY, scrollY, targetY, dt, NV_SPRING2_SCROLL, snap);
 }
 
 // ---------------------------------------------------------------------------
@@ -2879,9 +3043,9 @@ static float widthSeason(int c) {
   }
   return NV_DETWEB_SEA_PADX * 2 + widest + NV_DETWEB_SEA_GAP + NV_DETWEB_SEA_CHEV;
 }
+// The gap to the next tab included, as tab_page_width counts it.
 static float widthTabInfo(int i) {
-  TxtLine l = txt_line(TXT_PLR_BODY, TAB_LABEL[tabIdOf(i)], 255, 255, 255, 255);
-  return l.w;
+  return tab_page_width(TAB_LABEL[tabIdOf(i)]);
 }
 
 // THE SEASON PICKER — a DROPDOWN, which is what NuvioWeb has.
@@ -3322,20 +3486,16 @@ static void drawEpisodeList(float y, float a) {
   gfx_no_crop();
 }
 
-// Information tabs: plain text, with no pill. The chosen one (or the focused one) in
-// white, the others in #808080; the "|" divider is 32/700 #808080. Focus in the web app
-// is `transform: scale(1.03)` — the only place on this screen that scales.
+// Information tabs: the LIBRARY's strip (tabs.c) — bold words, the chosen one white
+// over a rule, the others grey, no "|" dividers. The owner's call, over the web's
+// plain text with bars: it is the strip this app already uses for a page-level
+// switch. Moving the focus along it chooses the tab (see detail_update), so the
+// chosen tab IS the cursor, and `tabsLit` says whether the cursor is on the strip.
 static void drawTabInfo(float x, float y, int i, float f, float a) {
-  int sel = (i == tabInfo);
-  int base = sel ? 255 : 128;
-  int color = (int)(base + (255 - base) * f);
-  TxtLine l = txt_line(TXT_PLR_BODY, TAB_LABEL[tabIdOf(i)], color, color, color, 255);
-  txt_weight(l, x, y + (NV_DETP_TAB_H - l.h) * 0.5f, a, 0.5f + f * 0.6f);
+  (void)f;
+  tab_page_draw(x, y, TAB_LABEL[tabIdOf(i)], i == tabInfo, tabsLit, a);
 }
 
-// Cast: a round 140 avatar ALIGNED LEFT in the 220 card (not centred, which was the
-// previous design), the name 26/500 rgb(179,179,179) and the role 21/400
-// rgb(128,128,128) below it.
 // --- the TRAILER card --------------------------------------------------------
 //
 // A 520x292 thumbnail with radius 24, a play badge in the centre, the name below and
@@ -3412,58 +3572,265 @@ static void drawDetails(float x, float y, float f, float a) {
   }
 }
 
-static void drawCast(float x, float y, int c, float f, float a) {
-  const CatItem *ci = cat_item(idx);
-  const char *name = NULL, *role = NULL, *photo = NULL;
-  if (ci && c < ci->nCast) {
-    name = ci->cast[c].name;
-    role = ci->cast[c].role;
-    if (ci->cast[c].photo[0]) photo = ci->cast[c].photo;
-  }
-  if (ci && ci->nCast > 0 && c >= ci->nCast) return;
-  // WITH NO CAST, DO NOT INVENT A CAST. There used to be a hard-coded fallback here
-  // (`CAST[c % N_CAST]`) that filled the row with the cast of "Shrinking" — and the
-  // result was Spider-Man crediting Jason Segel and Harrison Ford, looking like real
-  // data. The same defect as the "14" hard-coded in discover.c: a demo value shown as
-  // information.
-  //
-  // The row does not even reach here with no data, because sectionN returns 0 (and
-  // focus_move skips an empty row). This `return` is the second lock.
-  if (!name || !name[0]) return;
+// ---------------------------------------------------------------------------
+// THE CAST PAGE
+// ---------------------------------------------------------------------------
+// Defined with the score cards below; the posters share its corner.
+static float radiusPoster(float w, float h);
 
-  GfxRect av = { x, y, NV_DETP_EL_AVATAR, NV_DETP_EL_AVATAR };
+// A POSTER CARD AS THE HOME DRAWS ONE (home.c, the framed `.home-poster-card`): the
+// art sits NV_CARD_PAD inside the card's box with its corner reduced by the frame's
+// border, and focus fills that gutter white from the box inwards. The ring is a FILL
+// under the art, not a stroke around it — a stroke carries antialiasing on both
+// sides and reads as a grey smear — and its outer corner is the card's radius plus
+// the border, so it and the art's corner share a centre. The ring drawn outside the
+// art with the art's own radius, which is what this page did, pinched at the corners.
+//
+// `card` is the box AFTER the focus scale; `sc` is that scale, which the gutter
+// grows with, as it does on the home.
+static void drawPosterCard(GfxRect card, float sc, const char *po, float f, float a) {
+  float rPx = settings_radius_poster_px();
+  float pad = NV_CARD_PAD * sc;
+  GfxRect art = { card.x + pad, card.y + pad, card.w - pad * 2.0f, card.h - pad * 2.0f };
+  float rArt = rPx - NV_FRAME_BORDER;
+  GLuint t;
+  if (rArt < 0.0f) rArt = 0.0f;
   if (f > 0.01f) {
-    GfxRect ring = { av.x - NV_DETP_RING, av.y - NV_DETP_RING,
-                     av.w + NV_DETP_RING * 2, av.h + NV_DETP_RING * 2 };
-    gfx_color(ring, 0.5f, 1, 1, 1, f * a);
+    float in = NV_CARD_PAD - NV_FRAME_RING;
+    if (in < 0.0f) in = 0.0f;
+    in *= sc;
+    GfxRect fr = { card.x + in, card.y + in, card.w - in * 2.0f, card.h - in * 2.0f };
+    float rFr = rPx + NV_FRAME_BORDER - in;
+    gfx_color(fr, rFr / fr.h, NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
+              NV_FRAME_RING_A * f * a);
   }
-  GLuint t2 = photo ? tex_get_width(photo, NV_DETP_EL_AVATAR) : 0;
-  if (t2) {
-    gfx_tex_aspect_current = tex_aspect(photo);
-    gfx_rect(av, t2, GFX_CARD, 0, 0, 0, 0.5f, 0, 0, 0, a);
+  t = (po && po[0]) ? tex_get_width(po, card.w) : 0;
+  if (t) {
+    gfx_tex_aspect_current = tex_aspect(po);
+    gfx_rect(art, t, GFX_CARD, f, 0, 0, rArt / art.h, 0, 0, 0, a);
     gfx_tex_aspect_current = 0.0f;
-  } else {
-    // With no photo, the initial over #222 (#303030 with focus) — which is what the
-    // web app does with `.movie-cast-avatar-fallback`.
-    float luma = 0.133f + 0.055f * f;
-    gfx_color(av, 0.5f, luma, luma, luma, a);
-    char start[5] = {0};
-    for (int k = 0; k < 4 && name[k] && (unsigned char)name[k] >= 0x20; k++) {
-      start[k] = name[k];
-      if ((name[k] & 0xC0) != 0x80) { if (k) { start[k] = 0; break; } }
+  } else gfx_color(art, rArt / art.h, 0.173f, 0.173f, 0.173f, a);
+}
+// A face with no photo: its first character over #222 (#303030 lit), which is what
+// the web app does with `.movie-cast-avatar-fallback`.
+static void drawInitial(GfxRect r, float radius, const char *name, TxtStyle st,
+                        float lit, float a) {
+  char start[5] = {0};
+  float luma = 0.133f + 0.055f * lit;
+  gfx_color(r, radius, luma, luma, luma, a);
+  for (int k = 0; k < 4 && name[k] && (unsigned char)name[k] >= 0x20; k++) {
+    start[k] = name[k];
+    if ((name[k] & 0xC0) != 0x80) { if (k) { start[k] = 0; break; } }
+  }
+  if (!start[0]) return;
+  { TxtLine li = txt_line(st, start, 210, 212, 220, 255);
+    txt_draw_alpha(li, r.x + (r.w - li.w) * 0.5f, r.y + (r.h - li.h) * 0.5f, a * 0.9f); }
+}
+
+// A tracked-out capital label and the grey count beside it: "CAST  19 credited",
+// "ALSO IN".
+static void drawKicker(float x, float y, const char *label, const char *tail, float a) {
+  float w = txt_tracking(TXT_CWC_KICKER, label, 200, 200, 200, x, y, a, 3.0f);
+  if (tail && tail[0]) {
+    TxtLine lt = txt_line(TXT_CAPTION2, tail, 140, 144, 153, 255);
+    float base = y + txt_baseline(TXT_CWC_KICKER);
+    txt_draw_alpha(lt, x + w + 20.0f, base - txt_baseline(TXT_CAPTION2), a);
+  }
+}
+
+// One face in the list: the band, the thumbnail and its ring, the name and the
+// character. `lit` is the focus, lifted to half when the focus is across in the
+// "Also in" row — the face whose filmography that is stays marked.
+static void drawCastRow(float y, int c, float f, float a) {
+  const char *name = castName(c), *role = castRole(c), *photo = castPhoto(c);
+  float lit = f;
+  if (c == castSel && castAlso && lit < 0.5f) lit = 0.5f;
+  float rowA = a * (castListA + (1.0f - castListA) * lit);
+  float mid = y + NV_DETCP_ROW_H * 0.5f;
+  if (!name[0]) return;
+
+  if (lit > 0.01f) {
+    GfxRect band = { 0.0f, y, NV_DETCP_LIST_W, NV_DETCP_ROW_H };
+    gfx_rect(band, 0, GFX_ROW_FADE, 0, NV_DETEP_BAND_FADE, 0, 0.0f,
+             1, 1, 1, NV_DETEP_BAND_A * lit * a);
+  }
+  GfxRect th = { NV_DETP_X, mid - NV_DETCP_THUMB_H * 0.5f,
+                 NV_DETCP_THUMB_W, NV_DETCP_THUMB_H };
+  float radius = NV_DETCP_THUMB_R / th.h;
+  if (f > 0.01f) {
+    float ring = NV_DETEP_RING;
+    GfxRect ro = { th.x - ring, th.y - ring, th.w + ring * 2, th.h + ring * 2 };
+    gfx_color(ro, (NV_DETCP_THUMB_R + ring) / ro.h, 1, 1, 1, f * a);
+  }
+  { GLuint t2 = photo[0] ? tex_get_width(photo, NV_DETCP_THUMB_W) : 0;
+    if (t2) {
+      gfx_tex_aspect_current = tex_aspect(photo);
+      gfx_rect(th, t2, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, rowA);
+      gfx_tex_aspect_current = 0.0f;
+    } else drawInitial(th, radius, name, TXT_HEADLINE, lit, rowA); }
+
+  { float tx = th.x + th.w + NV_DETCP_TEXT_GAP;
+    float w = NV_DETCP_LIST_W - tx - 24.0f;
+    int ink = (int)(200 + 55 * lit);
+    TxtLine ln = txt_line_trim(TXT_BODY, name, ink, ink, ink, 255, w);
+    if (role[0]) {
+      TxtLine lr = txt_line_trim(TXT_PG_END, role, 150, 154, 163, 255, w);
+      float top = mid - (NV_DETCP_ROLE_DY + lr.h) * 0.5f;
+      txt_draw_alpha(ln, tx, top, rowA);
+      txt_draw_alpha(lr, tx, top + NV_DETCP_ROLE_DY, rowA * 0.95f);
+    } else txt_draw_alpha(ln, tx, mid - ln.h * 0.5f, rowA); }
+}
+
+// The list: a window from its first row to the page's end, the rows stacking down it
+// from scrollSec[SEC_CAST], clipped and dissolving at the top edge exactly as the
+// episode list does (drawEpisodeList).
+static void drawCastList(float y, float yEnd, float a) {
+  int n = sectionN(SEC_CAST);
+  float top = y - NV_DETEP_LIST_GAP;
+  float c0 = top < 0.0f ? 0.0f : top;
+  float c1 = yEnd < NV_SCREEN_H ? yEnd : NV_SCREEN_H;
+  if (n <= 0 || c1 <= c0) return;
+  gfx_crop(0.0f, c0, NV_DETCP_PANEL_X - 24.0f, c1 - c0);
+  float ry = y - scrollSec[SEC_CAST];
+  for (int c = 0; c < n && c < N_ITEMS && ry < c1; c++) {
+    float edge = anim_edge(ry, top, NV_DETEP_LIST_GAP);
+    if (ry + NV_DETCP_ROW_H > c0 && edge > 0.004f) {
+      gfx_opacity_group = edge;
+      drawCastRow(ry, c, animFocus[SEC_CAST][c], a);
+      gfx_opacity_group = 1.0f;
     }
-    TxtLine li = txt_line(TXT_TITLE3, start, 210, 212, 220, 255);
-    txt_draw_alpha(li, av.x + (av.w - li.w) * 0.5f,
-                       av.y + (av.h - li.h) * 0.5f, a * 0.9f);
+    ry += NV_DETCP_ROW_H;
   }
-  float yn = y + NV_DETP_EL_AVATAR + NV_DETP_EL_NAME_DY;
-  TxtLine ln = txt_line_trim(TXT_CALLOUT, name, 179, 179, 179, 255, NV_DETP_EL_W);
-  txt_draw_alpha(ln, x, yn, a);
-  if (role && role[0]) {
-    TxtLine lp = txt_line_trim(TXT_CAPTION2, role, 128, 128, 128, 255,
-                                  NV_DETP_EL_W);
-    txt_draw_alpha(lp, x, yn + NV_DETP_EL_ROLE_DY, a * 0.95f);
-  }
+  gfx_no_crop();
+}
+
+// The person column, for `castSel`: the photo, the name, "character · N episodes",
+// the biography (or where and when they were born) and "Also in". Everything the
+// cast list already knows — name, character, the small photo — is drawn at once;
+// what waits on the profile holds its place as a skeleton, so the column does not
+// rearrange itself when TMDB answers.
+static void drawCastPanel(float y, float yEnd, float a) {
+  int c = castSel;
+  long who = castPerson(c);
+  int ready = person_ready(who);
+  const char *name = castName(c), *role = castRole(c);
+  float x = NV_DETCP_PANEL_X;
+  if (!name[0]) return;
+
+  { GfxRect pr = { x, y, NV_DETCP_PHOTO_W, NV_DETCP_PHOTO_H };
+    float radius = NV_DETCP_PHOTO_R / pr.h;
+    const char *small = castPhoto(c);
+    const char *big = ready ? person_photo() : "";
+    GLuint ts = small[0] ? tex_get_width(small, NV_DETCP_THUMB_W) : 0;
+    GLuint tb = big[0] ? tex_get_width(big, NV_DETCP_PHOTO_W) : 0;
+    // The list's small photo stands in, enlarged, until the profile's larger one
+    // has decoded; the swap is the same picture getting sharper.
+    const char *art = tb ? big : small;
+    GLuint t = tb ? tb : ts;
+    if (t) {
+      gfx_tex_aspect_current = tex_aspect(art);
+      gfx_rect(pr, t, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, a);
+      gfx_tex_aspect_current = 0.0f;
+    } else drawInitial(pr, radius, name, TXT_TITLE1, 0.0f, a); }
+
+  { float cx = x + NV_DETCP_PHOTO_W + NV_DETCP_COPY_GAP;
+    float w = NV_SCREEN_W - NV_DETP_X - cx;
+    float ty = y - txt_cap_inset(TXT_TITLE3);
+    TxtLine ln = txt_line_trim(TXT_TITLE3, name, 245, 248, 255, 255, w);
+    txt_draw_alpha(ln, cx, ty, a);
+    ty += ln.h + 10.0f;
+
+    // "Inga Vestli · 10 episodes": the character in white, the count in grey.
+    { char eps[32] = "";
+      int ne = castFull() ? cast_episodes(c) : 0;
+      float lx = cx, yc;
+      TxtLine lr = txt_line_trim(TXT_DET_META, role[0] ? role : "", 235, 238, 245, 255, w);
+      if (ne > 0) snprintf(eps, sizeof eps, ne == 1 ? "%d episode" : "%d episodes", ne);
+      yc = ty + lr.h * 0.5f;
+      if (role[0]) { txt_draw_alpha(lr, lx, ty, a); lx += lr.w; }
+      if (eps[0]) {
+        TxtLine le = txt_line(TXT_DET_META, eps, 150, 154, 163, 255);
+        if (role[0]) { drawDot(lx + 16.0f, yc, a); lx += 32.0f + 5.0f; }
+        txt_draw_alpha(le, lx, ty, a);
+      }
+      if (role[0] || eps[0]) ty += lr.h + 16.0f; }
+
+    if (ready) {
+      const char *bio = person_bio()[0] ? person_bio() : person_born();
+      if (bio[0])
+        txt_block_trim(TXT_DET_META2, bio, 170, 174, 183, cx, ty, w, 32.0f, a,
+                       NV_DETCP_BIO_LINES);
+    } else if (who > 0) {
+      for (int k = 0; k < NV_DETCP_BIO_LINES; k++) {
+        GfxRect bar = { cx, ty + 8.0f + k * 32.0f, k == 2 ? w * 0.45f : w * 0.92f, 16.0f };
+        gfx_skeleton(bar, 0.5f, 0.20f, 0.21f, 0.23f, a * 0.45f);
+      }
+    } }
+
+  // --- ALSO IN ----------------------------------------------------------------
+  { int n = ready ? alsoN() : 0, m[PES_MAX];
+    float ya = y + NV_DETCP_PHOTO_H + NV_DETCP_ALSO_DY;
+    float yp = ya + NV_DETCP_ALSO_HEAD;
+    float step = NV_DETCP_POSTER_W + NV_DETCP_POSTER_GAP;
+    float radius = radiusPoster(NV_DETCP_POSTER_W, NV_DETCP_POSTER_H);
+    // Nothing to show once the profile is in and has no other work: no header over
+    // an empty row. Nothing at all for a face TMDB has no id for.
+    if (who <= 0 || (ready && n == 0) || yp > yEnd) return;
+    drawKicker(x, ya, "ALSO IN", NULL, a);
+    if (!ready) {
+      for (int j = 0; x + j * step < NV_SCREEN_W; j++) {
+        GfxRect r = { x + j * step, yp, NV_DETCP_POSTER_W, NV_DETCP_POSTER_H };
+        gfx_skeleton(r, radius, 0.17f, 0.18f, 0.20f, a * 0.62f);
+      }
+      return;
+    }
+    alsoMap(m, PES_MAX);
+    for (int j = 0; j < n; j++) {
+      int i = m[j];
+      float f = alsoAnim[j];
+      // THE HOME ROW'S FOCUS: the poster grows by NV_FOCUS_SCALE_POSTER, centred
+      // across and pinned along the top, so it never rises into "ALSO IN".
+      float sc = 1.0f + NV_FOCUS_SCALE_POSTER * f;
+      float w = NV_DETCP_POSTER_W * sc, h = NV_DETCP_POSTER_H * sc;
+      float px0 = x + j * step - alsoScroll;
+      float px = px0 - (w - NV_DETCP_POSTER_W) * 0.5f;
+      // Posters leaving on the left DISSOLVE across half a step, the way the cast
+      // list's rows fade at its top edge, instead of being cut off against an
+      // invisible line at the column's edge. Read off the resting x, so the focus
+      // growth does not fade the card it grows.
+      float edge = anim_edge(px0, x - step * 0.5f, step * 0.5f);
+      GfxRect r = { px, yp, w, h };
+      const char *po = person_credit_poster(i);
+      if (px > NV_SCREEN_W || edge <= 0.004f) continue;
+      gfx_opacity_group = edge;
+      drawPosterCard(r, sc, po, f, a);
+      { int ink = (int)(200 + 55 * f);
+        TxtLine lt = txt_line_trim(TXT_DET_META2, person_credit_title(i),
+                                   ink, ink, ink, 255, NV_DETCP_POSTER_W);
+        const char *year = person_credit_year(i);
+        float ty = yp + h + 12.0f;
+        txt_draw_alpha(lt, px0, ty, a);
+        if (year[0]) {
+          TxtLine ly = txt_line(TXT_MINI, year, 140, 144, 153, 255);
+          txt_draw_alpha(ly, px0, ty + lt.h + 4.0f, a * 0.9f);
+        } }
+      gfx_opacity_group = 1.0f;
+    } }
+}
+
+// The page, from its header line at `y` (screen coordinates).
+static void drawCastPage(float y, float a) {
+  float yEnd = y + castPageH();
+  float yList = y + NV_DETCP_HEAD_H;
+  char count[32];
+  int n = castN();
+  if (n <= 0) return;
+  if (!isSeries()) tab_page_draw(NV_DETP_X, y - CAST_HEAD_DY, "Cast & crew", 1, 0.0f, a);
+  snprintf(count, sizeof count, "%d credited", n);
+  drawKicker(NV_DETP_X, y, "CAST", count, a);
+  regionAdd("cast", (GfxRect){ 0.0f, y, NV_SCREEN_W, castPageH() });
+  drawCastList(yList, yEnd, a);
+  drawCastPanel(yList, yEnd, a);
 }
 
 // The "Ratings" tab. In the web app (metaDetailsScreen.js:3699) these are two cards
@@ -3655,47 +4022,32 @@ static void drawRatings(float x, float y, float a) {
 //
 // Only the first case was handled. On a film the row DID take focus (sectionN returns
 // the right count) but nothing lit up and OK did not respond — it looked as though the
-// whole section did not exist as far as the D-pad was concerned. This pair solves both
-// at once.
-static int relInList(void) {
-  return focus.row == SEC_CAST || focus.row == SEC_RELATED;
-}
+// whole section did not exist as far as the D-pad was concerned. relIndex solves both
+// at once. Whether the row is lit at all is detail_update's (relAnim).
 static int relIndex(void) {
   return (focus.row == SEC_RELATED) ? focus.column : relFocus;
 }
 
 static void drawRelated(float x, float y, float a) {
   int n = extras_n_related(), i;
-  int inList = relInList();
-  int foc = relIndex();
   for (i = 0; i < n && i < 7; i++) {
+    float f = relAnim[i];
+    // The home row's focus growth, pinned along the top like "Also in".
+    float sc = 1.0f + NV_FOCUS_SCALE_POSTER * f;
+    float w = REL_CARD_W * sc, h = REL_CARD_H * sc;
     float cx = x + i * (REL_CARD_W + REL_CARD_GAP);
-    GfxRect r = { cx, y, REL_CARD_W, REL_CARD_H };
-    int lit = inList && i == foc;
-    const char *po = extras_related_poster(i);
-    GLuint t = po[0] ? tex_get_width(po, REL_CARD_W) : 0;
-    float radius = radiusPoster(REL_CARD_W, REL_CARD_H);
+    GfxRect r = { cx - (w - REL_CARD_W) * 0.5f, y, w, h };
     if (cx + REL_CARD_W > NV_SCREEN_W - NV_DETP_X) break;
-    if (lit) {
-      GfxRect ring = { r.x - 4, r.y - 4, r.w + 8, r.h + 8 };
-      gfx_color(ring, radius, 1, 1, 1, a);
-    }
-    if (t) {
-      gfx_tex_aspect_current = tex_aspect(po);
-      gfx_rect(r, t, GFX_CARD, lit ? 1.0f : 0.0f, 0, 0, radius, 0, 0, 0, a);
-      gfx_tex_aspect_current = 0.0f;
-    } else {
-      gfx_color(r, radius, 0.133f, 0.133f, 0.133f, a);
-    }
-    { int c = lit ? 255 : 225;
+    drawPosterCard(r, sc, extras_related_poster(i), f, a);
+    { int c = (int)(225 + 30 * f);
+      float ty = y + h + 12.0f;
       TxtLine lt = txt_line_trim(TXT_DET_META2, extras_related_title(i),
                                     c, c, c, 255, REL_CARD_W);
-      txt_draw_alpha(lt, cx, y + REL_CARD_H + 12.0f, a);
+      txt_draw_alpha(lt, cx, ty, a);
       { const char *year = extras_related_year(i);
         if (year[0]) {
           TxtLine la = txt_line(TXT_MINI, year, 140, 144, 153, 255);
-          txt_draw_alpha(la, cx, y + REL_CARD_H + 12.0f + lt.h + 6.0f,
-                             a * 0.9f);
+          txt_draw_alpha(la, cx, ty + lt.h + 6.0f, a * 0.9f);
         } } }
   }
 }
@@ -3780,9 +4132,10 @@ static float baseOfTabActive(void) {
       if (n > 7) n = 7;
       return NV_DETP_EL_Y + 40.0f + 30.0f + (float)n * 52.0f;
     }
+    // The cast page fills page 3, so the Trakt section opens page 4 at the same
+    // top inset every page has.
     default:
-      return NV_DETP_EL_Y + NV_DETP_EL_AVATAR + NV_DETP_EL_NAME_DY
-           + NV_DETP_EL_ROLE_DY + NV_DETP_EL_LINE * 2.0f;
+      return NV_DETP_P3 + NV_SCREEN_H + NV_DETP_PAD_TOP - NV_DETP_EL_GAP_TRAKT;
   }
 }
 
@@ -3942,41 +4295,50 @@ static void drawComments(float x, float y, float a) {
     // px, and painting the ones nobody sees costs fill on a device where fill is the
     // scarce resource.
     if (cx > NV_SCREEN_W || cx + COM_CARD_W < 0.0f) continue;
-    char footer[64];
     px = cx + COM_PAD; width = COM_CARD_W - COM_PAD * 2;
-    frame(card, 20.0f, a);
+    // THE CARD IS A SOLID SURFACE and its focus ring a FILL behind it, the same
+    // construction as the posters (drawPosterCard). The old card was a 94% fill with
+    // a 1px GFX_RING hairline and a 4px GFX_RING focus: a stroke is antialiased on
+    // both sides, so on a 466px card the corners came out as grey smears that did not
+    // meet the fill. A white box 4px larger, with the radius plus 4, under an opaque
+    // card leaves exactly a 4px band with the card's own clean edge inside it.
     if (foc) {
       GfxRect ring = { card.x - NV_RING_FOCUS, card.y - NV_RING_FOCUS,
                        card.w + NV_RING_FOCUS * 2, card.h + NV_RING_FOCUS * 2 };
-      // The OUTER radius = the card's radius + the ring's thickness, otherwise the
-      // ring's corner is squarer than the card's and the two curves come apart.
-      gfx_rect(ring, 0, GFX_RING, 0, NV_RING_FOCUS / ring.h, 0,
-               (20.0f + NV_RING_FOCUS) / ring.h, 1, 1, 1, a);
+      gfx_color(ring, (COM_RADIUS + NV_RING_FOCUS) / ring.h, 1, 1, 1, a);
     }
+    gfx_color(card, COM_RADIUS / card.h, COM_SURFACE, COM_SURFACE, COM_SURFACE, a);
 
-    { TxtLine lu = txt_line_trim(TXT_ROW_TITLE,
-                                    ofSeries ? extras_comment_user(i)
+    // The head: who wrote it, and their score as a pill on the right.
+    { int score = ofSeries ? extras_comment_score(i) : extras_comment_ep_score(i);
+      float right = cx + COM_CARD_W - COM_PAD;
+      if (score > 0) {
+        char sc[24];
+        snprintf(sc, sizeof sc, "\xe2\x98\x85 %d/10", score);
+        TxtLine ls = txt_line(TXT_DET_META2, sc, 245, 197, 24, 255);
+        float pw = ls.w + 28.0f, ph = 40.0f;
+        GfxRect pill = { right - pw, y + COM_PAD - 2.0f, pw, ph };
+        gfx_color(pill, 0.5f, 0.2f, 0.2f, 0.2f, a);
+        txt_draw_alpha(ls, pill.x + 14.0f, pill.y + (ph - ls.h) * 0.5f, a);
+        right = pill.x - 16.0f;
+      }
+      { TxtLine lu = txt_line_trim(TXT_ROW_TITLE,
+                                   ofSeries ? extras_comment_user(i)
                                             : extras_comment_ep_user(i),
-                                    245, 248, 255, 255, width);
-      txt_draw_alpha(lu, px, y + COM_PAD, a); }
+                                   245, 248, 255, 255, right - px);
+        txt_draw_alpha(lu, px, y + COM_PAD, a); } }
 
-    // The text stops BEFORE the footer: without the line ceiling it ran over the
-    // likes. 5 lines is what fits between the name and the footer at a leading of 34.
-    txt_block(TXT_DET_META2, ofSeries ? extras_comment_text(i)
-                                     : extras_comment_ep_text(i),
-              200, 205, 214,
-              px, y + COM_PAD + 46.0f, width, 34.0f, a * 0.95f, 5);
+    // The body, ending on an ellipsis when it is cut rather than mid-sentence. It stops
+    // BEFORE the footer: 6 lines at 36 fit between the head and the likes.
+    txt_block_trim(TXT_DET_META2, ofSeries ? extras_comment_text(i)
+                                          : extras_comment_ep_text(i),
+                   205, 208, 215, px, y + COM_PAD + 62.0f, width, 36.0f, a, 6);
 
-    { int score = ofSeries ? extras_comment_score(i)
-                         : extras_comment_ep_score(i);
-      int cur  = ofSeries ? extras_comment_likes(i)
-                         : extras_comment_ep_likes(i);
-      if (score > 0)
-        snprintf(footer, sizeof footer, "%d/10   %d likes", score, cur);
-      else
-        snprintf(footer, sizeof footer, "%d likes", cur);
-      { TxtLine lr = txt_line(TXT_CAPTION2, footer, 150, 154, 163, 255);
-        txt_draw_alpha(lr, px, y + COM_CARD_H - COM_PAD - lr.h, a * 0.9f); } }
+    { char footer[32];
+      int cur = ofSeries ? extras_comment_likes(i) : extras_comment_ep_likes(i);
+      snprintf(footer, sizeof footer, cur == 1 ? "%d like" : "%d likes", cur);
+      { TxtLine lr = txt_line(TXT_CAPTION2, footer, 140, 144, 153, 255);
+        txt_draw_alpha(lr, px, y + COM_CARD_H - COM_PAD - lr.h, a); } }
   }
 }
 
@@ -4056,9 +4418,12 @@ static void drawSection(int r, float a, Uint32 now) {
       txt_draw_alpha(lc, NV_DETP_X, y - lc.h - NV_DETF_HEADER_GAP, a);
     } }
   { float height = heightSection(r);
-    if (y > NV_SCREEN_H || y + height < -40.0f) return; }
-  // The episode list is a vertical window of its own, not a row of columns.
+    float head = (r == SEC_CAST && !isSeries()) ? CAST_HEAD_DY : 0.0f;
+    if (y - head > NV_SCREEN_H || y + height < -40.0f) return; }
+  // The episode list is a vertical window of its own, not a row of columns; so is
+  // the cast page.
   if (r == SEC_EPISODES) { drawEpisodeList(y, a); return; }
+  if (r == SEC_CAST) { drawCastPage(y, a); return; }
 
   for (int c = 0; c < n && c < N_ITEMS; c++) {
     float f = animFocus[r][c];
@@ -4078,11 +4443,6 @@ static void drawSection(int r, float a, Uint32 now) {
       case SEC_TABS_INFO: {
         if (c == 0) regionAdd("tabs", (GfxRect){ x, y, NV_SCREEN_W - x, NV_DETP_TAB_H });
         drawTabInfo(x, y, c, f, a);
-        if (c + 1 < n) {
-          TxtLine d = txt_line(TXT_PLR_BODY, "|", 128, 128, 128, 255);
-          txt_weight(d, x + w + NV_DETP_TAB_SEP,
-                   y + (NV_DETP_TAB_H - d.h) * 0.5f, a, 1.4f);
-        }
         break;
       }
       case SEC_TRAILERS: drawTrailer(x, y, c, a); break;
@@ -4091,7 +4451,7 @@ static void drawSection(int r, float a, Uint32 now) {
       case SEC_RELATED: if (c == 0) drawRelated(NV_DETP_X, y, a); break;
       case SEC_COMMENTS:  drawComments(NV_DETP_X, y, a); break;
       case SEC_DETAILS: drawDetails(x, y, f, a); break;
-      default: drawCast(x, y, c, f, a); break;
+      default: break;
     }
   }
 }
@@ -4137,102 +4497,28 @@ static void drawSkeletonEpisodes(float a) {
   }
 }
 
-// The same idea for a film's CAST: six avatars and the two lines of text at the final
-// coordinates, with the "Cast" header in its place.
+// The same idea for a film's CAST: the page's header, six rows and the photo, at
+// the final coordinates.
 static void drawSkeletonCast(float a) {
   if (!castLoading()) return;
   float y = contentSec[SEC_CAST] - scrollY;
-  if (y > NV_SCREEN_H || y + NV_DETF_EL_HEIGHT < -40.0f) return;
-  { TxtLine lc = txt_line(TXT_HEADLINE, "Cast", 245, 248, 255, 255);
-    txt_draw_alpha(lc, NV_DETP_X, y - lc.h - NV_DETF_HEADER_GAP, a); }
+  float yList = y + NV_DETCP_HEAD_H;
+  if (y - CAST_HEAD_DY > NV_SCREEN_H || y + castPageH() < -40.0f) return;
+  tab_page_draw(NV_DETP_X, y - CAST_HEAD_DY, "Cast & crew", 1, 0.0f, a);
+  drawKicker(NV_DETP_X, y, "CAST", NULL, a);
   for (int c = 0; c < 6; c++) {
-    float x = NV_DETP_X + c * NV_DETP_EL_STEP;
-    GfxRect av = { x, y, NV_DETP_EL_AVATAR, NV_DETP_EL_AVATAR };
-    GfxRect name = { x, y + NV_DETP_EL_AVATAR + NV_DETP_EL_NAME_DY + 4.0f,
-                     c % 2 ? 150.0f : 184.0f, 20.0f };
-    GfxRect role = { x, name.y + NV_DETP_EL_ROLE_DY, 110.0f, 16.0f };
-    gfx_skeleton(av, 0.5f, 0.17f, 0.18f, 0.20f, a * 0.62f);
+    float mid = yList + c * NV_DETCP_ROW_H + NV_DETCP_ROW_H * 0.5f;
+    float tx = NV_DETP_X + NV_DETCP_THUMB_W + NV_DETCP_TEXT_GAP;
+    GfxRect th = { NV_DETP_X, mid - NV_DETCP_THUMB_H * 0.5f,
+                   NV_DETCP_THUMB_W, NV_DETCP_THUMB_H };
+    GfxRect name = { tx, mid - 22.0f, c % 2 ? 150.0f : 184.0f, 20.0f };
+    GfxRect role = { tx, mid + 8.0f, 110.0f, 16.0f };
+    gfx_skeleton(th, NV_DETCP_THUMB_R / th.h, 0.17f, 0.18f, 0.20f, a * 0.62f);
     gfx_skeleton(name, 0.5f, 0.22f, 0.23f, 0.25f, a * 0.55f);
     gfx_skeleton(role, 0.5f, 0.20f, 0.21f, 0.23f, a * 0.45f);
   }
-}
-
-// THE PERSON'S CARD — the screen the web app calls castDetailScreen. It fills the whole
-// screen over an opaque background, with the photo and the biography on the left and
-// the filmography in poster cards on the right. There is no measured web layout to copy
-// here (the web app's screen is a scrollable page of fluid width), so the measurements
-// follow the ones this screen already uses: a gutter of 96, a 212x318 poster, and a
-// card with the same radius as the others.
-
-static void drawPerson(float a) {
-  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, a);
-
-  { GLuint t = person_photo()[0] ? tex_get(person_photo()) : 0;
-    GfxRect r = { NV_DETP_X, 96.0f, PES_PHOTO_W, PES_PHOTO_H };
-    if (t) {
-      gfx_tex_aspect_current = tex_aspect(person_photo());
-      gfx_rect(r, t, GFX_CARD, 0, 0, 0, radiusPoster(PES_PHOTO_W, PES_PHOTO_H), 0, 0, 0, a);
-      gfx_tex_aspect_current = 0.0f;
-    } else {
-      gfx_color(r, radiusPoster(PES_PHOTO_W, PES_PHOTO_H), 0.13f, 0.13f, 0.13f, a);
-    } }
-
-  { float y = 96.0f + PES_PHOTO_H + 32.0f;
-    TxtLine ln = txt_line_trim(TXT_TITLE3, person_name(), 245, 248, 255, 255,
-                                  PES_PHOTO_W);
-    txt_draw_alpha(ln, NV_DETP_X, y, a);
-    y += ln.h + 10.0f;
-    if (person_area()[0]) {
-      TxtLine la = txt_line(TXT_DET_META2, person_area(), 150, 154, 163, 255);
-      txt_draw_alpha(la, NV_DETP_X, y, a * 0.9f);
-      y += la.h + 18.0f;
-    }
-    if (person_bio()[0])
-      txt_block(TXT_DET_META2, person_bio(), 190, 195, 205, NV_DETP_X, y,
-                PES_PHOTO_W, 32.0f, a * 0.9f, 6);
-  }
-
-  { int n = person_n_credits(), i;
-    float x0 = PES_COL_X;
-    TxtLine lt = txt_line(TXT_HEADLINE, "Filmography", 245, 248, 255, 255);
-    txt_draw_alpha(lt, x0, 96.0f, a);
-    for (i = 0; i < n; i++) {
-      int col = i % PES_PER_LINE, lin = i / PES_PER_LINE;
-      float x = x0 + col * (PES_CARD_W + PES_CARD_GAP);
-      float y = 96.0f + lt.h + 28.0f + (lin - personLine) * (PES_CARD_H + 92.0f);
-      if (lin < personLine) continue;
-      GfxRect r = { x, y, PES_CARD_W, PES_CARD_H };
-      const char *po = person_credit_poster(i);
-      GLuint t = po[0] ? tex_get_width(po, PES_CARD_W) : 0;
-      if (y + PES_CARD_H > NV_SCREEN_H - 24.0f) break;
-      if (i == personFocus) {
-        GfxRect ring = { r.x - 4, r.y - 4, r.w + 8, r.h + 8 };
-        gfx_color(ring, radiusPoster(PES_CARD_W, PES_CARD_H), 1, 1, 1, a);
-      }
-      if (t) {
-        gfx_tex_aspect_current = tex_aspect(po);
-        gfx_rect(r, t, GFX_CARD, i == personFocus ? 1.0f : 0.0f, 0, 0,
-                 radiusPoster(PES_CARD_W, PES_CARD_H), 0, 0, 0, a);
-        gfx_tex_aspect_current = 0.0f;
-      } else {
-        gfx_color(r, radiusPoster(PES_CARD_W, PES_CARD_H), 0.13f, 0.13f, 0.13f, a);
-      }
-      { TxtLine lc = txt_line_trim(TXT_DET_META2, person_credit_title(i),
-                                      230, 234, 242, 255, PES_CARD_W);
-        txt_draw_alpha(lc, x, y + PES_CARD_H + 12.0f, a);
-        { const char *year = person_credit_year(i);
-          const char *pap = person_credit_role(i);
-          char sub[96];
-          snprintf(sub, sizeof sub, "%s%s%s", year,
-                   (year[0] && pap[0]) ? "  \xc2\xb7  " : "", pap);
-          if (sub[0]) {
-            TxtLine ls = txt_line_trim(TXT_MINI, sub, 140, 144, 153, 255,
-                                          PES_CARD_W);
-            txt_draw_alpha(ls, x, y + PES_CARD_H + 12.0f + lc.h + 6.0f,
-                               a * 0.9f);
-          } } }
-    } }
+  { GfxRect pr = { NV_DETCP_PANEL_X, yList, NV_DETCP_PHOTO_W, NV_DETCP_PHOTO_H };
+    gfx_skeleton(pr, NV_DETCP_PHOTO_R / pr.h, 0.17f, 0.18f, 0.20f, a * 0.62f); }
 }
 
 // THE DIRECTOR'S PORTRAIT IS NOT DRAWN HERE, and that is deliberate.
@@ -4359,12 +4645,16 @@ void detail_draw_bg(Uint32 now) {
   // So the art fades to 18% under a full vignette: the left goes to #0d0d0d and the
   // right keeps a dim picture.
   drawArtDetail(target, tex, art, artPoster,
-                     tex ? aEntry * (1.0f - 0.82f * pg) : aEntry, 0.0f, zoom, cell);
+                     (tex ? aEntry * (1.0f - 0.82f * pg) * (1.0f - castDark) : aEntry)
+                     * popFade,
+                     0.0f, zoom, cell);
 }
 
 void detail_draw(Uint32 now) {
   if (!is_open) return;
   float s = t, a2 = phase2();
+  // Back fades the whole page in; the hero's rise still reads the unfaded a2.
+  float pa = pg * popFade;
   (void)s;
 
 
@@ -4376,23 +4666,18 @@ void detail_draw(Uint32 now) {
   // block changing arrangement, which is what the owner asked for.
   // The same sign as the 26px above, and for the same reason: the block's two
   // movements are one movement and must not pull against each other.
-  heroWeb(a2, -scrollY + (1.0f - a2) * NV_SCREEN_H *
+  heroWeb(a2 * popFade, -scrollY + (1.0f - a2) * NV_SCREEN_H *
                             ((sharedOrigin && NV_DETW_COPY_TOGETHER) ? -0.05f : 0.05f));
 
 
-  if (pg <= 0.01f && scrollY < 1.0f) {
-    if (personIs_open) drawPerson(s);
-    return;
-  }
+  if (pg <= 0.01f && scrollY < 1.0f) return;
   regionReset();
-  drawSkeletonEpisodes(pg);
-  drawSkeletonCast(pg);
-  for (int r = 0; r < N_SECTIONS; r++) drawSection(r, pg, now);
+  drawSkeletonEpisodes(pa);
+  drawSkeletonCast(pa);
+  for (int r = 0; r < N_SECTIONS; r++) drawSection(r, pa, now);
   // The expanded season list, over every section: it hangs 8px below its anchor and
   // covers the episode row, which is drawn after it in the loop above.
-  if (seasonMenuOpen) drawSeasonMenu(seasonMenuAt, pg);
-  // ABOVE everything: the card is another screen, not a section of this one.
-  if (personIs_open) drawPerson(s);
+  if (seasonMenuOpen) drawSeasonMenu(seasonMenuAt, pa);
 }
 
 int detail_index(void) { return idx; }

@@ -421,13 +421,22 @@ static void fmtTime(char *b, size_t n, float seg, int negative);
 #define PLR_FAIL_SEARCH_MS  90000u
 #define PLR_FAIL_STALL_MS   20000u
 #define PLR_FAIL_NOTICE_MS   7000u
-static char   failNotice[200];
+static char   failNotice[400];
 static Uint32 failNoticeAt;
 static char   failLast[160];          // the last stage+reason logged, for dedupe
 static int    failErrSeen, failEosSeen;
 static Uint32 loadStartAt, stallAt;
 static float  stallPos;
 static int    failLoadLogged, failSearchLogged, failStallLogged;
+
+// Milliseconds from `then` to `now`, and 0 when `then` is LATER. The frame's `now`
+// is read before app_update, and an open or source change inside app_update stamps
+// loadStartAt with a fresh SDL_GetTicks — a millisecond past `now`. The plain
+// unsigned subtraction wrapped to ~49 days, and "no picture after 45s" fired on
+// the very first frame of a title that went on to play at once.
+static Uint32 msSince(Uint32 now, Uint32 then) {
+  return (Sint32)(now - then) > 0 ? now - then : 0;
+}
 
 // The URL's HOST only. The rest of a debrid link is a signed token, which has no
 // business in a log file and says nothing about why the file failed.
@@ -445,18 +454,15 @@ static void reportFailure(const char *stage, const char *reason, int notify) {
   // A trailer's source is IMDb's MP4, not the film's stream list: describing the
   // film's current source here would blame a file that was never opened.
   const Stream *st = (stream_n() > 0 && !trailerMode) ? stream_item(stream_current()) : NULL;
-  char key[160], line[1400], who[200], src[600] = "no source chosen";
+  char key[160], line[1400], who[200], name[160], src[600] = "no source chosen";
   if (trailerMode) snprintf(src, sizeof src, "trailer: %s (IMDb MP4)", trailerName);
   snprintf(key, sizeof key, "%s|%s|%d", stage, reason, stream_current());
   if (!strcmp(key, failLast)) return;
   snprintf(failLast, sizeof failLast, "%s", key);
 
-  if (epT > 0)
-    snprintf(who, sizeof who, "%s S%dE%d (%s)", c ? c->title : "?", epT, epE,
-             c && c->imdb[0] ? c->imdb : "no id");
-  else
-    snprintf(who, sizeof who, "%s (%s)", c ? c->title : "?",
-             c && c->imdb[0] ? c->imdb : "no id");
+  if (epT > 0) snprintf(name, sizeof name, "%s S%dE%d", c ? c->title : "?", epT, epE);
+  else         snprintf(name, sizeof name, "%s", c ? c->title : "?");
+  snprintf(who, sizeof who, "%s (%s)", name, c && c->imdb[0] ? c->imdb : "no id");
   if (st) {
     char host[96], size[24] = "size ?";
     const char *box = st->mp4 || strstr(st->url, ".mp4") ? "MP4"
@@ -476,7 +482,9 @@ static void reportFailure(const char *stage, const char *reason, int notify) {
   failure_log(line);
   if (!notify) return;
 
-  snprintf(failNotice, sizeof failNotice, "Playback problem logged · %s", reason);
+  // It names the title, so a notice can never be mistaken for one about another.
+  snprintf(failNotice, sizeof failNotice, "Playback problem logged · %s%s · %s",
+           name, trailerMode ? " trailer" : "", reason);
   failNoticeAt = SDL_GetTicks();
 }
 void player_report_failure(const char *stage, const char *reason) {
@@ -1630,14 +1638,14 @@ void player_update(float dt, Uint32 now) {
       snprintf(r, sizeof r, "pipeline error: %s", e);
       player_report_failure(startImage ? "playback" : "load", r);
     }
-    if (hasVideo && !video_ready() && !failLoadLogged && now - loadStartAt > PLR_FAIL_LOAD_MS) {
+    if (hasVideo && !video_ready() && !failLoadLogged && msSince(now, loadStartAt) > PLR_FAIL_LOAD_MS) {
       failLoadLogged = 1;
       snprintf(r, sizeof r, "no picture after %us (%s)", PLR_FAIL_LOAD_MS / 1000u,
                video_active() ? "pipeline loaded, loadCompleted never came"
                               : "pipeline never took the media");
       player_report_failure("load", r);
     }
-    if (waitingSource && !failSearchLogged && now - loadStartAt > PLR_FAIL_SEARCH_MS) {
+    if (waitingSource && !failSearchLogged && msSince(now, loadStartAt) > PLR_FAIL_SEARCH_MS) {
       failSearchLogged = 1;
       snprintf(r, sizeof r, "still looking for a source after %us",
                PLR_FAIL_SEARCH_MS / 1000u);
@@ -1734,7 +1742,7 @@ void player_update(float dt, Uint32 now) {
   // Paused, the controls stay. Making them disappear would leave the user in front of
   // a still frame with no clue that it was they who paused.
   if (visible && playing && !player_loading() && !episodes_is_open() &&
-      !stream_sheet_is_open() && !tracks_is_open() && now - lastInput > PLR_HIDES_MS) visible = 0;
+      !stream_sheet_is_open() && !tracks_is_open() && msSince(now, lastInput) > PLR_HIDES_MS) visible = 0;
   if (epT > 0 && !strstr(lineEp, " · ")) player_set_episode(epT, epE);
 
   anim = anim_spring(anim, visible ? 1.0f : 0.0f, dt,

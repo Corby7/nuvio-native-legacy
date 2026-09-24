@@ -16,15 +16,14 @@ static float width(const TabSize *z, const char *name) {
   return (float)txt_line(z->font, name, 255, 255, 255, 255).w + z->gap;
 }
 
-// THE CURSOR SHOWS AS THE CHOSEN TAB LIGHTING UP. No plate or ring: the strip is
-// words and a rule. Lit, the chosen word is white and its rule solid; unlit it
-// drops to grey and the rule to a trace — still marking which tab is in force,
-// without claiming the focus that is somewhere below. Before this the chosen tab
-// looked the same either way, and with the cursor on the strip nothing on screen
-// said so.
+// THE CHOSEN TAB IS WHITE, ALWAYS; THE CURSOR IS THE RULE. No plate or ring: the
+// strip is words and a rule. The chosen word stays white whether or not the cursor
+// is on the strip — it is the tab in force, and greying it read as "nothing chosen"
+// (the owner's call). What the cursor changes is the rule under it: solid white
+// while the strip has the focus, a faint trace while the focus is somewhere below.
 static float draw(const TabSize *z, float x, float y, const char *name, int on,
                   float lit, float a) {
-  int c = on ? (int)anim_blend(150.0f, 255.0f, lit) : z->idle;
+  int c = on ? 255 : z->idle;
   TxtLine l = txt_line(z->font, name, c, c, c, 255);
   float inset = txt_cap_inset(z->font), cap = txt_baseline(z->font) - inset;
   float ty = y + (z->h - z->lineGap - z->line - cap) * 0.5f - inset;

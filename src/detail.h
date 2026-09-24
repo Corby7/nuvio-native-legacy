@@ -185,7 +185,9 @@ int  detail_requested_do_start(void);
 // The tabs "Creator and cast | Ratings | More like this | Trailer": font 32/500,
 // the selected one white, the others #808080; the "|" divider is 32/700 #808080,
 // with 20 of slack on each side.
-#define NV_DETP_TAB_Y       (NV_DETP_P3 + NV_DETP_PAD_TOP)   /* 2256 */
+// The strip sits at the SAME inset as the episode page's picker (NV_DETEP_TOP), so
+// arriving on page 3 puts "Cast & crew" where arriving on page 2 puts the season.
+#define NV_DETP_TAB_Y       (NV_DETP_P3 + NV_DETEP_TOP)   /* 2216 */
 #define NV_DETP_TAB_H         51.0f
 #define NV_DETP_TAB_SEP       20.0f
 
@@ -195,7 +197,7 @@ int  detail_requested_do_start(void);
 // The tab strip's base plus the 54 that separated the two when both were measured
 // (1992 - 1887 - 51). Every tab body and the Trakt section below stack off this one
 // number (baseOfTabActive), so page 3 restacks from here.
-#define NV_DETP_EL_Y        (NV_DETP_TAB_Y + NV_DETP_TAB_H + 54.0f)   /* 2361 */
+#define NV_DETP_EL_Y        (NV_DETP_TAB_Y + NV_DETP_TAB_H + 54.0f)   /* 2321 */
 #define NV_DETP_EL_W         220.0f
 #define NV_DETP_EL_STEP     270.0f
 #define NV_DETP_EL_AVATAR    140.0f
@@ -208,6 +210,42 @@ int  detail_requested_do_start(void);
 // which is the FILM's cast height, put the section ON TOP of the avatars.
 #define NV_DETP_EL_LINE      34.0f
 #define NV_DETP_EL_GAP_TRAKT 105.0f
+
+// --- THE CAST PAGE -----------------------------------------------------------
+//
+// The cast is no longer a row of faces with a filmography one screen deeper. It is
+// a PAGE: the credited cast as a vertical list on the left, walked like the episode
+// list, and beside it the focused person — photo, name, character, biography, and
+// an "Also in" poster row walked like a catalogue row. The owner's mockup at
+// 2000x1129, scaled to 1920.
+//
+// On a series it takes the tab body's slot on page 3 and runs to the page's end;
+// on a film it is a stacked section that snaps to its own page.
+#define NV_DETCP_HEAD_H       44.0f   // "CAST  19 credited" -> the first row
+#define NV_DETCP_ROW_H       116.0f
+#define NV_DETCP_THUMB_W      80.0f
+#define NV_DETCP_THUMB_H      96.0f
+#define NV_DETCP_THUMB_R      12.0f
+#define NV_DETCP_TEXT_GAP     22.0f   // thumbnail -> name
+#define NV_DETCP_ROLE_DY      38.0f   // name's top -> role's top (25 over 20)
+#define NV_DETCP_LIST_W      720.0f   // the band's width; it dissolves to the right
+#define NV_DETCP_DIM           0.55f  // the unfocused rows while the list has focus
+#define NV_DETCP_REST          0.80f
+#define NV_DETCP_PANEL_X     812.0f   // the person column
+#define NV_DETCP_PHOTO_W     288.0f
+#define NV_DETCP_PHOTO_H     348.0f
+#define NV_DETCP_PHOTO_R      16.0f
+#define NV_DETCP_COPY_GAP     44.0f   // photo -> the name column
+#define NV_DETCP_BIO_LINES     3
+#define NV_DETCP_ALSO_DY      52.0f   // the photo's base -> "ALSO IN"
+#define NV_DETCP_ALSO_HEAD    40.0f   // "ALSO IN" -> the posters
+#define NV_DETCP_POSTER_W    176.0f
+#define NV_DETCP_POSTER_H    264.0f
+#define NV_DETCP_POSTER_GAP   24.0f
+// How long the focus has to rest on a face before its profile is asked for. A held
+// DOWN walks the list at the key-repeat rate; asking TMDB for every face it passes
+// would queue a dozen profiles nobody looks at.
+#define NV_DETCP_DWELL_MS    160u
 
 // The badges of the HERO's meta stack, measured in the same session.
 #define NV_DETW_IMDB_W       109.0f   // a 60x60 logo + slack + the score 20.7/400
