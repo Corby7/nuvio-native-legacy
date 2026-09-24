@@ -583,7 +583,106 @@ static void txt_weight(TxtLine l, float x, float y, float a, float thickness) {
   if (thickness > 0.9f)  txt_draw_alpha(l, x + thickness, y, a);
 }
 
+// THE TITLES BEHIND THIS ONE. A title opened from another title's page (a "More
+// like this" card, a credit in a cast member's filmography) used to REPLACE the
+// page, so Back went straight to the home and the title the viewer came from was
+// gone: Home -> A -> B -> Back landed on the home, not on A. Every streaming app
+// walks back through the chain, and the remote's Back is the only way to do it.
+//
+// Each entry is where the viewer WAS on that page — the row and column, the
+// season, the tab, the cast member's filmography if it was open — so Back returns
+// to the card that was pressed, not to the top of the page. The title is kept by
+// IMDb id and not by index: a disc_rebuild while the stack is deep reorders the
+// catalogue, and an index would reopen a different film.
+#define DETAIL_HISTORY_MAX 8
+typedef struct {
+  char imdb[32];
+  int level, season, seasonByHand, tabInfo, relFocus, ratTemp, commentEp;
+  Focus focus;
+  int personOpen, personFocus, personLine;
+  long personTmdb;
+  char personName[64], personPhoto[512];
+} DetailPast;
+static DetailPast history[DETAIL_HISTORY_MAX];
+static int nHistory;
+// The cast member whose filmography is open, so it can be asked for again on the
+// way back: person.c holds ONE person, and the title opened from the filmography
+// may have opened another.
+static long personTmdbNow;
+static char personNameNow[64], personPhotoNow[512];
+
+static void historyPush(void) {
+  const CatItem *ci = cat_item(idx);
+  DetailPast *p;
+  if (!ci || !ci->imdb[0]) return;
+  // Full: the oldest goes. Eight titles deep is further than anyone walks back.
+  if (nHistory == DETAIL_HISTORY_MAX) {
+    memmove(history, history + 1, sizeof history[0] * (DETAIL_HISTORY_MAX - 1));
+    nHistory--;
+  }
+  p = &history[nHistory++];
+  memset(p, 0, sizeof *p);
+  snprintf(p->imdb, sizeof p->imdb, "%s", ci->imdb);
+  p->level = level; p->season = season; p->seasonByHand = seasonByHand;
+  p->tabInfo = tabInfo; p->relFocus = relFocus; p->ratTemp = ratTemp;
+  p->commentEp = commentEp; p->focus = focus;
+  p->personOpen = personIs_open; p->personFocus = personFocus;
+  p->personLine = personLine; p->personTmdb = personTmdbNow;
+  snprintf(p->personName, sizeof p->personName, "%s", personNameNow);
+  snprintf(p->personPhoto, sizeof p->personPhoto, "%s", personPhotoNow);
+}
+
+static void openState(const HomeItem *it, int shared);
+
+// Reopens the title behind this one, where the viewer left it. 0 when there is
+// none, and Back then closes the page as it always did. An entry whose title the
+// catalogue no longer has is skipped rather than opened empty.
+static int historyPop(void) {
+  while (nHistory > 0) {
+    DetailPast p = history[--nHistory];
+    int i = cat_index_by_imdb(p.imdb), r;
+    const CatItem *ci = cat_item(i);
+    HomeItem it;
+    if (!ci || (!ci->backdrop[0] && !ci->poster[0])) continue;
+    memset(&it, 0, sizeof it);
+    it.index_ = i;
+    it.rect = (GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+    it.art = ci->backdrop[0] ? ci->backdrop : ci->poster;
+    it.title = ci->title; it.genre = ci->genre; it.meta = ci->meta;
+    mark("detail: back to the previous title");
+    openState(&it, 0);
+    level = p.level; tabInfo = p.tabInfo; relFocus = p.relFocus;
+    ratTemp = p.ratTemp; commentEp = p.commentEp;
+    if (p.seasonByHand) { season = p.season; seasonByHand = 1; }
+    // The saved focus, over the columns this page has NOW: a row whose data has
+    // not come back yet is shorter than it was, and syncColumns pulls the column
+    // in until it arrives.
+    focus.row = p.focus.row < focus.nRows ? p.focus.row : 0;
+    focus.column = p.focus.column;
+    for (r = 0; r < FOCUS_MAX_ROWS; r++)
+      focus.columnRemembered[r] = p.focus.columnRemembered[r];
+    syncColumns();
+    if (p.personOpen && p.personTmdb > 0) {
+      person_request(p.personTmdb, p.personName, p.personPhoto);
+      personTmdbNow = p.personTmdb;
+      snprintf(personNameNow, sizeof personNameNow, "%s", p.personName);
+      snprintf(personPhotoNow, sizeof personPhotoNow, "%s", p.personPhoto);
+      personIs_open = 1; personFocus = p.personFocus; personLine = p.personLine;
+    }
+    return 1;
+  }
+  return 0;
+}
+
 void detail_open(const HomeItem *it, int shared) {
+  // Opened FROM a title that is on screen: remember it. Opened from anywhere else
+  // (the home, a grid, the search) the chain starts over.
+  if (is_open && !exiting) historyPush();
+  else nHistory = 0;
+  openState(it, shared);
+}
+
+static void openState(const HomeItem *it, int shared) {
   mark("detail_open");
   item = *it;
   sharedOrigin = shared;
@@ -1222,17 +1321,18 @@ void detail_event(const SDL_Event *e) {
           // separate work.
           const char *id = person_credit_imdb(personFocus);
           int target = id[0] ? cat_index_by_imdb(id) : -1;
-          if (target >= 0) { reqOpen = target; personIs_open = 0; }
+          // The panel STAYS open until the title replaces the page: detail_open
+          // remembers it with the page, so Back from that title comes back to this
+          // filmography, at this credit.
+          if (target >= 0) reqOpen = target;
           // Not in the catalogue: it fetches the meta and opens when it arrives. What
           // finishes the job is the router, which already follows the result.
           // The credit almost never carries an imdb_id, so the normal route is through
           // the TMDB id.
-          else if (id[0]) { disc_request_title(id); personIs_open = 0; }
-          else if (person_credit_tmdb(personFocus) > 0) {
+          else if (id[0]) disc_request_title(id);
+          else if (person_credit_tmdb(personFocus) > 0)
             disc_request_title_tmdb(person_credit_tmdb(personFocus),
                                    person_credit_kind(personFocus));
-            personIs_open = 0;
-          }
           return; }
         default: break;
       } }
@@ -1352,6 +1452,9 @@ void detail_event(const SDL_Event *e) {
         person_request(ci->cast[focus.column].tmdb,
                      ci->cast[focus.column].name,
                      ci->cast[focus.column].photo);
+        personTmdbNow = ci->cast[focus.column].tmdb;
+        snprintf(personNameNow, sizeof personNameNow, "%s", ci->cast[focus.column].name);
+        snprintf(personPhotoNow, sizeof personPhotoNow, "%s", ci->cast[focus.column].photo);
         personIs_open = 1;
         personFocus = 0;
         personLine = 0;
@@ -1372,6 +1475,11 @@ void detail_event(const SDL_Event *e) {
 
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
       k == SDLK_DELETE) {
+    // A title opened from another one goes back to THAT one, from any depth of
+    // the page: Back is "where I came from", and the page it returns to is
+    // restored at the card that was pressed. Only the first title of the chain
+    // steps up to the hero and then closes.
+    if (historyPop()) return;
     if (level > 0) level = 0; else exiting = 1;
     return;
   }
@@ -1578,7 +1686,7 @@ void detail_update(float dt, Uint32 now) {
   // exactly 0, so there is nothing on screen to pop — and the spring's tail below
   // that point was 270ms of an invisible rectangle being drawn over the home.
   if (exiting && t < NV_DETAIL_EXIT_CUT) {
-    is_open = 0; exiting = 0; velT = 0.0f; t = 0.0f; return;
+    is_open = 0; exiting = 0; velT = 0.0f; t = 0.0f; nHistory = 0; return;
   }
 
   for (int r = 0; r < N_SECTIONS; r++)
