@@ -115,6 +115,14 @@ int stream_sheet_reload(void);
 
 // Replaces the current title's list. Call when the addons answer.
 void stream_set_list(const Stream *list, int n);
+// Inserts one addon's rows at position `at` (clamped to the end), keeping every
+// index held into the list — the current source, the remembered one, the
+// sheet's cursor and a pick not yet consumed — on the row it pointed at. The
+// addons answer one at a time and the list grows as they do, so the sheet fills
+// in while the slow one is still out, instead of showing nothing until it gives
+// up. Returns how many rows went in (torrents with no debrid key are dropped).
+// UI thread only, and never while a verification is reading the list.
+int  stream_insert(int at, const Stream *list, int n);
 int  stream_n(void);
 const Stream *stream_item(int i);
 

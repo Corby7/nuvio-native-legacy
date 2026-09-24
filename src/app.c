@@ -54,6 +54,13 @@
 
 static int waitingSource;
 static pthread_t threadSource;
+// How long automatic Play waits on a slow addon before checking the links that
+// have already landed (see the early start in app_update).
+#define NV_SOURCE_EARLY_MS 2500u
+// 1 while the check running was started on a partial list; `triedEarly` makes it
+// once per Play, so a partial list that failed is not checked again row by row
+// every frame until the search ends.
+static int verifyEarly, triedEarly;
 static _Atomic int sourceChosen = -2;   // release/acquire entre verificacao e UI
 
 // Hands a chosen source to the player. A source that needs request headers goes
@@ -639,7 +646,38 @@ void app_update(float dt, Uint32 now) {
   // the new one, otherwise two would be stuck in the same pipeline.
   // The search fired by Play has finished: now VERIFY the sources, in order, until
   // one leads to the file — and only then switch the video on.
+  // START ON WHAT HAS LANDED when an addon is slow. The list grows one addon at a
+  // time (stream_insert), and waiting for the last one made automatic Play as
+  // slow as the slowest addon — a dead one cost its whole 12 s timeout every
+  // time. After NV_SOURCE_EARLY_MS the links already in are checked; a winner
+  // plays at once, and if none of them resolves the router goes back to waiting
+  // and checks the whole list once it is complete, exactly as before. The pick
+  // can differ from the all-addons one only when an addon is this slow.
+  //
+  // NOT WITH A REMEMBERED SOURCE: the pick the person made by hand may belong to
+  // the addon still out, and starting without it would skip it.
+  { int early = 0;
+    if (waitingSource == 1 && !triedEarly && addons_state() == ADD_SEARCHING &&
+        stream_n() > 0 && addons_search_ms() >= NV_SOURCE_EARLY_MS) {
+      const CatItem *ci = cat_item(player_index());
+      early = !(ci && ci->imdb[0] && sourcepref_has(ci->imdb));
+    }
+    if (early) {
+      printf("source: %u ms in, checking the %d sources already in\n",
+             addons_search_ms(), stream_n());
+      mark("source: checking early");
+      triedEarly = 1;
+      verifyEarly = 1;
+      stream_prefer(-1);
+      sourcePicked = -1;
+      waitingSource = 2;
+      sourceChosen = -2;
+      if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) {
+        waitingSource = 1; verifyEarly = 0;
+      }
+    } }
   if (waitingSource == 1 && addons_state() != ADD_SEARCHING) {
+    verifyEarly = 0;
     // THE SOURCE REMEMBERED FOR THIS TITLE GOES TO THE FRONT OF THE QUEUE.
     // Here and not on the button: the list only exists once the addons have
     // answered, and every path that asks for a source passes through here —
@@ -654,10 +692,20 @@ void app_update(float dt, Uint32 now) {
       waitingSource = 0; player_error_source();
     }
   }
+  // An early check that found nothing is not a failure: the addons still out may
+  // have what the first ones did not. Back to waiting for the complete list.
+  if (waitingSource == 2 && sourceChosen == -1 && verifyEarly &&
+      player_is_open() && !player_wants_exit()) {
+    pthread_join(threadSource, NULL);
+    verifyEarly = 0;
+    waitingSource = 1;
+    mark("source: early check found nothing, waiting for every addon");
+  }
   if (waitingSource == 2 && sourceChosen != -2) {
     pthread_join(threadSource,NULL);
     const Stream *s = sourceChosen >= 0 ? stream_item(sourceChosen) : NULL;
     waitingSource = 0;
+    verifyEarly = 0; triedEarly = 0;
     printf("automatic (checked): %s\n", s ? s->label : "(no usable source)");
     // The HDR/DV claim goes BEFORE playing: it is what the ACB bind describes to
     // tv.display. Without it the C9 shows everything mapped to SDR.

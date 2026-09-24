@@ -382,6 +382,8 @@ static int byAudio(const SourcePref *p) {
   return best;
 }
 
+int sourcepref_has(const char *id) { return ofTitle(id) != NULL; }
+
 int sourcepref_pick(const char *id) {
   const SourcePref *p = ofTitle(id);
   int best;

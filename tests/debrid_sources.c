@@ -222,9 +222,13 @@ int main(void) {
   assert(sourcepref_pick("tt1") == -1);
   profile = 1;
   assert(sourcepref_pick("tt1") == 1);                 // read back from the file
+  // HAS answers for the title, not for today's list: the router holds the early
+  // start on it even when the remembered row has not landed yet.
+  assert(sourcepref_has("tt1") && sourcepref_has("tt1:2:5") && !sourcepref_has("tt9"));
 
   sourcepref_forget();
   assert(sourcepref_pick("tt1") == -1);
+  assert(!sourcepref_has("tt1"));
   printf("ok  source memory: bingeGroup, audio, profiles, sign-out\n");
 
   printf("all debrid/source tests passed\n");

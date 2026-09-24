@@ -137,6 +137,13 @@ int  addons_subtitles_busy(void);
 int  addons_language_group(const char *code);
 
 AddState addons_state(void);
+// 1 while the title's search is out. A READ, unlike addons_state(), which also
+// PUBLISHES what has landed into the stream list — something a draw must never
+// do while a verification is reading that list.
+int  addons_busy(void);
+// How long the title's search has been out, in ms; 0 when none is. The router
+// starts checking links on a partial list once this passes a grace period.
+unsigned addons_search_ms(void);
 void addons_shutdown(void);
 
 #endif

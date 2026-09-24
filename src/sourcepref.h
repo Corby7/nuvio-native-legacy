@@ -66,6 +66,11 @@ int sourcepref_store(const char *id, const Stream *s);
 // preference. -1 when there is none or nothing today matches — and -1 means
 // "go automatic", never "do not play".
 int sourcepref_pick(const char *id);
+// 1 when this title HAS a remembered pick, whether or not today's list holds it.
+// The router asks before starting on a partial list: the pick may belong to the
+// addon that has not answered yet, and starting without it would skip the
+// source the person chose by hand.
+int sourcepref_has(const char *id);
 
 // The audio signature of a source: the marks found, sorted, joined by "+".
 // Empty when the source declares nothing. Exposed for the tests.

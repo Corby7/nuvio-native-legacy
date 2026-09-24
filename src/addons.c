@@ -30,8 +30,6 @@ static _Atomic AddState state = ADD_STOPPED;
 static pthread_t thread;
 static char targetId[64], targetKind[16];
 static int threadAlive;
-static Stream *result;
-static int nResult;
 static char pendingId[64], pendingKind[16];
 static void preForget(void);
 
@@ -217,26 +215,6 @@ const char *addons_base_for_id(const char *id) {
 int addons_has_catalog(int i) {
   return (i >= 0 && i < nAddon) ? addon[i].catalog : 0;
 }
-AddState addons_state(void) {
-  AddState e = atomic_load(&state);
-  // Publish on the UI thread: no drawing ever observes a half-written list.
-  if (threadAlive && e != ADD_SEARCHING) {
-    pthread_join(thread, NULL);
-    threadAlive = 0;
-    if (!pendingId[0]) stream_set_list(result, nResult);
-    free(result); result = NULL; nResult = 0;
-    if (pendingId[0]) {
-      char id[64], kind[16];
-      snprintf(id, sizeof id, "%s", pendingId);
-      snprintf(kind, sizeof kind, "%s", pendingKind);
-      pendingId[0] = 0;
-      addons_fetch(id, kind);
-      return ADD_SEARCHING;
-    }
-  }
-  return e;
-}
-
 // --- tolerant JSON reading ---------------------------------------------------
 // A complete parser does not pay for itself here: the format is known and
 // shallow, and what matters is never falling over on a missing field. Each
@@ -668,9 +646,13 @@ void addons_subtitles_file(const char *videoHash, long long videoSize, const cha
 #define ADD_THREADS 4
 
 typedef struct {
-  int idx;                 // qual addon
+  int idx;                 // which addon
   Stream *found;
   int    n;
+  // Set by the worker once `found` and `n` are final, so the UI thread can take
+  // this addon's rows while the others are still out.
+  _Atomic int done;
+  int shown;               // UI thread: rows that went into the list, -1 = not yet
 } BucketSource;
 
 // One search's worth of work, on the heap and not in globals: the normal fetch
@@ -697,66 +679,144 @@ static void *threadSources(void *u) {
     // 12 s and not 25: with the addons in parallel the timeout stops adding up,
     // but it is still the time the owner waits for the slowest one.
     body = net_download(url, 12);
-    if (!body) { printf("[addons] %s: no response\n", addon[i].name); continue; }
+    if (!body) {
+      printf("[addons] %s: no response\n", addon[i].name);
+      atomic_store_explicit(&r->buckets[mine].done, 1, memory_order_release);
+      continue;
+    }
     r->buckets[mine].n = stream_parse(body, addon[i].name, &r->buckets[mine].found);
+    if (r->buckets[mine].n < 0) r->buckets[mine].n = 0;
     printf("[addons] %s: %d sources (%u bytes)\n",
            addon[i].name, r->buckets[mine].n, (unsigned)strlen(body));
+    mark("addons: one addon answered");
     free(body);
+    atomic_store_explicit(&r->buckets[mine].done, 1, memory_order_release);
   }
+}
+
+static void roundOpen(Round *r, const char *id, const char *kind) {
+  int i;
+  memset(r, 0, sizeof *r);
+  r->id = id; r->kind = kind;
+  pthread_mutex_init(&r->lock, NULL);
+  r->buckets = calloc((size_t)(nAddon > 0 ? nAddon : 1), sizeof(BucketSource));
+  if (r->buckets)
+    for (i = 0; i < nAddon; i++)
+      if (addon[i].source) {
+        r->buckets[r->nBuckets].shown = -1;
+        r->buckets[r->nBuckets++].idx = i;
+      }
+}
+
+// Asks every source addon, in parallel, and returns once all have answered or
+// timed out.
+static void roundRun(Round *r) {
+  pthread_t threads[ADD_THREADS];
+  int created = 0, q;
+  if (!r->buckets || r->nBuckets <= 0) return;
+  for (q = 0; q < ADD_THREADS && q < r->nBuckets; q++)
+    if (pthread_create(&threads[created], NULL, threadSources, r) == 0) created++;
+  if (!created) threadSources(r);          // no threads: in series, same result
+  for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
+}
+
+static void roundClose(Round *r) {
+  int q;
+  for (q = 0; r->buckets && q < r->nBuckets; q++) free(r->buckets[q].found);
+  free(r->buckets);
+  r->buckets = NULL; r->nBuckets = 0;
+  pthread_mutex_destroy(&r->lock);
 }
 
 // Asks every source addon for `id` and returns the merged list in *out.
 static int gather(const char *id, const char *kind, Stream **out) {
   Stream *found = NULL;
-  int n = 0, i;
+  int n = 0, q;
   Round r;
-  memset(&r, 0, sizeof r);
-  r.id = id; r.kind = kind;
-  pthread_mutex_init(&r.lock, NULL);
-  r.buckets = calloc((size_t)(nAddon > 0 ? nAddon : 1), sizeof(BucketSource));
-  if (r.buckets)
-    for (i = 0; i < nAddon; i++)
-      if (addon[i].source) r.buckets[r.nBuckets++].idx = i;
-
-  if (r.buckets && r.nBuckets > 0) {
-    pthread_t threads[ADD_THREADS];
-    int created = 0, q;
-    for (q = 0; q < ADD_THREADS && q < r.nBuckets; q++)
-      if (pthread_create(&threads[created], NULL, threadSources, &r) == 0) created++;
-    if (!created) threadSources(&r);          // no threads: in series, same result
-    for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
-    // Joins IN ADDON ORDER, which is the order the owner installed them in.
-    for (q = 0; q < r.nBuckets; q++) {
-      int k = r.buckets[q].n;
-      if (k > 0) {
-        Stream *tmp = realloc(found, sizeof(Stream) * (size_t)(n + k));
-        if (tmp) { found = tmp;
-          memcpy(found + n, r.buckets[q].found, sizeof(Stream) * (size_t)k);
-          n += k;
-        } else printf("[addons] not enough memory for %d sources\n", k);
-      }
-      free(r.buckets[q].found);
+  roundOpen(&r, id, kind);
+  roundRun(&r);
+  // Joins IN ADDON ORDER, which is the order the owner installed them in.
+  for (q = 0; r.buckets && q < r.nBuckets; q++) {
+    int k = r.buckets[q].n;
+    if (k > 0) {
+      Stream *tmp = realloc(found, sizeof(Stream) * (size_t)(n + k));
+      if (tmp) { found = tmp;
+        memcpy(found + n, r.buckets[q].found, sizeof(Stream) * (size_t)k);
+        n += k;
+      } else printf("[addons] not enough memory for %d sources\n", k);
     }
   }
-  free(r.buckets);
-  pthread_mutex_destroy(&r.lock);
+  roundClose(&r);
   *out = found;
   return n;
 }
 
+// THE TITLE'S OWN SEARCH, the one whose rows the screen shows. It lives here
+// rather than inside the fetch thread because the UI thread reads its buckets
+// while it runs: each addon's rows go into the list the moment that addon
+// answers (livePublish), instead of all of them waiting on the slowest.
+//
+// Before, the list stayed empty until EVERY addon had answered, so one dead
+// addon held it for the full 12 s timeout, and automatic Play waited the same
+// 12 s before checking a single link even when a fast addon had long answered.
+static Round live;
+static Uint32 liveAt;
+
+// The rows of every addon that has answered, into the list in ADDON ORDER: an
+// addon that lands late goes in at its own place, not at the end, so the final
+// list is the one the old all-at-once merge built and the automatic pick among
+// the same rows is unchanged. UI thread.
+static void livePublish(void) {
+  int q, at = 0;
+  for (q = 0; live.buckets && q < live.nBuckets; q++) {
+    BucketSource *b = &live.buckets[q];
+    if (b->shown < 0 && atomic_load_explicit(&b->done, memory_order_acquire))
+      b->shown = b->n > 0 ? stream_insert(at, b->found, b->n) : 0;
+    if (b->shown > 0) at += b->shown;
+  }
+}
+
+unsigned addons_search_ms(void) {
+  return threadAlive ? SDL_GetTicks() - liveAt : 0;
+}
+
 static void *fetch(void *u) {
-  Stream *found = NULL;
-  int n;
+  int n = 0, q;
   (void)u;
   mark("addons: query start");
-  n = gather(targetId, targetKind, &found);
+  roundRun(&live);
+  for (q = 0; live.buckets && q < live.nBuckets; q++) n += live.buckets[q].n;
   mark(n ? "addons: sources received" : "addons: no sources");
-  result = found; nResult = n;
   printf("[addons] total %d\n", n);
   fflush(stdout);
   atomic_store(&state, n ? ADD_READY : ADD_EMPTY);
   return NULL;
 }
+
+AddState addons_state(void) {
+  AddState e = atomic_load(&state);
+  // Publish on the UI thread: no drawing ever observes a half-written list. The
+  // addons that have answered go in NOW, one at a time, while the slow one is
+  // still out — see stream_insert. A search already superseded publishes nothing.
+  if (threadAlive && !pendingId[0]) livePublish();
+  if (threadAlive && e != ADD_SEARCHING) {
+    pthread_join(thread, NULL);
+    threadAlive = 0;
+    if (!pendingId[0]) livePublish();
+    roundClose(&live);
+    if (pendingId[0]) {
+      char id[64], kind[16];
+      snprintf(id, sizeof id, "%s", pendingId);
+      snprintf(kind, sizeof kind, "%s", pendingKind);
+      pendingId[0] = 0;
+      addons_fetch(id, kind);
+      return ADD_SEARCHING;
+    }
+  }
+  return e;
+}
+
+int addons_busy(void) { return atomic_load(&state) == ADD_SEARCHING; }
 
 // THE NEXT EPISODE'S SOURCES, FETCHED BEFORE THEY ARE ASKED FOR.
 //
@@ -863,13 +923,17 @@ void addons_fetch(const char *imdb, const char *kind) {
     snprintf(targetId, sizeof targetId, "%s", imdb);
   snprintf(targetKind, sizeof targetKind, "%s", kind && *kind ? kind : "movie");
   state = ADD_SEARCHING;
+  roundOpen(&live, targetId, targetKind);
+  liveAt = SDL_GetTicks();
   threadAlive = 1;
-  if (pthread_create(&thread, NULL, fetch, NULL) != 0) { threadAlive = 0; state = ADD_STOPPED; }
+  if (pthread_create(&thread, NULL, fetch, NULL) != 0) {
+    threadAlive = 0; state = ADD_STOPPED; roundClose(&live);
+  }
 }
 
 void addons_shutdown(void) {
   int mergeSub;
-  if (threadAlive) pthread_join(thread, NULL);
+  if (threadAlive) { pthread_join(thread, NULL); roundClose(&live); }
   threadAlive = 0;
   pthread_mutex_lock(&subLock);
   subStop = 1; subGeneration++; mergeSub = threadSubCreated;
@@ -878,7 +942,6 @@ void addons_shutdown(void) {
   pthread_mutex_lock(&subLock);
   threadSubCreated = threadSubAlive = 0; nSubs = 0;
   pthread_mutex_unlock(&subLock);
-  free(result); result = NULL; nResult = 0;
   if (preAlive) { pthread_join(threadPre, NULL); preAlive = 0; free(preNew); preNew = NULL; }
   preClear();
   state = ADD_STOPPED;

@@ -90,6 +90,7 @@ int stream_n(void) {
   return n;
 }
 
+
 const Stream *stream_item(int i) {
   return i >= 0 && i < n ? &list[i] : NULL;
 }
@@ -400,6 +401,46 @@ static int nFiltered(void) {
   for(int i=0;i<n;i++) if(!filter || !strcmp(list[i].provider,providers[filter])) k++;
   return k;
 }
+// One addon's rows, into the list at `at`. See streams.h for why the list grows
+// instead of being replaced.
+int stream_insert(int at, const Stream *l, int count) {
+  int i, k = 0, debrid = debrid_active(), line = -1;
+  Stream *grown;
+  if (!l || count <= 0) return 0;
+  if (at < 0 || at > n) at = n;
+  for (i = 0; i < count; i++) if (l[i].url[0] || debrid) k++;
+  if (count - k) printf("[source] %d torrents dropped: no debrid key\n", count - k);
+  if (!k) return 0;
+  // The row the sheet's cursor is on, as a LIST index: the cursor counts lines
+  // of the filtered view, and rows landing above it would otherwise slide a
+  // different source under it while the viewer is reading.
+  if (is_open) line = filtered(focus);
+  pthread_mutex_lock(&seeLock);
+  grown = realloc(list, sizeof(Stream) * (size_t)(n + k));
+  if (!grown) { pthread_mutex_unlock(&seeLock); return 0; }
+  list = grown;
+  memmove(list + at + k, list + at, sizeof(Stream) * (size_t)(n - at));
+  for (i = 0, k = 0; i < count; i++)
+    if (l[i].url[0] || debrid) list[at + k++] = l[i];
+  n += k;
+  listGen++;
+  pthread_mutex_unlock(&seeLock);
+  // Every index held into the list moves with the rows it pointed at.
+  if (current >= at) current += k;
+  if (preferred >= at) preferred += k;
+  if (choice >= at) choice += k;
+  for (i = at; i < at + k; i++) stream_rank(&list[i], runtimeS);
+  if (line >= 0) {
+    int j, v = 0;
+    if (line >= at) line += k;
+    updateProviders();
+    for (j = 0; j < line; j++)
+      if (!filter || !strcmp(list[j].provider, providers[filter])) v++;
+    focus = v;
+  }
+  return k;
+}
+
 void stream_sheet_open(void) {
   is_open=1; choice=-1; focus=0; group=1; filter=0; reload=0;
   updateProviders();
@@ -879,7 +920,7 @@ void stream_sheet_draw(Uint32 now) {
     }
     if(pin>=0) sheetRow(pin,NV_SRC_TOP,cx,cw,now); }
   if(!nf) {
-    const char *msg=addons_state()==ADD_SEARCHING?"Fetching sources from the addons\xE2\x80\xA6":"No direct source available. Use Reload to try again.";
+    const char *msg=addons_busy()?"Fetching sources from the addons\xE2\x80\xA6":"No direct source available. Use Reload to try again.";
     txt_block(TXT_SRC_TEXT,msg,166,169,176,cx,NV_SRC_TOP+28.0f,cw,32.0f,anim,3);
   }
   gfx_no_crop();
