@@ -145,6 +145,14 @@ int  stream_first_good(int attempts, int season, int episode);
 // The same check for ONE row: the one the person picked in the sheet. Returns
 // `index` when it resolves, -1 when not. BLOCKS.
 int  stream_verify_one(int index, int season, int episode);
+// THE SAME WALK, BEFORE PLAY IS PRESSED, without resolving torrents: it stops at
+// the first torrent in the walk's order, since resolving one makes the debrid
+// fetch it. A row that passes is the row stream_first_good would pick too. *gen
+// receives the list generation it read; the answer holds only while
+// stream_list_gen() still returns it. -1 when nothing ahead of a torrent passed.
+int  stream_first_good_direct(int attempts, int season, int episode, unsigned *gen);
+// Changes whenever the list is replaced or grows.
+unsigned stream_list_gen(void);
 
 // THE SOURCE TO TRY FIRST: the one remembered for this title (sourcepref.c).
 // An index in the CURRENT list, or -1 for none. A new list resets it — an index

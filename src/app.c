@@ -136,6 +136,42 @@ static void *chooseSource(void *u) {
   sourceChosen = stream_first_good(8, t, e);
   return NULL;
 }
+// `threadSource` is joined only when one was started: a Play that uses the check
+// made ahead of it (below) goes to the hand-over with no thread behind it.
+static int joinSource;
+static int startCheck(void) {
+  if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) return 0;
+  joinSource = 1;
+  return 1;
+}
+static void joinCheck(void) {
+  if (joinSource) { pthread_join(threadSource, NULL); joinSource = 0; }
+}
+
+// THE LINK CHECK, MADE WHILE THE TITLE PAGE IS OPEN. The sources are already
+// fetched on opening the page, but the check that follows every redirect and
+// catches the debrid's notice videos only started at Play — seconds of "Opening
+// source" spent on work that could have been done while the viewer was reading.
+// It runs the automatic walk over the complete list without resolving torrents
+// (stream_first_good_direct), and Play hands its winner straight to the player
+// while the list is still the one it checked and the link is under
+// NV_LINK_VALID_MS old. One at a time; a page left before it ends simply leaves
+// an answer nobody reads.
+static _Atomic int aheadBusy, aheadDone;
+static int aheadChosen, aheadT, aheadE;
+static unsigned aheadGen, aheadAsked;
+static _Atomic Uint32 aheadAt;
+static char aheadTarget[64];
+static void *checkAhead(void *u) {
+  unsigned gen = 0;
+  (void)u;
+  aheadChosen = stream_first_good_direct(8, aheadT, aheadE, &gen);
+  aheadGen = gen;
+  atomic_store(&aheadAt, SDL_GetTicks());
+  atomic_store_explicit(&aheadDone, 1, memory_order_release);
+  atomic_store_explicit(&aheadBusy, 0, memory_order_release);
+  return NULL;
+}
 #include "catalog.h"
 #include "gfx.h"
 #include "catalog.h"
@@ -593,6 +629,23 @@ void app_update(float dt, Uint32 now) {
         // search takes seconds. Asking only when the owner opens the tracks sheet
         // would leave them waiting in front of an empty list.
         addons_fetch_subtitles(target, ci->kind);
+      }
+      // Once the list is complete, check it ahead of Play (see checkAhead). A new
+      // list — another episode focused, a reload — asks again.
+      if (!player_is_open() && waitingSource == 0 && ci && ci->imdb[0] &&
+          !atomic_load_explicit(&aheadBusy, memory_order_acquire) &&
+          addons_state() == ADD_READY && stream_n() > 0 &&
+          (strcmp(target, aheadTarget) || stream_list_gen() != aheadAsked)) {
+        pthread_t t;
+        snprintf(aheadTarget, sizeof aheadTarget, "%s", target);
+        aheadAsked = stream_list_gen();
+        aheadT = aheadE = 0;
+        detail_ep_focus(&aheadT, &aheadE);
+        stream_prefer(sourcepref_pick(ci->imdb));
+        atomic_store(&aheadDone, 0);
+        atomic_store(&aheadBusy, 1);
+        if (pthread_create(&t, NULL, checkAhead, NULL) == 0) pthread_detach(t);
+        else atomic_store(&aheadBusy, 0);
       } }
     if (detail_requested_play() && waitingSource != 2) {
       // The screen opens NOW, in the "opening source" state, and the choice
@@ -621,7 +674,20 @@ void app_update(float dt, Uint32 now) {
                (unsigned)stream_age_ms(), target);
         addons_fetch(target, ci->kind);
       }
-      waitingSource = 1;
+      // Checked ahead: straight to the hand-over below, with no thread and no
+      // wait. Only for the list it checked (a refresh just above changes it) and
+      // the target Play is for.
+      { char target[64];
+        idOfTarget(ci, target, sizeof target);
+        if (atomic_load_explicit(&aheadDone, memory_order_acquire) && aheadChosen >= 0 &&
+            aheadGen == stream_list_gen() && !strcmp(target, aheadTarget) &&
+            SDL_GetTicks() - atomic_load(&aheadAt) < NV_LINK_VALID_MS) {
+          printf("source: checked ahead of Play, %u ms ago\n",
+                 (unsigned)(SDL_GetTicks() - atomic_load(&aheadAt)));
+          mark("source: checked ahead of Play");
+          sourceChosen = aheadChosen;
+          waitingSource = 2;
+        } else waitingSource = 1; }
     }
     // A TRAILER: IMDb's MP4 is the URL already, so there is no source search and
     // `waitingSource` is left alone. Back closes the player onto this page.
@@ -682,7 +748,7 @@ void app_update(float dt, Uint32 now) {
       sourcePicked = -1;
       waitingSource = 2;
       sourceChosen = -2;
-      if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) {
+      if (!startCheck()) {
         waitingSource = 1; verifyEarly = 0;
       }
     } }
@@ -698,7 +764,7 @@ void app_update(float dt, Uint32 now) {
     sourcePicked = -1;
     waitingSource = 2;
     sourceChosen = -2;
-    if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) {
+    if (!startCheck()) {
       waitingSource = 0; player_error_source();
     }
   }
@@ -706,13 +772,13 @@ void app_update(float dt, Uint32 now) {
   // have what the first ones did not. Back to waiting for the complete list.
   if (waitingSource == 2 && sourceChosen == -1 && verifyEarly &&
       player_is_open() && !player_wants_exit()) {
-    pthread_join(threadSource, NULL);
+    joinCheck();
     verifyEarly = 0;
     waitingSource = 1;
     mark("source: early check found nothing, waiting for every addon");
   }
   if (waitingSource == 2 && sourceChosen != -2) {
-    pthread_join(threadSource,NULL);
+    joinCheck();
     const Stream *s = sourceChosen >= 0 ? stream_item(sourceChosen) : NULL;
     waitingSource = 0;
     verifyEarly = 0; triedEarly = 0;
@@ -765,7 +831,7 @@ void app_update(float dt, Uint32 now) {
         sourcePicked = source;
         waitingSource = 2;
         sourceChosen = -2;
-        if (pthread_create(&threadSource, NULL, chooseSource, NULL) != 0) {
+        if (!startCheck()) {
           waitingSource = 0; player_error_source();
         }
       }
@@ -1072,7 +1138,7 @@ void app_regions(void) {
 int app_wants_exit(void) { return wantsExit; }
 
 void app_shutdown(void) {
-  if (waitingSource == 2) pthread_join(threadSource, NULL);
+  joinCheck();
   waitingSource = 0;
   player_shutdown();
   settings_shutdown();

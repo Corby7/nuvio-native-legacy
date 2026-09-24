@@ -297,15 +297,15 @@ static int verify(const int *used, int nu, int season, int episode) {
   return chosen;
 }
 
-int stream_first_good(int attempts, int season, int episode) {
-  int *used, nu = 0;
+// The rows the automatic walk checks, in the order it reads them: the
+// remembered one first, then the best `attempts` by score. Returns how many went
+// into `used`, which has room for attempts + 1.
+static int candidates(int attempts, int *used) {
+  int nu = 0;
   int total = stream_n();
-  int chosen = -1;
-  if (total < 1) return -1;
+  if (total < 1) return 0;
   if (attempts < 1) attempts = 1;
   if (attempts > total) attempts = total;
-  used = calloc((size_t)attempts + 1, sizeof *used);
-  if (!used) return -1;
 
   // THE PREFERRED ONE GOES FIRST, ahead of the score: it is the source the
   // person picked by hand for this title, and it can sit anywhere in the list —
@@ -329,6 +329,16 @@ int stream_first_good(int attempts, int season, int episode) {
     if (best < 0) break;
     used[nu++] = best;
   }
+  return nu;
+}
+
+int stream_first_good(int attempts, int season, int episode) {
+  int *used, nu;
+  int chosen = -1;
+  if (stream_n() < 1) return -1;
+  used = calloc((size_t)(attempts < 1 ? 1 : attempts) + 1, sizeof *used);
+  if (!used) return -1;
+  nu = candidates(attempts, used);
   if (nu < 1) { free(used); return -1; }
 
   mark("source: check start");
@@ -337,6 +347,40 @@ int stream_first_good(int attempts, int season, int episode) {
   free(used);
   if (chosen >= 0) printf("[source] %d ok\n", chosen);
   return chosen;
+}
+
+int stream_first_good_direct(int attempts, int season, int episode, unsigned *gen) {
+  int *used, nu, q, chosen;
+  used = calloc((size_t)(attempts < 1 ? 1 : attempts) + 1, sizeof *used);
+  if (!used) return -1;
+  // The rows are picked UNDER THE LOCK, and the list's generation with them:
+  // this runs while the title page is open, where a new episode's search can
+  // replace the list at any moment. The caller trusts the answer only while the
+  // list is still that generation.
+  pthread_mutex_lock(&seeLock);
+  if (gen) *gen = listGen;
+  nu = candidates(attempts, used);
+  // CUT AT THE FIRST TORRENT. Resolving one asks the debrid to fetch it, which
+  // is real work on the person's account for a title they may only be reading
+  // about. The rows ahead of it are checked; whatever passes among them is the
+  // row the full walk would choose too, because the walk reads in this order.
+  for (q = 0; q < nu; q++) if (!list[used[q]].url[0]) break;
+  pthread_mutex_unlock(&seeLock);
+  nu = q;
+  if (nu < 1) { free(used); return -1; }
+  mark("source: check ahead of Play");
+  chosen = verify(used, nu, season, episode);
+  free(used);
+  if (chosen >= 0) printf("[source] %d ok ahead of Play\n", chosen);
+  return chosen;
+}
+
+unsigned stream_list_gen(void) {
+  unsigned g;
+  pthread_mutex_lock(&seeLock);
+  g = listGen;
+  pthread_mutex_unlock(&seeLock);
+  return g;
 }
 
 int stream_verify_one(int index, int season, int episode) {
