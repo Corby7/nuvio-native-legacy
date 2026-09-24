@@ -7,10 +7,13 @@
 #include "text.h"
 #include "tex_cache.h"
 #include "layout.h"
+#include "gridsize.h"
 #include "anim.h"
 #include "settings.h"
 #include "director.h"
 #include "dropdown.h"
+#include "hold.h"
+#include "ctxmenu.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -35,9 +38,10 @@
 // grid; the title screen is one press away and says all of that proprly, with
 // room to say it.
 //
-// Everything else is still the Library's: six columns, 24 between them, 16 down
-// to the title, 85.8 from one poster's foot to the next one's head.
-#define SEEALL_GRID_COLS 6
+// Everything else is still the Library's: its column count (the viewer's, from
+// the grid-size button — see gridsize.h), 24 between them, 16 down to the
+// title, 85.8 from one poster's foot to the next one's head.
+#define SEEALL_GRID_COLS grid_cols()
 #define SEEALL_COLS    (timeline ? 1 : SEEALL_GRID_COLS)
 #define SEEALL_CARD_W  gridCardW()
 #define SEEALL_CARD_H  (timeline ? 236.0f : SEEALL_CARD_W * 1.5f)
@@ -126,6 +130,12 @@ static int   menuOpen = -1, menuFocus;
 // card it belongs to is `focus`; when that moves the scale stays put and the
 // new card simply has it. Discover does the same.
 static float animCard;
+// THE GRID-SIZE BUTTON sits at the right end of the picker row and is reached
+// like one more picker: `pickSel == nPicks` is the button. With no pickers (a
+// home row's "See all") it is the only thing in that row. The Directors
+// timeline is one column by design and has none.
+#define HAS_GRID_BTN (!timeline)
+static float animBtn;
 
 // HOW WIDE A CARD HAS TO BE for six of them to fit the width.
 //
@@ -136,14 +146,15 @@ static float animCard;
 // the right edge of the screen. Fitted, the card is about 241 with the rail and
 // about 265 without it, which is the Library's to within a couple of pixels.
 //
-// Never wider than the Library's card: that is the app's poster, and a screen
-// with nothing on either side of it should not grow past it.
+// Never wider than the Library's card at the same column count: that is the
+// app's poster, and a screen with nothing on either side of it should not grow
+// past it.
 static float gridCardW(void) {
   float avail = NV_SCREEN_W - settings_content_x() - NV_CONTENT_PAD;
   float w = (avail - (SEEALL_GRID_COLS - 1) * NV_LIB_CARD_GAP)
           / (float)SEEALL_GRID_COLS;
   if (w < 120.0f) w = 120.0f;
-  return w > NV_LIB_CARD_W ? NV_LIB_CARD_W : w;
+  return w > grid_card_w() ? grid_card_w() : w;
 }
 static int group(const char *name) {
   return collection && !strcmp(collection->group, name);
@@ -494,9 +505,38 @@ int seeall_requested_open(void) { int v = reqOpen; reqOpen = -1; return v; }
 
 static int nItems(void) { return disc_seeall_n(); }
 
+// Holding OK on a card opens the poster menu (hold.h). The card it opens beside
+// is the one drawn focused on the last frame.
+static Hold hold;
+static GfxRect holdCard;
+static float holdCardR;
+static int hasHoldCard;
+
+// The focused card as a catalogue index. The grid item is NOT in the global
+// catalogue — it came from a page only this screen read. It goes in through
+// cat_append so the title screen and the hold menu can open it by index, which
+// is how the whole app works. -1 when there is no card.
+static int focusedIndex(void) {
+  CatItem it;
+  int idx;
+  if (focus < 0 || focus >= nItems() || !viewItem(focus, &it)) return -1;
+  idx = it.imdb[0] ? cat_index_by_imdb(it.imdb) : -1;
+  if (idx < 0) idx = cat_append(&it);
+  return idx;
+}
+
 void seeall_event(const SDL_Event *e) {
   int n = nItems(), k;
-  if (!is_open || e->type != SDL_KEYDOWN) return;
+  if (!is_open) return;
+  // OK over a card is a tap or a hold, and only the release can tell which.
+  { int tap;
+    if (hold_event(&hold, e, menuOpen < 0 && !pickFocus && n > 0 &&
+                             !disc_seeall_error(), &tap)) {
+      // A tap keeps the list and the position on the way back.
+      if (tap) { int idx = focusedIndex(); if (idx >= 0) reqOpen = idx; }
+      return;
+    } }
+  if (e->type != SDL_KEYDOWN) return;
   k = e->key.keysym.sym;
   { int back = (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
                 e->key.keysym.scancode == NV_SCANCODE_BACK);
@@ -517,9 +557,13 @@ void seeall_event(const SDL_Event *e) {
       return;
     }
     if (back) { is_open = 0; return; } }
-  if(nPicks&&pickFocus) {
+  if((nPicks||HAS_GRID_BTN)&&pickFocus) {
     if(k==SDLK_LEFT&&pickSel>0)pickSel--;
-    else if(k==SDLK_RIGHT&&pickSel+1<nPicks)pickSel++;
+    else if(k==SDLK_RIGHT&&pickSel+1<nPicks+HAS_GRID_BTN)pickSel++;
+    // The button: OK steps the size, and the grid re-flows around the title
+    // the focus was on.
+    else if((k==SDLK_RETURN||k==SDLK_KP_ENTER||k==SDLK_SPACE)&&pickSel>=nPicks)
+      grid_cycle();
     else if(k==SDLK_RETURN||k==SDLK_KP_ENTER||k==SDLK_SPACE) {
       // A list with one option in it is not a question. The picker is still
       // drawn — it says which list is on screen — but OK does not open a sheet
@@ -530,7 +574,7 @@ void seeall_event(const SDL_Event *e) {
     else if(k==SDLK_DOWN&&n>0)pickFocus=0;
     return;
   }
-  if(k==SDLK_UP&&focus<SEEALL_COLS&&nPicks){pickFocus=1;syncPickers();return;}
+  if(k==SDLK_UP&&focus<SEEALL_COLS&&(nPicks||HAS_GRID_BTN)){pickFocus=1;syncPickers();return;}
   if((k==SDLK_RETURN||k==SDLK_KP_ENTER)&&disc_seeall_error()){disc_seeall_more();return;}
   if (n < 1) return;
   if (k == SDLK_RIGHT && focus + 1 < n) focus++;
@@ -538,26 +582,25 @@ void seeall_event(const SDL_Event *e) {
   else if (k == SDLK_DOWN) { if (focus + SEEALL_COLS < n) focus += SEEALL_COLS;
                              else focus = n - 1; }
   else if (k == SDLK_UP) { if (focus >= SEEALL_COLS) focus -= SEEALL_COLS; }
-  else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
-    // The grid item is NOT in the global catalogue — it came from a page only
-    // this screen read. It goes in through cat_append so the title screen can
-    // open it by index, which is how the whole app works.
-    CatItem it;
-    if (viewItem(focus, &it)) {
-      int idx = it.imdb[0] ? cat_index_by_imdb(it.imdb) : -1;
-      if (idx < 0) idx = cat_append(&it);
-      if (idx >= 0) { reqOpen = idx; } // keeps the list and the position on the way back
-    }
-  }
+  // OK on a card is handled above, by the hold.
   // Nearing the end, ask for the next page. Before the owner sees the empty
   // space, not once they are already staring at it.
-  if (focus >= n - SEEALL_COLS * 2) disc_seeall_more();
+  // Four rows ahead and not two, for Discover's reason: the page has to land AND
+  // its posters have to arrive before the viewer gets there.
+  if (focus >= n - SEEALL_COLS * 4) disc_seeall_more();
 }
 
 void seeall_update(float dt, Uint32 now) {
   float target, maxY;
   int n = nItems(), lines;
-  (void)now;
+  hold_animate(&hold, dt, now);
+  if (hold_fired(&hold, now) && is_open && !pickFocus) {
+    int idx = focusedIndex();
+    if (idx >= 0) {
+      if (hasHoldCard) ctx_set_anchor(holdCard, holdCardR);
+      ctx_open(idx);
+    }
+  }
   // Critically damped, for the reason anim.h records at anim_spring2 and the
   // detail screen's flight documents at NV_SPRING2_SCREEN: a first-order spring
   // leaves at maximum speed, which on this size of movement is a cut.
@@ -565,10 +608,13 @@ void seeall_update(float dt, Uint32 now) {
                       is_open ? NV_SPRING2_GRID : NV_SPRING2_GRID_OUT);
   if (!is_open) return;
   for (int t = 0; t < TY_N; t++) {
-    float targetPick = nPicks && pickFocus && picks[pickSel] == t ? 1.0f : 0.0f;
+    float targetPick = pickFocus && pickSel < nPicks && picks[pickSel] == t ? 1.0f : 0.0f;
     pickAnim[t] = anim_spring(pickAnim[t], targetPick, dt,
                            targetPick > pickAnim[t] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
+  { float targetBtn = HAS_GRID_BTN && pickFocus && pickSel >= nPicks ? 1.0f : 0.0f;
+    animBtn = anim_spring(animBtn, targetBtn, dt,
+                          targetBtn > animBtn ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
   // The grid's own focus. It is the CARD scale, so it drops to 0 while the
   // picker row has the focus: a poster still swollen under a dropdown the viewer
   // has moved up to reads as two things focused at once.
@@ -873,6 +919,12 @@ static void themeHeader(float a,float x0,float dy) {
     dd_pill(pickRect(i, x0, dy), TY_LABEL[t], sourceOption(srcOf[t][selOf[t]]),
             pickAnim[t], t == activeType(), a);
   }
+  // Right-aligned on the picker row, centred on its pills. With no picker row
+  // the grid starts high, so it moves up beside the wordmark instead.
+  if (HAS_GRID_BTN)
+    grid_button_draw(NV_SCREEN_W - NV_CONTENT_PAD,
+                     (nPicks ? SEEALL_PICK_Y + (NV_DD_PICK_H - 64.0f) * 0.5f
+                             : 105.0f) + dy, animBtn, a);
 }
 
 static void timelineCard(int i,float cy,float a,float x0) {
@@ -897,6 +949,7 @@ static void timelineCard(int i,float cy,float a,float x0) {
 }
 
 void seeall_draw(Uint32 now) {
+  hasHoldCard = 0;
   float a = anim, x0 = settings_content_x();
   int n = nItems(), i;
   (void)now;
@@ -970,6 +1023,8 @@ void seeall_draw(Uint32 now) {
     // `transform-origin: top`: the top edge stays on its row and the growth goes
     // downwards, so only x is re-centred.
     GfxRect r = { cx - (cw - SEEALL_CARD_W) * 0.5f, cy, cw, chh };
+    // Held: pressed in about its centre (hold.h). The glow goes behind it below.
+    if (sel && !timeline) r = hold_card(&hold, r);
     // The SAME radius as the home's posters: `posterCardCornerRadiusDp` (12dp x
     // 2 = 24px), a fraction of the SMALLER side because the shader's SDF is
     // normalised. The fixed NV_RADIUS_CARD that used to be here gave a corner
@@ -979,7 +1034,17 @@ void seeall_draw(Uint32 now) {
     // Dividing by the width rounded this poster half again too much. See the
     // note on radiusInset in home.c.
     float radius = settings_radius_poster_px() / r.h;
-    if (cy > NV_SCREEN_H || cy + SEEALL_CARD_H + 40.0f < SEEALL_CLIP_TOP) continue;
+    if (sel && !timeline) { holdCard = r; holdCardR = radius * r.h; hasHoldCard = 1; }
+    if (cy > NV_SCREEN_H || cy + SEEALL_CARD_H + 40.0f < SEEALL_CLIP_TOP) {
+      // Off screen: warm the rows within reach so a DOWN brings up posters and
+      // not skeletons (gridsize.h). Only those rows, because a folder runs to
+      // hundreds of titles and each copy out of the page cache costs.
+      float step = SEEALL_CARD_H + SEEALL_GAP_Y;
+      if (!timeline && pass == 0 && cy < NV_SCREEN_H + step * 4.0f &&
+          cy + step > -step * 1.5f && viewItem(i, &it))
+        grid_warm(it.poster[0] ? it.poster : it.backdrop, cy, SEEALL_CARD_W, step);
+      continue;
+    }
     // The Directors timeline scrolls in the same viewport and dissolves with it.
     if(timeline){
       if(!pass&&edge>0.004f){
@@ -995,6 +1060,7 @@ void seeall_draw(Uint32 now) {
       // The RESTING width, not the animated one: tex_cache re-decodes an exact
       // request whose width moves, and a poster that re-decodes through a focus
       // spring is a poster that is missing for the length of it.
+      if (sel) hold_glow(&hold, r, radius * r.h);
       t = it.poster[0] ? tex_get_width(it.poster, SEEALL_CARD_W)
         : (it.backdrop[0] ? tex_get_width(it.backdrop, SEEALL_CARD_W) : 0);
       if (t) {
@@ -1025,9 +1091,10 @@ void seeall_draw(Uint32 now) {
       // AND /r.h, NOT /r.w: the SDF is normalised to the HEIGHT — `p =
       // (uv-0.5)*vec2(asp,1.0)` makes one unit h pixels on both axes — so a
       // thickness divided by the width comes out at w/h of what was asked for.
-      if (f > 0.01f)
-        gfx_rect(r, 0, GFX_RING_INSET, 0, NV_LIB_POSTER_BORDER / r.h, 0, radius,
-                 0.961f, 0.961f, 0.961f, f * a); }
+      // The ring, with the hold's sweep over it while OK is held.
+      hold_ring(&hold, r, NV_LIB_POSTER_BORDER / r.h, radius,
+                0.961f, 0.961f, 0.961f, f * a);
+      if (sel) hold_track(&hold, r, radius * r.h); }
     // The title stays on the UNSCALED column, as the Library's does: a name
     // that slid sideways under a poster that grew would be two movements where
     // the card only made one.

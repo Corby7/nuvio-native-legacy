@@ -28,10 +28,13 @@
 #include "tex_cache.h"
 #include "anim.h"
 #include "layout.h"
+#include "gridsize.h"
 #include "settings.h"
 #include "catalog.h"
 #include "dropdown.h"
 #include "tabs.h"
+#include "hold.h"
+#include "ctxmenu.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -52,7 +55,8 @@ static const char *ORDER_LABEL[LIB_N_ORDER] = {
   "Title A\xe2\x80\x93Z" };
 
 enum { PICK_KIND, PICK_ORDER, PICK_N };
-enum { ZONE_TABS, ZONE_PICKERS, ZONE_GRID };
+// ZONE_HEAD is the grid-size button on the title row, above the strip.
+enum { ZONE_HEAD, ZONE_TABS, ZONE_PICKERS, ZONE_GRID };
 
 static int mode = MODE_SAVED;
 static int kind = KIND_ALL;
@@ -71,10 +75,15 @@ static int totalMode = 0;
 static float animPick[PICK_N];
 static float animCard;           // one spring: only ever one card is focused
 static float animTabs;           // the cursor on the Saved / Collection strip
+static float animHead;           // the grid-size button
 static float scrollY;
 static int wantsExit = 0, request = -1, requestMenu = 0;
 static HomeItem itemFocus;
 static int hasItemFocus;
+// Holding OK on a card opens the poster menu (hold.h), and the list is rebuilt
+// when the menu closes: "Remove from library" there has to take the card away.
+static Hold hold;
+static int ctxWasOpen;
 
 // Account state. The real list is Trakt's, which marks ci->inList/inCollection
 // ON THE ITEM — there is no per-index table here any more: the catalogue is
@@ -174,13 +183,13 @@ int library_start(void) {
   return 1;
 }
 
-void library_resume(void) {
+// Rebuilds the list and puts the focus back on the title it was on, found by
+// id since its index may have moved. rebuild() alone puts it on the first card.
+// A title that has LEFT the list (removed from it through the hold menu) hands
+// the focus to the card that took its place.
+static void rebuildKeepingFocus(void) {
   char was[32] = "";
-  wantsExit = 0; request = -1;
-  hasItemFocus = 0;
-  // Rebuilt, because the watchlist may have changed while the screen was away
-  // (the title page's "+"). rebuild() puts the focus on the first card; the one
-  // the viewer left is found again by id, since its index may have moved.
+  int at = focus, found = 0;
   if (focus >= 0 && focus < nFilter) {
     const CatItem *ci = cat_item(filter[focus]);
     if (ci) snprintf(was, sizeof was, "%s", ci->imdb);
@@ -189,8 +198,20 @@ void library_resume(void) {
   if (was[0])
     for (int i = 0; i < nFilter; i++) {
       const CatItem *ci = cat_item(filter[i]);
-      if (ci && !strcmp(ci->imdb, was)) { focus = i; break; }
+      if (ci && !strcmp(ci->imdb, was)) { focus = i; found = 1; break; }
     }
+  if (!found && zone == ZONE_GRID) {
+    if (nFilter == 0) zone = ZONE_PICKERS;
+    else focus = at < nFilter ? at : nFilter - 1;
+  }
+}
+
+void library_resume(void) {
+  wantsExit = 0; request = -1;
+  hasItemFocus = 0;
+  // Rebuilt, because the watchlist may have changed while the screen was away
+  // (the title page's "+").
+  rebuildKeepingFocus();
 }
 
 void library_shutdown(void) { hasItemFocus = 0; }
@@ -241,6 +262,13 @@ static int isOk(SDL_Keycode k) {
 }
 
 void library_event(const SDL_Event *e) {
+  // OK over a card is a tap or a hold, and only the release can tell which.
+  { int tap;
+    if (hold_event(&hold, e, zone == ZONE_GRID && menuOpen < 0 &&
+                             focus >= 0 && focus < nFilter, &tap)) {
+      if (tap && focus >= 0 && focus < nFilter) request = filter[focus];
+      return;
+    } }
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
   int back = k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
@@ -264,9 +292,19 @@ void library_event(const SDL_Event *e) {
   }
 
   if (back) {
-    // Back climbs to the strip, one zone at a time, and only leaves from there.
-    if (zone != ZONE_TABS) zone--;
+    // Back climbs to the strip, one zone at a time, and only leaves from there
+    // (or from the button above it).
+    if (zone > ZONE_TABS) zone--;
     else wantsExit = 1;
+    return;
+  }
+
+  if (zone == ZONE_HEAD) {
+    // OK steps the size; the focused title keeps its index, so the grid
+    // re-flows around it and the scroll follows its new row.
+    if (isOk(k)) grid_cycle();
+    else if (k == SDLK_DOWN) zone = ZONE_TABS;
+    else if (k == SDLK_LEFT) requestMenu = 1;
     return;
   }
 
@@ -278,6 +316,7 @@ void library_event(const SDL_Event *e) {
       if (mode > 0) { mode--; rebuild(); } else requestMenu = 1;
     }
     else if (k == SDLK_DOWN || isOk(k)) zone = ZONE_PICKERS;
+    else if (k == SDLK_UP) zone = ZONE_HEAD;
     return;
   }
 
@@ -295,35 +334,39 @@ void library_event(const SDL_Event *e) {
   }
 
   // THE GRID, moved exactly as Discover's.
-  int row = focus / NV_DSC_COLUMNS;
-  int lastRow = nFilter > 0 ? (nFilter - 1) / NV_DSC_COLUMNS : 0;
+  int row = focus / grid_cols();
+  int lastRow = nFilter > 0 ? (nFilter - 1) / grid_cols() : 0;
   switch (k) {
     case SDLK_LEFT:
-      if (focus % NV_DSC_COLUMNS) focus--;
+      if (focus % grid_cols()) focus--;
       else requestMenu = 1;
       break;
     case SDLK_RIGHT:
-      if (focus + 1 < nFilter && (focus + 1) % NV_DSC_COLUMNS) focus++;
+      if (focus + 1 < nFilter && (focus + 1) % grid_cols()) focus++;
       break;
     case SDLK_UP:
       if (row == 0) zone = ZONE_PICKERS;
-      else focus -= NV_DSC_COLUMNS;
+      else focus -= grid_cols();
       break;
     case SDLK_DOWN:
       if (row < lastRow) {
-        focus += NV_DSC_COLUMNS;
+        focus += grid_cols();
         if (focus >= nFilter) focus = nFilter - 1;
       }
       break;
-    case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
-      if (focus >= 0 && focus < nFilter) request = filter[focus];
-      break;
+    // OK on a card is handled above, by the hold.
     default: break;
   }
 }
 
 void library_update(float dt, Uint32 now) {
-  (void)now;
+  hold_animate(&hold, dt, now);
+  if (hold_fired(&hold, now) && zone == ZONE_GRID && focus >= 0 && focus < nFilter) {
+    if (hasItemFocus) ctx_set_anchor(itemFocus.rect, NV_DSC_POSTER_R);
+    ctx_open(filter[focus]);
+  }
+  if (ctxWasOpen && !ctx_is_open()) rebuildKeepingFocus();
+  ctxWasOpen = ctx_is_open();
   for (int p = 0; p < PICK_N; p++) {
     float target = ((zone == ZONE_PICKERS && pickSel == p) || menuOpen == p)
                    ? 1.0f : 0.0f;
@@ -333,6 +376,9 @@ void library_update(float dt, Uint32 now) {
   { float target = (zone == ZONE_TABS) ? 1.0f : 0.0f;
     animTabs = anim_spring(animTabs, target, dt,
                            target > animTabs ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
+  { float target = (zone == ZONE_HEAD) ? 1.0f : 0.0f;
+    animHead = anim_spring(animHead, target, dt,
+                           target > animHead ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
   { float target = (zone == ZONE_GRID) ? 1.0f : 0.0f;
     animCard = anim_spring(animCard, target, dt,
                            target > animCard ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
@@ -341,7 +387,7 @@ void library_update(float dt, Uint32 now) {
   // one row of cards fits under the header, so the focused one goes to the top
   // and nothing is ever sliced there. See dui_update.
   float target = (zone == ZONE_GRID && nFilter > 0)
-                 ? (float)(focus / NV_DSC_COLUMNS) * NV_DSC_LINE_STEP : 0.0f;
+                 ? (float)(focus / grid_cols()) * grid_line_step() : 0.0f;
   scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
 }
 
@@ -387,25 +433,35 @@ static void drawGrid(void) {
     for (int i = 0; i < nFilter; i++) {
       int isFocus = (zone == ZONE_GRID && i == focus);
       float f = isFocus ? animCard : 0.0f;
-      float top = NV_LIB_GRID_Y + (float)(i / NV_DSC_COLUMNS) * NV_DSC_LINE_STEP - scrollY;
-      float left = NV_DSC_X + (float)(i % NV_DSC_COLUMNS) * NV_DSC_CARD_STEP;
+      float top = NV_LIB_GRID_Y + (float)(i / grid_cols()) * grid_line_step() - scrollY;
+      float left = NV_DSC_X + (float)(i % grid_cols()) * grid_card_step();
       float edge = anim_edge(top, NV_LIB_CLIP_TOP, NV_LIB_FADE);
       const CatItem *ci;
       if ((pass == 1) != (f > 0.01f)) continue;
-      if (top > NV_SCREEN_H + 40.0f || top + NV_DSC_POSTER_H < -40.0f) continue;
+      if (top > NV_SCREEN_H + 40.0f || top + grid_poster_h() < -40.0f) {
+        if ((ci = cat_item(filter[i])))
+          grid_warm(ci->poster[0] ? ci->poster : ci->backdrop, top,
+                    grid_card_w(), grid_line_step());
+        continue;
+      }
       if (edge <= 0.004f && !isFocus) continue;
       if (!(ci = cat_item(filter[i]))) continue;
       gfx_opacity_group = edge;
 
       { float scale = anim_blend(1.0f, 1.0f + NV_DSC_FOCUS_SCALE, f);
-        float w = NV_DSC_CARD_W * scale, h = NV_DSC_POSTER_H * scale;
+        float w = grid_card_w() * scale, h = grid_poster_h() * scale;
         // `transform-origin: top`: only x is re-centred.
-        GfxRect card = { left - (w - NV_DSC_CARD_W) * 0.5f, top, w, h };
+        GfxRect card = { left - (w - grid_card_w()) * 0.5f, top, w, h };
+        // Held: pressed in about its centre, the glow behind it (hold.h).
+        if (isFocus) {
+          card = hold_card(&hold, card);
+          hold_glow(&hold, card, NV_DSC_POSTER_R);
+        }
         float radius = NV_DSC_POSTER_R / card.h;
         const char *art = ci->poster[0] ? ci->poster
                         : (ci->backdrop[0] ? ci->backdrop : NULL);
         // The RESTING width, so the focus spring does not re-decode the poster.
-        GLuint tex = art ? tex_get_width(art, NV_DSC_CARD_W) : 0;
+        GLuint tex = art ? tex_get_width(art, grid_card_w()) : 0;
         if (tex) {
           gfx_tex_aspect_current = tex_aspect(art);
           gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, 1);
@@ -414,13 +470,14 @@ static void drawGrid(void) {
           gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,
                        NV_COLOR_SKELETON_B, 1.0f);
         }
-        if (f > 0.01f)
-          gfx_rect(card, 0, GFX_RING_INSET, 0, NV_DSC_BORDER / card.h, 0,
-                   radius, 0.961f, 0.961f, 0.961f, f);
+        // The ring, with the hold's sweep over it while OK is held.
+        hold_ring(&hold, card, NV_DSC_BORDER / card.h, radius,
+                  0.961f, 0.961f, 0.961f, f);
+        if (isFocus) hold_track(&hold, card, NV_DSC_POSTER_R);
 
         if (settings_labels_poster()) {
           TxtLine tl = txt_line_trim(TXT_CALLOUT, ci->title, 255, 255, 255, 255,
-                                     NV_DSC_CARD_W);
+                                     grid_card_w());
           txt_draw_alpha(tl, card.x, top + h + NV_DSC_TITLE_GAP, 0.98f);
         }
         gfx_opacity_group = 1.0f;
@@ -453,9 +510,12 @@ void library_draw(Uint32 now) {
     snprintf(line, sizeof line, "%s  \xc2\xb7  %d %s",
              trakt_active() ? "Trakt" : "Local", nFilter,
              nFilter == 1 ? "title" : "titles");
+    // The grid-size button takes the right end of the title row, and the
+    // context line moves in to sit beside it.
+    GfxRect b = grid_button_draw(NV_DSC_X + NV_DSC_W, NV_DSC_Y + (NV_DSC_TITLE_H - 64.0f) * 0.5f, animHead, 1.0f);
     float w = txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128, -1.0f, 0.0f, 0.0f, 4.0f);
     txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128,
-                 NV_DSC_X + NV_DSC_W - w, NV_DSC_Y + 10.0f, 0.95f, 4.0f); }
+                 b.x - 32.0f - w, NV_DSC_Y + 10.0f, 0.95f, 4.0f); }
 
   { float x = NV_DSC_X;
     for (int m = 0; m < LIB_N_MODES; m++)
