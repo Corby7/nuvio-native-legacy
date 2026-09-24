@@ -4,6 +4,7 @@
 #include "gl_compat.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <sys/stat.h>
 #include "gfx.h"
@@ -408,7 +409,43 @@ static void captureIfRequested(void) {
   free(px);
 }
 
+// HOW OLD THE PROCESS ALREADY IS when main starts: the dynamic loader, the
+// libraries' constructors and whatever SAM did between fork and exec. /proc
+// counts in clock ticks since boot, so this is good to ~10 ms. -1 off Linux.
+static long processAgeMs(void) {
+#ifdef __APPLE__
+  return -1;
+#else
+  FILE *f;
+  char buf[1024], *p;
+  unsigned long long start = 0;
+  double up = 0;
+  long hz = sysconf(_SC_CLK_TCK);
+  int field;
+  if (!(f = fopen("/proc/self/stat", "r"))) return -1;
+  if (!fgets(buf, sizeof buf, f)) { fclose(f); return -1; }
+  fclose(f);
+  // Field 22 is the start time; counting starts after the ")" that closes the
+  // command name, which may itself contain spaces.
+  if (!(p = strrchr(buf, ')'))) return -1;
+  for (field = 2; *p && field < 22; p++) if (*p == ' ') field++;
+  start = strtoull(p, NULL, 10);
+  if (!(f = fopen("/proc/uptime", "r"))) return -1;
+  if (fscanf(f, "%lf", &up) != 1) up = 0;
+  fclose(f);
+  if (hz <= 0 || up <= 0) return -1;
+  return (long)(up * 1000.0 - (double)start * 1000.0 / (double)hz);
+#endif
+}
+
 int main(int argc, char **argv) {
+  // THE MILESTONE CLOCK STARTS HERE. It used to start after the window and the
+  // GL context existed, and with the shaders cached the first frame came 90 ms
+  // after that zero — which said nothing about the part before it.
+  mark_start();
+  { char line[64];
+    snprintf(line, sizeof line, "main (process already %ld ms old)", processAgeMs());
+    mark(line); }
   // Without the app's identity, webOS's SDL registers the surface as "(null)" and
   // the compositor does NOT show the window — the app runs at 60fps drawing for
   // nobody. Measured: "Invalid appId specified OR Unsupported Application Type".
@@ -457,6 +494,7 @@ int main(int argc, char **argv) {
   SDL_SetHint("SDL_WEBOS_ACCESS_POLICY_KEYS_BACK", "true");
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) { printf("SDL_Init: %s\n", SDL_GetError()); return 1; }
+  mark("SDL_Init");
   // THE FLAG IS ASKED FOR AND THE C3 REFUSES IT. Kept deliberately, with the
   // measurement, so nobody spends the afternoon discovering this twice.
   //
@@ -540,6 +578,7 @@ int main(int argc, char **argv) {
                                      SDL_WINDOWPOS_CENTERED,
                                      winW, winH, flags);
   if (!win) { printf("window: %s\n", SDL_GetError()); return 1; }
+  mark("window created");
   // A TV app has no pointer: the cursor over the interface pollutes the reading
   // and disappears on its own on the device, but not on the Mac.
   SDL_ShowCursor(SDL_DISABLE);
@@ -591,6 +630,7 @@ int main(int argc, char **argv) {
   }
 #endif
   SDL_GLContext ctx = SDL_GL_CreateContext(win);
+  mark("GL context");
 #ifdef __APPLE__
   // No vsync on the Mac. Homebrew's SDL2 has become a layer over SDL3
   // (sdl2-compat), and in it SwapWindow blocks waiting for a vsync signal that
@@ -625,9 +665,6 @@ int main(int argc, char **argv) {
   // the viewport, the drawing occupies a quarter of the screen.
   applySurface(win);
 
-  // The milestone clock starts HERE and not at the top of main: what comes before
-  // is argument parsing and SDL_Init, which depend on nothing of ours.
-  mark_start();
   // BEFORE tex_start and app_start, which are what create the network threads.
   net_prepare();
   // The data folder is chosen BEFORE gfx_start, which keeps its compiled shader

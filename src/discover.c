@@ -1051,7 +1051,10 @@ static int readManifest(const char *base, Decl *output, int max) {
 // preference. So the threads each write into THEIR OWN bucket and whoever
 // assembles walks in order, waiting for bucket k to be ready. The result is the
 // same order as before, with the time of the LARGEST request instead of the SUM.
-#define CAT_THREADS 3
+// SIX, not three. MEASURED on the C3 (2026-09-24): ~22 aiometa catalogues at
+// 150-250 ms each ran three at a time from 1.3 s to 2.9 s after launch. Six is
+// what a browser opens per host, and the connections come from net.c's pool.
+#define CAT_THREADS 6
 
 typedef struct {
   const Decl *d;
@@ -1559,6 +1562,52 @@ static int buildResume(CatItem *output, int max) {
   return n;
 }
 
+// --- THE TRAKT ROWS, OFF THE CRITICAL PATH ------------------------------------
+//
+// MEASURED on the C3 (2026-09-24), with the home already on screen from the
+// cache: "Continue watching" took eight Trakt GETs in series (0 -> 1.3 s), and
+// only THEN did the catalogues start, although the manifests they need had
+// landed at 0.5 s. After the catalogues came the watchlist and the collection,
+// four more GETs in series (2.9 -> 3.8 s), and only then was anything published.
+// None of these depends on the catalogues, nor the catalogues on them.
+//
+// So they run on two threads of their own from the top of build(): A brings the
+// rows that go FIRST (continue watching, friend activity) and is joined just
+// before the catalogue rows are assembled after them; B brings the ones that go
+// LAST (watchlist, collection) and is joined at the very end. Each writes only
+// into its own buffers; build() copies them into the batch in the same order as
+// before.
+typedef struct {
+  CatItem resume[8], social[8];
+  int nResume, nSocial;
+} TraktFirst;
+typedef struct {
+  CatItem *items;
+  int n, cap;
+} TraktLast;
+
+static int buildResume(CatItem *output, int max);
+
+static void *traktFirst(void *u) {
+  TraktFirst *t = (TraktFirst *)u;
+  t->nResume = buildResume(t->resume, 8);
+  mark("continue watching, both sources");
+  // The official social feed is a row of its own, right after the return to what
+  // was being watched. With the row turned off in Settings there is nobody to
+  // show it to, and the feed is one more Trakt GET — so it is not fetched at all.
+  t->nSocial = settings_social_row() ? trakt_social(t->social, 8) : 0;
+  mark("trakt friend activity");
+  return NULL;
+}
+
+static void *traktLast(void *u) {
+  TraktLast *t = (TraktLast *)u;
+  if (!t->items) return NULL;
+  t->n = trakt_list("watchlist", t->items, t->cap);
+  t->n += trakt_list("collection", t->items + t->n, t->cap - t->n);
+  return NULL;
+}
+
 static void *build(void *u) {
   // The batch grows too: it used to be sized by CAT_MAX and so inherited the same
   // arbitrary ceiling.
@@ -1574,13 +1623,10 @@ static void *build(void *u) {
   // catalogue's first positions in that row, so the order here is what decides
   // what appears there, and the history has to beat the recommendations.
   mark("build: start");
-  // THE MANIFESTS LEAVE FIRST AND RUN UNDERNEATH THE TRAKT CALLS.
-  //
-  // They depend on nothing from Trakt, and Trakt is expensive: /sync/playback
-  // and /sync/history are two GETs of up to 25 s each, and the social feed is
-  // one more. While that ran, the network sat idle as far as the addons were
-  // concerned. Now the two happen at once and the join below usually waits for
-  // nothing at all.
+  // THE MANIFESTS LEAVE FIRST AND THE TRAKT ROWS RUN BESIDE THEM, on threads of
+  // their own (see traktFirst/traktLast): neither depends on the other, and
+  // Trakt is expensive — /sync/playback and /sync/history are two GETs of up to
+  // 25 s each, and the social feed is one more.
   //
   // The search-target reset comes along because every searchable catalogue
   // registers itself INSIDE readManifest — clearing it afterwards would erase
@@ -1589,45 +1635,18 @@ static void *build(void *u) {
   // next, so it stays exactly where it was, next to the ordering that uses it.
   disc_targets_search_reset();
   manifestsStart();
-  nResume = buildResume(lote, 8);
-  n += nResume;
-  mark("continue watching, both sources");
-  // The official social feed is a row of its own, right after the return to what
-  // was being watched. It comes early so as not to depend on the addons' manifests,
-  // and it uses the same Trakt credential already loaded.
-  // With the row turned off in Settings there is nobody to show it to, and the
-  // feed is a third Trakt GET on the critical path — so it is not fetched at
-  // all, instead of fetched and dropped later.
-  nSocial = settings_social_row() ? trakt_social(lote + n, 8) : 0;
-  n += nSocial;
-  mark("trakt friend activity");
-  // Trakt's history is the home's FIRST row and arrives ~1.6 s before the
-  // manifests. Publishing here puts content on screen at that moment instead of
-  // holding everything back to the end.
-  // It builds straight into filtersBuilt: the local `filter` array only exists
-  // further down, and creating one here just to copy from would be wasted work.
-  if (n > 0 && partialAllowed()) {
-    int nf = 0;
-    if (nResume > 0) {
-      CatRow *f0 = &filtersBuilt[nf++];
-      memset(f0, 0, sizeof *f0);
-      snprintf(f0->key,  sizeof f0->key,  "continue_watching");
-      snprintf(f0->title, sizeof f0->title, "Continue watching");
-      snprintf(f0->kind,   sizeof f0->kind,   "movie");
-      f0->start = 0; f0->n = nResume;
-    }
-    if (nSocial > 0) {
-      CatRow *fs = &filtersBuilt[nf++];
-      memset(fs, 0, sizeof *fs);
-      snprintf(fs->key, sizeof fs->key, "social_activity");
-      snprintf(fs->title, sizeof fs->title, "Friends watching");
-      snprintf(fs->kind, sizeof fs->kind, "social");
-      fs->start = nResume; fs->n = nSocial;
-    }
-    nRowsBuilt = nf;
-    cat_set_all(lote, n, filtersBuilt, nf);
-    mark("continue watching on screen");
-  }
+  TraktFirst first;
+  TraktLast last;
+  pthread_t thFirst, thLast;
+  int okFirst, okLast;
+  memset(&first, 0, sizeof first);
+  last.n = 0; last.cap = 800;
+  last.items = malloc(sizeof(CatItem) * (size_t)last.cap);
+  okFirst = pthread_create(&thFirst, NULL, traktFirst, &first) == 0;
+  okLast  = pthread_create(&thLast,  NULL, traktLast,  &last)  == 0;
+  // With no thread to spare, the same work in series, as it always was.
+  if (!okFirst) traktFirst(&first);
+  if (!okLast)  traktLast(&last);
 #define ENSURES(count) do { \
     if (n + (count) > cap) { \
       int newCap = cap; \
@@ -1645,26 +1664,6 @@ static void *build(void *u) {
     int k;
     CatRow filter[CAT_FILTER_MAX];
     int nFilter = 0;
-    // Row 0 is "Continue watching", which was assembled above. It is SYNTHETIC: it
-    // is not in the web app's order and cannot be switched off by key — in the app
-    // it exists whenever there is progress.
-    if (nResume > 0) {
-      CatRow *f0 = &filter[nFilter++];
-      memset(f0, 0, sizeof *f0);
-      snprintf(f0->key,  sizeof f0->key,  "continue_watching");
-      snprintf(f0->title, sizeof f0->title, "Continue watching");
-      snprintf(f0->kind,   sizeof f0->kind,   "movie");
-      f0->start = 0; f0->n = nResume;
-    }
-    if (nSocial > 0) {
-      CatRow *fs = &filter[nFilter++];
-      memset(fs, 0, sizeof *fs);
-      snprintf(fs->key, sizeof fs->key, "social_activity");
-      snprintf(fs->title, sizeof fs->title, "Friends watching");
-      snprintf(fs->kind, sizeof fs->kind, "social");
-      fs->start = nResume; fs->n = nSocial;
-    }
-
     readPrefs();
     // The manifests have been in flight since the top of build(); this only
     // waits for whatever has not landed yet. Every addon with catalogues is
@@ -1729,6 +1728,44 @@ static void *build(void *u) {
         // series on this very thread: worse performance, same result. Better than an
         // empty home.
         if (!created && nTasks > 0) threadCatalog(NULL);
+
+        // The catalogues are on the network now. The rows that go FIRST are
+        // placed before them — which is the one wait here, and thread A has been
+        // running since the top of build().
+        if (okFirst) pthread_join(thFirst, NULL);
+        nResume = first.nResume;
+        nSocial = first.nSocial;
+        ENSURES(nResume + nSocial);
+        memcpy(lote, first.resume, sizeof(CatItem) * (size_t)nResume);
+        memcpy(lote + nResume, first.social, sizeof(CatItem) * (size_t)nSocial);
+        n = nResume + nSocial;
+        // Row 0 is "Continue watching". It is SYNTHETIC: it is not in the web
+        // app's order and cannot be switched off by key — in the app it exists
+        // whenever there is progress.
+        if (nResume > 0) {
+          CatRow *f0 = &filter[nFilter++];
+          memset(f0, 0, sizeof *f0);
+          snprintf(f0->key,  sizeof f0->key,  "continue_watching");
+          snprintf(f0->title, sizeof f0->title, "Continue watching");
+          snprintf(f0->kind,   sizeof f0->kind,   "movie");
+          f0->start = 0; f0->n = nResume;
+        }
+        if (nSocial > 0) {
+          CatRow *fs = &filter[nFilter++];
+          memset(fs, 0, sizeof *fs);
+          snprintf(fs->key, sizeof fs->key, "social_activity");
+          snprintf(fs->title, sizeof fs->title, "Friends watching");
+          snprintf(fs->kind, sizeof fs->kind, "social");
+          fs->start = nResume; fs->n = nSocial;
+        }
+        // Published at once when the home is still empty: "Continue watching" is
+        // the FIRST row, and it has no reason to wait for the catalogues.
+        if (n > 0 && partialAllowed()) {
+          memcpy(filtersBuilt, filter, sizeof(CatRow) * (size_t)nFilter);
+          nRowsBuilt = nFilter;
+          cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
+          mark("continue watching on screen");
+        }
 
         // ETAPA 3 — PUBLISH AS IT ARRIVES, not in reading order.
         //
@@ -1846,10 +1883,14 @@ static void *build(void *u) {
   // in front (and they run to over 60 items each) the rows became the whole
   // watchlist and the recommendations never appeared. The library sweeps the whole
   // catalogue looking for the marks, so for it their position makes no difference.
-  ENSURES(400);
-  n += trakt_list("watchlist",  lote + n, cap - n);
-  ENSURES(400);
-  n += trakt_list("collection", lote + n, cap - n);
+  // The rows that go LAST, from thread B.
+  if (okLast) pthread_join(thLast, NULL);
+  if (last.n > 0) {
+    ENSURES(last.n);
+    memcpy(lote + n, last.items, sizeof(CatItem) * (size_t)last.n);
+    n += last.n;
+  }
+  free(last.items);
 #undef ENSURES
 
   if (n) {
