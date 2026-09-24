@@ -7,9 +7,9 @@
 // tens of seconds spread across different threads, and none of them show up in
 // a frame number.
 //
-// The output goes to /tmp/nuvio-marks.txt because on the device the standard
-// output of an app launched by applicationManager reaches nowhere you can read
-// — the same reason /tmp/nuvio-fps.txt already exists.
+// The output goes to nuvio-marks.txt in the data folder on the TV (/tmp on the
+// Mac), because on the device the standard output of an app launched by
+// applicationManager reaches nowhere you can read.
 //
 // Cheap on purpose: one fprintf per event, and there are only a few dozen per
 // session. Do not instrument per frame with this.

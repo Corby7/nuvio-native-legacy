@@ -9,7 +9,7 @@ cc "${flags[@]}" tests/collections_focus.c src/js.c -o /tmp/nuvio-collections-fo
 /tmp/nuvio-collections-focus-tests
 # The sprite-sheet cell, with a window and a GL context: it is the one part of
 # the focus animation that only a real draw can check.
-cc "${flags[@]}" tests/focus_sheet.c src/gfx.c src/tex_cache.c src/webp.c src/net.c \
+cc "${flags[@]}" tests/focus_sheet.c src/gfx.c src/tex_cache.c src/webp.c src/net.c src/neturl.c src/mark.c src/data.c \
   -L/opt/homebrew/lib -lSDL2 -lSDL2_image -framework OpenGL -o /tmp/nuvio-focus-sheet-tests
 /tmp/nuvio-focus-sheet-tests
 cc "${flags[@]}" tests/badges.c -o /tmp/nuvio-badges-tests

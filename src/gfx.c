@@ -1,4 +1,8 @@
 #include "gfx.h"
+#include <stdlib.h>
+#include <string.h>
+#include "data.h"
+#include "mark.h"
 #include "tex_cache.h"
 #include <SDL2/SDL.h>
 #include "layout.h"
@@ -1197,25 +1201,149 @@ static void uvPrecision(char *dst, size_t n) {
 #endif
 }
 
+// --- COMPILED PROGRAMS, KEPT ON DISK -----------------------------------------
+//
+// MEASURED on the C3 (2026-09-24): compiling and linking the 44 programs took
+// ~780 ms, all of it before the first frame, on every launch. The Mali-G52
+// driver offers GL_OES_get_program_binary, so after the first launch the linked
+// programs are read back from data_dir()/shaders.bin instead.
+//
+// The file is keyed on EVERYTHING that makes a binary valid: the source of every
+// program, the renderer and the driver version. A firmware update changes the
+// version string, and editing a shader changes the source, so either case falls
+// back to compiling and rewrites the file. A binary the driver refuses anyway
+// (LINK_STATUS 0 after loading) does the same — the cache can only cost one slow
+// launch, never a broken one.
+#define GL_PROGRAM_BINARY_LENGTH_OES 0x8741
+#define SHADER_CACHE_MAGIC 0x4E565348u   /* "NVSH" */
+typedef void (*ProgramBinaryFn)(GLuint, GLenum, const void *, GLint);
+typedef void (*GetProgramBinaryFn)(GLuint, GLsizei, GLsizei *, GLenum *, void *);
+
+static unsigned long long fnv(unsigned long long h, const char *s) {
+  while (s && *s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+  return h;
+}
+
+// Builds each program's fragment source into `dst`, the same text both paths use.
+static void fragSource(char *dst, size_t size, const char *uvp, int m) {
+  snprintf(dst, size, "%s%s%s%s%s%s", NV_GLSL_PREFIX, uvp, FS_HEAD,
+           NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "",
+           FS_BODY[m]);
+}
+
+static void cachePath(char *dst, size_t size) {
+  dst[0] = 0;
+  data_path(dst, (unsigned)size, "shaders.bin");
+}
+
+// Reads every program from the file into progs[m].progress. 1 only if ALL of
+// them loaded and linked; on 0 whatever was created has been deleted again.
+static int programsFromCache(unsigned long long key, ProgramBinaryFn load) {
+  char path[600];
+  FILE *f;
+  unsigned hdr[2];
+  unsigned long long k = 0;
+  int m, ok = 1;
+  cachePath(path, sizeof path);
+  if (!path[0] || !(f = fopen(path, "rb"))) return 0;
+  if (fread(hdr, sizeof hdr, 1, f) != 1 || fread(&k, sizeof k, 1, f) != 1 ||
+      hdr[0] != SHADER_CACHE_MAGIC || hdr[1] != GFX_NMODES || k != key) {
+    fclose(f);
+    return 0;
+  }
+  for (m = 0; m < GFX_NMODES && ok; m++) {
+    unsigned fmt = 0, len = 0;
+    void *bin;
+    GLint linked = 0;
+    if (fread(&fmt, 4, 1, f) != 1 || fread(&len, 4, 1, f) != 1 ||
+        !len || len > (8u << 20) || !(bin = malloc(len))) { ok = 0; break; }
+    if (fread(bin, 1, len, f) != len) { free(bin); ok = 0; break; }
+    progs[m].progress = glCreateProgram();
+    load(progs[m].progress, fmt, bin, (GLint)len);
+    free(bin);
+    glGetProgramiv(progs[m].progress, GL_LINK_STATUS, &linked);
+    if (!linked) ok = 0;
+  }
+  fclose(f);
+  if (!ok)
+    for (m = 0; m < GFX_NMODES; m++)
+      if (progs[m].progress) { glDeleteProgram(progs[m].progress); progs[m].progress = 0; }
+  return ok;
+}
+
+// Writes the linked programs out, through a temporary and a rename so a launch
+// that dies halfway never leaves a half file the next one would trust.
+static void programsToCache(unsigned long long key, GetProgramBinaryFn get) {
+  char path[600], tmp[610];
+  FILE *f;
+  unsigned hdr[2] = { SHADER_CACHE_MAGIC, GFX_NMODES };
+  int m, ok = 1;
+  cachePath(path, sizeof path);
+  if (!path[0]) return;
+  snprintf(tmp, sizeof tmp, "%s.tmp", path);
+  if (!(f = fopen(tmp, "wb"))) return;
+  fwrite(hdr, sizeof hdr, 1, f);
+  fwrite(&key, sizeof key, 1, f);
+  for (m = 0; m < GFX_NMODES && ok; m++) {
+    GLint len = 0;
+    GLsizei got = 0;
+    GLenum fmt = 0;
+    void *bin;
+    glGetProgramiv(progs[m].progress, GL_PROGRAM_BINARY_LENGTH_OES, &len);
+    if (len <= 0 || !(bin = malloc((size_t)len))) { ok = 0; break; }
+    get(progs[m].progress, len, &got, &fmt, bin);
+    if (got <= 0) { free(bin); ok = 0; break; }
+    { unsigned f4 = (unsigned)fmt, l4 = (unsigned)got;
+      fwrite(&f4, 4, 1, f); fwrite(&l4, 4, 1, f); fwrite(bin, 1, (size_t)got, f); }
+    free(bin);
+  }
+  if (fclose(f) != 0) ok = 0;
+  if (ok) rename(tmp, path); else remove(tmp);
+}
+
 int gfx_start(void) {
   char uvp[64];
   char vsrc[1200];
+  char source[8000];
+  unsigned long long key = 1469598103934665603ULL;
+  ProgramBinaryFn load = NULL;
+  GetProgramBinaryFn get = NULL;
+  int cached = 0;
+  GLuint vs = 0;
   uvPrecision(uvp, sizeof uvp);
   snprintf(vsrc, sizeof vsrc, "%s%s%s", NV_GLSL_PREFIX, uvp, VS);
-  GLuint vs = compiles(GL_VERTEX_SHADER, vsrc);
-  char source[8000];
+  { const char *ext = (const char *)glGetString(GL_EXTENSIONS);
+    if (ext && strstr(ext, "GL_OES_get_program_binary")) {
+      *(void **)&load = SDL_GL_GetProcAddress("glProgramBinaryOES");
+      *(void **)&get  = SDL_GL_GetProcAddress("glGetProgramBinaryOES");
+    } }
+  if (load && get) {
+    key = fnv(key, (const char *)glGetString(GL_RENDERER));
+    key = fnv(key, (const char *)glGetString(GL_VERSION));
+    key = fnv(key, vsrc);
+    for (int m = 0; m < GFX_NMODES; m++) {
+      fragSource(source, sizeof source, uvp, m);
+      key = fnv(key, source);
+    }
+    cached = programsFromCache(key, load);
+  }
+  mark(cached ? "gfx: programs from cache" : "gfx: programs compiled");
+  if (!cached) vs = compiles(GL_VERTEX_SHADER, vsrc);
   for (int m = 0; m < GFX_NMODES; m++) {
-    snprintf(source, sizeof source, "%s%s%s%s%s%s", NV_GLSL_PREFIX, uvp, FS_HEAD,
-             NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "",
-             FS_BODY[m]);
-    GLuint p = glCreateProgram();
-    glAttachShader(p, vs);
-    glAttachShader(p, compiles(GL_FRAGMENT_SHADER, source));
-    glBindAttribLocation(p, 0, "aPos");
-    glLinkProgram(p);
-    GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
-    if (!ok) { char log[700]; glGetProgramInfoLog(p, 700, NULL, log);
-               printf("gfx link mode %d: %s\n", m, log); return 0; }
+    GLuint p;
+    if (cached) {
+      p = progs[m].progress;
+    } else {
+      fragSource(source, sizeof source, uvp, m);
+      p = glCreateProgram();
+      glAttachShader(p, vs);
+      glAttachShader(p, compiles(GL_FRAGMENT_SHADER, source));
+      glBindAttribLocation(p, 0, "aPos");
+      glLinkProgram(p);
+      GLint ok = 0; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+      if (!ok) { char log[700]; glGetProgramInfoLog(p, 700, NULL, log);
+                 printf("gfx link mode %d: %s\n", m, log); return 0; }
+    }
     progs[m].progress = p;
     progs[m].rect = glGetUniformLocation(p, "uRect");
     progs[m].screen = glGetUniformLocation(p, "uScreen");
@@ -1241,6 +1369,7 @@ int gfx_start(void) {
     // the two disagree. Caught by tests/focus_sheet.c.
     if (progs[m].cell >= 0) glUniform4f(progs[m].cell, 0.0f, 0.0f, 1.0f, 1.0f);
   }
+  if (!cached && load && get) programsToCache(key, get);
   glUseProgram(progs[GFX_CARD].progress);
   progressCurrent = GFX_CARD;
 

@@ -1,4 +1,5 @@
 #include "tex_cache.h"
+#include "mark.h"
 #include "net.h"
 #include "webp.h"
 #include "gfx.h"
@@ -1424,6 +1425,22 @@ int tex_pump(int max_per_frame) {
     SDL_FreeSurface(sup);
     rose++;
   }
+  // STARTUP MARKS for the art: the first texture on screen, and the first moment
+  // nothing requested is still on its way — which on the home is "every visible
+  // card has its poster". Once each, so the file stays a timeline of the launch.
+  { static int firstMarked, idleMarked, uploads;
+    uploads += rose;
+    if (rose && !firstMarked) { firstMarked = 1; mark("tex: first art on screen"); }
+    if (uploads && !idleMarked) {
+      int busy;
+      SDL_LockMutex(mtx); busy = inFlight(); SDL_UnlockMutex(mtx);
+      if (!busy) {
+        char line[64];
+        idleMarked = 1;
+        snprintf(line, sizeof line, "tex: all requested art on screen (%d)", uploads);
+        mark(line);
+      }
+    } }
   return rose;
 }
 
