@@ -470,7 +470,16 @@ typedef enum {
   //   uPar.x = the card's height in pixels, uPar.y = the glow's downward offset
   //   uColor.r = edge alpha, uColor.g = sheen alpha
   GFX_CARD_DEPTH = 43,
-  GFX_NMODES = 44
+  // GFX_RING_INSET_FILL — GFX_RING_FILL's sweep, but only inside
+  // GFX_RING_INSET's band, so it can be drawn OVER the art. The poster grids
+  // (Library, Discover, See all) draw their focus ring inset and on top of the
+  // poster, where GFX_RING_FILL, which relies on the art covering the middle,
+  // would paint the whole card. It is the hold's sweep there (hold.c).
+  //
+  //   uPar.x = how much of the perimeter is filled, 0..1
+  //   uPar.y = the band's thickness, normalised to the height like the radius
+  GFX_RING_INSET_FILL = 44,
+  GFX_NMODES = 45
 } GfxMode;
 
 typedef struct {

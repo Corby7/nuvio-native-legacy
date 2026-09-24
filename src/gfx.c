@@ -1072,6 +1072,13 @@ static const char *FS_BODY[GFX_NMODES] = {
   // clockwise from top centre (y grows DOWN the screen). The rounding of the
   // corners is ignored for the length: at a few percent of the edge nobody sees it.
   //
+  // THE TOP EDGE'S LEFT HALF is the last stretch of the lap: it starts where the
+  // left side ends, at 3hx + 4hy, and runs to `per` at top centre. It used to
+  // start at 4hx + 2hy, which is the same number only for a card exactly twice
+  // as wide as it is tall. The landscape cards (~1.78) were a few percent off
+  // and looked right; on a portrait poster (~0.67) the sweep jumped at top
+  // centre and lit the top-left stretch out of order, so a held poster never
+  // filled the way a held landscape card does.
   // ONE HEAD, ALL THE WAY ROUND, CLOCKWISE FROM THE TOP-LEFT CORNER: `o` is the
   // distance from that corner going clockwise. Top centre drew the eye to where it
   // started; a corner reads as where the frame begins. The front is a long soft
@@ -1091,7 +1098,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  } else {\n"
   "    float x = p.x * hy / max(abs(p.y), 1e-4);\n"
   "    s = p.y > 0.0 ? hx + 2.0 * hy + (hx - x)\n"
-  "        : (x >= 0.0 ? x : 4.0 * hx + 2.0 * hy + (x + hx));\n"
+  "        : (x >= 0.0 ? x : 3.0 * hx + 4.0 * hy + (x + hx));\n"
   "  }\n"
   "  float o = mod(s - (per - hx), per);\n"
   "  float soft = 0.2 * per;\n"
@@ -1126,6 +1133,36 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  if (a <= 0.002) discard;\n"
   "  gl_FragColor = vec4(1.0, 1.0, 1.0, a);\n"
   "}\n",
+
+  // GFX_RING_INSET_FILL — GFX_RING_FILL's sweep, masked to GFX_RING_INSET's band
+  // (thickness in uPar.y) so it can sit on top of the art. See gfx.h.
+  "void main(){\n"
+  "  float d = sdf(vUv, uRadius, uAspect);\n"
+  "  float m = smoothstep(uAA,-uAA, d) * smoothstep(-uPar.y - uAA, -uPar.y + uAA, d);\n"
+  "  if (m <= 0.001) discard;\n"
+  "  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+  "  float hx = 0.5 * uAspect, hy = 0.5;\n"
+  "  float per = 4.0 * (hx + hy);\n"
+  "  float s;\n"
+  "  if (abs(p.x) * hy > abs(p.y) * hx) {\n"
+  "    float y = p.y * hx / max(abs(p.x), 1e-4);\n"
+  "    s = p.x > 0.0 ? hx + (y + hy) : 3.0 * hx + 2.0 * hy + (hy - y);\n"
+  "  } else {\n"
+  "    float x = p.x * hy / max(abs(p.y), 1e-4);\n"
+  "    s = p.y > 0.0 ? hx + 2.0 * hy + (hx - x)\n"
+  "        : (x >= 0.0 ? x : 3.0 * hx + 4.0 * hy + (x + hx));\n"
+  "  }\n"
+  "  float o = mod(s - (per - hx), per);\n"
+  "  float soft = 0.2 * per;\n"
+  "  float a = clamp((uPar.x * (per + soft) - o) / soft, 0.0, 1.0);\n"
+  // The TAIL is soft too, or the start point is a hard seam against the unlit
+  // ring just behind it. The softness closes over the last 40% of the hold, so
+  // the ring still ends whole.
+  "  a *= clamp(o / (0.08 * per) + smoothstep(0.6, 1.0, uPar.x), 0.0, 1.0);\n"
+  "  if (a * m <= 0.002) discard;\n"
+  "  gl_FragColor = vec4(uColor.rgb, uColor.a * a * m);\n"
+  "}\n"
+
 };
 
 // Each body declares what it uses; assembling only what is needed keeps the
@@ -1163,7 +1200,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,0},   /* GFX_DROP         — the inflated quad's own SDF */
   {0,0},   /* GFX_SCRIM_HOLE   — its own pixel-space SDF, not the quad's */
   {1,0},   /* GFX_RING_FILL    — the rect's SDF, masked by perimeter progress */
-  {1,0}    /* GFX_CARD_DEPTH   — the card's SDF, and again 2px lower for the line */
+  {1,0},   /* GFX_CARD_DEPTH   — the card's SDF, and again 2px lower for the line */
+  {1,0}    /* GFX_RING_INSET_FILL — the inset band, masked by perimeter progress */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
