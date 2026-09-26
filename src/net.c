@@ -406,22 +406,22 @@ char *net_download(const char *url, int seconds) {
   return net_download_internal(url, seconds, NULL, NULL, 0);
 }
 
-char *net_download_chunk(const char *url, int seconds, long start, long end,
-                         long *size) {
+char *net_download_chunk(const char *url, int seconds, long long start,
+                         long long end, long *size) {
   char track[80];
   const char *header[2];
   // Range is an ordinary header, so the existing with-headers path serves.
   // There is no separate "binary with headers" mode because
   // net_download_internal already returns the size when `size` is passed — it
   // is whoever asked for text that ignores that field.
-  snprintf(track, sizeof track, "Range: bytes=%ld-%ld", start, end);
+  snprintf(track, sizeof track, "Range: bytes=%lld-%lld", start, end);
   header[0] = track; header[1] = NULL;
   // A REAL CEILING, and not just the header. MEASURED: a server that ignores
   // Range answers 200 with the WHOLE file — in the test 31 MB came back for a
   // 2 MB request. Without the ceiling, reading the header of a 20 GB film would
   // download the film. The cut is in the receiver, so the connection dies at
   // the limit instead of waiting for the end.
-  return net_download_internal(url, seconds, size, header, end - start + 1);
+  return net_download_internal(url, seconds, size, header, (long)(end - start + 1));
 }
 
 char *net_download_headers(const char *url, int seconds, const char *const *header) {

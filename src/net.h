@@ -40,8 +40,11 @@ char *net_download_headers(const char *url, int seconds, const char *const *head
 // A server that ignores Range returns the whole file; so the caller has to be
 // ready to receive MORE than it asked for, and to stop reading once it has
 // found what it wanted.
-char *net_download_chunk(const char *url, int seconds, long start, long end,
-                         long *size);
+//
+// The offsets are long long: on the TV long is 32 bits, and the end of a film
+// — where its Cues index lives — is past 2 GB.
+char *net_download_chunk(const char *url, int seconds, long long start,
+                         long long end, long *size);
 
 // Follows the redirects and returns the FINAL address, without downloading the
 // body. It tells you whether a debrid link leads to the file or to a notice

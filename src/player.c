@@ -41,6 +41,7 @@
 #include "parental.h"
 #include "episodes.h"
 #include "streams.h"
+#include "autosync.h"
 #include "subtitle.h"
 #include "intro.h"
 #include "watchedep.h"
@@ -630,6 +631,7 @@ static void fraseFirst(char *dst, size_t n, const char *src, size_t maxBytes) {
 // looking at the TV saw. Checking zoom means looking at the device.
 static int    aspect = PLR_ASPECT_ORIGINAL;
 static Uint32 toastAte = 0;      // until when the mode notice stays up
+static char   toastText[96];     // its text when it is not the aspect mode's
 static char   dirPrefs[512];
 
 // Short labels for the on-screen notice. The web app's are "Fit (Original)",
@@ -865,7 +867,15 @@ void player_aspect_set(int mode) {
 
 void player_aspect_cycle(void) {
   player_aspect_set((aspect + 1) % PLR_ASPECT_N);
+  toastText[0] = 0;
   toastAte = SDL_GetTicks() + PLR_TOAST_MS;
+}
+
+// Twice the aspect notice's time: that one confirms a key just pressed, this one
+// announces something nobody asked for, and has to be read from the sofa.
+void player_toast(const char *text) {
+  snprintf(toastText, sizeof toastText, "%s", text ? text : "");
+  toastAte = SDL_GetTicks() + 2 * PLR_TOAST_MS;
 }
 
 static void openSession(int indexCatalog, const char *url) {
@@ -892,6 +902,7 @@ static void openSession(int indexCatalog, const char *url) {
   waitingSource = (url == NULL);
   // An external subtitle belongs to the session that has just ended, not to this one.
   tracks_reset();
+  autosync_reset();
   // The aspect mode belongs to the DEVICE, not to the session: rereading here is
   // what makes "Cinema zoom" still apply on the next film, as in the web app.
   prefsRead();
@@ -1595,6 +1606,7 @@ void player_update(float dt, Uint32 now) {
   // longer drawn — so it steps back down to the bar the frame the prompt leaves.
   if (cardFocus && !cardPresent()) { cardFocus = 0; barFocus = 1; }
   if (!is_open) return;
+  autosync_pump();
 
   // THE OPENING RUNS ON THE DETAIL'S OWN CURVE. The first-order spring left at full
   // speed on the first frame — a third of the fade inside one frame at 60Hz, which
@@ -2490,7 +2502,7 @@ static void drawPlayer(Uint32 now) {
     // drawing fault.
     float remains = (float)(toastAte - now);
     float at = (remains < 200.0f ? remains / 200.0f : 1.0f) * entry;
-    TxtLine l = txt_line(TXT_PLR_TITLE, player_aspect_label(aspect),
+    TxtLine l = txt_line(TXT_PLR_TITLE, toastText[0] ? toastText : player_aspect_label(aspect),
                            243, 248, 255, 242);
     float pw = (float)l.w + 128.0f, ph = 128.0f;
     GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 160.0f, pw, ph };
@@ -2507,6 +2519,30 @@ static void drawPlayer(Uint32 now) {
   // failures happen with the controls hidden, and a notice tied to them would
   // be missed exactly when it matters. It only says THAT something was logged
   // and the short reason — the full record is in the log.
+  // --- AUTOSYNC AT WORK ------------------------------------------------------
+  // The failure notice's pill, with a slow pulsing blue dot instead of the amber
+  // one: something is under way, nothing is wrong. It gives way to any other
+  // notice, and AutoSync's own result replaces it as a toast.
+  { static Uint32 syncSince;
+    const char *st = autosync_status();
+    if (!st || toastAte > now || (failNoticeAt && now - failNoticeAt < PLR_FAIL_NOTICE_MS)) {
+      if (!st) syncSince = 0;
+    } else {
+      float na, pulse;
+      TxtLine l = txt_line(TXT_PLR_STAT, st, 255, 255, 255, 255);
+      float dot = 12.0f, padX = 28.0f, gap = 14.0f;
+      float pw = padX * 2.0f + dot + gap + (float)l.w, ph = (float)l.h + 28.0f;
+      GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 48.0f, pw, ph };
+      if (!syncSince) syncSince = now;
+      na = anim_clamp((float)(now - syncSince) / 200.0f, 0.0f, 1.0f) * entry;
+      pulse = 0.45f + 0.55f * (0.5f + 0.5f * sinf((float)(now - syncSince) * 0.005f));
+      gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.90f * na);
+      gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
+                110 / 255.0f, 170 / 255.0f, 255 / 255.0f, na * pulse);
+      txt_draw_alpha(l, pil.x + padX + dot + gap, pil.y + (ph - (float)l.h) * 0.5f, na);
+    }
+  }
+
   if (failNoticeAt && now - failNoticeAt < PLR_FAIL_NOTICE_MS) {
     float el = (float)(now - failNoticeAt), rest = (float)PLR_FAIL_NOTICE_MS - el;
     float na = anim_clamp(el / 200.0f, 0.0f, 1.0f) * anim_clamp(rest / 300.0f, 0.0f, 1.0f)

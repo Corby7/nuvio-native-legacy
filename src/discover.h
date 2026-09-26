@@ -164,9 +164,11 @@ int  disc_genres_n(const char *base, const char *kind, const char *id);
 // which is a different request and not a genre.
 const char *disc_genre_at(const char *base, const char *kind, const char *id, int i);
 
-// Registers the targets, called by the manifest loading. `reset` puts back
-// Cinemeta only.
+// Registers the targets, called by the manifest loading. `reset` empties the
+// list; `fallback`, called once every manifest is in, adds Cinemeta only when
+// no installed addon declared a search catalogue.
 void disc_targets_search_reset(void);
+void disc_targets_search_fallback(void);
 void disc_target_search(const char *base, const char *kind, const char *id,
                      const char *title, const char *addon);
 

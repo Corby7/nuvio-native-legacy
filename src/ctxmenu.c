@@ -304,9 +304,8 @@ static void apply(void) {
     case OP_SEEALL:  reqSeeAll = 1;    break;
     case OP_RESUME:      reqPlay = idx; reqFromStart = 0; break;
     case OP_START_OVER:  reqPlay = idx; reqFromStart = 1; break;
-    // The card leaves the row at once (the local half of cw_remove is
-    // synchronous), so there is nothing left for the menu to show: it closes, and
-    // the remote deletes finish on their own thread.
+    // The menu closes at once and hands the wait to the card: its ring circles
+    // until the remote deletes answer, and then it leaves the row (cwremove.h).
     case OP_REMOVE_CW:   cw_remove(current); break;
     case OP_LIST:
       // Capture the intent BEFORE any write. The same value goes on to the
@@ -382,6 +381,7 @@ void ctx_update(float dt, Uint32 now) {
     holdObserver = 1;
   }
   if (holdActive && now - holdSince >= NV_HOLD_MS) holdReady = 1;
+  cw_remove_step();
   if (settings_animations_reduced())
     anim = is_open ? 1.0f : 0.0f;
   else

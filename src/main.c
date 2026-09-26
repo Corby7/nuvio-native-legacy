@@ -69,6 +69,31 @@ static const char *devPath(const char *name) {
   return out;
 }
 
+// TEMPORARY, Magic Remote spike: every pointer, window and key event, appended to
+// .nuvio/pointer-spike.log so it can be read over ssh. Remove once pointer.c exists.
+static void spikeLog(SDL_Window *win, const SDL_Event *e) {
+  static FILE *f;
+  if (!f) { f = fopen(devPath("pointer-spike.log"), "a"); if (!f) return;
+            int ww, wh, dw, dh; SDL_GetWindowSize(win, &ww, &wh);
+            SDL_GL_GetDrawableSize(win, &dw, &dh);
+            fprintf(f, "start window %dx%d drawable %dx%d\n", ww, wh, dw, dh); }
+  Uint32 t = SDL_GetTicks();
+  switch (e->type) {
+    case SDL_MOUSEMOTION: fprintf(f, "%u motion %d,%d rel %d,%d which %u state %u\n", t,
+      e->motion.x, e->motion.y, e->motion.xrel, e->motion.yrel, e->motion.which, e->motion.state); break;
+    case SDL_MOUSEBUTTONDOWN: case SDL_MOUSEBUTTONUP: fprintf(f, "%u button%s %d at %d,%d clicks %d which %u\n", t,
+      e->type == SDL_MOUSEBUTTONDOWN ? "down" : "up", e->button.button, e->button.x, e->button.y,
+      e->button.clicks, e->button.which); break;
+    case SDL_MOUSEWHEEL: fprintf(f, "%u wheel %d,%d dir %u\n", t, e->wheel.x, e->wheel.y, e->wheel.direction); break;
+    case SDL_WINDOWEVENT: fprintf(f, "%u window %d\n", t, e->window.event); break;
+    case SDL_KEYDOWN: case SDL_KEYUP: fprintf(f, "%u key%s sym %d scan %d rep %d\n", t,
+      e->type == SDL_KEYDOWN ? "down" : "up", e->key.keysym.sym, e->key.keysym.scancode, e->key.repeat); break;
+    case SDL_FINGERDOWN: case SDL_FINGERUP: case SDL_FINGERMOTION: fprintf(f, "%u finger %u\n", t, e->type); break;
+    default: if (e->type >= SDL_USEREVENT || e->type < SDL_KEYDOWN) fprintf(f, "%u other 0x%x\n", t, e->type); break;
+  }
+  fflush(f);
+}
+
 static SDL_Keycode codeOfKey(const char *name) {
   if (!strcmp(name, "up"))    return SDLK_UP;
   if (!strcmp(name, "down"))  return SDLK_DOWN;
@@ -581,7 +606,9 @@ int main(int argc, char **argv) {
   mark("window created");
   // A TV app has no pointer: the cursor over the interface pollutes the reading
   // and disappears on its own on the device, but not on the Mac.
+#ifdef __APPLE__
   SDL_ShowCursor(SDL_DISABLE);
+#endif
   // TEXT INPUT OFF, everywhere but the one screen that asks for it. SDL starts
   // it by default on some backends, and left on, a backend that reports D-pad
   // presses as text as well as keys would have every screen reacting twice to
@@ -787,6 +814,7 @@ int main(int argc, char **argv) {
     // While the detail screen exists it keeps the whole keyboard: the home is
     // still drawn underneath, but must not react to the D-pad.
     while (SDL_PollEvent(&e)) {
+      spikeLog(win, &e);
       if (e.type == SDL_WINDOWEVENT) {
         // The only one that matters: the surface changed shape, so the
         // letterbox has to be measured again. Everything else (focus, expose,

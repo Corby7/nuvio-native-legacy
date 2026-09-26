@@ -10,7 +10,7 @@
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static SubtitleCue *cues;
 static int nCues, on;
-static unsigned generation;
+static unsigned generation, retimed;
 
 static double parseTime(const char *s) {
   int h=0,m=0; double seg=0;
@@ -98,6 +98,38 @@ void subtitle_load(const char *url) {
 
 void subtitle_off(void) {
   pthread_mutex_lock(&lock);on=0;generation++;free(cues);cues=NULL;nCues=0;pthread_mutex_unlock(&lock);
+}
+
+unsigned subtitle_ready(void) {
+  unsigned g;
+  pthread_mutex_lock(&lock);g=on&&nCues>0?generation:0;pthread_mutex_unlock(&lock);
+  return g;
+}
+
+int subtitle_times(unsigned g,double **starts,double **ends) {
+  int i,n=0;
+  *starts=*ends=NULL;
+  pthread_mutex_lock(&lock);
+  if(g&&g==generation&&on&&nCues>0){
+    *starts=malloc((size_t)nCues*sizeof **starts);*ends=malloc((size_t)nCues*sizeof **ends);
+    if(*starts&&*ends){for(i=0;i<nCues;i++){(*starts)[i]=cues[i].start;(*ends)[i]=cues[i].end;}n=nCues;}
+  }
+  pthread_mutex_unlock(&lock);
+  if(!n){free(*starts);free(*ends);*starts=*ends=NULL;}
+  return n;
+}
+
+// The lines stay sorted: a positive scale and one offset keep their order.
+int subtitle_retime(unsigned g,double scale,double offset) {
+  int i,done=0;
+  if(scale<=0)return 0;
+  pthread_mutex_lock(&lock);
+  if(g&&g==generation&&on&&retimed!=g){
+    for(i=0;i<nCues;i++){cues[i].start=cues[i].start*scale+offset;cues[i].end=cues[i].end*scale+offset;}
+    retimed=g;done=1;
+  }
+  pthread_mutex_unlock(&lock);
+  return done;
 }
 
 int subtitle_text(double posSeg,int delayMs,char *dst,size_t size) {

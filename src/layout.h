@@ -954,6 +954,11 @@
 #define NV_HOLD_SPRING_W    26.0f     // rad/s
 #define NV_HOLD_SPRING_ZETA  0.42f    // < 1: it overshoots, once, visibly
 #define NV_FRAME_RING_A    1.0f
+// A CARD BUSY ON A REMOTE WRITE ("Remove from Continue watching"): the hold's
+// dimmed ring with an arc of its sweep, NV_BUSY_ARC of the perimeter, circling
+// once every NV_BUSY_LAP_MS.
+#define NV_BUSY_ARC        0.3f
+#define NV_BUSY_LAP_MS     1100u
 
 // Area util explicita da home: a rail pode variar, mas o texto e o foco nunca
 // encostam na safe area direita.
@@ -1484,7 +1489,13 @@
 //   track      padding 16px 64px 32px 16px, gap 24
 #define NV_SEARCH_ROW_SUB     37.6f   // row top -> the origin line (33.6 + 4)
 #define NV_SEARCH_ROW_RAIL    77.8f   // row top -> the cards (33.6 + 4 + 24.2 + 16)
-#define NV_SEARCH_TRACK_X     16.0f   // .search-results-track padding-left
+// 0, NOT the web's 16px .search-results-track padding-left: that indent put the
+// posters and their names 16px right of the row title and origin above them, and
+// on the TV the two left edges visibly disagree. At 0 the cards share the one
+// left edge the title, field and row titles use. The focus growth (1.05 from the
+// top centre plus the 2px ring, ~8px) still fits inside the results' crop, which
+// starts 12px left of the content.
+#define NV_SEARCH_TRACK_X      0.0f
 #define NV_SEARCH_CARD_W     248.0f
 #define NV_SEARCH_CARD_STEP  272.0f   // 248 + the track's 24 gap
 #define NV_SEARCH_POSTER_H   372.0f

@@ -18,6 +18,18 @@
 // stuttering the video on all of them.
 #define MKV_CHUNK  (320L * 1024)
 
+// The Cues are read in one go when they fit in the first request, and in two
+// when they do not — the size is only known once the element's header is in.
+// The ceiling is for the same reason as MKV_CHUNK above: this read also happens
+// with the video playing. A film with a handful of subtitle tracks indexes in a
+// few hundred KB, but a UHD remux carries forty PGS tracks, each indexed twice
+// per line (shown, cleared). 8 MB is still about a second of such a remux's own
+// bitrate; past it the file loses the embedded timing rather than stuttering.
+// MEASURED on the owner's TV: a 54 GB remux with 43 subtitle tracks failed
+// under the first ceiling of 2 MB.
+#define MKV_CUES_FIRST (128L * 1024)
+#define MKV_CUES_MAX   (8L * 1024 * 1024)
+
 // --- EBML: variable-length integers ------------------------------------------
 //
 // The first byte says, by the position of the highest 1 bit, how many bytes the
@@ -28,10 +40,10 @@
 static int widthOf(unsigned char b) {
   int i;
   for (i = 0; i < 8; i++) if (b & (0x80 >> i)) return i + 1;
-  return 0;                       // byte 0x00: invalido em EBML
+  return 0;                       // byte 0x00: invalid in EBML
 }
 
-// Le um ID (mantendo o bit marcador). 0 e o fim ou dado invalido.
+// Reads an ID (keeping the marker bit). 0 is the end or invalid data.
 static unsigned long readId(const unsigned char *p, long remains, int *used) {
   int w, i;
   unsigned long v;
@@ -47,34 +59,35 @@ static unsigned long readId(const unsigned char *p, long remains, int *used) {
 // Reads a SIZE (stripping the marker bit). Returns -1 on invalid and -2 on the
 // "unknown" size (all data bits 1), which Segment uses in a live-streamed file
 // — there the read continues INSIDE the element instead of skipping over it.
-// vez de pular por cima dele.
-static long readSize(const unsigned char *p, long remains, int *used) {
+// 64-bit: a Segment's size is the size of the film.
+static long long readSize(const unsigned char *p, long remains, int *used) {
   int w, i;
-  unsigned long v;
-  int allUm = 1;
+  unsigned long long v;
+  int allOnes = 1;
   if (remains < 1) return -1;
   w = widthOf(p[0]);
   if (w < 1 || w > 8 || remains < w) return -1;
   v = p[0] & (0xFF >> w);
-  if ((unsigned char)(p[0] & (0xFF >> w)) != (unsigned char)(0xFF >> w)) allUm = 0;
+  if ((unsigned char)(p[0] & (0xFF >> w)) != (unsigned char)(0xFF >> w)) allOnes = 0;
   for (i = 1; i < w; i++) {
-    if (p[i] != 0xFF) allUm = 0;
+    if (p[i] != 0xFF) allOnes = 0;
     v = (v << 8) | p[i];
   }
   *used = w;
-  if (allUm) return -2;
-  return (long)v;
+  if (allOnes) return -2;
+  if (v > 0x7FFFFFFFFFFFFFFFULL) return -1;
+  return (long long)v;
 }
 
-static unsigned long readUint(const unsigned char *p, long n) {
-  unsigned long v = 0;
-  long i;
+static unsigned long long readUint(const unsigned char *p, long long n) {
+  unsigned long long v = 0;
+  long long i;
   if (n < 1 || n > 8) return 0;
   for (i = 0; i < n; i++) v = (v << 8) | p[i];
   return v;
 }
 
-static void readText(const unsigned char *p, long n, char *dst, size_t size) {
+static void readText(const unsigned char *p, long long n, char *dst, size_t size) {
   size_t k = (size_t)n;
   if (k > size - 1) k = size - 1;
   memcpy(dst, p, k);
@@ -84,8 +97,31 @@ static void readText(const unsigned char *p, long n, char *dst, size_t size) {
   { size_t i; for (i = 0; i < k; i++) if (dst[i] == 0) { dst[i] = 0; break; } }
 }
 
-// --- ids que interessam ------------------------------------------------------
+// Steps over one child of a master element spanning [0, n): its id, its
+// payload's offset in *at and its size in *size. 0 at the end or on anything
+// that does not fit — every walker below stops there rather than guess.
+static unsigned long child(const unsigned char *p, long long n, long long o,
+                           long long *at, long long *size) {
+  int ui = 0, ut = 0;
+  unsigned long id = readId(p + o, (long)(n - o), &ui);
+  if (!id) return 0;
+  *size = readSize(p + o + ui, (long)(n - o - ui), &ut);
+  if (*size < 0) return 0;
+  *at = o + ui + ut;
+  if (*at + *size > n) return 0;
+  return id;
+}
+
+// --- ids that matter ---------------------------------------------------------
+#define ID_EBML        0x1A45DFA3UL
 #define ID_SEGMENT     0x18538067UL
+#define ID_SEEKHEAD    0x114D9B74UL
+#define ID_SEEK        0x4DBBUL
+#define ID_SEEKID      0x53ABUL
+#define ID_SEEKPOS     0x53ACUL
+#define ID_INFO        0x1549A966UL
+#define ID_TSSCALE     0x2AD7B1UL
+#define ID_CLUSTER     0x1F43B675UL
 #define ID_TRACKS      0x1654AE6BUL
 #define ID_TRACKENTRY  0xAEUL
 #define ID_TRACKNUMBER 0xD7UL
@@ -95,101 +131,245 @@ static void readText(const unsigned char *p, long n, char *dst, size_t size) {
 #define ID_NAME        0x536EUL
 #define ID_CODECID     0x86UL
 #define ID_FLAGFORCED  0x55AAUL
+#define ID_CUES        0x1C53BB6BUL
+#define ID_CUEPOINT    0xBBUL
+#define ID_CUETIME     0xB3UL
+#define ID_CUETRACKPOS 0xB7UL
+#define ID_CUETRACK    0xF7UL
+#define ID_CUEDURATION 0xB2UL
 
 // Reads the TrackEntry elements inside an already-located Tracks.
-static int readTracks(const unsigned char *p, long n, MkvTrack *output, int max) {
-  long o = 0;
+static int readTracks(const unsigned char *p, long long n, MkvTrack *output, int max) {
+  long long o = 0, at, size;
+  unsigned long id;
   int found = 0;
-  while (o < n && found < max) {
-    int ui = 0, ut = 0;
-    unsigned long id = readId(p + o, n - o, &ui);
-    long size;
-    if (!id) break;
-    size = readSize(p + o + ui, n - o - ui, &ut);
-    if (size < 0) break;
-    o += ui + ut;
-    if (o + size > n) break;
+  while (o < n && found < max && (id = child(p, n, o, &at, &size))) {
     if (id == ID_TRACKENTRY) {
       MkvTrack f;
-      long q = 0;
+      long long q = 0, fat, fsize;
+      unsigned long fid;
       memset(&f, 0, sizeof f);
-      while (q < size) {
-        int vi = 0, vt = 0;
-        unsigned long fid = readId(p + o + q, size - q, &vi);
-        long fontSize;
-        if (!fid) break;
-        fontSize = readSize(p + o + q + vi, size - q - vi, &vt);
-        if (fontSize < 0) break;
-        q += vi + vt;
-        if (q + fontSize > size) break;
-        { const unsigned char *v = p + o + q;
-          if (fid == ID_TRACKNUMBER) f.number = (int)readUint(v, fontSize);
-          else if (fid == ID_TRACKTYPE) f.kind = (int)readUint(v, fontSize);
-          else if (fid == ID_LANGUAGE || fid == ID_LANG_BCP47) {
-            // BCP47 beats ISO 639-2 when both exist: "pt-BR" says more than
-            // "por", and it is what the owner wants to see in the list.
-            if (fid == ID_LANG_BCP47 || !f.language[0])
-              readText(v, fontSize, f.language, sizeof f.language);
-          }
-          else if (fid == ID_NAME)    readText(v, fontSize, f.name,  sizeof f.name);
-          else if (fid == ID_CODECID) readText(v, fontSize, f.codec, sizeof f.codec);
-          else if (fid == ID_FLAGFORCED) f.forced = readUint(v, fontSize) != 0; }
-        q += fontSize;
+      while (q < size && (fid = child(p + at, size, q, &fat, &fsize))) {
+        const unsigned char *v = p + at + fat;
+        if (fid == ID_TRACKNUMBER) f.number = (int)readUint(v, fsize);
+        else if (fid == ID_TRACKTYPE) f.kind = (int)readUint(v, fsize);
+        else if (fid == ID_LANGUAGE || fid == ID_LANG_BCP47) {
+          // BCP47 beats ISO 639-2 when both exist: "pt-BR" says more than
+          // "por", and it is what the owner wants to see in the list.
+          if (fid == ID_LANG_BCP47 || !f.language[0])
+            readText(v, fsize, f.language, sizeof f.language);
+        }
+        else if (fid == ID_NAME)    readText(v, fsize, f.name,  sizeof f.name);
+        else if (fid == ID_CODECID) readText(v, fsize, f.codec, sizeof f.codec);
+        else if (fid == ID_FLAGFORCED) f.forced = readUint(v, fsize) != 0;
+        q = fat + fsize;
       }
       if (f.number > 0) output[found++] = f;
     }
-    o += size;
+    o = at + size;
   }
   return found;
 }
 
-// Walks the tree until it finds Tracks. Descends into Segment (which is a giant
-// container) and SKIPS the rest — without the skip the search would sweep byte
-// by byte and match any coincidence inside the video data.
-static int findTracks(const unsigned char *p, long n, MkvTrack *output, int max) {
-  long o = 0;
+// The SeekHead's entry for the Cues, relative to the Segment's payload. -1 when
+// it lists none (the file may carry a second SeekHead, which is not followed).
+static long long readSeekHead(const unsigned char *p, long long n) {
+  long long o = 0, at, size;
+  unsigned long id;
+  while (o < n && (id = child(p, n, o, &at, &size))) {
+    if (id == ID_SEEK) {
+      long long q = 0, fat, fsize, pos = -1;
+      unsigned long fid, target = 0;
+      while (q < size && (fid = child(p + at, size, q, &fat, &fsize))) {
+        if (fid == ID_SEEKID && fsize <= 4) target = (unsigned long)readUint(p + at + fat, fsize);
+        else if (fid == ID_SEEKPOS) pos = (long long)readUint(p + at + fat, fsize);
+        q = fat + fsize;
+      }
+      if (target == ID_CUES && pos >= 0) return pos;
+    }
+    o = at + size;
+  }
+  return -1;
+}
+
+// Walks the tree as far as the first Cluster. Descends into Segment (which is a
+// giant container) and SKIPS the rest — without the skip the search would sweep
+// byte by byte and match any coincidence inside the video data.
+int mkv_head_parse(const unsigned char *p, long n, MkvHead *h) {
+  long long o = 0, segment = -1, cuesRel = -1;
+  memset(h, 0, sizeof *h);
+  h->cuesAt = -1;
+  h->scale = 1000000;             // the Matroska default: milliseconds
+  // The EBML signature. Without it this is not Matroska (it could be MP4, or an
+  // error HTML the server returned with a 200), and going on would read rubbish.
+  if (!p || n < 64 || p[0] != 0x1A || p[1] != 0x45 || p[2] != 0xDF || p[3] != 0xA3) return 0;
   while (o < n) {
     int ui = 0, ut = 0;
     unsigned long id = readId(p + o, n - o, &ui);
-    long size;
-    if (!id) return 0;
-    size = readSize(p + o + ui, n - o - ui, &ut);
-    if (size == -1) return 0;
-    o += ui + ut;
-    if (id == ID_SEGMENT || size == -2) {
-      // Segment: descend into it. An unknown size likewise — there is nothing
-      // to skip by.
-      if (id == ID_SEGMENT) continue;
-      return 0;
-    }
+    long long size, at;
+    if (!id) break;
+    size = readSize(p + o + ui, (long)(n - o - ui), &ut);
+    if (size == -1) break;
+    at = o + ui + ut;
+    // Segment: descend into it. Its size is the film's; there is nothing to
+    // check it against.
+    if (id == ID_SEGMENT) { segment = at; o = at; continue; }
+    // Media data from here on: the header is over.
+    if (id == ID_CLUSTER || size == -2) break;
     if (id == ID_TRACKS) {
-      long disp = n - o;
-      if (size > disp) size = disp;     // header larger than the downloaded chunk
-      return readTracks(p + o, size, output, max);
+      long long avail = n - at;
+      // A header larger than the downloaded chunk still yields the tracks that
+      // fit, which is what this read did before it learnt about the Cues.
+      h->nTracks = readTracks(p + at, size < avail ? size : avail, h->tracks, MKV_MAX_TRACKS);
     }
-    if (o + size > n) return 0;        // the element runs past what we downloaded
-    o += size;
+    if (at + size > n) break;        // the element runs past what we downloaded
+    if (id == ID_SEEKHEAD && cuesRel < 0) cuesRel = readSeekHead(p + at, size);
+    else if (id == ID_INFO) {
+      long long q = 0, fat, fsize;
+      unsigned long fid;
+      while (q < size && (fid = child(p + at, size, q, &fat, &fsize))) {
+        if (fid == ID_TSSCALE) {
+          unsigned long long v = readUint(p + at + fat, fsize);
+          if (v) h->scale = v;
+        }
+        q = fat + fsize;
+      }
+    }
+    else if (id == ID_CUES && h->cuesAt < 0) h->cuesAt = o;   // indexed up front
+    o = at + size;
   }
+  if (h->cuesAt < 0 && cuesRel >= 0 && segment >= 0) h->cuesAt = segment + cuesRel;
+  return h->nTracks;
+}
+
+static int isSubtitle(const MkvHead *h, int number) {
+  int i;
+  for (i = 0; i < h->nTracks; i++)
+    if (h->tracks[i].number == number) return h->tracks[i].kind == 17;
   return 0;
 }
 
-int mkv_tracks(const char *url, MkvTrack *output, int max) {
+int mkv_cues_parse(const unsigned char *p, long n, const MkvHead *h, MkvCue **out) {
+  const unsigned char *c;
+  long long o = 0, cat, csize, at, size;
+  unsigned long id;
+  double tick;
+  int found = 0, cap = 0;
+  MkvCue *list = NULL;
+  *out = NULL;
+  if (!p || !h || child(p, n, 0, &cat, &csize) != ID_CUES) return -1;
+  tick = (double)h->scale / 1e9;
+  c = p + cat;
+  while (o < csize && (id = child(c, csize, o, &at, &size))) {
+    if (id == ID_CUEPOINT) {
+      const unsigned char *q = c + at;
+      long long k = 0, fat, fsize, ticks = -1;
+      unsigned long fid;
+      // CueTime first: nothing in the format promises it comes before the
+      // positions it dates.
+      while (k < size && (fid = child(q, size, k, &fat, &fsize))) {
+        if (fid == ID_CUETIME) ticks = (long long)readUint(q + fat, fsize);
+        k = fat + fsize;
+      }
+      k = 0;
+      while (ticks >= 0 && k < size && (fid = child(q, size, k, &fat, &fsize))) {
+        if (fid == ID_CUETRACKPOS) {
+          long long j = 0, gat, gsize, dur = 0;
+          unsigned long gid;
+          int track = 0;
+          while (j < fsize && (gid = child(q + fat, fsize, j, &gat, &gsize))) {
+            if (gid == ID_CUETRACK) track = (int)readUint(q + fat + gat, gsize);
+            else if (gid == ID_CUEDURATION) dur = (long long)readUint(q + fat + gat, gsize);
+            j = gat + gsize;
+          }
+          if (track > 0 && isSubtitle(h, track)) {
+            if (found == cap) {
+              MkvCue *grown;
+              cap = cap ? cap * 2 : 512;
+              grown = realloc(list, (size_t)cap * sizeof *list);
+              if (!grown) { free(list); return -1; }
+              list = grown;
+            }
+            list[found].track = track;
+            list[found].start = (double)ticks * tick;
+            list[found].end = (double)(ticks + dur) * tick;
+            found++;
+          }
+        }
+        k = fat + fsize;
+      }
+    }
+    o = at + size;
+  }
+  *out = list;
+  return found;
+}
+
+int mkv_head(const char *url, MkvHead *h) {
   char *buf;
   long n = 0;
   int found;
-  if (!url || !url[0] || !output || max < 1) return 0;
+  memset(h, 0, sizeof *h);
+  h->cuesAt = -1;
+  if (!url || !url[0]) return 0;
   buf = net_download_chunk(url, 20, 0, MKV_CHUNK - 1, &n);
   if (!buf) return 0;
-  // The EBML signature. Without it this is not Matroska (it could be MP4, or an
-  // error HTML the server returned with a 200), and going on would read rubbish.
-  if (n < 64 || (unsigned char)buf[0] != 0x1A || (unsigned char)buf[1] != 0x45 ||
-      (unsigned char)buf[2] != 0xDF || (unsigned char)buf[3] != 0xA3) {
-    free(buf);
-    return 0;
-  }
-  found = findTracks((const unsigned char *)buf, n, output, max);
+  found = mkv_head_parse((const unsigned char *)buf, n, h);
   free(buf);
-  printf("[mkv] %d tracks read from the header (%ld bytes)\n", found, n);
+  printf("[mkv] %d tracks read from the header (%ld bytes), cues at %lld\n", found, n, h->cuesAt);
   fflush(stdout);
+  return found;
+}
+
+int mkv_cues(const char *url, const MkvHead *h, MkvCue **out, long *bytes,
+             char *why, unsigned whySize) {
+  unsigned char *buf;
+  long n = 0;
+  long long size, total;
+  int found;
+  char none[8];
+  if (!why || !whySize) { why = none; whySize = sizeof none; }
+  why[0] = 0;
+  *out = NULL;
+  if (bytes) *bytes = 0;
+  if (!url || !url[0] || !h || h->cuesAt < 0) { snprintf(why, whySize, "no index position"); return -1; }
+  buf = (unsigned char *)net_download_chunk(url, 20, h->cuesAt, h->cuesAt + MKV_CUES_FIRST - 1, &n);
+  if (!buf) { snprintf(why, whySize, "first request failed"); return -1; }
+  if (bytes) *bytes = n;
+  // A server that ignores Range sends the file from byte 0, which starts with
+  // the EBML signature and not with the Cues: refused here, and the net layer's
+  // ceiling has already cut the transfer at MKV_CUES_FIRST.
+  { int ui = 0, ut = 0;
+    unsigned long id = readId(buf, n, &ui);
+    if (id != ID_CUES) {
+      snprintf(why, whySize, "not the Cues there (id %lx)", id);
+      free(buf); return -1;
+    }
+    size = readSize(buf + ui, n - ui, &ut);
+    if (size < 0) { snprintf(why, whySize, "unreadable index size"); free(buf); return -1; }
+    total = ui + ut + size; }
+  if (total > MKV_CUES_MAX) {
+    snprintf(why, whySize, "index of %lld KB, over the ceiling", total / 1024);
+    free(buf); return -1;
+  }
+  if (total > n) {
+    long more = 0;
+    char *rest = net_download_chunk(url, 30, h->cuesAt + n, h->cuesAt + total - 1, &more);
+    unsigned char *whole;
+    if (!rest || more != total - n) {
+      snprintf(why, whySize, "second request got %ld of %lld bytes", rest ? more : 0L, total - n);
+      free(rest); free(buf); return -1;
+    }
+    whole = realloc(buf, (size_t)total);
+    if (!whole) { snprintf(why, whySize, "out of memory"); free(rest); free(buf); return -1; }
+    buf = whole;
+    memcpy(buf + n, rest, (size_t)more);
+    free(rest);
+    n += more;
+    if (bytes) *bytes = n;
+  }
+  found = mkv_cues_parse(buf, n, h, out);
+  if (found < 0) snprintf(why, whySize, "index of %lld KB did not parse", total / 1024);
+  free(buf);
   return found;
 }

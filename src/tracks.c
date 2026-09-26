@@ -51,6 +51,17 @@ static int forcedDone, audioDone, userChose;
 // Called when a new playback session starts: the external subtitle belongs to
 // the session, not to the device. Without this the next title would open the
 // sheet marking as active a subtitle that was not chosen for it.
+// The language of the addon subtitle loaded last, for tracks_external_language.
+static char externalLang[8];
+
+const char *tracks_external_language(void) { return subExternal >= 0 ? externalLang : ""; }
+
+// Loads an addon subtitle, remembering its language.
+static void loadExternal(const Subtitle *l) {
+  snprintf(externalLang, sizeof externalLang, "%s", l->language);
+  video_choose_subtitle(-1); subtitle_load(l->url);
+}
+
 void tracks_reset(void) {
   subExternal = -1; is_open = 0; subtitle_off();
   autoDone = 0; autoSince = 0;
@@ -341,7 +352,7 @@ void tracks_auto(Uint32 now) {
     }
     if (best >= 0) {
       const Subtitle *l = addons_subtitle(best);
-      video_choose_subtitle(-1); subtitle_load(l->url);
+      loadExternal(l);
       subExternal = embedded + best;
       { char o[300]; snprintf(o, sizeof o, "chose addon %d (%s, %s) score %d%s%s%s: %.120s", best,
                               l->language, l->source, bestScore, l->hashMatch ? " hash" : "",
@@ -896,7 +907,7 @@ static void applySubtitle(int i) {
     const Subtitle *l = addons_subtitle(i - embedded);
     // Only mark as active if there was something to apply: without the URL the
     // uMS gets nothing, and the sheet would say "active" about nothing.
-    if (l) { video_choose_subtitle(-1); subtitle_load(l->url); subExternal = i; }
+    if (l) { loadExternal(l); subExternal = i; }
   }
 }
 

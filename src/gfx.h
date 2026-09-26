@@ -455,6 +455,8 @@ typedef enum {
   // what shows is the ring filling with colour as OK is held.
   //
   //   uPar.x = how much of the perimeter is filled, 0..1
+  //   focus  = where the fill starts, as a fraction of the lap past the
+  //            top-left corner (0 for a hold; the clock for a busy spinner)
   GFX_RING_FILL = 42,
   // GFX_CARD_DEPTH — the card depth effect (`cardDepth*`), the web's two inset
   // shadows in one pass over the card's own quad, clipped by its corner:

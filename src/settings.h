@@ -115,6 +115,9 @@ int   settings_meta_external(void);            // preferExternalMetaAddonDetail
 int   settings_expand_poster(void);         // focusedPosterBackdropExpandEnabled
 float settings_expand_poster_delay(void);  // in seconds
 int   settings_navigation_horizontal_fast(void); // fastHorizontalNavigationEnabled
+// rowScrollAnchor (local): 1 when every horizontal row puts the focused card in
+// its first slot on each step; 0 scrolls only as far as the card needs to fit.
+int   settings_row_first_slot(void);
 
 // --- LAYOUT: card depth ------------------------------------------------------
 int   settings_depth(void);            // cardDepthEnabled

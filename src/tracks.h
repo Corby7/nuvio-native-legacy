@@ -45,5 +45,8 @@ void tracks_draw(Uint32 now);
 float tracks_shown(void);
 // How far the STYLE BAR is in, 0..1. The player keeps the subtitle above it.
 float tracks_style_shown(void);
+// The language code of the addon subtitle playing, "" when none is (autosync.c
+// picks its reference track by it).
+const char *tracks_external_language(void);
 
 #endif

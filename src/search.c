@@ -879,8 +879,11 @@ void search_update(float dt, Uint32 now) {
     float left = focusRes.column * NV_SEARCH_CARD_STEP;
     float dir = left + NV_SEARCH_CARD_W;
     float targetX = scrollX[r];
-    if (dir - targetX > util) targetX = dir - util;
-    if (left - targetX < 0.0f) targetX = left;
+    if (settings_row_first_slot()) targetX = left;
+    else {
+      if (dir - targetX > util) targetX = dir - util;
+      if (left - targetX < 0.0f) targetX = left;
+    }
     if (targetX < 0.0f) targetX = 0.0f;
     scrollX[r] = anim_spring(scrollX[r], targetX, dt, NV_SPRING_SCROLL);
   } else {
@@ -1146,6 +1149,53 @@ static void drawEmpty(void) {
   txt_draw(l2, x, y + NV_SEARCH_EMPTY_TOP + (float)l1.h + NV_SEARCH_EMPTY_GAP);
 }
 
+// 1 while the addons are still being asked about the CURRENT term. It is what
+// separates "nothing yet" from "nothing at all": without it the screen said
+// "No Results" for the whole second or two the network took, then replaced it
+// with results — the owner was told the search had failed before it had run.
+static int searchPending(void) {
+  char target[SEARCH_MAX_QUERY * 2];
+  normalize(query, target, sizeof target);
+  return (int)strlen(target) >= 2 && disc_searching();
+}
+
+// THE LOADING STATE: rows of skeleton cards in the exact geometry of the real
+// ones — title bar where the catalogue name goes, origin bar under it, posters
+// on the rail with name and year bars below — so the results land in place
+// instead of the layout jumping when they arrive. Not focusable; there is
+// nothing behind a skeleton to open. `y0` is where the first one starts, so the
+// same rows can stand in for the whole screen or trail real rows that arrived
+// while slower addons are still answering.
+static void drawSkeletonRows(float y0, int rows) {
+  float x0 = contentX();
+  float trackX = x0 + NV_SEARCH_TRACK_X;
+  float radius = NV_SEARCH_POSTER_R / NV_SEARCH_POSTER_H;
+  int r, c;
+  gfx_crop(x0 - 12.0f, NV_SEARCH_BODY_Y - 30.0f,
+           (NV_SCREEN_W - x0) + 12.0f,
+           (NV_SCREEN_H - NV_SEARCH_TOP) - NV_SEARCH_BODY_Y + 30.0f);
+  for (r = 0; r < rows; r++) {
+    float ry = y0 + r * NV_SEARCH_ROW_STEP;
+    float cardY = ry + NV_SEARCH_ROW_RAIL;
+    if (ry > NV_SCREEN_H) break;
+    gfx_skeleton((GfxRect){ x0, ry + 4.0f, 280.0f, 26.0f }, 0.5f,
+                 0.25f, 0.26f, 0.28f, 0.62f);
+    gfx_skeleton((GfxRect){ x0, ry + NV_SEARCH_ROW_SUB + 2.0f, 160.0f, 18.0f }, 0.5f,
+                 0.20f, 0.21f, 0.23f, 0.52f);
+    for (c = 0; trackX + c * NV_SEARCH_CARD_STEP < NV_SCREEN_W; c++) {
+      float px = trackX + c * NV_SEARCH_CARD_STEP;
+      float ny = cardY + NV_SEARCH_POSTER_H + NV_SEARCH_NAME_GAP;
+      gfx_skeleton((GfxRect){ px, cardY, NV_SEARCH_CARD_W, NV_SEARCH_POSTER_H }, radius,
+                   NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G, NV_COLOR_SKELETON_B, 1.0f);
+      gfx_skeleton((GfxRect){ px, ny + 4.0f, NV_SEARCH_CARD_W * 0.72f, 20.0f }, 0.5f,
+                   0.22f, 0.23f, 0.25f, 0.55f);
+      gfx_skeleton((GfxRect){ px, ny + 36.0f, NV_SEARCH_CARD_W * 0.30f, 16.0f }, 0.5f,
+                   0.20f, 0.21f, 0.23f, 0.45f);
+    }
+  }
+  gfx_no_crop();
+}
+
 // The round "See All" at the end of a full row. The same 100px circle as the
 // header's buttons; focused it fills white and the arrow swaps to the filled
 // glyph, which is a different FILE and not the same shape recoloured.
@@ -1171,6 +1221,7 @@ static void drawResults(Uint32 now) {
   hasItemFocus = 0;
   if (nFilter == 0) {
     if (histShown()) drawHistory();
+    else if (searchPending()) drawSkeletonRows(NV_SEARCH_BODY_Y, 2);
     else if (nQuery >= 2) drawEmpty();
     return;
   }
@@ -1178,8 +1229,8 @@ static void drawResults(Uint32 now) {
   // The track really does run to the screen's edge: `.search-content` has no
   // right padding and the row is clipped by the viewport, which is what makes a
   // row read as continuing past the edge instead of ending there.
-  gfx_crop(x0 - 8.0f, NV_SEARCH_BODY_Y - 30.0f,
-           (NV_SCREEN_W - x0) + 8.0f,
+  gfx_crop(x0 - 12.0f, NV_SEARCH_BODY_Y - 30.0f,
+           (NV_SCREEN_W - x0) + 12.0f,
            (NV_SCREEN_H - NV_SEARCH_TOP) - NV_SEARCH_BODY_Y + 30.0f);
 
   for (int r = 0; r < nFilter; r++) {
@@ -1287,6 +1338,8 @@ static void drawResults(Uint32 now) {
     }
   }
   gfx_no_crop();
+  if (searchPending())
+    drawSkeletonRows(NV_SEARCH_BODY_Y + nFilter * NV_SEARCH_ROW_STEP - scrollY, 1);
 }
 
 void search_draw(Uint32 now) {

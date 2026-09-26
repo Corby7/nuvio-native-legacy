@@ -34,6 +34,7 @@
 // demuxer.
 #ifndef NV_VIDEO_H
 #define NV_VIDEO_H
+#include "mkv.h"
 
 // Registers on the bus and brings up the event loop. 1 on success.
 // Failing here is not fatal: the app carries on without video.
@@ -145,6 +146,16 @@ void video_subtitle_external(const char *url);
 // /file/123 with no .srt; this function makes the URI recognisable without
 // changing the file.
 void video_normalize_url_subtitle(const char *url, char *dst, unsigned size);
+
+// The playing MKV's header, once the background probe has read it: copied into
+// `copy`, with the URL it was read from. 0 before then, for a file that is not
+// MKV, and from the moment another playback starts.
+int video_mkv_head(MkvHead *copy, char *url, unsigned urlSize);
+// 1 while that probe is armed or running: the file is MKV with subtitles and
+// its header is on the way. video_mkv_hurry asks for it sooner — AutoSync has
+// a subtitle on screen waiting for it.
+int  video_mkv_waiting(void);
+void video_mkv_hurry(void);
 
 // --- SUBTITLE STYLE ----------------------------------------------------------
 //

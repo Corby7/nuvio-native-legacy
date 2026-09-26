@@ -1100,7 +1100,9 @@ static const char *FS_BODY[GFX_NMODES] = {
   "    s = p.y > 0.0 ? hx + 2.0 * hy + (hx - x)\n"
   "        : (x >= 0.0 ? x : 3.0 * hx + 4.0 * hy + (x + hx));\n"
   "  }\n"
-  "  float o = mod(s - (per - hx), per);\n"
+  // uFocus TURNS THE START POINT, as a fraction of the lap: every hold passes 0;
+  // a busy card passes the clock, and a short arc then circles the ring.
+  "  float o = mod(s - (per - hx) - uFocus * per, per);\n"
   "  float soft = 0.2 * per;\n"
   "  float a = clamp((uPar.x * (per + soft) - o) / soft, 0.0, 1.0);\n"
   // The TAIL is soft too, or the start point is a hard seam against the unlit

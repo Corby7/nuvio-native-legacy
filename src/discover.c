@@ -399,20 +399,34 @@ const char *disc_genre_at(const char *base, const char *kind, const char *id, in
 
 void disc_targets_search_reset(void) {
   pthread_mutex_lock(&searchLock);
-  // Cinemeta goes in ALWAYS and first: it is the only source that depends on no
-  // addon, so the search goes on working on a clean installation.
+  // EMPTY, and filled only by the manifests — the web app's buildSearchTargets,
+  // which searches the catalogues the owner's addons declare and nothing else.
+  // Cinemeta used to go in here unconditionally and first, so an account whose
+  // search came from AIOMetadata got a Cinemeta "Movies"/"Series" pair on top of
+  // it that it never installed (and a second pair when it had). It is now only
+  // the fallback: see disc_targets_search_fallback.
   nTargets = 0;
-  { int t; const char *tt[2] = { "movie", "series" };
+  memset(resTarget, 0, sizeof resTarget);
+  pthread_mutex_unlock(&searchLock);
+}
+
+void disc_targets_search_fallback(void) {
+  pthread_mutex_lock(&searchLock);
+  // No installed addon declares search: Cinemeta keeps the screen working on a
+  // clean installation, since it is the one source that depends on no addon.
+  if (nTargets == 0) {
+    int t; const char *tt[2] = { "movie", "series" };
     const char *rot[2] = { "Movies", "Series" };
     for (t = 0; t < 2; t++) {
       TargetSearch *a = &targets[nTargets++];
       snprintf(a->base,  sizeof a->base,  "%s", CINEMETA);
       snprintf(a->kind,  sizeof a->kind,  "%s", tt[t]);
       snprintf(a->id,    sizeof a->id,    "%s", "top");
-      snprintf(a->title,sizeof a->title,"%s", rot[t]);
+      snprintf(a->title, sizeof a->title, "%s", rot[t]);
       snprintf(a->addon, sizeof a->addon, "%s", "Cinemeta");
-    } }
-  memset(resTarget, 0, sizeof resTarget);
+    }
+    printf("[disc] no addon declares search: falling back to Cinemeta\n");
+  }
   pthread_mutex_unlock(&searchLock);
 }
 
@@ -1763,6 +1777,7 @@ static void *build(void *u) {
     // during the read and does not depend on this array.
     nDecl = manifestsJoin(decls, DECL_MAX);
     printf("[disc] %d catalogues declared by the addons\n", nDecl);
+    disc_targets_search_fallback();
 
     // SEARCH TARGETS. They are independent of the order/filtering of the home's
     // ROWS: a catalogue may be disabled on the home and still be good to search
@@ -2301,23 +2316,29 @@ static void *fetchEps(void *u) {
     // the TYPE ("TV Show") in place of the genres, with no IMDb badge and no
     // country. /meta carries all three, and this function already has the response
     // in hand — not reading it was wasting a round trip already paid for.
+    // THE SAME SHAPE AS ofMeta's: the TYPE first, then the genres through
+    // disc_genre_label, joined by "  ·  ". Every reader (the hero's meta line,
+    // detail's genre group, catalog.c's sharesGenre) skips the first field as the
+    // type. Writing the bare list here made them all drop the first REAL genre, and
+    // on the hero "Movie • Action" flipped to "Action • Drama" the moment this
+    // prefetch landed, 400 ms into a rest.
     { const char *g = js_array(body, NULL, "genres");
-      char list[160]; size_t n3 = 0;
-      list[0] = 0;
-      while (g && *g == '"' && n3 + 1 < sizeof list) {
+      char list[160]; int any = 0;
+      snprintf(list, sizeof list, "%s", isMovie ? "Movie" : "TV Show");
+      while (g && *g == '"') {
         const char *p2 = g + 1;
-        if (n3) { // separador do web: espaco, ponto medio, espaco
-          if (n3 + 4 >= sizeof list) break;
-          list[n3++] = ' '; list[n3++] = '\xc2'; list[n3++] = '\xb7'; list[n3++] = ' ';
-        }
-        while (*p2 && *p2 != '"' && n3 + 1 < sizeof list) list[n3++] = *p2++;
-        list[n3] = 0;
+        char raw[48]; size_t n3 = 0, used = strlen(list);
+        while (*p2 && *p2 != '"' && n3 + 1 < sizeof raw) raw[n3++] = *p2++;
+        raw[n3] = 0;
+        if (raw[0])
+          { snprintf(list + used, sizeof list - used, "  \xc2\xb7  %s", disc_genre_label(raw)); any = 1; }
+        while (*p2 && *p2 != '"') p2++;
         if (*p2 == '"') p2++;
         while (*p2 == ' ') p2++;
         g = (*p2 == ',') ? p2 + 1 : NULL;
         while (g && *g == ' ') g++;
       }
-      if (list[0]) snprintf(edit.genre, sizeof edit.genre, "%s", list); }
+      if (any) snprintf(edit.genre, sizeof edit.genre, "%s", list); }
     { double score = js_num(body, NULL, "imdbRating", 0.0);
       // The field arrives as "8.1" (a string or a number); we store it times 10 so
       // it fits in an int without losing the decimal place, as the rest of the

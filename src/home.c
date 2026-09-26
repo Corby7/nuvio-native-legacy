@@ -21,6 +21,7 @@
 #include "extras.h"
 #include "trailers.h"
 #include "director.h"
+#include "cwremove.h"
 #include <strings.h>
 // Declared by hand rather than including detail.h: that header includes THIS one
 // (because of HomeItem), and the cycle only fails to explode thanks to the guards.
@@ -998,7 +999,11 @@ void home_event(const SDL_Event *e) {
     // carousel: anyone arriving there (coming back from another screen, say) had no
     // way to open the menu without first going down. The carousel is still reachable
     // by the right arrow and by the automatic change.
-    if (focus.column == 0) { requestMenu = 1; return; }
+    // Only on a FRESH press: holding left to run back along a row used to carry on
+    // into the menu the moment the row ran out. The repeats stop at the first card;
+    // releasing and pressing left again is what opens the menu. Independent of the
+    // row-scrolling setting — this is the focus, not the scroll.
+    if (focus.column == 0) { if (!e->key.repeat) requestMenu = 1; return; }
     focus_move(&focus, -1, 0);
   }
   else if (k == SDLK_DOWN)  focus_move(&focus, 0, 1);
@@ -1343,19 +1348,10 @@ static void syncRows(void) {
     snprintf(s->title,sizeof s->title,"Among friends");
     snprintf(s->key,sizeof s->key,"social_activity");destination++;
   }
-  // A return from the player is context, not catalogue: it goes above the rows and
-  // disappears when there is no incomplete session. It duplicates no data and makes
-  // no network calls; it points at the item the player has just updated in memory.
-  if (resumeId[0]) resumeIndex = cat_index_by_imdb(resumeId);
-  if (resumeIndex >= 0 && destination < MAX_FILTER) {
-    memmove(rows + 1, rows, sizeof(Row) * (size_t)destination);
-    memset(&rows[0], 0, sizeof rows[0]);
-    snprintf(rows[0].title, sizeof rows[0].title, "Resume now");
-    snprintf(rows[0].key, sizeof rows[0].key, "last_session");
-    rows[0].kind = ROW_RETURN;
-    rows[0].start = resumeIndex; rows[0].n = 1;
-    destination++;
-  }
+  // NO "Resume now" ROW. A return from the player used to push a one-card row above
+  // everything; the owner asked for it gone — Continue watching already carries the
+  // same title with its progress. home_record_return still tracks the session, so
+  // resumeRev keeps forcing the rebuild that refreshes that row's bar and time.
   nRows = destination;
   // THE HOME'S FINAL ORDER, once per rebuild.
   //
@@ -1623,6 +1619,22 @@ void home_update(float dt, Uint32 now) {
       ctx_open_row(rows[focus.row].start + focus.column, &c); }
   }
 
+  // The busy card's arc stops only once the card has left "Continue watching".
+  { const char *busy = cw_remove_busy();
+    if (busy) {
+      size_t nb = strlen(busy);
+      int r, c, present = 0;
+      for (r = 0; r < nRows && !present; r++) {
+        if (strcmp(rows[r].key, "continue_watching")) continue;
+        for (c = 0; c < rows[r].n && !present; c++) {
+          const CatItem *ci = cat_item_exact(rows[r].start + c);
+          present = ci && !strncmp(ci->imdb, busy, nb) &&
+                    (ci->imdb[nb] == '\0' || ci->imdb[nb] == ':');
+        }
+      }
+      if (!present) cw_remove_gone();
+    } }
+
   // The catalogue may shrink between two responses. Normalising the carousel's
   // indices stops a stale state falling into cat_item()'s wrap-around.
   { int total = nArchiveHero();
@@ -1840,8 +1852,13 @@ void home_update(float dt, Uint32 now) {
       // the slack covers the focus's growth: the card grows on both sides, and
       // without reserving that half it touches the edge when it takes focus
       float slack = lw * scaleOf(rows[r].kind) * 0.5f;
-      if (dir + slack - target > util)  target = dir + slack - util;
-      if (left - target < 0.0f)  target = left;
+      // "First slot" (Settings > Poster focus) pins the focused card to the row's
+      // start on every step instead, and the rest of the row slides past it.
+      if (settings_row_first_slot()) target = left;
+      else {
+        if (dir + slack - target > util)  target = dir + slack - util;
+        if (left - target < 0.0f)  target = left;
+      }
       if (target < 0) target = 0;
       scrollX[r] = anim_spring2_reduced(&velX[r], scrollX[r], target, dt,
                                        NV_SPRING2_SCROLL, motionReduced);
@@ -2023,15 +2040,13 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
           o += (size_t)snprintf(metaBuf + o, sizeof metaBuf - o, "%s", s_) + 1; \
         } } while (0)
 
-    // THE STREAMING SERVICE, AS TEXT. It used to be a LOGO drawn ahead of the line by
-    // badges_draw, and the owner's call is that the name reads better than the mark:
-    // "dont need logos to indicate what streaming service it is on, just text is
-    // enough". It leads the group that says what the title IS.
-    //
-    // NuvioWeb shows no provider on the hero at all, so this is a deliberate
-    // divergence and not a measurement — it is information the owner asked for, in the
-    // place the line already had for it.
-    if (ci && ci->providerName[0]) META_PUSH(ci->providerName);
+    // NO STREAMING SERVICE HERE, on purpose. It led this line as text for a while, but
+    // providerName only exists after /watch/providers answers — the third serial TMDB
+    // round trip of photosOfCast, started 400 ms into a rest (NV_HOME_PREFETCH_MS) —
+    // so it landed seconds after the hero and shoved the whole line right. Drawing it
+    // only when already known at the swap avoids the jump but shows it on some titles
+    // and not others. NuvioWeb shows no provider on the hero either; the detail page
+    // still does.
     if (contHero && ci && ci->season > 0) {
       char header[64];
       snprintf(header, sizeof header, "S%d E%d", ci->season, ci->episode);
@@ -3612,7 +3627,18 @@ void home_draw(Uint32 now) {
           // The hold's ring: dimmed while the sweep refills it in white.
           int held = focus_index(&focus, r, c);
           float ringA = held ? 1.0f - NV_HOLD_DIM * holdDim : 1.0f;
-          float sweep = held ? holdShown : 0.0f;
+          float sweep = held ? holdShown : 0.0f, sweepFrom = 0.0f;
+          // BUSY: "Remove from Continue watching" is waiting on Trakt and the
+          // account. The same dimmed ring, with a short arc of the hold's sweep
+          // circling it until the card leaves the row.
+          { const char *busy = cw_remove_busy();
+            size_t nb = busy ? strlen(busy) : 0;
+            if (held && busy && cItem && !strncmp(cItem->imdb, busy, nb) &&
+                (cItem->imdb[nb] == '\0' || cItem->imdb[nb] == ':')) {
+              ringA = 1.0f - NV_HOLD_DIM;
+              sweep = NV_BUSY_ARC;
+              sweepFrom = (float)(now % NV_BUSY_LAP_MS) / NV_BUSY_LAP_MS;
+            } }
           // The glow that confirms it, BEHIND the card: it widens as it fades.
           float glowPx = 10.0f + 28.0f * (1.0f - holdPulse);
           if (held && holdPulse > 0.0f)
@@ -3646,7 +3672,7 @@ void home_draw(Uint32 now) {
                         NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
                         NV_FRAME_RING_A * f * ringA);
               if (sweep > 0.0f)
-                gfx_rect(frame, 0, GFX_RING_FILL, 0, sweep, 0,
+                gfx_rect(frame, 0, GFX_RING_FILL, sweepFrom, sweep, 0,
                          radiusFocus(frame.h, in),
                          NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
                          NV_FRAME_RING_A * f);
@@ -3669,7 +3695,7 @@ void home_draw(Uint32 now) {
               gfx_color(border, rPx / (h + NV_RING_FOCUS * 2.0f),
                         1.0f, 1.0f, 1.0f, f * ringA);
               if (sweep > 0.0f)
-                gfx_rect(border, 0, GFX_RING_FILL, 0, sweep, 0,
+                gfx_rect(border, 0, GFX_RING_FILL, sweepFrom, sweep, 0,
                          rPx / (h + NV_RING_FOCUS * 2.0f),
                          1.0f, 1.0f, 1.0f, f);
             }

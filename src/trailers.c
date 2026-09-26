@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <time.h>
 
 typedef struct {
   char name[96], kind[16], thumb[240], url[900];
@@ -17,6 +18,40 @@ static int     nList;
 static char    idRequest[24], idLoaded[24];
 static int     threadAlive;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+
+// THE LAST FEW TITLES' LISTS, kept in memory. The home prefetches a card's trailers
+// while it rests under the focus (prefetchDetail), and sweeping back to a card seen a
+// moment ago should not cost IMDb another round trip — nor the title page another
+// late button. Only lists with something in them are kept: an empty answer may have
+// been the network, and is asked again. The playback URLs are signed for 24 hours;
+// an entry is dropped long before that (TR_CACHE_SECS), and never reaches the disk.
+#define TR_CACHE      8
+#define TR_CACHE_SECS (3 * 60 * 60)
+static struct {
+  char id[24];
+  time_t at;
+  int n;
+  Trailer list[TR_MAX];
+} cache[TR_CACHE];
+
+// Under the lock. The entry for `id` still fresh, or -1.
+static int cacheFind(const char *id) {
+  time_t now = time(NULL);
+  for (int i = 0; i < TR_CACHE; i++)
+    if (cache[i].id[0] && !strcmp(cache[i].id, id) && now - cache[i].at < TR_CACHE_SECS)
+      return i;
+  return -1;
+}
+// Under the lock. Replaces the oldest entry.
+static void cacheStore(const char *id, const Trailer *found, int n) {
+  int slot = 0;
+  if (n <= 0) return;
+  for (int i = 1; i < TR_CACHE; i++) if (cache[i].at < cache[slot].at) slot = i;
+  snprintf(cache[slot].id, sizeof cache[slot].id, "%s", id);
+  cache[slot].at = time(NULL);
+  cache[slot].n = n;
+  memcpy(cache[slot].list, found, n * sizeof *found);
+}
 
 // The fields are asked for in the order they are read below; the parse finds
 // each one by searching forward inside the node, so the order is what keeps
@@ -140,6 +175,7 @@ static void *fetch(void *arg) {
     printf("[trailers] %s: %d from IMDb%s\n", id, n, body ? "" : " (no answer)");
     fflush(stdout);
     pthread_mutex_lock(&lock);
+    cacheStore(id, found, n);
     if (!strcmp(id, idRequest)) {
       // Copied while nList is still 0, then published: the drawing reads without
       // the lock and only ever sees a whole list or none.
@@ -150,7 +186,13 @@ static void *fetch(void *arg) {
       pthread_mutex_unlock(&lock);
       return NULL;
     }
-    // Another title was opened during the request: fetch that one instead.
+    // Another title was opened during the request: fetch that one instead —
+    // unless the cache already answered it.
+    if (!strcmp(idLoaded, idRequest)) {
+      threadAlive = 0;
+      pthread_mutex_unlock(&lock);
+      return NULL;
+    }
     pthread_mutex_unlock(&lock);
   }
 }
@@ -171,6 +213,17 @@ void trailers_request(const char *imdb) {
   }
   snprintf(idRequest, sizeof idRequest, "%s", id);
   nList = 0; idLoaded[0] = 0;
+  // Already fetched: published at once, the same way the thread publishes — the
+  // list copied while nList is 0, then the count. A thread still in flight for
+  // another title sees idRequest changed and simply stores what it gets.
+  { int c = cacheFind(id);
+    if (c >= 0) {
+      memcpy(list, cache[c].list, cache[c].n * sizeof *list);
+      nList = cache[c].n;
+      snprintf(idLoaded, sizeof idLoaded, "%s", id);
+      pthread_mutex_unlock(&lock);
+      return;
+    } }
   if (threadAlive) { pthread_mutex_unlock(&lock); return; }
   threadAlive = 1;
   pthread_mutex_unlock(&lock);

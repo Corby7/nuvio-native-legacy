@@ -95,6 +95,12 @@ static char  subUrlCurrent[1024];
 static int    pauseRequested;   // 1 while the pause was asked for by us
 // An MKV probe requested, waiting for the buffer. See the note in sourceInfo.
 static int    mkvPending;
+// When it was requested, and when the pipeline last reported buffering: the
+// probe's second trigger (see video_pump). SDL ticks; a Uint32 written from the
+// LS2 thread and read on the drawing one, a torn read costing one frame's check.
+static Uint32 mkvArmedMs, lastBufferingMs;
+// Set by video_mkv_hurry: an addon subtitle is waiting for the header to sync.
+static int mkvHurry;
 // 1 when the source was announced as MP4. See video_set_mp4.
 static int    sourceMp4;
 static double seekTarget;
@@ -175,6 +181,9 @@ int  video_eos_count(void) { return 0; }
 const char *video_hdr(void) { return "none"; }
 int  video_width(void) { return 0; }
 int  video_height(void) { return 0; }
+int  video_mkv_head(MkvHead *h, char *u, unsigned n) { (void)h; (void)u; (void)n; return 0; }
+int  video_mkv_waiting(void) { return 0; }
+void video_mkv_hurry(void) {}
 void video_shutdown(void) {}
 #else
 #include <dlfcn.h>
@@ -486,8 +495,9 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     // PGS tracks, and a language that is present but wrong never set this off.
     // The header also supplies what the pipeline never does — the codec, the name
     // and the forced flag.
-    { // IT ONLY NOTES IT DOWN. What fires it is video_pump, once the buffer is
-      if (nSub > 0 && !sourceMp4) mkvPending = 1;
+    { // IT ONLY NOTES IT DOWN. What fires it is video_pump, once playback shows
+      // bandwidth to spare.
+      if (nSub > 0 && !sourceMp4) { mkvPending = 1; mkvArmedMs = SDL_GetTicks(); }
       else if (nSub > 0) mark("mkv: source is MP4, probe skipped"); }
   }
 
@@ -604,12 +614,14 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   // separates "the source is not delivering" from "the decoder choked".
   if (strstr(p, "bufferingStart")) {
     char m[64];
+    lastBufferingMs = SDL_GetTicks();
     snprintf(m, sizeof m, "buffering START (buffer %+.1fs ahead)",
              bufferSeg - posSeg);
     mark(m);
   }
   if (strstr(p, "bufferingEnd")) {
     char m[64];
+    lastBufferingMs = SDL_GetTicks();
     snprintf(m, sizeof m, "buffering END (buffer %+.1fs ahead)",
              bufferSeg - posSeg);
     mark(m);
@@ -893,15 +905,54 @@ int video_start(void) {
 
 // --- the subtitles' language read from the file itself -----------------------
 // See the note at the trigger point, just below the sourceInfo parse.
+// THE HEADER, KEPT FOR AUTOSYNC. readMkv reads it for the languages anyway;
+// autosync.c wants the same header for where the Cues index is and which tracks
+// are subtitles. It is published under a lock with the URL it belongs to, and a
+// new playback withdraws it (video_play), so a probe that finishes late can
+// never hand one title's header to the next.
+static pthread_mutex_t headLock = PTHREAD_MUTEX_INITIALIZER;
+static MkvHead headShared;
+static char headUrl[1024];
+static int headReady;
+
+static void headPublish(const char *url, const MkvHead *h) {
+  pthread_mutex_lock(&headLock);
+  if (!strcmp(url, urlCurrent)) {
+    headShared = *h;
+    snprintf(headUrl, sizeof headUrl, "%s", url);
+    headReady = 1;
+  }
+  pthread_mutex_unlock(&headLock);
+}
+
+static void headWithdraw(void) {
+  pthread_mutex_lock(&headLock);
+  headReady = 0; headUrl[0] = 0;
+  pthread_mutex_unlock(&headLock);
+}
+
+int  video_mkv_waiting(void) { return mkvPending || threadMkvAlive; }
+void video_mkv_hurry(void) { mkvHurry = 1; }
+
+int video_mkv_head(MkvHead *copy, char *url, unsigned urlSize) {
+  int ok;
+  pthread_mutex_lock(&headLock);
+  ok = headReady;
+  if (ok) { *copy = headShared; snprintf(url, urlSize, "%s", headUrl); }
+  pthread_mutex_unlock(&headLock);
+  return ok;
+}
+
 static void *readMkv(void *arg) {
-  MkvTrack fx[MKV_MAX_TRACKS];
+  static MkvHead head;
+  MkvTrack *fx = head.tracks;
   char url[1024];
   int n, i, j, matched = 0;
   (void)arg;
 
   snprintf(url, sizeof url, "%s", urlCurrent);
 
-  n = mkv_tracks(url, fx, MKV_MAX_TRACKS);
+  n = mkv_head(url, &head);
   if (n < 1) {
     // Without this the only sign was a line on stdout, which on the TV reaches
     // nowhere — and the list stayed at "Subtitle 1, Subtitle 2" with nobody
@@ -986,6 +1037,7 @@ static void *readMkv(void *arg) {
     tracksLog("mkv result", m); }
   printf("[mkv] %d subtitles gained a language\n", matched);
   fflush(stdout);
+  headPublish(url, &head);
   threadMkvAlive = 0;
   return NULL;
 }
@@ -1003,6 +1055,7 @@ static void pushWindow(void);
 
 int video_play(const char *url) {
   dvInset = 0;
+  headWithdraw();
   snprintf(urlCurrent, sizeof urlCurrent, "%s", url ? url : "");
   return playInternal(url, 1);
 }
@@ -1022,11 +1075,33 @@ void video_pump(void) {
   // AN MKV PROBE only with buffer to spare. 20 s ahead is the sign that the source
   // is delivering faster than the decoder consumes, and therefore that there is
   // bandwidth left for the header's 320 KB.
-  if (mkvPending && !threadMkvAlive && urlCurrent[0] && bufferSeg - posSeg >= 20.0) {
-    mkvPending = 0;
-    threadMkvAlive = 1;
-    if (pthread_create(&threadMkv, NULL, readMkv, NULL) != 0) threadMkvAlive = 0;
-    else pthread_detach(threadMkv);
+  //
+  // OR a minute of playback with no buffering in the last 30 s. MEASURED on the
+  // owner's TV, 2026-09-26: four MKVs with subtitles, 4K and 1080p, and the
+  // 20 s lead never came — the probe did not run once, so the languages and
+  // the Cues never arrived. Playback that has run steadily for a minute is the
+  // same evidence of spare bandwidth, reached by another road.
+  //
+  // OR, when AutoSync is waiting on it, ten seconds with five of them clean. An
+  // addon subtitle playing out of sync is worse than the risk: MEASURED on the
+  // owner's TV, the header and a 3.6 MB Cues index read with a 4K remux playing
+  // (+3 s of buffer) and no buffering followed.
+  if (mkvPending && !threadMkvAlive && urlCurrent[0]) {
+    Uint32 now = SDL_GetTicks();
+    int lead = bufferSeg - posSeg >= 20.0;
+    int steady = playing && now - mkvArmedMs >= 60000 && now - lastBufferingMs >= 30000;
+    int hurried = playing && mkvHurry && now - mkvArmedMs >= 10000 && now - lastBufferingMs >= 5000;
+    if (lead || steady || hurried) {
+      char m[80];
+      snprintf(m, sizeof m, "mkv: probe on %s, buffer %+.1fs ahead",
+               lead ? "the 20 s lead" : steady ? "a steady minute" : "AutoSync's request",
+               bufferSeg - posSeg);
+      mark(m);
+      mkvPending = 0;
+      threadMkvAlive = 1;
+      if (pthread_create(&threadMkv, NULL, readMkv, NULL) != 0) threadMkvAlive = 0;
+      else pthread_detach(threadMkv);
+    }
   }
   // A pending seek that has already settled.
   if (seekIn && SDL_GetTicks() >= seekIn) {
@@ -1074,7 +1149,7 @@ static int playInternal(const char *url, int comDV) {
   fontX = -1; dstX = dstY = dstW = dstH = -1;
   posSeg = durationSeg = bufferSeg = 0; playing = ready = 0; media[0] = 0;
   nAudio = nSub = 0; audioCurrent = 0; subCurrent = -1; vidAtmos = 0;
-  subUrlCurrent[0] = 0; mkvPending = 0;
+  subUrlCurrent[0] = 0; mkvPending = 0; mkvHurry = 0;
   snprintf(vidHdr, sizeof vidHdr, "none");
   seiX0 = seiX1 = seiX2 = seiY0 = seiY1 = seiY2 = 0;
   seiWhiteX = seiWhiteY = seiMinLuma = seiMaxLuma = seiMaxCLL = seiMaxFALL = 0;
@@ -1187,7 +1262,7 @@ void video_stop(void) {
   recovering = 0; resumeIn = posOnLoad = 0.0;
   audioOnLoad = subOnLoad = -1;
   subUrlOnLoad[0] = 0;
-  pauseRequested = 0; seekIn = 0; mkvPending = 0; seekHold = -1.0;
+  pauseRequested = 0; seekIn = 0; mkvPending = 0; mkvHurry = 0; seekHold = -1.0;
   if (on && media[0]) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", media);
     call("unload", b, soLog);

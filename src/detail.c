@@ -1876,6 +1876,7 @@ void detail_update(float dt, Uint32 now) {
       float x = alsoFocus * step, w = NV_DETCP_POSTER_W;
       float view = NV_SCREEN_W - NV_DETP_X - NV_DETCP_PANEL_X;
       if (alsoFocus == 0) target = 0.0f;
+      else if (settings_row_first_slot()) target = x;
       else if (x + w > target + view - 24.0f) target = x + w - view + 24.0f;
       else if (x < target + 24.0f)             target = x - 24.0f;
       if (target < 0.0f) target = 0.0f;
@@ -1951,6 +1952,12 @@ void detail_update(float dt, Uint32 now) {
         // to the selector.
         if (r == SEC_COMMENTS && focus.column < nPillsCom()) target = 0.0f;
         else if (focus.column == 0) target = 0.0f;
+        // "First slot": the focused card to the row's start, the rest sliding along.
+        // Comment cards count from their own line's start: xItem is not monotonic on
+        // that row (see there), so their offset is computed from the card index.
+        else if (settings_row_first_slot())
+          target = r == SEC_COMMENTS
+                 ? (float)(focus.column - nPillsCom()) * (COM_CARD_W + COM_CARD_GAP) : x;
         else if (x + w > target + view - 24.0f) target = x + w - view + 24.0f;
         else if (x < target + 24.0f)             target = x - 24.0f;
       }
