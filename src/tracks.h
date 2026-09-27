@@ -34,6 +34,10 @@ void tracks_open(void);
 // The player has an icon for each, and always opening on audio made the two
 // look like the same button.
 void tracks_open_at(int col);
+// Live TV's sheet: the stream's embedded tracks only — no addon subtitles (they
+// are the last film's) and no per-show memory (keyed on the film player's
+// title). tracks_reset, which every film playback calls, turns it off again.
+void tracks_embedded_only(int on);
 int  tracks_is_open(void);
 void tracks_event(const SDL_Event *e);
 void tracks_update(float dt, Uint32 now);

@@ -7,9 +7,9 @@
 #   NUVIO_SHOTS=dir bash tests/iptv_ui.sh
 #
 # Needs SDL2, SDL2_image, SDL2_ttf and a GL context. On Linux without a display
-# it runs itself under xvfb-run. The video pipeline is not exercised (there is
-# none off the TV): tuning shows the "channel unavailable" banner, which is the
-# banner's error face, and that is part of what the capture is for.
+# it runs itself under xvfb-run. The video pipeline is tests/video_stub.c, which
+# plays everything and supplies a generated picture, so the overlays over a
+# playing channel can be captured.
 set -eu
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -74,7 +74,10 @@ open(tmp + "/data/iptv.txt", "w").write("kind=m3u\nurl=file://%s/playlist.m3u\ne
 PY
 
 sources=()
-for s in src/*.c; do [ "$s" != src/main.c ] && sources+=("$s"); done
+for s in src/*.c; do
+  case "$s" in src/main.c|src/video.c|src/video_mac.c) ;; *) sources+=("$s") ;; esac
+done
+sources+=(tests/video_stub.c)
 if [ "$(uname)" = Darwin ]; then
   cc "${sources[@]}" tests/iptv_ui.c -Isrc -o "$TMP/t" -O1 -g \
     -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 -L/opt/homebrew/lib \

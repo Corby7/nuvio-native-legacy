@@ -8,6 +8,8 @@
 #include "anim.h"
 #include "layout.h"
 #include "subtitle.h"
+// Live TV: the stream's own tracks only (see tracks_embedded_only).
+static int embeddedOnly;
 #include "settings.h"
 #include "streams.h"
 #include "tabs.h"
@@ -65,6 +67,7 @@ static void loadExternal(const Subtitle *l) {
 
 void tracks_reset(void) {
   subExternal = -1; is_open = 0; subtitle_off();
+  embeddedOnly = 0;
   autoDone = 0; autoSince = 0;
   memRead = 0;
   forcedDone = audioDone = userChose = 0;
@@ -225,7 +228,7 @@ static void memWrite(const char *file, const char *value) {
   const char *lang = value;
   int n = 0, i, from;
   FILE *f;
-  if (!memShow[0] || !data_path(path, sizeof path, file)) return;
+  if (embeddedOnly || !memShow[0] || !data_path(path, sizeof path, file)) return;
   if ((f = fopen(path, "r"))) {
     char line[320];
     size_t k = strlen(memShow);
@@ -517,7 +520,11 @@ typedef struct { char name[32]; int count, active, rank; } Lang;
 static Lang langs[LANG_MAX];
 static int nLangs;
 
-static int nSubtitles(void) { return video_n_subtitle() + addons_n_subtitles(); }
+// LIVE TV opens this sheet too (tracks_embedded_only): there, only the stream's
+// own tracks exist. The addons' subtitles are the last FILM's, and the per-show
+// memory is keyed on the film player's title, so both stay out.
+void tracks_embedded_only(int on) { embeddedOnly = on; }
+static int nSubtitles(void) { return video_n_subtitle() + (embeddedOnly ? 0 : addons_n_subtitles()); }
 
 // The playing row as an index into the combined list, -1 when off.
 static int subActive(void) {
@@ -1270,7 +1277,7 @@ static void drawHeader(float x, int count, float right, float a) {
     float by = mid - (capC + txt_baseline(TXT_SRC_COUNT)) * 0.5f;
     if (mode == MODE_SUBTITLE)
       snprintf(n, sizeof n, "%d available%s", count,
-               addons_subtitles_busy() ? "  \xc2\xb7  searching" : "");
+               !embeddedOnly && addons_subtitles_busy() ? "  \xc2\xb7  searching" : "");
     else
       snprintf(n, sizeof n, "%d track%s", count, count == 1 ? "" : "s");
     txt_draw_alpha(txt_line(TXT_SRC_COUNT, n, 132, 135, 142, 255),
@@ -1476,8 +1483,9 @@ static void drawPanel(float a, float away) {
       if (tab == TAB_TRACKS)
         pointer_zone(sub.x, sub.y, sub.w, sub.h, pointSelect, Z_SUBSEL, 0);
     } else if (!nSubtitles()) {
-      quiet(addons_subtitles_busy() ? "Searching OpenSubtitles\xe2\x80\xa6"
-                                    : "No subtitles for this title.", cx, sub.y, cw, a);
+      quiet(embeddedOnly ? "No subtitles on this channel."
+            : addons_subtitles_busy() ? "Searching OpenSubtitles\xe2\x80\xa6"
+                                      : "No subtitles for this title.", cx, sub.y, cw, a);
     }
 
     // The open menu LAST, in front of the select below it.

@@ -142,16 +142,62 @@ int main(int argc, char **argv) {
     assert(favs == 1); }
   { char *f = data_read("iptv_favourites.txt"); assert(f && f[0]); free(f); }
 
-  // --- Watching ------------------------------------------------------------------
+  // --- Watching: Y4's bar and Y5's four levels ---------------------------------
+  // (tests/video_stub.c plays everything, with a generated picture.)
   key(SDLK_RETURN);
   assert(iptvui_fullscreen());
-  snprintf(path, sizeof path, "%s/nuvio-live-full.bmp", out); frames(30, path);
+  // Arriving, the bar.
+  snprintf(path, sizeof path, "%s/nuvio-live-bar.bmp", out); frames(30, path);
+  { char *before = data_read("iptv_recent.txt"), *after;
+    // 3 · Peek: ▲▼ with the bar open browses the channels, and the stream stays.
+    key(SDLK_DOWN); key(SDLK_DOWN);
+    snprintf(path, sizeof path, "%s/nuvio-live-peek.bmp", out); frames(40, path);
+    after = data_read("iptv_recent.txt");
+    assert(before && after && !strcmp(before, after));
+    free(after);
+    // BACK to stay: still the same channel.
+    key(SDLK_AC_BACK);
+    frames(10, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
+    // 4 · Walk: ◀▶ with the bar open shows a later programme; OK reminds.
+    key(SDLK_RIGHT);
+    snprintf(path, sizeof path, "%s/nuvio-live-walk.bmp", out); frames(30, path);
+    key(SDLK_RIGHT);
+    key(SDLK_RETURN);
+    snprintf(path, sizeof path, "%s/nuvio-live-walk-remind.bmp", out); frames(20, path);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
+    key(SDLK_LEFT); key(SDLK_LEFT);
+    // OK on the bar: the controls.
+    key(SDLK_RETURN);
+    snprintf(path, sizeof path, "%s/nuvio-live-bar-controls.bmp", out); frames(20, path);
+    key(SDLK_AC_BACK);
+    // BACK hides the bar; ▲▼ now zaps, and the toast names where it landed.
+    key(SDLK_AC_BACK);
+    frames(20, NULL);
+    key(SDLK_DOWN);
+    snprintf(path, sizeof path, "%s/nuvio-live-toast.bmp", out); frames(30, path);
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after));   // the zap retuned, once the keys stopped
+    free(after);
+    // The peek's OK is the other thing that retunes.
+    free(before);
+    before = data_read("iptv_recent.txt");
+    key(SDLK_RETURN); key(SDLK_UP); key(SDLK_RETURN);
+    frames(10, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after));
+    free(after); free(before); }
+  key(SDLK_AC_BACK);
+  frames(10, NULL);
   key(SDLK_LEFT);
   snprintf(path, sizeof path, "%s/nuvio-live-quicklist.bmp", out); frames(30, path);
   key(SDLK_AC_BACK);
   key(SDLK_AC_BACK);
   assert(!iptvui_fullscreen());
-  { char *r = data_read("iptv_recent.txt"); assert(r && r[0]); free(r); }
 
   // --- Setup ------------------------------------------------------------------------
   // To the header, RIGHT to Source, OK; then Xtream Codes.
@@ -164,6 +210,6 @@ int main(int argc, char **argv) {
   assert(!iptvui_wants_exit());
 
   iptvui_shutdown();
-  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, tune, setup.");
+  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), setup.");
   return 0;
 }

@@ -43,6 +43,7 @@
 #include "settings.h"
 #include "tex_cache.h"
 #include "text.h"
+#include "tracks.h"
 #include "video.h"
 #include <ctype.h>
 #include <math.h>
@@ -100,7 +101,8 @@
 #define LIVE_AHEAD_S      (28 * 3600)
 
 // The full-screen view.
-#define LIVE_BANNER_MS    5000u
+#define LIVE_TOAST_OV_MS  3000u   // the zap toast
+#define LIVE_BAR_MS       6000u   // the bar, the peek, the walk
 #define LIVE_ZAP_MS        350u    // CH+/CH- held down tunes only where it stops
 #define LIVE_DIGITS_MS    1600u
 #define LIVE_TOAST_MS     2600u
@@ -148,8 +150,37 @@ static int full;
 static unsigned playSession;
 static int playing, playFailed, errSeen;
 static int zapPending;
-static Uint32 zapAt, bannerUntil, tunedAt;
-static float bannerA;
+static Uint32 zapAt, tunedAt;
+
+// THE OVERLAY OVER A PLAYING CHANNEL, Y5's four amounts, each one more press:
+//   TOAST  ▲▼ with nothing showing: a card bottom-left, identity only, 3 s.
+//   BAR    OK: what is this and what is next, the controls under it, 6 s.
+//   PEEK   ▲▼ with the bar open: a rail of channels; the stream stays put.
+//   WALK   ◀▶ with the bar open: the same block, a later programme.
+// Only OK retunes (peek) or changes anything (walk: the reminder). Timers
+// restart on every press and never stack; the bar stays while a control has
+// the focus.
+enum { OV_NONE, OV_TOAST, OV_BAR, OV_PEEK, OV_WALK };
+enum { CTL_GUIDE, CTL_CHANNELS, CTL_SUBS, CTL_AUDIO, CTL_ASPECT, CTL_FAV, CTL_N };
+static int ov;
+static Uint32 ovUntil;
+static float toastA, barA;
+static int barCtl = -1;         // the focused control, -1 while the block has it
+static int peekRow;
+static float peekScroll, peekScrollV;
+static int walkPg = -1;         // the walked programme's index, -1 = now
+// The picture's zoom, cycled by the Aspect control. Live has no per-title
+// memory to keep it in, so it lasts the session.
+static const float ASPECT_ZOOM[3] = { 1.0f, 1.15f, 1.34f };
+static const char *ASPECT_NAME[3] = { "Fit", "Slight zoom", "Cinema zoom" };
+static int aspectMode;
+static float lastZoom = -1.0f;
+
+// "Remind me", from walking the schedule. In memory for the session: a toast
+// when the programme starts, while Live TV is open.
+#define REMIND_MAX 32
+static struct { char name[256]; char title[200]; int number; long long start; } reminders[REMIND_MAX];
+static int nReminders;
 static int quickOpen, quickRow;
 static float quickScroll, quickScrollV;
 static char digits[6];
@@ -385,6 +416,7 @@ static void startStream(void) {
   // would open a second connection, and IPTV accounts allow one.
   video_set_dv(0);
   video_set_mp4(1);
+  tracks_reset();
   errSeen = video_error_count();
   playing = video_play(url);
   playSession = video_session();
@@ -404,7 +436,6 @@ static void tune(int ch, int immediate) {
   tuned = ch;
   snprintf(tunedName, sizeof tunedName, "%s", c->name);
   tunedAt = SDL_GetTicks();
-  bannerUntil = tunedAt + LIVE_BANNER_MS;
   playFailed = 0;
   if (immediate) startStream();
   else { zapPending = 1; zapAt = tunedAt + LIVE_ZAP_MS; }
@@ -435,10 +466,21 @@ static void tuneNumber(int number) {
   { char m[64]; snprintf(m, sizeof m, "No channel %d", number); say(m); }
 }
 
+// Shows overlay `level`, restarting its clock. Called again at the same level
+// it only restarts the clock: a run of presses never replays the entrance.
+static void overlay(int level) {
+  ov = level;
+  ovUntil = SDL_GetTicks() + (level == OV_TOAST ? LIVE_TOAST_OV_MS : LIVE_BAR_MS);
+  if (level != OV_BAR) barCtl = -1;
+  if (level != OV_WALK) walkPg = -1;
+}
+
+// Arriving full screen, the bar says what this is.
 static void enterFull(void) {
   full = 1;
   quickOpen = 0;
-  bannerUntil = SDL_GetTicks() + LIVE_BANNER_MS;
+  barCtl = -1;
+  overlay(OV_BAR);
 }
 
 // OK on a channel: watch it full screen. OK on the one already playing just
@@ -688,48 +730,167 @@ static void typeDigit(int d) {
   digitsAt = SDL_GetTicks();
 }
 
+static int viewIndex(int ch) {
+  for (int r = 0; r < nView; r++) if (view[r] == ch) return r;
+  return -1;
+}
+
+// The walk: the programmes of the tuned channel after the one on now.
+static int walkNext(int from) {
+  const IptvList *l = iptv_list();
+  const IptvChannel *c = chan(tuned);
+  long long now = nowSec();
+  int p;
+  if (!l || !c || !c->nPg) return -1;
+  if (from < 0) p = iptv_programme_after(l, tuned, now);
+  else p = from + 1 < c->firstPg + c->nPg ? from + 1 : -1;
+  return p;
+}
+static int walkPrev(int from) {
+  const IptvList *l = iptv_list();
+  const IptvChannel *c = chan(tuned);
+  if (!l || !c || from < 0) return -1;
+  // Back past the first programme after now is now itself.
+  return from - 1 >= c->firstPg && l->pg[from - 1].start > nowSec() ? from - 1 : -1;
+}
+
+static int reminderIndex(const char *name, long long start) {
+  for (int i = 0; i < nReminders; i++)
+    if (reminders[i].start == start && !strcmp(reminders[i].name, name)) return i;
+  return -1;
+}
+static void toggleReminder(int ch, int pg) {
+  const IptvList *l = iptv_list();
+  const IptvChannel *c = chan(ch);
+  int i;
+  if (!c || !l || pg < 0) return;
+  i = reminderIndex(c->name, l->pg[pg].start);
+  if (i >= 0) {
+    reminders[i] = reminders[--nReminders];
+    say("Reminder removed");
+  } else if (nReminders < REMIND_MAX) {
+    snprintf(reminders[nReminders].name, sizeof reminders[0].name, "%s", c->name);
+    snprintf(reminders[nReminders].title, sizeof reminders[0].title, "%s", l->pg[pg].title);
+    reminders[nReminders].number = c->number;
+    reminders[nReminders].start = l->pg[pg].start;
+    nReminders++;
+    say("We'll remind you when it starts");
+  }
+}
+
+static void control(int ctl) {
+  switch (ctl) {
+    case CTL_GUIDE:
+      // Out to the guide, on this channel; the picture follows into the preview.
+      full = 0; ov = OV_NONE;
+      viewMode = VIEW_GUIDE; zone = ZONE_BODY; fChan = 0;
+      if (viewIndex(tuned) >= 0) fRow = viewIndex(tuned);
+      rememberFocus();
+      fTime = nowSec(); winStart = slotFloor(fTime);
+      break;
+    case CTL_CHANNELS:
+      quickOpen = 1;
+      quickRow = viewIndex(tuned) >= 0 ? viewIndex(tuned) : 0;
+      quickScroll = (float)quickRow;
+      break;
+    case CTL_SUBS: case CTL_AUDIO:
+      tracks_embedded_only(1);
+      tracks_open_at(ctl == CTL_SUBS ? 1 : 0);
+      break;
+    case CTL_ASPECT:
+      aspectMode = (aspectMode + 1) % 3;
+      say(ASPECT_NAME[aspectMode]);
+      break;
+    case CTL_FAV: toggleFavourite(tuned); break;
+    default: break;
+  }
+}
+
+static void startPeek(int step) {
+  int r = viewIndex(tuned);
+  if (!nView) return;
+  if (r < 0) r = 0;
+  peekRow = ((r + step) % nView + nView) % nView;
+  peekScroll = (float)peekRow;
+  overlay(OV_PEEK);
+}
+
 static void fullEvent(SDL_Keycode k) {
   int d = digitOf(k);
-  Uint32 now = SDL_GetTicks();
-  if (d >= 0 && !quickOpen) { typeDigit(d); return; }
+  int up = k == SDLK_UP || k == SDLK_PAGEDOWN, down = k == SDLK_DOWN || k == SDLK_PAGEUP;
   if (quickOpen) {
     if (k == SDLK_UP)        { if (quickRow > 0) quickRow--; }
     else if (k == SDLK_DOWN) { if (quickRow + 1 < nView) quickRow++; }
     else if (k == SDLK_PAGEUP)   { quickRow = quickRow > 8 ? quickRow - 8 : 0; }
     else if (k == SDLK_PAGEDOWN) { quickRow = quickRow + 8 < nView ? quickRow + 8 : nView - 1; }
-    else if (isOk(k) && quickRow < nView) { fRow = quickRow; rememberFocus(); tune(view[quickRow], 1); quickOpen = 0; }
+    else if (isOk(k) && quickRow < nView) {
+      fRow = quickRow; rememberFocus(); tune(view[quickRow], 1); quickOpen = 0; overlay(OV_TOAST);
+    }
     else if (isBack(k) || k == SDLK_RIGHT) quickOpen = 0;
     return;
   }
-  switch (k) {
-    case SDLK_UP:       zap(-1); break;
-    case SDLK_DOWN:     zap(+1); break;
-    // CH+ is the higher number, the next one down the list.
-    case SDLK_PAGEUP:   zap(+1); break;
-    case SDLK_PAGEDOWN: zap(-1); break;
-    case SDLK_LEFT:
-      quickOpen = 1;
-      quickRow = 0;
-      for (int r = 0; r < nView; r++) if (view[r] == tuned) { quickRow = r; break; }
-      quickScroll = (float)quickRow;
-      break;
-    case SDLK_RIGHT: bannerUntil = now + LIVE_BANNER_MS; break;
-    default:
-      if (isOk(k)) {
-        // OK over the banner opens the list; OK over the bare picture calls the banner.
-        if (now < bannerUntil) { fullEvent(SDLK_LEFT); bannerUntil = 0; }
-        else bannerUntil = now + LIVE_BANNER_MS;
-      } else if (isBack(k)) {
+  if (d >= 0) { typeDigit(d); return; }
+
+  switch (ov) {
+    case OV_NONE: case OV_TOAST:
+      // Channel hopping: ▲▼ (and CH+/CH-, CH+ being the next number) zap, and
+      // the toast says where you landed. The retune waits for the keys to stop.
+      if (up || down) { zap(down ? +1 : -1); overlay(OV_TOAST); }
+      else if (isOk(k) || k == SDLK_i || k == SDLK_RIGHT) overlay(OV_BAR);
+      else if (k == SDLK_LEFT) control(CTL_CHANNELS);
+      else if (isBack(k)) {
         // Back to the screen; the picture carries on in the preview.
-        full = 0;
-        zone = ZONE_BODY;
-        fChan = 0;
-        for (int r = 0; r < nView; r++) if (view[r] == tuned) { fRow = r; break; }
+        full = 0; ov = OV_NONE;
+        zone = ZONE_BODY; fChan = 0;
+        if (viewIndex(tuned) >= 0) fRow = viewIndex(tuned);
         rememberFocus();
         fTime = nowSec();
         keepWindowOnFocus();
       }
-      break;
+      return;
+    case OV_BAR:
+      if (barCtl >= 0) {
+        if (k == SDLK_LEFT) { if (barCtl > 0) barCtl--; }
+        else if (k == SDLK_RIGHT) { if (barCtl + 1 < CTL_N) barCtl++; }
+        else if (isOk(k)) control(barCtl);
+        else if (k == SDLK_UP || isBack(k)) barCtl = -1;
+        overlay(OV_BAR);
+        if (ov == OV_BAR && barCtl < 0 && isBack(k)) barCtl = -1;
+        return;
+      }
+      if (up || down) startPeek(down ? +1 : -1);
+      else if (k == SDLK_RIGHT) {
+        int p = walkNext(-1);
+        if (p >= 0) { overlay(OV_WALK); walkPg = p; } else overlay(OV_BAR);
+      }
+      else if (k == SDLK_LEFT) overlay(OV_BAR);
+      else if (isOk(k) || k == SDLK_DOWN) { barCtl = 0; overlay(OV_BAR); }
+      else if (isBack(k)) ov = OV_NONE;
+      return;
+    case OV_PEEK:
+      if (k == SDLK_UP || k == SDLK_LEFT || k == SDLK_PAGEDOWN) peekRow = (peekRow - 1 + nView) % nView;
+      else if (k == SDLK_DOWN || k == SDLK_RIGHT || k == SDLK_PAGEUP) peekRow = (peekRow + 1) % nView;
+      else if (isOk(k) && peekRow < nView) {
+        // The one press that retunes.
+        fRow = peekRow; rememberFocus();
+        tune(view[peekRow], 1);
+        overlay(OV_BAR);
+        return;
+      }
+      else if (isBack(k)) { overlay(OV_BAR); return; }
+      overlay(OV_PEEK);
+      return;
+    case OV_WALK:
+      if (k == SDLK_RIGHT) { int p = walkNext(walkPg); if (p >= 0) walkPg = p; overlay(OV_WALK); walkPg = p >= 0 ? p : walkPg; }
+      else if (k == SDLK_LEFT) {
+        int p = walkPrev(walkPg);
+        if (p >= 0) { overlay(OV_WALK); walkPg = p; } else overlay(OV_BAR);
+      }
+      else if (isOk(k)) { int p = walkPg; toggleReminder(tuned, p); overlay(OV_WALK); walkPg = p; }
+      else if (up || down) startPeek(down ? +1 : -1);
+      else if (isBack(k)) overlay(OV_BAR);
+      return;
+    default: return;
   }
 }
 
@@ -867,17 +1028,38 @@ void iptvui_update(float dt, Uint32 now) {
     fflush(stdout);
     errSeen = video_error_count();
     playFailed = 1;
-    bannerUntil = now + LIVE_BANNER_MS * 2;
+    // Full screen, the failure is said in the bar, where the channel is named.
+    if (full && ov != OV_PEEK && ov != OV_WALK) overlay(OV_BAR);
   }
   if (digits[0] && now - digitsAt >= LIVE_DIGITS_MS) {
     int n = atoi(digits);
     digits[0] = 0;
-    if (n > 0) { tuneNumber(n); if (!full && tuned >= 0) enterFull(); }
+    if (n > 0) {
+      tuneNumber(n);
+      if (!full && tuned >= 0) enterFull();
+      else if (full) overlay(OV_TOAST);
+    }
   }
 
-  // The quick list replaces the banner rather than sitting over it.
-  bannerA = anim_spring(bannerA, (full && !quickOpen && (now < bannerUntil || playFailed)) ? 1.0f : 0.0f,
-                        dt, NV_SPRING_FOCUS);
+  // The overlay's clock. The bar stays while a control holds the focus, or
+  // while the tracks sheet it opened is up.
+  if (full && ov != OV_NONE && now >= ovUntil && !(ov == OV_BAR && barCtl >= 0) && !tracks_is_open())
+    ov = OV_NONE;
+  if (!full) ov = OV_NONE;
+  toastA = anim_spring(toastA, full && ov == OV_TOAST && !quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
+  barA = anim_spring(barA, full && ov >= OV_BAR && !quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
+  peekScroll = anim_spring2_reduced(&peekScrollV, peekScroll, (float)peekRow, dt, NV_SPRING2_PAGE, reduced);
+
+  // Reminders due: said once, within ten minutes of the start.
+  for (int i = 0; i < nReminders; i++) {
+    if (t < reminders[i].start) continue;
+    if (t < reminders[i].start + 600) {
+      char m[300];
+      snprintf(m, sizeof m, "Starting now on %d \xC2\xB7 %s", reminders[i].number, reminders[i].title);
+      say(m);
+    }
+    reminders[i--] = reminders[--nReminders];
+  }
 
   { int visible = viewMode == VIEW_GUIDE ? (int)((G_BOTTOM - G_GRID_Y) / G_ROW_STEP)
                                          : (int)((NV_SCREEN_H - 60.0f - C_LIST_Y) / C_ROW_STEP);
@@ -1172,8 +1354,22 @@ static void drawDigits(void) {
 static void drawVideo(GfxRect r, float radius) {
   GLuint frame;
   int w[4] = { (int)(r.x + 0.5f), (int)(r.y + 0.5f), (int)(r.w + 0.5f), (int)(r.h + 0.5f) };
-  if (memcmp(w, lastWin, sizeof w)) {
-    video_window(w[0], w[1], w[2], w[3]);
+  // Full screen takes the Aspect control's zoom: the frame is enlarged about its
+  // centre and the slice that still falls on screen is sent as the source
+  // rectangle, the way the film player crops (applyAspect in player.c).
+  float zoom = (radius <= 0.0f && full) ? ASPECT_ZOOM[aspectMode] : 1.0f;
+  if (memcmp(w, lastWin, sizeof w) || zoom != lastZoom) {
+    float qw = (float)video_width(), qh = (float)video_height();
+    if (zoom > 1.0f && qw > 2.0f && qh > 2.0f) {
+      float vw = r.w * zoom, vh = r.h * zoom, vx = r.x + (r.w - vw) * 0.5f, vy = r.y + (r.h - vh) * 0.5f;
+      int sx = (int)((r.x - vx) / vw * qw + 0.5f) & ~1, sy = (int)((r.y - vy) / vh * qh + 0.5f) & ~1;
+      int sw = (int)(r.w / vw * qw + 0.5f) & ~1, sh = (int)(r.h / vh * qh + 0.5f) & ~1;
+      video_window_source(sx, sy, sw, sh, w[0], w[1], w[2], w[3]);
+    } else {
+      video_window(w[0], w[1], w[2], w[3]);
+    }
+    // Until the stream reports its size a zoom cannot be applied; try again then.
+    lastZoom = (zoom > 1.0f && (qw <= 2.0f || qh <= 2.0f)) ? -1.0f : zoom;
     memcpy(lastWin, w, sizeof w);
   }
   frame = video_frame_texture();
@@ -1820,72 +2016,268 @@ static void drawSetup(void) {
 }
 
 // --- Full screen ---------------------------------------------------------------------------------
-static void drawBanner(float a) {
+// The live tag: LIVE on its red tint; TUNING while the stream opens; the
+// failure in the same place, where the eye already is.
+static float streamTag(float x, float cy, float a) {
+  const char *word = playFailed ? "UNAVAILABLE" : (zapPending || !video_ready()) ? "TUNING" : "LIVE";
+  int live = !playFailed && !(zapPending || !video_ready());
+  float w = tagWidth(word) + 24.0f + (live ? 16.0f : 0.0f);
+  GfxRect r = { x, cy - 15.0f, w, 30.0f };
+  if (live || playFailed) gfx_color(r, 8.0f / 30.0f, 232 / 255.0f, 96 / 255.0f, 76 / 255.0f, 0.16f * a);
+  else gfx_color(r, 8.0f / 30.0f, 1, 1, 1, 0.10f * a);
+  if (live) gfx_color((GfxRect){ x + 12.0f, cy - 4.0f, 8.0f, 8.0f }, 0.5f, HEXF(C_LIVE), a);
+  tagText(word, live || playFailed ? 0xF0A090 : 0xC1C7CD, x + 12.0f + (live ? 16.0f : 0.0f), cy, a);
+  return w;
+}
+
+// 1 · THE ZAP TOAST. Identity and nothing else, bottom-left, no scrim.
+static void drawZapToast(float a) {
+  const IptvChannel *c = chan(tuned);
+  const IptvProgramme *pg;
+  long long now = nowMinute();
+  char kick[300], until[40] = "";
+  float tile = 80.0f, pad = 22.0f, textX, textW = 400.0f, h = tile + 2 * pad;
+  if (!c || a < 0.01f) return;
+  pg = programmeAt(tuned, now);
+  snprintf(kick, sizeof kick, "%d", c->number);
+  if (pg) { char z[16]; clockText(pg->stop, z, sizeof z); snprintf(until, sizeof until, "until %s", z); }
+  { float tw = txt_width(TXT_PLR_EPCODE, pg ? pg->title : c->name);
+    if (tw > textW) textW = tw > 720.0f ? 720.0f : tw; }
+  { float uw = until[0] ? txt_width(TXT_LIVE_META, until) + 24.0f : 0.0f;
+    GfxRect card = { 96.0f, NV_SCREEN_H - 62.0f - h, pad + tile + 24.0f + textW + uw + 36.0f, h };
+    float y = card.y + pad;
+    gfx_opacity_group = a;
+    gfx_drop_shadow(card, 20.0f, 34.0f, 16.0f, 0.5f);
+    gfx_color((GfxRect){ card.x - 1.0f, card.y - 1.0f, card.w + 2.0f, card.h + 2.0f }, 21.0f / (card.h + 2.0f), 1, 1, 1, 0.08f);
+    gfx_color(card, 20.0f / card.h, 8 / 255.0f, 10 / 255.0f, 13 / 255.0f, 0.86f);
+    identity(c, (GfxRect){ card.x + pad, y, tile, tile }, 14.0f, C_PLATE, 0xE4E7EA, a);
+    textX = card.x + pad + tile + 24.0f;
+    { float kx = textX;
+      kx += ink(TXT_LIVE_META_B, kick, 0xC1C7CD, kx, y - 2.0f, a) + 10.0f;
+      kx += ink(TXT_LIVE_META, "\xC2\xB7", 0x4D535A, kx, y - 2.0f, a) + 10.0f;
+      inkTrim(TXT_LIVE_META, c->name, 0x8A9199, kx, y - 2.0f, textW - (kx - textX), a); }
+    inkTrim(TXT_PLR_EPCODE, pg ? pg->title : c->name, 0xF5F6F8, textX, y + 26.0f, textW, a);
+    if (pg) progressBar(textX, y + tile - 6.0f, textW, 4.0f,
+                        (float)(now - pg->start) / (float)(pg->stop - pg->start), 0.20f, a);
+    if (playFailed) {
+      TxtLine t = txt_line(TXT_LIVE_META, "Unavailable", HEXI(0xF0A090), 255);
+      txt_draw_alpha(t, card.x + card.w - 36.0f - t.w, y + tile - t.h, a);
+    } else if (until[0]) {
+      TxtLine t = txt_line(TXT_LIVE_META, until, HEXI(0x7C838B), 255);
+      txt_draw_alpha(t, card.x + card.w - 36.0f - t.w, y + tile - t.h, a);
+    }
+    gfx_opacity_group = 1.0f; }
+}
+
+// The row of controls: circles, the focused one on the white plate.
+static void drawControls(float x, float cy, float a) {
+  static const char *ICON[CTL_N] = { "live_grid", "live_list", "subtitles", "audio", "aspect", "live_star" };
+  for (int i = 0; i < CTL_N; i++) {
+    int f = i == barCtl;
+    float d = f ? 66.0f : 60.0f;
+    const char *icon = i == CTL_FAV && iptv_is_favourite(tuned) ? "live_star_fill" : ICON[i];
+    GfxRect r = { x + (60.0f - d) * 0.5f, cy - d * 0.5f, d, d };
+    if (f) {
+      gfx_color((GfxRect){ r.x - 4.0f, r.y - 4.0f, r.w + 8.0f, r.h + 8.0f }, 0.5f, 1, 1, 1, 0.26f * a);
+      gfx_color(r, 0.5f, HEXF(C_PAPER), a);
+    }
+    gfx_icon((GfxRect){ r.x + (d - 28.0f) * 0.5f, cy - 14.0f, 28.0f, 28.0f }, icon,
+             f ? 10 / 255.0f : 0xA9 / 255.0f, f ? 12 / 255.0f : 0xB0 / 255.0f, f ? 14 / 255.0f : 0xB8 / 255.0f, a);
+    x += 60.0f + 18.0f;
+  }
+}
+
+// What the stream is: its resolution, outlined, and the audio track.
+static void drawStreamFacts(float right, float cy, float a) {
+  int h = video_height(), ai = video_audio_current();
+  const VideoTrack *au = ai >= 0 ? video_audio(ai) : NULL;
+  float x = right;
+  if (au && au->label[0]) {
+    TxtLine t = txt_line_trim(TXT_SRC_TEXT, au->label, HEXI(0x9AA1A9), 255, 360.0f);
+    x -= t.w;
+    txt_draw_alpha(t, x, cy - t.h * 0.5f, a);
+    x -= 14.0f;
+  }
+  if (ownsVideo() && h > 0) {
+    const char *res = h >= 2000 ? "4K" : h >= 1000 ? "1080p" : h >= 700 ? "720p" : "SD";
+    TxtLine t = txt_line(TXT_PLR_BADGE, res, HEXI(0xE4E7EA), 255);
+    float w = t.w + 28.0f;
+    x -= w;
+    gfx_color((GfxRect){ x, cy - 19.0f, w, 38.0f }, 10.0f / 38.0f, 1, 1, 1, 0.30f * a);
+    gfx_color((GfxRect){ x + 1.0f, cy - 18.0f, w - 2.0f, 36.0f }, 9.0f / 36.0f, 10 / 255.0f, 11 / 255.0f, 14 / 255.0f, a);
+    txt_draw_alpha(t, x + 14.0f, cy - t.h * 0.5f, a);
+  }
+}
+
+// 2 · THE BAR, and 4 · the walk, which is the same block on a later programme.
+static void drawBlock(float a) {
   const IptvList *l = iptv_list();
   const IptvChannel *c = chan(tuned);
   long long now = nowMinute();
-  GfxRect plate = { 64.0f, NV_SCREEN_H - 64.0f - 232.0f, NV_SCREEN_W - 128.0f, 232.0f };
-  float x, ar, ag, ab;
-  char s[320], a1[16], b1[16];
-  if (!c || a < 0.01f) return;
-  accent(&ar, &ag, &ab);
+  int walking = ov == OV_WALK && walkPg >= 0 && l && walkPg < l->nPg && l->pg[walkPg].channel == tuned;
+  const IptvProgramme *pg = walking ? &l->pg[walkPg] : programmeAt(tuned, now);
+  const IptvProgramme *next = walking ? NULL : programmeAfter(tuned, now, 0);
+  float x = 96.0f, right = NV_SCREEN_W - 96.0f;
+  float ctlY = NV_SCREEN_H - 62.0f - 33.0f;        // the controls' centre line
+  float trackY = ctlY - 33.0f - 26.0f - 12.0f;     // the progress track's centre
+  float idBottom = trackY - 12.0f - 54.0f + 24.0f - 26.0f;
+  float tile = 84.0f;
+  char line[300], a1[16], b1[16];
+  if (!c) return;
   gfx_opacity_group = a;
-  gfx_color(plate, 28.0f / plate.h, 0.05f, 0.05f, 0.06f, 0.88f);
-  { char num[16]; TxtLine t;
-    snprintf(num, sizeof num, "%d", c->number);
-    t = txt_line(TXT_TITLE2, num, 255, 255, 255, 255);
-    txt_draw(t, plate.x + 40.0f, plate.y + 30.0f); }
-  identity(c, (GfxRect){ plate.x + 40.0f, plate.y + 110.0f, 92.0f, 92.0f }, 16.0f, C_PLATE, 0xC1C7CD, a);
-  x = plate.x + 200.0f;
-  { TxtLine t = txt_line_trim(TXT_HEADLINE, c->name, 255, 255, 255, 255, 900.0f);
-    txt_draw(t, x, plate.y + 30.0f);
-    if (iptv_is_favourite(tuned))
-      gfx_icon((GfxRect){ x + t.w + 16.0f, plate.y + 30.0f + (t.h - 30.0f) * 0.5f, 30.0f, 30.0f },
-               "live_star_fill", 0.98f, 0.78f, 0.29f, a); }
-  { char clock[16]; clockText(nowSec(), clock, sizeof clock);
-    TxtLine t = txt_line(TXT_PAUSE_CLOCK, clock, 235, 235, 240, 255);
-    txt_draw(t, plate.x + plate.w - 40.0f - t.w, plate.y + 32.0f); }
-
-  if (playFailed) {
-    ink(TXT_DET_META, "This channel isn't available right now. Try another, or reload the list under Source.",
-        0xFF8C8C, x, plate.y + 100.0f, a);
-  } else if (!video_ready() || zapPending) {
-    ink(TXT_DET_META, "Tuning\xE2\x80\xA6", 0xBEBEC3, x, plate.y + 100.0f, a);
-  }
-  { long long s0, e0;
-    int p = cellAt(tuned, now, &s0, &e0), nx;
-    float y = plate.y + ((playFailed || !video_ready() || zapPending) ? 140.0f : 100.0f);
-    if (p >= 0) {
-      const IptvProgramme *pg = &l->pg[p];
-      float kw = tagWidth("NOW") + 20.0f;
-      gfx_color((GfxRect){ x, y + 2.0f, kw, 28.0f }, 7.0f / 28.0f, ar, ag, ab, a);
-      tagText("NOW", 0xFFFFFF, x + 10.0f, y + 16.0f, a);
+  identity(c, (GfxRect){ x, idBottom - tile, tile, tile }, 14.0f, C_PLATE, 0xE4E7EA, walking ? a * 0.6f : a);
+  { float tx = x + tile + 26.0f, titleW = right - tx - 520.0f;
+    TxtLine title = txt_line_trim(TXT_LIVE_TITLE, pg ? pg->title : c->name, HEXI(0xF5F6F8), 255, titleW);
+    float titleY = idBottom - title.h + 6.0f, kickY = titleY - 9.0f - 16.0f;
+    txt_draw_alpha(title, tx, titleY, a);
+    if (walking) {
+      // LATER, outlined, and when.
+      float w = tagWidth("LATER") + 22.0f, kx = tx;
+      long long until = (pg->start - nowSec() + 59) / 60;
+      gfx_color((GfxRect){ kx, kickY - 15.0f, w, 30.0f }, 8.0f / 30.0f, 1, 1, 1, 0.28f * a);
+      gfx_color((GfxRect){ kx + 1.0f, kickY - 14.0f, w - 2.0f, 28.0f }, 7.0f / 28.0f, 10 / 255.0f, 11 / 255.0f, 14 / 255.0f, a);
+      tagText("LATER", 0xC1C7CD, kx + 11.0f, kickY, a);
+      kx += w + 14.0f;
       clockText(pg->start, a1, sizeof a1); clockText(pg->stop, b1, sizeof b1);
-      inkTrim(TXT_SRC_TAB, pg->title, 0xFFFFFF, x + kw + 16.0f, y, 880.0f, a);
-      snprintf(s, sizeof s, "%s \xE2\x80\x93 %s", a1, b1);
-      { TxtLine t = txt_line(TXT_SRC_META, s, 180, 180, 185, 255);
-        float bx = x + kw + 16.0f + 900.0f;
-        txt_draw(t, plate.x + plate.w - 40.0f - t.w, y + 2.0f);
-        progressBar(bx, y + 14.0f, plate.x + plate.w - 64.0f - t.w - bx, 4.0f,
-                    (float)(now - pg->start) / (float)(pg->stop - pg->start), 0.18f, a); }
-      y += 44.0f;
-      nx = (p + 1 < c->firstPg + c->nPg) ? p + 1 : -1;
+      if (until >= 60) snprintf(line, sizeof line, "%s \xE2\x80\x93 %s \xC2\xB7 in %lld h %02lld min", a1, b1, until / 60, until % 60);
+      else snprintf(line, sizeof line, "%s \xE2\x80\x93 %s \xC2\xB7 in %lld min", a1, b1, until);
+      inkMid(TXT_LIVE_NAME, line, 0x8A9199, kx, kickY, 900.0f, a);
     } else {
-      ink(TXT_SRC_META, iptv_guide_state() == IPTV_LOADING ? "Loading guide\xE2\x80\xA6" : "No guide data",
-          0xA0A0A5, x, y, a);
-      y += 44.0f;
-      nx = iptv_programme_after(l, tuned, now);
+      float kx = tx;
+      char num[16];
+      snprintf(num, sizeof num, "%d", c->number);
+      kx += inkMid(TXT_DETWEB_EP_BADGE, num, 0xC1C7CD, kx, kickY, 120.0f, a) + 14.0f;
+      if (pg) {
+        kx += inkMid(TXT_LIVE_NAME, "\xC2\xB7", 0x4D535A, kx, kickY, 30.0f, a) + 14.0f;
+        kx += inkMid(TXT_LIVE_NAME, c->name, 0x9AA1A9, kx, kickY, 520.0f, a) + 14.0f;
+      }
+      streamTag(kx, kickY, a);
+    } }
+  // The right of the identity row: NEXT, or in the walk, the reminder.
+  if (walking) {
+    int set = reminderIndex(c->name, pg->start) >= 0;
+    const char *w = set ? "Reminder set" : "Remind me";
+    TxtLine t = txt_line(TXT_DETWEB_EP_BADGE, w, HEXI(0xE4E7EA), 255);
+    GfxRect r = { right - t.w - 44.0f, idBottom - 52.0f, t.w + 44.0f, 52.0f };
+    gfx_color(r, 0.5f, 1, 1, 1, set ? 0.18f : 0.10f * a);
+    txt_draw_alpha(t, r.x + 22.0f, r.y + (r.h - t.h) * 0.5f, a);
+  } else if (next) {
+    TxtLine t;
+    clockText(next->start, a1, sizeof a1);
+    snprintf(line, sizeof line, "%s \xE2\x80\x82%s", a1, next->title);
+    t = txt_line_trim(TXT_PLR_META3, line, HEXI(0xA9B0B8), 255, 480.0f);
+    txt_draw_alpha(t, right - t.w, idBottom - 4.0f - t.h, a);
+    { float w = tagWidth("NEXT");
+      txt_tracking(TXT_LIVE_TAG, "NEXT", HEXI(0x7C838B), right - w, idBottom - 4.0f - t.h - 8.0f - 16.0f, a, 2.2f); }
+  }
+  // The programme: no playhead dot and no buffered band — this is live, and
+  // the dot is the app's promise that a thing can be moved. Clock times either
+  // side: a programme, not a file.
+  if (pg) {
+    float span = (float)(pg->stop - pg->start), frac = walking ? 0.0f : (float)(now - pg->start) / span;
+    float fa = walking ? a * 0.4f : a;
+    float tx = x + 62.0f + 20.0f, tw = right - 62.0f - 20.0f - tx;
+    clockText(pg->start, a1, sizeof a1); clockText(pg->stop, b1, sizeof b1);
+    inkMid(TXT_LIVE_META, a1, 0x8A9199, x, trackY, 80.0f, fa);
+    { TxtLine t = txt_line(TXT_LIVE_META, b1, HEXI(0x8A9199), 255);
+      txt_draw_alpha(t, right - t.w, trackY - t.h * 0.5f, fa); }
+    progressBar(tx, trackY - 4.0f, tw, 8.0f, frac, walking ? 0.16f : 0.22f, fa);
+    if (!walking) {
+      char in[32];
+      TxtLine t;
+      float fx;
+      snprintf(in, sizeof in, "%lld min in", (now - pg->start) / 60);
+      t = txt_line(TXT_SRC_STATE, in, HEXI(0xE4E7EA), 255);
+      fx = tx + tw * (frac < 0 ? 0 : frac > 1 ? 1 : frac) - t.w * 0.5f;
+      if (fx < tx) fx = tx;
+      if (fx + t.w > tx + tw) fx = tx + tw - t.w;
+      txt_draw_alpha(t, fx, trackY - 4.0f - 12.0f - t.h, a);
     }
-    if (nx >= 0 && y < plate.y + plate.h - 30.0f) {
-      const IptvProgramme *pg = &l->pg[nx];
-      float kw = tagWidth("NEXT");
-      tagText("NEXT", 0x969699, x, y + 16.0f, a);
-      clockText(pg->start, a1, sizeof a1);
-      snprintf(s, sizeof s, "%s  %s", a1, pg->title);
-      inkTrim(TXT_SRC_TAB, s, 0xC8C8CD, x + kw + 36.0f, y, 1200.0f, a);
+  }
+  // The controls and the stream's facts, or in the walk, how to get about.
+  if (walking) {
+    const IptvProgramme *after = walkNext(walkPg) >= 0 ? &l->pg[walkNext(walkPg)] : NULL;
+    float hx = x;
+    hx += ink(TXT_LIVE_META, "\xE2\x97\x80\xE2\x80\x82" "back to now", 0x7C838B, hx, ctlY - 12.0f, a) + 14.0f;
+    if (after) {
+      hx += ink(TXT_LIVE_META, "\xC2\xB7", 0x3A3F45, hx, ctlY - 12.0f, a) + 14.0f;
+      clockText(after->start, a1, sizeof a1);
+      snprintf(line, sizeof line, "%s %s\xE2\x80\x82\xE2\x96\xB6", a1, after->title);
+      inkTrim(TXT_LIVE_META, line, 0x7C838B, hx, ctlY - 12.0f, 900.0f, a);
     }
+  } else {
+    drawControls(x, ctlY, a);
+    drawStreamFacts(right, ctlY, a);
+    ink(TXT_LIVE_TIME, barCtl >= 0 ? "\xE2\x97\x80\xE2\x96\xB6 choose \xE2\x80\x82\xC2\xB7\xE2\x80\x82 OK select \xE2\x80\x82\xC2\xB7\xE2\x80\x82 BACK close"
+                                   : "\xE2\x96\xB2\xE2\x96\xBC channel \xE2\x80\x82\xC2\xB7\xE2\x80\x82 \xE2\x97\x80\xE2\x96\xB6 what\xE2\x80\x99s on \xE2\x80\x82\xC2\xB7\xE2\x80\x82 OK options \xE2\x80\x82\xC2\xB7\xE2\x80\x82 BACK to hide",
+        0x4E545B, x, NV_SCREEN_H - 26.0f - 20.0f, a);
   }
   gfx_opacity_group = 1.0f;
+}
+
+// 3 · THE PEEK. A rail of channels with their now; the stream stays put.
+static void drawPeek(float a) {
+  const IptvList *l = iptv_list();
+  const IptvChannel *tc = chan(tuned);
+  long long now = nowMinute();
+  float cw = 328.0f, ch = 170.0f, gap = 26.0f, top = NV_SCREEN_H - 155.0f - ch;
+  if (!l || !nView) return;
+  gfx_opacity_group = a;
+  for (int k = -2; k <= 5; k++) {
+    int r = (int)floorf(peekScroll) + k;
+    float x = 96.0f + ((float)r - peekScroll + 1.0f) * (cw + gap);
+    int idx = ((r % nView) + nView) % nView, f = idx == peekRow && fabsf((float)r - peekScroll) < 0.5f;
+    const IptvChannel *c;
+    const IptvProgramme *pg;
+    float dist = fabsf((float)r - peekScroll), ca;
+    GfxRect card = { x, top, cw, ch };
+    char label[300];
+    if (x < 96.0f - 1.0f || x > NV_SCREEN_W) continue;
+    if (nView < 4 && (r < 0 || r >= nView)) continue;
+    c = &l->ch[view[idx]];
+    pg = programmeAt(view[idx], now);
+    ca = f ? 1.0f : dist < 2.5f ? 0.5f : 0.32f;
+    if (f) {
+      gfx_color((GfxRect){ x - 3.0f, top - 3.0f, cw + 6.0f, ch + 6.0f }, 23.0f / (ch + 6.0f), HEXF(C_PAPER), a);
+      gfx_color(card, 20.0f / ch, 0.10f, 0.11f, 0.12f, a);
+      gfx_color(card, 20.0f / ch, 1, 1, 1, 0.12f * a);
+    } else {
+      gfx_color(card, 20.0f / ch, 1, 1, 1, 0.07f * a * ca);
+    }
+    identity(c, (GfxRect){ x + 26.0f, top + 22.0f, 48.0f, 48.0f }, 10.0f, f ? C_PLATE_F : C_PLATE,
+             f ? 0xF5F6F8 : 0xC1C7CD, a * ca);
+    snprintf(label, sizeof label, "%d %s", c->number, c->name);
+    inkMid(TXT_SRC_TAB, label, f ? 0xF5F6F8 : 0xE4E7EA, x + 26.0f + 48.0f + 16.0f, top + 22.0f + 24.0f,
+           cw - 26.0f - 48.0f - 16.0f - 22.0f, a * ca);
+    inkTrim(TXT_PLR_META3, pg ? pg->title : "No guide data", f ? 0xE4E7EA : 0x9AA1A9, x + 26.0f, top + 88.0f,
+            cw - 52.0f, a * ca);
+    if (pg) progressBar(x + 26.0f, top + ch - 30.0f, cw - 52.0f, 5.0f,
+                        (float)(now - pg->start) / (float)(pg->stop - pg->start), f ? 0.22f : 0.18f, a * ca);
+  }
+  // Still on 103: the one line that makes browsing safe.
+  if (tc) {
+    char still[40];
+    float r, g, b, w, by = NV_SCREEN_H - 55.0f - 38.0f;
+    accent(&r, &g, &b);
+    snprintf(still, sizeof still, "STILL ON %d", tc->number);
+    w = tagWidth(still) + 30.0f;
+    gfx_color((GfxRect){ 96.0f, by, w, 38.0f }, 10.0f / 38.0f, r, g, b, 0.20f * a);
+    tagText(still, 0xA896FA, 96.0f + 15.0f, by + 19.0f, a);
+    inkMid(TXT_LIVE_META, "OK to switch \xC2\xB7 BACK to stay", 0x7C838B, 96.0f + w + 16.0f, by + 19.0f, 600.0f, a);
+  }
+  gfx_opacity_group = 1.0f;
+}
+
+static void drawClock(float a) {
+  char c[16], d[48];
+  time_t tt = (time_t)nowSec();
+  struct tm tmv;
+  localtime_r(&tt, &tmv);
+  strftime(c, sizeof c, "%H:%M", &tmv);
+  strftime(d, sizeof d, "%a %d %b", &tmv);
+  { TxtLine t = txt_line(TXT_PG_CLOCK, c, HEXI(0xF5F6F8), 255), u = txt_line(TXT_LIVE_NOTE, d, HEXI(0x8A9199), 255);
+    txt_draw_alpha(t, NV_SCREEN_W - 96.0f - t.w, 66.0f, a);
+    txt_draw_alpha(u, NV_SCREEN_W - 96.0f - u.w, 66.0f + t.h + 2.0f, a); }
 }
 
 static void drawQuick(void) {
@@ -1925,10 +2317,20 @@ static void drawQuick(void) {
 static void drawFull(void) {
   const IptvChannel *c = chan(tuned);
   drawVideo((GfxRect){ 0.0f, 0.0f, NV_SCREEN_W, NV_SCREEN_H }, 0.0f);
-  if (c && (!video_ready() || zapPending || playFailed) && bannerA < 0.5f)
+  // While the stream opens or has failed, the channel stands in for the picture.
+  if (c && (!video_ready() || zapPending || playFailed) && barA < 0.5f && toastA < 0.5f)
     identity(c, (GfxRect){ NV_SCREEN_W * 0.5f - 80.0f, NV_SCREEN_H * 0.5f - 80.0f, 160.0f, 160.0f }, 28.0f,
              C_PLATE, 0xC1C7CD, 1.0f);
-  drawBanner(bannerA);
+  if (barA > 0.01f) {
+    // The player's own scrims, one quad each: a shader gradient, never a blur
+    // and never stacked bands (this is live video under them).
+    gfx_rect((GfxRect){ 0.0f, 0.0f, NV_SCREEN_W, 190.0f }, 0, GFX_VEIL_TOP, 0, 0, 0, 0.0f, 0, 0, 0, 0.72f * barA);
+    { float h = ov == OV_PEEK ? 440.0f : 560.0f;
+      gfx_rect((GfxRect){ 0.0f, NV_SCREEN_H - h, NV_SCREEN_W, h }, 0, GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, barA); }
+    drawClock(barA);
+    if (ov == OV_PEEK) drawPeek(barA); else drawBlock(barA);
+  }
+  drawZapToast(toastA);
   if (quickOpen) drawQuick();
   drawDigits();
   drawToast();

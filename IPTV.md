@@ -62,14 +62,38 @@ focus changes text, never the stream; only OK tunes.
 | List, guide | hold OK | add to / remove from Favourites |
 | List, guide | 0–9 | type a channel number |
 | List, guide | Back | guide → list; list: stop the preview, then the chips, then leave |
-| Full screen | ↑ ↓, CH+ / CH− | zap through the category being browsed (debounced: holding CH+ opens one stream, not ten) |
-| Full screen | ← or OK | the quick channel list |
-| Full screen | → | the channel banner (now / next, progress, clock) |
+| Full screen, nothing showing | ▲▼, CH+ / CH− | zap; a toast bottom-left names the channel (3 s). Presses in a run swap its contents without replaying it, and the stream retunes once, when the keys stop |
+| Full screen, nothing showing | OK, → | the bar (6 s) |
+| Full screen, nothing showing | ← | the quick channel list |
+| Bar | ▲▼ | **peek**: a rail of channel cards with what each is showing; "Still on 101" — the stream does not move. OK switches, Back stays |
+| Bar | ◀▶ | **walk the schedule**: the same block, a later programme on this channel, its bar empty at 40%. OK: remind me. ◀ back to now |
+| Bar | OK, ▼ | the controls: Guide, Channels, Subtitles, Audio, Aspect (Fit / Slight zoom / Cinema zoom), Favourite |
+| Bar | Back | hide the bar |
 | Full screen | 0–9 | type a channel number |
-| Full screen | Back | back to the screen; the picture keeps playing in the preview |
+| Full screen, nothing showing | Back | back to the screen; the picture keeps playing in the preview |
 
 The Magic Remote pointer works on the header, the chips, the list, the guide's
 channels and programmes, the buttons, the setup form and the quick list.
+
+### Over a playing channel (Y4, Y5)
+
+Live has no scrub, so the overlay is not a transport: it answers *what is this
+and what is next*. The bar is the film player's block minus the transport — **no
+playhead dot and no buffered band**, because everywhere else in Nuvio the dot
+promises that a thing can be moved. Just the track, the accent fill up to now, and
+the programme's clock times either side (20:00 ——— 21:00), not elapsed/duration.
+If catch-up is ever added, the dot comes back and the bar becomes scrubbable
+within the programme.
+
+Four levels, each one more press: the zap toast, the bar, the channel peek, and
+walking the schedule. **Only OK retunes** (zapping aside, which retunes once the
+keys stop); peeking and walking move text, never the stream. Timers restart on
+every press and never stack; the bar stays while a control has the focus. With
+no guide data the bar keeps the logo, number, name, stream facts and controls and
+simply drops the programme lines.
+
+Reminders ("Remind me" while walking) live for the session and are announced
+when the programme starts, while Live TV is open.
 
 ### Degrading well
 
@@ -144,9 +168,11 @@ current time, drives the screen with key events, and asserts the focus model
 (the guide's time-keeping ↓, → and ←, ← onto the channel cell and then the side
 bar), the favourite and the history round-trips. It captures the list, the list's
 actions, the guide (now, later, on a channel cell), an empty category, a
-category, full screen, the quick list and the setup form. It runs on the Mac,
-and on Linux under `xvfb-run` with a GLES context. Off the TV there is no video
-pipeline, so previews show their idle face and full screen its error banner.
+category, full screen, the quick list and the setup form. It also walks the full-screen overlay (bar, peek, walk, controls, zap toast) and
+asserts from the watch history that peeking and walking never retune while a
+zap and the peek's OK do. It runs on the Mac, and on Linux under `xvfb-run` with
+a GLES context, with `tests/video_stub.c` standing in for the pipeline: it plays
+everything and hands the drawing a generated picture.
 
 ## Performance
 
