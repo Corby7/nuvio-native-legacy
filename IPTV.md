@@ -85,6 +85,10 @@ the programme's clock times either side (20:00 ——— 21:00), not elapsed/dur
 If catch-up is ever added, the dot comes back and the bar becomes scrubbable
 within the programme.
 
+The controls are the film player's own row: the same 90 px circles and 48 px
+glyphs, no circle at rest, the white focus puck, and the focused button's name
+underneath. No key hints are printed on the picture.
+
 Four levels, each one more press: the zap toast, the bar, the channel peek, and
 walking the schedule. **Only OK retunes** (zapping aside, which retunes once the
 keys stop); peeking and walking move text, never the stream. Timers restart on

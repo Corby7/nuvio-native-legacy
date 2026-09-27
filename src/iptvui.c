@@ -166,6 +166,7 @@ static int ov;
 static Uint32 ovUntil;
 static float toastA, barA;
 static int barCtl = -1;         // the focused control, -1 while the block has it
+static float ctlFocus[CTL_N];   // each control's puck, faded like the film player's
 static int peekRow;
 static float peekScroll, peekScrollV;
 static int walkPg = -1;         // the walked programme's index, -1 = now
@@ -1049,6 +1050,10 @@ void iptvui_update(float dt, Uint32 now) {
   toastA = anim_spring(toastA, full && ov == OV_TOAST && !quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
   barA = anim_spring(barA, full && ov >= OV_BAR && !quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
   peekScroll = anim_spring2_reduced(&peekScrollV, peekScroll, (float)peekRow, dt, NV_SPRING2_PAGE, reduced);
+  for (int i = 0; i < CTL_N; i++) {
+    float target = (full && ov == OV_BAR && barCtl == i) ? 1.0f : 0.0f;
+    ctlFocus[i] = anim_spring(ctlFocus[i], target, dt, target > ctlFocus[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
 
   // Reminders due: said once, within ten minutes of the start.
   for (int i = 0; i < nReminders; i++) {
@@ -2069,21 +2074,39 @@ static void drawZapToast(float a) {
     gfx_opacity_group = 1.0f; }
 }
 
-// The row of controls: circles, the focused one on the white plate.
+// THE ROW OF CONTROLS, the film player's own (player.c): 90px circles 14 apart,
+// 48px glyphs, no circle at rest — the white puck IS the focus, fading in on the
+// player's spring while the glyph crosses from white to black under it — and
+// the focused button's name 16px under its circle, faded and risen the same way.
+#define CTL_D     90.0f
+#define CTL_GAP   14.0f
+#define CTL_ICON  48.0f
+#define CTL_TIP   16.0f
 static void drawControls(float x, float cy, float a) {
   static const char *ICON[CTL_N] = { "live_grid", "live_list", "subtitles", "audio", "aspect", "live_star" };
+  static const char *NAME[CTL_N] = { "Guide", "Channels", "Subtitles", "Audio", "Aspect Ratio", "Favourite" };
+  float step = CTL_D + CTL_GAP, x0 = x + CTL_D * 0.5f;
+  int fav = iptv_is_favourite(tuned);
   for (int i = 0; i < CTL_N; i++) {
-    int f = i == barCtl;
-    float d = f ? 66.0f : 60.0f;
-    const char *icon = i == CTL_FAV && iptv_is_favourite(tuned) ? "live_star_fill" : ICON[i];
-    GfxRect r = { x + (60.0f - d) * 0.5f, cy - d * 0.5f, d, d };
-    if (f) {
-      gfx_color((GfxRect){ r.x - 4.0f, r.y - 4.0f, r.w + 8.0f, r.h + 8.0f }, 0.5f, 1, 1, 1, 0.26f * a);
-      gfx_color(r, 0.5f, HEXF(C_PAPER), a);
+    float f = ctlFocus[i], cx = x0 + i * step, luma = 0.94f + (0.13f - 0.94f) * f;
+    const char *icon = i == CTL_FAV && fav ? "live_star_fill" : ICON[i];
+    if (f > 0.004f)
+      gfx_color((GfxRect){ cx - CTL_D * 0.5f, cy - CTL_D * 0.5f, CTL_D, CTL_D }, 0.5f, 1, 1, 1, f * a);
+    gfx_icon((GfxRect){ cx - CTL_ICON * 0.5f, cy - CTL_ICON * 0.5f, CTL_ICON, CTL_ICON }, icon,
+             luma, luma, luma, a * 0.94f);
+  }
+  // The label, "Remove favourite" when that is what OK would do.
+  for (int i = 0; i < CTL_N; i++) {
+    float f = ctlFocus[i];
+    const char *name = i == CTL_FAV && fav ? "Remove favourite" : NAME[i];
+    if (f > 0.004f) {
+      TxtLine label = txt_line(TXT_PLR_TIP, name, 255, 255, 255, 255);
+      TxtLine sh = txt_line(TXT_PLR_TIP, name, 0, 0, 0, 255);
+      float lx = x0 + i * step - label.w * 0.5f;
+      float ly = cy + CTL_D * 0.5f + CTL_TIP + (1.0f - f) * 4.0f;
+      txt_draw_alpha(sh, lx, ly + 2.0f, a * 0.80f * f);
+      txt_draw_alpha(label, lx, ly, a * 0.92f * f);
     }
-    gfx_icon((GfxRect){ r.x + (d - 28.0f) * 0.5f, cy - 14.0f, 28.0f, 28.0f }, icon,
-             f ? 10 / 255.0f : 0xA9 / 255.0f, f ? 12 / 255.0f : 0xB0 / 255.0f, f ? 14 / 255.0f : 0xB8 / 255.0f, a);
-    x += 60.0f + 18.0f;
   }
 }
 
@@ -2118,8 +2141,8 @@ static void drawBlock(float a) {
   const IptvProgramme *pg = walking ? &l->pg[walkPg] : programmeAt(tuned, now);
   const IptvProgramme *next = walking ? NULL : programmeAfter(tuned, now, 0);
   float x = 96.0f, right = NV_SCREEN_W - 96.0f;
-  float ctlY = NV_SCREEN_H - 62.0f - 33.0f;        // the controls' centre line
-  float trackY = ctlY - 33.0f - 26.0f - 12.0f;     // the progress track's centre
+  float ctlY = NV_SCREEN_H - 64.0f - CTL_D * 0.5f; // the controls' centre: the film player's row
+  float trackY = ctlY - CTL_D * 0.5f - 26.0f - 12.0f;   // the progress track's centre
   float idBottom = trackY - 12.0f - 54.0f + 24.0f - 26.0f;
   float tile = 84.0f;
   char line[300], a1[16], b1[16];
@@ -2194,23 +2217,20 @@ static void drawBlock(float a) {
       txt_draw_alpha(t, fx, trackY - 4.0f - 12.0f - t.h, a);
     }
   }
-  // The controls and the stream's facts, or in the walk, how to get about.
+  // The controls and the stream's facts; in the walk, what comes after it.
   if (walking) {
-    const IptvProgramme *after = walkNext(walkPg) >= 0 ? &l->pg[walkNext(walkPg)] : NULL;
-    float hx = x;
-    hx += ink(TXT_LIVE_META, "\xE2\x97\x80\xE2\x80\x82" "back to now", 0x7C838B, hx, ctlY - 12.0f, a) + 14.0f;
+    int an = walkNext(walkPg);
+    const IptvProgramme *after = an >= 0 ? &l->pg[an] : NULL;
     if (after) {
-      hx += ink(TXT_LIVE_META, "\xC2\xB7", 0x3A3F45, hx, ctlY - 12.0f, a) + 14.0f;
+      float hx = x;
+      hx += txt_tracking(TXT_SRC_TIER, "THEN", HEXI(0x7C838B), hx, ctlY - 12.0f, a, 1.7f) + 12.0f;
       clockText(after->start, a1, sizeof a1);
-      snprintf(line, sizeof line, "%s %s\xE2\x80\x82\xE2\x96\xB6", a1, after->title);
-      inkTrim(TXT_LIVE_META, line, 0x7C838B, hx, ctlY - 12.0f, 900.0f, a);
+      snprintf(line, sizeof line, "%s %s", a1, after->title);
+      inkTrim(TXT_LIVE_META, line, 0xA9B0B8, hx, ctlY - 12.0f, 900.0f, a);
     }
   } else {
     drawControls(x, ctlY, a);
     drawStreamFacts(right, ctlY, a);
-    ink(TXT_LIVE_TIME, barCtl >= 0 ? "\xE2\x97\x80\xE2\x96\xB6 choose \xE2\x80\x82\xC2\xB7\xE2\x80\x82 OK select \xE2\x80\x82\xC2\xB7\xE2\x80\x82 BACK close"
-                                   : "\xE2\x96\xB2\xE2\x96\xBC channel \xE2\x80\x82\xC2\xB7\xE2\x80\x82 \xE2\x97\x80\xE2\x96\xB6 what\xE2\x80\x99s on \xE2\x80\x82\xC2\xB7\xE2\x80\x82 OK options \xE2\x80\x82\xC2\xB7\xE2\x80\x82 BACK to hide",
-        0x4E545B, x, NV_SCREEN_H - 26.0f - 20.0f, a);
   }
   gfx_opacity_group = 1.0f;
 }
@@ -2263,7 +2283,6 @@ static void drawPeek(float a) {
     w = tagWidth(still) + 30.0f;
     gfx_color((GfxRect){ 96.0f, by, w, 38.0f }, 10.0f / 38.0f, r, g, b, 0.20f * a);
     tagText(still, 0xA896FA, 96.0f + 15.0f, by + 19.0f, a);
-    inkMid(TXT_LIVE_META, "OK to switch \xC2\xB7 BACK to stay", 0x7C838B, 96.0f + w + 16.0f, by + 19.0f, 600.0f, a);
   }
   gfx_opacity_group = 1.0f;
 }
