@@ -31,6 +31,7 @@
 #include "search.h"
 #include "discoverui.h"
 #include "library.h"
+#include "iptvui.h"
 #include "settings.h"
 #include "player.h"
 #include "trailers.h"
@@ -249,8 +250,8 @@ static void idOfTarget(const CatItem *ci, char *dst, size_t n) {
 // which is what the zeroing was for; the window below is where one becomes the
 // other. Another profile, or another account, always starts fresh.
 #define NV_SCREEN_KEEP_MS 300000u
-static Uint32 leftAt[SCREEN_DISCOVER + 1];
-static int leftProfile[SCREEN_DISCOVER + 1];
+static Uint32 leftAt[SCREEN_LIVE + 1];
+static int leftProfile[SCREEN_LIVE + 1];
 static void leaveScreen(void) {
   leftAt[screen] = SDL_GetTicks();
   if (!leftAt[screen]) leftAt[screen] = 1;
@@ -266,6 +267,9 @@ static void swapScreen(Screen new) {
   int kept;
   if (new == screen) return;
   leaveScreen();
+  // Live TV owns the video pipeline while it is on screen; nothing else should
+  // find a channel still playing behind it.
+  if (screen == SCREEN_LIVE) iptvui_leave();
   screen = new;
   kept = screenKept(new);
   switch (screen) {
@@ -273,6 +277,7 @@ static void swapScreen(Screen new) {
     case SCREEN_DISCOVER: dui_start();         break;
     case SCREEN_LIBRARY:  if (kept) library_resume();  else library_start();  break;
     case SCREEN_SETTINGS: if (kept) settings_resume(); else settings_start(); break;
+    case SCREEN_LIVE:     if (kept) iptvui_resume();   else iptvui_start();   break;
     default: break;
   }
 }
@@ -344,6 +349,9 @@ void app_event(const SDL_Event *e) {
   if (stream_sheet_is_open()) { stream_sheet_event(e); return; }
   if (player_is_open()) { player_event(e); return; }
   if (detail_is_open()) { detail_event(e); return; }
+  // A channel playing full screen takes every key, the side menu's included:
+  // there is no rail on screen to open.
+  if (screen == SCREEN_LIVE && iptvui_fullscreen()) { iptvui_event(e); return; }
   if (menu_is_open()) {
     menu_event(e);
     // Back with the bar open over the home is the end of the chain: the home's
@@ -368,6 +376,7 @@ void app_event(const SDL_Event *e) {
     case SCREEN_DISCOVER:   dui_event(e);         break;
     case SCREEN_LIBRARY: library_event(e); break;
     case SCREEN_SETTINGS:    settings_event(e);    break;
+    case SCREEN_LIVE:        iptvui_event(e);      break;
     default:              home_event(e);       break;
   }
 
@@ -382,6 +391,7 @@ void app_event(const SDL_Event *e) {
       case SCREEN_DISCOVER: wants = dui_requested_menu();      break;
       case SCREEN_LIBRARY:  wants = library_requested_menu();  break;
       case SCREEN_SETTINGS: wants = settings_requested_menu(); break;
+      case SCREEN_LIVE:     wants = iptvui_requested_menu();   break;
       default:              wants = home_requested_menu();     break;
     }
     if (wants) menu_open(); }
@@ -430,6 +440,8 @@ static void swapOfTitleIfRequested(void) {
 }
 
 void app_update(float dt, Uint32 now) {
+  // A live channel never outlives its screen, whatever route left it.
+  if (screen != SCREEN_LIVE) iptvui_background();
   if (screen == SCREEN_LOGIN) {
     login_update(dt, now);
     // The swap only happens HERE, when the session really exists — not at the
@@ -538,7 +550,8 @@ void app_update(float dt, Uint32 now) {
   if (screen != SCREEN_HOME) {
     int shouldClose = (screen == SCREEN_SEARCH      && search_wants_exit())
               || (screen == SCREEN_LIBRARY && library_wants_exit())
-              || (screen == SCREEN_SETTINGS    && settings_wants_exit());
+              || (screen == SCREEN_SETTINGS    && settings_wants_exit())
+              || (screen == SCREEN_LIVE        && iptvui_wants_exit());
     if (shouldClose) { swapScreen(SCREEN_HOME); menu_set_destination(MENU_START); }
   } else if (home_wants_exit()) {
     wantsExit = 1;
@@ -560,6 +573,7 @@ void app_update(float dt, Uint32 now) {
     switch (menu_destination()) {
       case MENU_FETCH:     swapScreen(SCREEN_SEARCH);      break;
       case MENU_LIBRARY: swapScreen(SCREEN_LIBRARY); break;
+      case MENU_LIVE:        swapScreen(SCREEN_LIVE);        break;
       case MENU_SETTINGS:    swapScreen(SCREEN_SETTINGS);    break;
       default:              swapScreen(SCREEN_HOME);       break;
     }
@@ -947,6 +961,7 @@ void app_update(float dt, Uint32 now) {
     case SCREEN_DISCOVER:   dui_update(dt, now);         break;
     case SCREEN_LIBRARY: library_update(dt, now); break;
     case SCREEN_SETTINGS:    settings_update(dt, now);    break;
+    case SCREEN_LIVE:        iptvui_update(dt, now);      break;
     default:              home_update(dt, now);       break;
   }
 }
@@ -1029,6 +1044,7 @@ void app_draw(Uint32 now) {
         case SCREEN_DISCOVER:   dui_draw(now);         break;
         case SCREEN_LIBRARY: library_draw(now); break;
         case SCREEN_SETTINGS:    settings_draw(now);    break;
+        case SCREEN_LIVE:        iptvui_draw(now);      break;
         default:              home_draw(now);       break;
       }
     }
@@ -1061,7 +1077,8 @@ void app_draw(Uint32 now) {
     // The collapsed rail belongs to the screen beside it as much as to the bar:
     // pointing at it is how the bar opens.
     pointer_accept(owner == OWN_MENU || owner == OWN_SCREEN);
-    if (menu_visible() && !detail_is_open())
+    if (menu_visible() && !detail_is_open() &&
+        !(screen == SCREEN_LIVE && iptvui_fullscreen()))
       menu_draw(now);
   }
   pointer_accept(owner == OWN_PLAYER);
@@ -1114,7 +1131,7 @@ int app_goto_detail(const char *imdb) {
 void app_where(char *out, size_t n) {
   static const char *NAME[] = { "login", "profile-picker", "home", "search",
                                 "library", "settings", "player",
-                                "discover" };
+                                "discover", "live" };
   // sizeof, not a literal. The bound was written as `< 9` and the tenth screen
   // arrived: every capture taken from the Discover screen was labelled "?",
   // which is the one thing a position log must never say. Counting the array
@@ -1150,6 +1167,7 @@ void app_shutdown(void) {
   waitingSource = 0;
   player_shutdown();
   settings_shutdown();
+  iptvui_shutdown();
   library_shutdown();
   search_shutdown();
   dui_shutdown();

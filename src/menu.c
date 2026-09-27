@@ -139,7 +139,7 @@
 
 // Labels and order checked against the reference. "Search" is the noun, not the
 // verb: the other entries are nouns too, and a verb among them read as odd.
-static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Settings" };
+static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Live TV", "Settings" };
 
 // FOOTER: who is using the app, and the door to switching. It is one EXTRA focus
 // item, at index MENU_N — it deliberately did not go into the enum, because
@@ -373,8 +373,8 @@ void menu_update(float dt, Uint32 now) {
 // is composited. Here the reason is smaller but points the same way: one tint
 // means the two variants cannot drift apart in colour.
 static void icon(int d, int filled, float cx, float cy, float s, float a) {
-  static const char *names[MENU_N] = {"menu_home", "menu_search", "menu_library", "menu_settings"};
-  static const char *fills[MENU_N] = {"menu_home_fill", "menu_search_fill", "menu_library_fill", "menu_settings_fill"};
+  static const char *names[MENU_N] = {"menu_home", "menu_search", "menu_library", "menu_live", "menu_settings"};
+  static const char *fills[MENU_N] = {"menu_home_fill", "menu_search_fill", "menu_library_fill", "menu_live_fill", "menu_settings_fill"};
   if (d < 0 || d >= MENU_N) return;
   gfx_icon((GfxRect){cx-s*.5f, cy-s*.5f, s, s}, filled ? fills[d] : names[d],
            1.0f, 1.0f, 1.0f, a);

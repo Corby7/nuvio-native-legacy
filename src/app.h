@@ -26,7 +26,10 @@ typedef enum {
   // as the web app's has none. The only way in is the compass in the search
   // header, and Back from it returns THERE and not to the home — which is why
   // app.c gives it a line of its own rather than the generic close.
-  SCREEN_DISCOVER
+  SCREEN_DISCOVER,
+  // Live TV (iptvui.h). Appended for the same reason. It is the one screen that
+  // can cover the side rail: a tuned channel plays full screen inside it.
+  SCREEN_LIVE
 } Screen;
 
 int  app_start(const char *dirArt);
