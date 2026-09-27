@@ -46,6 +46,7 @@
 #include "settings.h"
 #include "tex_cache.h"
 #include "text.h"
+#include "timeshift.h"
 #include "tracks.h"
 #include "video.h"
 #include <ctype.h>
@@ -54,6 +55,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/time.h>
 #include <time.h>
 
 // --- Layout (1920x1080 design space), read off the mockups --------------------
@@ -110,6 +112,14 @@
 #define LIVE_DIGITS_MS    1600u
 #define LIVE_START_MS    15000u   // a stream with no picture by then has failed
 #define LIVE_TOAST_MS     2600u
+#define LIVE_EDGE_S         12.0   // this close to now is "live"
+#define LIVE_BUF_LEAD_S      2.0   // live from the buffer starts this far back: data at once
+#define LIVE_BUF_WAIT_MS  4000u    // the recorder's first bytes, before playing direct
+#define LIVE_RESUME_MS    5000u    // a live pause shorter than this resumes in place
+#define LIVE_ARCH_RESUME_MS 60000u // an archive paused longer reconnects where it was
+#define LIVE_SCRUB_S        30.0   // a ◀▶ step while rewound, growing while held
+#define LIVE_SCRUB_MS      800u    // the scrub lands when the keys rest this long
+#define LIVE_PREVIEW_MS    900u    // resting on a channel this long previews it
 
 // Colours, as hex from the mockups. HEXF for gfx (floats), HEXI for text (ints).
 #define HEXF(h) ((h) >> 16 & 255) / 255.0f, ((h) >> 8 & 255) / 255.0f, ((h) & 255) / 255.0f
@@ -169,11 +179,14 @@ static Uint32 streamAt;
 // restart on every press and never stack; the bar stays while a control has
 // the focus.
 enum { OV_NONE, OV_TOAST, OV_BAR, OV_PEEK, OV_WALK };
-enum { CTL_GUIDE, CTL_CHANNELS, CTL_SUBS, CTL_AUDIO, CTL_ASPECT, CTL_FAV, CTL_N };
+// The controls, by id. Not all are shown at once (shownControls): Start over
+// needs a past to start from, Go live a present to go back to.
+enum { CTL_PLAY, CTL_RESTART, CTL_LIVE, CTL_GUIDE, CTL_CHANNELS, CTL_SUBS, CTL_AUDIO,
+       CTL_ASPECT, CTL_FAV, CTL_N };
 static int ov;
 static Uint32 ovUntil;
 static float toastA, barA;
-static int barCtl = -1;         // the focused control, -1 while the block has it
+static int barCtl = -1;         // the focused control's id, -1 while the block has it
 static float ctlFocus[CTL_N];   // each control's puck, faded like the film player's
 static int peekRow;
 static float peekScroll, peekScrollV;
@@ -184,6 +197,30 @@ static const float ASPECT_ZOOM[3] = { 1.0f, 1.15f, 1.34f };
 static const char *ASPECT_NAME[3] = { "Fit", "Slight zoom", "Cinema zoom" };
 static int aspectMode;
 static float lastZoom = -1.0f;
+
+// THE TIMELINE: where in time the picture is. Three kinds of load:
+//   SRC_LIVE     the provider's stream, direct: now, and nothing before it
+//   SRC_BUFFER   the pause buffer's loopback (timeshift.c): any instant it holds
+//   SRC_ARCHIVE  the provider's catch-up: any instant its archive reaches
+// A load plays from `srcBase` on at normal speed, so the instant on screen is
+// srcBase plus the time it has played: counted here by the clock from the
+// first ready frame, less the time paused. The pipeline's own position is no
+// help — a live TS reports the broadcaster's clock, not the load's.
+enum { SRC_LIVE, SRC_BUFFER, SRC_ARCHIVE };
+static int srcKind;
+static double srcBase;
+static Uint32 srcReadyAt, pausedAt, pausedMs;
+static int paused, eosSeen;
+static int bufWaiting;          // the recorder is connecting; nothing plays yet
+static Uint32 bufWaitUntil;
+static int noteOnPlay;          // the load that starts counts as watched
+// ◀▶ while rewound: the instant being chosen, landed when the keys rest.
+static int scrubbing, scrubRun;
+static double scrubAt;
+static Uint32 scrubCommitAt, scrubLastKey;
+// Preview on focus: the channel the browse focus rests on, and since when.
+static int restCh = -1;
+static Uint32 restSince;
 
 // "Remind me", from walking the schedule. In memory for the session: a toast
 // when the programme starts, while Live TV is open.
@@ -230,6 +267,11 @@ static Uint32 phoneRetryAt; // no network yet: when to look for one again
 // --- Small helpers ---------------------------------------------------------------
 static float X0(void) { return settings_content_x() - 8.0f; }
 static long long nowSec(void) { return (long long)time(NULL); }
+static double wallNow(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return tv.tv_sec + tv.tv_usec / 1e6;
+}
 // Every "now" the screen DRAWS is the minute: the line moves once a minute
 // rather than creeping a pixel at a time (Y3).
 static long long nowMinute(void) { long long t = nowSec(); return t - t % 60; }
@@ -392,7 +434,7 @@ static int cellAt(int ch, long long t, long long *s, long long *e) {
 
 // PAGED, not scrolled: the window only ever moves in whole half hours.
 static void keepWindowOnFocus(void) {
-  long long floor = slotFloor(nowSec());
+  long long now = nowSec(), floor = slotFloor(fTime < now ? fTime : now);
   if (fTime < winStart) winStart = slotFloor(fTime);
   while (fTime >= winStart + LIVE_SPAN_S - LIVE_SLOT_S / 2) winStart += LIVE_SLOT_S;
   if (winStart < floor) winStart = floor;
@@ -406,7 +448,19 @@ static void guideRight(void) {
   cellAt(ch, fTime, &s, &e);
   if (!c || !c->nPg || e >= LIVE_FOREVER || e >= now + LIVE_AHEAD_S) return;
   fTime = e;
+  // Walking forward out of the past, the programme on now is "now" again.
+  if (fTime <= now) { cellAt(ch, fTime, &s, &e); if (e > now) fTime = now; }
   keepWindowOnFocus();
+}
+
+// DOWN and UP keep the instant — unless it is a past the new channel has no
+// archive of; then it is now.
+static void guideSettle(void) {
+  long long now = nowSec();
+  if (viewMode == VIEW_GUIDE && fTime < now - 90 && !iptv_has_archive(focusedChannel(), fTime)) {
+    fTime = now;
+    keepWindowOnFocus();
+  }
 }
 
 static void guideLeft(void) {
@@ -414,8 +468,18 @@ static void guideLeft(void) {
   int ch = focusedChannel();
   if (fChan) { requestMenu = 1; return; }
   cellAt(ch, fTime, &s, &e);
-  // What is on now is the first column; left of it is the channel itself.
-  if (s <= now) { fChan = 1; return; }
+  // What is on now is the first column; left of it is the channel itself —
+  // unless the channel keeps an archive: then the past is more columns.
+  if (s <= now) {
+    long long ps, pe;
+    const IptvChannel *c = chan(ch);
+    if (c && c->catchup && s > -LIVE_FOREVER) {
+      cellAt(ch, s - 1, &ps, &pe);
+      if (ps > -LIVE_FOREVER && iptv_has_archive(ch, ps)) { fTime = ps; keepWindowOnFocus(); return; }
+    }
+    fChan = 1;
+    return;
+  }
   cellAt(ch, s - 1, &s, &e);
   fTime = s < now ? now : s;
   keepWindowOnFocus();
@@ -426,53 +490,59 @@ static int ownsVideo(void) { return playing && video_session() == playSession; }
 
 static void stopStream(void) {
   if (ownsVideo()) video_stop();
-  playing = 0; playFailed = 0; zapPending = 0;
+  timeshift_end();
+  playing = 0; playFailed = 0; zapPending = 0; bufWaiting = 0;
+  paused = 0; scrubbing = 0; srcKind = SRC_LIVE;
   lastWin[0] = -1;
 }
 
-static void startStream(void) {
-  char relay[4200];
-  const char *url = NULL;
-  zapPending = 0;
-  playFailed = 0;
-  altTried = 0;
-  usingAlt = useAlt && (url = iptv_play_url_alt(tuned, relay, sizeof relay)) != NULL;
-  if (!url) url = iptv_play_url(tuned, relay, sizeof relay);
-  streamAt = SDL_GetTicks();
-  if (!url) return;
+// Hands `url` to the pipeline as a load of `kind` starting at wall time `base`.
+static void playUrl(const char *url, int kind, double base) {
   // A live stream is neither Dolby Vision nor an MKV worth probing: the probe
   // would open a second connection, and IPTV accounts allow one.
   video_set_dv(0);
   video_set_mp4(1);
-  tracks_reset();
   errSeen = video_error_count();
+  eosSeen = video_eos_count();
   playing = video_play(url);
   playSession = video_session();
+  srcKind = kind; srcBase = base;
+  srcReadyAt = 0; paused = 0; pausedMs = 0; pausedAt = 0;
+  playFailed = !playing;
+  streamAt = SDL_GetTicks();
   lastWin[0] = -1;
-  if (!playing) playFailed = 1;
-  iptv_note_watched(tuned);
-  printf("[live] tuned %d %s%s\n", chan(tuned) ? chan(tuned)->number : 0,
-         chan(tuned) ? chan(tuned)->name : "?", playing ? "" : " (pipeline refused)");
+  if (noteOnPlay && playing) { iptv_note_watched(tuned); noteOnPlay = 0; }
+  printf("[live] %s %d %s%s\n", kind == SRC_ARCHIVE ? "catch-up" : kind == SRC_BUFFER ? "buffered" : "tuned",
+         chan(tuned) ? chan(tuned)->number : 0, chan(tuned) ? chan(tuned)->name : "?",
+         playing ? "" : " (pipeline refused)");
   fflush(stdout);
 }
 
-// The stream failed (`why`): play the same channel in the other container,
-// once per tune. 0 when there is no other one or it was already tried.
+// The stream as listed, or in the other container once that is what played
+// (useAlt).
+static void playDirect(void) {
+  char relay[4200];
+  const char *url = NULL;
+  usingAlt = useAlt && (url = iptv_play_url_alt(tuned, relay, sizeof relay)) != NULL;
+  if (!url) url = iptv_play_url(tuned, relay, sizeof relay);
+  if (!url) { playFailed = 1; return; }
+  playUrl(url, SRC_LIVE, wallNow());
+}
+
+// The live stream failed (`why`): play the same channel in the other
+// container, once per tune. 0 when there is no other one or it was tried.
 static int tryOther(const char *why) {
   char relay[4200];
-  const char *url = usingAlt ? iptv_play_url(tuned, relay, sizeof relay)
-                             : iptv_play_url_alt(tuned, relay, sizeof relay);
-  if (altTried || !url) return 0;
+  const char *url;
+  if (altTried || srcKind != SRC_LIVE) return 0;
+  url = usingAlt ? iptv_play_url(tuned, relay, sizeof relay)
+                 : iptv_play_url_alt(tuned, relay, sizeof relay);
+  if (!url) return 0;
   printf("[live] %s on %s; trying the other container\n", why, tunedName);
   fflush(stdout);
   altTried = 1;
   usingAlt = !usingAlt;
-  errSeen = video_error_count();
-  playing = video_play(url);
-  playSession = video_session();
-  lastWin[0] = -1;
-  playFailed = !playing;
-  streamAt = SDL_GetTicks();
+  playUrl(url, SRC_LIVE, wallNow());
   return playing;
 }
 
@@ -487,12 +557,216 @@ static void failStream(const char *why) {
   say(m);
 }
 
+// Live, from the top: the pause buffer when it is on and the stream is one it
+// can keep (MPEG-TS), the stream itself otherwise.
+static void beginLive(void) {
+  const IptvChannel *c = chan(tuned);
+  long long budget;
+  if (ownsVideo()) video_stop();
+  playing = 0;
+  timeshift_end();
+  bufWaiting = 0; paused = 0; scrubbing = 0;
+  if (!c) return;
+  budget = settings_live_buffer_minutes() > 0 ? timeshift_budget(settings_live_buffer_minutes()) : 0;
+  if (budget > 0 && timeshift_begin(c->url, c->headers, budget)) {
+    // The recorder opens the one connection; the pipeline follows it once
+    // bytes arrive (iptvui_update), or plays direct if none do.
+    bufWaiting = 1;
+    bufWaitUntil = SDL_GetTicks() + LIVE_BUF_WAIT_MS;
+    srcKind = SRC_LIVE;
+    return;
+  }
+  playDirect();
+}
+
+static void startStream(void) {
+  zapPending = 0;
+  playFailed = 0;
+  altTried = 0;
+  if (!chan(tuned)) return;
+  tracks_reset();
+  noteOnPlay = 1;
+  beginLive();
+}
+
+// The instant on screen, as wall-clock seconds.
+static double playAt(void) {
+  Uint32 t = SDL_GetTicks();
+  double now = wallNow(), v;
+  long played;
+  if (srcKind == SRC_LIVE) return paused ? now - (double)(t - pausedAt) / 1000.0 : now;
+  if (!srcReadyAt) return srcBase;
+  played = (long)(t - srcReadyAt) - (long)pausedMs - (paused ? (long)(t - pausedAt) : 0);
+  v = srcBase + (played > 0 ? played : 0) / 1000.0;
+  return v > now ? now : v;
+}
+static double shownAt(void) { return scrubbing ? scrubAt : playAt(); }
+static int atLive(void) {
+  return !paused && (srcKind == SRC_LIVE || wallNow() - playAt() < LIVE_EDGE_S);
+}
+
+// The earliest instant within reach: the buffer's oldest, or the archive's.
+// 0 when there is none.
+static double rewindFloor(void) {
+  double lo = 0, hi, best = 0, now = wallNow();
+  const IptvChannel *c = chan(tuned);
+  if (timeshift_range(&lo, &hi)) best = lo;
+  if (c && c->catchup) {
+    double a = now - (double)c->catchupDays * 86400.0 + 120.0;
+    if (!best || a < best) best = a;
+  }
+  return best;
+}
+static int canRewind(void) {
+  double f = rewindFloor();
+  // More past than the live edge's own width, or ◀ would land back on live.
+  return ownsVideo() && !playFailed && f > 0 && f < wallNow() - (LIVE_EDGE_S + 5.0);
+}
+
+static void goLive(void);
+
+// Plays from wall time `t`: from the buffer when it holds `t`, else from the
+// archive, else it cannot.
+static void seekTo(double t) {
+  double now = wallNow(), lo, hi;
+  char buf[4200];
+  const char *u;
+  scrubbing = 0;
+  if (t >= now - LIVE_EDGE_S) { goLive(); return; }
+  if (timeshift_range(&lo, &hi) && t >= lo - 1.0) {
+    if (t < lo) t = lo;
+    if ((u = timeshift_url(t, buf, sizeof buf))) { playUrl(u, SRC_BUFFER, t); return; }
+  }
+  if (iptv_has_archive(tuned, (long long)t)) {
+    const IptvProgramme *pg = programmeAt(tuned, (long long)t);
+    long long from = (long long)t, stop = pg ? pg->stop : from + 3600;
+    if (stop - from < 120) stop = from + 3600;
+    // The recorder's connection goes first: many accounts allow one.
+    timeshift_end();
+    if ((u = iptv_archive_url(tuned, from, stop, buf, sizeof buf))) {
+      if (ownsVideo()) video_stop();
+      playUrl(u, SRC_ARCHIVE, (double)from);
+      return;
+    }
+  }
+  say("That's further back than this channel keeps");
+}
+
+static void goLive(void) {
+  double lo, hi;
+  char buf[256];
+  const char *u;
+  scrubbing = 0;
+  if (timeshift_range(&lo, &hi)) {
+    double from = hi - LIVE_BUF_LEAD_S > lo ? hi - LIVE_BUF_LEAD_S : lo;
+    if ((u = timeshift_url(from, buf, sizeof buf))) { playUrl(u, SRC_BUFFER, from); return; }
+  }
+  beginLive();
+}
+
+// Pause and play. Paused with a past to come back from (the buffer, the
+// archive) it resumes where it froze. Paused with neither, a short pause
+// resumes in place; a long one comes back to live, and says so — the stream
+// went on without the picture, and pretending otherwise would stall it.
+static void togglePause(void) {
+  Uint32 t = SDL_GetTicks(), held;
+  double at;
+  if (!ownsVideo() || playFailed) return;
+  if (!paused) {
+    scrubbing = 0;
+    video_pause(1);
+    paused = 1; pausedAt = t;
+    return;
+  }
+  at = playAt();
+  held = t - pausedAt;
+  paused = 0;
+  if (srcKind == SRC_LIVE) {
+    if (held < LIVE_RESUME_MS) video_pause(0);
+    else if (iptv_has_archive(tuned, (long long)at)) seekTo(at);
+    else { beginLive(); say("Back to live"); }
+    return;
+  }
+  pausedMs += held;
+  if (srcKind == SRC_BUFFER) {
+    double lo, hi;
+    // Paused for longer than the ring keeps: the loopback has already skipped
+    // ahead to the oldest it has, so the picture is reloaded there, knowingly.
+    if (timeshift_range(&lo, &hi) && at < lo - 0.5) seekTo(lo + 5.0);
+    else video_pause(0);
+  } else if (held > LIVE_ARCH_RESUME_MS) {
+    seekTo(at);
+  } else {
+    video_pause(0);
+  }
+}
+
+// ◀▶ while rewound: moves the instant being chosen; it lands when the keys
+// rest. Steps grow while the key is held, as the film player's do.
+static void scrub(int dir) {
+  Uint32 t = SDL_GetTicks();
+  double now = wallNow(), floor = rewindFloor(), step;
+  if (!scrubbing) { scrubAt = playAt(); scrubbing = 1; scrubRun = 0; }
+  scrubRun = t - scrubLastKey < 450u ? scrubRun + 1 : 0;
+  scrubLastKey = t;
+  step = LIVE_SCRUB_S * (scrubRun < 4 ? 1 : scrubRun < 10 ? 4 : 20);
+  scrubAt += dir * step;
+  if (floor > 0 && scrubAt < floor) scrubAt = floor;
+  if (scrubAt > now) scrubAt = now;
+  scrubCommitAt = t + LIVE_SCRUB_MS;
+}
+
+// The start of what is on screen, reachable?
+static const IptvProgramme *restartable(void) {
+  const IptvProgramme *pg = programmeAt(tuned, (long long)playAt());
+  double f = rewindFloor();
+  if (!pg || !ownsVideo() || f <= 0 || (double)pg->start < f - 1.0) return NULL;
+  return pg;
+}
+
+// The controls on show, in order; the count.
+static int shownControls(int *out) {
+  int n = 0;
+  out[n++] = CTL_PLAY;
+  if (restartable()) out[n++] = CTL_RESTART;
+  if (!atLive() && srcKind != SRC_LIVE) out[n++] = CTL_LIVE;
+  for (int i = CTL_GUIDE; i < CTL_N; i++) out[n++] = i;
+  return n;
+}
+static int shownIndex(int id) {
+  int ids[CTL_N], n = shownControls(ids);
+  for (int i = 0; i < n; i++) if (ids[i] == id) return i;
+  return -1;
+}
+static int shownFirst(void) { int ids[CTL_N]; shownControls(ids); return ids[0]; }
+static void barStep(int dir) {
+  int ids[CTL_N], n = shownControls(ids), i = shownIndex(barCtl);
+  if (i < 0) { barCtl = ids[0]; return; }
+  i += dir;
+  if (i >= 0 && i < n) barCtl = ids[i];
+}
+
+// A preview: tuned like any channel, but not counted as watched.
+static void previewTune(int ch) {
+  const IptvChannel *c = chan(ch);
+  if (!c) return;
+  if (ch != tuned) timeshift_end();
+  tuned = ch;
+  snprintf(tunedName, sizeof tunedName, "%s", c->name);
+  tunedAt = SDL_GetTicks();
+  zapPending = 0; playFailed = 0;
+  tracks_reset();
+  noteOnPlay = 0;
+  beginLive();
+}
+
 // Tunes `ch`. `immediate` starts the stream at once; otherwise it waits
 // LIVE_ZAP_MS for the keys to stop, so a run of CH+ presses opens one stream
 // (zap decides which).
 static void tune(int ch, int immediate) {
   const IptvChannel *c = chan(ch);
   if (!c) return;
+  if (ch != tuned) timeshift_end();
   tuned = ch;
   snprintf(tunedName, sizeof tunedName, "%s", c->name);
   tunedAt = SDL_GetTicks();
@@ -554,7 +828,25 @@ static void enterFull(void) {
 // takes it full screen; it is never retuned.
 static void watch(int ch) {
   if (ch < 0) return;
-  if (!(ch == tuned && (ownsVideo() || zapPending))) tune(ch, 1);
+  if (!(ch == tuned && (ownsVideo() || zapPending || bufWaiting))) tune(ch, 1);
+  else if (!noteOnPlay) iptv_note_watched(ch);   // a preview becomes a viewing
+  enterFull();
+}
+
+// OK on a programme that has ended, on a channel with catch-up: from its start.
+static void watchFrom(int ch, long long start) {
+  const IptvChannel *c = chan(ch);
+  if (!c) return;
+  if (ownsVideo()) video_stop();
+  playing = 0; zapPending = 0; bufWaiting = 0;
+  if (ch != tuned) timeshift_end();
+  tuned = ch;
+  snprintf(tunedName, sizeof tunedName, "%s", c->name);
+  tunedAt = SDL_GetTicks();
+  tracks_reset();
+  noteOnPlay = 1;
+  seekTo((double)start);
+  if (!ownsVideo()) { beginLive(); return; }   // it said why; live instead
   enterFull();
 }
 
@@ -801,7 +1093,7 @@ void iptvui_leave(void) {
 
 void iptvui_background(void) {
   phonelink_close();
-  if (playing || zapPending) { stopStream(); full = 0; quickOpen = 0; }
+  if (playing || zapPending || bufWaiting) { stopStream(); full = 0; quickOpen = 0; }
 }
 
 void iptvui_shutdown(void) {
@@ -918,6 +1210,13 @@ static void control(int ctl) {
       say(ASPECT_NAME[aspectMode]);
       break;
     case CTL_FAV: toggleFavourite(tuned); break;
+    case CTL_PLAY: togglePause(); break;
+    case CTL_RESTART: {
+      const IptvProgramme *pg = restartable();
+      if (pg) seekTo((double)pg->start);
+      break;
+    }
+    case CTL_LIVE: goLive(); barCtl = CTL_PLAY; break;
     default: break;
   }
 }
@@ -980,10 +1279,29 @@ static void quickEvent(SDL_Keycode k) {
   }
 }
 
+// The remote's own transport keys, wherever the focus is.
+static int mediaKey(SDL_Keycode k) {
+  if (k == SDLK_AUDIOPLAY || k == SDLK_PAUSE || k == SDLK_AUDIOSTOP) {
+    togglePause();
+    overlay(OV_BAR);
+    return 1;
+  }
+#if SDL_VERSION_ATLEAST(2, 0, 6)
+  if (k == SDLK_AUDIOREWIND || k == SDLK_AUDIOFASTFORWARD) {
+    int back = k == SDLK_AUDIOREWIND;
+    if (back ? canRewind() : (scrubbing || !atLive())) scrub(back ? -1 : +1);
+    overlay(OV_BAR);
+    return 1;
+  }
+#endif
+  return 0;
+}
+
 static void fullEvent(SDL_Keycode k) {
   int d = digitOf(k);
   int up = k == SDLK_UP || k == SDLK_PAGEDOWN, down = k == SDLK_DOWN || k == SDLK_PAGEUP;
   if (quickOpen) { quickEvent(k); return; }
+  if (mediaKey(k)) return;
   if (d >= 0) { typeDigit(d); return; }
 
   switch (ov) {
@@ -1005,21 +1323,32 @@ static void fullEvent(SDL_Keycode k) {
       return;
     case OV_BAR:
       if (barCtl >= 0) {
-        if (k == SDLK_LEFT) { if (barCtl > 0) barCtl--; }
-        else if (k == SDLK_RIGHT) { if (barCtl + 1 < CTL_N) barCtl++; }
+        if (k == SDLK_LEFT) barStep(-1);
+        else if (k == SDLK_RIGHT) barStep(+1);
         else if (isOk(k)) control(barCtl);
         else if (k == SDLK_UP || isBack(k)) barCtl = -1;
         overlay(OV_BAR);
         if (ov == OV_BAR && barCtl < 0 && isBack(k)) barCtl = -1;
         return;
       }
-      if (up || down) startPeek(down ? +1 : -1);
+      // Rewound, ◀▶ move through time; at live, ◀ rewinds when there is a
+      // past to rewind into and ▶ walks the schedule, the future being the
+      // only direction left.
+      if (scrubbing && isOk(k)) { seekTo(scrubAt); overlay(OV_BAR); }
+      else if (scrubbing && isBack(k)) { scrubbing = 0; overlay(OV_BAR); }
+      else if (up || down) { scrubbing = 0; startPeek(down ? +1 : -1); }
       else if (k == SDLK_RIGHT) {
-        int p = walkNext(-1);
-        if (p >= 0) { overlay(OV_WALK); walkPg = p; } else overlay(OV_BAR);
+        if (scrubbing || !atLive()) { scrub(+1); overlay(OV_BAR); }
+        else {
+          int p = walkNext(-1);
+          if (p >= 0) { overlay(OV_WALK); walkPg = p; } else overlay(OV_BAR);
+        }
       }
-      else if (k == SDLK_LEFT) overlay(OV_BAR);
-      else if (isOk(k) || k == SDLK_DOWN) { barCtl = 0; overlay(OV_BAR); }
+      else if (k == SDLK_LEFT) {
+        if (scrubbing || !atLive() || canRewind()) scrub(-1);
+        overlay(OV_BAR);
+      }
+      else if (isOk(k) || k == SDLK_DOWN) { barCtl = shownFirst(); overlay(OV_BAR); }
       else if (isBack(k)) ov = OV_NONE;
       return;
     case OV_PEEK:
@@ -1091,6 +1420,7 @@ static void pageRows(int step) {
   if (fRow < 0) fRow = 0;
   if (fRow >= nView) fRow = nView ? nView - 1 : 0;
   rememberFocus();
+  guideSettle();
 }
 
 void iptvui_event(const SDL_Event *e) {
@@ -1103,7 +1433,15 @@ void iptvui_event(const SDL_Event *e) {
   }
   // Hold OK on a channel: favourite. A tap is OK: watch.
   if (hold_event(&hold, e, zone == ZONE_BODY && nView > 0, &tap)) {
-    if (tap) watch(focusedChannel());
+    if (tap) {
+      long long cs, ce;
+      int ch = focusedChannel();
+      // A programme in the past plays from the archive, from its start.
+      if (viewMode == VIEW_GUIDE && !fChan && fTime < nowSec() - 90 &&
+          cellAt(ch, fTime, &cs, &ce) >= 0 && iptv_has_archive(ch, cs))
+        watchFrom(ch, cs);
+      else watch(ch);
+    }
     return;
   }
   if (e->type != SDL_KEYDOWN) return;
@@ -1128,10 +1466,10 @@ void iptvui_event(const SDL_Event *e) {
   { int d = digitOf(k); if (d >= 0) { typeDigit(d); return; } }
   switch (k) {
     case SDLK_UP:
-      if (fRow > 0) { fRow--; rememberFocus(); }
+      if (fRow > 0) { fRow--; rememberFocus(); guideSettle(); }
       else zone = ZONE_CHIPS;
       break;
-    case SDLK_DOWN: if (fRow + 1 < nView) { fRow++; rememberFocus(); } break;
+    case SDLK_DOWN: if (fRow + 1 < nView) { fRow++; rememberFocus(); guideSettle(); } break;
     case SDLK_PAGEUP:   pageRows(-6); break;
     case SDLK_PAGEDOWN: pageRows(+6); break;
     case SDLK_LEFT:
@@ -1229,32 +1567,78 @@ void iptvui_update(float dt, Uint32 now) {
   hold_animate(&hold, dt, now);
   if (hold_fired(&hold, now) && zone == ZONE_BODY) toggleFavourite(focusedChannel());
 
-  // Time moves on under a screen left open.
-  if (fTime < t) fTime = t;
-  if (winStart < slotFloor(t)) winStart = slotFloor(t);
+  // Time moves on under a screen left open — unless the focus is on a past
+  // programme, which catch-up made a place to be.
+  if (fTime < t && fTime >= t - 90) fTime = t;
+  if (fTime >= t - 90 && winStart < slotFloor(t)) winStart = slotFloor(t);
 
   if (zapPending && now >= zapAt) startStream();
+  // The recorder's first bytes, or not: the pipeline follows it, or goes direct.
+  if (bufWaiting) {
+    int st = timeshift_state();
+    double lo, hi;
+    char buf[256];
+    const char *u;
+    if (st == TS_RECORDING && timeshift_range(&lo, &hi) &&
+        (u = timeshift_url(hi - LIVE_BUF_LEAD_S > lo ? hi - LIVE_BUF_LEAD_S : lo, buf, sizeof buf))) {
+      bufWaiting = 0;
+      playUrl(u, SRC_BUFFER, hi - LIVE_BUF_LEAD_S > lo ? hi - LIVE_BUF_LEAD_S : lo);
+    } else if (st == TS_REFUSED || st == TS_FAILED || now >= bufWaitUntil) {
+      printf("[live] no pause buffer for %s (%s)\n", tunedName,
+             st == TS_REFUSED ? "not MPEG-TS" : st == TS_FAILED ? "recorder failed" : "no bytes yet");
+      bufWaiting = 0;
+      timeshift_end();
+      playDirect();
+    }
+  }
+  if (ownsVideo() && !srcReadyAt && video_ready()) srcReadyAt = now ? now : 1;
+  if (scrubbing && now >= scrubCommitAt) seekTo(scrubAt);
+  // A programme from the archive ends: on with what follows, or live.
+  if (ownsVideo() && srcKind == SRC_ARCHIVE && video_eos_count() > eosSeen) {
+    eosSeen = video_eos_count();
+    seekTo(playAt() + 1.0);
+  }
   if (ownsVideo() && video_error_count() > errSeen) {
     char why[160] = "";
     video_last_error(why, sizeof why);
-    printf("[live] stream error on %s: %s\n", tunedName, why[0] ? why : "?");
+    printf("[live] stream error on %s (%s): %s\n", tunedName,
+           srcKind == SRC_ARCHIVE ? "catch-up" : srcKind == SRC_BUFFER ? "buffer" : "live",
+           why[0] ? why : "?");
     fflush(stdout);
     errSeen = video_error_count();
-    if (!tryOther(why[0] ? why : "stream error")) {
+    if (srcKind == SRC_ARCHIVE) {
+      // The archive refused: back to what is on, rather than a dead picture.
+      say("Catch-up isn't available for this programme");
+      beginLive();
+    } else if (srcKind == SRC_BUFFER) {
+      timeshift_end();
+      playDirect();
+    } else if (!tryOther(why[0] ? why : "stream error")) {
       failStream(why[0] ? why : "the TV reported an error");
       // Full screen, the failure is said in the bar, where the channel is named.
       if (full && ov != OV_PEEK && ov != OV_WALK) overlay(OV_BAR);
     }
   }
-  // No error and no picture either: a stream that never starts.
-  if (ownsVideo() && !zapPending && !playFailed && !video_ready() && now - streamAt >= LIVE_START_MS &&
-      !tryOther("no picture after 15 s"))
+  // No error and no picture either: a live stream that never starts.
+  if (ownsVideo() && srcKind == SRC_LIVE && !zapPending && !playFailed && !paused &&
+      !video_ready() && now - streamAt >= LIVE_START_MS && !tryOther("no picture after 15 s"))
     failStream("no picture after 15 seconds");
   // It plays: if that took the other container, start there from now on.
-  if (ownsVideo() && video_ready() && usingAlt != useAlt) {
+  if (ownsVideo() && srcKind == SRC_LIVE && video_ready() && usingAlt != useAlt) {
     useAlt = usingAlt;
     printf("[live] this source plays as %s; using that from now on\n", useAlt ? "the other container" : "listed");
     fflush(stdout);
+  }
+  // Preview on focus: resting on a channel while browsing plays it in the
+  // preview. It is not "watched" until OK.
+  if (!full && zone == ZONE_BODY && settings_live_preview()) {
+    int f = focusedChannel();
+    if (f != restCh) { restCh = f; restSince = now; }
+    else if (f >= 0 && f != tuned && now - restSince >= LIVE_PREVIEW_MS && !zapPending) {
+      previewTune(f);
+    }
+  } else {
+    restCh = -1;
   }
   if (digits[0] && now - digitsAt >= LIVE_DIGITS_MS) {
     int n = atoi(digits);
@@ -1268,8 +1652,12 @@ void iptvui_update(float dt, Uint32 now) {
 
   // The overlay's clock. The bar stays while a control holds the focus, or
   // while the tracks sheet it opened is up.
-  if (full && ov != OV_NONE && now >= ovUntil && !(ov == OV_BAR && barCtl >= 0) && !tracks_is_open())
+  if (barCtl >= 0 && shownIndex(barCtl) < 0) barCtl = CTL_PLAY;
+  // Paused or choosing an instant, the bar stays: it is what says so.
+  if (full && ov != OV_NONE && now >= ovUntil && !(ov == OV_BAR && barCtl >= 0) && !tracks_is_open() &&
+      !paused && !scrubbing)
     ov = OV_NONE;
+  if (full && (paused || scrubbing) && ov == OV_NONE) overlay(OV_BAR);
   if (!full) ov = OV_NONE;
   // ANY SHEET OVER THE PICTURE HIDES THE BAR, as the film player hides its
   // transport under its sheets: subtitles, audio, the channels panel. When the
@@ -1282,7 +1670,7 @@ void iptvui_update(float dt, Uint32 now) {
     barA = anim_spring(barA, full && ov >= OV_BAR && !sheet ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS); }
   peekScroll = anim_spring2_reduced(&peekScrollV, peekScroll, (float)peekRow, dt, NV_SPRING2_PAGE, reduced);
   for (int i = 0; i < CTL_N; i++) {
-    float target = (full && ov == OV_BAR && barCtl == i) ? 1.0f : 0.0f;
+    float target = (full && ov == OV_BAR && barCtl == i && shownIndex(i) >= 0) ? 1.0f : 0.0f;
     ctlFocus[i] = anim_spring(ctlFocus[i], target, dt, target > ctlFocus[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
 
@@ -1730,6 +2118,14 @@ static void guideDetail(void) {
   { float kx = x;
     const IptvProgramme *pg = p >= 0 ? &l->pg[p] : NULL;
     if (pg && pg->start <= now && now < pg->stop) kx += onNow(kx, y, 1.0f) + 14.0f;
+    else if (pg && pg->stop <= now && iptv_has_archive(ch, pg->start)) {
+      // CATCH-UP, outlined: this ended programme plays from the archive.
+      float tw = tagWidth("CATCH-UP") + 22.0f;
+      gfx_color((GfxRect){ kx, y, tw, 32.0f }, 8.0f / 32.0f, 1, 1, 1, 0.28f);
+      gfx_color((GfxRect){ kx + 1.0f, y + 1.0f, tw - 2.0f, 30.0f }, 7.0f / 30.0f, 10 / 255.0f, 11 / 255.0f, 14 / 255.0f, 1.0f);
+      tagText("CATCH-UP", 0xC1C7CD, kx + 11.0f, y + 16.0f, 1.0f);
+      kx += tw + 14.0f;
+    }
     snprintf(line, sizeof line, "%d \xC2\xB7 %s%s", c->number, c->name, iptv_is_favourite(ch) ? "  \xE2\x98\x85" : "");
     kx += inkMid(TXT_LIVE_META, line, 0x9AA1A9, kx, y + 16.0f, w * 0.5f, 1.0f) + 14.0f;
     if (pg) {
@@ -1800,8 +2196,10 @@ static void guideRuler(double ws, double pps) {
 static void guideBlock(const IptvProgramme *pg, GfxRect b, int focused, long long now, float nowX, int row,
                        double ws) {
   int airing = pg->start <= now && now < pg->stop, past = pg->stop <= now;
+  // Ended, but in the archive: still watchable, so not greyed like the rest.
+  int kept = past && iptv_has_archive(pg->channel, pg->start);
   float ar, ag, ab;
-  unsigned titleHex = focused ? C_INK : past ? 0x8A9199 : airing ? 0xE4E7EA : 0xA9B0B8;
+  unsigned titleHex = focused ? C_INK : kept ? 0xC1C7CD : past ? 0x8A9199 : airing ? 0xE4E7EA : 0xA9B0B8;
   unsigned timeHex = focused ? 0x4A5058 : airing ? 0x7C838B : 0x636A71;
   accent(&ar, &ag, &ab);
   if (focused) {
@@ -2280,8 +2678,18 @@ static void drawSetup(void) {
 // The live tag: LIVE on its red tint; TUNING while the stream opens; the
 // failure in the same place, where the eye already is.
 static float streamTag(float x, float cy, float a) {
-  const char *word = playFailed ? "UNAVAILABLE" : (zapPending || !video_ready()) ? "TUNING" : "LIVE";
-  int live = !playFailed && !(zapPending || !video_ready());
+  int tuning = zapPending || bufWaiting || !video_ready();
+  int onLive = !playFailed && !tuning && atLive();
+  char behind[32];
+  const char *word = playFailed ? "UNAVAILABLE" : tuning ? "TUNING" : paused ? "PAUSED"
+                   : onLive ? "LIVE" : srcKind == SRC_ARCHIVE ? "CATCH-UP" : behind;
+  int live = onLive && !paused;
+  if (!playFailed && !tuning && !paused && !onLive) {
+    long sec = (long)(wallNow() - playAt() + 0.5);
+    // Behind live: −0:40 under ten minutes, −25 MIN past them.
+    if (sec < 600) snprintf(behind, sizeof behind, "\xE2\x88\x92%ld:%02ld", sec / 60, sec % 60);
+    else snprintf(behind, sizeof behind, "\xE2\x88\x92%ld MIN", (sec + 30) / 60);
+  }
   float w = tagWidth(word) + 24.0f + (live ? 16.0f : 0.0f);
   GfxRect r = { x, cy - 15.0f, w, 30.0f };
   if (live || playFailed) gfx_color(r, 8.0f / 30.0f, 232 / 255.0f, 96 / 255.0f, 76 / 255.0f, 0.16f * a);
@@ -2339,26 +2747,30 @@ static void drawZapToast(float a) {
 #define CTL_ICON  48.0f
 #define CTL_TIP   16.0f
 static void drawControls(float x, float cy, float a) {
-  static const char *ICON[CTL_N] = { "live_grid", "live_list", "subtitles", "audio", "aspect", "live_star" };
-  static const char *NAME[CTL_N] = { "Guide", "Channels", "Subtitles", "Audio", "Aspect Ratio", "Favourite" };
+  static const char *ICON[CTL_N] = { "pause", "live_restart", "live_edge", "live_grid", "live_list",
+                                     "subtitles", "audio", "aspect", "live_star" };
+  static const char *NAME[CTL_N] = { "Pause", "Start over", "Go live", "Guide", "Channels", "Subtitles",
+                                     "Audio", "Aspect Ratio", "Favourite" };
   float step = CTL_D + CTL_GAP, x0 = x + CTL_D * 0.5f;
-  int fav = iptv_is_favourite(tuned);
-  for (int i = 0; i < CTL_N; i++) {
-    float f = ctlFocus[i], cx = x0 + i * step, luma = 0.94f + (0.13f - 0.94f) * f;
-    const char *icon = i == CTL_FAV && fav ? "live_star_fill" : ICON[i];
+  int fav = iptv_is_favourite(tuned), ids[CTL_N], n = shownControls(ids);
+  for (int k = 0; k < n; k++) {
+    int i = ids[k];
+    float f = ctlFocus[i], cx = x0 + k * step, luma = 0.94f + (0.13f - 0.94f) * f;
+    const char *icon = i == CTL_FAV && fav ? "live_star_fill" : i == CTL_PLAY && paused ? "play" : ICON[i];
     if (f > 0.004f)
       gfx_color((GfxRect){ cx - CTL_D * 0.5f, cy - CTL_D * 0.5f, CTL_D, CTL_D }, 0.5f, 1, 1, 1, f * a);
     gfx_icon((GfxRect){ cx - CTL_ICON * 0.5f, cy - CTL_ICON * 0.5f, CTL_ICON, CTL_ICON }, icon,
              luma, luma, luma, a * 0.94f);
   }
   // The label, "Remove favourite" when that is what OK would do.
-  for (int i = 0; i < CTL_N; i++) {
+  for (int k = 0; k < n; k++) {
+    int i = ids[k];
     float f = ctlFocus[i];
-    const char *name = i == CTL_FAV && fav ? "Remove favourite" : NAME[i];
+    const char *name = i == CTL_FAV && fav ? "Remove favourite" : i == CTL_PLAY && paused ? "Play" : NAME[i];
     if (f > 0.004f) {
       TxtLine label = txt_line(TXT_PLR_TIP, name, 255, 255, 255, 255);
       TxtLine sh = txt_line(TXT_PLR_TIP, name, 0, 0, 0, 255);
-      float lx = x0 + i * step - label.w * 0.5f;
+      float lx = x0 + k * step - label.w * 0.5f;
       float ly = cy + CTL_D * 0.5f + CTL_TIP + (1.0f - f) * 4.0f;
       txt_draw_alpha(sh, lx, ly + 2.0f, a * 0.80f * f);
       txt_draw_alpha(label, lx, ly, a * 0.92f * f);
@@ -2394,8 +2806,10 @@ static void drawBlock(float a) {
   const IptvChannel *c = chan(tuned);
   long long now = nowMinute();
   int walking = ov == OV_WALK && walkPg >= 0 && l && walkPg < l->nPg && l->pg[walkPg].channel == tuned;
-  const IptvProgramme *pg = walking ? &l->pg[walkPg] : programmeAt(tuned, now);
-  const IptvProgramme *next = walking ? NULL : programmeAfter(tuned, now, 0);
+  // Rewound, the bar is about what is on screen, not what is on now.
+  double at = shownAt();
+  const IptvProgramme *pg = walking ? &l->pg[walkPg] : programmeAt(tuned, (long long)at);
+  const IptvProgramme *next = walking ? NULL : programmeAfter(tuned, (long long)at, 0);
   float x = 96.0f, right = NV_SCREEN_W - 96.0f;
   float ctlY = NV_SCREEN_H - 64.0f - CTL_D * 0.5f; // the controls' centre: the film player's row
   float trackY = ctlY - CTL_D * 0.5f - 26.0f - 12.0f;   // the progress track's centre
@@ -2430,7 +2844,10 @@ static void drawBlock(float a) {
         kx += inkMid(TXT_LIVE_NAME, "\xC2\xB7", 0x4D535A, kx, kickY, 30.0f, a) + 14.0f;
         kx += inkMid(TXT_LIVE_NAME, c->name, 0x9AA1A9, kx, kickY, 520.0f, a) + 14.0f;
       }
-      streamTag(kx, kickY, a);
+      kx += streamTag(kx, kickY, a) + 14.0f;
+      // Paused with nothing to keep the stream in: say what resuming will do.
+      if (paused && srcKind == SRC_LIVE && !iptv_has_archive(tuned, (long long)playAt()))
+        inkMid(TXT_LIVE_NAME, "No pause buffer \xC2\xB7 resumes live", 0x8A9199, kx, kickY, 520.0f, a);
     } }
   // The right of the identity row: NEXT, or in the walk, the reminder.
   if (walking) {
@@ -2449,23 +2866,52 @@ static void drawBlock(float a) {
     { float w = tagWidth("NEXT");
       txt_tracking(TXT_LIVE_TAG, "NEXT", HEXI(0x7C838B), right - w, idBottom - 4.0f - t.h - 8.0f - 16.0f, a, 2.2f); }
   }
-  // The programme: no playhead dot and no buffered band — this is live, and
-  // the dot is the app's promise that a thing can be moved. Clock times either
-  // side: a programme, not a file.
+  // The programme. At plain live there is no playhead dot and no band — the
+  // dot is the app's promise that a thing can be moved, and live cannot be.
+  // With a past to move through (the pause buffer, catch-up) it can: then the
+  // dot is the picture's instant, the lighter band what can be reached, and a
+  // tick where now is. Clock times either side: a programme, not a file.
   if (pg) {
-    float span = (float)(pg->stop - pg->start), frac = walking ? 0.0f : (float)(now - pg->start) / span;
+    float span = (float)(pg->stop - pg->start);
+    float frac = walking ? 0.0f : (float)((at - (double)pg->start) / span);
     float fa = walking ? a * 0.4f : a;
     float tx = x + 62.0f + 20.0f, tw = right - 62.0f - 20.0f - tx;
+    int movable = !walking && ownsVideo() && (canRewind() || !atLive() || paused || scrubbing);
     clockText(pg->start, a1, sizeof a1); clockText(pg->stop, b1, sizeof b1);
     inkMid(TXT_LIVE_META, a1, 0x8A9199, x, trackY, 80.0f, fa);
     { TxtLine t = txt_line(TXT_LIVE_META, b1, HEXI(0x8A9199), 255);
       txt_draw_alpha(t, right - t.w, trackY - t.h * 0.5f, fa); }
-    progressBar(tx, trackY - 4.0f, tw, 8.0f, frac, walking ? 0.16f : 0.22f, fa);
+    if (movable) {
+      double floor = rewindFloor(), wn = wallNow();
+      float lo = (float)((floor - (double)pg->start) / span), hi = (float)((wn - (double)pg->start) / span);
+      if (lo < 0) lo = 0;
+      if (hi > 1) hi = 1;
+      gfx_color((GfxRect){ tx, trackY - 4.0f, tw, 8.0f }, 0.5f, 1, 1, 1, 0.12f * fa);
+      if (hi > lo) gfx_color((GfxRect){ tx + tw * lo, trackY - 4.0f, tw * (hi - lo), 8.0f }, 0.5f, 1, 1, 1, 0.16f * fa);
+      progressBar(tx, trackY - 4.0f, tw, 8.0f, frac, 0.0f, fa);
+      if (hi < 1.0f && hi > 0.0f)
+        gfx_color((GfxRect){ tx + tw * hi - 1.5f, trackY - 9.0f, 3.0f, 18.0f }, 0.5f, 1, 1, 1, 0.85f * fa);
+      { float cxDot = tx + tw * (frac < 0 ? 0 : frac > 1 ? 1 : frac), d = scrubbing ? 26.0f : 22.0f;
+        gfx_color((GfxRect){ cxDot - d * 0.5f, trackY - d * 0.5f, d, d }, 0.5f, 1, 1, 1, fa); }
+    } else {
+      progressBar(tx, trackY - 4.0f, tw, 8.0f, frac, walking ? 0.16f : 0.22f, fa);
+    }
     if (!walking) {
-      char in[32];
+      char in[64];
       TxtLine t;
       float fx;
-      snprintf(in, sizeof in, "%lld min in", (now - pg->start) / 60);
+      double back = wallNow() - at;
+      if (scrubbing || back >= LIVE_EDGE_S) {
+        char c1[16];
+        clockText((long long)at, c1, sizeof c1);
+        if (back >= 3600.0) snprintf(in, sizeof in, "%s \xC2\xB7 %ld h %02ld min behind live", c1,
+                                     (long)(back / 3600.0), (long)(back / 60.0) % 60);
+        else if (back >= 60.0) snprintf(in, sizeof in, "%s \xC2\xB7 %ld min behind live", c1, (long)(back / 60.0));
+        else if (back >= LIVE_EDGE_S) snprintf(in, sizeof in, "%s \xC2\xB7 %ld s behind live", c1, (long)back);
+        else snprintf(in, sizeof in, "%s \xC2\xB7 live", c1);
+      } else {
+        snprintf(in, sizeof in, "%lld min in", (now - pg->start) / 60);
+      }
       t = txt_line(TXT_SRC_STATE, in, HEXI(0xE4E7EA), 255);
       fx = tx + tw * (frac < 0 ? 0 : frac > 1 ? 1 : frac) - t.w * 0.5f;
       if (fx < tx) fx = tx;

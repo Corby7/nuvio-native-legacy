@@ -14,6 +14,7 @@
 #include "phonelink.h"
 #include "pointer.h"
 #include "tex_cache.h"
+#include "settings.h"
 #include "text.h"
 #include "tracks.h"
 #include <SDL2/SDL_image.h>
@@ -25,9 +26,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static SDL_Window *win;
 const char *video_stub_last_url(void);   // tests/video_stub.c
+
+// tests/video_stub.c's inspection hooks.
+const char *video_stub_url(void);
+int video_stub_plays(void);
+int video_stub_paused(void);
 
 static void key(SDL_Keycode k) {
   SDL_Event e;
@@ -67,6 +74,25 @@ static void frames(int n, const char *capture) {
     SDL_GL_SwapWindow(win);
     SDL_Delay(4);
   }
+}
+
+// Frames for `ms` of real time: the screen's timers run on the clock.
+static void waitMs(Uint32 ms) {
+  Uint32 t0 = SDL_GetTicks();
+  while (SDL_GetTicks() - t0 < ms) frames(1, NULL);
+}
+
+static void number(const char *n) {
+  for (; *n; n++) key(SDLK_0 + (*n - '0'));
+  waitMs(1800);   // the digits land when the typing stops
+}
+
+// The byte a pause-buffer URL starts at.
+static long long tsOffset(const char *u) {
+  const char *p = strstr(u, "/ts/");
+  unsigned s; long long b;
+  assert(p && sscanf(p, "/ts/%u/%lld", &s, &b) == 2);
+  return b;
 }
 
 // The phone's side: one form POST to the TV's listener on loopback. Returns
@@ -126,6 +152,8 @@ int main(int argc, char **argv) {
   ime_start(win);
 
   // --- The guide ---------------------------------------------------------------
+  // The pause buffer on (Settings → Playback → Live TV), for the local TS channel.
+  settings_set_live(15, 0);
   iptvui_start();
   assert(iptv_configured());
   WAIT_FOR(iptv_guide_state() == IPTV_READY || iptv_guide_state() == IPTV_FAILED);
@@ -133,7 +161,8 @@ int main(int argc, char **argv) {
   assert(iptv_guide_state() == IPTV_READY);
   frames(2, NULL);   // the list lands on the next iptv_step
   { const IptvList *l = iptv_list();
-    assert(l && l->nCh == 48 && l->nGroups == 4);
+    assert(l && l->nCh == 49 && l->nGroups == 5);
+    assert(l->ch[12].catchup == IPTV_CATCHUP_SHIFT && !l->ch[0].catchup);
     assert(l->ch[0].nPg > 0); }
   frames(40, NULL);
   // The landing is the channel list (Y2).
@@ -281,7 +310,7 @@ int main(int argc, char **argv) {
   frames(30, NULL);
   assert(iptvui_fullscreen());
   // From the bar's Channels control; BACK returns to the bar.
-  key(SDLK_RETURN); key(SDLK_RETURN); key(SDLK_RIGHT); key(SDLK_RETURN);
+  key(SDLK_RETURN); key(SDLK_RETURN); key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
   snprintf(path, sizeof path, "%s/nuvio-live-channels-from-bar.bmp", out); frames(30, path);
   key(SDLK_AC_BACK);
   snprintf(path, sizeof path, "%s/nuvio-live-channels-back-to-bar.bmp", out); frames(30, path);
@@ -296,6 +325,117 @@ int main(int argc, char **argv) {
   frames(10, NULL);
   key(SDLK_AC_BACK);
   assert(!iptvui_fullscreen());
+
+  // --- Pause and rewind ------------------------------------------------------------
+  // 1 · A channel with neither a pause buffer (HLS) nor catch-up: a pause is
+  // honest about resuming live, and a long one does.
+  number("102");
+  assert(iptvui_fullscreen() && strstr(video_stub_url(), "/live/2.m3u8"));
+  key(SDLK_RETURN);            // the controls, Pause first
+  key(SDLK_RETURN);            // pause
+  assert(video_stub_paused());
+  snprintf(path, sizeof path, "%s/nuvio-live-paused.bmp", out); frames(30, path);
+  { int plays = video_stub_plays();
+    waitMs(5300);
+    key(SDLK_RETURN);          // play, past the short-pause window: a new live load
+    assert(video_stub_plays() == plays + 1 && !video_stub_paused()); }
+  key(SDLK_AC_BACK); key(SDLK_AC_BACK); frames(10, NULL);
+  key(SDLK_AC_BACK);
+  assert(!iptvui_fullscreen());
+
+  // 2 · Catch-up (Sport keeps a day, "shift"): ◀ on the bar rewinds into the
+  // archive, OK lands it; Go live and Start over from the controls.
+  number("113");
+  assert(iptvui_fullscreen() && !strstr(video_stub_url(), "utc="));
+  key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_LEFT);
+  snprintf(path, sizeof path, "%s/nuvio-live-scrub.bmp", out); frames(8, path);
+  key(SDLK_RETURN);
+  assert(strstr(video_stub_url(), "/live/13.m3u8?utc=") && strstr(video_stub_url(), "&lutc="));
+  { long long utc = atoll(strstr(video_stub_url(), "utc=") + 4), now = (long long)time(NULL);
+    assert(utc < now - 100 && utc > now - 3600); }
+  snprintf(path, sizeof path, "%s/nuvio-live-catchup.bmp", out); frames(30, path);
+  key(SDLK_RETURN);            // the controls: Pause, Start over, Go live, …
+  key(SDLK_RIGHT); key(SDLK_RIGHT);
+  snprintf(path, sizeof path, "%s/nuvio-live-catchup-controls.bmp", out); frames(20, path);
+  key(SDLK_RETURN);            // Go live
+  assert(!strstr(video_stub_url(), "utc="));
+  key(SDLK_RIGHT); key(SDLK_RETURN);   // Start over
+  { const IptvList *l = iptv_list();
+    long long now = (long long)time(NULL), utc;
+    int p = iptv_programme_at(l, 12, now);
+    assert(p >= 0 && strstr(video_stub_url(), "utc="));
+    utc = atoll(strstr(video_stub_url(), "utc=") + 4);
+    assert(utc == l->pg[p].start); }
+  // Out to the guide from the controls, still on Start over (then Go live,
+  // Guide), then ◀ from now: the programme before, which the archive keeps;
+  // OK plays it.
+  key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
+  assert(!iptvui_fullscreen());
+  key(SDLK_LEFT);
+  snprintf(path, sizeof path, "%s/nuvio-live-guide-catchup.bmp", out); frames(30, path);
+  key(SDLK_RETURN);
+  assert(iptvui_fullscreen() && strstr(video_stub_url(), "utc="));
+  { const IptvList *l = iptv_list();
+    long long utc = atoll(strstr(video_stub_url(), "utc=") + 4);
+    int p = iptv_programme_at(l, 12, utc);
+    assert(p >= 0 && l->pg[p].start == utc && l->pg[p].stop <= (long long)time(NULL) + 1); }
+  key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);
+  assert(!iptvui_fullscreen());
+
+  // 3 · The pause buffer, on the local MPEG-TS channel: the pipeline plays the
+  // loopback; a pause resumes in place; ◀ rewinds within what was kept.
+  number("149");
+  WAIT_FOR(strstr(video_stub_url(), "/ts/"));
+  { long long live = tsOffset(video_stub_url()), back;
+    int plays;
+    waitMs(3000);
+    key(SDLK_RETURN); key(SDLK_RETURN);        // pause
+    assert(video_stub_paused());
+    plays = video_stub_plays();
+    waitMs(6500);                              // longer than a plain live pause may be
+    key(SDLK_RETURN);                          // play: the same load, resumed
+    assert(!video_stub_paused() && video_stub_plays() == plays);
+    waitMs(10000);
+    key(SDLK_AC_BACK);                         // the block, not the controls
+    key(SDLK_LEFT);                            // back as far as the buffer goes
+    key(SDLK_RETURN);
+    back = tsOffset(video_stub_url());
+    // Back to the oldest kept: where playing began, within a sample (0.5 s).
+    assert(video_stub_plays() == plays + 1 && back < live + 188 * 5000);
+    snprintf(path, sizeof path, "%s/nuvio-live-buffer.bmp", out); frames(30, path);
+    key(SDLK_RETURN); key(SDLK_RIGHT);
+    snprintf(path, sizeof path, "%s/nuvio-live-buffer-controls.bmp", out); frames(20, path);
+    // Start over is not offered: the buffer began mid-programme. Go live is.
+    key(SDLK_RETURN);
+    assert(tsOffset(video_stub_url()) > back + 188 * 1000); }
+  key(SDLK_AC_BACK); key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);
+  assert(!iptvui_fullscreen());
+
+  // 4 · Preview on focus: resting on a channel plays it, without counting it
+  // as watched until OK.
+  settings_set_live(15, 1);
+  key(SDLK_AC_BACK);           // the guide (from the catch-up above) back to the list
+  { char *before = data_read("iptv_recent.txt"), *after;
+    const char *was;
+    char seen[256];
+    snprintf(seen, sizeof seen, "%s", video_stub_url());
+    key(SDLK_UP);              // the list's focus is on 149, its last row
+    waitMs(1400);
+    was = video_stub_url();
+    assert(strcmp(seen, was));                 // it tuned
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));            // and did not count it
+    free(after);
+    snprintf(path, sizeof path, "%s/nuvio-live-preview.bmp", out); frames(20, path);
+    key(SDLK_RETURN);
+    assert(iptvui_fullscreen());
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after));             // OK does
+    free(before); free(after); }
+  key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);
+  assert(!iptvui_fullscreen());
+  key(SDLK_AC_BACK);           // stop the preview, as Back does in the list
+  settings_set_live(15, 0);
 
   // --- A container the TV refuses -----------------------------------------------------
   // HLS errors: the channel retries as TS on its own, and the next tune starts
@@ -319,7 +459,7 @@ int main(int argc, char **argv) {
 
   // --- Setup ------------------------------------------------------------------------
   // To the header, RIGHT to Source, OK; then Xtream Codes.
-  for (int i = 0; i < 12; i++) key(SDLK_UP);
+  for (int i = 0; i < 60; i++) key(SDLK_UP);
   key(SDLK_RIGHT);
   key(SDLK_RETURN);
   key(SDLK_RIGHT);
@@ -349,10 +489,11 @@ int main(int argc, char **argv) {
     frames(3, NULL);
     assert(phonelink_state() == PL_OFF);             // saved, so the form left
     assert(iptv_source()->kind == IPTV_SRC_M3U);
-    WAIT_FOR(iptv_list() && iptv_list()->nCh == 48);  // and the channels load again
+    WAIT_FOR(iptv_list() && iptv_list()->nCh == 49);  // and the channels load again
   }
 
   iptvui_shutdown();
-  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), setup.");
+  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), "
+       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, setup, phone form.");
   return 0;
 }

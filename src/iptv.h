@@ -83,4 +83,11 @@ const char *iptv_play_url(int ch, char *dst, unsigned size);
 // one often plays the other. NULL when the address is not of that shape.
 const char *iptv_play_url_alt(int ch, char *dst, unsigned size);
 
+// CATCH-UP. Whether channel `ch`'s archive reaches back to unix time `t` (and
+// `t` is in the past), and the URL that plays it from `start` to `stop` — the
+// programme's bounds, or any instant and an hour past it. NULL when the channel
+// has no archive or the URL does not fit.
+int iptv_has_archive(int ch, long long t);
+const char *iptv_archive_url(int ch, long long start, long long stop, char *dst, unsigned size);
+
 #endif

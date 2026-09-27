@@ -39,7 +39,8 @@ job was done by `libAcbAPI`, which does not exist from webOS 5 onwards.
 - Trakt and Simkl linked from the TV itself, through their device-code flows
 - Continue Watching, library, search, collections, director pages, settings
 - **Live TV** (in progress): an M3U or Xtream Codes source with an XMLTV guide,
-  favourites, zapping and a channel banner — see [IPTV.md](IPTV.md)
+  favourites, zapping and a channel banner; catch-up, pause and rewind (provider
+  archive or an opt-in pause buffer) and preview while browsing — see [IPTV.md](IPTV.md)
 - **The home is the owner's home**: the addons' catalogues, the owner's own
   collections, and both in the order chosen in the web app — hidden rows hidden,
   renamed rows renamed, pinned collections first

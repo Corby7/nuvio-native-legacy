@@ -26,6 +26,7 @@
 // worth reading about) to a day and a bit ahead.
 #define IPTV_GUIDE_BEHIND_S   (3 * 3600)
 #define IPTV_GUIDE_AHEAD_S    (30 * 3600)
+#define IPTV_GUIDE_ARCHIVE_S  (24 * 3600)   // how far back, when there is catch-up
 // A guide older than this is fetched again when the screen is opened.
 #define IPTV_GUIDE_STALE_MS   (4u * 3600u * 1000u)
 #define IPTV_MAX_FAVOURITES   500
@@ -251,6 +252,106 @@ static void post(IptvList *l, unsigned gen) {
   if (l) { iptv_list_free(l); free(l); }
 }
 
+// --- Xtream's archive ---------------------------------------------------------------
+// Xtream's m3u_plus says nothing about catch-up; player_api.php does. Two calls:
+// the account's server_info, whose local clock is what timeshift URLs are
+// written in, and get_live_streams, which marks each stream's tv_archive and how
+// many days of it. Both are best-effort: a panel without them simply has no
+// catch-up.
+typedef struct { long id; int days; } Archive;
+typedef struct { Archive *a; int n; int offset; int known; } Archives;
+
+// The number after "key": in [p, e), quoted or not. -1 when absent.
+static long jsonNumber(const char *p, const char *e, const char *key) {
+  size_t k = strlen(key);
+  for (const char *q = p; q && q + k < e; q++) {
+    q = memchr(q, '"', (size_t)(e - q));
+    if (!q || q + k + 2 >= e) return -1;
+    if (!strncmp(q + 1, key, k) && q[k + 1] == '"') {
+      const char *v = q + k + 2;
+      while (v < e && (*v == ':' || isspace((unsigned char)*v) || *v == '"')) v++;
+      return (v < e && isdigit((unsigned char)*v)) ? strtol(v, NULL, 10) : -1;
+    }
+  }
+  return -1;
+}
+
+static int archiveCmp(const void *a, const void *b) {
+  long x = ((const Archive *)a)->id, y = ((const Archive *)b)->id;
+  return x < y ? -1 : x > y;
+}
+
+static void fetchArchives(const IptvSource *src, Archives *out) {
+  char base[600], u[400], p[400], url[1600];
+  char *text;
+  memset(out, 0, sizeof *out);
+  if (src->kind != IPTV_SRC_XTREAM) return;
+  serverBase(src->server, base, sizeof base);
+  urlEncode(src->user, u, sizeof u);
+  urlEncode(src->pass, p, sizeof p);
+  snprintf(url, sizeof url, "%s/player_api.php?username=%s&password=%s", base, u, p);
+  if ((text = net_download(url, 20))) {
+    const char *t = strstr(text, "\"time_now\"");
+    long stamp = jsonNumber(text, text + strlen(text), "timestamp_now");
+    if (t && stamp > 0) {
+      int y, mo, d, h, mi, se;
+      t = strchr(t + 10, '"');
+      if (t && sscanf(t + 1, "%d-%d-%d %d:%d:%d", &y, &mo, &d, &h, &mi, &se) == 6) {
+        char xml[32];
+        long long local;
+        snprintf(xml, sizeof xml, "%04d%02d%02d%02d%02d%02d +0000", y, mo, d, h, mi, se);
+        local = iptv_xmltv_time(xml);
+        // Rounded to the quarter hour: the two readings are a network trip apart.
+        if (local > 0) {
+          long long diff = local - stamp;
+          out->offset = (int)((diff >= 0 ? diff + 450 : diff - 450) / 900 * 900);
+        }
+      }
+    }
+    free(text);
+  }
+  snprintf(url, sizeof url, "%s/player_api.php?username=%s&password=%s&action=get_live_streams",
+           base, u, p);
+  if (!(text = net_download(url, 60))) return;
+  out->known = 1;
+  { const char *q = text, *end = text + strlen(text);
+    int cap = 0;
+    while ((q = strstr(q, "\"stream_id\""))) {
+      const char *next = strstr(q + 11, "\"stream_id\"");
+      const char *e = next ? next : end;
+      long id = jsonNumber(q, e, "stream_id"), on = jsonNumber(q, e, "tv_archive");
+      long days = jsonNumber(q, e, "tv_archive_duration");
+      if (id >= 0 && on > 0) {
+        if (out->n == cap) {
+          Archive *g = realloc(out->a, (size_t)(cap ? cap * 2 : 256) * sizeof *g);
+          if (!g) break;
+          out->a = g; cap = cap ? cap * 2 : 256;
+        }
+        out->a[out->n].id = id;
+        out->a[out->n].days = days > 0 ? (int)days : 1;
+        out->n++;
+      }
+      q = e;
+    }
+  }
+  free(text);
+  if (out->n) qsort(out->a, (size_t)out->n, sizeof *out->a, archiveCmp);
+  printf("[iptv] xtream: %d streams with an archive, server clock %+ds\n", out->n, out->offset);
+}
+
+static void applyArchives(IptvList *l, const Archives *ar) {
+  if (!l || !ar->known) return;
+  l->serverOffset = ar->offset;
+  for (int i = 0; i < l->nCh; i++) {
+    IptvChannel *c = &l->ch[i];
+    Archive key, *hit;
+    if (c->catchup || !iptv_xtream_parts(c->url, NULL, 0, NULL, 0, NULL, 0, &key.id, NULL, 0))
+      continue;
+    hit = ar->n ? bsearch(&key, ar->a, (size_t)ar->n, sizeof *ar->a, archiveCmp) : NULL;
+    if (hit) { c->catchup = IPTV_CATCHUP_XC; c->catchupDays = hit->days; }
+  }
+}
+
 static IptvList *parsePlaylist(const char *text) {
   IptvList *l = malloc(sizeof *l);
   if (!l) return NULL;
@@ -308,7 +409,9 @@ static void *loader(void *arg) {
   IptvList *l;
   int fromCache = 0;
   char prefer[8] = "";
+  Archives archives;
   free(arg);
+  memset(&archives, 0, sizeof archives);
   if (xtreamFromUrl(&job.src, &job.src, prefer, sizeof prefer))
     printf("[iptv] the playlist address is an Xtream login; loading it as one\n");
 
@@ -355,6 +458,9 @@ static void *loader(void *arg) {
     } else {
       printf("[iptv] %d channels, %d groups\n", l->nCh, l->nGroups);
       data_write(IPTV_CACHE_FILE, text);
+      fetchArchives(&job.src, &archives);
+      if (job.gen != atomic_load(&generation)) { iptv_list_free(l); free(l); goto out; }
+      applyArchives(l, &archives);
       post(l, job.gen);
       atomic_store(&state, IPTV_READY);
     } }
@@ -363,6 +469,12 @@ static void *loader(void *arg) {
   // channel indices come out identical, which is what lets the screen keep its
   // focus across the swap.
   { IptvList *probe = parsePlaylist(text);
+    long long behind = IPTV_GUIDE_BEHIND_S;
+    applyArchives(probe, &archives);
+    // With an archive, the past is watchable: keep as much of it as the guide
+    // has, up to a day (two would double the guide's memory for little use).
+    if (probe) for (int i = 0; i < probe->nCh; i++)
+      if (probe->ch[i].catchup) { behind = IPTV_GUIDE_ARCHIVE_S; break; }
     guideUrl(&job.src, probe, gurl, sizeof gurl);
     if (!gurl[0]) {
       setStatus("");
@@ -381,7 +493,7 @@ static void *loader(void *arg) {
         if (probe) { iptv_list_free(probe); free(probe); }
         goto out;
       }
-      n = (xml && probe) ? iptv_parse_xmltv(probe, xml, now - IPTV_GUIDE_BEHIND_S,
+      n = (xml && probe) ? iptv_parse_xmltv(probe, xml, now - behind,
                                             now + IPTV_GUIDE_AHEAD_S) : 0;
       free(xml);
       if (n > 0) {
@@ -400,7 +512,7 @@ static void *loader(void *arg) {
     }
   }
 out:
-  free(text); free(cached);
+  free(text); free(cached); free(archives.a);
   fflush(stdout);
   atomic_store(&busy, 0);
   return NULL;
@@ -617,6 +729,29 @@ void iptv_note_watched(int ch) {
   }
   recents[0] = name;
   writeNames(IPTV_RECENT_FILE, recents, nRecents);
+}
+
+int iptv_has_archive(int ch, long long t) {
+  const IptvChannel *c;
+  long long now = (long long)time(NULL);
+  if (!live || ch < 0 || ch >= live->nCh) return 0;
+  c = &live->ch[ch];
+  if (!c->catchup) return 0;
+  // A minute of margin at the far end: the oldest minute is the next to go.
+  return t < now && t >= now - (long long)c->catchupDays * 86400 + 60;
+}
+
+const char *iptv_archive_url(int ch, long long start, long long stop, char *dst, unsigned size) {
+  const IptvChannel *c;
+  char raw[2048];
+  long long now = (long long)time(NULL);
+  if (!live || ch < 0 || ch >= live->nCh) return NULL;
+  c = &live->ch[ch];
+  if (stop <= start) stop = start + 3600;
+  if (!iptv_catchup_url(c, start, stop, now, live->serverOffset, raw, sizeof raw)) return NULL;
+  if (c->headers[0] && !strstr(raw, ".m3u8")) return proxy_wrap(raw, c->headers, dst, size);
+  if (snprintf(dst, size, "%s", raw) >= (int)size) return NULL;
+  return dst;
 }
 
 const char *iptv_play_url(int ch, char *dst, unsigned size) {

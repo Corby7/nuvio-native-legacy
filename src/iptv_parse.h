@@ -37,10 +37,30 @@ typedef struct {
   const char *headers;   // "Name: Value\n…" from #EXTVLCOPT / #EXTHTTP, "" when none
   int number;            // tvg-chno when given, else its 1-based position
   int catchupDays;       // catchup-days / tvg-rec, 0 when none
+  int catchup;           // IptvCatchup: how to ask for the past, NONE when it cannot be
+  const char *catchupSource;   // catchup-source, the template; "" when none
   int groupIndex;        // into IptvList.groups, -1 when ungrouped
   // The channel's programmes, sorted by start: pg[firstPg .. firstPg+nPg-1].
   int firstPg, nPg;
 } IptvChannel;
+
+// CATCH-UP, the provider's archive: how a channel's past is asked for. These are
+// the conventions Kodi's IPTV Simple client reads, which is what providers write
+// playlists for:
+//   catchup="default"    catchup-source is the whole archive URL, a template
+//   catchup="append"     catchup-source is appended to the stream URL
+//   catchup="shift"      the stream URL + ?utc={utc}&lutc={lutc}
+//   catchup="flussonic"  (or "fs") …/index.m3u8 -> …/index-{utc}-{duration}.m3u8,
+//                        …/mpegts -> …/timeshift_abs-{utc}.ts
+//   catchup="xc"         Xtream Codes: …/live/u/p/1.ts -> …/timeshift/u/p/{minutes}/
+//                        {Y}-{m}-{d}:{H}-{M}/1.ts, in the SERVER's local time
+// The #EXTM3U line may carry catchup, catchup-source and catchup-days as
+// defaults for every channel. A channel with catchup-days and no mode gets
+// "default" when it has a source, "xc" when its URL is Xtream-shaped.
+typedef enum {
+  IPTV_CATCHUP_NONE, IPTV_CATCHUP_DEFAULT, IPTV_CATCHUP_APPEND, IPTV_CATCHUP_SHIFT,
+  IPTV_CATCHUP_FLUSSONIC, IPTV_CATCHUP_XC
+} IptvCatchup;
 
 typedef struct {
   int channel;                 // index into IptvList.ch
@@ -58,6 +78,12 @@ typedef struct {
   IptvProgramme *pg; int nPg, capPg;
   const char **groups; int nGroups, capGroups;
   char epgUrl[1024];           // from the #EXTM3U header, "" when none
+  // The #EXTM3U line's catch-up defaults.
+  int catchupMode, catchupDays;
+  char catchupSource[1024];
+  // Seconds the Xtream server's clock is ahead of UTC: its timeshift URLs are
+  // written in its own local time. iptv.c measures it; 0 otherwise.
+  int serverOffset;
   IptvBlock *arena;
 } IptvList;
 
@@ -89,6 +115,25 @@ int iptv_programme_after(const IptvList *l, int ch, long long t);
 // link against, the TV has one. NULL when `in` is not compressed or there is no
 // libz; *outN gets the size.
 char *iptv_gunzip(const char *in, long n, long *outN);
+
+// The archive URL for channel `c` from `start` (unix seconds) until `stop`, with
+// `now` for the templates that want it and `serverOffset` for Xtream's local
+// time. 1 when written; 0 when the channel has no catch-up or it does not fit.
+int iptv_catchup_url(const IptvChannel *c, long long start, long long stop,
+                     long long now, int serverOffset, char *dst, size_t size);
+// Expands a catch-up template's placeholders: {utc} {start} ${start} {utcend}
+// {end} ${end} {lutc} {now} ${now} ${timestamp} {timestamp} {duration}
+// {duration:N} {offset:N} ${offset} {Y} {m} {d} {H} {M} {S}, and {utc:FORMAT}
+// {utcend:FORMAT} {lutc:FORMAT} with Y m d H M S in FORMAT. The broken-down
+// fields are in UTC plus `offset` seconds. 0 when `dst` is too small.
+int iptv_catchup_expand(const char *tpl, long long start, long long stop,
+                        long long now, int offset, char *dst, size_t size);
+// "xc", "shift", … as IptvCatchup; NONE for anything unknown.
+int iptv_catchup_mode(const char *s, size_t n);
+// An Xtream stream URL's parts: http://host:port[/live]/user/pass/id[.ext]. 1 when
+// it has that shape. Any pointer may be NULL.
+int iptv_xtream_parts(const char *url, char *origin, size_t no, char *user, size_t nu,
+                      char *pass, size_t np, long *id, char *ext, size_t ne);
 
 // XTREAM CODES' JSON API AS A PLAYLIST. Many panels refuse get.php (the M3U
 // download) and answer only player_api.php, the API every IPTV app uses: the

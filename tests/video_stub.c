@@ -19,28 +19,32 @@ const char *const VIDEO_SUB_COLORS_LABEL[VIDEO_SUB_NCOLORS] = {
 };
 
 static unsigned session, tex;
-static int active;
+static int active, paused, plays;
+static char lastUrl[4200];
 static VideoTrack audio = { "English \xC2\xB7 EAC3 5.1", "en", 1, "", 0 };
 
 int  video_start(void) { return 1; }
 int  video_launch_youtube(const char *id) { (void)id; return 0; }
 // NUVIO_STUB_FAIL: a pipeline that errors on any URL containing it, the way a
-// TV's refuses a container the provider does not really serve. The URL last
-// asked for is kept for the harness to read.
-static char lastUrl[2048], lastErr[128];
+// TV's refuses a container the provider does not really serve.
+static char lastErr[128];
 static int errs;
-const char *video_stub_last_url(void) { return lastUrl; }
 int  video_play(const char *url) {
   const char *fail = getenv("NUVIO_STUB_FAIL");
+  session++; paused = 0; plays++;
   snprintf(lastUrl, sizeof lastUrl, "%s", url ? url : "");
-  session++;
   active = !(fail && *fail && url && strstr(url, fail));
   if (!active) { errs++; snprintf(lastErr, sizeof lastErr, "stub refused %s (code 7)", fail); }
   return 1;
 }
+// For the harnesses: what was last handed over, how many loads, paused or not.
+const char *video_stub_url(void) { return lastUrl; }
+const char *video_stub_last_url(void) { return lastUrl; }
+int video_stub_plays(void) { return plays; }
+int video_stub_paused(void) { return paused; }
 void video_pump(void) {}
 void video_stop(void) { active = 0; }
-void video_pause(int p) { (void)p; }
+void video_pause(int p) { paused = p; }
 void video_fetch(double s) { (void)s; }
 void video_window(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
 void video_window_source(int sx, int sy, int sw, int sh, int x, int y, int w, int h) {
