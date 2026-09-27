@@ -462,6 +462,57 @@ static int tagAttr(const char *a, const char *b, const char *key, char *dst, siz
   return 1;
 }
 
+// Whether [a, b) — the inside of a trailing "(…)" — is a quality tag rather than
+// part of the name: a resolution ("720p", "1080i") or HD / SD / FHD / UHD / 4K.
+static int qualityTag(const char *a, const char *b) {
+  static const char *words[] = { "hd", "sd", "fhd", "uhd", "4k" };
+  size_t n = (size_t)(b - a), d = 0;
+  while (d < n && isdigit((unsigned char)a[d])) d++;
+  if (d && d + 1 == n && (a[d] == 'p' || a[d] == 'P' || a[d] == 'i' || a[d] == 'I')) return 1;
+  for (size_t i = 0; i < sizeof words / sizeof *words; i++)
+    if (strlen(words[i]) == n && !strncasecmp(a, words[i], n)) return 1;
+  return 0;
+}
+
+// A channel name without the tags playlists hang off its end, into `dst`.
+// iptv-org names a third of its channels "00s Replay (720p) [Geo-blocked]", and
+// the guides that carry them say "00s Replay": matched as written, those
+// channels got no programmes. A square bracket is always a tag ("[Not 24/7]");
+// a parenthesis only when qualityTag says so — "(US)" and "(East)" are what tell
+// two channels apart. Returns 1 when something was cut and a name is left.
+static int bareName(const char *s, char *dst, size_t size) {
+  size_t n = strlen(s);
+  int cut = 0;
+  if (n >= size) n = size - 1;
+  memcpy(dst, s, n); dst[n] = 0;
+  for (;;) {
+    char close, *o;
+    while (n && isspace((unsigned char)dst[n - 1])) dst[--n] = 0;
+    if (!n || ((close = dst[n - 1]) != ')' && close != ']')) break;
+    dst[n - 1] = 0;
+    o = strrchr(dst, close == ')' ? '(' : '[');
+    dst[n - 1] = close;
+    if (!o || o == dst || (close == ')' && !qualityTag(o + 1, dst + n - 1))) break;
+    n = (size_t)(o - dst); dst[n] = 0; cut = 1;
+  }
+  return cut && n;
+}
+
+// The guide's <icon src="…"> for a channel whose playlist line has no tvg-logo:
+// iptv-org's source lists carry none, and the guides that match them do. Every
+// channel chained to `ch` that has no logo of its own gets it.
+static void takeIcon(IptvList *l, int ch, const int *link, const char *a, const char *b) {
+  const char *s = findIn(a, b, "<icon"), *e, *logo = NULL;
+  char src[1024];
+  if (!s || !(e = memchr(s, '>', (size_t)(b - s)))) return;
+  if (!tagAttr(s, e, "src", src, sizeof src) || !src[0]) return;
+  for (int k = ch; k >= 0; k = link[k])
+    if (!l->ch[k].logo[0]) {
+      if (!logo) logo = arenaDup(l, src, strlen(src));
+      l->ch[k].logo = logo;
+    }
+}
+
 static int byChannelStart(const void *x, const void *y) {
   const IptvProgramme *a = x, *b = y;
   if (a->channel != b->channel) return a->channel < b->channel ? -1 : 1;
@@ -511,6 +562,15 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
     mapPut(&byName, l->ch[i].tvgName, i);
     mapPut(&byName, l->ch[i].name, i);
   }
+  // The same names with their tags cut, after every name as written: a channel
+  // really called "News (HD)" keeps that key over another's "News HD (HD)".
+  for (int i = 0; i < l->nCh; i++) {
+    char bare[256];
+    if (bareName(l->ch[i].tvgName, bare, sizeof bare))
+      mapPut(&byName, arenaDup(l, bare, strlen(bare)), i);
+    if (bareName(l->ch[i].name, bare, sizeof bare))
+      mapPut(&byName, arenaDup(l, bare, strlen(bare)), i);
+  }
   memset(&byXml, 0, sizeof byXml);
 
   // Pass 1: <channel id="…"><display-name>…</display-name></channel>. A channel
@@ -526,7 +586,9 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
     end = findIn(tagEnd, xmlEnd, "</channel>");
     if (!end) end = tagEnd;
     tagAttr(p, tagEnd, "id", id, sizeof id);
-    if (id[0] && mapGet(&byId, id, strlen(id)) < 0) {
+    if (id[0] && (ch = mapGet(&byId, id, strlen(id))) >= 0) {
+      takeIcon(l, ch, link, tagEnd, end);
+    } else if (id[0]) {
       for (const char *d = tagEnd; d && d < end; ) {
         const char *s = findIn(d, end, "<display-name");
         const char *e;
@@ -538,7 +600,11 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
           if (n >= sizeof name) n = sizeof name - 1;
           memcpy(name, s, n); name[n] = 0;
           iptv_xml_unescape(name);
-          ch = mapGet(&byName, name, strlen(name)); }
+          ch = mapGet(&byName, name, strlen(name));
+          if (ch < 0) {
+            char bare[256];
+            if (bareName(name, bare, sizeof bare)) ch = mapGet(&byName, bare, strlen(bare));
+          } }
         if (ch >= 0) break;
         d = e;
       }
@@ -546,6 +612,7 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
         xmlIds[nXml].id = arenaDup(l, id, strlen(id));
         xmlIds[nXml++].ch = ch;
       }
+      if (ch >= 0) takeIcon(l, ch, link, tagEnd, end);
     }
     p = end;
   }

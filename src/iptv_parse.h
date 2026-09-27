@@ -69,8 +69,9 @@ void iptv_list_free(IptvList *l);
 int iptv_parse_m3u(IptvList *l, const char *text);
 
 // Reads the programmes in `xml` that overlap [from, to) into `l`, matched to
-// its channels by tvg-id, then by name. Replaces any guide already attached.
-// Returns how many programmes were kept.
+// its channels by tvg-id, then by name (also with "(720p)" / "[…]" tags cut).
+// Replaces any guide already attached. A matched channel with no tvg-logo takes
+// the guide's <icon>. Returns how many programmes were kept.
 int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to);
 
 // XMLTV's timestamp, "20260927143000 +0200" (the offset is optional and means

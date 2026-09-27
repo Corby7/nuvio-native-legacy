@@ -164,6 +164,46 @@ static void testXmltv(IptvList *l) {
   assert(iptv_parse_xmltv(l, "not xml", 0, NOON * 2) == 0 && l->ch[0].nPg == 0);
 }
 
+// iptv-org's way of writing a playlist: no logos, tags after the names, and ids
+// the guide does not use. The guide's names and icons are what match.
+static void testTagsAndIcons(void) {
+  IptvList l;
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l,
+    "#EXTM3U\n"
+    "#EXTINF:-1 tvg-id=\"00sReplay.us@SD\",00s Replay (720p) [Geo-blocked]\n"
+    "http://s/1.m3u8\n"
+    "#EXTINF:-1 tvg-id=\"x.us@SD\",Cops [Not 24/7]\n"
+    "http://s/2.m3u8\n"
+    // A parenthesis that is part of the name is not cut: "Local" must not match.
+    "#EXTINF:-1,Local (US)\n"
+    "http://s/3.m3u8\n"
+    // Its own logo wins over the guide's.
+    "#EXTINF:-1 tvg-logo=\"http://own.png\",Kept (1080p)\n"
+    "http://s/4.m3u8\n"
+    // Matched by id, logo from the guide.
+    "#EXTINF:-1 tvg-id=\"byid\",Whatever\n"
+    "http://s/5.m3u8\n") == 5);
+  assert(iptv_parse_xmltv(&l,
+    "<tv>\n"
+    "<channel id=\"a1\"><display-name>00s Replay</display-name><icon src=\"http://i/a1.png\"/></channel>\n"
+    "<channel id=\"a2\"><display-name>Cops</display-name><icon src=\"http://i/a2.png\" width=\"1\"/></channel>\n"
+    "<channel id=\"a3\"><display-name>Local</display-name><icon src=\"http://i/a3.png\"/></channel>\n"
+    "<channel id=\"a4\"><display-name>Kept</display-name><icon src=\"http://i/a4.png\"/></channel>\n"
+    "<channel id=\"byid\"><display-name>Other</display-name><icon src=\"http://i/b&amp;c.png\"/></channel>\n"
+    "<programme start=\"20260927110000 +0000\" stop=\"20260927130000 +0000\" channel=\"a1\"><title>A</title></programme>\n"
+    "<programme start=\"20260927110000 +0000\" stop=\"20260927130000 +0000\" channel=\"a2\"><title>B</title></programme>\n"
+    "<programme start=\"20260927110000 +0000\" stop=\"20260927130000 +0000\" channel=\"a3\"><title>C</title></programme>\n"
+    "<programme start=\"20260927110000 +0000\" stop=\"20260927130000 +0000\" channel=\"a4\"><title>D</title></programme>\n"
+    "</tv>\n", NOON - 3600, NOON + 3600) == 3);
+  assert(l.ch[0].nPg == 1 && !strcmp(l.ch[0].logo, "http://i/a1.png"));
+  assert(l.ch[1].nPg == 1 && !strcmp(l.ch[1].logo, "http://i/a2.png"));
+  assert(l.ch[2].nPg == 0 && !l.ch[2].logo[0]);
+  assert(l.ch[3].nPg == 1 && !strcmp(l.ch[3].logo, "http://own.png"));
+  assert(l.ch[4].nPg == 0 && !strcmp(l.ch[4].logo, "http://i/b&c.png"));
+  iptv_list_free(&l);
+}
+
 // A large synthetic guide: nothing quadratic, nothing leaked (ASan).
 static void testScale(void) {
   IptvList l;
@@ -252,8 +292,9 @@ int main(int argc, char **argv) {
   testM3u(&l);
   testXmltv(&l);
   iptv_list_free(&l);
+  testTagsAndIcons();
   testScale();
   if (argc > 1) testGunzip(argv[1]);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, window; gzip.");
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; gzip.");
   return 0;
 }
