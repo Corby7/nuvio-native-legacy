@@ -40,7 +40,9 @@
 #include "hold.h"
 #include "ime.h"
 #include "layout.h"
+#include "phonelink.h"
 #include "pointer.h"
+#include "qr.h"
 #include "settings.h"
 #include "tex_cache.h"
 #include "text.h"
@@ -216,6 +218,7 @@ static IptvSource draft;
 static int setupRow, setupBtn;
 static int setupRows[8], nSetupRows;
 static int editing = -1;    // the ROW_* whose text the keyboard is filling
+static Uint32 phoneRetryAt; // no network yet: when to look for one again
 
 // --- Small helpers ---------------------------------------------------------------
 static float X0(void) { return settings_content_x() - 8.0f; }
@@ -541,6 +544,7 @@ static void openSetup(void) {
   if (draft.kind == IPTV_SRC_NONE) draft.kind = IPTV_SRC_M3U;
   mode = MODE_SETUP;
   setupRow = 0; setupBtn = BTN_SAVE; editing = -1;
+  phoneRetryAt = 0;
   layoutSetup();
   stopStream();
   full = 0;
@@ -678,6 +682,26 @@ static void setupEvent(const SDL_Event *e) {
   }
 }
 
+// THE PHONE FORM (phonelink.h): open while the setup form is, closed the moment
+// it is not. A form saved on the phone lands in the draft and is saved exactly
+// as the Save button would, with the same check and the same message.
+static void phoneStep(Uint32 now) {
+  IptvSource s;
+  if (mode != MODE_SETUP) { phonelink_close(); return; }
+  // With no network address yet (the TV still joining the Wi-Fi), look again
+  // every few seconds rather than every frame.
+  if (phonelink_state() == PL_OFF && now >= phoneRetryAt) {
+    phoneRetryAt = now + 3000u;
+    phonelink_open(iptv_source());
+  }
+  if (!phonelink_take(&s)) return;
+  if (ime_is_open()) ime_close();
+  editing = -1;
+  draft = s;
+  layoutSetup();
+  saveSetup();
+}
+
 // --- Pointer ---------------------------------------------------------------------------
 static void pointHead(int b, int unused) { (void)unused; zone = ZONE_HEAD; headSel = b; }
 static void pointChip(int g, int unused) { (void)unused; zone = ZONE_CHIPS; chooseGroup(g); }
@@ -725,6 +749,7 @@ void iptvui_resume(void) {
 }
 
 void iptvui_leave(void) {
+  phonelink_close();
   stopStream();
   full = 0; quickOpen = 0;
   if (ime_is_open()) ime_close();
@@ -732,6 +757,7 @@ void iptvui_leave(void) {
 }
 
 void iptvui_background(void) {
+  phonelink_close();
   if (playing || zapPending) { stopStream(); full = 0; quickOpen = 0; }
 }
 
@@ -1154,6 +1180,7 @@ void iptvui_update(float dt, Uint32 now) {
     rebuildView();
     measureChips();
   }
+  phoneStep(now);
   if (mode != MODE_BROWSE) return;
 
   hold_animate(&hold, dt, now);
@@ -2092,6 +2119,33 @@ static GfxRect pillButton(float x, float y, const char *label, int focused, int 
   return r;
 }
 
+// Right of the form: the QR for the phone form, and what state it is in. The
+// state line is also the check that the network lets a phone reach the TV:
+// "Phone connected" only appears once a request got through.
+#define P_QR 300.0f
+static void drawPhonePanel(void) {
+  float x = L_RIGHT - P_QR - 32.0f, y = 300.0f, w = P_QR + 32.0f;
+  int st = phonelink_state();
+  const char *url = phonelink_url();
+  GLuint tex = st != PL_OFF && url[0] ? qr_texture(url) : 0;
+  if (x < X0() + 1040.0f + 64.0f) return;   // no room beside the form
+  ink(TXT_LIVE_NAME, "Or fill it in on your phone", 0xF5F6F8, x, y, 1.0f);
+  y += 44.0f;
+  if (tex) {
+    gfx_color((GfxRect){ x, y, w, w }, 16.0f / w, 1.0f, 1.0f, 1.0f, 1.0f);
+    gfx_tex_aspect_current = 0.0f;
+    gfx_rect((GfxRect){ x + 16.0f, y + 16.0f, P_QR, P_QR }, tex, GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+    y += w + 24.0f;
+    txt_block(TXT_LIVE_META,
+              st == PL_OPENED ? "Phone connected. Fill in the form there and press Save."
+                              : "Scan with your phone's camera. The phone must be on the same Wi-Fi as the TV.",
+              HEXI(st == PL_OPENED ? 0xF5F6F8 : 0x9AA1A9), x, y, w, 27.0f, 1.0f, 3);
+  } else {
+    txt_block(TXT_LIVE_META, "Connect the TV to your home network to fill this in from a phone.",
+              HEXI(0x9AA1A9), x, y, w, 27.0f, 1.0f, 3);
+  }
+}
+
 static void drawSetup(void) {
   float x = X0();
   { TxtLine t = txt_line(TXT_TITLE3, "Live TV", 245, 246, 248, 255);
@@ -2160,6 +2214,7 @@ static void drawSetup(void) {
       pointer_zone(f.x, f.y, f.w, f.h, pointSetup, i, 0);
     }
   }
+  drawPhonePanel();
 }
 
 // --- Full screen ---------------------------------------------------------------------------------

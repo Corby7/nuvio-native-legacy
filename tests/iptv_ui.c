@@ -11,11 +11,16 @@
 #include "gfx.h"
 #include "ime.h"
 #include "net.h"
+#include "phonelink.h"
 #include "pointer.h"
 #include "tex_cache.h"
 #include "text.h"
 #include "tracks.h"
 #include <SDL2/SDL_image.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +63,31 @@ static void frames(int n, const char *capture) {
     SDL_GL_SwapWindow(win);
     SDL_Delay(4);
   }
+}
+
+// The phone's side: one form POST to the TV's listener on loopback. Returns
+// the HTTP status.
+static int phonePost(const char *body) {
+  struct sockaddr_in a;
+  char req[4096], res[8192], target[128];
+  size_t got = 0;
+  int fd = socket(AF_INET, SOCK_STREAM, 0), k, status = 0;
+  const char *code = strstr(phonelink_url(), "?k=");
+  assert(code);
+  snprintf(target, sizeof target, "/save%s", code);
+  memset(&a, 0, sizeof a);
+  a.sin_family = AF_INET;
+  a.sin_port = htons((unsigned short)phonelink_port());
+  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  assert(connect(fd, (struct sockaddr *)&a, sizeof a) == 0);
+  k = snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nContent-Length: %zu\r\n\r\n%s",
+               target, strlen(body), body);
+  assert(send(fd, req, (size_t)k, 0) == k);
+  for (ssize_t r; (r = recv(fd, res + got, sizeof res - 1 - got, 0)) > 0; ) got += (size_t)r;
+  res[got] = 0;
+  close(fd);
+  sscanf(res, "HTTP/1.1 %d", &status);
+  return status;
 }
 
 // Frames until `cond` holds, or fail after ~20 s.
@@ -272,6 +302,31 @@ int main(int argc, char **argv) {
   snprintf(path, sizeof path, "%s/nuvio-live-setup.bmp", out); frames(30, path);
   key(SDLK_AC_BACK);
   assert(!iptvui_wants_exit());
+  frames(2, NULL);
+  assert(phonelink_state() == PL_OFF);   // the form closed, and the listener with it
+
+  // --- The phone form ----------------------------------------------------------------
+  // Source again: the listener opens with the form. A phone saves the same
+  // playlist as an M3U; the TV takes it as the Save button would.
+  for (int i = 0; i < 12; i++) key(SDLK_UP);
+  key(SDLK_RIGHT);
+  key(SDLK_RETURN);
+  snprintf(path, sizeof path, "%s/nuvio-live-setup-phone.bmp", out); frames(10, path);
+  if (phonelink_state() == PL_OFF) {
+    puts("note: no network address here, phone form not exercised");
+    key(SDLK_AC_BACK);
+  } else {
+    char body[2400], enc[2200];
+    size_t k = 0;
+    for (const char *p = iptv_source()->url; *p && k + 4 < sizeof enc; p++)
+      k += (size_t)snprintf(enc + k, sizeof enc - k, "%%%02X", (unsigned char)*p);
+    snprintf(body, sizeof body, "kind=m3u&url=%s&epg=", enc);
+    assert(phonePost(body) == 200);
+    frames(3, NULL);
+    assert(phonelink_state() == PL_OFF);             // saved, so the form left
+    assert(iptv_source()->kind == IPTV_SRC_M3U);
+    WAIT_FOR(iptv_list() && iptv_list()->nCh == 48);  // and the channels load again
+  }
 
   iptvui_shutdown();
   puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), setup.");
