@@ -57,8 +57,9 @@ focus changes text, never the stream; only OK tunes.
 | List | → | the Watch / Favourite buttons beside the list |
 | List | ← | the side bar |
 | Guide | ↑ ↓ | channel; the focus keeps its **time**, so ↓ from a 21:00 film lands on what the next channel shows at 21:00 |
-| Guide | → ← | next / previous programme, paging the timeline in 30-minute jumps; ← from what is on now lands on the channel's own cell, ← again opens the side bar |
-| List, guide | OK | watch full screen (on the channel already playing: just full screen) |
+| Guide | → ← | next / previous programme, paging the timeline in 30-minute jumps; ← from what is on now lands on the channel's own cell, ← again opens the side bar. On a channel with **catch-up**, ← walks on into the past programmes its archive keeps first |
+| List, guide | OK | watch full screen (on the channel already playing: just full screen). On a past programme with catch-up: watch it from its start |
+| List, guide | rest ~1 s | with **Preview while browsing** on: the focused channel plays in the preview (not counted as watched until OK) |
 | List, guide | hold OK | add to / remove from Favourites |
 | List, guide | 0–9 | type a channel number |
 | List, guide | Back | guide → list; list: stop the preview, then the chips, then leave |
@@ -68,8 +69,11 @@ focus changes text, never the stream; only OK tunes.
 | Channels panel | ▲▼ / ◀▶ | channels / the group; ▲ past the first row is the group pill, whose OK opens the group menu |
 | Channels panel | OK, Back | OK tunes the row (on the playing one: just closes); Back closes, back to the bar when opened from its Channels button |
 | Bar | ▲▼ | **peek**: a rail of channel cards with what each is showing; "Still on 101" — the stream does not move. OK switches, Back stays |
-| Bar | ◀▶ | **walk the schedule**: the same block, a later programme on this channel, its bar empty at 40%. OK: remind me. ◀ back to now |
-| Bar | OK | the controls: Guide, Channels, Subtitles, Audio, Aspect (Fit / Slight zoom / Cinema zoom), Favourite |
+| Bar, at live | ▶ | **walk the schedule**: the same block, a later programme on this channel, its bar empty at 40%. OK: remind me. ◀ back to now |
+| Bar, at live | ◀ | when there is a past (pause buffer, catch-up): **rewind** — starts choosing an instant, 30 s a press |
+| Bar, rewound | ◀▶ | move the instant (30 s a press, faster while held); it lands when the keys rest, or on OK; Back cancels. ▶ up to now is live again |
+| Bar | OK | the controls: Pause, Start over (when the programme's start is within reach), Go live (when behind), Guide, Channels, Subtitles, Audio, Aspect (Fit / Slight zoom / Cinema zoom), Favourite |
+| Full screen | ⏯ ⏸ / ⏪ ⏩ | the remote's own transport keys, when the TV reports them to SDL: pause / play, rewind / forward |
 | Bar | Back | hide the bar |
 | Full screen | 0–9 | type a channel number |
 | Full screen, nothing showing | Back | back to the screen; the picture keeps playing in the preview |
@@ -92,13 +96,15 @@ browsing never retunes: only OK does.
 While the channels panel, subtitles or audio is open, the bar and the toast step
 aside, and come back on close if the bar was up — the film player's rule.
 
-Live has no scrub, so the overlay is not a transport: it answers *what is this
-and what is next*. The bar is the film player's block minus the transport — **no
-playhead dot and no buffered band**, because everywhere else in Nuvio the dot
-promises that a thing can be moved. Just the track, the accent fill up to now, and
-the programme's clock times either side (20:00 ——— 21:00), not elapsed/duration.
-If catch-up is ever added, the dot comes back and the bar becomes scrubbable
-within the programme.
+At plain live the overlay is not a transport: it answers *what is this and what
+is next*. The bar is the film player's block minus the transport — **no playhead
+dot and no buffered band**, because everywhere else in Nuvio the dot promises
+that a thing can be moved. Just the track, the accent fill up to now, and the
+programme's clock times either side (20:00 ——— 21:00), not elapsed/duration.
+When there IS a past to move through (below), the promise holds and the dot comes
+back: the dot is the picture's instant, a lighter band what can be reached, a
+tick where now is, and the label above says "20:29 · 2 min behind live". The tag
+beside the channel reads LIVE, PAUSED, CATCH-UP or how far behind (−0:40).
 
 The controls are the film player's own row: the same 90 px circles and 48 px
 glyphs, no circle at rest, the white focus puck, and the focused button's name
@@ -113,6 +119,45 @@ simply drops the programme lines.
 
 Reminders ("Remind me" while walking) live for the session and are announced
 when the programme starts, while Live TV is open.
+
+### Pause, rewind and catch-up
+
+A live stream has no file to seek in, so where "back" can go depends on who holds
+the past. Three sources, tried in this order:
+
+1. **The pause buffer** (Settings → Source → Playback → Pause buffer; off by
+   default). While a channel plays, `timeshift.c` downloads it into a ring file in
+   the data folder and the pipeline plays that from a loopback server; pausing
+   only stops the reading side, so play resumes exactly where the picture froze,
+   and ◀ reaches back as far as the ring goes. **MPEG-TS only** (a TS joins at any
+   packet; an HLS playlist would have to be fetched and rewritten, which it does
+   not do). The ring's size is a byte budget — minutes × 10 Mbit/s, at most half
+   the free space — and the stream is **written to the TV's flash for as long as
+   it plays**, which is why it is opt-in. The recorder is the only connection to
+   the provider, so an account limited to one stream is not charged a second.
+2. **The provider's catch-up archive.** Read from the playlist the way Kodi's
+   IPTV Simple client reads it: `catchup="default|append|shift|flussonic|xc"`,
+   `catchup-source` templates (`{utc}`, `{utcend}`, `{lutc}`, `{duration}`,
+   `{duration:60}`, `{offset:N}`, `{Y}{m}{d}{H}{M}{S}`, `{utc:Y-m-d:H-M}`, the
+   `${start}` family), `catchup-days`, and the same three on the `#EXTM3U` line as
+   defaults. For Xtream logins, `player_api.php` says which streams have
+   `tv_archive` and for how many days, and its `server_info` gives the server's
+   clock offset: Xtream's `/timeshift/` URLs are written in the server's local
+   time. With an archive, the guide's past programmes on that channel are not
+   greyed, ← walks into them, and OK plays one from its start; in full screen,
+   Start over and rewinding reach back through the archive. An archived
+   programme that ends carries on with the next, or live.
+3. **Neither.** Pause still pauses, and says so: "No pause buffer · resumes
+   live". Under 5 s it resumes in place; longer, it comes back to live, because
+   the stream went on without the picture (with catch-up it resumes in place from
+   the archive instead). Forward only ever goes as far as now.
+
+**Preview while browsing** (Playback, off by default): resting on a channel for
+about a second in the list or the guide plays it in the preview. It is a real
+tune — one stream at a time, a new connection each rest — and it is not counted
+as watched until OK. There is no picture-in-picture: the TV's video is a hardware
+plane behind the interface, with one decoder, and most IPTV accounts allow one
+connection.
 
 ### Degrading well
 
@@ -135,7 +180,8 @@ All in the app's data folder (`data.h`; `$NUVIO_DATA` on the Mac):
 
 | File | Holds |
 |---|---|
-| `iptv.txt` | the source: `kind=m3u\|xtream`, `url=`, `epg=`, `server=`, `user=`, `pass=` — one per line. **The password is stored in plain text**, like the account session beside it. |
+| `iptv.txt` | the source: `kind=m3u\|xtream`, `url=`, `epg=`, `server=`, `user=`, `pass=`, and the playback preferences `buffer=` (minutes, 0 = off) and `preview=` (0/1) — one per line. **The password is stored in plain text**, like the account session beside it. |
+| `timeshift.ts` | the pause buffer's ring, while a channel plays with it on. Deleted when playback stops |
 | `iptv_playlist.m3u` | the last playlist that parsed, so the channels appear at once on the next visit (and when the provider is unreachable) |
 | `iptv_favourites.txt`, `iptv_recent.txt` | one channel name per line. Keyed by name, not URL: providers rotate stream URLs (they carry the credentials) far more often than they rename channels |
 
@@ -147,7 +193,8 @@ The guide is not cached: stale programme data is worse than a "loading" line.
 |---|---|
 | `src/iptv_parse.[ch]` | M3U and XMLTV parsing into one `IptvList`; gzip through the TV's own `libz` (dlopen, like libcurl). No SDL, no network — `tests/iptv_parse.sh` covers it under ASan/UBSan |
 | `src/iptv.[ch]` | the source, the loader thread, the playlist cache, favourites and history |
-| `src/iptvui.[ch]` | the screen: setup, channel list, guide, full-screen playback |
+| `src/iptvui.[ch]` | the screen: setup, channel list, guide, full-screen playback and its timeline (live / buffer / archive) |
+| `src/timeshift.[ch]` | the pause buffer: the recorder thread, the ring file, the arrival index, the loopback server |
 | `deploy/app/art/icons/menu_live*.png` | the side-bar glyph, drawn on Phosphor's 256 grid to match the others |
 | `deploy/app/art/icons/live_*.png` | the header, button and favourite glyphs, from the mockups' SVGs |
 
@@ -178,12 +225,19 @@ Things worth knowing before changing them:
 ## Tests
 
 ```sh
-bash tests/iptv_parse.sh   # parser: attributes, headers, groups, times, entities, gzip, 120k programmes
+bash tests/iptv_parse.sh   # parser: attributes, headers, groups, times, entities, catch-up URLs, gzip, 120k programmes
+bash tests/timeshift.sh    # the pause buffer against a local endless MPEG-TS
 bash tests/iptv_ui.sh      # the screen off the TV, over file://; writes /tmp/nuvio-live-*.bmp
 ```
 
-`iptv_ui.sh` generates a 48-channel playlist and a gzipped guide around the
-current time, drives the screen with key events, and asserts the focus model
+`timeshift.sh` serves numbered TS packets and asserts that HLS is refused, that
+a paused reader resumes on the very next packet, rewinding, the ring wrapping,
+reconnecting after a dropped upstream, failing after a dead one, and that the
+ring file is removed.
+
+`iptv_ui.sh` generates a 49-channel playlist (Sport with a day of `shift`
+catch-up, and one local MPEG-TS channel for the pause buffer) and a gzipped guide
+around the current time, drives the screen with key events, and asserts the focus model
 (the guide's time-keeping ↓, → and ←, ← onto the channel cell and then the side
 bar), the favourite and the history round-trips. It captures the list, the list's
 actions, the guide (now, later, on a channel cell), an empty category, a
@@ -192,7 +246,12 @@ menu, from the bar) and the setup form. It also walks the full-screen overlay
 (bar, peek, walk, controls, zap toast, the bar stepping aside for the subtitles
 sheet) and
 asserts from the watch history that peeking and walking never retune while a
-zap and the peek's OK do. It runs on the Mac, and on Linux under `xvfb-run` with
+zap and the peek's OK do. From the addresses handed to the video stub it checks
+the timeline: a plain-live pause that comes back live, catch-up (rewind, the
+archive URL's `utc=`, Go live, Start over at the programme's start, a past
+programme from the guide), the pause buffer (the loopback URL, a pause that
+resumes the same load, rewinding to an earlier byte, Go live) and preview on
+focus (it tunes, and only OK adds to the history), and the Playback column. It runs on the Mac, and on Linux under `xvfb-run` with
 a GLES context, with `tests/video_stub.c` standing in for the pipeline: it plays
 everything and hands the drawing a generated picture.
 
@@ -250,6 +309,15 @@ yet**, so these are open:
   `video_error_count`) and how long a stall takes to surface.
 - Memory and parse time for a large real guide (tens of MB inflated) on the TV.
 - The TV keyboard for long URLs (the phone keyboard via LG ThinQ helps).
+- Whether the pipeline plays the pause buffer's loopback (an endless MPEG-TS with
+  no length) and holds its connection through a pause; how long it takes to start
+  from an earlier byte. The instant on screen is counted by the clock from the
+  first ready frame, so a long stall would drift it.
+- Which SDL keycodes the remote's ⏯ ⏪ ⏩ arrive as on the TV (the code accepts
+  `SDLK_AUDIOPLAY`, `SDLK_PAUSE`, `SDLK_AUDIOREWIND`, `SDLK_AUDIOFASTFORWARD`);
+  the Pause control on the bar works either way.
+- Catch-up against real providers: the Xtream server clock offset, and
+  Flussonic's URL shapes.
 
 ## Roadmap
 
@@ -260,8 +328,8 @@ Roughly in order:
 2. Search channels (and programmes) by name.
 3. Reminders: OK on a future programme offers "Remind me", with a toast when it
    starts.
-4. Catch-up / timeshift for channels with `catchup-days` (Xtream `timeshift.php`,
-   `catchup-source` templates) — the guide already dims the past, ready for it.
+4. The pause buffer for HLS channels (fetch the segments, serve a rewritten
+   playlist), and in RAM rather than flash where the TV has room.
 5. Xtream VOD and series as their own rows (`get_vod_streams`,
    `get_series`) — or left to the addons, which already cover films and series.
 6. More than one source, and hiding / reordering groups.

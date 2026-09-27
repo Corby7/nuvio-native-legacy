@@ -275,6 +275,69 @@ static void testGunzip(const char *path) {
   free(raw);
 }
 
+static void testCatchup(void) {
+  IptvList l;
+  char u[1024];
+  long long st = iptv_xmltv_time("20260927180000 +0000"), en = st + 1800, now = st + 3600;
+  const char *m3u =
+    "#EXTM3U catchup=\"shift\" catchup-days=\"5\"\n"
+    "#EXTINF:-1 tvg-id=\"a\",Shifted\n"
+    "http://h/a.m3u8?t=1\n"
+    "#EXTINF:-1 catchup=\"default\" catchup-source=\"http://arc/{utc}/{utcend}/{duration:60}/${offset}/{Y}{m}{d}-{H}{M}{S}/{utc:Y-m-d H:M}/{lutc}\" catchup-days=\"2\",Templated\n"
+    "http://h/b.ts\n"
+    "#EXTINF:-1 catchup=\"append\" catchup-source=\"?start={utc}&end={utcend}\",Appended\n"
+    "http://h/c.m3u8\n"
+    "#EXTINF:-1 catchup=\"fs\",Fluss\n"
+    "http://f/ch/index.m3u8?token=x\n"
+    "#EXTINF:-1 catchup=\"flussonic\",FlussTs\n"
+    "http://f/ch/mpegts\n"
+    "#EXTINF:-1 catchup=\"xc\",Xtream\n"
+    "http://x:8080/live/u1/p1/1234.ts\n"
+    "#EXTINF:-1 catchup=\"xc\",XtreamBare\n"
+    "http://x:8080/u1/p1/99\n";
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, m3u) == 7);
+  // The header's defaults reach a channel with none of its own.
+  assert(l.ch[0].catchup == IPTV_CATCHUP_SHIFT && l.ch[0].catchupDays == 5);
+  assert(iptv_catchup_url(&l.ch[0], st, en, now, 0, u, sizeof u));
+  assert(!strcmp(u, "http://h/a.m3u8?t=1&utc=1790532000&lutc=1790535600"));
+  assert(l.ch[1].catchup == IPTV_CATCHUP_DEFAULT && l.ch[1].catchupDays == 2);
+  assert(iptv_catchup_url(&l.ch[1], st, en, now, 0, u, sizeof u));
+  assert(!strcmp(u, "http://arc/1790532000/1790533800/30/3600/20260927-180000/2026-09-27 18:00/1790535600"));
+  assert(iptv_catchup_url(&l.ch[2], st, en, now, 0, u, sizeof u));
+  assert(!strcmp(u, "http://h/c.m3u8?start=1790532000&end=1790533800"));
+  assert(iptv_catchup_url(&l.ch[3], st, en, now, 0, u, sizeof u));
+  assert(!strcmp(u, "http://f/ch/index-1790532000-1800.m3u8?token=x"));
+  assert(iptv_catchup_url(&l.ch[4], st, en, now, 0, u, sizeof u));
+  assert(!strcmp(u, "http://f/ch/timeshift_abs-1790532000.ts"));
+  // Xtream: whole minutes, rounded up, in the server's local time (+2 h here).
+  assert(iptv_catchup_url(&l.ch[5], st, en + 10, now, 7200, u, sizeof u));
+  assert(!strcmp(u, "http://x:8080/timeshift/u1/p1/31/2026-09-27:20-00/1234.ts"));
+  assert(iptv_catchup_url(&l.ch[6], st, en, now, 0, u, sizeof u));
+  assert(!strcmp(u, "http://x:8080/timeshift/u1/p1/30/2026-09-27:18-00/99.ts"));
+  // Too small a buffer is a refusal, not a truncation.
+  assert(!iptv_catchup_url(&l.ch[1], st, en, now, 0, u, 20));
+  iptv_list_free(&l);
+  // Days and an Xtream-shaped URL, no mode anywhere: Xtream's own archive.
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, "#EXTM3U\n#EXTINF:-1 tvg-rec=\"3\",RecOnly\nhttp://x:8080/live/u1/p1/77.m3u8\n") == 1);
+  assert(l.ch[0].catchup == IPTV_CATCHUP_XC && l.ch[0].catchupDays == 3);
+  assert(iptv_catchup_url(&l.ch[0], st, en, now, 0, u, sizeof u));
+  assert(!strcmp(u, "http://x:8080/timeshift/u1/p1/30/2026-09-27:18-00/77.m3u8"));
+  iptv_list_free(&l);
+  // A playlist without any of it: no catch-up anywhere.
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, "#EXTM3U\n#EXTINF:-1,Plain\nhttp://h/p.m3u8\n") == 1);
+  assert(l.ch[0].catchup == IPTV_CATCHUP_NONE && !l.ch[0].catchupDays);
+  assert(!iptv_catchup_url(&l.ch[0], st, en, now, 0, u, sizeof u));
+  iptv_list_free(&l);
+  { long id; char o[64], us[16], pw[16], ex[8];
+    assert(iptv_xtream_parts("https://s.tv:443/live/a/b/12.m3u8?x", o, sizeof o, us, sizeof us, pw, sizeof pw, &id, ex, sizeof ex));
+    assert(!strcmp(o, "https://s.tv:443") && !strcmp(us, "a") && !strcmp(pw, "b") && id == 12 && !strcmp(ex, "m3u8"));
+    assert(!iptv_xtream_parts("http://h/some/deep/path/a/b/12.ts", 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    assert(!iptv_xtream_parts("http://h/live/a/b/name.ts", 0, 0, 0, 0, 0, 0, 0, 0, 0)); }
+}
+
 int main(int argc, char **argv) {
   IptvList l;
   if (argc > 3 && !strcmp(argv[1], "--dump-xml")) {
@@ -294,7 +357,8 @@ int main(int argc, char **argv) {
   iptv_list_free(&l);
   testTagsAndIcons();
   testScale();
+  testCatchup();
   if (argc > 1) testGunzip(argv[1]);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; gzip.");
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; catch-up URLs; gzip.");
   return 0;
 }

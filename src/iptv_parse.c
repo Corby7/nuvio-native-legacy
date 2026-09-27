@@ -208,10 +208,29 @@ static int addChannel(IptvList *l, Pending *pd, const char *url, size_t nUrl) {
     if (attr(pd->attrs, pd->attrsEnd, "catchup-days", &v, &n) ||
         attr(pd->attrs, pd->attrsEnd, "tvg-rec", &v, &n))
       c->catchupDays = atoi(v);
+    if (attr(pd->attrs, pd->attrsEnd, "catchup", &v, &n) ||
+        attr(pd->attrs, pd->attrsEnd, "catchup-type", &v, &n))
+      c->catchup = iptv_catchup_mode(v, n);
+    c->catchupSource = attrDup(l, pd->attrs, pd->attrsEnd, "catchup-source");
     c->name = arenaDup(l, pd->name, pd->nName);
   } else {
-    c->tvgId = c->tvgName = c->logo = c->group = "";
+    c->tvgId = c->tvgName = c->logo = c->group = c->catchupSource = "";
   }
+  // The playlist's defaults, then what a mode-less channel must have meant.
+  if (!c->catchup && !c->catchupSource[0] && l->catchupMode) {
+    c->catchup = l->catchupMode;
+    c->catchupSource = l->catchupSource;
+  }
+  if (!c->catchupDays && c->catchup) c->catchupDays = l->catchupDays;
+  if (!c->catchup && c->catchupDays > 0) {
+    if (c->catchupSource[0]) c->catchup = IPTV_CATCHUP_DEFAULT;
+    else if (iptv_xtream_parts(c->url, NULL, 0, NULL, 0, NULL, 0, NULL, NULL, 0))
+      c->catchup = IPTV_CATCHUP_XC;
+  }
+  if (!c->catchup && c->catchupSource[0]) c->catchup = IPTV_CATCHUP_DEFAULT;
+  // A mode with no days: the archive's depth is unknown; a day is what nearly
+  // every provider keeps.
+  if (c->catchup && c->catchupDays <= 0) c->catchupDays = 1;
   if (!c->group[0] && pd->nGrp) c->group = arenaDup(l, pd->grp, pd->nGrp);
   if (!c->name || !c->name[0]) {
     if (c->tvgName[0]) c->name = c->tvgName;
@@ -262,6 +281,13 @@ int iptv_parse_m3u(IptvList *l, const char *text) {
         if (k >= sizeof l->epgUrl) k = sizeof l->epgUrl - 1;
         memcpy(l->epgUrl, v, k); l->epgUrl[k] = 0;
       }
+      if (attr(p, e, "catchup", &v, &n) || attr(p, e, "catchup-type", &v, &n))
+        l->catchupMode = iptv_catchup_mode(v, n);
+      if (attr(p, e, "catchup-days", &v, &n)) l->catchupDays = atoi(v);
+      if (attr(p, e, "catchup-source", &v, &n) && n < sizeof l->catchupSource) {
+        memcpy(l->catchupSource, v, n); l->catchupSource[n] = 0;
+        if (!l->catchupMode) l->catchupMode = IPTV_CATCHUP_DEFAULT;
+      }
     } else if (!strncasecmp(p, "#EXTINF:", 8)) {
       // The name follows the last comma that is not inside quotes.
       const char *q = p + 8, *comma = NULL;
@@ -306,6 +332,194 @@ int iptv_parse_m3u(IptvList *l, const char *text) {
     p = next;
   }
   return l->nCh - before;
+}
+
+// --- Catch-up -------------------------------------------------------------------
+int iptv_catchup_mode(const char *s, size_t n) {
+  static const struct { const char *name; int mode; } M[] = {
+    { "default", IPTV_CATCHUP_DEFAULT }, { "append", IPTV_CATCHUP_APPEND },
+    { "shift", IPTV_CATCHUP_SHIFT }, { "timeshift", IPTV_CATCHUP_SHIFT },
+    { "flussonic", IPTV_CATCHUP_FLUSSONIC }, { "flussonic-hls", IPTV_CATCHUP_FLUSSONIC },
+    { "flussonic-ts", IPTV_CATCHUP_FLUSSONIC }, { "fs", IPTV_CATCHUP_FLUSSONIC },
+    { "xc", IPTV_CATCHUP_XC },
+  };
+  while (n && isspace((unsigned char)*s)) { s++; n--; }
+  while (n && isspace((unsigned char)s[n - 1])) n--;
+  for (size_t i = 0; i < sizeof M / sizeof *M; i++)
+    if (strlen(M[i].name) == n && !strncasecmp(M[i].name, s, n)) return M[i].mode;
+  return IPTV_CATCHUP_NONE;
+}
+
+static void civil(long long t, int *y, int *mo, int *d, int *h, int *mi, int *se) {
+  long long days = t >= 0 ? t / 86400 : (t - 86399) / 86400, sec = t - days * 86400;
+  long long z = days + 719468, era = (z >= 0 ? z : z - 146096) / 146097;
+  long long doe = z - era * 146097, yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100), mp = (5 * doy + 2) / 153;
+  *d = (int)(doy - (153 * mp + 2) / 5 + 1);
+  *mo = (int)(mp < 10 ? mp + 3 : mp - 9);
+  *y = (int)(yoe + era * 400 + (*mo <= 2));
+  *h = (int)(sec / 3600); *mi = (int)(sec / 60 % 60); *se = (int)(sec % 60);
+}
+
+// Y m d H M S in `fmt` [f, fe) as the fields of `t`; everything else as is.
+static int putTime(char *dst, size_t size, size_t *k, const char *f, const char *fe, long long t) {
+  int y, mo, d, h, mi, se;
+  civil(t, &y, &mo, &d, &h, &mi, &se);
+  for (; f < fe; f++) {
+    char b[8]; int w;
+    switch (*f) {
+      case 'Y': w = snprintf(b, sizeof b, "%04d", y); break;
+      case 'm': w = snprintf(b, sizeof b, "%02d", mo); break;
+      case 'd': w = snprintf(b, sizeof b, "%02d", d); break;
+      case 'H': w = snprintf(b, sizeof b, "%02d", h); break;
+      case 'M': w = snprintf(b, sizeof b, "%02d", mi); break;
+      case 'S': w = snprintf(b, sizeof b, "%02d", se); break;
+      default: b[0] = *f; b[1] = 0; w = 1; break;
+    }
+    if (*k + (size_t)w >= size) return 0;
+    memcpy(dst + *k, b, (size_t)w); *k += (size_t)w;
+  }
+  return 1;
+}
+
+int iptv_catchup_expand(const char *tpl, long long start, long long stop,
+                        long long now, int offset, char *dst, size_t size) {
+  size_t k = 0;
+  long long dur = stop > start ? stop - start : 0;
+  if (!size) return 0;
+  while (*tpl) {
+    const char *p = tpl, *open = NULL, *close;
+    char name[32], arg[32];
+    long long v = 0; int isNum = 1;
+    if (p[0] == '{') open = p + 1;
+    else if (p[0] == '$' && p[1] == '{') open = p + 2;
+    close = open ? strchr(open, '}') : NULL;
+    if (!close || close - open >= (long)sizeof name + (long)sizeof arg) {
+      if (k + 1 >= size) return 0;
+      dst[k++] = *tpl++;
+      continue;
+    }
+    { const char *colon = memchr(open, ':', (size_t)(close - open));
+      size_t nn = (size_t)((colon ? colon : close) - open);
+      if (nn >= sizeof name) nn = sizeof name - 1;
+      memcpy(name, open, nn); name[nn] = 0;
+      arg[0] = 0;
+      if (colon) {
+        size_t na = (size_t)(close - colon - 1);
+        if (na >= sizeof arg) na = sizeof arg - 1;
+        memcpy(arg, colon + 1, na); arg[na] = 0;
+      } }
+    if (!strcmp(name, "utc") || !strcmp(name, "start")) v = start;
+    else if (!strcmp(name, "utcend") || !strcmp(name, "end")) v = stop;
+    else if (!strcmp(name, "lutc") || !strcmp(name, "now") || !strcmp(name, "timestamp")) v = now;
+    else if (!strcmp(name, "duration")) v = dur;
+    else if (!strcmp(name, "offset")) v = now - start;
+    else if (strlen(name) == 1 && strchr("YmdHMS", name[0])) isNum = 0;
+    else {   // not ours: copied as it stands
+      if (k + 1 >= size) return 0;
+      dst[k++] = *tpl++;
+      continue;
+    }
+    if (!isNum) {
+      if (!putTime(dst, size, &k, name, name + 1, start + offset)) return 0;
+    } else if (arg[0] && (!strcmp(name, "duration") || !strcmp(name, "offset"))) {
+      long long div = atoll(arg);
+      int w = snprintf(dst + k, size - k, "%lld", div > 0 ? v / div : v);
+      if (w < 0 || k + (size_t)w >= size) return 0;
+      k += (size_t)w;
+    } else if (arg[0]) {
+      if (!putTime(dst, size, &k, arg, arg + strlen(arg), v + offset)) return 0;
+    } else {
+      int w = snprintf(dst + k, size - k, "%lld", v);
+      if (w < 0 || k + (size_t)w >= size) return 0;
+      k += (size_t)w;
+    }
+    tpl = close + 1;
+  }
+  dst[k] = 0;
+  return 1;
+}
+
+int iptv_xtream_parts(const char *url, char *origin, size_t no, char *user, size_t nu,
+                      char *pass, size_t np, long *id, char *ext, size_t ne) {
+  const char *auth, *path, *end, *seg[4];
+  int nSeg = 0;
+  if (!url || (strncmp(url, "http://", 7) && strncmp(url, "https://", 8))) return 0;
+  auth = strstr(url, "://") + 3;
+  path = auth + strcspn(auth, "/?#");
+  end = path + strcspn(path, "?#");
+  // The last three segments, from the end: id[.ext], pass, user.
+  { const char *q = end;
+    while (q > path && nSeg < 4) {
+      const char *s = q;
+      while (s > path && s[-1] != '/') s--;
+      seg[nSeg++] = s;
+      q = s > path ? s - 1 : s;
+    } }
+  if (nSeg < 3) return 0;
+  { const char *idEnd = end, *dot, *pe, *ue;
+    char *stop;
+    long v = strtol(seg[0], &stop, 10);
+    dot = memchr(seg[0], '.', (size_t)(end - seg[0]));
+    if (stop == seg[0] || (dot ? stop != dot : stop != idEnd)) return 0;
+    pe = seg[0] - 1; ue = seg[1] - 1;
+    if (pe <= seg[1] || ue <= seg[2]) return 0;
+    if ((size_t)(pe - seg[1]) >= (np ? np : 1024) || (size_t)(ue - seg[2]) >= (nu ? nu : 1024)) return 0;
+    // Only "/live" may stand before the user; a deeper path is not Xtream's.
+    { const char *before = seg[2] - 1;   // the '/' before the user
+      if (before > path) {
+        size_t nb = (size_t)(before - path);
+        if (!(nb == 5 && !strncmp(path, "/live", 5))) return 0;
+      } }
+    if (id) *id = v;
+    if (pass) { memcpy(pass, seg[1], (size_t)(pe - seg[1])); pass[pe - seg[1]] = 0; }
+    if (user) { memcpy(user, seg[2], (size_t)(ue - seg[2])); user[ue - seg[2]] = 0; }
+    if (ext) snprintf(ext, ne, "%.*s", dot ? (int)(end - dot - 1) : 0, dot ? dot + 1 : "");
+    if (origin) snprintf(origin, no, "%.*s", (int)(path - url), url);
+  }
+  return 1;
+}
+
+int iptv_catchup_url(const IptvChannel *c, long long start, long long stop,
+                     long long now, int serverOffset, char *dst, size_t size) {
+  char tpl[2048];
+  if (!c || !c->catchup || !c->url) return 0;
+  switch (c->catchup) {
+    case IPTV_CATCHUP_DEFAULT:
+      if (!c->catchupSource[0]) return 0;
+      return iptv_catchup_expand(c->catchupSource, start, stop, now, 0, dst, size);
+    case IPTV_CATCHUP_APPEND:
+      if (snprintf(tpl, sizeof tpl, "%s%s", c->url, c->catchupSource) >= (int)sizeof tpl) return 0;
+      return iptv_catchup_expand(tpl, start, stop, now, 0, dst, size);
+    case IPTV_CATCHUP_SHIFT:
+      if (snprintf(tpl, sizeof tpl, "%s%sutc={utc}&lutc={lutc}", c->url,
+                   strchr(c->url, '?') ? "&" : "?") >= (int)sizeof tpl) return 0;
+      return iptv_catchup_expand(tpl, start, stop, now, 0, dst, size);
+    case IPTV_CATCHUP_FLUSSONIC: {
+      const char *q = c->url + strcspn(c->url, "?#"), *s = q, *dot;
+      while (s > c->url && s[-1] != '/') s--;
+      dot = memchr(s, '.', (size_t)(q - s));
+      if ((size_t)(q - s) == 6 && !strncmp(s, "mpegts", 6)) {
+        if (snprintf(tpl, sizeof tpl, "%.*stimeshift_abs-{utc}.ts%s", (int)(s - c->url), c->url, q)
+            >= (int)sizeof tpl) return 0;
+      } else if (dot) {
+        if (snprintf(tpl, sizeof tpl, "%.*s-{utc}-{duration}%s", (int)(dot - c->url), c->url, dot)
+            >= (int)sizeof tpl) return 0;
+      } else return 0;
+      return iptv_catchup_expand(tpl, start, stop, now, 0, dst, size);
+    }
+    case IPTV_CATCHUP_XC: {
+      char origin[512], user[128], pass[128], ext[16];
+      long id;
+      if (!iptv_xtream_parts(c->url, origin, sizeof origin, user, sizeof user, pass, sizeof pass,
+                             &id, ext, sizeof ext)) return 0;
+      if (snprintf(tpl, sizeof tpl, "%s/timeshift/%s/%s/{duration:60}/{Y}-{m}-{d}:{H}-{M}/%ld.%s",
+                   origin, user, pass, id, ext[0] ? ext : "ts") >= (int)sizeof tpl) return 0;
+      // Xtream counts whole minutes; a programme's last partial one is kept.
+      return iptv_catchup_expand(tpl, start, stop + 59, now, serverOffset, dst, size);
+    }
+    default: return 0;
+  }
 }
 
 // --- Time ---------------------------------------------------------------------

@@ -79,4 +79,18 @@ void iptv_note_watched(int ch);
 // relay address when one is used.
 const char *iptv_play_url(int ch, char *dst, unsigned size);
 
+// PLAYBACK PREFERENCES, saved with the source and applied at once (no reload):
+// the pause buffer's length in minutes (0 = off; see timeshift.h), and whether
+// resting on a channel while browsing previews it.
+int  iptv_pref_buffer(void);
+int  iptv_pref_preview(void);
+void iptv_set_prefs(int bufferMinutes, int preview);
+
+// CATCH-UP. Whether channel `ch`'s archive reaches back to unix time `t` (and
+// `t` is in the past), and the URL that plays it from `start` to `stop` — the
+// programme's bounds, or any instant and an hour past it. NULL when the channel
+// has no archive or the URL does not fit.
+int iptv_has_archive(int ch, long long t);
+const char *iptv_archive_url(int ch, long long start, long long stop, char *dst, unsigned size);
+
 #endif
