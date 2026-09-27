@@ -78,5 +78,9 @@ void iptv_note_watched(int ch);
 // loopback relay when the playlist asked for request headers. `dst` holds the
 // relay address when one is used.
 const char *iptv_play_url(int ch, char *dst, unsigned size);
+// The same stream in the provider's other container: an Xtream address serves
+// /live/user/pass/<id>.m3u8 and .ts alike, and a TV or a panel that chokes on
+// one often plays the other. NULL when the address is not of that shape.
+const char *iptv_play_url_alt(int ch, char *dst, unsigned size);
 
 #endif

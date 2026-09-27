@@ -150,9 +150,10 @@ static int queryParam(const char *url, const char *key, char *dst, size_t n) {
 // "http://host/get.php?username=…&password=…&type=m3u_plus&output=ts" as "your
 // M3U link", and people paste it as one. It is an Xtream login, and loading it
 // as one reaches the API that panels which refuse get.php still answer.
-static int xtreamFromUrl(const IptvSource *in, IptvSource *out) {
+static int xtreamFromUrl(const IptvSource *in, IptvSource *out, char *prefer, size_t np) {
   const char *g;
   IptvSource s;
+  char o[16];
   if (in->kind != IPTV_SRC_M3U || !(g = strstr(in->url, "/get.php?"))) return 0;
   memset(&s, 0, sizeof s);
   s.kind = IPTV_SRC_XTREAM;
@@ -162,6 +163,10 @@ static int xtreamFromUrl(const IptvSource *in, IptvSource *out) {
   memcpy(s.server, in->url, (size_t)(g - in->url));
   s.server[g - in->url] = 0;
   snprintf(s.epg, sizeof s.epg, "%s", in->epg);
+  // The container the link asked for ("output=ts"): the provider's own choice
+  // for this account, and the one to try first.
+  if (queryParam(in->url, "output", o, sizeof o) && (!strcmp(o, "ts") || !strcmp(o, "m3u8")))
+    snprintf(prefer, np, "%s", o);
   *out = s;
   return 1;
 }
@@ -171,7 +176,7 @@ static int xtreamFromUrl(const IptvSource *in, IptvSource *out) {
 // the API is not there or refused; `why` then says so when the answer was
 // specific (a refused login, an expired account), and stays empty otherwise so
 // get.php can be tried.
-static char *xtreamApi(const IptvSource *src, char *why, size_t n) {
+static char *xtreamApi(const IptvSource *src, const char *prefer, char *why, size_t n) {
   char base[600], u[400], p[400], api[1400], url[1500], state[40] = "", ext[8] = "m3u8";
   char *acct, *cats, *streams, *m3u;
   int st = 0;
@@ -192,11 +197,15 @@ static char *xtreamApi(const IptvSource *src, char *why, size_t n) {
     js_text(acct, NULL, "status", state, sizeof state);
     // HLS when the account allows it, for the reason playlistUrl gives; raw TS
     // when that is all it may use.
-    if (f && fe) {
-      char list[128];
-      size_t k = (size_t)(fe - f) < sizeof list - 1 ? (size_t)(fe - f) : sizeof list - 1;
-      memcpy(list, f, k); list[k] = 0;
-      if (!strstr(list, "\"m3u8\"") && strstr(list, "\"ts\"")) snprintf(ext, sizeof ext, "ts");
+    { char list[128] = "", want[12];
+      if (f && fe) {
+        size_t k = (size_t)(fe - f) < sizeof list - 1 ? (size_t)(fe - f) : sizeof list - 1;
+        memcpy(list, f, k); list[k] = 0;
+        if (!strstr(list, "\"m3u8\"") && strstr(list, "\"ts\"")) snprintf(ext, sizeof ext, "ts");
+      }
+      // The pasted link's own choice wins when the account allows it.
+      snprintf(want, sizeof want, "\"%s\"", prefer);
+      if (prefer[0] && (!list[0] || strstr(list, want))) snprintf(ext, sizeof ext, "%s", prefer);
     }
     printf("[iptv] xtream api: auth %d, status '%s', streams as .%s\n", auth, state, ext);
     free(acct);
@@ -298,8 +307,9 @@ static void *loader(void *arg) {
   char *text = NULL, *cached = NULL;
   IptvList *l;
   int fromCache = 0;
+  char prefer[8] = "";
   free(arg);
-  if (xtreamFromUrl(&job.src, &job.src))
+  if (xtreamFromUrl(&job.src, &job.src, prefer, sizeof prefer))
     printf("[iptv] the playlist address is an Xtream login; loading it as one\n");
 
   // Stage 0: the cached playlist, so the screen has channels at once.
@@ -320,7 +330,7 @@ static void *loader(void *arg) {
     char why[160] = "";
     text = NULL;
     // Xtream: the API first, get.php only when there is no API answer at all.
-    if (job.src.kind == IPTV_SRC_XTREAM) text = xtreamApi(&job.src, why, sizeof why);
+    if (job.src.kind == IPTV_SRC_XTREAM) text = xtreamApi(&job.src, prefer, why, sizeof why);
     if (!text && !why[0]) {
       playlistUrl(&job.src, url, sizeof url);
       text = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &status);
@@ -618,4 +628,23 @@ const char *iptv_play_url(int ch, char *dst, unsigned size) {
   // goes direct, and loses the headers, rather than losing every segment.
   if (c->headers[0] && !strstr(c->url, ".m3u8")) return proxy_wrap(c->url, c->headers, dst, size);
   return c->url;
+}
+
+const char *iptv_play_url_alt(int ch, char *dst, unsigned size) {
+  static char alt[2048];
+  const IptvChannel *c;
+  size_t n;
+  if (!live || ch < 0 || ch >= live->nCh) return NULL;
+  c = &live->ch[ch];
+  n = strcspn(c->url, "?#");
+  if (!strstr(c->url, "/live/") || n + 2 >= sizeof alt) return NULL;
+  if (n > 5 && !strncmp(c->url + n - 5, ".m3u8", 5))
+    snprintf(alt, sizeof alt, "%.*s.ts%s", (int)(n - 5), c->url, c->url + n);
+  else if (n > 3 && !strncmp(c->url + n - 3, ".ts", 3))
+    snprintf(alt, sizeof alt, "%.*s.m3u8%s", (int)(n - 3), c->url, c->url + n);
+  else
+    return NULL;
+  // The relay rule of iptv_play_url, for the address actually played.
+  if (c->headers[0] && !strstr(alt, ".m3u8")) return proxy_wrap(alt, c->headers, dst, size);
+  return alt;
 }

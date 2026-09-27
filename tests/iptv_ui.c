@@ -27,6 +27,7 @@
 #include <string.h>
 
 static SDL_Window *win;
+const char *video_stub_last_url(void);   // tests/video_stub.c
 
 static void key(SDL_Keycode k) {
   SDL_Event e;
@@ -46,6 +47,9 @@ static void frames(int n, const char *capture) {
     txt_new_frame(); tex_new_frame(); tex_pump(6);
     iptvui_update(1.0f / 60, SDL_GetTicks());
     tracks_update(1.0f / 60, SDL_GetTicks());
+    // What the side menu's avatar leaves behind in the app: art drawn without
+    // setting its own aspect would come out cropped to this one.
+    gfx_tex_aspect_current = 0.3f;
     glClearColor(0.051f, 0.051f, 0.051f, 1); glClear(GL_COLOR_BUFFER_BIT);
     iptvui_draw(SDL_GetTicks());
     tracks_draw(SDL_GetTicks());
@@ -292,6 +296,26 @@ int main(int argc, char **argv) {
   frames(10, NULL);
   key(SDLK_AC_BACK);
   assert(!iptvui_fullscreen());
+
+  // --- A container the TV refuses -----------------------------------------------------
+  // HLS errors: the channel retries as TS on its own, and the next tune starts
+  // there. Then everything errors: the reason is said, not just "unavailable".
+  setenv("NUVIO_STUB_FAIL", ".m3u8", 1);
+  key(SDLK_1); key(SDLK_0); key(SDLK_5);
+  frames(3, NULL);
+  printf("played: %s\n", video_stub_last_url());
+  assert(strstr(video_stub_last_url(), "/live/5.ts"));
+  key(SDLK_1); key(SDLK_0); key(SDLK_6);
+  frames(3, NULL);
+  assert(strstr(video_stub_last_url(), "/live/6.ts"));   // straight to TS
+  setenv("NUVIO_STUB_FAIL", "/live/", 1);
+  key(SDLK_1); key(SDLK_0); key(SDLK_7);
+  snprintf(path, sizeof path, "%s/nuvio-live-failed.bmp", out); frames(10, path);
+  unsetenv("NUVIO_STUB_FAIL");
+  key(SDLK_1); key(SDLK_0); key(SDLK_8);
+  frames(3, NULL);
+  key(SDLK_AC_BACK); key(SDLK_AC_BACK);
+  frames(10, NULL);
 
   // --- Setup ------------------------------------------------------------------------
   // To the header, RIGHT to Source, OK; then Xtream Codes.

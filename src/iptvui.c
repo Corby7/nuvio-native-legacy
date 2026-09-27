@@ -108,6 +108,7 @@
 #define LIVE_BAR_MS       6000u   // the bar, the peek, the walk
 #define LIVE_ZAP_MS        350u    // CH+/CH- held down tunes only where it stops
 #define LIVE_DIGITS_MS    1600u
+#define LIVE_START_MS    15000u   // a stream with no picture by then has failed
 #define LIVE_TOAST_MS     2600u
 
 // Colours, as hex from the mockups. HEXF for gfx (floats), HEXI for text (ints).
@@ -152,6 +153,12 @@ static unsigned playSession;
 static int playing, playFailed, errSeen;
 static int zapPending;
 static Uint32 zapAt, tunedAt, zapKeyAt;
+// THE OTHER CONTAINER (iptv_play_url_alt). `usingAlt`: this tune is playing
+// it; `altTried`: this tune already switched once; `useAlt`: it is what played
+// last time the first choice failed, so every tune starts there until the
+// source changes. `streamAt` starts the LIVE_START_MS clock.
+static int usingAlt, altTried, useAlt;
+static Uint32 streamAt;
 
 // THE OVERLAY OVER A PLAYING CHANNEL, Y5's four amounts, each one more press:
 //   TOAST  ▲▼ with nothing showing: a card bottom-left, identity only, 3 s.
@@ -425,9 +432,13 @@ static void stopStream(void) {
 
 static void startStream(void) {
   char relay[4200];
-  const char *url = iptv_play_url(tuned, relay, sizeof relay);
+  const char *url = NULL;
   zapPending = 0;
   playFailed = 0;
+  altTried = 0;
+  usingAlt = useAlt && (url = iptv_play_url_alt(tuned, relay, sizeof relay)) != NULL;
+  if (!url) url = iptv_play_url(tuned, relay, sizeof relay);
+  streamAt = SDL_GetTicks();
   if (!url) return;
   // A live stream is neither Dolby Vision nor an MKV worth probing: the probe
   // would open a second connection, and IPTV accounts allow one.
@@ -443,6 +454,37 @@ static void startStream(void) {
   printf("[live] tuned %d %s%s\n", chan(tuned) ? chan(tuned)->number : 0,
          chan(tuned) ? chan(tuned)->name : "?", playing ? "" : " (pipeline refused)");
   fflush(stdout);
+}
+
+// The stream failed (`why`): play the same channel in the other container,
+// once per tune. 0 when there is no other one or it was already tried.
+static int tryOther(const char *why) {
+  char relay[4200];
+  const char *url = usingAlt ? iptv_play_url(tuned, relay, sizeof relay)
+                             : iptv_play_url_alt(tuned, relay, sizeof relay);
+  if (altTried || !url) return 0;
+  printf("[live] %s on %s; trying the other container\n", why, tunedName);
+  fflush(stdout);
+  altTried = 1;
+  usingAlt = !usingAlt;
+  errSeen = video_error_count();
+  playing = video_play(url);
+  playSession = video_session();
+  lastWin[0] = -1;
+  playFailed = !playing;
+  streamAt = SDL_GetTicks();
+  return playing;
+}
+
+// A failure with nothing left to try: said on screen with the pipeline's own
+// words, which is what anyone reporting it needs to pass on.
+static void failStream(const char *why) {
+  char m[200];
+  playFailed = 1;
+  printf("[live] %s gave up: %s\n", tunedName, why);
+  fflush(stdout);
+  snprintf(m, sizeof m, "Couldn't play %s \xC2\xB7 %s", tunedName, why);
+  say(m);
 }
 
 // Tunes `ch`. `immediate` starts the stream at once; otherwise it waits
@@ -614,6 +656,7 @@ static void saveSetup(void) {
   ime_close();
   editing = -1;
   iptv_set_source(&draft);
+  useAlt = 0;
   backToBrowse();
   group = GROUP_ALL;
   focusName[0] = 0;
@@ -1197,9 +1240,21 @@ void iptvui_update(float dt, Uint32 now) {
     printf("[live] stream error on %s: %s\n", tunedName, why[0] ? why : "?");
     fflush(stdout);
     errSeen = video_error_count();
-    playFailed = 1;
-    // Full screen, the failure is said in the bar, where the channel is named.
-    if (full && ov != OV_PEEK && ov != OV_WALK) overlay(OV_BAR);
+    if (!tryOther(why[0] ? why : "stream error")) {
+      failStream(why[0] ? why : "the TV reported an error");
+      // Full screen, the failure is said in the bar, where the channel is named.
+      if (full && ov != OV_PEEK && ov != OV_WALK) overlay(OV_BAR);
+    }
+  }
+  // No error and no picture either: a stream that never starts.
+  if (ownsVideo() && !zapPending && !playFailed && !video_ready() && now - streamAt >= LIVE_START_MS &&
+      !tryOther("no picture after 15 s"))
+    failStream("no picture after 15 seconds");
+  // It plays: if that took the other container, start there from now on.
+  if (ownsVideo() && video_ready() && usingAlt != useAlt) {
+    useAlt = usingAlt;
+    printf("[live] this source plays as %s; using that from now on\n", useAlt ? "the other container" : "listed");
+    fflush(stdout);
   }
   if (digits[0] && now - digitsAt >= LIVE_DIGITS_MS) {
     int n = atoi(digits);
@@ -1395,6 +1450,10 @@ static void identity(const IptvChannel *c, GfxRect r, float radius, unsigned pla
       if (asp <= 0.0f) asp = 1.0f;
       if (asp > box.w / box.h) { w = box.w; h = box.w / asp; } else { h = box.h; w = box.h * asp; }
       gfx_opacity_group = a;
+      // The rectangle already has the logo's shape. The shader's own crop reads
+      // a global the last art drawn left behind (the menu's avatar, a poster),
+      // and a logo cropped to THAT shape is the squashed look: say "as is".
+      gfx_tex_aspect_current = 0.0f;
       gfx_texture((GfxRect){ box.x + (box.w - w) * 0.5f, box.y + (box.h - h) * 0.5f, w, h }, tex);
       gfx_opacity_group = 1.0f;
       return;
@@ -1846,7 +1905,7 @@ static void drawGuide(void) {
       } else {
         // Dashed, not filled: absence, not a very long programme.
         GLuint dash = dashOutline((int)b.w, (int)b.h);
-        if (dash) gfx_texture(b, dash);
+        if (dash) { gfx_tex_aspect_current = 0.0f; gfx_texture(b, dash); }
       }
       inkMid(TXT_LIVE_META, msg, rowFocus ? 0x4A5058 : 0x565C63, b.x + 18.0f, y + G_ROW_H * 0.5f, b.w - 36.0f, 1.0f);
       pointer_zone(b.x, b.y, b.w, b.h, pointCell, r, 0);

@@ -6,6 +6,7 @@
 #include "video.h"
 #include "gl_compat.h"
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,7 +24,20 @@ static VideoTrack audio = { "English \xC2\xB7 EAC3 5.1", "en", 1, "", 0 };
 
 int  video_start(void) { return 1; }
 int  video_launch_youtube(const char *id) { (void)id; return 0; }
-int  video_play(const char *url) { (void)url; session++; active = 1; return 1; }
+// NUVIO_STUB_FAIL: a pipeline that errors on any URL containing it, the way a
+// TV's refuses a container the provider does not really serve. The URL last
+// asked for is kept for the harness to read.
+static char lastUrl[2048], lastErr[128];
+static int errs;
+const char *video_stub_last_url(void) { return lastUrl; }
+int  video_play(const char *url) {
+  const char *fail = getenv("NUVIO_STUB_FAIL");
+  snprintf(lastUrl, sizeof lastUrl, "%s", url ? url : "");
+  session++;
+  active = !(fail && *fail && url && strstr(url, fail));
+  if (!active) { errs++; snprintf(lastErr, sizeof lastErr, "stub refused %s (code 7)", fail); }
+  return 1;
+}
 void video_pump(void) {}
 void video_stop(void) { active = 0; }
 void video_pause(int p) { (void)p; }
@@ -58,8 +72,8 @@ int video_mkv_waiting(void) { return 0; }
 void video_mkv_hurry(void) {}
 void video_subtitle_style(const VideoSubtitleStyle *e) { (void)e; }
 void video_subtitle_lift(int s) { (void)s; }
-int video_error_count(void) { return 0; }
-void video_last_error(char *d, unsigned n) { if (n) d[0] = 0; }
+int video_error_count(void) { return errs; }
+void video_last_error(char *d, unsigned n) { if (n) snprintf(d, n, "%s", lastErr); }
 int video_eos_count(void) { return 0; }
 int video_has_atmos(void) { return 0; }
 int video_has_dolby_vision(void) { return 0; }
