@@ -2089,6 +2089,7 @@ static int subBlockBuild(SubBlock *b,char *text,TxtStyle st,int r,int g,int bl){
 // Draws a block with its top-left at (x, y); `column` lines each line up inside
 // it: 0 left, 1 centre, 2 right.
 static void subBlockDraw(const SubBlock *b,float x,float y,int column,float alpha){
+  if(alpha<=0.f)return;  // the layout pass: the lines are asked for, nothing drawn
   for(int i=0;i<b->n;i++){
     TxtLine l=b->color[i];
     float lx=column==0?x:column==2?x+b->w-l.w:x+(b->w-l.w)*.5f;
@@ -2136,13 +2137,12 @@ static void drawSubtitlePlaced(const SubtitleCue *c,TxtStyle st,int r,int g,int 
   subBlockDraw(&b,x,y,column,alpha);
 }
 
-static void drawSubtitleExternal(void){
-  SubtitleCue shown[8];char text[768];size_t used=0;SubBlock band;int r,g,b,n;
-  n=subtitle_shown(posSeg,subStyle.delayMs,shown,8);
+// `alpha` 0 lays the cues out without drawing them — see drawSubtitleExternal.
+static void drawCues(const SubtitleCue *shown,int n,float alpha){
+  char text[768];size_t used=0;SubBlock band;int r,g,b;
   if(!n)return;
   int pct=subStyle.size;if(pct<50)pct=50;if(pct>200)pct=200;pct=(pct/10)*10;
   TxtStyle st=(TxtStyle)(TXT_SUB_50+(pct-50)/10);colorSubtitle(subStyle.color,&r,&g,&b);
-  float alpha=(subStyle.opacity==3?.25f:subStyle.opacity==2?.5f:subStyle.opacity==1?.75f:1.f)*entry;
   // Everything the file does not place goes to the usual band at the bottom:
   // SRT and VTT, and ASS lines that are bottom-aligned with no point of their own.
   text[0]=0;
@@ -2168,6 +2168,27 @@ static void drawSubtitleExternal(void){
   { float bar=tracks_style_shown();
     if(bar>0.f&&base>NV_TRK_PREVIEW_FLOOR)base+=(NV_TRK_PREVIEW_FLOOR-base)*bar; }
   subBlockDraw(&band,(NV_SCREEN_W-band.w)*.5f,base-band.h,1,alpha);
+}
+
+// A NEW CUE COMES IN WHOLE. text.c rasterises two lines a frame (TXT_PER_FRAME)
+// and hands back an empty one past that; a two-line cue with an outline is four.
+// Drawn as it came, its first frame had the top line alone, a line lower, and the
+// next frame jumped it up — one frame, seen as a flicker nobody could describe.
+// So the cues are laid out first, undrawn; if any line was still missing, the
+// previous frame's cues are drawn instead (their lines are cached) and the new
+// ones take over once every line is in. The hold gives up after a few frames, so
+// a line that never rasterises cannot freeze the old cue on screen.
+#define SUB_HOLD_FRAMES 6
+static void drawSubtitleExternal(void){
+  static SubtitleCue last[8];static int nLast,held;
+  SubtitleCue shown[8];int n,missBefore=txt_misses;
+  float alpha=(subStyle.opacity==3?.25f:subStyle.opacity==2?.5f:subStyle.opacity==1?.75f:1.f)*entry;
+  n=subtitle_shown(posSeg,subStyle.delayMs,shown,8);
+  drawCues(shown,n,0.f);
+  if(txt_misses!=missBefore&&held<SUB_HOLD_FRAMES){held++;drawCues(last,nLast,alpha);return;}
+  held=0;
+  memcpy(last,shown,(size_t)n*sizeof *shown);nLast=n;
+  drawCues(shown,n,alpha);
 }
 
 // --- THE STREAM STATS PANEL (#playerStatsOverlay) ----------------------------

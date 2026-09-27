@@ -83,6 +83,7 @@
 
 static int   is_open, focus, reqOpen = -1;
 static float anim, animV, scrollY, scrollV;
+static ScrollBar bar;
 // WHERE THE VIEW GREW FROM: the collection card that was focused when OK was
 // pressed. The grid does not simply appear — it opens out of that card, so the
 // screen the viewer gets is visibly the thing they chose. 0 when the grid was
@@ -1002,7 +1003,6 @@ void seeall_draw(Uint32 now) {
   hasHoldCard = 0;
   float a = anim, x0 = settings_content_x();
   int n = nItems(), i;
-  (void)now;
   if (a < 0.01f) return;
 
   // THE BACKGROUND DOES NOT TAKE PART IN THE OPENING, and that is deliberate.
@@ -1168,6 +1168,13 @@ void seeall_draw(Uint32 now) {
   }
   gfx_opacity_group = 1.0f;
   pointer_no_clip();
+  // The row the view is on: the focused one while it leads, else where the
+  // pointer left the scroll.
+  { float step = SEEALL_CARD_H + SEEALL_GAP_Y;
+    int row = pickFocus ? 0 : followFocus ? focus / SEEALL_COLS
+            : (int)(goalY / step + 0.5f);
+    grid_bar_draw(&bar, row, (n + SEEALL_COLS - 1) / SEEALL_COLS, step,
+                  SEEALL_TOP + rise, NV_SCREEN_H - SEEALL_FADE, a, now); }
   if(!n&&disc_seeall_loading())for(int i=0;i<SEEALL_COLS;i++)
     gfx_color((GfxRect){x0+i*(SEEALL_CARD_W+SEEALL_GAP_X),SEEALL_TOP,
                         SEEALL_CARD_W,SEEALL_CARD_H},.06f,.12f,.13f,.15f,a);

@@ -375,7 +375,7 @@ static void *fetchSubtitles(void *u) {
     Subtitle *found = calloc(SUB_MAX, sizeof *found);
     char id[64], kind[16], extra[sizeof subExtra];
     unsigned generation;
-    int nFound = 0, season, episode, i;
+    int nFound = 0, season, episode, i, superseded = 0;
 
     if (!found) { pthread_mutex_lock(&subLock); threadSubAlive = 0;
                   pthread_mutex_unlock(&subLock); return NULL; }
@@ -398,7 +398,7 @@ static void *fetchSubtitles(void *u) {
       snprintf(url, sizeof url, "%s/subtitles/%s/%s%s%s.json",
                addon[i].base, kind, id, extra[0] ? "/" : "", extra);
       body = net_download(url, 25);
-      if (requestChanged(generation)) { free(body); break; }
+      if (requestChanged(generation)) { free(body); superseded = 1; break; }
       if (!body) { data_log("addons.log", "subtitles %s from '%s': no answer", id, addon[i].name); continue; }
       p = js_array(body, NULL, "subtitles");
       {
@@ -482,7 +482,8 @@ static void *fetchSubtitles(void *u) {
     }
     for (; i < nAddon; i++)
       if (addon[i].subtitle)
-        data_log("addons.log", "subtitles %s from '%s': NOT ASKED (list full)", id, addon[i].name);
+        data_log("addons.log", "subtitles %s from '%s': NOT ASKED (%s)", id, addon[i].name,
+                 superseded ? "another title was asked for" : "list full");
 
     pthread_mutex_lock(&subLock);
     if (subStop) { threadSubAlive = 0; pthread_mutex_unlock(&subLock); free(found); return NULL; }

@@ -324,6 +324,15 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
 void cat_save_progress_at(int index_, double posSeg, double durationSeg,
                           int season, int episode, long long whenMs, int origin);
 
+// Only the progress.txt line, by id, with no catalogue item to update. For a
+// synced row whose title is not loaded right now: "Continue watching" is built
+// from this file, so a title missing from the catalogue still needs its line —
+// skipping it froze whatever stale line was there, and a stale line that falls
+// outside the row's limits is exactly what keeps the title out of the catalogue.
+// Returns 1 when the line was written.
+int cat_save_progress_id(const char *imdb, double posSeg, double durationSeg,
+                         int season, int episode, long long whenMs, int origin);
+
 // ONE LINE of progress.txt, as it was RECORDED — not as it was applied to the
 // catalogue.
 //
@@ -362,6 +371,12 @@ typedef struct {
 // ignored) and zeroes the progress of the matching items in memory. The first
 // half of "Remove from Continue watching"; the account and Trakt are cwremove.c's.
 void cat_progress_remove(const char *imdb);
+
+// Hands a line this device pushed over to the account: origin 1 -> 2, for the
+// line of `imdb` whose instant is `ms`. From then on the account's copy is the
+// record, so a delete made on another device is followed here instead of being
+// undone by the next push. A line rewritten since (newer playback) is left alone.
+void cat_progress_mark_synced(const char *imdb, long long ms);
 
 // "REMOVED FROM CONTINUE WATCHING", remembered with the instant it happened
 // (cw-removed.txt in the writing folder). Deleting the resume points is not
@@ -458,6 +473,12 @@ void cat_set_all(const CatItem *list, int count,
 // reaches its last poster — see the long note on the implementation. Returns how
 // many it took; less than asked (or 0) means the row can grow no further.
 int cat_row_grow(int r, const CatItem *v, int count);
+
+// The opposite of cat_row_grow: takes every card of `imdb`'s work out of row
+// `r`, moving the windows after it. ON THE DRAWING THREAD, like cat_row_grow.
+// It lets a card removed from "Continue watching" leave at once instead of
+// waiting for a full rebuild (~20 s on the C3). Returns how many cards went.
+int cat_row_drop(int r, const char *imdb);
 
 // Replaces the episodes of ONE title. Called when the detail screen opens.
 void cat_set_episodes(int indexItem, const CatEp *list, int n);

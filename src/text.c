@@ -668,6 +668,31 @@ static int fileOf(int i) {
   return STYLES[i].weight + (STYLES[i].body < NV_FT_DISPLAY_MIN ? 3 : 0);
 }
 
+// FACES AT ANY SIZE, for txt_line_px. A style's face is opened once at the
+// style's own size; a miniature (the settings previews) needs the same weights
+// at a fraction of it. Opened on demand from the bytes already in memory and kept:
+// a preview asks for a handful of sizes and asks for them every frame.
+#define TXT_SIZED_N 16
+static struct { int file, px; TTF_Font *font; SDL_RWops *rw; } sized[TXT_SIZED_N];
+static int fontFallback;
+
+static TTF_Font *sizedFont(TxtStyle style, int px) {
+  // Under the Display cut's floor the Text cut, as fileOf does for a style.
+  int file = STYLES[style].weight + (px < NV_FT_DISPLAY_MIN ? 3 : 0), i;
+  for (i = 0; i < TXT_SIZED_N && sized[i].font; i++)
+    if (sized[i].file == file && sized[i].px == px) return sized[i].font;
+  if (i == TXT_SIZED_N || !bytesWeight[file]) return NULL;
+  sized[i].rw = SDL_RWFromConstMem(bytesWeight[file], (int)sizeWeight[file]);
+  if (!sized[i].rw) return NULL;
+  sized[i].font = TTF_OpenFontRW(sized[i].rw, 0, (int)(px * scaleTxt + 0.5f));
+  if (!sized[i].font) { SDL_FreeRW(sized[i].rw); sized[i].rw = NULL; return NULL; }
+  if (fontFallback && STYLES[style].weight == WEIGHT_BOLD)
+    TTF_SetFontStyle(sized[i].font, TTF_STYLE_BOLD);
+  sized[i].file = file;
+  sized[i].px = px;
+  return sized[i].font;
+}
+
 int txt_start(const char *dirAssets, float scale) {
   if (scale < 0.5f) scale = 1.0f;
   scaleTxt = scale;
@@ -792,6 +817,7 @@ int txt_start(const char *dirAssets, float scale) {
       { int reads = 0;
         for (int p = 0; p < TXT_FILES; p++) reads += ownerWeight[p];
         printf("font: %s (%d styles, %d reads)\n", names[c], TXT_NFONTS, reads); }
+      fontFallback = c > 0;
       mark("fonts: ready");
       return 1;
     }
@@ -816,6 +842,11 @@ void txt_shutdown(void) {
     if (cache[i].busy && cache[i].line.tex) glDeleteTextures(1, &cache[i].line.tex);
   // ORDER: the font first, the RWops after, the buffer last. FreeType's face still
   // references the stream, and the stream, the bytes.
+  for (int i = 0; i < TXT_SIZED_N; i++) {
+    if (sized[i].font) TTF_CloseFont(sized[i].font);
+    if (sized[i].rw) SDL_FreeRW(sized[i].rw);
+    sized[i].font = NULL; sized[i].rw = NULL;
+  }
   for (int i = 0; i < TXT_NFONTS; i++) {
     if (fonts[i]) TTF_CloseFont(fonts[i]);
     fonts[i] = NULL;
@@ -834,8 +865,9 @@ void txt_shutdown(void) {
   TTF_Quit();
 }
 
+// `px` > 0 sets the style's weight at that size instead of its own (txt_line_px).
 static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
-                             int b, int a, TxtFamily family) {
+                             int b, int a, TxtFamily family, int px) {
   TxtLine empty = {0, 0, 0};
   char clean[1024], clean2[1024];
   if (!s || !*s || style < 0 || style >= TXT_NFONTS || !fonts[style]) return empty;
@@ -866,8 +898,8 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   }
 
   char key[288];
-  snprintf(key, sizeof key, "%d:%d|%02x%02x%02x|%.236s", (int)family,
-           (int)style, r & 255, g & 255, b & 255, s);
+  snprintf(key, sizeof key, "%d:%d:%d|%02x%02x%02x|%.230s", (int)family,
+           (int)style, px, r & 255, g & 255, b & 255, s);
 
   // A hash of the key to avoid the strcmp on almost every entry: the lookup runs
   // for EVERY line of EVERY frame, and comparing 288 bytes hundreds of times per
@@ -928,8 +960,9 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
 
   Uint64 t0 = SDL_GetPerformanceCounter();
   SDL_Color color = { (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a };
-  SDL_Surface *sf = TTF_RenderUTF8_Blended(
-      subtitleFontOf(style, s, family), s, color);
+  TTF_Font *face = px > 0 ? sizedFont(style, px) : subtitleFontOf(style, s, family);
+  if (!face) return empty;
+  SDL_Surface *sf = TTF_RenderUTF8_Blended(face, s, color);
   if (!sf) return empty;
   SDL_Surface *cv = SDL_ConvertSurfaceFormat(sf, SDL_PIXELFORMAT_ABGR8888, 0);
   SDL_FreeSurface(sf);
@@ -1075,12 +1108,17 @@ static float widthOf(TxtStyle style, const char *s, TxtFamily family) {
 }
 
 TxtLine txt_line(TxtStyle style, const char *s, int r, int g, int b, int a) {
-  return lineFamily(style, s, r, g, b, a, TXT_FAMILY_INTER);
+  return lineFamily(style, s, r, g, b, a, TXT_FAMILY_INTER, 0);
+}
+
+TxtLine txt_line_px(TxtStyle style, const char *s, float px, int r, int g, int b, int a) {
+  int p = (int)(px + 0.5f);
+  return lineFamily(style, s, r, g, b, a, TXT_FAMILY_INTER, p < 1 ? 1 : p);
 }
 
 TxtLine txt_line_family(TxtStyle style, const char *s, int r, int g,
                            int b, int a, TxtFamily family) {
-  return lineFamily(style, s, r, g, b, a, family);
+  return lineFamily(style, s, r, g, b, a, family, 0);
 }
 
 void txt_draw(TxtLine l, float x, float y) { txt_draw_alpha(l, x, y, 1.0f); }

@@ -573,8 +573,10 @@ int subtitle_retime(unsigned g,double scale,double offset) {
 // Every cue on screen at `t`, oldest first. ASS files overlap cues all the
 // time (a sign over the dialogue) and repeat the same line on several layers
 // for its outline or shadow; a repeat in the same place is kept once.
+// A POSITIVE delay shows the subtitle LATER, as the sheet's "Later" chip and mpv's
+// sub-delay say: the cue for t plays at t + delay, so the one due now is t - delay.
 int subtitle_shown(double posSeg,int delayMs,SubtitleCue *out,int max) {
-  int lo=0,hi,last,i,k,hits[16],nHits=0; double t=posSeg+(double)delayMs/1000.0;
+  int lo=0,hi,last,i,k,hits[16],nHits=0; double t=posSeg-(double)delayMs/1000.0;
   if(!out||max<=0)return 0;
   if(max>16)max=16;
   pthread_mutex_lock(&lock);

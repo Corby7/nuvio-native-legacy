@@ -63,6 +63,9 @@ void sync_dirty_progress(void);
 // The account's own RPC, sync_delete_watch_progress, the one the web and Android
 // apps call. BLOCKS; 1 on success or when there is no session to delete from.
 int  sync_delete_progress(const char *const *keys, int n);
+// Every progress_key the account holds for `work` (one per episode of a
+// series), from a fresh pull. Up to `max`; 0 on any failure.
+int  sync_progress_keys(const char *work, char (*out)[40], int max);
 void sync_dirty_addons(void);
 
 // The last instant a cycle finished successfully (SDL_GetTicks); 0 if never.

@@ -232,6 +232,17 @@ void txt_new_frame(void);
 
 TxtLine txt_line(TxtStyle style, const char *s, int r, int g, int b, int a);
 
+// A line's width in layout units, measured and NOT rasterised and taking no slot
+// in the line cache: for laying out more lines than will be drawn (Live TV's
+// category chips can number in the hundreds), or deciding between sizes before
+// drawing any.
+float txt_width(TxtStyle style, const char *s);
+
+// The style's weight at `px` layout pixels rather than its own size: a
+// miniature of a screen (the settings previews) scales every line by the same
+// factor, so the lines keep their proportions to each other.
+TxtLine txt_line_px(TxtStyle style, const char *s, float px, int r, int g, int b, int a);
+
 // Like txt_line, but picks one of the families that are safe for subtitles. If
 // the system font does not exist (in the Mac preview, for instance), it falls
 // back to the embedded Inter and logs the fallback once.
@@ -288,10 +299,6 @@ void txt_draw_shadow(TxtLine l, float x, float y, float alpha);
 float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
                    float x, float y, float alpha, float tracking);
 
-// How wide `s` would be in `style`, in layout units, WITHOUT rasterising it or
-// taking a slot in the line cache. For laying out many labels of which only a
-// few will be drawn — Live TV's category chips can number in the hundreds.
-float txt_width(TxtStyle style, const char *s);
 
 // Draws text WRAPPED into lines that fit `width`, returning the height used.
 // Without this, any variable-length text (an episode synopsis, a title's name)
