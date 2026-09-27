@@ -149,7 +149,7 @@ static int full;
 static unsigned playSession;
 static int playing, playFailed, errSeen;
 static int zapPending;
-static Uint32 zapAt, tunedAt;
+static Uint32 zapAt, tunedAt, zapKeyAt;
 
 // THE OVERLAY OVER A PLAYING CHANNEL, Y5's four amounts, each one more press:
 //   TOAST  ▲▼ with nothing showing: a card bottom-left, identity only, 3 s.
@@ -443,7 +443,8 @@ static void startStream(void) {
 }
 
 // Tunes `ch`. `immediate` starts the stream at once; otherwise it waits
-// LIVE_ZAP_MS for the keys to stop, so a run of CH+ presses opens one stream.
+// LIVE_ZAP_MS for the keys to stop, so a run of CH+ presses opens one stream
+// (zap decides which).
 static void tune(int ch, int immediate) {
   const IptvChannel *c = chan(ch);
   if (!c) return;
@@ -464,7 +465,14 @@ static void zap(int step) {
   r = r < 0 ? 0 : ((r + step) % nView + nView) % nView;
   fRow = r;
   rememberFocus();
-  tune(view[r], 0);
+  // A LONE PRESS TUNES AT ONCE. Only a press that follows another within
+  // LIVE_ZAP_MS waits for the keys to stop: the single CH+ used to pay the
+  // whole wait before the stream even started loading. A run of presses costs
+  // one extra load, the first one, which the next tune unloads.
+  { Uint32 t = SDL_GetTicks();
+    int alone = !zapPending && t - zapKeyAt >= LIVE_ZAP_MS;
+    zapKeyAt = t;
+    tune(view[r], alone); }
 }
 
 static void tuneNumber(int number) {
@@ -741,10 +749,27 @@ int iptvui_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v
 int iptvui_fullscreen(void) { return full && tuned >= 0; }
 
 // --- Events ---------------------------------------------------------------------------
+// Whether a longer channel number starts with the digits typed so far. When
+// none does, the number is complete and waiting LIVE_DIGITS_MS for another
+// digit is only a delay: "7" on a list of 1-20 tunes at once, "1" waits for a
+// possible "12". A full buffer is complete too.
+static int digitsCanGrow(void) {
+  const IptvList *l = iptv_list();
+  size_t n = strlen(digits);
+  char num[16];
+  if (!l || n + 1 >= sizeof digits) return 0;
+  for (int c = 0; c < l->nCh; c++) {
+    snprintf(num, sizeof num, "%d", l->ch[c].number);
+    if (strlen(num) > n && !strncmp(num, digits, n)) return 1;
+  }
+  return 0;
+}
+
 static void typeDigit(int d) {
   size_t n = strlen(digits);
   if (n + 1 < sizeof digits) { digits[n] = (char)('0' + d); digits[n + 1] = 0; }
   digitsAt = SDL_GetTicks();
+  if (!digitsCanGrow()) digitsAt -= LIVE_DIGITS_MS;
 }
 
 static int viewIndex(int ch) {

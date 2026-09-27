@@ -183,10 +183,38 @@ int main(int argc, char **argv) {
     // BACK hides the bar; ▲▼ now zaps, and the toast names where it landed.
     key(SDLK_AC_BACK);
     frames(20, NULL);
+    // A lone press tunes on the frame it lands, not after the zap wait.
+    SDL_Delay(400);
     key(SDLK_DOWN);
+    frames(1, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after));
+    free(after);
+    // A run of presses tunes only where it stops.
+    free(before);
+    before = data_read("iptv_recent.txt");
+    key(SDLK_DOWN);
+    frames(1, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
     snprintf(path, sizeof path, "%s/nuvio-live-toast.bmp", out); frames(30, path);
     after = data_read("iptv_recent.txt");
     assert(strcmp(before, after));   // the zap retuned, once the keys stopped
+    free(after);
+    // A number no longer number starts with tunes as its last digit lands:
+    // the list runs 101-148, so 148 cannot grow and 14 can.
+    free(before);
+    before = data_read("iptv_recent.txt");
+    key(SDLK_1); key(SDLK_4);
+    frames(2, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
+    key(SDLK_8);
+    frames(2, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after) && !strncmp(after, "Family", 6));
     free(after);
     // The peek's OK is the other thing that retunes.
     free(before);
