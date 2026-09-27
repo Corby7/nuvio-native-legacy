@@ -2158,7 +2158,7 @@
 // The thumbnail sits INSIDE the card's padding at 16:9 with its own radius — a
 // picture on the card, not the card's left end. Its height is the copy stack's:
 // caption, title, pills.
-#define NV_NEXT_THUMB_H   132.0f
+#define NV_NEXT_THUMB_H   148.0f
 #define NV_NEXT_THUMB_W   (NV_NEXT_THUMB_H * 16.0f / 9.0f)
 #define NV_NEXT_THUMB_R    12.0f
 // The copy column is as wide as the wider of the title and the pill row, capped
@@ -2166,24 +2166,24 @@
 #define NV_NEXT_COPY_MAX  440.0f
 #define NV_NEXT_TITLE_Y    28.0f   // caption top to title top
 #define NV_NEXT_TITLE_DOT_GAP 12.0f // either side of the dot in "S1 E12 · Name"
-#define NV_NEXT_PILL_H     44.0f
-#define NV_NEXT_PILL_PADX  20.0f
-#define NV_NEXT_PILL_GAP   10.0f
+#define NV_NEXT_PILL_H     56.0f
+#define NV_NEXT_PILL_PADX  28.0f
+#define NV_NEXT_PILL_GAP   12.0f
 // play.png's triangle is not centred in half its box the way the skip glyph is:
 // its ink runs from 25% to 94% of the width (x 32..120 of 128). Layout therefore
 // counts the INK width and hangs the box so the ink starts on the text column —
 // assuming the 2x rule put the triangle's tip against the "P".
-#define NV_NEXT_PLAY_BOX   14.0f
+#define NV_NEXT_PLAY_BOX   18.0f
 #define NV_NEXT_PLAY_INK_X 0.25f
 #define NV_NEXT_PLAY_INK_W (NV_NEXT_PLAY_BOX * 0.6875f)
-#define NV_NEXT_PILL_ICON_GAP 10.0f
+#define NV_NEXT_PILL_ICON_GAP 12.0f
 #define NV_NEXT_PILL_RING   1.5f   // the Not now outline, in px
 // The countdown along the card's base, the same 6px band the skip button carries.
 #define NV_NEXT_BAR         6.0f
 #define NV_FT_NEXT_KICK    17      // "UP NEXT"          17 / 700, ls .2em
 #define NV_FT_NEXT_COUNT   17      // "Playing in 8s"    17 / 700
 #define NV_FT_NEXT_TITLE   28      // "S1 E11 · Name"    28 / 700
-#define NV_FT_NEXT_PILL    19      // the action pills   19 / 700
+#define NV_FT_NEXT_PILL    23      // the action pills   23 / 700 (19 read too small from the sofa)
 #define NV_NEXT_KICK_TRACK  3.4f   // 0.2em at 17px
 
 // THE PLAYER'S DROPDOWNS — the season pill here, the subtitle sheet's selects —
@@ -2511,5 +2511,28 @@
 #define NV_FT_SRC_SIZE    30  // the file size
 #define NV_FT_SRC_TIER    17  // BEST / GOOD / FAIR / POOR
 #define NV_SRC_TIER_TRACK  1.4f  // 0.08em at 17px
+
+// THE PAUSE OVERLAY — what comes up when playback has sat paused with nobody
+// touching the remote: the paused frame goes behind a blur and the title
+// introduces itself again, bottom-left, the way NuvioTV's PauseOverlay does.
+// How long it waits is a Settings row (Playback, "Pause overlay after"), 10 s by
+// default; NuvioTV's is a fixed 5 s, which read as jumpy for a pause to fetch a drink.
+#define NV_PAUSE_IN_S      0.60f   // the fade in: slow, it is ambient
+#define NV_PAUSE_OUT_S     0.18f   // the fade out: quick, a key was pressed
+#define NV_PAUSE_X         120.0f  // the copy's left edge, and the corners' inset
+#define NV_PAUSE_TOP       72.0f   // the clock's line
+#define NV_PAUSE_BOTTOM    130.0f  // the copy's base above the screen's
+#define NV_PAUSE_COPY_W    880.0f  // the synopsis wraps here: a calmer measure than 1040
+#define NV_PAUSE_LOGO_W    560.0f  // the logo's box; the art keeps its ratio
+#define NV_PAUSE_LOGO_H    180.0f
+#define NV_PAUSE_SIN_LINES 3
+#define NV_PAUSE_SIN_LD    38.0f   // the synopsis's line pitch
+#define NV_PAUSE_RISE      24.0f   // how far the copy rises as it fades in
+#define NV_FT_PAUSE_TITLE  64
+#define NV_FT_PAUSE_META   24      // the status line, bottom right
+#define NV_FT_PAUSE_EP     28
+#define NV_FT_PAUSE_SIN    25
+// The player's own corner clock size (NV_FT_PG_CLOCK); 44 dominated the screen.
+#define NV_FT_PAUSE_CLOCK  32
 
 #endif

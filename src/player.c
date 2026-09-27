@@ -161,14 +161,12 @@
 // The web app's answer, ported: a PREVIEW. Presses move a target, the bar draws the
 // target, playback carries on untouched underneath, and ONE seek is issued 1000ms
 // after the last press (scheduleSeekPreviewCommit).
-// The stats panel's corner. The web app hangs it at left ~38 / top 24; this keeps
-// a little more edge than that because the TV's overscan really does eat the strip
-// the browser never loses — but it is a CORNER now, not the 96/64 content gutter
-// the rest of the overlay uses, which had it floating in the middle of the frame.
-// The prompts' own margins (NV_PJ_RIGHT / NV_PJ_BOTTOM), mirrored into the top-left
-// corner, so the stats panel keeps the same distance from the frame they do.
-#define PLR_STATS_X         NV_PJ_RIGHT
-#define PLR_STATS_Y         NV_PJ_BOTTOM
+// The stats panel's corner. The web app hangs it at left ~38 / top 24. It used
+// to borrow the jump prompts' 64/60 margins, which the owner found too far from
+// the corner; 32 sits with the web's. An older note here warned that overscan
+// eats the edge strip — if the panel ever looks clipped, this is what to raise.
+#define PLR_STATS_X         32.0f
+#define PLR_STATS_Y         32.0f
 #define PLR_SEEK_COMMIT_MS  1000u
 // The pill's fade once the seek is committed. The web app simply clears the text;
 // 200ms of fade costs nothing and stops it popping out of existence.
@@ -419,6 +417,10 @@ static int    skipAutoHidden;
 // the resume, a skip) starts the count again; a pause only holds it.
 #define PLR_SKIP_LEAD_MS 1000.0f
 static float  rolledMs;
+// Has THIS load rolled for PLR_SKIP_LEAD_MS at least once? rolledMs drops back
+// to 0 on every seek; this does not, so seeking near the end does not blink
+// the Up next card away.
+static int    rolledOnce;
 static int introIdx=-1, introT=-1, introE=-1;
 static int resumeApplied, resumePct;
 
@@ -915,7 +917,7 @@ static void openSession(int indexCatalog, const char *url) {
   startImage = 0;
   nextDismissed = 0; nextFocus = NEXT_PLAY; nextElapsed = 0;
   reportReset();
-  skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0; rolledMs = 0;
+  skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0; rolledMs = 0; rolledOnce = 0;
   resumeApplied=0;
   button = PLR_PLAY;
   memset(focusB, 0, sizeof focusB);
@@ -1007,6 +1009,7 @@ void player_set_source(const char *url) {
   // A source CHANGE mid-playback starts a new load from empty; the first source
   // of an opening carries on from the search stage it just finished.
   if (!waitingSource) { loadFill = 0.0f; loadEndAt = 0; }
+  rolledOnce = 0;
   waitingSource = 0;
   errorSource = 0;
   failWatchReset();
@@ -1100,7 +1103,7 @@ void player_shutdown(void) {
   seekActive = 0; seekRepeats = 0; seekDir = 0;
   seekAt = seekEndAt = settleAt = 0;
   quickAt = 0; quickDelta = 0.0f; quickAnim = 0.0f; quickPulse = 0.0f;
-  startImage = 0; rolledMs = 0;
+  startImage = 0; rolledMs = 0; rolledOnce = 0;
   episodes_close();
   intro_off(); introIdx=introT=introE=-1;
   subtitle_off();
@@ -1240,7 +1243,12 @@ const CatEp *player_prefetch_next(void) {
 }
 
 static int nextCardUp(void) {
-  if (!playbackReady()) return 0;
+  // NOT WHILE AN EPISODE IS LOADING. playbackReady() is true for the whole
+  // source search (there is no pipeline yet, so !hasVideo), and on the TV a
+  // picture that has only just landed may still be settling a resume seek. The
+  // card waits until this episode has actually rolled, as the skip button does.
+  if (!playbackReady() || player_loading() || errorSource) return 0;
+  if (hasVideo && !rolledOnce) return 0;
   return offerNext() && !nextDismissed && player_next_episode() != NULL;
 }
 
@@ -1351,6 +1359,21 @@ static void nextStep(int dir) {
 // Every key wakes the controls, including one that has already carried out an
 // action: on the device there is no command that happens with the bar hidden without
 // bringing the bar along — the user needs to see the effect of what they pressed.
+// THE PAUSE OVERLAY (NuvioTV's PauseOverlay): paused, and nobody has touched the
+// remote for the Settings row's delay (settings_pause_overlay_ms, 0 = off), the frame goes behind a blur and the title
+// introduces itself again. `pauseAnim` follows the target; any input drops it —
+// wake() moves lastInput, and lastInput is the whole trigger.
+static float pauseAnim;
+static int   pauseOn;
+
+static int pauseWanted(Uint32 now) {
+  return !playing && !trailerMode && !exiting && !errorSource && !seekActive &&
+         playbackReady() && !player_loading() && !statsOpen &&
+         !episodes_is_open() && !stream_sheet_is_open() && !tracks_is_open() &&
+         settings_pause_overlay_ms() > 0 &&
+         msSince(now, lastInput) > (Uint32)settings_pause_overlay_ms();
+}
+
 static void wake(void) { visible = 1; lastInput = SDL_GetTicks(); }
 
 static void togglePlaying(void) {
@@ -1430,6 +1453,11 @@ static float barX, barW;
 // 1 while a click that landed on the bar is still held: the aim follows the
 // pointer until the button comes up, and only then is the seek sent.
 static int barDrag;
+// THE HOVER READOUT (.player-progress-hover): a marker on the bar under the
+// pointer and a bubble above it with the time a click there would seek to —
+// YouTube's scrub preview, minus the thumbnail. hoverFrac is the last aim, kept
+// while the bubble fades so it fades where it was and not at 0:00.
+static float hoverFrac, hoverAnim;
 
 static float barFracAt(float x) {
   return barW > 0.0f ? anim_clamp((x - barX) / barW, 0.0f, 1.0f) : 0.0f;
@@ -1476,6 +1504,19 @@ static void clickPicture(int a, int b) {
 void player_event(const SDL_Event *e) {
   if (!is_open || exiting || e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+
+  // THE PAUSE OVERLAY TAKES THE FIRST KEY. OK resumes straight from it — the one
+  // thing a paused viewer coming back most likely wants — and anything else,
+  // Back included, only puts it away and brings the controls back, so the key
+  // that dismisses it does not also seek, leave or change the aspect.
+  if (pauseOn) {
+    pauseOn = 0;
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+      if (!playing) togglePlaying();
+    }
+    wake();
+    return;
+  }
 
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
       k == SDLK_DELETE) {
@@ -1826,7 +1867,8 @@ void player_update(float dt, Uint32 now) {
   }
   { float step = posSeg - posBefore;
     if (step < 0.0f || step > 1.0f || settleAt) rolledMs = 0;
-    else if (playing && playbackReady() && !player_loading()) rolledMs += dt * 1000.0f; }
+    else if (playing && playbackReady() && !player_loading()) rolledMs += dt * 1000.0f;
+    if (rolledMs >= PLR_SKIP_LEAD_MS) rolledOnce = 1; }
 
   // THE SUBTITLE CHOOSES ITSELF, once per playback, from the Settings row. Held
   // back until the first frame with a picture: before that the pipeline has no
@@ -1864,7 +1906,19 @@ void player_update(float dt, Uint32 now) {
         barDrag = 0;
         commitSeek();
       }
-    } }
+    }
+    // Over the bar, or dragging along it: the readout follows, and the controls
+    // stay up — resting the pointer on the bar is aiming, and the transport must
+    // not time out from under it.
+    { int on = durationSeg > 0.0f &&
+               (barDrag || (pointer_active() && visible && pointer_over(pointBar, 0, 0)));
+      if (on) {
+        hoverFrac = barDrag ? anim_clamp(seekPreview / durationSeg, 0.0f, 1.0f)
+                            : barFracAt(pointer_x());
+        lastInput = now;
+      }
+      hoverAnim = anim_spring(hoverAnim, on ? 1.0f : 0.0f, dt,
+                              on ? NV_SPRING_FOCUS : NV_SPRING_BLUR); } }
 
   // Paused, the controls stay. Making them disappear would leave the user in front of
   // a still frame with no clue that it was they who paused.
@@ -1892,6 +1946,15 @@ void player_update(float dt, Uint32 now) {
     quickAnim = anim_spring(quickAnim, q ? 1.0f : 0.0f, dt,
                             q ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     quickPulse *= expf(-dt / 0.12f); }
+
+  // THE PAUSE OVERLAY. Rising, it takes the transport down with it: the controls
+  // are what "paused" looked like until now, and the two stacked read as clutter.
+  // The first key brings them back (player_event), so the paused viewer is never
+  // left without them for longer than the overlay is up.
+  pauseOn = pauseWanted(now);
+  if (pauseOn) visible = 0;
+  pauseAnim = pauseOn ? fminf(1.0f, pauseAnim + dt / NV_PAUSE_IN_S)
+                      : fmaxf(0.0f, pauseAnim - dt / NV_PAUSE_OUT_S);
 }
 
 // hh:mm:ss only when it passes an hour — "0:03:12" on a short episode reads as a
@@ -1970,6 +2033,30 @@ static void buttonCircle(float cx, float cy, float f, float a) {
 static float railRadius(float w, float h) {
   if (h <= 0.0f) return 0.0f;
   return 0.5f * (w < h ? w / h : 1.0f);
+}
+
+// THE INTRO'S EDGES as cuts in the bar, the way YouTube marks chapters: a gap
+// where the opening starts and one where it ends, and nothing drawn on top.
+// Each layer (track, buffer, fill) is still ONE rounded bar, drawn once per
+// piece under a crop — so the bar's outer ends keep their rounding and the cuts
+// come out square, and a translucent layer never overlaps itself.
+#define PLR_RAIL_GAP 4.0f
+static float railCut[2];
+static int nRailCut;
+
+static void railLayer(GfxRect r, float cr, float cg, float cb, float ca) {
+  float rad = railRadius(r.w, r.h);
+  if (!nRailCut) { gfx_color(r, rad, cr, cg, cb, ca); return; }
+  float from = barX;
+  for (int i = 0; i <= nRailCut; i++) {
+    float to = i < nRailCut ? railCut[i] - PLR_RAIL_GAP * 0.5f : barX + barW;
+    if (to > from) {
+      gfx_crop(from, r.y - r.h, to - from, r.h * 3.0f);
+      gfx_color(r, rad, cr, cg, cb, ca);
+    }
+    if (i < nRailCut) from = railCut[i] + PLR_RAIL_GAP * 0.5f;
+  }
+  gfx_no_crop();
 }
 
 static void colorSubtitle(int i,int *r,int *g,int *b){
@@ -2235,7 +2322,9 @@ static void drawStats(float alpha) {
     float x = PLR_STATS_X, y = PLR_STATS_Y;
     float rad = NV_NEXT_R / (w < h ? w : h);
     GfxRect r = { x, y, w, h };
-    gfx_color(r, rad, NV_TRK_INK_R, NV_TRK_INK_G, NV_TRK_INK_B, 0.92f * alpha);
+    // Translucent, not the card's 0.92: the picture shows through, so the panel
+    // reads as an overlay on the film rather than a slab over it.
+    gfx_color(r, rad, NV_TRK_INK_R, NV_TRK_INK_G, NV_TRK_INK_B, 0.55f * alpha);
     gfx_rect(r, 0, GFX_RING_INSET, 0, 1.0f / (w < h ? w : h), 0, rad,
              1, 1, 1, 0.10f * alpha);
     txt_tracking(TXT_NEXT_KICK, "STREAM STATS", 150, 152, 158,
@@ -2508,6 +2597,233 @@ void player_draw_subtitle_over(void) {
   drawSubtitleExternal();
 }
 
+// --- the pause overlay ---------------------------------------------------------
+//
+// WHY THE BLUR IS THE TITLE'S ART AND NOT THE PAUSED FRAME: the video is a hardware
+// plane BEHIND the GL surface, and GL cannot read a single pixel of it — what this
+// surface holds over the video is a hole. So the frame is covered, not filtered:
+// the title's backdrop, run through the gaussian targets (gfx_blur_*, pair 0, which
+// nothing else draws into any more), stands in for it. It is the same art the
+// loading screen showed, so tex_get_hero is a cache hit and the blur runs once per
+// title, not per frame.
+static char pauseBlurFor[512];
+
+static const CatEp *currentEp(void) {
+  if (epT < 1) return NULL;
+  for (int i = 0; i < cat_n_episodes(idx); i++) {
+    const CatEp *ep = cat_episode(idx, i);
+    if (ep && ep->season == epT && ep->episode == epE) return ep;
+  }
+  return NULL;
+}
+
+// The next " · "-separated piece of `*s`, trimmed, into `out`; 0 when none is left.
+// strtok would not do: its delimiters are single BYTES, and the dot's two (C2 B7)
+// also occur inside other characters.
+static int pauseNextPiece(const char **s, char *out, size_t n) {
+  const char *a = *s;
+  if (!a || !*a) return 0;
+  const char *b = strstr(a, "\xc2\xb7");
+  size_t len = b ? (size_t)(b - a) : strlen(a);
+  *s = b ? b + 2 : a + len;
+  while (len && *a == ' ') { a++; len--; }
+  while (len && a[len - 1] == ' ') len--;
+  if (len >= n) len = n - 1;
+  memcpy(out, a, len); out[len] = 0;
+  return 1;
+}
+
+// THE META LINE AS THE HOME HERO'S TOKENS: "Action • Adventure • Drama  • 2024 • 14+".
+// Two groups, as there — what the title IS (up to three genres), then its NUMBERS
+// (year, a film's running time, the age rating) — with *nLead the index where the
+// second begins. The type word ("TV Show", "Movie") at the head of `genre` is
+// dropped, and so is a series' season count: the episode line below already says
+// where in the series this is.
+#define PAUSE_META_MAXTOK 8
+static int pauseMeta(const CatItem *c, char tok[][64], int *nLead) {
+  char t[64];
+  const char *s;
+  int n = 0, genres = 0;
+  for (s = c->genre; genres < 3 && n < PAUSE_META_MAXTOK && pauseNextPiece(&s, t, sizeof t); ) {
+    if (!t[0] || !strcmp(t, "TV Show") || !strcmp(t, "Movie") ||
+        !strcmp(t, "Series") || !strcmp(t, "Film")) continue;
+    snprintf(tok[n++], 64, "%s", t); genres++;
+  }
+  *nLead = n;
+  if (c->year > 0 && n < PAUSE_META_MAXTOK) snprintf(tok[n++], 64, "%d", c->year);
+  for (s = c->meta; n < PAUSE_META_MAXTOK && pauseNextPiece(&s, t, sizeof t); ) {
+    if (!t[0] || strstr(t, "season") || strstr(t, "Season")) continue;
+    if (c->year > 0 && atoi(t) == c->year) continue;
+    snprintf(tok[n++], 64, "%s", t);
+  }
+  // A bare "14" reads as a count, not a rating; "14+" does not.
+  if (c->age_rating[0] && n < PAUSE_META_MAXTOK) {
+    const char *r = c->age_rating;
+    int numeric = 1;
+    for (const char *q = r; *q; q++) if (*q < '0' || *q > '9') numeric = 0;
+    snprintf(tok[n++], 64, numeric ? "%s+" : "%s", r);
+  }
+  return n;
+}
+
+static void drawPauseOverlay(Uint32 now) {
+  (void)now;
+  float p = pauseAnim * entry;
+  if (p <= 0.004f) return;
+  const CatItem *c = item();
+  if (!c) return;
+  gfx_opacity_group = 1.0f;
+  float e  = anim_smooth(p);
+  // The copy comes in behind the veil, not with it: first the picture softens, then
+  // the title settles into it.
+  float ec = anim_smooth((p - 0.30f) / 0.70f);
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+
+  // --- the blur ---
+  const char *art = c->backdrop[0] ? c->backdrop : NULL;
+  if (art && strcmp(pauseBlurFor, art)) {
+    GLuint tex = tex_get_hero(art);
+    if (tex) {
+      gfx_blur_generate(0, tex, tex_aspect(art));
+      snprintf(pauseBlurFor, sizeof pauseBlurFor, "%s", art);
+    }
+  }
+  if (art && !strcmp(pauseBlurFor, art)) gfx_blur_draw(0, screen, e);
+  else gfx_color(screen, 0.0f, 0.02f, 0.02f, 0.025f, 0.86f * e);
+  // Darker to the left and the base, where the copy sits, and a band along the top
+  // for the clock — the blurred art alone is too bright for white type to hold on.
+  gfx_color(screen, 0.0f, 0, 0, 0, 0.30f * e);
+  gfx_rect(screen, 0, GFX_VEIL, 0, 0, 0, 0.0f, 0, 0, 0, 0.92f * e);
+  { GfxRect top = { 0, 0, NV_SCREEN_W, 220 };
+    gfx_rect(top, 0, GFX_VEIL_TOP, 0, 0, 0, 0.0f, 0, 0, 0, 0.55f * e); }
+
+  // --- the clock, top right ---
+  { time_t nowT = time(NULL);
+    struct tm lt;
+    char hhmm[8];
+    localtime_r(&nowT, &lt);
+    strftime(hhmm, sizeof hhmm, "%H:%M", &lt);
+    TxtLine lc = txt_line(TXT_PAUSE_CLOCK, hhmm, 255, 255, 255, 255);
+    txt_draw_alpha(lc, NV_SCREEN_W - NV_PAUSE_X - lc.w, NV_PAUSE_TOP, 0.90f * ec); }
+
+  // --- where playback stopped, bottom right, on the copy's base line ---
+  // No separator: the weight and the dimmer time already split "Paused" from
+  // "0:03 / 52:00", and a dot between them was one more mark on a quiet screen.
+  { char at[16], total[16], status[40];
+    fmtTime(at, sizeof at, posSeg, 0);
+    fmtTime(total, sizeof total, durationSeg, 0);
+    snprintf(status, sizeof status, "%s / %s", at, total);
+    TxtLine lp = txt_line(TXT_PAUSE_META, "Paused", 255, 255, 255, 255);
+    TxtLine ls = txt_line(TXT_PAUSE_META, status, 255, 255, 255, 255);
+    float icon = 22.0f, gap = 18.0f;
+    float base = NV_SCREEN_H - NV_PAUSE_BOTTOM + (1.0f - ec) * NV_PAUSE_RISE;
+    float mid = base - lp.h * 0.5f;
+    float xs = NV_SCREEN_W - NV_PAUSE_X - (icon + 12.0f + lp.w + gap + ls.w);
+    iconFile(xs + icon * 0.5f, mid, 0.90f * ec, 1.0f, "pause", icon);
+    xs += icon + 12.0f;
+    txt_draw_alpha(lp, xs, mid - lp.h * 0.5f, 0.90f * ec);
+    xs += lp.w + gap;
+    txt_draw_alpha(ls, xs, mid - ls.h * 0.5f, NV_HERO_META_INK * ec); }
+
+  // --- the title, stacked from the base up: logo, meta line, episode, synopsis ---
+  const CatEp *ep = currentEp();
+  char meta[PAUSE_META_MAXTOK][64], epCode[24];
+  int nLead, nMeta = pauseMeta(c, meta, &nLead);
+  const char *epName = NULL;
+  if (epT > 0) {
+    snprintf(epCode, sizeof epCode, "S%d E%d", epT, epE);
+    epName = (ep && ep->name[0]) ? ep->name
+           : (epT == c->season && epE == c->episode && c->nameEpisode[0]) ? c->nameEpisode
+           : NULL;
+  }
+  const char *sin = (ep && ep->synopsis[0]) ? ep->synopsis : c->synopsis;
+  int nSin = sin[0] ? txt_block_lines(TXT_PAUSE_SIN, sin, NV_PAUSE_COPY_W) : 0;
+  if (nSin > NV_PAUSE_SIN_LINES) nSin = NV_PAUSE_SIN_LINES;
+
+  GLuint logo = 0;
+  float lw = NV_PAUSE_LOGO_W, lh = 0.0f;
+  if (c->logo[0]) {
+    // 640, the loading screen's request: the same width is a cache hit.
+    logo = tex_get_width(c->logo, 640);
+    float ar = tex_aspect(c->logo);
+    if (logo && ar > 0.0f) {
+      lh = lw / ar;
+      if (lh > NV_PAUSE_LOGO_H) { lh = NV_PAUSE_LOGO_H; lw = lh * ar; }
+    } else logo = 0;
+  }
+  TxtLine title = txt_line_trim(TXT_PAUSE_TITLE, c->title, 255, 255, 255, 255, NV_PAUSE_COPY_W);
+  float hMeta = nMeta ? (float)txt_line(TXT_HERO_META, meta[0], 255, 255, 255, 255).h : 0.0f;
+  // "S1 E1   The End": no separator, the dimmer code and a wider gap do its job.
+  const float epGap = 16.0f;
+  TxtLine lcode = {0}, lname = {0};
+  if (epT > 0) {
+    lcode = txt_line(TXT_PAUSE_EP, epCode, 255, 255, 255, 255);
+    if (epName)
+      lname = txt_line_trim(TXT_PAUSE_EP, epName, 255, 255, 255, 255,
+                            NV_PAUSE_COPY_W - lcode.w - epGap);
+  }
+
+  float hIdent = logo ? lh : (float)title.h;
+  float gIdent = nMeta ? 28.0f : 0.0f, gEp = 30.0f, gSin = 14.0f;
+  float h = hIdent + gIdent + hMeta;
+  if (epT > 0) h += gEp + lcode.h;
+  if (nSin)    h += (epT > 0 ? gSin : gEp) + nSin * NV_PAUSE_SIN_LD;
+
+  float x = NV_PAUSE_X;
+  float y = NV_SCREEN_H - NV_PAUSE_BOTTOM - h + (1.0f - ec) * NV_PAUSE_RISE;
+
+  if (logo) {
+    // Bottom-aligned in its slot, so a short wide logo sits on the meta line
+    // instead of floating above it.
+    GfxRect r = { x, y + hIdent - lh, lw, lh };
+    gfx_logo(r, logo, tex_brand_dark(c->logo), .95f, .95f, .97f, ec);
+  } else {
+    txt_draw_alpha(title, x, y, ec);
+  }
+  y += hIdent + gIdent;
+  // The home hero's line, drawn the way home.c draws it: TXT_HERO_META, the tokens
+  // at 62% and every "•" at 34% with NV_HERO_META_SEP either side, and the wider
+  // NV_HERO_META_GROUP before the numbers. A token that does not fit is dropped whole.
+  { int ink = (int)(255.0f * NV_HERO_META_INK + 0.5f);
+    int dim = (int)(255.0f * NV_HERO_META_DOT + 0.5f);
+    float cx = x, limit = x + NV_PAUSE_COPY_W;
+    int drawn = 0;
+    for (int i = 0; i < nMeta; i++) {
+      TxtLine lt = txt_line(TXT_HERO_META, meta[i], ink, ink, ink, 255);
+      TxtLine ld = { 0, 0, 0 };
+      float lead = 0.0f, sep = 0.0f;
+      if (drawn) {
+        lead = (i == nLead) ? NV_HERO_META_GROUP : NV_HERO_META_SEP;
+        ld = txt_line(TXT_HERO_META, "\xe2\x80\xa2", dim, dim, dim, 255);
+        sep = lead + (float)ld.w + NV_HERO_META_SEP;
+      }
+      if (cx + sep + (float)lt.w > limit) break;
+      if (drawn) {
+        txt_draw_alpha(ld, cx + lead, y + ((float)lt.h - (float)ld.h) * 0.5f, ec);
+        cx += sep;
+      }
+      txt_draw_alpha(lt, cx, y, ec);
+      cx += (float)lt.w;
+      drawn++;
+    } }
+  y += hMeta;
+  // The episode and its synopsis are ONE block, a wider gap above it than inside it,
+  // so the stack reads as two things — the show, then this episode — not five lines.
+  if (epT > 0) {
+    float xe = x;
+    y += gEp;
+    txt_draw_alpha(lcode, xe, y, 0.55f * ec);
+    xe += lcode.w;
+    if (epName) txt_draw_alpha(lname, xe + epGap, y, 0.95f * ec);
+    y += lcode.h;
+  }
+  if (nSin) {
+    y += epT > 0 ? gSin : gEp;
+    txt_block_trim(TXT_PAUSE_SIN, sin, 255, 255, 255, x, y, NV_PAUSE_COPY_W,
+                   NV_PAUSE_SIN_LD, 0.70f * ec, NV_PAUSE_SIN_LINES);
+  }
+}
+
 void player_draw(Uint32 now) {
   if (!is_open) return;
   // The audio and subtitle sheets, and the episode list, take the screen the
@@ -2517,6 +2833,7 @@ void player_draw(Uint32 now) {
     if (eps > sheet) sheet = eps;
     chrome = 1.0f - sheet; }
   drawPlayer(now);
+  drawPauseOverlay(now);
   gfx_opacity_group = 1.0f;
 }
 static void drawPlayer(Uint32 now) {
@@ -2553,7 +2870,12 @@ static void drawPlayer(Uint32 now) {
     // does not exist on the device.
     if (hole.w < NV_SCREEN_W - 0.5f || hole.h < NV_SCREEN_H - 0.5f)
       gfx_color(screen, 0.0f, 0, 0, 0, 1.0f);
-    if (hole.w > 0.0f && hole.h > 0.0f) gfx_hole(hole);
+    if (hole.w > 0.0f && hole.h > 0.0f) {
+      // The Mac preview has a frame to draw instead of a plane to reveal.
+      GLuint frame = video_frame_texture();
+      if (frame) gfx_texture(hole, frame);
+      else gfx_hole(hole);
+    }
   } else {
     const char *art = (c && c->backdrop[0]) ? c->backdrop : NULL;
     GLuint tex = art ? tex_get_hero(art) : 0;   // it fills the whole screen
@@ -2899,9 +3221,27 @@ static void drawPlayer(Uint32 now) {
   // rest, and the focused step keeps the same 0.08 span so the two states stay as
   // far apart as the sheet has them.
   float aRail = 0.26f + (0.34f - 0.26f) * fBar;
-  GfxRect rail = { cx, yBar, cw, hRail };
-  gfx_color(rail, railRadius(cw, hRail), 1, 1, 1, aRail * ab);
   barX = cx; barW = cw;
+  nRailCut = 0;
+  if (durationSeg > 0.0f) {
+    IntroChunk ch[3];
+    int n = intro_chunks(ch, 3);
+    for (int i = 0; i < n; i++) {
+      if (ch[i].kind != INTRO_OPENING) continue;
+      double edge[2] = { ch[i].start, ch[i].end };
+      // A cut within a gap of either end would leave a sliver; an intro that
+      // starts at 0:00 only needs its end marked.
+      for (int k = 0; k < 2; k++) {
+        float x = cx + cw * anim_clamp((float)edge[k] / durationSeg, 0.0f, 1.0f);
+        if (x > cx + PLR_RAIL_GAP * 2.0f && x < cx + cw - PLR_RAIL_GAP * 2.0f &&
+            (!nRailCut || x > railCut[nRailCut - 1] + PLR_RAIL_GAP * 2.0f))
+          railCut[nRailCut++] = x;
+      }
+      break;
+    }
+  }
+  GfxRect rail = { cx, yBar, cw, hRail };
+  railLayer(rail, 1, 1, 1, aRail * ab);
   // Taller than the rail, which is a few pixels: a pointer held in the air has to
   // be able to land on it.
   if (a > 0.3f)
@@ -2916,8 +3256,7 @@ static void drawPlayer(Uint32 now) {
   { float bufFrac = durationSeg > 0.0f ? anim_clamp(video_buffer_end() / durationSeg, 0.0f, 1.0f) : 0.0f;
     float bwid = cw * bufFrac;
     if (bwid > 0.5f)
-      gfx_color((GfxRect){ cx, yBar, bwid, hRail }, railRadius(bwid, hRail),
-                1, 1, 1, 0.30f * ab); }
+      railLayer((GfxRect){ cx, yBar, bwid, hRail }, 1, 1, 1, 0.30f * ab); }
   // Half a pixel already counts: with the test at 1.0 the start of the film drew
   // nothing, and the bar seemed only to start moving after a while.
   // The fill and the playhead take the Settings colour (Playback -> Seek bar
@@ -2926,8 +3265,7 @@ static void drawPlayer(Uint32 now) {
   { float fwid = cw * frac, sr, sg, sb;
     settings_seek_color(&sr, &sg, &sb);
     if (fwid > 0.5f)
-      gfx_color((GfxRect){ cx, yBar, fwid, hRail }, railRadius(fwid, hRail),
-                sr, sg, sb, ab);
+      railLayer((GfxRect){ cx, yBar, fwid, hRail }, sr, sg, sb, ab);
     // THE PLAYHEAD. `transform: scale(0)` at rest and `scale(1)` when the shell has
     // focus, so the resting bar stays a hairline and the knob is what says the bar
     // is now the thing LEFT and RIGHT are driving. Centred on the track's middle,
@@ -2946,6 +3284,15 @@ static void drawPlayer(Uint32 now) {
     float oh = 22.0f, ow = 4.0f;
     GfxRect t = { cx + cw * of - ow * 0.5f, yBar + hRail * 0.5f - oh * 0.5f, ow, oh };
     gfx_color(t, 0.5f, 1, 1, 1, 0.85f * ab);
+  }
+  // The hover MARKER, 3px and 8px taller than the focused track, on the true
+  // pointer position. Its bubble is drawn with the time readout below, last, so
+  // it covers the title block rather than sitting under it.
+  float hoverA = hoverAnim * ab;
+  if (hoverA > 0.004f) {
+    float mw = 3.0f, mh = PLR_RAIL_H_FOCUS + 8.0f;
+    GfxRect m = { cx + cw * hoverFrac - mw * 0.5f, yBar + hRail * 0.5f - mh * 0.5f, mw, mh };
+    gfx_color(m, 0.5f, 1, 1, 1, hoverA);
   }
 
   // A film: the name only. A series: the name, then the episode line.
@@ -3162,6 +3509,20 @@ static void drawPlayer(Uint32 now) {
       ty += (yBar - PLR_QUICK_TIME_GAP - (float)le.h - ty) * (1.0f - full);
       txt_draw_alpha(lt, right - lt.w,        ty, ab * 0.60f);
       txt_draw_alpha(le, right - lt.w - le.w, ty, ab * 0.96f);
+    }
+
+    // THE HOVER BUBBLE (.player-progress-hover-time): 20px above the bar's middle,
+    // near-black at 0.92, radius 8. Centred on the marker but held inside the
+    // bar's span, so it never hangs off either end while the marker still does.
+    if (hoverA > 0.004f) {
+      char ht[24];
+      fmtTime(ht, sizeof ht, hoverFrac * durationSeg, 0);
+      { TxtLine lh = txt_line(TXT_PLR_DELTA, ht, 255, 255, 255, 255);
+        float pw = (float)lh.w + 24.0f, ph = (float)lh.h + 12.0f;
+        float px = anim_clamp(cx + cw * hoverFrac - pw * 0.5f, cx, cx + cw - pw);
+        GfxRect r = { px, yBar + hRail * 0.5f - 20.0f - ph, pw, ph };
+        gfx_color(r, 8.0f / ph, 10.0f / 255.0f, 12.0f / 255.0f, 16.0f / 255.0f, 0.92f * hoverA);
+        txt_draw_alpha(lh, r.x + 12.0f, r.y + (ph - (float)lh.h) * 0.5f, hoverA); }
     }
   }
 

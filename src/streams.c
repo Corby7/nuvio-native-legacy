@@ -540,7 +540,11 @@ void stream_sheet_open(void) {
   scroll=0;
 }
 int stream_sheet_is_open(void) { return is_open; }
-float stream_sheet_shown(void) { return anim; }
+// Cut to 0 below 1%, as episodes_shown and tracks_shown are. The spring only
+// approaches 0 and in float it can park on a denormal for good: the Up next
+// countdown holds while this is above 0, so once Sources had been opened the
+// countdown never ran again.
+float stream_sheet_shown(void) { return anim < 0.01f ? 0.0f : anim; }
 // The pointer's setters: the header's two icons, a provider tab (on the click
 // only — sweeping across the strip must not reshuffle the list), and a row.
 static void pointHead(int i,int unused) {

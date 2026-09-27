@@ -7,6 +7,7 @@
 #
 #   NUVIO_TV_DEVICE=lgc3         # ares device name (see ares-setup-device --list)
 #   NUVIO_NO_INSTALL=1           # build and package, stop before the TV
+#   NUVIO_RELEASE=1              # plain title (no build hash) for a published .ipk
 #
 # ONE-TIME SETUP: the Developer Mode ssh key has a passphrase, so load it into
 # the agent once per session or the verification step cannot read the TV:
@@ -38,7 +39,7 @@ cd "$(dirname "$0")/.."
 # TV no longer holds) and cost a deploy each time it was hardcoded. A name that
 # resolves through the ares config cannot go stale that way.
 TV_DEV="${NUVIO_TV_DEVICE:-lgc3}"
-APP_ID="space.nuvio.native.legacy"
+APP_ID="io.github.corby7.nuvio"
 # The sibling web checkout supplies the whole ares toolchain, and has been called
 # both NuvioWeb-0.3.38-beta and NuvioWeb. Try each rather than hard-coding one.
 ARESDIR=""
@@ -132,7 +133,13 @@ STAMP=${STAMP:0:8}
 # The source keeps the (BUILD) placeholder; only the packaged copy is stamped.
 # Rewriting deploy/app/appinfo.json in place would make the placeholder survive
 # exactly one build and then be gone from the tree.
-sed "s/(BUILD)/($STAMP)/" deploy/app/appinfo.json > /tmp/appinfo.stamped.json
+# NUVIO_RELEASE=1 drops the placeholder instead: a published .ipk carries the
+# plain title, not a build hash nobody else can use.
+if [ -n "$NUVIO_RELEASE" ]; then
+  sed "s/ (BUILD)//" deploy/app/appinfo.json > /tmp/appinfo.stamped.json
+else
+  sed "s/(BUILD)/($STAMP)/" deploy/app/appinfo.json > /tmp/appinfo.stamped.json
+fi
 echo "    $STAMP"
 
 # The .ipk only matters for DISTRIBUTION (installing on another TV, publishing).

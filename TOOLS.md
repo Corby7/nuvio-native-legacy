@@ -114,8 +114,8 @@ read from the log of an old process, and nearly led to the conclusion that the
 fix had not worked. `arm.sh` closes the app before launching for that reason:
 
 ```bash
-ares-launch -d lgc3 --close space.nuvio.native.legacy
-ares-launch -d lgc3 space.nuvio.native.legacy
+ares-launch -d lgc3 --close io.github.corby7.nuvio
+ares-launch -d lgc3 io.github.corby7.nuvio
 ```
 
 The title still carries the first 8 digits of the binary's md5 so the launcher
@@ -252,7 +252,7 @@ bash /tmp/shot.sh 6          # build + deploy + capture + download + convert
 of its own that the Developer Mode ssh user cannot even list. `devPath()` in
 main.c puts `nuvio-key`, `nuvio-goto`, `nuvio-video`, `nuvio-rect`,
 `nuvio-shot-req` and `nuvio-shot.bmp` in the app's data folder instead,
-`/media/developer/apps/usr/palm/applications/space.nuvio.native.legacy/.nuvio`
+`/media/developer/apps/usr/palm/applications/io.github.corby7.nuvio/.nuvio`
 (group `jailer`, 775 — the ssh user is in `jailer`). The Mac build keeps /tmp,
 so `tools/dev.sh` is unchanged. `chmod 664` each request you write so the app
 can consume it.

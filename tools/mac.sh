@@ -60,17 +60,26 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleName</key><string>Nuvio Legacy</string>
   <key>CFBundleDisplayName</key><string>Nuvio Legacy</string>
-  <key>CFBundleIdentifier</key><string>space.nuvio.native.legacy</string>
+  <key>CFBundleIdentifier</key><string>io.github.corby7.nuvio</string>
   <key>CFBundleExecutable</key><string>nuvio-legacy</string>
   <key>CFBundleIconFile</key><string>nuvio</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0.1</string>
+  <key>CFBundleShortVersionString</key><string>1.0.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
 PLIST
 
-eval cc src/*.c -o "$APP/Contents/MacOS/nuvio-legacy" -O1 -g "$ENV_D" \
+# Video playback on the Mac comes from libmpv (src/video_mac.c). Optional: without
+# it the player keeps the black hole the TV's plane would fill.
+MPV_FLAGS=""
+if [ -f /opt/homebrew/include/mpv/client.h ]; then
+  MPV_FLAGS="-DNV_MPV -lmpv"
+else
+  echo "mac.sh: libmpv not found (brew install mpv) -- building without video" >&2
+fi
+
+eval cc src/*.c -o "$APP/Contents/MacOS/nuvio-legacy" -O1 -g "$ENV_D" $MPV_FLAGS \
   -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
   -L/opt/homebrew/lib -lSDL2 -lSDL2_image -lSDL2_ttf \
   -framework OpenGL -Wno-deprecated-declarations

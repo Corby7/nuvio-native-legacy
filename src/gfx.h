@@ -549,6 +549,8 @@ void gfx_crop(float x, float y, float w, float h);
 // exception and it is the sheet's: it has no solid form to fill into. The sources
 // sheet adds "instant", the bolt on a row that will play at once; it is a file and
 // not a character because Inter has no U+26A1 (tools/build-source-icons.sh).
+// The Settings screen's group headers add "set_playback", "set_home",
+// "set_appearance" and "set_account" (same script).
 //
 // THE FOLDER HOLDS NOTHING THAT IS NOT LOADED. "more", "watched", "unwatched" and
 // "trailer" were dropped once the title screen moved to the web's files and the

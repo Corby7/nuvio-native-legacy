@@ -165,6 +165,12 @@ typedef enum {
   // The sidebar's row labels. APPENDED, like everything above.
   TXT_MENU_ITEM,     // .home-nav-label                      28 / 400
   TXT_MENU_SEL,      // .home-nav-item.selected              28 / bold
+  // The player's pause overlay. APPENDED.
+  TXT_PAUSE_TITLE,   // the name, when there is no logo      64 / 700
+  TXT_PAUSE_META,    // "Paused  0:03 / 52:00", bottom right 24 / 500
+  TXT_PAUSE_EP,      // "S1 E3  Name"                        28 / 700
+  TXT_PAUSE_SIN,     // the synopsis                         25 / 400
+  TXT_PAUSE_CLOCK,   // the corner clock                     32 / 500
   TXT_NFONTS
 } TxtStyle;
 

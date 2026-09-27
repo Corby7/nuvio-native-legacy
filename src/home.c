@@ -3099,6 +3099,15 @@ static void focusVideoWindow(GfxRect r) {
                (int)(r.w + 0.5f), (int)(r.h + 0.5f));
 }
 
+// Shows the focus video inside the card: a rounded hole onto the plane on the
+// TV, the decoded frame itself on the Mac preview (video_frame_texture).
+static void focusVideoReveal(GfxRect card, float radius, float reveal) {
+  GLuint frame = video_frame_texture();
+  if (!frame) { gfx_hole_round(card, radius); return; }
+  gfx_tex_aspect_current = 0;
+  gfx_rect(card, frame, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, reveal);
+}
+
 // How much of the video shows through the card, 0..1. The caller cuts the hole
 // when it is above zero and draws the cover over it at 1 - reveal. `rest` is where
 // the card will settle once its growth and the row's glide are over.
@@ -3333,14 +3342,14 @@ static void drawShortcuts(int r, float y) {
         // With the focus video showing, the card is a rounded hole onto the plane
         // and the cover fades out over it (see focusVideoStep).
         (void)texAspect;
-        if (reveal > 0.0f) gfx_hole_round(card, radius);
+        if (reveal > 0.0f) focusVideoReveal(card, radius, reveal);
         if (reveal < 1.0f) {
           gfx_tex_aspect_current = 0;
           gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1.0f - reveal);
           gfx_tex_aspect_current = 0;
         }
       } else if (reveal > 0.0f) {
-        gfx_hole_round(card, radius);
+        focusVideoReveal(card, radius, reveal);
       } else if (folder->title[0]) {
         // AND HERE THE SWEEP IS RIGHT: this branch is reached only while `tex` is 0,
         // which for a folder that HAS a cover means the file is still on its way.

@@ -141,7 +141,17 @@ static const char LANG_UNKNOWN[] = "Unknown";
 #define MEM_MAX  300
 // This playback's show and what it remembers, read once per playback: the sheet's
 // language order asks every frame, and the file does not change under us.
-static char memShow[24], memLang[32];
+static char memShow[40], memLang[32];
+// THE PICK, beside the language, in subtitle-picks.txt: WHICH subtitle in it the
+// viewer chose, as far as that carries to the next episode. Not the file — every
+// episode has its own — but what it was:
+//   "embedded|Dialogue"               the file's own track, by its name
+//   "addon|OpenSubtitles|AnimeTime"   a download, by provider and release group
+// The next episode takes the track that matches it best, and the language alone
+// when nothing does. Parsed once per playback into the fields below.
+#define PICK_FILE "subtitle-picks.txt"
+static int pickAddon, pickKnown;
+static char pickName[64], pickSource[48], pickGroup[48];
 
 // The show's id without the episode: "tt0251439" out of "tt0251439:1:3". An
 // anime catalogue's id keeps its prefix — "kitsu:1234" — or every show from it
@@ -157,14 +167,14 @@ static void showKey(char *dst, size_t size) {
 // This show's line in `file`, "" for none. The value can hold a space
 // ("Portuguese (BR)"), so it is the rest of the line; the last line wins.
 static void memLookup(const char *file, char *out, size_t size) {
-  char path[600], line[96];
+  char path[600], line[320];
   FILE *f;
   out[0] = 0;
   if (!memShow[0] || !data_path(path, sizeof path, file) || !(f = fopen(path, "r"))) return;
   while (fgets(line, sizeof line, f)) {
-    char id[32], v[32];
+    char id[32], v[256];
     line[strcspn(line, "\r\n")] = 0;
-    if (sscanf(line, "%31s %31[^\n]", id, v) == 2 && !strcmp(id, memShow))
+    if (sscanf(line, "%31s %255[^\n]", id, v) == 2 && !strcmp(id, memShow))
       snprintf(out, size, "%s", v);
   }
   fclose(f);
@@ -176,6 +186,18 @@ static const char *memLanguage(void) {
   memRead = 1;
   showKey(memShow, sizeof memShow);
   memLookup(MEM_FILE, memLang, sizeof memLang);
+  { char v[256], *f[3] = { v, NULL, NULL }, *bar;
+    int k;
+    memLookup(PICK_FILE, v, sizeof v);
+    for (k = 1; k < 3 && (bar = strchr(f[k - 1], '|')); k++) { *bar = 0; f[k] = bar + 1; }
+    pickKnown = pickAddon = 0; pickName[0] = pickSource[0] = pickGroup[0] = 0;
+    if (!strcmp(v, "embedded") && f[1]) {
+      pickKnown = 1; snprintf(pickName, sizeof pickName, "%s", f[1]);
+    } else if (!strcmp(v, "addon") && f[1]) {
+      pickKnown = pickAddon = 1;
+      snprintf(pickSource, sizeof pickSource, "%s", f[1]);
+      snprintf(pickGroup, sizeof pickGroup, "%s", f[2] ? f[2] : "");
+    } }
   return memLang;
 }
 
@@ -198,13 +220,14 @@ static void memRemember(const char *lang) {
 // This show's line in `file` replaced by `value`: the old one goes, the new one
 // is appended, and the oldest shows fall off past MEM_MAX.
 static void memWrite(const char *file, const char *value) {
-  char path[600], tmp[620], lines[MEM_MAX][96];
+  static char lines[MEM_MAX][320];
+  char path[600], tmp[620];
   const char *lang = value;
   int n = 0, i, from;
   FILE *f;
   if (!memShow[0] || !data_path(path, sizeof path, file)) return;
   if ((f = fopen(path, "r"))) {
-    char line[96];
+    char line[320];
     size_t k = strlen(memShow);
     while (fgets(line, sizeof line, f) && n < MEM_MAX) {
       line[strcspn(line, "\r\n")] = 0;
@@ -241,6 +264,9 @@ static int wanted(const char *code, const char *remembered, int group) {
 }
 
 static int hasWord(const char *s, const char *w);
+static int releaseGroup(const char *name, char *dst, size_t size);
+static const char *labelRest(const char *label, const char *lang);
+static void subLanguage(int i, char *dst, size_t size);
 static int matchesPlaying(const char *release);
 static int subScore(const Subtitle *l);
 static int subActive(void);
@@ -342,6 +368,30 @@ static void audioTick(void) {
   fflush(stdout);
 }
 
+// The file's own track in the wanted language, and on. The remembered pick's
+// name wins ("Dialogue" over "Signs & Songs", both English); then the first that
+// is text and not forced. A FORCED track is never the answer on its own: asked
+// for English subtitles, the viewer means the whole dialogue, and a forced
+// English track shows only the signs — unless it is the very track they picked.
+// Forced tracks are otherwise the fallback's (forcedTick). 1 when one came on.
+static int chooseEmbedded(const char *remembered, int group) {
+  int embedded = video_n_subtitle(), pass, i;
+  for (pass = remembered[0] && pickKnown && !pickAddon ? 0 : 1; pass < 2; pass++)
+    for (i = 0; i < embedded; i++) {
+      const VideoTrack *t = video_subtitle(i);
+      char lang[32];
+      if (!t || !wanted(t->language, remembered, group) || embeddedBitmap(t)) continue;
+      subLanguage(i, lang, sizeof lang);
+      if (pass == 0 ? strcasecmp(labelRest(t->label, lang), pickName) : trackForced(t)) continue;
+      video_choose_subtitle(i); subtitle_off(); subExternal = -1;
+      { char o[128]; snprintf(o, sizeof o, "chose embedded %d%s%s", i,
+                              pass == 0 ? " (the pick remembered for this show)" : "",
+                              pass && remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
+      autoDone = 1; return 1;
+    }
+  return 0;
+}
+
 void tracks_auto(Uint32 now) {
   // -1 off; otherwise lang.h's index — "Automatic" is English. It used to mean
   // Portuguese first, a leftover from the app's first owner that handed an
@@ -378,18 +428,10 @@ void tracks_auto(Uint32 now) {
     if (!known && stream_n() > 0 && strstr(stream_item(stream_current())->file, ".mkv"))
       return;
   }
-  // A FORCED track is never the answer here: asked for English subtitles, the
-  // viewer means the whole dialogue, and a forced English track shows only the
-  // signs. Forced tracks are the fallback's (forcedTick).
-  for (i = 0; i < embedded; i++) {
-    const VideoTrack *t = video_subtitle(i);
-    if (!t || !wanted(t->language, remembered, group) || embeddedBitmap(t) ||
-        trackForced(t)) continue;
-    video_choose_subtitle(i); subtitle_off(); subExternal = -1;
-    { char o[96]; snprintf(o, sizeof o, "chose embedded %d%s", i,
-                           remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
-    autoDone = 1; return;
-  }
+  // A pick of a DOWNLOAD last time puts the addon's list first; otherwise the
+  // file's own leads, as it always has. Either way the other is the fallback.
+  { int addonFirst = remembered[0] && pickKnown && pickAddon;
+    if (!addonFirst && chooseEmbedded(remembered, group)) return;
 
   // Then the addon's. Its search is still out on most starts, so wait for it.
   //
@@ -403,6 +445,14 @@ void tracks_auto(Uint32 now) {
       int score;
       if (!l || !wanted(l->language, remembered, group)) continue;
       score = subScore(l);
+      // The remembered pick's provider and release group outrank the evidence
+      // above, all of it but a hash match: the viewer already chose between them.
+      if (remembered[0] && pickAddon) {
+        char g[48];
+        if (pickGroup[0] && releaseGroup(l->release, g, sizeof g) && !strcasecmp(g, pickGroup))
+          score += 10;
+        if (pickSource[0] && !strcasecmp(l->source, pickSource)) score += 3;
+      }
       if (score > bestScore) { best = i; bestScore = score; }
     }
     if (best >= 0) {
@@ -415,6 +465,7 @@ void tracks_auto(Uint32 now) {
                               remembered[0] ? " (remembered for this show)" : "", l->release); autoLog(o); }
       autoDone = 1; return;
     } }
+    if (addonFirst && chooseEmbedded(remembered, group)) return; }
 
   // Nothing yet. Keep looking until the deadline — the addon list can still land
   // — and then stop, so the search does not run for the whole film. The Settings
@@ -644,6 +695,15 @@ static int releaseGroup(const char *name, char *dst, size_t size) {
   const char *slash = strrchr(name, '/'), *dash, *end;
   size_t k = 0;
   if (slash) name = slash + 1;
+  // Anime names lead with it instead: "[Anime Time] Trigun - 003 - Peace Maker".
+  // Spaces and dots go, so "Anime Time" and "Anime.Time" compare equal.
+  if (name[0] == '[' && (end = strchr(name, ']'))) {
+    for (dash = name + 1; dash < end && k + 1 < size; dash++)
+      if (isalnum((unsigned char)*dash)) dst[k++] = *dash;
+    dst[k] = 0;
+    if (k >= 2) return 1;
+    k = 0;
+  }
   // The last '.' starts an EXTENSION only when what follows looks like one —
   // ".mkv", ".srt". SubDL's names carry none, and "…DTS-HD.MA.5.1.HEVC.REMUX-FraMeSToR"
   // was cut at ".REMUX-FraMeSToR", which made its group "HD", out of "DTS-HD".
@@ -960,7 +1020,21 @@ static void applySubtitle(int i) {
   { char lang[32];
     if (i < 0) snprintf(lang, sizeof lang, "%s", LANG_OFF);
     else subLanguage(i, lang, sizeof lang);
-    memRemember(lang); }
+    memRemember(lang);
+    // ...and which one in it, as far as that carries to another episode.
+    if (i >= 0) {
+      char v[256] = "", g[48] = "";
+      if (i < embedded) {
+        const VideoTrack *t = video_subtitle(i);
+        if (t) snprintf(v, sizeof v, "embedded|%s", labelRest(t->label, lang));
+      } else {
+        const Subtitle *l = addons_subtitle(i - embedded);
+        if (l && !releaseGroup(l->release, g, sizeof g)) g[0] = 0;
+        if (l) snprintf(v, sizeof v, "addon|%s|%s", l->source, g);
+      }
+      for (char *c = v; *c; c++) if (*c == '\n' || *c == '\r') *c = ' ';
+      if (v[0]) memWrite(PICK_FILE, v);
+    } }
   if (i < 0)             { video_choose_subtitle(-1); subtitle_off(); subExternal = -1; }
   else if (i < embedded) { video_choose_subtitle(i);  subtitle_off(); subExternal = -1; }
   else {
@@ -1119,8 +1193,11 @@ void tracks_update(float dt, Uint32 now) {
   { float t = zone == Z_TABS ? 1.0f : 0.0f;
     tabsLit = anim_spring(tabsLit, t, dt, t > tabsLit ? NV_SPRING_FOCUS : NV_SPRING_BLUR); }
   anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
-  styleAnim = anim_spring(styleAnim, is_open && mode == MODE_SUBTITLE && tab == TAB_STYLE
-                          ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
+  // Held while closing: springing it back to 0 brought the Tracks panel back
+  // and walked the header left on the way out. The bar's own exit is barStyle.
+  if (is_open)
+    styleAnim = anim_spring(styleAnim, mode == MODE_SUBTITLE && tab == TAB_STYLE
+                            ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
 }
 
 float tracks_shown(void) { return anim < 0.01f ? 0.0f : anim; }
@@ -1132,6 +1209,11 @@ float tracks_style_shown(void) {
 
 
 // --- DRAWING -------------------------------------------------------------------
+
+// The Style bar's presence. While open it is the tab switch; while closing
+// styleAnim is held, so the close itself drives the bar's drop and fade — the
+// same exit it had when styleAnim sprang down alongside anim.
+static float barStyle(void) { return is_open ? styleAnim : styleAnim * anim; }
 
 // Keeps the cursor inside the window, moving the MINIMUM: only when it passes one
 // of the edges. Always scrolling to centre would make the whole list move on
@@ -1425,7 +1507,7 @@ static void lightBox(GfxRect r, float a) {
 }
 
 static void drawBar(float a) {
-  float drop = (1.0f - styleAnim) * 40.0f, x = NV_TRK_BAR_X;
+  float drop = (1.0f - barStyle()) * 40.0f, x = NV_TRK_BAR_X;
   float w = NV_SCREEN_W - NV_TRK_BAR_X * 2;
   float tw = (w - NV_TRK_TILE_GAP * (FX_N_TILE - 1)) / FX_N_TILE;
   float chipY = NV_SCREEN_H - NV_TRK_BAR_BOTTOM - NV_TRK_CHIP_H + drop;
@@ -1511,7 +1593,7 @@ void tracks_draw(Uint32 now) {
   if (is_open) pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOff, 0, 0);
   drawPanel(anim * (1.0f - styleAnim), styleAnim);
   if (mode != MODE_SUBTITLE) return;
-  drawBar(anim * styleAnim);
+  drawBar(anim * barStyle());
   // THE HEADER STAYS PUT across the two tabs. The panel under it leaves for the
   // Style bar, but the heading and the tabs are how you get back — moving them to
   // the other corner of the screen made the switch look like a different sheet.

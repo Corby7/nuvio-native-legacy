@@ -7,5 +7,7 @@ void intro_off(void);
 int  intro_active(double posSeg,double *end,int *kind);
 // Where the credits begin, in seconds; -1 when this episode has no credits chunk.
 double intro_credits_start(void);
+// A copy of this episode's chunks, for drawing them; returns how many (0 until loaded).
+int  intro_chunks(IntroChunk *out,int max);
 int  intro_parse(const char *json,IntroChunk *output,int max);
 #endif

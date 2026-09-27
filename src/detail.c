@@ -254,6 +254,12 @@ static GfxRect seasonMenuAt;
 // puts under "Trakt ratings". On a film it does not exist and it stays at 0.
 static int commentEp = 0;
 static int tabInfo = 0;              // the chosen information tab
+// The tab Back returned to, by id and not by position, or -1. tabInfo is a position
+// in the strip, and the strip is rebuilt as the title's extras come back in: a
+// series left on "Cast & crew" (position 1, behind "More like this") came back with
+// no related titles yet, so position 1 was "Ratings" and the cast page was gone until
+// the related titles arrived. Held until the viewer moves on the strip themselves.
+static int tabWanted = -1;
 // The tab strip's lit spring: 1 while the focus is on it (tab_page_draw's `lit`).
 static float tabsLit;
 // How far the backdrop has gone to black under the cast page, 0..1.
@@ -615,6 +621,12 @@ static int tabIdOf(int c) {
     if (tabAvailable(id) && v++ == c) return id;
   return TAB_CAST;
 }
+// The inverse: tab `id`'s position in the strip as it stands now.
+static int tabPosOf(int id) {
+  int c = 0;
+  for (int k = 0; k < id; k++) if (tabAvailable(k)) c++;
+  return c;
+}
 static int castPageOn(void) { return !isSeries() || tabIdOf(tabInfo) == TAB_CAST; }
 static int nTabsInfo(void) {
   int n = 0;
@@ -753,7 +765,7 @@ static void txt_weight(TxtLine l, float x, float y, float a, float thickness) {
 #define DETAIL_HISTORY_MAX 8
 typedef struct {
   char imdb[32];
-  int level, season, seasonByHand, tabInfo, relFocus, ratTemp, commentEp;
+  int level, season, seasonByHand, tabId, relFocus, ratTemp, commentEp;
   Focus focus;
   int castSel, castAlso, alsoFocus;
 } DetailPast;
@@ -773,7 +785,7 @@ static void historyPush(void) {
   memset(p, 0, sizeof *p);
   snprintf(p->imdb, sizeof p->imdb, "%s", ci->imdb);
   p->level = level; p->season = season; p->seasonByHand = seasonByHand;
-  p->tabInfo = tabInfo; p->relFocus = relFocus; p->ratTemp = ratTemp;
+  p->tabId = tabIdOf(tabInfo); p->relFocus = relFocus; p->ratTemp = ratTemp;
   p->commentEp = commentEp; p->focus = focus;
   p->castSel = castSel; p->castAlso = castAlso; p->alsoFocus = alsoFocus;
 }
@@ -797,9 +809,10 @@ static int historyPop(void) {
     it.title = ci->title; it.genre = ci->genre; it.meta = ci->meta;
     mark("detail: back to the previous title");
     openState(&it, 0);
-    level = p.level; tabInfo = p.tabInfo; relFocus = p.relFocus;
+    level = p.level; tabWanted = p.tabId; relFocus = p.relFocus;
     ratTemp = p.ratTemp; commentEp = p.commentEp;
     if (p.seasonByHand) { season = p.season; seasonByHand = 1; }
+    if (tabAvailable(tabWanted)) tabInfo = tabPosOf(tabWanted);
     // The saved focus, over the columns this page has NOW: a row whose data has
     // not come back yet is shorter than it was, and syncColumns pulls the column
     // in until it arrives.
@@ -834,7 +847,7 @@ static void openState(const HomeItem *it, int shared) {
   item = *it;
   sharedOrigin = shared;
   is_open = 1; exiting = 0; level = 0; button = 0;
-  t = 0.0f; velT = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; tabsLit = 0.0f; castDark = 0.0f; popFade = 1.0f;
+  t = 0.0f; velT = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; tabWanted = -1; tabsLit = 0.0f; castDark = 0.0f; popFade = 1.0f;
   castSel = castAlso = alsoFocus = 0; castSelSeen = -1; castAsked = 0;
   alsoScroll = velAlso = 0.0f;
   follow = 1; goalY = goalAlso = 0.0f; memset(goalSec, 0, sizeof goalSec);
@@ -1875,6 +1888,14 @@ void detail_update(float dt, Uint32 now) {
 
   // THE TAB STRIP CHOOSES AS IT MOVES, as the Library's does: with an underline
   // marking the chosen tab, a cursor on a different word would need a second mark.
+  if (tabWanted >= 0) {
+    if (level >= 1 && focus.row == SEC_TABS_INFO && focus.column != tabInfo)
+      tabWanted = -1;
+    else if (tabAvailable(tabWanted)) {
+      tabInfo = tabPosOf(tabWanted);
+      if (focus.row == SEC_TABS_INFO) focus.column = tabInfo;
+    }
+  }
   if (level >= 1 && focus.row == SEC_TABS_INFO && focus.column != tabInfo)
     tabInfo = focus.column;
   { float target = (level >= 1 && focus.row == SEC_TABS_INFO) ? 1.0f : 0.0f;

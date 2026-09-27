@@ -19,7 +19,7 @@ if [ "$1" = "--mac" ]; then
 fi
 
 TV_DEV="${NUVIO_TV_DEVICE:-lgc3}"
-APP_ID=space.nuvio.native.legacy
+APP_ID=io.github.corby7.nuvio
 # The same lookup arm.sh does, so this reads the TV that arm.sh deploys to.
 eval "$(python3 - "$TV_DEV" <<'PY'
 import json, os, sys

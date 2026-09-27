@@ -1,6 +1,7 @@
 #include "simklauth.h"
 #include "cloud.h"
 #include "data.h"
+#include "appid.h"
 #include "net.h"
 #include "sync.h"
 #include "js.h"
@@ -33,7 +34,8 @@ static char *take(const char *path, int *status) {
   cloud_url_escape(cloud_simkl_client(), cid, sizeof cid);
   cloud_url_escape(cloud_simkl_app()[0] ? cloud_simkl_app() : "nuvio", name, sizeof name);
   snprintf(complete, sizeof complete,
-           "%s%s?client_id=%s&app-name=%s&app-version=1.0.1", SMK_BASE, path, cid, name);
+           "%s%s?client_id=%s&app-name=%s&app-version=%s", SMK_BASE, path, cid, name,
+           NV_APP_VERSION);
   header[0] = "Accept: application/json";
   header[1] = NULL;
   return net_download_st(complete, 20, header, status);

@@ -227,6 +227,12 @@ int  video_height(void);
 // you cannot trust to tell you what is actually happening.
 const char *video_engine(void);
 
+// The current frame as a GL texture, for the Mac preview build (video_mac.c,
+// through mpv), where there is no plane to show through a hole. 0 on the TV,
+// and whenever there is no frame yet: the caller then punches the hole as always.
+// Call it from the drawing, with the GL context current.
+unsigned video_frame_texture(void);
+
 void video_shutdown(void);
 
 #endif

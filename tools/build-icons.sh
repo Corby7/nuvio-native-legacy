@@ -2,14 +2,17 @@
 # Builds the app icon: the badged 1024px master, plus the two sizes webOS asks
 # for in appinfo.json (80px `icon`, 130px `largeIcon`).
 #
-#   bash tools/build-icons.sh            # default badge, "ribbon"
-#   NUVIO_ICON_BADGE=chip  bash tools/build-icons.sh
-#   NUVIO_ICON_BADGE=tint  bash tools/build-icons.sh
-#   NUVIO_ICON_BADGE=plain bash tools/build-icons.sh
+#   bash tools/build-icons.sh            # default, "plain" (the release icon)
+#   NUVIO_ICON_BADGE=ribbon bash tools/build-icons.sh
+#   NUVIO_ICON_BADGE=chip   bash tools/build-icons.sh
+#   NUVIO_ICON_BADGE=tint   bash tools/build-icons.sh
+#
+# The released app ships "plain": the title tells it apart on the launcher.
+# The badges are for a dev install that sits next to a release.
 #
 # WHY A BADGE AT ALL: this app and the web build (space.nuvio.webos, "Nuvio TV")
 # install side by side on the same TV and share one brand mark. On the C3 home
-# row the title under the tile is small and truncated — "Nuvio Legacy Nati…"
+# row the title under the tile is small and truncated — "Nuvio Native…"
 # against "Nuvio TV" — so the picture is what you actually pick from the couch.
 # The badge is the only thing that tells them apart at that distance.
 #
@@ -27,7 +30,7 @@ command -v rsvg-convert >/dev/null || { echo "rsvg-convert not found (brew insta
 
 SRC=assets/icon-1024.png
 OUT=assets/icon-1024-legacy.png
-BADGE="${NUVIO_ICON_BADGE:-ribbon}"
+BADGE="${NUVIO_ICON_BADGE:-plain}"
 B64=$(base64 -i "$SRC")
 
 case "$BADGE" in

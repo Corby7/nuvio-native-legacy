@@ -1,4 +1,20 @@
-# nuvio-native-legacy
+# Nuvio Native
+
+A fork of [iqui27's nuvio-native-legacy](https://github.com/iqui27/nuvio-native-legacy),
+the native C port of Nuvio for LG webOS, focused on UI/UX and smoothness. The UI
+work started on [WhiteGiso's NuvioWeb](https://github.com/WhiteGiso/NuvioWeb)
+and moved here, because a Chromium app carries too much overhead for the TV to
+stay smooth.
+
+It installs as its own app (`io.github.corby7.nuvio`, "Nuvio Native"), so it
+sits next to Nuvio TV and upstream's Nuvio Legacy Native instead of replacing
+either. It is developed on and for an LG C3; other models should work, but have
+not been tested. Reports are welcome.
+
+**[Download the .ipk](https://github.com/Corby7/nuvio-native-legacy/releases/latest)**
+· [Install guide](INSTALL.md) · Licensed under the [GPLv3](LICENSE)
+
+## About the port
 
 A streaming app for LG webOS written in C99 against SDL2 and GLES2, instead of
 JavaScript in the TV's browser. The current target is an **OLED55C32LA (a C3) on
@@ -14,9 +30,6 @@ Video plays through the TV's own pipeline — LS2 to `com.webos.media` — on a
 hardware plane behind the GL surface, not in a browser. The plane is attached by
 exporting the app's own Wayland surface to the compositor; up to webOS 4 that
 job was done by `libAcbAPI`, which does not exist from webOS 5 onwards.
-
-**[Download the .ipk](https://github.com/iqui27/nuvio-native-legacy/releases/latest)**
-· [Install guide](INSTALL.md)
 
 ## What works
 
@@ -136,21 +149,27 @@ Dolby Vision is also untested; the `DolbyHdrInfo` opt-in remains off by default.
 The package the current tree builds is **~24 MB**, nearly all of it prebaked
 artwork — whoever installs it sees the packager's catalogue before signing in.
 (Older notes in this repo say 175 MB; that was a larger `art/` and it no longer
-matches what `tools/arm.sh` produces. The published v1.0.1 release has not been
-re-measured.)
+matches what `tools/arm.sh` produces.)
 
 ## Building
 
 ```bash
 ssh-add ~/.ssh/lgc3_webos      # once per session: the devmode key has a passphrase
-bash tools/mac.sh              # build and run on macOS (UI only, no video)
+bash tools/mac.sh              # build and run on macOS (video needs brew install mpv)
 bash tools/arm.sh              # cross-compile, install via Developer Mode, verify
 bash tools/arm.sh --build      # build only, no package and no TV
 bash tools/arm.sh --ipk        # same as the default, but keeps the .ipk
+NUVIO_RELEASE=1 bash tools/arm.sh --ipk   # release .ipk: plain title, no build hash
 ```
 
-The Mac build has **no video at all** — there is no compositor and no plane, so
-`plane.c` and the device half of `video.c` are stubs there. That also means the
+The app id and version live in `src/appid.h` and `deploy/app/appinfo.json`;
+bump both together.
+
+The Mac build plays video through **libmpv** when it is installed
+(`brew install mpv`; `src/video_mac.c`), drawn as a texture where the TV shows
+its plane. It is a preview: no HDR/Dolby Vision, and embedded subtitles are drawn
+by mpv, not the TV pipeline. Without libmpv the player is a black hole. Either
+way `plane.c` and the device half of `video.c` are stubs there. That also means the
 Mac never compiles the half that talks to the TV: a mistake in it survives every
 local build and only appears on the device.
 
@@ -196,12 +215,5 @@ Written down because each one cost a day:
 
 ## Documentation
 
-- [PORT-LEGACY.md](PORT-LEGACY.md) — what this build is, and what it is not
-- [ACCOUNT-SYNC-PLAN.md](ACCOUNT-SYNC-PLAN.md) — the account, the sync contract
-  and every RPC, with what was measured against the real server
-- [WEB-MEASUREMENTS.md](WEB-MEASUREMENTS.md) — every dimension measured in the
-  running web app, the reference for the 1:1 port
-- [SUBTITLE-PERFORMANCE-PLAN.md](SUBTITLE-PERFORMANCE-PLAN.md) — subtitle styling
-  through the TV pipeline, and where the perceived slowness actually is
 - [TOOLS.md](TOOLS.md) — building, logging, screen capture and key injection
 - [INSTALL.md](INSTALL.md) — installing on another TV

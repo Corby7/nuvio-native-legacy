@@ -32,10 +32,13 @@ case "$1" in
     pkill -f "$(basename $BIN)" 2>/dev/null || true
     sleep 0.5
     ENV_D=$(tools/env.sh)
+    # Video through libmpv when it is installed (see tools/mac.sh).
+    MPV_FLAGS=""
+    [ -f /opt/homebrew/include/mpv/client.h ] && MPV_FLAGS="-DNV_MPV -lmpv"
     # QUIET, except for what is actually wrong. gl_compat.h redefines three GL
     # macros the macOS SDK already has, once per translation unit -- 150-odd lines
     # of noise per build that hides a real diagnostic in the middle of it.
-    if ! eval cc src/*.c -o "$BIN" -O1 -g "$ENV_D" \
+    if ! eval cc src/*.c -o "$BIN" -O1 -g "$ENV_D" $MPV_FLAGS \
       -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
       -L/opt/homebrew/lib -lSDL2 -lSDL2_image -lSDL2_ttf \
       -framework OpenGL -Wno-deprecated-declarations -Wno-macro-redefined \

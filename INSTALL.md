@@ -1,14 +1,15 @@
 # Installing on another TV
 
-Download `space.nuvio.native.legacy_1.0.1_arm.ipk` from the
-[releases page](https://github.com/iqui27/nuvio-native-legacy/releases/latest),
+Download `io.github.corby7.nuvio_1.0.0_arm.ipk` from the
+[releases page](https://github.com/Corby7/nuvio-native-legacy/releases/latest),
 or build it yourself:
 
 ```bash
 bash tools/arm.sh --ipk
 ```
 
-The package contains **no credentials**. `tools/test-ipk.sh` proves it, and
+The package contains **no credential files** (the backend URL and the public
+client ids are compiled into the binary, as in any client app). `tools/test-ipk.sh` proves it, and
 `arm.sh` aborts and deletes the package if one appears.
 
 ---
@@ -29,8 +30,8 @@ gets exercised on every deploy rather than the one nobody tried.
 
 ```bash
 ares-setup-device
-ares-install space.nuvio.native.legacy_1.0.1_arm.ipk -d <name>
-ares-launch space.nuvio.native.legacy -d <name>
+ares-install io.github.corby7.nuvio_1.0.0_arm.ipk -d <name>
+ares-launch io.github.corby7.nuvio -d <name>
 ```
 
 `tools/arm.sh` now does exactly this, plus the build and the verification —
@@ -121,5 +122,7 @@ after it. That is distinct from the plane failing, which instead logs
   signing in. Not a credential, but it does not belong there. (Older notes say
   175 MB, from a larger `art/`.)
 - **50 h** sessions in Developer Mode. LG's limit, not the app's.
-- The package uses the id `space.nuvio.native.legacy` so it can coexist with the
-  web app (`space.nuvio.webos`) on the same TV. See PORT-LEGACY.md.
+- The package uses its own id, `io.github.corby7.nuvio`, so it installs next to
+  the web app (`space.nuvio.webos`) and upstream's native build
+  (`space.nuvio.native.legacy`) instead of replacing either. Each keeps its own
+  data folder, so signing in here does not touch the others.

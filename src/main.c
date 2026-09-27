@@ -2,6 +2,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include "gl_compat.h"
+#include "appid.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -455,8 +456,8 @@ int main(int argc, char **argv) {
   // the compositor does NOT show the window — the app runs at 60fps drawing for
   // nobody. Measured: "Invalid appId specified OR Unsupported Application Type".
 #ifndef __APPLE__
-  setenv("APPID", "space.nuvio.native.legacy", 0);
-  setenv("LS2_APPID", "space.nuvio.native.legacy", 0);
+  setenv("APPID", NV_APP_ID, 0);
+  setenv("LS2_APPID", NV_APP_ID, 0);
   setenv("SDL_VIDEODRIVER", "wayland", 0);
 #endif
   // Launched by SAM, stdout and stderr go to /dev/null — all the telemetry (FPS,

@@ -30,3 +30,4 @@ void intro_request(const char *imdb,int t,int e){Request*p;pthread_t thread;if(!
 void intro_off(void){pthread_mutex_lock(&lock);generation++;nChunks=0;pthread_mutex_unlock(&lock);}
 int intro_active(double pos,double*end,int*kind){int ok=0;pthread_mutex_lock(&lock);for(int i=0;i<nChunks;i++)if(pos>=chunks[i].start&&pos<chunks[i].end){if(end)*end=chunks[i].end;if(kind)*kind=chunks[i].kind;ok=1;break;}pthread_mutex_unlock(&lock);return ok;}
 double intro_credits_start(void){double r=-1;pthread_mutex_lock(&lock);for(int i=0;i<nChunks;i++)if(chunks[i].kind==INTRO_CREDITS){r=chunks[i].start;break;}pthread_mutex_unlock(&lock);return r;}
+int intro_chunks(IntroChunk*out,int max){int n;pthread_mutex_lock(&lock);n=nChunks<max?nChunks:max;memcpy(out,chunks,(size_t)n*sizeof *out);pthread_mutex_unlock(&lock);return n;}

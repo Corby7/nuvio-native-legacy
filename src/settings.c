@@ -29,12 +29,11 @@
 #include "homerows.h"
 #include "pointer.h"
 #include "app.h"
+#include "appid.h"
 #include <stdio.h>
 #include <string.h>
 
-// The app's version: the same string as the packaged appinfo.json. It lives here
-// because the screen has no way to read the manifest at runtime on the device.
-#define SETTING_VERSION       "1.0.1"
+#define SETTING_VERSION       NV_APP_VERSION
 
 // The screen is a quiet list on the left and a preview panel on the right. Rows
 // have no plate at rest — only a hairline between them — so the one focused row,
@@ -43,6 +42,8 @@
 // A group header ("PLAYBACK", "SIDEBAR"): a tracked kicker and a hairline, in the
 // room above the group's first row. It is part of the list and scrolls with it.
 #define SETTING_GROUP_H      56.0f
+// The glyph before a section group's kicker on the list of sections.
+#define SETTING_GROUP_ICON   20.0f
 // Not a constant: it follows the rail, like all the rest of the content. With the
 // bar collapsed the list also starts at 104 — leaving 248 hard-coded here made
 // the Settings screen the only one misaligned with the others.
@@ -73,7 +74,7 @@ typedef enum {
   // Playback
   SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_AUDIO_LANG, SETTING_AUDIO_ANIME, SETTING_SUBS,
   SETTING_SUBS_FORCED, SETTING_SEEK_COLOR, SETTING_NEXT_AUTOPLAY, SETTING_NEXT_COUNTDOWN,
-  SETTING_NEXT_MODE, SETTING_NEXT_SECONDS, SETTING_NEXT_PERCENT,
+  SETTING_NEXT_MODE, SETTING_NEXT_SECONDS, SETTING_NEXT_PERCENT, SETTING_PAUSE_DELAY,
   // Layout da Home
   SETTING_LANDSCAPE, SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
   // Conteudo da Home
@@ -213,6 +214,8 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Up next appears",            V_NEXT_MODE, 2),
   NUM("Up next before the end",     0, 210, 30, " s"),
   NUM("Up next at",                 90, 100, 1, "%"),
+  // 0 is Off: textValue draws it as a word, not as "0 s".
+  NUM("Pause overlay after",        0, 60, 5, " s"),
 
   ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
   ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
@@ -312,6 +315,9 @@ static const char *KEY[] = {
   // nextEpisodeThresholdMode / ...MinutesBeforeEnd / ...Percent, in this port's
   // units: an index, seconds and whole percent.
   "nextEpisodeTriggerMode", "nextEpisodeSecondsBeforeEnd", "nextEpisodePercentWatched",
+  // Local to this port: NuvioTV has an on/off switch at a fixed 5 s; this is one
+  // row, seconds, with 0 for off.
+  "pauseOverlayDelaySeconds",
   "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
   "heroBackdropArea", "heroBackdropScale",
   "collapseSidebar", "modernSidebar", "modernSidebarBlur",
@@ -356,7 +362,7 @@ typedef char checked_one_key_per_option[
 // panel says about a section before it is opened. `group` starts a new group
 // header on the list of sections; NULL continues the one above.
 static const struct { const char *group, *title; int start, n; const char *blurb; } SECTIONS[] = {
-  { "Playback", "Playback",          SETTING_QUALITY,              13,
+  { "Playback", "Playback",          SETTING_QUALITY,              14,
     "Quality, Dolby formats, languages, the seek bar and what happens at the end of an episode." },
   { "Home", "Home layout",       SETTING_LANDSCAPE,            4,
     "Poster shape and how the hero backdrop is drawn." },
@@ -406,6 +412,7 @@ static int value[SETTING_N] = {
   0,                /* up next appears: before the end (the web's default) */
   120,              /* up next lead: 2 min, the web's default and the old fixed value */
   99,               /* up next share: 99% (the web's default) */
+  10,               /* pause overlay: after 10 s paused */
 
   0,                /* landscape posters: ON (the owner's profile; factory: off) */
   0,                /* full-screen backdrop: ON (profile; factory: off) */
@@ -516,6 +523,7 @@ double settings_next_lead(double durationSeg) {
   return (double)value[SETTING_NEXT_SECONDS];
 }
 int settings_next_countdown(void)    { return value[SETTING_NEXT_COUNTDOWN]; }
+int settings_pause_overlay_ms(void)  { return value[SETTING_PAUSE_DELAY] * 1000; }
 void settings_seek_color(float *r, float *g, float *b) {
   int i = value[SETTING_SEEK_COLOR];
   if (i < 0 || i >= (int)(sizeof SEEK_RGB / sizeof *SEEK_RGB)) i = 0;
@@ -955,6 +963,7 @@ static const char *helpOption(int op) {
     case SETTING_NEXT_MODE: return "When the Up next card appears. The credits, when they are known, bring it up earlier.";
     case SETTING_NEXT_SECONDS: return "How long before the end of an episode the Up next card appears.";
     case SETTING_NEXT_PERCENT: return "How much of an episode has to be watched before the Up next card appears.";
+    case SETTING_PAUSE_DELAY: return "How long playback sits paused, with no key pressed, before the title's details come up over a blurred picture. Off never shows them.";
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
     case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";
@@ -1257,6 +1266,7 @@ static const char *textValue(int op) {
   const Option *o = &OPTIONS[op];
   if (o->kind == OP_READ || o->kind == OP_ACTION) return textRead(op);
   if (o->kind == OP_NUMBER) {
+    if (op == SETTING_PAUSE_DELAY && value[op] == 0) return "Off";
     snprintf(buf, sizeof buf, "%d%s", value[op], o->suffix ? o->suffix : "");
     return buf;
   }
@@ -1280,82 +1290,6 @@ static const char *needsOf(int op) {
       if (op >= SETTING_CW_STYLE && op <= SETTING_CW_ORDER) return "Continue watching";
       return "Depth effect";
   }
-}
-
-// A section's row, on the right: what is set inside it now, in a few words, so
-// the list of sections reads as a summary and not just a table of contents.
-static const char *summaryOf(int s) {
-  static char b[112];
-  b[0] = 0;
-  switch (SECTIONS[s].start) {
-    case SETTING_QUALITY: {
-      int sub = value[SETTING_SUBS];
-      snprintf(b, sizeof b, "%s \xc2\xb7 %s \xc2\xb7 autoplay %s",
-               value[SETTING_QUALITY] ? V_QUALITY[value[SETTING_QUALITY]] : "Auto quality",
-               sub == 0 ? "no subtitles" : sub == 1 ? "auto subtitles" : V_SUBS[sub],
-               settings_next_autoplay() ? "on" : "off");
-      break; }
-    case SETTING_LANDSCAPE:
-      snprintf(b, sizeof b, "%s posters \xc2\xb7 %s",
-               settings_posters_landscape() ? "Landscape" : "Portrait",
-               !settings_hero_full() ? "banded hero"
-               : settings_hero_top_band() ? "top-band hero" : "full-screen hero");
-      break;
-    case SETTING_RAIL:
-      snprintf(b, sizeof b, "%s \xc2\xb7 hero %s \xc2\xb7 labels %s",
-               settings_rail_modern() ? "Modern sidebar"
-               : settings_rail_collapsed() ? "Sidebar collapsed" : "Sidebar fixed",
-               settings_hero_on() ? "on" : "off", settings_labels_poster() ? "on" : "off");
-      break;
-    case SETTING_N: {
-      // The list is built when the section opens; before that there is nothing
-      // to count, and "0 rows" would read as an empty Home.
-      int n = homerows_n(), shown = 0, i;
-      for (i = 0; i < n; i++) if (homerows_enabled(i)) shown++;
-      if (n) snprintf(b, sizeof b, "%d shown \xc2\xb7 %d hidden", shown, n - shown);
-      else snprintf(b, sizeof b, "Order and visibility");
-      break; }
-    case SETTING_CW_ON:
-      if (settings_cw_on())
-        snprintf(b, sizeof b, "Shown \xc2\xb7 %s style", V_CW[settings_cw_style()]);
-      else snprintf(b, sizeof b, "Hidden");
-      break;
-    case SETTING_DET_BLUR_NOT_WATCHED:
-      snprintf(b, sizeof b, "Trailer button %s \xc2\xb7 spoiler blur %s",
-               settings_button_trailer() ? "on" : "off",
-               settings_blur_unwatched() ? "on" : "off");
-      break;
-    case SETTING_EXPAND:
-      if (settings_expand_poster())
-        snprintf(b, sizeof b, "Expand after %d s", value[SETTING_EXPAND_DELAY]);
-      else snprintf(b, sizeof b, "No expansion");
-      if (settings_navigation_horizontal_fast())
-        snprintf(b + strlen(b), sizeof b - strlen(b), " \xc2\xb7 fast navigation");
-      if (settings_row_first_slot())
-        snprintf(b + strlen(b), sizeof b - strlen(b), " \xc2\xb7 first-slot rows");
-      break;
-    case SETTING_DEPTH:
-      if (settings_depth())
-        snprintf(b, sizeof b, "On \xc2\xb7 edge %d%% \xc2\xb7 sheen %d%%",
-                 value[SETTING_DEPTH_BORDER], value[SETTING_DEPTH_BRIGHTNESS]);
-      else snprintf(b, sizeof b, "Off");
-      break;
-    case SETTING_WIDTH_DP:
-      snprintf(b, sizeof b, "%d dp wide \xc2\xb7 %d dp corners",
-               value[SETTING_WIDTH_DP], value[SETTING_RADIUS_DP]);
-      break;
-    case SETTING_ANIM:
-      snprintf(b, sizeof b, "%s animations", V_ANIM[value[SETTING_ANIM]]);
-      break;
-    case SETTING_PROFILE_ACTIVE:
-      snprintf(b, sizeof b, "%s \xc2\xb7 Trakt %s", textRead(SETTING_PROFILE_ACTIVE),
-               textRead(SETTING_TRAKT));
-      break;
-    case SETTING_VERSION_I:
-      snprintf(b, sizeof b, "Version %s", SETTING_VERSION);
-      break;
-  }
-  return b;
 }
 
 // Capitals for a kicker. The strings live in sentence case so the same names
@@ -1415,6 +1349,18 @@ static void drawRule(int i, int rows, int focusedRow, float y, float a) {
             1.0f, 1.0f, 1.0f, 0.07f * a);
 }
 
+// The glyph beside a section group's header on level 0 (art/icons/set_*.png,
+// tools/build-source-icons.sh). Keyed by the section that opens the group.
+static const char *iconOfSection(int s) {
+  switch (SECTIONS[s].start) {
+    case SETTING_QUALITY:              return "set_playback";
+    case SETTING_LANDSCAPE:            return "set_home";
+    case SETTING_DET_BLUR_NOT_WATCHED: return "set_appearance";
+    case SETTING_PROFILE_ACTIVE:       return "set_account";
+    default:                           return NULL;
+  }
+}
+
 // The header over row i, in the room yOfRow left for it.
 static void drawGroup(int i, float y) {
   const char *g = groupOfRow(i);
@@ -1424,8 +1370,16 @@ static void drawGroup(int i, float y) {
   // in half by the crop there.
   a = rowAlpha(y, 0.0f) * anim_clamp((y - SETTING_GROUP_H - SETTING_TOP + 16.0f) / 24.0f, 0.0f, 1.0f);
   if (a <= 0.005f) return;
-  drawKicker(g, SETTING_LIST_X + SETTING_PAD, y - SETTING_GROUP_H + 22.0f,
-             SETTING_LIST_X + SETTING_LIST_W - SETTING_PAD, a);
+  float x = SETTING_LIST_X + SETTING_PAD, ky = y - SETTING_GROUP_H + 22.0f;
+  const char *icon = level == 0 ? iconOfSection(i) : NULL;
+  if (icon) {
+    // Centred on the kicker's line, in the kicker's grey.
+    float h = (float)txt_line(TXT_CWC_KICKER, caps(g), 128, 130, 136, 255).h;
+    gfx_icon((GfxRect){ x, ky + (h - SETTING_GROUP_ICON) * 0.5f, SETTING_GROUP_ICON, SETTING_GROUP_ICON },
+             icon, 128 / 255.0f, 130 / 255.0f, 136 / 255.0f, a);
+    x += SETTING_GROUP_ICON + 12.0f;
+  }
+  drawKicker(g, x, ky, SETTING_LIST_X + SETTING_LIST_W - SETTING_PAD, a);
 }
 
 // The row's label, left.
@@ -1545,23 +1499,20 @@ static void drawHomeRow(int i, int rows, float y, float f) {
   }
 }
 
-// A section's row on level 0: the title on the left, a summary of what is set
-// inside it on the right, and a chevron that says the row opens something.
+// A section's row on level 0: the title on the left and a chevron that says the
+// row opens something. It carried a summary of the section's values too ("Auto
+// quality · auto subtitles · …"); the owner found it confusing and it went.
 static void drawSection(int s, float y, float f) {
   float a = rowAlpha(y, f);
   if (a <= 0.005f) return;
   drawPlate(y, f, s == focusSec, 0.0f, a);
   drawRule(s, SETTING_N_SECTIONS, focusSec, y, a);
 
-  float lw = drawLabel(SECTIONS[s].title, y, 238, a);
+  drawLabel(SECTIONS[s].title, y, 238, a);
   float xr = SETTING_LIST_X + SETTING_LIST_W - SETTING_PAD;
   int cc = (int)(120 + 110 * f);
   TxtLine chev = txt_line(TXT_CALLOUT, "\xe2\x80\xba", cc, cc, cc + 2, 255);
   txt_draw_alpha(chev, xr - chev.w, y + (SETTING_LINE_H - chev.h) * 0.5f, a);
-  int cs = (int)(146 + 50 * f);
-  float room = SETTING_LIST_W - SETTING_PAD * 2.0f - lw - chev.w - 24.0f - 60.0f;
-  TxtLine sum = txt_line_trim(TXT_CAPTION, summaryOf(s), cs, cs, cs + 4, 255, room);
-  txt_draw_alpha(sum, xr - chev.w - 24.0f - sum.w, y + (SETTING_LINE_H - sum.h) * 0.5f, a);
 }
 
 // --- THE PREVIEW -------------------------------------------------------------
@@ -1618,7 +1569,8 @@ static int highlightOf(void) {
     case SETTING_DET_DATE_FULL: return HL_META;
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:
     case SETTING_HIDE_UNRELEASED: return HL_ROWS;
-    case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM: return HL_NONE;
+    case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM:
+    case SETTING_PAUSE_DELAY: return HL_NONE;
     default:
       if (focusOp >= SETTING_CW_ON && focusOp <= SETTING_CW_ORDER) return HL_CW;
       return HL_CARD;
@@ -1945,6 +1897,7 @@ static void drawRange(int op, float x, float y, float w) {
   if (t > 0.004f) gfx_color((GfxRect){ x, y + 6.0f, w * t, 6.0f }, 0.5f, 0.93f, 0.93f, 0.94f, 1.0f);
   gfx_color((GfxRect){ x + w * t - d * 0.5f, y + 9.0f - d * 0.5f, d, d }, 0.5f, 0.97f, 0.97f, 0.98f, 1.0f);
   snprintf(lo, sizeof lo, "%d%s", o->min, o->suffix ? o->suffix : "");
+  if (op == SETTING_PAUSE_DELAY) snprintf(lo, sizeof lo, "Off");
   snprintf(hi, sizeof hi, "%d%s", o->max, o->suffix ? o->suffix : "");
   TxtLine l = txt_line(TXT_CAPTION2, lo, 140, 142, 148, 255);
   TxtLine h = txt_line(TXT_CAPTION2, hi, 140, 142, 148, 255);

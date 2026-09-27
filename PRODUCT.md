@@ -13,9 +13,7 @@ from across the room.
 ## Product Purpose
 
 Port the official Nuvio to C and SDL2/GLES2, keeping the catalogue, addons,
-Trakt and playback. PORT-LEGACY.md sets the NuvioWeb app as the functional and
-visual reference; WEB-MEASUREMENTS.md records dimensions measured in that
-reference application.
+Trakt and playback. The NuvioWeb app is the functional and visual reference.
 
 ## Brand Personality
 

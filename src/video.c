@@ -1,5 +1,6 @@
 #include "video.h"
 #include "plane.h"
+#include "appid.h"
 #include <SDL2/SDL.h>
 #include "mark.h"
 #include "mkv.h"
@@ -128,7 +129,61 @@ static int       threadMkvAlive;
 // the correct load be ignored.
 static unsigned  session;
 
-#ifdef __APPLE__
+// A readable name for the language. Shared by every backend (the TV here,
+// mpv in video_mac.c), so it sits outside the platform branches. Only those that actually turn up in this
+// collection; the rest keep the code, which is better than "Unknown" — the code at
+// least identifies it.
+static const char *languageReadable(const char *c) {
+  // A table WITH ACCENTS — it is a language name on screen, not an identifier. And
+  // with the three-letter codes (ISO 639-2) as well as the two-letter ones, because
+  // a release MKV almost always tags with the three-letter ones.
+  static const struct { const char *cod, *name; } T[] = {
+    { "pt", "Portuguese" },  { "pob", "Portuguese (BR)" }, { "por", "Portuguese" },
+    { "pt-br", "Portuguese (BR)" }, { "ptb", "Portuguese (BR)" },
+    { "en", "English" },     { "eng", "English" },
+    { "es", "Spanish" },   { "spa", "Spanish" }, { "esp", "Spanish" },
+    { "fr", "French" },    { "fre", "French" },  { "fra", "French" },
+    { "de", "German" },     { "ger", "German" },   { "deu", "German" },
+    { "it", "Italian" },   { "ita", "Italian" },
+    { "ja", "Japanese" },    { "jpn", "Japanese" },
+    { "ko", "Korean" },    { "kor", "Korean" },
+    { "zh", "Chinese" },     { "chi", "Chinese" },   { "zho", "Chinese" },
+    { "ru", "Russian" },      { "rus", "Russian" },
+    { "ar", "Arabic" },      { "ara", "Arabic" },
+    { "hi", "Hindi" },      { "hin", "Hindi" },
+    { "nl", "Dutch" },   { "dut", "Dutch" }, { "nld", "Dutch" },
+    { "sv", "Swedish" },      { "swe", "Swedish" },
+    { "no", "Norwegian" },  { "nor", "Norwegian" },
+    { "da", "Danish" },{ "dan", "Danish" },
+    { "fi", "Finnish" },  { "fin", "Finnish" },
+    { "pl", "Polish" },    { "pol", "Polish" },
+    { "tr", "Turkish" },      { "tur", "Turkish" },
+    { "he", "Hebrew" },   { "heb", "Hebrew" },
+    { "th", "Thai" },  { "tha", "Thai" },
+    { "cs", "Czech" },     { "cze", "Czech" },
+    { "el", "Greek" },      { "gre", "Greek" },
+    { "hu", "Hungarian" },    { "hun", "Hungarian" },
+    { "ro", "Romanian" },     { "rum", "Romanian" },
+    { "uk", "Ukrainian" },  { "ukr", "Ukrainian" },
+    { "vi", "Vietnamese" }, { "vie", "Vietnamese" },
+    { "id", "Indonesian" },  { "ind", "Indonesian" },
+  };
+  size_t i;
+  if (!c || !*c) return "";
+  for (i = 0; i < sizeof T / sizeof *T; i++)
+    if (!strcasecmp(c, T[i].cod)) return T[i].name;
+  // With no name in the table, it returns the CODE IN CAPITALS — which is what the
+  // web app does when it cannot name it ("ENG", "POR"). Showing the code says
+  // something; falling back to "Subtitle 3" says nothing.
+  { static char cx[16]; size_t k;
+    for (k = 0; c[k] && k + 1 < sizeof cx; k++)
+      cx[k] = (c[k] >= 'a' && c[k] <= 'z') ? (char)(c[k] - 32) : c[k];
+    cx[k] = 0;
+    return cx; }
+}
+const char *video_language_name(const char *code) { return languageReadable(code); }
+
+#if defined(__APPLE__) && !defined(NV_MPV)
 // On the Mac there is no bus and no video plane. The stubs let the rest of the app
 // compile and run the same, only with no moving image.
 int  video_start(void) { return 0; }
@@ -166,7 +221,6 @@ const VideoTrack *video_audio(int i) { (void)i; return 0; }
 const VideoTrack *video_subtitle(int i) { (void)i; return 0; }
 int  video_audio_current(void) { return 0; }
 int  video_subtitle_current(void) { return -1; }
-const char *video_language_name(const char *c) { return c ? c : ""; }
 int video_frame_rate_milli(void) { return 0; }
 void video_choose_audio(int i) { (void)i; }
 void video_choose_subtitle(int i) { (void)i; }
@@ -186,7 +240,8 @@ int  video_mkv_head(MkvHead *h, char *u, unsigned n) { (void)h; (void)u; (void)n
 int  video_mkv_waiting(void) { return 0; }
 void video_mkv_hurry(void) {}
 void video_shutdown(void) {}
-#else
+unsigned video_frame_texture(void) { return 0; }
+#elif !defined(__APPLE__)
 #include <dlfcn.h>
 
 typedef struct LSHandle LSHandle;
@@ -263,58 +318,6 @@ static int nAudio, nSub, audioCurrent, subCurrent = -1;
 // video_play zeroes vidDV when starting a new session.
 static int dvRequest;
 
-// A readable name for the language. Only those that actually turn up in this
-// collection; the rest keep the code, which is better than "Unknown" — the code at
-// least identifies it.
-static const char *languageReadable(const char *c) {
-  // A table WITH ACCENTS — it is a language name on screen, not an identifier. And
-  // with the three-letter codes (ISO 639-2) as well as the two-letter ones, because
-  // a release MKV almost always tags with the three-letter ones.
-  static const struct { const char *cod, *name; } T[] = {
-    { "pt", "Portuguese" },  { "pob", "Portuguese (BR)" }, { "por", "Portuguese" },
-    { "pt-br", "Portuguese (BR)" }, { "ptb", "Portuguese (BR)" },
-    { "en", "English" },     { "eng", "English" },
-    { "es", "Spanish" },   { "spa", "Spanish" }, { "esp", "Spanish" },
-    { "fr", "French" },    { "fre", "French" },  { "fra", "French" },
-    { "de", "German" },     { "ger", "German" },   { "deu", "German" },
-    { "it", "Italian" },   { "ita", "Italian" },
-    { "ja", "Japanese" },    { "jpn", "Japanese" },
-    { "ko", "Korean" },    { "kor", "Korean" },
-    { "zh", "Chinese" },     { "chi", "Chinese" },   { "zho", "Chinese" },
-    { "ru", "Russian" },      { "rus", "Russian" },
-    { "ar", "Arabic" },      { "ara", "Arabic" },
-    { "hi", "Hindi" },      { "hin", "Hindi" },
-    { "nl", "Dutch" },   { "dut", "Dutch" }, { "nld", "Dutch" },
-    { "sv", "Swedish" },      { "swe", "Swedish" },
-    { "no", "Norwegian" },  { "nor", "Norwegian" },
-    { "da", "Danish" },{ "dan", "Danish" },
-    { "fi", "Finnish" },  { "fin", "Finnish" },
-    { "pl", "Polish" },    { "pol", "Polish" },
-    { "tr", "Turkish" },      { "tur", "Turkish" },
-    { "he", "Hebrew" },   { "heb", "Hebrew" },
-    { "th", "Thai" },  { "tha", "Thai" },
-    { "cs", "Czech" },     { "cze", "Czech" },
-    { "el", "Greek" },      { "gre", "Greek" },
-    { "hu", "Hungarian" },    { "hun", "Hungarian" },
-    { "ro", "Romanian" },     { "rum", "Romanian" },
-    { "uk", "Ukrainian" },  { "ukr", "Ukrainian" },
-    { "vi", "Vietnamese" }, { "vie", "Vietnamese" },
-    { "id", "Indonesian" },  { "ind", "Indonesian" },
-  };
-  size_t i;
-  if (!c || !*c) return "";
-  for (i = 0; i < sizeof T / sizeof *T; i++)
-    if (!strcasecmp(c, T[i].cod)) return T[i].name;
-  // With no name in the table, it returns the CODE IN CAPITALS — which is what the
-  // web app does when it cannot name it ("ENG", "POR"). Showing the code says
-  // something; falling back to "Subtitle 3" says nothing.
-  { static char cx[16]; size_t k;
-    for (k = 0; c[k] && k + 1 < sizeof cx; k++)
-      cx[k] = (c[k] >= 'a' && c[k] <= 'z') ? (char)(c[k] - 32) : c[k];
-    cx[k] = 0;
-    return cx; }
-}
-const char *video_language_name(const char *code) { return languageReadable(code); }
 static char      media[64];
 static double    posSeg, durationSeg;
 static int       playing, ready, on;
@@ -1242,7 +1245,7 @@ static int playInternal(const char *url, int comDV) {
   }
   snprintf(load, sizeof load,
       "{\"payload\":{\"option\":{\"useSeekableRanges\":true,"
-      "\"appId\":\"space.nuvio.native.legacy\","
+      "\"appId\":\"" NV_APP_ID "\","
       "%s"
       "\"bufferControl\":{\"userBufferCtrl\":false},"
       "\"windowId\":\"%s\"}},"
@@ -1387,6 +1390,8 @@ int    video_ready(void)   { return ready; }
 // and waiting for the event would leave the screen drawn over the video if the
 // event changed name or did not arrive.
 int    video_active(void)    { return media[0] != 0; }
+// The picture is on the hardware plane, never in a texture: player.c punches a hole.
+unsigned video_frame_texture(void) { return 0; }
 
 int  video_n_audio(void)   { return nAudio; }
 int  video_n_subtitle(void) { return nSub; }

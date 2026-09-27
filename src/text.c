@@ -42,14 +42,16 @@ typedef struct {
 static float scaleTxt = 1.0f;
 static TTF_Font *fonts[TXT_NFONTS];
 
-// The TTF files of the three weights, READ ONCE and kept alive as long as the app
-// lives: FreeType's faces read from them on demand, so freeing here means reading
-// freed memory on the first new glyph. They are ~900 KB in total.
+// The TTF files, READ ONCE and kept alive as long as the app lives: FreeType's
+// faces read from them on demand, so freeing here means reading freed memory on
+// the first new glyph. Indexed by fileOf: the three Display weights, then the
+// three Text weights; only the ones a style uses are read (~400 KB each).
 // `ownerWeight` marks which pointers are owned: weights pointing at the same file
 // share the buffer and only one of them frees it.
-static unsigned char *bytesWeight[3];
-static size_t         sizeWeight[3];
-static int            ownerWeight[3];
+#define TXT_FILES 6
+static unsigned char *bytesWeight[TXT_FILES];
+static size_t         sizeWeight[TXT_FILES];
+static int            ownerWeight[TXT_FILES];
 // The RWops of each style. Kept because we open with freesrc=0 (the buffer is
 // shared, the font must not close it) and somebody has to close it in
 // txt_shutdown.
@@ -109,9 +111,9 @@ int    txt_evictions = 0;
 int    txt_misses = 0;
 double txt_ms = 0.0;
 
-// The weight per style. Each weight is a real Inter Display FILE (Regular 400,
-// Medium 500, Bold 700) — there is no repeated pass and no sub-pixel offset to
-// fake a weight. Synthetic bold (TTF_SetFontStyle) only comes in on the FALLBACK
+// The weight per style. Each weight is a real Inter FILE (Regular 400, Medium
+// 500, Bold 700), in the Display or the text cut by size (NV_FT_DISPLAY_MIN).
+// There is no repeated pass and no sub-pixel offset to fake a weight. Synthetic bold (TTF_SetFontStyle) only comes in on the FALLBACK
 // families (LG, Droid), which have no Bold file of their own; see the
 // `if (c > 0 && ...)` in txt_start. That matters because synthetic bold thickens
 // the strokes without redrawing anything, and next to a real Bold the difference
@@ -130,6 +132,13 @@ double txt_ms = 0.0;
 // destinations for the same 600 on purpose, and not an oversight — without the
 // rule written here, the next person "fixes" one of the two and misaligns the screen.
 enum { WEIGHT_REGULAR, WEIGHT_MEDIUM, WEIGHT_BOLD };
+
+// WHICH CUT OF INTER. Inter Display is drawn for headings: tighter spacing and
+// closed-up apertures that look right at 48 px and start to run together at 17
+// from the couch. Inter (the text cut) is drawn for exactly those sizes. So a
+// style under NV_FT_DISPLAY_MIN gets the text cut and the rest keep Display —
+// the owner compared the two side by side and chose the split.
+#define NV_FT_DISPLAY_MIN 28
 static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_TITLE1,  WEIGHT_BOLD   },   // the film's title on the detail screen
   // It WAS WEIGHT_REGULAR, after the tracked-out header of the Apple app's title
@@ -335,6 +344,14 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_DD_SEL,    WEIGHT_MEDIUM  },   // TXT_DD_SEL
   { NV_FT_MENU,      WEIGHT_REGULAR },   // TXT_MENU_ITEM
   { NV_FT_MENU,      WEIGHT_BOLD    },   // TXT_MENU_SEL
+  // The pause overlay. Light type over a darkened blur, so the optical rule at the
+  // top of this table applies throughout; only the synopsis stays Regular, being
+  // the one block meant to be read rather than glanced at.
+  { NV_FT_PAUSE_TITLE, WEIGHT_BOLD    }, // TXT_PAUSE_TITLE
+  { NV_FT_PAUSE_META,  WEIGHT_MEDIUM  }, // TXT_PAUSE_META
+  { NV_FT_PAUSE_EP,    WEIGHT_BOLD    }, // TXT_PAUSE_EP
+  { NV_FT_PAUSE_SIN,   WEIGHT_REGULAR }, // TXT_PAUSE_SIN
+  { NV_FT_PAUSE_CLOCK, WEIGHT_MEDIUM  }, // TXT_PAUSE_CLOCK
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
@@ -638,6 +655,12 @@ static TTF_Font *subtitleFontOf(TxtStyle style, const char *s,
   return subFontsHeight[family][i];
 }
 
+// The file style `i` opens: its weight, in the Display cut or, under
+// NV_FT_DISPLAY_MIN, the text cut three slots on.
+static int fileOf(int i) {
+  return STYLES[i].weight + (STYLES[i].body < NV_FT_DISPLAY_MIN ? 3 : 0);
+}
+
 int txt_start(const char *dirAssets, float scale) {
   if (scale < 0.5f) scale = 1.0f;
   scaleTxt = scale;
@@ -656,10 +679,13 @@ int txt_start(const char *dirAssets, float scale) {
     if (bp) { snprintf(base, sizeof base, "%s", bp); SDL_free(bp); }
   }
 
-  char inter[3][512];
+  char inter[TXT_FILES][512];
   snprintf(inter[WEIGHT_REGULAR], 512, "%sfonts/InterDisplay-Regular.ttf", base);
   snprintf(inter[WEIGHT_MEDIUM],  512, "%sfonts/InterDisplay-Medium.ttf",  base);
   snprintf(inter[WEIGHT_BOLD],    512, "%sfonts/InterDisplay-Bold.ttf",    base);
+  snprintf(inter[3 + WEIGHT_REGULAR], 512, "%sfonts/Inter-Regular.ttf", base);
+  snprintf(inter[3 + WEIGHT_MEDIUM],  512, "%sfonts/Inter-Medium.ttf",  base);
+  snprintf(inter[3 + WEIGHT_BOLD],    512, "%sfonts/Inter-Bold.ttf",    base);
 
   const char *lg[3] = { "/usr/share/fonts/LG_Display-Light.ttf",
                         "/usr/share/fonts/LG_Display-Regular.ttf",
@@ -668,11 +694,15 @@ int txt_start(const char *dirAssets, float scale) {
                            "/usr/share/fonts/DroidSans.ttf",
                            "/usr/share/fonts/DroidSans.ttf" };
 
-  const char *families[3][3] = {
-    { inter[0], inter[1], inter[2] },
-    { lg[0], lg[1], lg[2] },
-    { droid[0], droid[1], droid[2] },
+  // LG and Droid have one cut: their "text" files are the same three again, and
+  // the read below notices the repeat and shares the buffer.
+  const char *families[3][TXT_FILES] = {
+    { inter[0], inter[1], inter[2], inter[3], inter[4], inter[5] },
+    { lg[0], lg[1], lg[2], lg[0], lg[1], lg[2] },
+    { droid[0], droid[1], droid[2], droid[0], droid[1], droid[2] },
   };
+  int need[TXT_FILES] = {0};
+  for (int i = 0; i < TXT_NFONTS; i++) need[fileOf(i)] = 1;
   const char *names[3] = { "Inter (embedded)", "LG Display", "DroidSans" };
 
   // The path of the CJK fallback. On the TV it is DroidSansFallback; on the Mac,
@@ -721,11 +751,12 @@ int txt_start(const char *dirAssets, float scale) {
     // slow storage does not make them less redundant — not doing the reads does.
     // Serial is more predictable, and none of this goes near FreeType's dubious
     // thread-safety.
-    for (int p = 0; p < 3; p++) {
+    for (int p = 0; p < TXT_FILES; p++) {
       int j;
+      if (!need[p]) continue;
       // LG repeats Regular across two weights and Droid across all three: do not read again.
       for (j = 0; j < p; j++)
-        if (!strcmp(families[c][p], families[c][j])) break;
+        if (need[j] && !strcmp(families[c][p], families[c][j])) break;
       if (j < p) { bytesWeight[p] = bytesWeight[j]; sizeWeight[p] = sizeWeight[j]; ownerWeight[p] = 0; continue; }
       bytesWeight[p] = readAll(families[c][p], &sizeWeight[p]);
       ownerWeight[p] = bytesWeight[p] ? 1 : 0;
@@ -733,7 +764,7 @@ int txt_start(const char *dirAssets, float scale) {
     }
     if (all)
       for (int i = 0; i < TXT_NFONTS; i++) {
-        int weight = STYLES[i].weight;
+        int weight = fileOf(i);
         // One RWops PER font: FreeType reads through the stream for the whole life
         // of the face, so two styles cannot share the same read position. They are
         // bytes in memory — creating the RWops costs no I/O.
@@ -751,7 +782,9 @@ int txt_start(const char *dirAssets, float scale) {
         if (c > 0 && STYLES[i].weight == WEIGHT_BOLD) TTF_SetFontStyle(fonts[i], TTF_STYLE_BOLD);
       }
     if (all) {
-      printf("font: %s (%d styles, 3 reads)\n", names[c], TXT_NFONTS);
+      { int reads = 0;
+        for (int p = 0; p < TXT_FILES; p++) reads += ownerWeight[p];
+        printf("font: %s (%d styles, %d reads)\n", names[c], TXT_NFONTS, reads); }
       mark("fonts: ready");
       return 1;
     }
@@ -761,7 +794,7 @@ int txt_start(const char *dirAssets, float scale) {
       if (rwSource[i]) SDL_FreeRW(rwSource[i]);
       rwSource[i] = NULL;
     }
-    for (int p = 0; p < 3; p++) {
+    for (int p = 0; p < TXT_FILES; p++) {
       if (ownerWeight[p]) free(bytesWeight[p]);
       bytesWeight[p] = NULL; sizeWeight[p] = 0; ownerWeight[p] = 0;
     }
@@ -784,7 +817,7 @@ void txt_shutdown(void) {
     for (int e = 0; e < SCRIPT_N; e++)
       if (fallbacks[e][i]) TTF_CloseFont(fallbacks[e][i]);
   }
-  for (int p = 0; p < 3; p++) {
+  for (int p = 0; p < TXT_FILES; p++) {
     if (ownerWeight[p]) free(bytesWeight[p]);
     bytesWeight[p] = NULL; sizeWeight[p] = 0; ownerWeight[p] = 0;
   }
