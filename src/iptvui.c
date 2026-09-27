@@ -844,7 +844,10 @@ static void drawDigits(void) {
   GfxRect r;
   if (!digits[0]) return;
   t = txt_line(TXT_TITLE1, digits, 255, 255, 255, 255);
-  r = (GfxRect){ LIVE_RIGHT - t.w - 64.0f, 56.0f, t.w + 64.0f, t.h + 24.0f };
+  // Top right of the picture: full screen that is the screen's corner; on the
+  // guide it is the preview's, below the header's buttons.
+  r = (GfxRect){ LIVE_RIGHT - t.w - 64.0f - (iptvui_fullscreen() ? 0.0f : 16.0f),
+                 iptvui_fullscreen() ? 56.0f : LIVE_INFO_Y + 16.0f, t.w + 64.0f, t.h + 24.0f };
   gfx_color(r, NV_RADIUS_BADGE, 0.06f, 0.06f, 0.07f, 0.88f);
   txt_draw(t, r.x + 32.0f, r.y + 12.0f);
 }
@@ -1136,7 +1139,9 @@ static void drawGuide(void) {
 
   // Now: a line down the guide, with its dot on the ruler.
   if ((double)now >= ws && (double)now < we) {
-    float nx = tx + (float)(((double)now - ws) * pps);
+    // Snapped to a whole pixel: at a fractional x the 2 px line rasterises as
+    // one faint pixel, and it is the one mark on the guide that must not fade.
+    float nx = (float)(int)(tx + (float)(((double)now - ws) * pps) + 0.5f);
     float bottom = LIVE_ROWS_Y + (nView - scrollRows) * LIVE_ROW_STEP;
     if (bottom > LIVE_BOTTOM) bottom = LIVE_BOTTOM;
     gfx_color((GfxRect){ nx - 1.0f, LIVE_GUIDE_Y + LIVE_RULER_H - 6.0f, 2.0f,

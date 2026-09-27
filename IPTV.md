@@ -114,6 +114,45 @@ favourite and the history round-trips, and captures the guide, a group, full
 screen, the quick list and the setup form. It runs on the Mac, and on Linux
 under `xvfb-run` with a GLES context.
 
+## Performance
+
+Measured off the TV on an x86 core, 2026-09-27. The TV's cores are several
+times slower, so read these as proportions, not as the C3's numbers.
+
+**Frames** (the guide, 48 channels, main-thread CPU time; the GPU was a
+software rasteriser, so GPU time is not meaningful here):
+
+| | CPU / frame | draw calls | text settles in |
+|---|---|---|---|
+| Guide, steady | ~1.0 ms | ~130 rects, ~90 texture binds | — |
+| First open | worst 2.4 ms | | 34 frames (~0.57 s) |
+| Six programmes to the right | worst 2.2 ms | | 18 frames (~0.3 s) |
+| Two pages down | worst 2.4 ms | | 23 frames (~0.38 s) |
+| Holding DOWN through 20 rows | worst 3.0 ms | | 16 frames after stopping |
+
+The frame cost is low; what is visible is **text arriving**. `text.c`
+rasterises at most two new lines per frame (`TXT_PER_FRAME`, set from a
+measurement on the TV), and a fresh guide page carries 60-100 distinct strings
+— titles, times, channel names. So after opening or paging, cells fill in over
+a quarter to half a second. The budget is the app's, deliberately; the guide's
+lever is drawing fewer distinct strings (for example, times only on the focused
+row) if this reads as slow on the TV.
+
+**Loading** (`iptv_parse.c`, -O2, run on the loader thread, never on a frame):
+
+| | size | time |
+|---|---|---|
+| Playlist, 10 000 channels, 360 groups | 2.1 MB | 30 ms |
+| Guide, 2 000 channels × 7 days, gzipped | 4.1 MB → 140 MB XML | inflate 173 ms, parse 484 ms |
+| Kept after the -3 h..+30 h window | 77 493 programmes | — |
+| Resident afterwards (channels + guide) | ~16 MB | — |
+
+The cost to watch is **memory while the guide loads**: the whole inflated XML
+is held at once, about 140 MB for that guide, and more when a panel serves it
+uncompressed (the download buffer grows by reallocation). On a TV that can end
+the app, so a streaming parse — inflate and parse a chunk at a time, a few MB
+resident — is the first thing to do if large guides misbehave.
+
 ## Not verified yet
 
 Everything above was exercised off the TV. **Nothing has been played on the C3
@@ -132,6 +171,7 @@ yet**, so these are open:
 Roughly in order:
 
 1. Verify playback on the C3 and adjust the load payload for live streams.
+   Watch memory while a large guide loads (see Performance).
 2. Search channels (and programmes) by name.
 3. Reminders: OK on a future programme offers "Remind me", with a toast when it
    starts.
