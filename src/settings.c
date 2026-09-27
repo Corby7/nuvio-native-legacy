@@ -80,6 +80,7 @@ typedef enum {
   SETTING_NEXT_AUTOPLAY, SETTING_NEXT_COUNTDOWN, SETTING_NEXT_MODE, SETTING_NEXT_SECONDS,
   SETTING_NEXT_PERCENT,
   SETTING_SEEK_COLOR, SETTING_PAUSE_DELAY,
+  SETTING_LIVE_BUFFER, SETTING_LIVE_PREVIEW,
   // Hero
   SETTING_HERO, SETTING_HERO_CATALOGS,
   SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
@@ -164,6 +165,8 @@ static const float SEEK_RGB[][3] = {
   { 0xF5 / 255.0f, 0x9E / 255.0f, 0x0B / 255.0f },   /* #F59E0B */
 };
 static const char *V_ON[]      = { "On", "Off" };
+// Live TV's pause buffer, in minutes (settings_live_buffer_minutes).
+static const char *V_LIVE_BUFFER[] = { "Off", "15 min", "30 min", "60 min" };
 static const char *V_ANIM[]      = { "Full", "Reduced" };
 // How a row follows the focus sideways. Local to this port: "Minimal" scrolls only
 // as far as the focused card needs to fit; "First slot" puts it in the row's first
@@ -224,6 +227,8 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_NEXT_PERCENT] = NUM("Up next at",                 90, 100, 1, "%"),
   // 0 is Off: textValue draws it as a word, not as "0 s".
   [SETTING_PAUSE_DELAY] = NUM("Pause overlay after",        0, 60, 5, " s"),
+  [SETTING_LIVE_BUFFER] = ESC("Pause buffer",               V_LIVE_BUFFER, 4),
+  [SETTING_LIVE_PREVIEW] = ESC("Preview while browsing",    V_ON, 2),
 
   [SETTING_LANDSCAPE] = ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
   [SETTING_HERO_FULL] = ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
@@ -326,6 +331,8 @@ static const char *KEY[] = {
   // Local to this port: NuvioTV has an on/off switch at a fixed 5 s; this is one
   // row, seconds, with 0 for off.
   [SETTING_PAUSE_DELAY] = "pauseOverlayDelaySeconds",
+  // Local to this port: Live TV has no web counterpart.
+  [SETTING_LIVE_BUFFER] = "liveTvPauseBufferIndex", [SETTING_LIVE_PREVIEW] = "liveTvPreviewWhileBrowsing",
   [SETTING_LANDSCAPE] = "modernLandscapePostersEnabled", [SETTING_HERO_FULL] = "modernHeroFullScreenBackdropEnabled",
   [SETTING_HERO_AREA] = "heroBackdropArea", [SETTING_HERO_BAND] = "heroBackdropScale",
   [SETTING_RAIL] = "collapseSidebar", [SETTING_RAIL_MODERN] = "modernSidebar", [SETTING_RAIL_BLUR] = "modernSidebarBlur",
@@ -370,8 +377,8 @@ typedef char checked_one_key_per_option[
 // panel says about a section before it is opened. `group` starts a new group
 // header on the list of sections; NULL continues the one above.
 static const struct { const char *group, *title; int start, n; const char *blurb; } SECTIONS[] = {
-  { "Playback", "Playback",          SETTING_QUALITY,              14,
-    "Quality, Dolby formats, languages, subtitles, what happens at the end of an episode and the player's controls." },
+  { "Playback", "Playback",          SETTING_QUALITY,              16,
+    "Quality, Dolby formats, languages, subtitles, what happens at the end of an episode, the player's controls and Live TV's pause and preview." },
   { "Home", "Hero",                  SETTING_HERO,                 5,
     "The featured title at the top of Home: whether it shows, and how its backdrop is drawn." },
   // No options of its own: `start` is SETTING_N, the marker openSection reads to
@@ -419,6 +426,10 @@ static int value[SETTING_N] = {
   [SETTING_NEXT_SECONDS] = 120,              /* up next lead: 2 min, the web's default and the old fixed value */
   [SETTING_NEXT_PERCENT] = 99,               /* up next share: 99% (the web's default) */
   [SETTING_PAUSE_DELAY] = 10,               /* pause overlay: after 10 s paused */
+  // Both off: the buffer writes the channel to the TV's flash while it plays, and
+  // a preview opens a connection on every rest.
+  [SETTING_LIVE_BUFFER] = 0,                /* Live TV pause buffer: off */
+  [SETTING_LIVE_PREVIEW] = 1,               /* Live TV preview while browsing: off */
 
   [SETTING_LANDSCAPE] = 0,                /* landscape posters: ON (the owner's profile; factory: off) */
   [SETTING_HERO_FULL] = 0,                /* full-screen backdrop: ON (profile; factory: off) */
@@ -533,6 +544,19 @@ double settings_next_lead(double durationSeg) {
 }
 int settings_next_countdown(void)    { return value[SETTING_NEXT_COUNTDOWN]; }
 int settings_pause_overlay_ms(void)  { return value[SETTING_PAUSE_DELAY] * 1000; }
+static void save(void);
+int settings_live_buffer_minutes(void) {
+  static const int MIN[4] = { 0, 15, 30, 60 };
+  int i = value[SETTING_LIVE_BUFFER];
+  return i >= 0 && i < 4 ? MIN[i] : 0;
+}
+int settings_live_preview(void)      { return on(SETTING_LIVE_PREVIEW); }
+void settings_set_live(int bufferMinutes, int preview) {
+  int i = bufferMinutes >= 60 ? 3 : bufferMinutes >= 30 ? 2 : bufferMinutes > 0 ? 1 : 0;
+  value[SETTING_LIVE_BUFFER] = i;
+  value[SETTING_LIVE_PREVIEW] = preview ? 0 : 1;
+  save();
+}
 void settings_seek_color(float *r, float *g, float *b) {
   int i = value[SETTING_SEEK_COLOR];
   if (i < 0 || i >= (int)(sizeof SEEK_RGB / sizeof *SEEK_RGB)) i = 0;
@@ -973,6 +997,8 @@ static const char *helpOption(int op) {
     case SETTING_NEXT_SECONDS: return "How long before the end of an episode the Up next card appears.";
     case SETTING_NEXT_PERCENT: return "How much of an episode has to be watched before the Up next card appears.";
     case SETTING_PAUSE_DELAY: return "How long playback sits paused, with no key pressed, before the title's details come up over a blurred picture. Off never shows them.";
+    case SETTING_LIVE_BUFFER: return "Keeps the last minutes of a live channel on the TV so you can pause and rewind it. Works on MPEG-TS channels, and writes to the TV's storage while you watch.";
+    case SETTING_LIVE_PREVIEW: return "Rest on a channel in the Live TV list or guide and it plays in the preview. It counts as watched only when you press OK.";
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
     case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";
@@ -997,6 +1023,7 @@ static const char *groupOfOption(int op) {
     case SETTING_AUDIO_LANG:     return "Audio and subtitles";
     case SETTING_NEXT_AUTOPLAY:  return "Up next";
     case SETTING_SEEK_COLOR:     return "Player";
+    case SETTING_LIVE_BUFFER:    return "Live TV";
     case SETTING_HERO:           return "Hero";
     case SETTING_HERO_FULL:      return "Backdrop";
     case SETTING_SUFFIX_KIND:    return "Row titles";
@@ -1580,7 +1607,7 @@ static int highlightOf(void) {
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:
     case SETTING_HIDE_UNRELEASED: return HL_ROWS;
     case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM:
-    case SETTING_PAUSE_DELAY: return HL_NONE;
+    case SETTING_PAUSE_DELAY: case SETTING_LIVE_BUFFER: case SETTING_LIVE_PREVIEW: return HL_NONE;
     default:
       if (focusOp >= SETTING_CW_ON && focusOp <= SETTING_CW_NOT_SHOWN) return HL_CW;
       return HL_CARD;

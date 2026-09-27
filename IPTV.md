@@ -59,7 +59,7 @@ focus changes text, never the stream; only OK tunes.
 | Guide | ↑ ↓ | channel; the focus keeps its **time**, so ↓ from a 21:00 film lands on what the next channel shows at 21:00 |
 | Guide | → ← | next / previous programme, paging the timeline in 30-minute jumps; ← from what is on now lands on the channel's own cell, ← again opens the side bar. On a channel with **catch-up**, ← walks on into the past programmes its archive keeps first |
 | List, guide | OK | watch full screen (on the channel already playing: just full screen). On a past programme with catch-up: watch it from its start |
-| List, guide | rest ~1 s | with **Preview while browsing** on: the focused channel plays in the preview (not counted as watched until OK) |
+| List, guide | rest ~1 s | with **Preview while browsing** on (Settings → Playback): the focused channel plays in the preview (not counted as watched until OK) |
 | List, guide | hold OK | add to / remove from Favourites |
 | List, guide | 0–9 | type a channel number |
 | List, guide | Back | guide → list; list: stop the preview, then the chips, then leave |
@@ -125,7 +125,7 @@ when the programme starts, while Live TV is open.
 A live stream has no file to seek in, so where "back" can go depends on who holds
 the past. Three sources, tried in this order:
 
-1. **The pause buffer** (Settings → Source → Playback → Pause buffer; off by
+1. **The pause buffer** (Settings → Playback → Live TV → Pause buffer; off by
    default). While a channel plays, `timeshift.c` downloads it into a ring file in
    the data folder and the pipeline plays that from a loopback server; pausing
    only stops the reading side, so play resumes exactly where the picture froze,
@@ -152,7 +152,7 @@ the past. Three sources, tried in this order:
    the stream went on without the picture (with catch-up it resumes in place from
    the archive instead). Forward only ever goes as far as now.
 
-**Preview while browsing** (Playback, off by default): resting on a channel for
+**Preview while browsing** (Settings → Playback → Live TV, off by default): resting on a channel for
 about a second in the list or the guide plays it in the preview. It is a real
 tune — one stream at a time, a new connection each rest — and it is not counted
 as watched until OK. There is no picture-in-picture: the TV's video is a hardware
@@ -180,7 +180,7 @@ All in the app's data folder (`data.h`; `$NUVIO_DATA` on the Mac):
 
 | File | Holds |
 |---|---|
-| `iptv.txt` | the source: `kind=m3u\|xtream`, `url=`, `epg=`, `server=`, `user=`, `pass=`, and the playback preferences `buffer=` (minutes, 0 = off) and `preview=` (0/1) — one per line. **The password is stored in plain text**, like the account session beside it. |
+| `iptv.txt` | the source: `kind=m3u\|xtream`, `url=`, `epg=`, `server=`, `user=`, `pass=` — one per line (the pause buffer and preview are app settings, in `settings.txt` as `liveTvPauseBufferIndex` and `liveTvPreviewWhileBrowsing`). **The password is stored in plain text**, like the account session beside it. |
 | `timeshift.ts` | the pause buffer's ring, while a channel plays with it on. Deleted when playback stops |
 | `iptv_playlist.m3u` | the last playlist that parsed, so the channels appear at once on the next visit (and when the provider is unreachable) |
 | `iptv_favourites.txt`, `iptv_recent.txt` | one channel name per line. Keyed by name, not URL: providers rotate stream URLs (they carry the credentials) far more often than they rename channels |
@@ -251,7 +251,7 @@ the timeline: a plain-live pause that comes back live, catch-up (rewind, the
 archive URL's `utc=`, Go live, Start over at the programme's start, a past
 programme from the guide), the pause buffer (the loopback URL, a pause that
 resumes the same load, rewinding to an earlier byte, Go live) and preview on
-focus (it tunes, and only OK adds to the history), and the Playback column. It runs on the Mac, and on Linux under `xvfb-run` with
+focus (it tunes, and only OK adds to the history). It runs on the Mac, and on Linux under `xvfb-run` with
 a GLES context, with `tests/video_stub.c` standing in for the pipeline: it plays
 everything and hands the drawing a generated picture.
 

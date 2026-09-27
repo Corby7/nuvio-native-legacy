@@ -60,6 +60,12 @@ int settings_next_countdown(void);
 // How long playback sits paused with no input before the pause overlay rises, in
 // ms; 0 = the overlay is off.
 int settings_pause_overlay_ms(void);
+// Live TV (Playback → Live TV): the pause buffer's minutes, 0 = off; and whether
+// resting on a channel while browsing previews it. The setter is for the
+// harnesses; the screen changes them like any other row.
+int  settings_live_buffer_minutes(void);
+int  settings_live_preview(void);
+void settings_set_live(int bufferMinutes, int preview);
 // "Automatic", "4K", "1080p" or "720p" — the displayed label, so whatever picks
 // the video source shows exactly what the user chose.
 const char *settings_quality(void);

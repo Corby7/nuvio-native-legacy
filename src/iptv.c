@@ -32,10 +32,6 @@
 
 static IptvSource source;
 static char sourceLabel[96];
-// Playback preferences, kept in iptv.txt beside the source. Off by default: the
-// pause buffer writes the channel to the TV's flash for as long as it plays.
-static int prefBuffer;     // minutes, 0 = off
-static int prefPreview;    // preview the focused channel while browsing
 
 // The list the screen reads (main thread only) and the one the loader has just
 // finished (handed over under `mu`).
@@ -428,7 +424,6 @@ static void startLoad(void) {
 static void readConfig(void) {
   char *s = data_read(IPTV_CONFIG_FILE), *line, *save = NULL;
   memset(&source, 0, sizeof source);
-  prefBuffer = 0; prefPreview = 0;
   if (!s) { updateLabel(); return; }
   for (line = strtok_r(s, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
     char *eq = strchr(line, '='), *v;
@@ -445,8 +440,6 @@ static void readConfig(void) {
     else if (!strcmp(line, "server")) snprintf(source.server, sizeof source.server, "%s", v);
     else if (!strcmp(line, "user"))   snprintf(source.user, sizeof source.user, "%s", v);
     else if (!strcmp(line, "pass"))   snprintf(source.pass, sizeof source.pass, "%s", v);
-    else if (!strcmp(line, "buffer"))  prefBuffer = atoi(v);
-    else if (!strcmp(line, "preview")) prefPreview = atoi(v) != 0;
   }
   free(s);
   updateLabel();
@@ -454,10 +447,9 @@ static void readConfig(void) {
 
 static void writeConfig(void) {
   char buf[4096];
-  snprintf(buf, sizeof buf, "kind=%s\nurl=%s\nepg=%s\nserver=%s\nuser=%s\npass=%s\n"
-           "buffer=%d\npreview=%d\n",
+  snprintf(buf, sizeof buf, "kind=%s\nurl=%s\nepg=%s\nserver=%s\nuser=%s\npass=%s\n",
            source.kind == IPTV_SRC_XTREAM ? "xtream" : source.kind == IPTV_SRC_M3U ? "m3u" : "none",
-           source.url, source.epg, source.server, source.user, source.pass, prefBuffer, prefPreview);
+           source.url, source.epg, source.server, source.user, source.pass);
   data_write(IPTV_CONFIG_FILE, buf);
 }
 
@@ -484,14 +476,6 @@ static void writeNames(const char *file, char **names, int n) {
 }
 
 // --- The API -------------------------------------------------------------------------
-int  iptv_pref_buffer(void) { return prefBuffer; }
-int  iptv_pref_preview(void) { return prefPreview; }
-void iptv_set_prefs(int bufferMinutes, int preview) {
-  prefBuffer = bufferMinutes < 0 ? 0 : bufferMinutes > 240 ? 240 : bufferMinutes;
-  prefPreview = preview != 0;
-  writeConfig();
-}
-
 void iptv_start(void) {
   readConfig();
   nFavourites = readNames(IPTV_FAV_FILE, favourites, IPTV_MAX_FAVOURITES);

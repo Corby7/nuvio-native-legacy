@@ -102,7 +102,7 @@ for cid in chans:
     t += d
 x.append("</tv>")
 gzip.open(tmp + "/guide.xml.gz", "wt").write("\n".join(x))
-open(tmp + "/data/iptv.txt", "w").write("kind=m3u\nurl=file://%s/playlist.m3u\nepg=\nserver=\nuser=\npass=\nbuffer=15\n" % tmp)
+open(tmp + "/data/iptv.txt", "w").write("kind=m3u\nurl=file://%s/playlist.m3u\nepg=\nserver=\nuser=\npass=\n" % tmp)
 PY
 
 sources=()

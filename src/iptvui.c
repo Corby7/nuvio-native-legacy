@@ -40,7 +40,9 @@
 #include "hold.h"
 #include "ime.h"
 #include "layout.h"
+#include "phonelink.h"
 #include "pointer.h"
+#include "qr.h"
 #include "settings.h"
 #include "tex_cache.h"
 #include "text.h"
@@ -159,7 +161,7 @@ static int full;
 static unsigned playSession;
 static int playing, playFailed, errSeen;
 static int zapPending;
-static Uint32 zapAt, tunedAt;
+static Uint32 zapAt, tunedAt, zapKeyAt;
 
 // THE OVERLAY OVER A PLAYING CHANNEL, Y5's four amounts, each one more press:
 //   TOAST  ▲▼ with nothing showing: a card bottom-left, identity only, 3 s.
@@ -253,12 +255,7 @@ static IptvSource draft;
 static int setupRow, setupBtn;
 static int setupRows[8], nSetupRows;
 static int editing = -1;    // the ROW_* whose text the keyboard is filling
-// The Playback column, right of the form: preferences that apply at once,
-// with no reload. RIGHT from a field reaches it; LEFT past its first choice
-// leaves it.
-static int setupCol, prefRow;
-static const int BUFFER_MIN[4] = { 0, 15, 30, 60 };
-static const char *BUFFER_NAME[4] = { "Off", "15 min", "30 min", "60 min" };
+static Uint32 phoneRetryAt; // no network yet: when to look for one again
 
 // --- Small helpers ---------------------------------------------------------------
 static float X0(void) { return settings_content_x() - 8.0f; }
@@ -530,7 +527,7 @@ static void beginLive(void) {
   timeshift_end();
   bufWaiting = 0; paused = 0; scrubbing = 0;
   if (!c) return;
-  budget = iptv_pref_buffer() > 0 ? timeshift_budget(iptv_pref_buffer()) : 0;
+  budget = settings_live_buffer_minutes() > 0 ? timeshift_budget(settings_live_buffer_minutes()) : 0;
   if (budget > 0 && timeshift_begin(c->url, c->headers, budget)) {
     // The recorder opens the one connection; the pipeline follows it once
     // bytes arrive (iptvui_update), or plays direct if none do.
@@ -723,7 +720,8 @@ static void previewTune(int ch) {
 }
 
 // Tunes `ch`. `immediate` starts the stream at once; otherwise it waits
-// LIVE_ZAP_MS for the keys to stop, so a run of CH+ presses opens one stream.
+// LIVE_ZAP_MS for the keys to stop, so a run of CH+ presses opens one stream
+// (zap decides which).
 static void tune(int ch, int immediate) {
   const IptvChannel *c = chan(ch);
   if (!c) return;
@@ -745,7 +743,14 @@ static void zap(int step) {
   r = r < 0 ? 0 : ((r + step) % nView + nView) % nView;
   fRow = r;
   rememberFocus();
-  tune(view[r], 0);
+  // A LONE PRESS TUNES AT ONCE. Only a press that follows another within
+  // LIVE_ZAP_MS waits for the keys to stop: the single CH+ used to pay the
+  // whole wait before the stream even started loading. A run of presses costs
+  // one extra load, the first one, which the next tune unloads.
+  { Uint32 t = SDL_GetTicks();
+    int alone = !zapPending && t - zapKeyAt >= LIVE_ZAP_MS;
+    zapKeyAt = t;
+    tune(view[r], alone); }
 }
 
 static void tuneNumber(int number) {
@@ -832,7 +837,7 @@ static void openSetup(void) {
   if (draft.kind == IPTV_SRC_NONE) draft.kind = IPTV_SRC_M3U;
   mode = MODE_SETUP;
   setupRow = 0; setupBtn = BTN_SAVE; editing = -1;
-  setupCol = 0; prefRow = 0;
+  phoneRetryAt = 0;
   layoutSetup();
   stopStream();
   full = 0;
@@ -910,25 +915,6 @@ static void saveSetup(void) {
   say("Loading your channels\xE2\x80\xA6");
 }
 
-static int bufferChoice(void) {
-  int m = iptv_pref_buffer(), best = 0;
-  for (int i = 0; i < 4; i++) if (BUFFER_MIN[i] <= m) best = i;
-  return best;
-}
-static void prefStep(int dir) {
-  if (prefRow == 0) {
-    int c = bufferChoice() + dir;
-    if (c < 0) { setupCol = 0; return; }
-    if (c > 3) return;
-    iptv_set_prefs(BUFFER_MIN[c], iptv_pref_preview());
-    if (BUFFER_MIN[c] == 0) timeshift_end();
-  } else {
-    int on = iptv_pref_preview();
-    if (dir < 0 && !on) { setupCol = 0; return; }
-    iptv_set_prefs(iptv_pref_buffer(), dir > 0);
-  }
-}
-
 static void setupEvent(const SDL_Event *e) {
   SDL_Keycode k;
   int row = setupRows[setupRow];
@@ -955,18 +941,6 @@ static void setupEvent(const SDL_Event *e) {
       if (setupRow + 1 < nSetupRows) setupRow++; }
     return;
   }
-  if (setupCol == 1) {
-    if (k == SDLK_UP && prefRow > 0) prefRow--;
-    else if (k == SDLK_DOWN && prefRow < 1) prefRow++;
-    else if (k == SDLK_LEFT) prefStep(-1);
-    else if (k == SDLK_RIGHT) prefStep(+1);
-    else if (isOk(k)) {
-      if (prefRow == 0) iptv_set_prefs(BUFFER_MIN[(bufferChoice() + 1) % 4], iptv_pref_preview());
-      else iptv_set_prefs(iptv_pref_buffer(), !iptv_pref_preview());
-      if (!iptv_pref_buffer()) timeshift_end();
-    }
-    return;
-  }
   switch (k) {
     case SDLK_UP:   if (setupRow > 0) setupRow--; break;
     case SDLK_DOWN: if (setupRow + 1 < nSetupRows) setupRow++; break;
@@ -978,7 +952,6 @@ static void setupEvent(const SDL_Event *e) {
     case SDLK_RIGHT:
       if (row == ROW_TYPE && draft.kind != IPTV_SRC_XTREAM) { draft.kind = IPTV_SRC_XTREAM; layoutSetup(); }
       else if (row == ROW_SAVE && setupBtn + 1 < setupButtons()) setupBtn++;
-      else if (row != ROW_TYPE && row != ROW_SAVE) { setupCol = 1; prefRow = 0; }
       break;
     default:
       if (!isOk(k)) break;
@@ -1002,6 +975,26 @@ static void setupEvent(const SDL_Event *e) {
   }
 }
 
+// THE PHONE FORM (phonelink.h): open while the setup form is, closed the moment
+// it is not. A form saved on the phone lands in the draft and is saved exactly
+// as the Save button would, with the same check and the same message.
+static void phoneStep(Uint32 now) {
+  IptvSource s;
+  if (mode != MODE_SETUP) { phonelink_close(); return; }
+  // With no network address yet (the TV still joining the Wi-Fi), look again
+  // every few seconds rather than every frame.
+  if (phonelink_state() == PL_OFF && now >= phoneRetryAt) {
+    phoneRetryAt = now + 3000u;
+    phonelink_open(iptv_source());
+  }
+  if (!phonelink_take(&s)) return;
+  if (ime_is_open()) ime_close();
+  editing = -1;
+  draft = s;
+  layoutSetup();
+  saveSetup();
+}
+
 // --- Pointer ---------------------------------------------------------------------------
 static void pointHead(int b, int unused) { (void)unused; zone = ZONE_HEAD; headSel = b; }
 static void pointChip(int g, int unused) { (void)unused; zone = ZONE_CHIPS; chooseGroup(g); }
@@ -1019,8 +1012,7 @@ static void pointCell(int row, int t) {
     fTime = at < now ? now : at; }
 }
 static void pointAct(int a, int unused) { (void)unused; zone = ZONE_ACTIONS; actSel = a; }
-static void pointSetup(int i, int unused) { (void)unused; if (!ime_is_open()) { setupRow = i; setupCol = 0; } }
-static void pointPref(int r, int unused) { (void)unused; if (!ime_is_open()) { setupCol = 1; prefRow = r; } }
+static void pointSetup(int i, int unused) { (void)unused; if (!ime_is_open()) setupRow = i; }
 static void pointQuick(int r, int unused) { (void)unused; if (!gmOpen) { quickRow = r; quickZone = Q_LIST; } }
 static void pointQuickPill(int a, int b) { (void)a; (void)b; if (!gmOpen) quickZone = Q_PILL; }
 static void pointGroupMenu(int g, int unused) { (void)unused; if (gmOpen && g >= 0) gmCursor = g; }
@@ -1050,6 +1042,7 @@ void iptvui_resume(void) {
 }
 
 void iptvui_leave(void) {
+  phonelink_close();
   stopStream();
   full = 0; quickOpen = 0;
   if (ime_is_open()) ime_close();
@@ -1057,6 +1050,7 @@ void iptvui_leave(void) {
 }
 
 void iptvui_background(void) {
+  phonelink_close();
   if (playing || zapPending || bufWaiting) { stopStream(); full = 0; quickOpen = 0; }
 }
 
@@ -1074,10 +1068,27 @@ int iptvui_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v
 int iptvui_fullscreen(void) { return full && tuned >= 0; }
 
 // --- Events ---------------------------------------------------------------------------
+// Whether a longer channel number starts with the digits typed so far. When
+// none does, the number is complete and waiting LIVE_DIGITS_MS for another
+// digit is only a delay: "7" on a list of 1-20 tunes at once, "1" waits for a
+// possible "12". A full buffer is complete too.
+static int digitsCanGrow(void) {
+  const IptvList *l = iptv_list();
+  size_t n = strlen(digits);
+  char num[16];
+  if (!l || n + 1 >= sizeof digits) return 0;
+  for (int c = 0; c < l->nCh; c++) {
+    snprintf(num, sizeof num, "%d", l->ch[c].number);
+    if (strlen(num) > n && !strncmp(num, digits, n)) return 1;
+  }
+  return 0;
+}
+
 static void typeDigit(int d) {
   size_t n = strlen(digits);
   if (n + 1 < sizeof digits) { digits[n] = (char)('0' + d); digits[n + 1] = 0; }
   digitsAt = SDL_GetTicks();
+  if (!digitsCanGrow()) digitsAt -= LIVE_DIGITS_MS;
 }
 
 static int viewIndex(int ch) {
@@ -1508,6 +1519,7 @@ void iptvui_update(float dt, Uint32 now) {
     rebuildView();
     measureChips();
   }
+  phoneStep(now);
   if (mode != MODE_BROWSE) return;
 
   hold_animate(&hold, dt, now);
@@ -1567,7 +1579,7 @@ void iptvui_update(float dt, Uint32 now) {
   }
   // Preview on focus: resting on a channel while browsing plays it in the
   // preview. It is not "watched" until OK.
-  if (!full && zone == ZONE_BODY && iptv_pref_preview()) {
+  if (!full && zone == ZONE_BODY && settings_live_preview()) {
     int f = focusedChannel();
     if (f != restCh) { restCh = f; restSince = now; }
     else if (f >= 0 && f != tuned && now - restSince >= LIVE_PREVIEW_MS && !zapPending) {
@@ -2508,6 +2520,33 @@ static GfxRect pillButton(float x, float y, const char *label, int focused, int 
   return r;
 }
 
+// Right of the form: the QR for the phone form, and what state it is in. The
+// state line is also the check that the network lets a phone reach the TV:
+// "Phone connected" only appears once a request got through.
+#define P_QR 300.0f
+static void drawPhonePanel(void) {
+  float x = L_RIGHT - P_QR - 32.0f, y = 300.0f, w = P_QR + 32.0f;
+  int st = phonelink_state();
+  const char *url = phonelink_url();
+  GLuint tex = st != PL_OFF && url[0] ? qr_texture(url) : 0;
+  if (x < X0() + 1040.0f + 64.0f) return;   // no room beside the form
+  ink(TXT_LIVE_NAME, "Or fill it in on your phone", 0xF5F6F8, x, y, 1.0f);
+  y += 44.0f;
+  if (tex) {
+    gfx_color((GfxRect){ x, y, w, w }, 16.0f / w, 1.0f, 1.0f, 1.0f, 1.0f);
+    gfx_tex_aspect_current = 0.0f;
+    gfx_rect((GfxRect){ x + 16.0f, y + 16.0f, P_QR, P_QR }, tex, GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+    y += w + 24.0f;
+    txt_block(TXT_LIVE_META,
+              st == PL_OPENED ? "Phone connected. Fill in the form there and press Save."
+                              : "Scan with your phone's camera. The phone must be on the same Wi-Fi as the TV.",
+              HEXI(st == PL_OPENED ? 0xF5F6F8 : 0x9AA1A9), x, y, w, 27.0f, 1.0f, 3);
+  } else {
+    txt_block(TXT_LIVE_META, "Connect the TV to your home network to fill this in from a phone.",
+              HEXI(0x9AA1A9), x, y, w, 27.0f, 1.0f, 3);
+  }
+}
+
 static void drawSetup(void) {
   float x = X0();
   { TxtLine t = txt_line(TXT_TITLE3, "Live TV", 245, 246, 248, 255);
@@ -2520,7 +2559,7 @@ static void drawSetup(void) {
             HEXI(0x9AA1A9), x, 196.0f, 1040.0f, 29.0f, 1.0f, 3);
 
   for (int i = 0; i < nSetupRows; i++) {
-    int row = setupRows[i], focused = i == setupRow && setupCol == 0;
+    int row = setupRows[i], focused = i == setupRow;
     float y = setupRowY(i);
     if (row == ROW_TYPE) {
       static const char *KIND[2] = { "M3U playlist", "Xtream Codes" };
@@ -2576,29 +2615,7 @@ static void drawSetup(void) {
       pointer_zone(f.x, f.y, f.w, f.h, pointSetup, i, 0);
     }
   }
-
-  // The Playback column.
-  { float px = x + 1040.0f + 80.0f, py = 300.0f, pw = L_RIGHT - px;
-    ink(TXT_LIVE_META_B, "Playback", 0xE4E7EA, px, py - 8.0f, 1.0f);
-    py += 48.0f;
-    for (int r = 0; r < 2; r++) {
-      float bx = px;
-      int focusedRow = setupCol == 1 && prefRow == r;
-      ink(TXT_LIVE_META, r == 0 ? "Pause buffer" : "Preview while browsing", 0x9AA1A9, px + 4.0f, py, 1.0f);
-      for (int k = 0; k < (r == 0 ? 4 : 2); k++) {
-        int on = r == 0 ? k == bufferChoice() : (k == 1) == (iptv_pref_preview() != 0);
-        GfxRect b = pillButton(bx, py + 34.0f, r == 0 ? BUFFER_NAME[k] : k ? "On" : "Off", focusedRow && on, on);
-        pointer_zone(b.x, b.y, b.w, b.h, pointPref, r, 0);
-        bx += b.w + L_CHIP_GAP;
-      }
-      txt_block(TXT_LIVE_NOTE, r == 0
-                ? "Keeps the last minutes of a channel on the TV so you can pause and rewind it. "
-                  "Works on MPEG-TS channels; writes to the TV's storage while you watch."
-                : "Rest on a channel in the list or the guide and it plays in the preview. "
-                  "It counts as watched only when you press OK.",
-                HEXI(0x7C838B), px + 4.0f, py + 34.0f + 56.0f + 14.0f, pw - 8.0f, 24.0f, 1.0f, 3);
-      py += 34.0f + 56.0f + 14.0f + 3 * 24.0f + 36.0f;
-    } }
+  drawPhonePanel();
 }
 
 // --- Full screen ---------------------------------------------------------------------------------

@@ -11,11 +11,17 @@
 #include "gfx.h"
 #include "ime.h"
 #include "net.h"
+#include "phonelink.h"
 #include "pointer.h"
 #include "tex_cache.h"
+#include "settings.h"
 #include "text.h"
 #include "tracks.h"
 #include <SDL2/SDL_image.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,6 +91,31 @@ static long long tsOffset(const char *u) {
   return b;
 }
 
+// The phone's side: one form POST to the TV's listener on loopback. Returns
+// the HTTP status.
+static int phonePost(const char *body) {
+  struct sockaddr_in a;
+  char req[4096], res[8192], target[128];
+  size_t got = 0;
+  int fd = socket(AF_INET, SOCK_STREAM, 0), k, status = 0;
+  const char *code = strstr(phonelink_url(), "?k=");
+  assert(code);
+  snprintf(target, sizeof target, "/save%s", code);
+  memset(&a, 0, sizeof a);
+  a.sin_family = AF_INET;
+  a.sin_port = htons((unsigned short)phonelink_port());
+  a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  assert(connect(fd, (struct sockaddr *)&a, sizeof a) == 0);
+  k = snprintf(req, sizeof req, "POST %s HTTP/1.1\r\nContent-Length: %zu\r\n\r\n%s",
+               target, strlen(body), body);
+  assert(send(fd, req, (size_t)k, 0) == k);
+  for (ssize_t r; (r = recv(fd, res + got, sizeof res - 1 - got, 0)) > 0; ) got += (size_t)r;
+  res[got] = 0;
+  close(fd);
+  sscanf(res, "HTTP/1.1 %d", &status);
+  return status;
+}
+
 // Frames until `cond` holds, or fail after ~20 s.
 #define WAIT_FOR(cond) do { int _i = 0; \
     while (!(cond) && _i++ < 1200) frames(1, NULL); \
@@ -117,6 +148,8 @@ int main(int argc, char **argv) {
   ime_start(win);
 
   // --- The guide ---------------------------------------------------------------
+  // The pause buffer on (Settings → Playback → Live TV), for the local TS channel.
+  settings_set_live(15, 0);
   iptvui_start();
   assert(iptv_configured());
   WAIT_FOR(iptv_guide_state() == IPTV_READY || iptv_guide_state() == IPTV_FAILED);
@@ -209,10 +242,38 @@ int main(int argc, char **argv) {
     // BACK hides the bar; ▲▼ now zaps, and the toast names where it landed.
     key(SDLK_AC_BACK);
     frames(20, NULL);
+    // A lone press tunes on the frame it lands, not after the zap wait.
+    SDL_Delay(400);
     key(SDLK_DOWN);
+    frames(1, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after));
+    free(after);
+    // A run of presses tunes only where it stops.
+    free(before);
+    before = data_read("iptv_recent.txt");
+    key(SDLK_DOWN);
+    frames(1, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
     snprintf(path, sizeof path, "%s/nuvio-live-toast.bmp", out); frames(30, path);
     after = data_read("iptv_recent.txt");
     assert(strcmp(before, after));   // the zap retuned, once the keys stopped
+    free(after);
+    // A number no longer number starts with tunes as its last digit lands:
+    // the list runs 101-148, so 148 cannot grow and 14 can.
+    free(before);
+    before = data_read("iptv_recent.txt");
+    key(SDLK_1); key(SDLK_4);
+    frames(2, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
+    key(SDLK_8);
+    frames(2, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after) && !strncmp(after, "Family", 6));
     free(after);
     // The peek's OK is the other thing that retunes.
     free(before);
@@ -348,7 +409,7 @@ int main(int argc, char **argv) {
 
   // 4 · Preview on focus: resting on a channel plays it, without counting it
   // as watched until OK.
-  iptv_set_prefs(15, 1);
+  settings_set_live(15, 1);
   key(SDLK_AC_BACK);           // the guide (from the catch-up above) back to the list
   { char *before = data_read("iptv_recent.txt"), *after;
     const char *was;
@@ -370,7 +431,7 @@ int main(int argc, char **argv) {
   key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);
   assert(!iptvui_fullscreen());
   key(SDLK_AC_BACK);           // stop the preview, as Back does in the list
-  iptv_set_prefs(15, 0);
+  settings_set_live(15, 0);
 
   // --- Setup ------------------------------------------------------------------------
   // To the header, RIGHT to Source, OK; then Xtream Codes.
@@ -379,22 +440,36 @@ int main(int argc, char **argv) {
   key(SDLK_RETURN);
   key(SDLK_RIGHT);
   snprintf(path, sizeof path, "%s/nuvio-live-setup.bmp", out); frames(30, path);
-  // The Playback column: RIGHT from a field, choices applied at once.
-  key(SDLK_DOWN); key(SDLK_RIGHT);
-  key(SDLK_RIGHT);
-  assert(iptv_pref_buffer() == 30);
-  key(SDLK_DOWN); key(SDLK_RIGHT);
-  assert(iptv_pref_preview() == 1);
-  { char *cfg = data_read("iptv.txt");
-    assert(cfg && strstr(cfg, "buffer=30") && strstr(cfg, "preview=1") && strstr(cfg, "url=file://"));
-    free(cfg); }
-  key(SDLK_LEFT); key(SDLK_LEFT);   // preview off, then out of the column
-  assert(iptv_pref_preview() == 0);
   key(SDLK_AC_BACK);
   assert(!iptvui_wants_exit());
+  frames(2, NULL);
+  assert(phonelink_state() == PL_OFF);   // the form closed, and the listener with it
+
+  // --- The phone form ----------------------------------------------------------------
+  // Source again: the listener opens with the form. A phone saves the same
+  // playlist as an M3U; the TV takes it as the Save button would.
+  for (int i = 0; i < 12; i++) key(SDLK_UP);
+  key(SDLK_RIGHT);
+  key(SDLK_RETURN);
+  snprintf(path, sizeof path, "%s/nuvio-live-setup-phone.bmp", out); frames(10, path);
+  if (phonelink_state() == PL_OFF) {
+    puts("note: no network address here, phone form not exercised");
+    key(SDLK_AC_BACK);
+  } else {
+    char body[2400], enc[2200];
+    size_t k = 0;
+    for (const char *p = iptv_source()->url; *p && k + 4 < sizeof enc; p++)
+      k += (size_t)snprintf(enc + k, sizeof enc - k, "%%%02X", (unsigned char)*p);
+    snprintf(body, sizeof body, "kind=m3u&url=%s&epg=", enc);
+    assert(phonePost(body) == 200);
+    frames(3, NULL);
+    assert(phonelink_state() == PL_OFF);             // saved, so the form left
+    assert(iptv_source()->kind == IPTV_SRC_M3U);
+    WAIT_FOR(iptv_list() && iptv_list()->nCh == 49);  // and the channels load again
+  }
 
   iptvui_shutdown();
   puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), "
-       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, setup.");
+       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, setup, phone form.");
   return 0;
 }
