@@ -29,6 +29,7 @@
 #include "anim.h"
 #include "layout.h"
 #include "settings.h"
+#include "pointer.h"
 
 // Widths: the collapsed one fits only the icon; the open one is in layout.h,
 // because main.c sizes the backdrop's grab from it.
@@ -165,6 +166,7 @@ static int    pillSnap = 1;                // place it without travel on the nex
 static void icon(int d, int filled, float cx, float cy, float s, float a);
 static void drawFooter(float px, float w, float alpha, float focus);
 static void drawGlass(float w, float alpha);
+static void pointRow(int row, int unused);
 
 // The top of the pill on focus `row`: a nav row, or the footer, which sits apart
 // at the bottom of the bar — the pill glides the whole gap to reach it.
@@ -236,7 +238,27 @@ static void drawRailFixed(Uint32 now) {
          NV_MENU_ICON, current ? 1.0f : 0.5f);
   }
   drawFooter(0.0f, NV_LEGACY_RAIL_W, 1.0f, 0.0f);
+  y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
+  for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H)
+    pointer_zone_hover(0, y, NV_LEGACY_RAIL_W, NV_MENU_LINE_H, pointRow, i, 0);
+  pointer_zone_hover(0, pillTop(MENU_FOOTER), NV_LEGACY_RAIL_W, NV_MENU_FOOTER_H,
+                     pointRow, MENU_FOOTER, 0);
 }
+
+// THE POINTER ON THE BAR. Collapsed, landing on the rail opens the bar on the
+// row under the pointer — the web's hover-to-expand. Open, it moves the
+// highlight, as UP and DOWN would. `away` is the content beside the open bar:
+// pointing back at it closes the bar, the way RIGHT does.
+static void pointRow(int row, int unused) {
+  (void)unused;
+  if (row < 0 || row >= NV_MENU_FOCUSES) return;
+  if (!is_open) menu_open();
+  line = row;
+}
+static void pointAway(int a, int b) { (void)a; (void)b; if (is_open) menu_close(); }
+// With the rail collapsed there is nothing at the edge to land on, so the strip
+// itself opens the bar, on the destination in force as the LEFT key does.
+static void pointEdge(int a, int b) { (void)a; (void)b; if (!is_open) menu_open(); }
 
 int menu_start(void) {
   is_open = 0; destination = MENU_START; line = MENU_START; changed = 0;
@@ -524,6 +546,8 @@ void menu_draw(Uint32 now) {
   // (settings_content_x), but went on painting the rail's 144px underneath it: a
   // dark band under the first card, with nothing on top.
   if (!is_open && slides < .002f && !settings_rail_collapsed()) drawRailFixed(now);
+  if (!is_open && settings_rail_collapsed())
+    pointer_zone_hover(0, 0, NV_MENU_EDGE_ZONE_W, NV_SCREEN_H, pointEdge, 0, 0);
   if (!is_open && slides < 0.002f) return;
 
   float w = anim_blend(NV_MENU_W_ICON, NV_MENU_W_IS_OPEN, anim_smooth(expands));
@@ -603,4 +627,16 @@ void menu_draw(Uint32 now) {
   drawFooter(px, w, entry, animFocus[MENU_FOOTER]);
 
   gfx_no_crop();
+
+  // THE ZONES TAKE THE BAR'S RESTING WIDTH, not the one on screen. While it
+  // slides in, the drawn width starts near zero, and `away` measured from it
+  // covered the whole screen: the first motion after the bar opened closed it.
+  if (is_open) {
+    float wOpen = NV_MENU_W_IS_OPEN;
+    pointer_zone_hover(wOpen, 0, NV_SCREEN_W - wOpen, NV_SCREEN_H, pointAway, 0, 0);
+    y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
+    for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H)
+      pointer_zone(0, y, wOpen, NV_MENU_LINE_H, pointRow, i, 0);
+    pointer_zone(0, pillTop(MENU_FOOTER), wOpen, NV_MENU_FOOTER_H, pointRow, MENU_FOOTER, 0);
+  }
 }

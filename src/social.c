@@ -1,3 +1,4 @@
+#include "pointer.h"
 #include "social.h"
 #include "trakt.h"
 #include "net.h"
@@ -121,9 +122,20 @@ void social_open(const CatItem *person) { openInternal(person,0); }
 int social_wants_exit(void){int v=wantsExit;wantsExit=0;return v;}
 int social_requested_menu(void){int v=requestMenu;requestMenu=0;return v;}
 SocialState social_state(void){return data.state;}
+// The Magic Remote's pointer: a row focuses under it and the click is the OK
+// that opens it; "← Back" is a click target of its own, and a screen that says
+// "OK · try again" takes that OK anywhere on it.
+static void pointActivity(int i,int unused){(void)unused;if(i>=0&&i<data.n)selected=i;}
+static void clickBack(int a,int b){(void)a;(void)b;wantsExit=1;}
+static void pointRetry(int a,int b){(void)a;(void)b;}
+// The list's first shown row, kept between frames and moved only as far as the
+// selection needs. Derived from the selection alone, it slid whenever the
+// selection moved inside it — under a pointer, onto another row.
+static int winStart;
 void social_event(const SDL_Event *e){SDL_Keycode k;if(!e||e->type!=SDL_KEYDOWN)return;k=e->key.keysym.sym;
   if(k==SDLK_ESCAPE||k==SDLK_AC_BACK||k==SDLK_BACKSPACE){wantsExit=1;return;}
-  if(k==SDLK_LEFT){requestMenu=1;return;}   // the left edge is the side menu; Back leavesif(k==SDLK_UP&&selected>0)selected--;if(k==SDLK_DOWN&&selected+1<data.n)selected++;
+  if(k==SDLK_LEFT){requestMenu=1;return;}   // the left edge is the side menu; Back leaves
+  if(k==SDLK_UP&&selected>0)selected--;if(k==SDLK_DOWN&&selected+1<data.n)selected++;
   if(k==SDLK_r && data.state!=SOCIAL_LOADING && data.state!=SOCIAL_UPDATING){openInternal(&data.person,1);return;}
   if(k==SDLK_RETURN||k==SDLK_KP_ENTER){if(data.state==SOCIAL_PRIVATE||data.state==SOCIAL_UNAVAILABLE||data.state==SOCIAL_DISCONNECTED||data.state==SOCIAL_STALE){openInternal(&data.person,1);return;}if((data.state==SOCIAL_READY||data.state==SOCIAL_UPDATING)&&selected>=0&&selected<data.n&&data.activities[selected].imdb[0])chosen=selected;}
 }
@@ -134,12 +146,19 @@ static const char *stateText(SocialState state){switch(state){case SOCIAL_LOADIN
 void social_draw(Uint32 now){(void)now;gfx_color((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,NV_COLOR_BACKGROUND_R,NV_COLOR_BACKGROUND_G,NV_COLOR_BACKGROUND_B,1);text(TXT_CAPTION,"AMONG FRIENDS",96,56,550,179);
   {GfxRect av={96,132,176,176};GLuint tex=data.person.socialAvatar[0]?tex_get_width(data.person.socialAvatar,220):0;gfx_color(av,.5f,.15f,.16f,.18f,1);if(tex){gfx_tex_aspect_current=tex_aspect(data.person.socialAvatar);gfx_rect(av,tex,GFX_AVATAR,0,0,0,0,1,1,1,1);gfx_tex_aspect_current=0;}else gfx_icon((GfxRect){148,184,72,72},"menu_profile",.8f,.81f,.83f,1);}
   if(data.person.socialName[0])text(TXT_TITLE2,data.person.socialName,96,346,480,245);else if(data.state==SOCIAL_UNAVAILABLE||data.state==SOCIAL_DISCONNECTED)text(TXT_TITLE2,"Profile unavailable",96,346,480,245);if(data.person.socialSlug[0]){char u[160];snprintf(u,sizeof u,"@%s",data.person.socialSlug);text(TXT_CALLOUT,u,96,416,480,179);}if(data.local[0])text(TXT_CAPTION,data.local,96,470,480,179);if(data.bio[0])txt_block(TXT_CAPTION,data.bio,210,210,210,96,524,480,32,1,8);
-  text(TXT_CAPTION,"Trakt · public profile",96,900,480,179);text(TXT_CAPTION,"← Back",96,970,480,235);text(TXT_TITLE3,"Recent activity",656,64,1150,245);text(TXT_CAPTION,"Person · action · title · time",656,122,1150,179);
+  text(TXT_CAPTION,"Trakt · public profile",96,900,480,179);text(TXT_CAPTION,"← Back",96,970,480,235);
+  pointer_zone_click(80,958,240,56,clickBack,0,0);text(TXT_TITLE3,"Recent activity",656,64,1150,245);text(TXT_CAPTION,"Person · action · title · time",656,122,1150,179);
   if(data.state==SOCIAL_LOADING){for(int i=0;i<4;i++)gfx_color((GfxRect){656,210+i*170,1120,134},.06f,.12f,.125f,.14f,1);text(TXT_CAPTION,stateText(data.state),680,248,1050,210);return;}
-  if(data.state!=SOCIAL_READY&&data.state!=SOCIAL_UPDATING&&data.state!=SOCIAL_STALE){text(TXT_TITLE3,stateText(data.state),656,236,1120,235);if(data.state==SOCIAL_PRIVATE||data.state==SOCIAL_UNAVAILABLE||data.state==SOCIAL_DISCONNECTED)text(TXT_CALLOUT,"OK or R · try again",656,310,1120,235);return;}
-  { int start = selected > 3 ? selected - 3 : 0;
+  if(data.state!=SOCIAL_READY&&data.state!=SOCIAL_UPDATING&&data.state!=SOCIAL_STALE){text(TXT_TITLE3,stateText(data.state),656,236,1120,235);if(data.state==SOCIAL_PRIVATE||data.state==SOCIAL_UNAVAILABLE||data.state==SOCIAL_DISCONNECTED){text(TXT_CALLOUT,"OK or R · try again",656,310,1120,235);pointer_zone(640,0,NV_SCREEN_W-640,NV_SCREEN_H,pointRetry,0,0);}return;}
+  { int start = winStart;
+    if (selected > start + 4) start = selected - 4;
+    if (selected < start) start = selected;
+    if (start > data.n - 5) start = data.n - 5;
+    if (start < 0) start = 0;
+    winStart = start;
     for (int i = start; i < data.n && i < start + 5; i++) {
       Activity *a=&data.activities[i]; float y=196+(i-start)*154;
+      pointer_zone(640,y-12,1160,144,pointActivity,i,0);
       if(i==selected)gfx_color((GfxRect){640,y-12,1160,144},.07f,.18f,.185f,.20f,1);
       if(a->poster[0]){GLuint p=tex_get_width(a->poster,96);if(p){gfx_tex_aspect_current=tex_aspect(a->poster);gfx_rect((GfxRect){656,y,96,134},p,GFX_CARD,0,0,0,.055f,0,0,0,1);gfx_tex_aspect_current=0;}}
       text(TXT_MINI,a->person,772,y+4,430,179);text(TXT_CALLOUT,a->action,772,y+36,430,235);text(TXT_CAPTION,a->title,1210,y+4,500,245);text(TXT_CAPTION,a->detail,1210,y+42,500,179);if(a->timeStr[0])text(TXT_MINI,a->timeStr,1210,y+82,500,179);

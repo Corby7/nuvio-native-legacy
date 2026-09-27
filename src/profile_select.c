@@ -1,3 +1,4 @@
+#include "pointer.h"
 #include "profile_select.h"
 #include "profiles.h"
 #include "sync.h"
@@ -184,6 +185,19 @@ static void eventPin(SDL_Keycode k) {
   { size_t n = strlen(pin);
     if (n < PS_PIN_MAX) { pin[n] = (char)('0' + pinFocus); pin[n + 1] = 0; } }
 }
+
+// The Magic Remote's pointer: a card or a PIN key focuses under it, and the
+// click is the remote's OK. With the PIN pad up the cards behind take nothing.
+static void pointProfile(int i, int unused) {
+  (void)unused;
+  if (pinOf < 0 && i >= 0 && i < profiles_n()) focus = i;
+}
+static void pointPin(int i, int unused) {
+  (void)unused;
+  if (pinOf >= 0 && !verifying) pinFocus = i;
+}
+// A failed load answers OK anywhere: the whole screen is the retry.
+static void pointRetry(int a, int b) { (void)a; (void)b; }
 
 void profilesel_event(const SDL_Event *e) {
   SDL_Keycode k;
@@ -598,6 +612,7 @@ static void drawPin(void) {
                   y0 + lin * (PS_KEY + PS_KEY_GAP), PS_KEY, PS_KEY };
     int f = (i == pinFocus);
     TxtLine l;
+    pointer_zone(r.x, r.y, r.w, r.h, pointPin, i, 0);
     gfx_color(r, 0.22f, 1.0f, 1.0f, 1.0f, f ? 0.92f : 0.10f);
     l = txt_line(TXT_TITLE3, ROT[i], f ? 24 : 235, f ? 24 : 235, f ? 26 : 240, 255);
     txt_draw(l, r.x + (r.w - l.w) * 0.5f, r.y + (r.h - l.h) * 0.5f);
@@ -633,6 +648,8 @@ void profilesel_draw(Uint32 now) {
                         : "Loading the profiles on your account\xE2\x80\xA6";
     TxtLine e = txt_line(TXT_PSEL_SUB, msg, c, c, c, 255);
     drawCentred(e, NV_SCREEN_W * 0.5f, L.subY, NV_PSEL_SUB_H, 1.0f, 1.0f);
+    if (sync_state() == SYNC_FAILED)
+      pointer_zone(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointRetry, 0, 0);
     return;
   }
 
@@ -651,6 +668,8 @@ void profilesel_draw(Uint32 now) {
     rowW = inRow * L.cardW + (inRow - 1) * L.gap;
     x = (NV_SCREEN_W - rowW) * 0.5f + col * L.pitch;
     drawCard(i, &L, x, L.gridY + row * (L.cardH + L.gap));
+    if (pinOf < 0)
+      pointer_zone(x, L.gridY + row * (L.cardH + L.gap), L.cardW, L.cardH, pointProfile, i, 0);
   }
 
   // NO HINT LINE. The web app puts "Hold to manage profile" here; this app has

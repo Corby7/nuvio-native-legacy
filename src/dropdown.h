@@ -47,4 +47,9 @@ float dd_select_width(int n, DdLabel label, void *ctx);
 // shadow that has to fall on them.
 void dd_menu(GfxRect anchor, int n, int focus, DdLabel label, void *ctx,
              float alpha);
+// For the NEXT dd_menu only: its options become pointer zones that call
+// `focus(option, 0)`, and a click on the menu's own plate does nothing. The
+// caller's setter moves its highlight; the click that follows is its OK.
+#include "pointer.h"
+void dd_menu_point(PointerFocus focus);
 #endif

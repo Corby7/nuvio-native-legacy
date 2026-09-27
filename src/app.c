@@ -12,6 +12,7 @@
 //   3. menu    — a layer over the current screen
 //   4. the current screen (home, search, library or settings)
 #include "app.h"
+#include "pointer.h"
 #include "login.h"
 #include "session.h"
 #include "profiles.h"
@@ -1039,7 +1040,32 @@ void app_update(float dt, Uint32 now) {
   if(screen==SCREEN_SOCIAL) social_update(dt, now);
 }
 
+// WHO OWNS THE KEYS, in exactly the order app_event routes them. The pointer
+// follows it: only the layer that would receive the arrows registers hit zones,
+// so pointing at the home through an open title or sheet moves nothing.
+typedef enum {
+  OWN_SCREEN, OWN_SEEALL, OWN_CTX, OWN_MENU, OWN_PROFILE_SIDE,
+  OWN_DETAIL, OWN_PLAYER, OWN_STREAMS, OWN_EPISODES, OWN_TRACKS
+} Owner;
+
+static Owner keyOwner(void) {
+  if (tracks_is_open())                  return OWN_TRACKS;
+  if (episodes_is_open())                return OWN_EPISODES;
+  if (stream_sheet_is_open())            return OWN_STREAMS;
+  if (player_is_open())                  return OWN_PLAYER;
+  if (detail_is_open())                  return OWN_DETAIL;
+  if (profile_is_open() && profile_side()) return OWN_PROFILE_SIDE;
+  if (menu_is_open())                    return OWN_MENU;
+  if (ctx_is_open())                     return OWN_CTX;
+  if (seeall_is_open())                  return OWN_SEEALL;
+  return OWN_SCREEN;
+}
+
+int app_screen_in_front(void) { return keyOwner() == OWN_SCREEN; }
+int app_seeall_in_front(void) { return keyOwner() == OWN_SEEALL; }
+
 void app_draw(Uint32 now) {
+  Owner owner = keyOwner();
   if (screen == SCREEN_LOGIN)          { login_draw(now);     return; }
   if (screen == SCREEN_CHOICE_PROFILE) { profilesel_draw(now); return; }
 
@@ -1056,6 +1082,7 @@ void app_draw(Uint32 now) {
                      : "If this does not move on, check your addons in the account.",
                    160, 162, 170, 255);
     txt_draw(sb, (NV_SCREEN_W - sb.w) * 0.5f, 546.0f);
+    pointer_accept(owner == OWN_MENU || owner == OWN_SCREEN);
     if (menu_visible()) menu_draw(now);
     return;
   }
@@ -1080,8 +1107,10 @@ void app_draw(Uint32 now) {
     // THE TITLE SCREEN'S BACKDROP FIRST, under the screen it is replacing. It is
     // the background of the transition, not a layer over it: drawn afterwards its
     // left boundary sweeps through the home's shelves and copy as a hard line.
+    pointer_accept(0);
     detail_draw_bg(now);
     if (!detail_covers_screen() && !seeall_covers_screen()) {
+      pointer_accept(owner == OWN_SCREEN);
       switch (screen) {
         case SCREEN_SEARCH:      search_draw(now);      break;
         case SCREEN_DISCOVER:   dui_draw(now);         break;
@@ -1092,8 +1121,11 @@ void app_draw(Uint32 now) {
         default:              home_draw(now);       break;
       }
     }
+    pointer_accept(owner == OWN_SEEALL);
     if (!detail_covers_screen()) seeall_draw(now);
+    pointer_accept(owner == OWN_CTX);
     ctx_draw(now);
+    pointer_accept(owner == OWN_DETAIL);
     detail_draw(now);
     // The rail does NOT exist on the web app's detail screen: it is full-bleed and
     // the content column starts at x=72, that is, INSIDE what the rail would
@@ -1115,15 +1147,25 @@ void app_draw(Uint32 now) {
     // reported as "the menu doesn't show and there are no settings".
     // The same rule guarded in two places: on the inside it means "do not paint
     // the band", on the outside it meant "do not exist".
+    // The collapsed rail belongs to the screen beside it as much as to the bar:
+    // pointing at it is how the bar opens.
+    pointer_accept(owner == OWN_MENU || owner == OWN_SCREEN);
     if (menu_visible() && !detail_is_open())
       menu_draw(now);
+    pointer_accept(owner == OWN_PROFILE_SIDE);
     if(profile_side() && !detail_is_open()) profile_draw(now);
   }
+  pointer_accept(owner == OWN_PLAYER);
   player_draw(now);
+  pointer_accept(owner == OWN_EPISODES);
   episodes_draw();
+  pointer_accept(owner == OWN_STREAMS);
   stream_sheet_draw(now);
+  pointer_accept(owner == OWN_TRACKS);
   tracks_draw(now);
+  pointer_accept(0);
   player_draw_subtitle_over();
+  home_focus_video_end_frame();
 }
 
 // --- THE DEV CHANNEL, see app.h for why -------------------------------------

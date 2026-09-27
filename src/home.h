@@ -42,6 +42,10 @@ const char *home_backdrop(int i);   // art for title i of the catalogue
 void home_event(const SDL_Event *e);
 void home_update(float dt, Uint32 now);
 void home_draw(Uint32 now);
+// Once per frame, AFTER everything has drawn: lets go of the collection tile's
+// focus video when the home did not draw its focused tile this frame (another
+// screen covers it, the focus left the row). See focusVideoStep in home.c.
+void home_focus_video_end_frame(void);
 
 // Where the hero's ART was drawn on the last frame. The detail screen uses this
 // to be born with the backdrop in the same place — the detail's background IS

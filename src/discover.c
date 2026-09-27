@@ -2322,7 +2322,13 @@ static void *fetchEps(void *u) {
     // type. Writing the bare list here made them all drop the first REAL genre, and
     // on the hero "Movie • Action" flipped to "Action • Drama" the moment this
     // prefetch landed, 400 ms into a rest.
-    { const char *g = js_array(body, NULL, "genres");
+    // ONLY WHEN THE CARD HAS NONE. A catalogue that already carried genres (the
+    // TMDB addon, AIOMetadata) often lists them in another order than Cinemeta —
+    // "Action, Drama" against "Drama, Action" — and the hero shows the first one,
+    // so replacing them still flipped "Movie • Action" to "Movie • Drama" at the
+    // same 400 ms. A genre field with no separator is the bare type: fill that.
+    { const char *g = strstr(it->genre, "\xc2\xb7") ? NULL
+                                                   : js_array(body, NULL, "genres");
       char list[160]; int any = 0;
       snprintf(list, sizeof list, "%s", isMovie ? "Movie" : "TV Show");
       while (g && *g == '"') {

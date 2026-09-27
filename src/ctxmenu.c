@@ -1,3 +1,4 @@
+#include "pointer.h"
 #include "ctxmenu.h"
 #include "catalog.h"
 #include "trakt.h"
@@ -343,6 +344,18 @@ static void apply(void) {
   }
 }
 
+// THE POINTER: landing on a row moves the highlight as UP and DOWN would, and
+// not while a write is in flight (the D-pad is held then too). A click outside
+// the panel dismisses it, as Back does.
+static void pointOp(int i, int unused) {
+  (void)unused;
+  if (!is_open || i < 0 || i >= nOps) return;
+  if (operation != CTX_OP_NONE && stateOperation == CTX_PENDING) return;
+  focus = i;
+}
+static void pointOutside(int a, int b) { (void)a; (void)b; is_open = 0; }
+static void pointPanel(int a, int b) { (void)a; (void)b; }
+
 void ctx_event(const SDL_Event *e) {
   int k;
   if (!is_open) return;
@@ -536,9 +549,16 @@ void ctx_draw(Uint32 now) {
     cy = y + CTX_PAD + headH;
   }
 
+  // Outside, then the panel, then its rows: the last registered wins, so a click
+  // on the panel's padding or its title is a click on nothing, not a dismissal.
+  if (is_open) {
+    pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOutside, 0, 0);
+    pointer_zone_hover(x, y, CTX_W, height, pointPanel, 0, 0);
+  }
   for (i = 0; i < nOps; i++) {
     float by = cy + (float)i * (CTX_LINE + CTX_GAP);
     GfxRect r = { x + CTX_PAD, by, CTX_W - CTX_PAD * 2.0f, CTX_LINE };
+    if (is_open) pointer_zone(r.x, r.y, r.w, r.h, pointOp, i, 0);
     float f = focusAnim[i];
     // The focused row INVERTS into a full pill, like every other button in the
     // app: a light capsule with dark ink.

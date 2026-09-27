@@ -1,3 +1,4 @@
+#include "pointer.h"
 #include "streams.h"
 #include "tabs.h"
 #include <pthread.h>
@@ -25,6 +26,12 @@ int stream_sheet_reload(void) { int r = reload; reload = 0; return r; }
 static int is_open = 0, focus = 0, choice = -1;
 static float anim = 0.0f, scroll = 0.0f;
 static float tipA[2];   // the header tooltips' fades: Reload, Close
+// Whether the list's scroll follows the cursor. A row the Magic Remote's pointer
+// focused leaves it where it is (goalScroll): centring that row would slide
+// another under a pointer that had not moved. Any arrow, the wheel's included,
+// hands it back.
+static int follow = 1;
+static float goalScroll;
 // The highlight's row, in ITEM units (2.4 = between the third and the fourth).
 // The highlight slides between rows instead of jumping: with a hard jump the
 // sheet looked like it swapped its contents on every keypress, and on a D-pad
@@ -486,6 +493,7 @@ int stream_insert(int at, const Stream *l, int count) {
 }
 
 void stream_sheet_open(void) {
+  follow=1;
   is_open=1; choice=-1; focus=0; group=1; filter=0; reload=0;
   updateProviders();
   if(current>=0) focus=current;
@@ -493,9 +501,30 @@ void stream_sheet_open(void) {
 }
 int stream_sheet_is_open(void) { return is_open; }
 float stream_sheet_shown(void) { return anim; }
+// The pointer's setters: the header's two icons, a provider tab (on the click
+// only — sweeping across the strip must not reshuffle the list), and a row.
+static void pointHead(int i,int unused) {
+  (void)unused;
+  if(!is_open) return;
+  group=-1; focus=i;
+}
+static void clickTab(int i,int unused) {
+  (void)unused;
+  if(!is_open || i<0 || i>=nProviders) return;
+  group=0; filter=i; focus=0; scroll=0; goalScroll=0;
+}
+static void pointRow(int row,int unused) {
+  (void)unused;
+  if(!is_open || row<0 || row>=nFiltered()) return;
+  group=1; focus=row; follow=0;
+}
+static void pointOff(int a,int b) { (void)a; (void)b; is_open=0; }
+static void pointPanel(int a,int b) { (void)a; (void)b; }
+
 void stream_sheet_event(const SDL_Event *e) {
   if(!is_open || e->type!=SDL_KEYDOWN) return;
   SDL_Keycode k=e->key.keysym.sym;
+  if(k==SDLK_UP || k==SDLK_DOWN || k==SDLK_LEFT || k==SDLK_RIGHT) follow=1;
   if(k==SDLK_ESCAPE || k==SDLK_AC_BACK || k==SDLK_BACKSPACE || k==SDLK_DELETE) {is_open=0;return;}
   if(k==SDLK_r) {reload=1;return;}
   int nf=nFiltered();
@@ -536,6 +565,8 @@ void stream_sheet_update(float dt, Uint32 now) {
   float target=focus*NV_SRC_ROW-(area-NV_SRC_ROW)*.5f;
   if(target>max) target=max;
   if(target<0) target=0;
+  if(!follow) target=goalScroll;
+  goalScroll=target;
   // Discover's grid spring, so the three lists that scroll row by row — Discover,
   // the title's episodes and this one — all move the same way.
   scroll=anim_spring(scroll,target,dt,NV_SPRING_GRID);
@@ -823,6 +854,7 @@ static void tabs(float left, float w, float y, float lit, float a) {
   x = left;
   for (i = from; i < nProviders; i++) {
     if (x + widths[i] - NV_TAB_GAP > left + w) break;
+    pointer_zone_click(x, y, widths[i] - NV_TAB_GAP, NV_TAB_H, clickTab, i, 0);
     x += tab_draw(x, y, providers[i], i == filter, lit, a);
   }
 }
@@ -869,6 +901,11 @@ void stream_sheet_draw(Uint32 now) {
   // full strength on the left. The ramp is the entire treatment.
   gfx_rect((GfxRect){x,0,NV_SRC_VEIL_W,NV_SCREEN_H},0,GFX_SRC_VEIL,0,
            1,0,0,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,anim*NV_SRC_VEIL_A);
+  // Off the sheet, a click closes it as Back does; the column itself is inert.
+  if(is_open) {
+    pointer_zone_click(0,0,NV_SCREEN_W,NV_SCREEN_H,pointOff,0,0);
+    pointer_zone_hover(cx-NV_SRC_PAD,0,NV_SCREEN_W-cx+NV_SRC_PAD,NV_SCREEN_H,pointPanel,0,0);
+  }
 
   // --- the heading, with the count on its baseline and the episode after it.
   txt_draw_alpha(txt_line(TXT_PANEL_TITLE,"Sources",240,241,243,255),cx,NV_SRC_TITLE_Y,anim);
@@ -901,6 +938,7 @@ void stream_sheet_draw(Uint32 now) {
       int sel=group==-1 && focus==i;
       float bx=px+NV_SRC_HEAD_INSET+i*NV_SRC_HEAD_BTN, by=py+(h-NV_SRC_HEAD_BTN)*0.5f;
       float ic=NV_SRC_HEAD_ICON, c=sel?0.09f:0.86f;
+      pointer_zone(bx,by,NV_SRC_HEAD_BTN,NV_SRC_HEAD_BTN,pointHead,i,0);
       if(sel) gfx_color((GfxRect){bx,by,NV_SRC_HEAD_BTN,NV_SRC_HEAD_BTN},0.5f,
                         .94f,.94f,.95f,anim);
       gfx_icon((GfxRect){bx+(NV_SRC_HEAD_BTN-ic)*0.5f,by+(NV_SRC_HEAD_BTN-ic)*0.5f,ic,ic},
@@ -938,6 +976,7 @@ void stream_sheet_draw(Uint32 now) {
   // screen. NV_SRC_FOOT stays in the scroll's arithmetic, so the LAST card still
   // ends with that air under it.
   gfx_crop(x,fadeTop,NV_SRC_VEIL_W,NV_SCREEN_H-fadeTop);
+  pointer_clip(x,fadeTop,NV_SRC_VEIL_W,NV_SCREEN_H-fadeTop);
   nf=nFiltered();
   // THE PLAYING CARD STICKS UNDER THE TABS. Once the list has scrolled it past the
   // first row's place it stays there, so what is on screen is always in view
@@ -958,14 +997,19 @@ void stream_sheet_draw(Uint32 now) {
       if(edge<=0.004f) continue;
       gfx_opacity_group=edge;
       sheetRow(row,y,cx,cw,now);
+      pointer_zone(cx,y,cw,NV_SRC_ROW,pointRow,row,0);
       // PUT IT BACK before anything else is drawn: a group opacity left set bleeds
       // onto every later draw call in the frame.
       gfx_opacity_group=1.0f;
     }
-    if(pin>=0) sheetRow(pin,NV_SRC_TOP,cx,cw,now); }
+    if(pin>=0) {
+      sheetRow(pin,NV_SRC_TOP,cx,cw,now);
+      pointer_zone(cx,NV_SRC_TOP,cw,NV_SRC_ROW,pointRow,pin,0);
+    } }
   if(!nf) {
     const char *msg=addons_busy()?"Fetching sources from the addons\xE2\x80\xA6":"No direct source available. Use Reload to try again.";
     txt_block(TXT_SRC_TEXT,msg,166,169,176,cx,NV_SRC_TOP+28.0f,cw,32.0f,anim,3);
   }
   gfx_no_crop();
+  pointer_no_clip();
 }

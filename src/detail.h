@@ -186,7 +186,7 @@ int  detail_requested_do_start(void);
 // the selected one white, the others #808080; the "|" divider is 32/700 #808080,
 // with 20 of slack on each side.
 // The strip sits at the SAME inset as the episode page's picker (NV_DETEP_TOP), so
-// arriving on page 3 puts "Cast & crew" where arriving on page 2 puts the season.
+// arriving on page 3 puts the first tab where arriving on page 2 puts the season.
 #define NV_DETP_TAB_Y       (NV_DETP_P3 + NV_DETEP_TOP)   /* 2216 */
 #define NV_DETP_TAB_H         51.0f
 #define NV_DETP_TAB_SEP       20.0f

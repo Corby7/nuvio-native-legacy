@@ -1,3 +1,4 @@
+#include "pointer.h"
 #include "login.h"
 #include "session.h"
 #include "cloud.h"
@@ -30,6 +31,10 @@ void login_start(void) {
   // the code only adds one keypress and a few seconds of waiting after it.
   if (!session_loggedin()) session_login_begin();
 }
+
+// The one control on this screen: a zone for it is all the Magic Remote needs,
+// since the click that lands on it is the OK that retries.
+static void pointRetry(int a, int b) { (void)a; (void)b; }
 
 void login_event(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
@@ -142,6 +147,7 @@ void login_draw(Uint32 now) {
       { GfxRect pill = { (NV_SCREEN_W - LG_PILL_W) * 0.5f, y, LG_PILL_W, LG_PILL_H };
         TxtLine t;
         gfx_color(pill, NV_RADIUS_PILL, 1.0f, 1.0f, 1.0f, 0.92f * animButton);
+        pointer_zone(pill.x, pill.y, pill.w, pill.h, pointRetry, 0, 0);
         t = txt_line(TXT_BODY, "Try again", 24, 24, 26, 255);
         txt_draw_alpha(t, (NV_SCREEN_W - t.w) * 0.5f,
                            y + (LG_PILL_H - t.h) * 0.5f, animButton); }

@@ -1,3 +1,4 @@
+#include "pointer.h"
 #include "episodes.h"
 #include "catalog.h"
 #include "discover.h"
@@ -48,6 +49,12 @@ static int smOpen, smCursor, smScroll;
 // The layer above may have closed on the KEYDOWN and let the KEYUP leak through,
 // and acting on the KEYDOWN instead would leak this panel's KEYUP to the player.
 static int okHeld;
+// `follow`: whether the list's scroll and the rows' opening follow the focus. A
+// row the pointer focused is lit but does not open and the list does not move —
+// either would slide another row under a pointer that had not moved, and the list
+// would walk away from it. Any arrow, the wheel's included, sets it again.
+static int follow = 1;
+static float goal;
 
 static int nSeasons(void) {
   const CatItem *c = cat_item(title);
@@ -74,6 +81,7 @@ static int nLines(void) {
   return n;
 }
 void episodes_open(int idx, int t, int e) {
+  follow = 1;
   title = idx; currentT = t; currentE = e; is_open = 1;
   okHeld = 0;
   season = focus = 0; requestE = 0; scroll = 0;
@@ -127,8 +135,32 @@ static void smEvent(SDL_Keycode k) {
   smKeep();
 }
 
+// --- THE MAGIC REMOTE'S POINTER -------------------------------------------
+//
+static void pointPill(int a, int b) {
+  (void)a; (void)b;
+  if (!is_open || smOpen) return;
+  zone = Z_PILL; follow = 0;
+}
+static void pointRow(int i, int unused) {
+  (void)unused;
+  if (!is_open || smOpen || i < 0 || i >= nLines()) return;
+  zone = Z_LIST; focus = i; follow = 0;
+}
+static void pointSeason(int s, int unused) {
+  (void)unused;
+  if (smOpen && s >= 0 && s < nSeasons()) smCursor = s;
+}
+static void pointOffMenu(int a, int b) { (void)a; (void)b; smOpen = 0; }
+static void pointOffPanel(int a, int b) { (void)a; (void)b; is_open = 0; smOpen = 0; }
+static void pointPanel(int a, int b) { (void)a; (void)b; }
+
 void episodes_event(const SDL_Event *ev) {
   if (!is_open) return;
+  if (ev->type == SDL_KEYDOWN) {
+    SDL_Keycode ka = ev->key.keysym.sym;
+    if (ka == SDLK_UP || ka == SDLK_DOWN || ka == SDLK_LEFT || ka == SDLK_RIGHT) follow = 1;
+  }
 
   // The season menu takes every key while it is up.
   if (smOpen) { if (ev->type == SDL_KEYDOWN) smEvent(ev->key.keysym.sym); return; }
@@ -219,7 +251,7 @@ void episodes_update(float dt) {
   if (focus >= n) focus = n > 0 ? n - 1 : 0;
   // A row is open only while the cursor is on it: up on the pill, none is.
   for (int i = 0; i < n && i < EP_MAX; i++) {
-    float want = i == focus && zone == Z_LIST;
+    float want = i == focus && zone == Z_LIST && follow;
     opened[i] = snap ? want : anim_spring(opened[i], want, dt, NV_SPRING_GRID);
   }
   // THE LIST'S OFFSET, as the sources sheet keeps its own: the focused row held
@@ -238,6 +270,8 @@ void episodes_update(float dt) {
     target = roundf(target / EP_PITCH) * EP_PITCH;
     if (target > max) target = max;
     if (target < 0) target = 0;
+    if (!follow && !snap) target = goal;
+    goal = target;
     scroll = snap ? target : anim_spring(scroll, target, dt, NV_SPRING_GRID); }
   if (n) snap = 0;
 }
@@ -453,6 +487,8 @@ static void seasonMenu(GfxRect pill, float a) {
   // whose corners showed square under the plate's round ones. Over a see-through
   // plate it would also darken the plate itself.
   gfx_color(box, radius, NV_DETWEB_REST, NV_DETWEB_REST, NV_DETWEB_REST, NV_PLR_DD_A * a);
+  pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOffMenu, 0, 0);
+  pointer_zone_hover(box.x, box.y, box.w, box.h, pointSeason, -1, 0);
   gfx_rect(box, 0, GFX_RING, 0, 1.0f / box.h, 0, radius, 1, 1, 1, 0.08f * a);
   for (i = 0; i < vis; i++) {
     int s = smScroll + i, on = s == smCursor;
@@ -460,6 +496,7 @@ static void seasonMenu(GfxRect pill, float a) {
                    box.y + NV_DETWEB_SEA_MENU_PADY + i * NV_EPL_SMENU_ROW,
                    box.w - NV_DETWEB_SEA_MENU_PADX * 2, NV_EPL_SMENU_ROW };
     int ink = on ? 17 : 255;
+    pointer_zone(op.x, op.y, op.w, op.h, pointSeason, s, 0);
     if (on) gfx_color(op, NV_RADIUS_PILL, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, a);
     seasonName(s, name, sizeof name);
     { TxtLine l = txt_line(TXT_TRK_OPT, name, ink, ink, ink, 255);
@@ -498,7 +535,14 @@ void episodes_draw(void) {
     } }
 
   // --- the season pill, on the line the Subtitles sheet puts its tabs on -------
+  // Off the panel, a click closes it as Back does; on it, nothing but what is lit.
+  if (is_open) {
+    pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOffPanel, 0, 0);
+    pointer_zone_hover(cx - NV_EPL_PAD, 0, NV_SCREEN_W - cx + NV_EPL_PAD, NV_SCREEN_H,
+                       pointPanel, 0, 0);
+  }
   pill = pillDraw(cx + NV_EPL_PADX, NV_TRK_TABS_Y, anim);
+  pointer_zone(pill.x, pill.y, pill.w, pill.h, pointPill, 0, 0);
 
   // --- the list ---------------------------------------------------------------
   if (!n) {
@@ -514,6 +558,7 @@ void episodes_draw(void) {
     // clip runs to the screen's edge and the list simply continues past it.
     float fadeTop = NV_TRK_TABS_Y + NV_EPL_PILL_H + NV_RING_FOCUS;
     gfx_crop(0, fadeTop, NV_SCREEN_W, NV_SCREEN_H - fadeTop);
+    pointer_clip(0, fadeTop, NV_SCREEN_W, NV_SCREEN_H - fadeTop);
     y = vt - scroll;
     for (i = 0; i < n && y < NV_SCREEN_H; i++) {
       float op = openedAt(i), h = NV_EPL_ROW_H, edge;
@@ -530,10 +575,12 @@ void episodes_draw(void) {
         // PUT IT BACK before anything else is drawn: a group opacity left set
         // bleeds onto every later draw call in the frame.
         gfx_opacity_group = 1.0f;
+        pointer_zone(cx, y, NV_EPL_W, h, pointRow, i, 0);
       }
       y += h + NV_EPL_ROW_GAP;
     }
     gfx_no_crop();
+    pointer_no_clip();
   }
 
   // The season menu over the list it replaces.

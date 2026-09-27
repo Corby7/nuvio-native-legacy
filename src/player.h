@@ -124,8 +124,9 @@ int         player_aspect(void);              // current mode (PlrAspect)
 const char *player_aspect_label(int mode);   // "Cinema Zoom", "Fit"...
 void        player_aspect_set(int mode);  // applies and saves
 void        player_aspect_cycle(void);       // next mode + on-screen notice
-// Any other short notice, in the aspect notice's pill (AutoSync's result).
-void        player_toast(const char *text);
+// Any other short notice (AutoSync's result), in the small pill of the failure
+// notice with a dot: `good` 1 green, 0 amber.
+void        player_toast(const char *text, int good);
 
 // THE SUBTITLE STYLE, stored in art/player.txt alongside the aspect: it is a
 // DEVICE preference and not a title's. The tracks sheet edits the struct and

@@ -1,4 +1,8 @@
-// The sprite-sheet cell that the collection tile's focus animation draws.
+// The sprite-sheet cell GFX_CARD samples through gfx_tex_cell_current.
+//
+// Written for the collection tile's old focus sheet, which is gone (the tile now
+// plays the ident on the video plane); the uniform it pins down is still what
+// GFX_SCRIM_HOLE reads, so the test stays.
 //
 // This is the one genuinely new piece of RENDERING in that feature: GFX_CARD
 // gained a uCell uniform, and everything downstream assumes cell N of an 8x8
@@ -27,8 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define COLS NV_FOCUS_SHEET_COLS
-#define ROWS NV_FOCUS_SHEET_ROWS
+#define COLS 8
+#define ROWS 8
 #define CELL_W 240
 #define CELL_H 136
 // The rect drawn into. Its aspect equals the sheet's, and the grid is square, so

@@ -1,3 +1,5 @@
+#include "pointer.h"
+#include "app.h"
 #include "discoverui.h"
 #include "gfx.h"
 #include "text.h"
@@ -46,6 +48,11 @@ static int   wantsExit;
 static int   requestMenu;   // LEFT off the screen's left edge
 static int   request = -1;
 static float scrollY, scrollTarget;
+// Whether the grid's scroll follows the focus. A card the Magic Remote's pointer
+// focused leaves it where it is: snapping that card's row to the top would slide
+// another under a pointer that had not moved. Any arrow, the wheel's included,
+// hands it back.
+static int   follow = 1;
 static float animPick[PICK_N];
 static float animCard;         // one spring: only ever one card is focused
 static float animHead;         // the grid-size button
@@ -235,6 +242,26 @@ static int focusedIndex(void) {
   return idx;
 }
 
+// The pointer's setters, each doing what the keys that reach the same place do.
+static void pointHead(int a, int b) {
+  (void)a; (void)b;
+  if (menuOpen < 0) zone = ZONE_HEAD;
+}
+static void pointPick(int p, int unused) {
+  (void)unused;
+  if (menuOpen < 0) { zone = ZONE_PICKERS; pickSel = p; }
+}
+static void pointOption(int c, int unused) {
+  (void)unused;
+  if (menuOpen >= 0 && c >= 0 && c < optionsN(menuOpen)) menuFocus = c;
+}
+static void pointOffMenu(int a, int b) { (void)a; (void)b; menuOpen = -1; }
+static void pointCard(int i, int unused) {
+  (void)unused;
+  if (menuOpen >= 0 || i < 0 || i >= gridN()) return;
+  zone = ZONE_GRID; focus = i; follow = 0;
+}
+
 void dui_event(const SDL_Event *e) {
   int n, row, lastRow;
   if (e->type == SDL_QUIT) { wantsExit = 1; return; }
@@ -247,6 +274,7 @@ void dui_event(const SDL_Event *e) {
     } }
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+  if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) follow = 1;
   n = gridN();
 
   // AN OPEN LIST OWNS THE WHOLE D-PAD. It is a question standing in front of the
@@ -385,11 +413,21 @@ void dui_update(float dt, Uint32 now) {
   // No clamp at the end of the list: stopping the scroll early would put the
   // last rows back where a partial row sits at the top, which is the thing this
   // exists to avoid. The list simply ends with space under it.
-  if (zone == ZONE_GRID && n > 0) {
+  if (!follow) {
+    /* the pointer's: hold where it is */
+  } else if (zone == ZONE_GRID && n > 0) {
     scrollTarget = (float)(focus / grid_cols()) * grid_line_step();
   } else {
     scrollTarget = 0.0f;
   }
+  // THE POINTER RESTING ON THE GRID'S EDGE scrolls it; the focus stays put.
+  { float d = app_screen_in_front() && menuOpen < 0 && n > 0
+            ? pointer_edge_scroll(0.0f, NV_SCREEN_W, NV_DSC_CLIP_TOP, NV_SCREEN_H, dt) : 0.0f;
+    if (d != 0.0f) {
+      float max = (float)((n - 1) / grid_cols()) * grid_line_step();
+      scrollTarget = anim_clamp(scrollTarget + d, 0.0f, max);
+      follow = 0;
+    } }
   if (scrollTarget < 0.0f) scrollTarget = 0.0f;
   scrollY = anim_spring(scrollY, scrollTarget, dt, NV_SPRING_GRID);
 }
@@ -426,6 +464,8 @@ static void drawPicker(int p) {
 static void drawMenu(void) {
   int p = menuOpen;
   if (p < 0) return;
+  pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOffMenu, 0, 0);
+  dd_menu_point(pointOption);
   dd_menu(pickRect(p), optionsN(p), menuFocus, menuLabel, &menuOpen, 1.0f);
 }
 
@@ -455,6 +495,7 @@ static void drawGrid(void) {
   // to stop 60px short, which is the other half of the cut-off-with-room-left
   // report above.
   gfx_crop(0.0f, NV_DSC_CLIP_TOP, NV_SCREEN_W, NV_DSC_GRID_BOTTOM - NV_DSC_CLIP_TOP);
+  pointer_clip(0.0f, NV_DSC_CLIP_TOP, NV_SCREEN_W, NV_DSC_GRID_BOTTOM - NV_DSC_CLIP_TOP);
   // TWO PASSES: the focused card scales up and must sit over its neighbours,
   // or the poster beside it clips the focus border.
   for (int pass = 0; pass < 2; pass++)
@@ -495,6 +536,7 @@ static void drawGrid(void) {
         // `transform-origin: top`: the top edge stays on the row and the growth
         // goes downwards, so only x is re-centred.
         GfxRect card = { left - (w - grid_card_w()) * 0.5f, top, w, h };
+        pointer_zone(card.x, card.y, card.w, card.h, pointCard, i, 0);
         // Held: pressed in about its centre, the glow behind it (hold.h).
         if (isFocus) {
           card = hold_card(&hold, card);
@@ -544,7 +586,7 @@ static void drawGrid(void) {
     }
   gfx_opacity_group = 1.0f;
   gfx_no_crop();
-
+  pointer_no_clip();
 }
 
 void dui_draw(Uint32 now) {
@@ -568,11 +610,16 @@ void dui_draw(Uint32 now) {
     // The grid-size button takes the right end of the title row, and the
     // context line moves in to sit beside it.
     { GfxRect b = grid_button_draw(NV_DSC_X + NV_DSC_W, NV_DSC_Y + (NV_DSC_TITLE_H - 64.0f) * 0.5f, animHead, 1.0f);
+      pointer_zone(b.x, b.y, b.w, b.h, pointHead, 0, 0);
       float w = txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128, -1.0f, 0.0f, 0.0f, 4.0f);
       txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128,
                    b.x - 32.0f - w, NV_DSC_Y + 10.0f, 0.95f, 4.0f); } }
 
-  for (p = 0; p < PICK_N; p++) drawPicker(p);
+  for (p = 0; p < PICK_N; p++) {
+    GfxRect r = pickRect(p);
+    drawPicker(p);
+    pointer_zone(r.x, r.y, r.w, r.h, pointPick, p, 0);
+  }
   drawGrid();
   // LAST, over everything: an open list covers the grid and the pickers beside
   // it, and it carries a shadow that has to fall on them.

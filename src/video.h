@@ -91,6 +91,10 @@ void video_set_dv(int dv);
 // that is streaming, and on an MP4 it is guaranteed wasted work — the log itself
 // said "no track read" every time.
 void video_set_mp4(int isMp4);
+// Which load is current. It changes on every video_play and video_stop, so a
+// caller that started a video can tell, by keeping the number it saw right
+// after, whether the plane is still its own or someone else has loaded over it.
+unsigned video_session(void);
 int    video_playing(void);
 int    video_ready(void);   // 1 after loadCompleted
 int    video_active(void);    // 1 as soon as there is a mediaId — this is what opens the hole

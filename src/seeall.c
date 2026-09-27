@@ -14,6 +14,8 @@
 #include "dropdown.h"
 #include "hold.h"
 #include "ctxmenu.h"
+#include "pointer.h"
+#include "app.h"
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
@@ -126,6 +128,15 @@ static float pickAnim[TY_N];
 // moving inside it must change nothing until OK. The same split Discover and
 // the detail screen's season picker use.
 static int   menuOpen = -1, menuFocus;
+
+// WHETHER THE SCROLL FOLLOWS THE FOCUS. The grid aims the focused row at 30% of
+// the screen; with the Magic Remote's pointer on a lower row that slid another
+// row under a pointer that had not moved, which focused it, which scrolled
+// again. So a focus set by the POINTER leaves the scroll where it is (goalY),
+// and any arrow — the wheel's included, which is how a pointer scrolls — hands
+// it back to the focus.
+static int followFocus = 1;
+static float goalY;
 // One spring for the grid's focus, because only ever one card is focused. The
 // card it belongs to is `focus`; when that moves the scale stays put and the
 // new card simply has it. Discover does the same.
@@ -333,7 +344,7 @@ void seeall_collection(const ColFolder *folder) {
                                         &fromCard.w, &fromCard.h);
   anim = 0.0f; animV = 0.0f; scrollY = 0.0f; focus = 0;
   animCard = 0.0f;
-  collection=folder;source=0;is_open=1;reqOpen=-1;
+  collection=folder;source=0;is_open=1;reqOpen=-1;followFocus=1;
   timeline=!strcmp(folder->group,"Directors");
   snprintf(title,sizeof title,"%s",folder->title);openSource();
   buildPickers();
@@ -358,7 +369,7 @@ void seeall_open(const char *base, const char *kind, const char *catId,
   // A home row's "See all" card is not a collection card and has no wordmark to
   // carry: that path keeps the plain fade it has always had.
   fromValid = 0;
-  is_open = 1; focus = 0; scrollY = 0.0f; reqOpen = -1;
+  is_open = 1; focus = 0; scrollY = 0.0f; reqOpen = -1; followFocus = 1;
   animCard = 0.0f;
   snprintf(title, sizeof title, "%s", heading ? heading : "");
   collection=col_by_catalog(base,kind,catId);timeline=collection&&!strcmp(collection->group,"Directors");
@@ -505,6 +516,28 @@ int seeall_requested_open(void) { int v = reqOpen; reqOpen = -1; return v; }
 
 static int nItems(void) { return disc_seeall_n(); }
 
+// The pointer's setters. Each does what the keys that reach the same place do.
+static void pointCard(int i, int unused) {
+  (void)unused;
+  if (!is_open || menuOpen >= 0 || i < 0 || i >= nItems()) return;
+  pickFocus = 0;
+  focus = i;
+  followFocus = 0;
+  if (focus >= nItems() - SEEALL_COLS * 4) disc_seeall_more();
+}
+static void pointPick(int i, int unused) {
+  (void)unused;
+  if (!is_open || menuOpen >= 0 || i < 0 || i >= nPicks + HAS_GRID_BTN) return;
+  if (!pickFocus) { pickFocus = 1; syncPickers(); }
+  pickSel = i;
+  followFocus = 0;
+}
+static void pointOption(int c, int unused) {
+  (void)unused;
+  if (menuOpen >= 0 && c >= 0 && c < nSrcOf[menuOpen]) menuFocus = c;
+}
+static void pointOffMenu(int a, int b) { (void)a; (void)b; menuOpen = -1; }
+
 // Holding OK on a card opens the poster menu (hold.h). The card it opens beside
 // is the one drawn focused on the last frame.
 static Hold hold;
@@ -538,6 +571,7 @@ void seeall_event(const SDL_Event *e) {
     } }
   if (e->type != SDL_KEYDOWN) return;
   k = e->key.keysym.sym;
+  if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) followFocus = 1;
   { int back = (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
                 e->key.keysym.scancode == NV_SCANCODE_BACK);
     // AN OPEN LIST OWNS THE WHOLE D-PAD, Back included: it is a question
@@ -645,10 +679,16 @@ void seeall_update(float dt, Uint32 now) {
     // direction — see the snap note in discoverui.c.
     if (target > row) target = row; }
   if(pickFocus)target=0;
+  if (!followFocus) target = goalY;
+  goalY = target;
   maxY = SEEALL_TOP + (float)lines * (SEEALL_CARD_H + SEEALL_GAP_Y) - NV_SCREEN_H + 120.0f;
   if (maxY < 0.0f) maxY = 0.0f;
   if (target < 0.0f) target = 0.0f;
   if (target > maxY) target = maxY;
+  // THE POINTER RESTING ON THE GRID'S EDGE scrolls it; the focus stays put.
+  { float d = app_seeall_in_front() && menuOpen < 0 && n > 0
+            ? pointer_edge_scroll(0.0f, NV_SCREEN_W, SEEALL_CLIP_TOP, NV_SCREEN_H, dt) : 0.0f;
+    if (d != 0.0f) { target = goalY = anim_clamp(goalY + d, 0.0f, maxY); followFocus = 0; } }
   scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
 }
 
@@ -918,13 +958,16 @@ static void themeHeader(float a,float x0,float dy) {
     int t = picks[i];
     dd_pill(pickRect(i, x0, dy), TY_LABEL[t], sourceOption(srcOf[t][selOf[t]]),
             pickAnim[t], t == activeType(), a);
+    { GfxRect pr = pickRect(i, x0, dy); pointer_zone(pr.x, pr.y, pr.w, pr.h, pointPick, i, 0); }
   }
   // Right-aligned on the picker row, centred on its pills. With no picker row
   // the grid starts high, so it moves up beside the wordmark instead.
-  if (HAS_GRID_BTN)
-    grid_button_draw(NV_SCREEN_W - NV_CONTENT_PAD,
+  if (HAS_GRID_BTN) {
+    GfxRect b = grid_button_draw(NV_SCREEN_W - NV_CONTENT_PAD,
                      (nPicks ? SEEALL_PICK_Y + (NV_DD_PICK_H - 64.0f) * 0.5f
                              : 105.0f) + dy, animBtn, a);
+    pointer_zone(b.x, b.y, b.w, b.h, pointPick, nPicks, 0);
+  }
 }
 
 static void timelineCard(int i,float cy,float a,float x0) {
@@ -990,6 +1033,7 @@ void seeall_draw(Uint32 now) {
   // TWO PASSES: the focused card GROWS, and a card that grows has to be drawn
   // over its neighbours or the poster beside it clips its border. The Library
   // and Discover both do this, and for the same reason.
+  pointer_clip(0.0f, SEEALL_CLIP_TOP, NV_SCREEN_W, NV_SCREEN_H - SEEALL_CLIP_TOP);
   for (int pass = 0; pass < 2; pass++)
   for (i = 0; i < n; i++) {
     float cx = x0 + (float)(i % SEEALL_COLS) * (SEEALL_CARD_W + SEEALL_GAP_X);
@@ -1051,6 +1095,7 @@ void seeall_draw(Uint32 now) {
         gfx_opacity_group=edge;timelineCard(i,cy,a,x0);gfx_opacity_group=1.0f;
       }
       continue;}
+    if (pass == 0) pointer_zone(r.x, r.y, r.w, r.h, pointCard, i, 0);
     /* pass 0 lays the row, pass 1 puts the one that grew back on top of it */
     if ((pass == 1) != (f > 0.01f)) continue;
     if (!viewItem(i, &it)) continue;
@@ -1115,6 +1160,7 @@ void seeall_draw(Uint32 now) {
     gfx_opacity_group = 1.0f;
   }
   gfx_opacity_group = 1.0f;
+  pointer_no_clip();
   if(!n&&disc_seeall_loading())for(int i=0;i<SEEALL_COLS;i++)
     gfx_color((GfxRect){x0+i*(SEEALL_CARD_W+SEEALL_GAP_X),SEEALL_TOP,
                         SEEALL_CARD_W,SEEALL_CARD_H},.06f,.12f,.13f,.15f,a);
@@ -1135,8 +1181,12 @@ void seeall_draw(Uint32 now) {
   if (menuOpen >= 0) {
     int t = menuOpen, i;
     for (i = 0; i < nPicks && picks[i] != t; i++) ;
-    if (i < nPicks)
+    if (i < nPicks) {
+      // A click anywhere off the list closes it, as Back does.
+      pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOffMenu, 0, 0);
+      dd_menu_point(pointOption);
       dd_menu(pickRect(i, x0, rise), nSrcOf[t], menuFocus, pickOption, &t, a);
+    }
   }
   }
 }

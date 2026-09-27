@@ -747,6 +747,13 @@ void gfx_skeleton(GfxRect r, float radius,
 // Zeroes the rectangle's colour AND alpha, with blending off, opening the
 // surface to the video plane behind it. See video.h.
 void gfx_hole(GfxRect r);
+// The same hole with ROUNDED corners, `radius` a fraction of the short side like
+// gfx_color's. It ERASES rather than writes: the rounded rect is drawn with
+// dst *= (1 - srcA), so the inside goes to zero, the corners outside keep what
+// was under them, and the anti-aliased edge takes the video plane partly. Drawing
+// over it afterwards with the ordinary blend composes on top of the plane — a
+// cover drawn at alpha a leaves the plane showing through (1 - a) of it.
+void gfx_hole_round(GfxRect r, float radius);
 void gfx_texture(GfxRect r, GLuint tex);
 
 #endif

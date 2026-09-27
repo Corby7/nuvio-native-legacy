@@ -48,6 +48,7 @@
 #include "home.h"
 #include "settings.h"
 #include "failures.h"
+#include "pointer.h"
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
@@ -122,6 +123,9 @@
 // railRadius below, which is the same correction parental_guide already applies to
 // its vertical bar.
 #define PLR_RAIL_H         8.0f
+// The bar as the Magic Remote's pointer sees it: a band this tall centred on the
+// rail, which is too thin to land on from across the room.
+#define PLR_BAR_HIT_H     48.0f
 #define PLR_RAIL_H_FOCUS  12.0f
 // The playhead. "Wants to be ~2.5x the focused bar. Closer than that and it reads
 // as a bump in the bar rather than a playhead you are holding" — the sheet's own
@@ -632,6 +636,7 @@ static void fraseFirst(char *dst, size_t n, const char *src, size_t maxBytes) {
 static int    aspect = PLR_ASPECT_ORIGINAL;
 static Uint32 toastAte = 0;      // until when the mode notice stays up
 static char   toastText[96];     // its text when it is not the aspect mode's
+static int    toastGood;         // its dot: 1 green, 0 amber
 static char   dirPrefs[512];
 
 // Short labels for the on-screen notice. The web app's are "Fit (Original)",
@@ -873,8 +878,9 @@ void player_aspect_cycle(void) {
 
 // Twice the aspect notice's time: that one confirms a key just pressed, this one
 // announces something nobody asked for, and has to be read from the sofa.
-void player_toast(const char *text) {
+void player_toast(const char *text, int good) {
   snprintf(toastText, sizeof toastText, "%s", text ? text : "");
+  toastGood = good;
   toastAte = SDL_GetTicks() + 2 * PLR_TOAST_MS;
 }
 
@@ -1385,6 +1391,62 @@ static void commitSeek(void) {
   if (hasVideo) video_fetch(seekPreview);
 }
 
+// --- THE MAGIC REMOTE'S POINTER -------------------------------------------
+//
+// Moving it raises the controls, as any key does (player_update). Pointing at a
+// button focuses it and a click presses it, through the same OK as the remote.
+// The bar lights under the pointer, and a click on it SEEKS THERE — held, it
+// drags the aim along and lets go where the button comes up. A click on the
+// picture itself, on nothing, pauses or resumes, the web player's gesture.
+
+// Where the bar was drawn last frame, for turning a pointer x into a time.
+static float barX, barW;
+// 1 while a click that landed on the bar is still held: the aim follows the
+// pointer until the button comes up, and only then is the seek sent.
+static int barDrag;
+
+static float barFracAt(float x) {
+  return barW > 0.0f ? anim_clamp((x - barX) / barW, 0.0f, 1.0f) : 0.0f;
+}
+
+static void pointButton(int act, int unused) {
+  (void)unused;
+  if (!is_open || exiting || !visible) return;
+  barFocus = 0; cardFocus = 0; button = act;
+  wake();
+}
+static void pointBar(int a, int b) {
+  (void)a; (void)b;
+  if (!is_open || exiting || !visible) return;
+  cardFocus = 0; barFocus = 1;
+  wake();
+}
+static void clickBar(int a, int b) {
+  (void)a; (void)b;
+  if (!is_open || exiting || durationSeg <= 0.0f || !playbackReady()) return;
+  cardFocus = 0; barFocus = 1;
+  seekBegin();
+  seekPreview = barFracAt(pointer_x()) * durationSeg;
+  seekAt = SDL_GetTicks();
+  barDrag = 1;
+  wake();
+}
+// The prompt's pills: "Play now" / "Not now", or the one "Skip intro". With the
+// controls up they take the card rung, as UP from the bar would; down, the card
+// is already what OK acts on.
+static void pointCard(int pill, int unused) {
+  (void)unused;
+  if (!is_open || exiting) return;
+  if (nextCardUp() && pill >= 0 && pill < NEXT_NPILLS) nextFocus = pill;
+  if (visible) { barFocus = 0; cardFocus = 1; wake(); }
+}
+static void clickPicture(int a, int b) {
+  (void)a; (void)b;
+  if (!is_open || exiting || player_loading()) return;
+  togglePlaying();
+  wake();
+}
+
 void player_event(const SDL_Event *e) {
   if (!is_open || exiting || e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
@@ -1751,6 +1813,26 @@ void player_update(float dt, Uint32 now) {
   { int up = tracks_style_shown() > 0.5f || (visible && chrome > 0.5f);
     video_subtitle_lift(up ? NV_TRK_EMBED_LIFT : 0); }
 
+  // THE POINTER WAKES THE CONTROLS as a key would, and the drag along the bar
+  // follows it until the button comes up.
+  { static Uint32 seenMove;
+    Uint32 moved = pointer_moved_at();
+    if (moved != seenMove) {
+      seenMove = moved;
+      if (pointer_active() && !exiting && !episodes_is_open() &&
+          !stream_sheet_is_open() && !tracks_is_open()) wake();
+    }
+    if (barDrag) {
+      if (pointer_held() && seekActive) {
+        seekPreview = barFracAt(pointer_x()) * durationSeg;
+        seekAt = now;
+        lastInput = now;
+      } else {
+        barDrag = 0;
+        commitSeek();
+      }
+    } }
+
   // Paused, the controls stay. Making them disappear would leave the user in front of
   // a still frame with no clue that it was they who paused.
   if (visible && playing && !player_loading() && !episodes_is_open() &&
@@ -2101,6 +2183,7 @@ static void drawSkipIntro(int kind) {
   float c = hot ? 0.961f : NV_SKIP_BG, a = hot ? 1.0f : NV_SKIP_BG_A;
   float pad = (NV_SKIP_ICON - NV_SKIP_ICON_INK) * 0.5f;
   gfx_color((GfxRect){ x, y, w, h }, NV_SKIP_R / h, c, c, c, a * entry);
+  pointer_zone(x, y, w, h, pointCard, -1, 0);
   { float g = ink / 255.0f;
     gfx_icon((GfxRect){ x + NV_SKIP_PADX - pad, y + (h - NV_SKIP_ICON) * 0.5f,
                         NV_SKIP_ICON, NV_SKIP_ICON }, "forward", g, g, g, entry); }
@@ -2227,6 +2310,7 @@ static void drawNextCard(const CatEp *next) {
       int sel = hot && nextFocus == i;
       float tx = px + NV_NEXT_PILL_PADX;
       GfxRect pr = { px, py, pw[i], ph };
+      pointer_zone(pr.x, pr.y, pr.w, pr.h, pointCard, i, 0);
       if (sel) {
         gfx_color(pr, 0.5f, 0.961f, 0.961f, 0.961f, entry);
       } else {
@@ -2502,14 +2586,31 @@ static void drawPlayer(Uint32 now) {
     // drawing fault.
     float remains = (float)(toastAte - now);
     float at = (remains < 200.0f ? remains / 200.0f : 1.0f) * entry;
-    TxtLine l = txt_line(TXT_PLR_TITLE, toastText[0] ? toastText : player_aspect_label(aspect),
-                           243, 248, 255, 242);
-    float pw = (float)l.w + 128.0f, ph = 128.0f;
-    GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 160.0f, pw, ph };
-    // The radius is a FRACTION of the smaller side (see gfx.h): 0.5 is the full pill.
-    gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.88f * at);
-    txt_draw_alpha(l, pil.x + (pw - l.w) * 0.5f,
-                       pil.y + (ph - (float)l.h) * 0.5f, at);
+    if (toastText[0]) {
+      // Not a mode change but a report, so the failure notice's size and place:
+      // it takes over from the "Syncing subtitles" pill without jumping.
+      TxtLine l = txt_line_trim(TXT_PLR_STAT, toastText, 255, 255, 255, 255, 1100);
+      float dot = 12.0f, padX = 28.0f, gap = 14.0f;
+      float pw = padX * 2.0f + dot + gap + (float)l.w, ph = (float)l.h + 28.0f;
+      GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 48.0f, pw, ph };
+      gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.90f * at);
+      if (toastGood)
+        gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
+                  90 / 255.0f, 200 / 255.0f, 120 / 255.0f, at);
+      else
+        gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
+                  240 / 255.0f, 160 / 255.0f, 60 / 255.0f, at);
+      txt_draw_alpha(l, pil.x + padX + dot + gap, pil.y + (ph - (float)l.h) * 0.5f, at);
+    } else {
+      TxtLine l = txt_line(TXT_PLR_TITLE, player_aspect_label(aspect),
+                             243, 248, 255, 242);
+      float pw = (float)l.w + 128.0f, ph = 128.0f;
+      GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 160.0f, pw, ph };
+      // The radius is a FRACTION of the smaller side (see gfx.h): 0.5 is the full pill.
+      gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.88f * at);
+      txt_draw_alpha(l, pil.x + (pw - l.w) * 0.5f,
+                         pil.y + (ph - (float)l.h) * 0.5f, at);
+    }
   }
 
   // --- the FAILURE NOTICE ----------------------------------------------------
@@ -2610,6 +2711,8 @@ static void drawPlayer(Uint32 now) {
   // content: they are offers, and an offer that the chrome shades is an offer the
   // chrome looks like it owns. The subtitle line stays where it was — it IS
   // content, and it is lifted clear of this band anyway.
+  // FIRST, so every control registered after it wins: a click on the picture.
+  pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, clickPicture, 0, 0);
   drawActionsEpisode();
   drawQuickSeek(q);
   if (ab <= 0.005f) return;   // playing clean: nothing more over the image
@@ -2689,6 +2792,12 @@ static void drawPlayer(Uint32 now) {
   float aRail = 0.26f + (0.34f - 0.26f) * fBar;
   GfxRect rail = { cx, yBar, cw, hRail };
   gfx_color(rail, railRadius(cw, hRail), 1, 1, 1, aRail * ab);
+  barX = cx; barW = cw;
+  // Taller than the rail, which is a few pixels: a pointer held in the air has to
+  // be able to land on it.
+  if (a > 0.3f)
+    pointer_zone_act(cx, yBar + hRail * 0.5f - PLR_BAR_HIT_H * 0.5f, cw, PLR_BAR_HIT_H,
+                     pointBar, clickBar, 0, 0);
   // The pipeline's buffer: what is decoded ahead of the playhead. In the web app
   // (.player-progress-buffered) it is WHITE at 0.3 and it runs from ZERO, under the
   // fill — not a segment starting where the fill ends, which is what was here. The
@@ -2827,6 +2936,9 @@ static void drawPlayer(Uint32 now) {
         continue;
       }
       buttonCircle(bcx, cyButtons, f, a);
+      if (a > 0.3f)
+        pointer_zone(bcx - PLR_BTN_D * 0.5f, cyButtons - PLR_BTN_D * 0.5f,
+                     PLR_BTN_D, PLR_BTN_D, pointButton, act, 0);
       switch (act) {
         case PLR_PLAY:     iconPlayPause(bcx, cyButtons, a, playing, luma); break;
         case PLR_CC:       iconSubtitles(bcx, cyButtons, a, luma); break;

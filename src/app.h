@@ -38,6 +38,12 @@ void app_event(const SDL_Event *e);
 void app_update(float dt, Uint32 now);
 void app_draw(Uint32 now);
 int  app_wants_exit(void);
+// Whether the current screen itself (library, search, settings…) or the "see
+// all" grid is what the keys reach right now, with nothing open over it. A
+// screen asks before scrolling on its own — the pointer's edge scrolling —
+// so a sheet or the menu over it does not scroll it from underneath.
+int  app_screen_in_front(void);
+int  app_seeall_in_front(void);
 void app_shutdown(void);
 
 // --- THE DEV CHANNEL --------------------------------------------------------

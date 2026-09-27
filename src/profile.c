@@ -4,6 +4,8 @@
 // the streak is a calendar, genres become a proportional band and the
 // most-watched titles get wide panels with art. The violet accent belongs to the
 // data, while the focus stays white as in the rest of the legacy native app.
+#include "pointer.h"
+#include "app.h"
 #include "profile.h"
 #include "anim.h"
 #include "gfx.h"
@@ -55,6 +57,11 @@ static char error[160];
 #define PF_ERROR PROFILE_STATE_ERROR
 static ProfileState state=PROFILE_STATE_LOADING;
 static float entry, scroll, scrollTarget, velScroll;
+// Whether the page's scroll follows the focused section. A card or a day the
+// Magic Remote's pointer focused leaves it where it is: snapping to that section
+// would slide another under a pointer that had not moved. Any arrow, the wheel's
+// included, hands it back.
+static int follow = 1;
 static float focusSec[PF_SECTIONS], focusItem[PROFILE_MAX_HIGHLIGHTS];
 
 static int limit(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -181,9 +188,27 @@ int profile_item_selected(ProfileHighlight *output) {
   return 1;
 }
 
+// The pointer's setters. Each does what the keys that reach the same place do;
+// the click that follows is the remote's OK.
+static void pointSide(int i, int unused) {
+  (void)unused;
+  if (is_open && side && i >= 0 && i < 3) sideFocus = i;
+}
+static void pointHighlight(int i, int unused) {
+  (void)unused;
+  if (!is_open || side || i < 0 || i >= data.nHighlights) return;
+  section = 1; item = i; follow = 0;
+}
+static void pointDay(int i, int unused) {
+  (void)unused;
+  if (!is_open || side || i < 0 || i >= data.nDays) return;
+  section = 2; day = i; follow = 0;
+}
+
 void profile_event(const SDL_Event *e) {
   if (!is_open || !e || e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+  if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) follow = 1;
   if(side) {
     if(k==SDLK_ESCAPE || k==SDLK_AC_BACK || k==SDLK_BACKSPACE || k==SDLK_LEFT) {profile_close();return;}
     if(k==SDLK_UP && sideFocus>0)sideFocus--;
@@ -238,7 +263,11 @@ void profile_update(float dt, Uint32 now) {
   if (!is_open && entry < 0.002f) entry = 0;
   float target = SECTION_Y[section] - (section == 0 ? PF_SUMMARY_Y : 120.0f);
   float maxScroll = fmax0(PF_DOC_H - NV_SCREEN_H + 54.0f);
-  scrollTarget = anim_clamp(target, 0, maxScroll);
+  if (follow) scrollTarget = anim_clamp(target, 0, maxScroll);
+  // THE POINTER RESTING ON THE PAGE'S EDGE scrolls it; the focus stays put.
+  { float d = !side && is_open && app_screen_in_front()
+            ? pointer_edge_scroll(0.0f, NV_SCREEN_W, 0.0f, NV_SCREEN_H, dt) : 0.0f;
+    if (d != 0.0f) { scrollTarget = anim_clamp(scrollTarget + d, 0, maxScroll); follow = 0; } }
   scroll = anim_spring2(&velScroll, scroll, scrollTarget, dt, NV_SPRING2_SCROLL);
   if(reduced) { entry=is_open?1:0;scroll=scrollTarget;velScroll=0; }
   for (int i = 0; i < PF_SECTIONS; i++)
@@ -389,6 +418,7 @@ static void drawActivity(float a) {
     int p=data.firstDayWeek+i, col=p%7, lin=p/7;
     float q=max?(float)data.activity[i]/max:0.0f;
     GfxRect c={x0+col*(cel+gap),y0+lin*(cel+gap),cel,cel};
+    if(!side) pointer_zone(c.x,c.y,c.w,c.h,pointDay,i,0);
     if(q<=0) gfx_color(c,.16f,.12f,.12f,.14f,.78f*a);
     else gfx_color(c,.16f,.38f+.23f*q,.13f+.13f*q,.52f+.31f*q,a);
     char nd[8];snprintf(nd,sizeof(nd),"%d",i+1);
@@ -467,6 +497,7 @@ static void drawHighlights(float a) {
     if(y+PF_CARD_H<0 || y>PF_CONTENT_H) continue;
     float lift=f*NV_FOCUS_LIFT;
     GfxRect r={x,y-lift,PF_CARD_W,PF_CARD_H};
+    if(!side) pointer_zone(r.x,r.y,r.w,r.h,pointHighlight,i,0);
     if(f>.02f) {
       GfxRect s={r.x-18,r.y+10,r.w+36,r.h+26};
       gfx_rect(s,0,GFX_SHADOW,f,0,0,.05f,0,0,0,NV_SHADOW_ALFA*a*f);
@@ -504,6 +535,7 @@ void profile_draw(Uint32 now) {
     for(int i=0;i<3;i++) {
       GfxRect b={x+44,i==0?130:878+(i-1)*76,688,60};
       int f=sideFocus==i;
+      pointer_zone(b.x,b.y,b.w,b.h,pointSide,i,0);
       gfx_color(b,.18f,f?.92f:.14f,f?.91f:.13f,f?.96f:.16f,a);
       txt_draw_alpha(txt_line(TXT_BODY,labels[i],f?25:236,f?24:234,f?30:242,255),b.x+24,b.y+14,a);
     }

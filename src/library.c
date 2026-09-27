@@ -21,6 +21,8 @@
 // THE FOCUS MOVES LIKE DISCOVER'S. Three zones, top to bottom; Back climbs one
 // zone at a time and only leaves from the strip; LEFT off the left edge of any
 // zone calls up the menu; an open dropdown owns the whole D-pad.
+#include "pointer.h"
+#include "app.h"
 #include "library.h"
 #include "trakt.h"
 #include "gfx.h"
@@ -77,6 +79,12 @@ static float animCard;           // one spring: only ever one card is focused
 static float animTabs;           // the cursor on the Saved / Collection strip
 static float animHead;           // the grid-size button
 static float scrollY;
+// Whether the grid's scroll follows the focus. A card the Magic Remote's pointer
+// focused leaves it where it is (goalY): scrolling that card's row into place
+// would slide another under a pointer that had not moved. Any arrow, the wheel's
+// included, hands it back.
+static int follow = 1;
+static float goalY;
 static int wantsExit = 0, request = -1, requestMenu = 0;
 static HomeItem itemFocus;
 static int hasItemFocus;
@@ -261,6 +269,34 @@ static int isOk(SDL_Keycode k) {
   return k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE;
 }
 
+// The pointer's setters, each doing what the keys that reach the same place do.
+// The Saved / Collection tabs switch on the click only, as a sheet's tabs do:
+// the set is rebuilt, and passing over the strip must not do that.
+static void pointHead(int a, int b) {
+  (void)a; (void)b;
+  if (menuOpen < 0) zone = ZONE_HEAD;
+}
+static void clickMode(int m, int unused) {
+  (void)unused;
+  if (menuOpen >= 0 || m < 0 || m >= LIB_N_MODES) return;
+  zone = ZONE_TABS;
+  if (m != mode) { mode = m; rebuild(); }
+}
+static void pointPick(int p, int unused) {
+  (void)unused;
+  if (menuOpen < 0) { zone = ZONE_PICKERS; pickSel = p; }
+}
+static void pointOption(int c, int unused) {
+  (void)unused;
+  if (menuOpen >= 0 && c >= 0 && c < optionsN(menuOpen)) menuFocus = c;
+}
+static void pointOffMenu(int a, int b) { (void)a; (void)b; menuOpen = -1; }
+static void pointCard(int i, int unused) {
+  (void)unused;
+  if (menuOpen >= 0 || i < 0 || i >= nFilter) return;
+  zone = ZONE_GRID; focus = i; follow = 0;
+}
+
 void library_event(const SDL_Event *e) {
   // OK over a card is a tap or a hold, and only the release can tell which.
   { int tap;
@@ -271,6 +307,7 @@ void library_event(const SDL_Event *e) {
     } }
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+  if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) follow = 1;
   int back = k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
              k == SDLK_DELETE;
 
@@ -388,6 +425,17 @@ void library_update(float dt, Uint32 now) {
   // and nothing is ever sliced there. See dui_update.
   float target = (zone == ZONE_GRID && nFilter > 0)
                  ? (float)(focus / grid_cols()) * grid_line_step() : 0.0f;
+  if (!follow) target = goalY;
+  goalY = target;
+  // THE POINTER RESTING ON THE GRID'S EDGE scrolls it, the rest of the way to
+  // the rows no arrow is near. It moves the goal, and the focus stays put.
+  { float d = app_screen_in_front() && menuOpen < 0 && nFilter > 0
+            ? pointer_edge_scroll(0.0f, NV_SCREEN_W, NV_LIB_CLIP_TOP, NV_SCREEN_H, dt) : 0.0f;
+    if (d != 0.0f) {
+      float max = (float)((nFilter - 1) / grid_cols()) * grid_line_step();
+      target = goalY = anim_clamp(goalY + d, 0.0f, max);
+      follow = 0;
+    } }
   scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
 }
 
@@ -428,6 +476,7 @@ static void drawGrid(void) {
   if (!nFilter) { drawEmpty(); return; }
 
   gfx_crop(0.0f, NV_LIB_CLIP_TOP, NV_SCREEN_W, NV_DSC_GRID_BOTTOM - NV_LIB_CLIP_TOP);
+  pointer_clip(0.0f, NV_LIB_CLIP_TOP, NV_SCREEN_W, NV_DSC_GRID_BOTTOM - NV_LIB_CLIP_TOP);
   // TWO PASSES: the focused card scales up and must sit over its neighbours.
   for (int pass = 0; pass < 2; pass++)
     for (int i = 0; i < nFilter; i++) {
@@ -452,6 +501,7 @@ static void drawGrid(void) {
         float w = grid_card_w() * scale, h = grid_poster_h() * scale;
         // `transform-origin: top`: only x is re-centred.
         GfxRect card = { left - (w - grid_card_w()) * 0.5f, top, w, h };
+        pointer_zone(card.x, card.y, card.w, card.h, pointCard, i, 0);
         // Held: pressed in about its centre, the glow behind it (hold.h).
         if (isFocus) {
           card = hold_card(&hold, card);
@@ -495,6 +545,7 @@ static void drawGrid(void) {
     }
   gfx_opacity_group = 1.0f;
   gfx_no_crop();
+  pointer_no_clip();
 }
 
 void library_draw(Uint32 now) {
@@ -513,20 +564,31 @@ void library_draw(Uint32 now) {
     // The grid-size button takes the right end of the title row, and the
     // context line moves in to sit beside it.
     GfxRect b = grid_button_draw(NV_DSC_X + NV_DSC_W, NV_DSC_Y + (NV_DSC_TITLE_H - 64.0f) * 0.5f, animHead, 1.0f);
+    pointer_zone(b.x, b.y, b.w, b.h, pointHead, 0, 0);
     float w = txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128, -1.0f, 0.0f, 0.0f, 4.0f);
     txt_tracking(TXT_SRCH_NAME, line, 128, 128, 128,
                  b.x - 32.0f - w, NV_DSC_Y + 10.0f, 0.95f, 4.0f); }
 
   { float x = NV_DSC_X;
-    for (int m = 0; m < LIB_N_MODES; m++)
-      x += tab_page_draw(x, NV_LIB_TABS_Y, MODE_LABEL[m], m == mode, animTabs, 1.0f); }
+    for (int m = 0; m < LIB_N_MODES; m++) {
+      float adv = tab_page_draw(x, NV_LIB_TABS_Y, MODE_LABEL[m], m == mode, animTabs, 1.0f);
+      pointer_zone_click(x, NV_LIB_TABS_Y, adv - NV_LIB_TAB_GAP, NV_LIB_TAB_H, clickMode, m, 0);
+      x += adv;
+    } }
 
   dd_select(pickRect(PICK_KIND), KIND_LABEL[kind], NULL, animPick[PICK_KIND], 1.0f);
   dd_select(pickRect(PICK_ORDER), ORDER_LABEL[order], NULL, animPick[PICK_ORDER], 1.0f);
+  for (int p = 0; p < PICK_N; p++) {
+    GfxRect r = pickRect(p);
+    pointer_zone(r.x, r.y, r.w, r.h, pointPick, p, 0);
+  }
 
   drawGrid();
   // LAST, over everything: an open list covers the grid under it.
-  if (menuOpen >= 0)
+  if (menuOpen >= 0) {
+    pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOffMenu, 0, 0);
+    dd_menu_point(pointOption);
     dd_menu(pickRect(menuOpen), optionsN(menuOpen), menuFocus, optionLabel,
             &menuOpen, 1.0f);
+  }
 }

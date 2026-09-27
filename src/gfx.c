@@ -1630,6 +1630,12 @@ void gfx_hole(GfxRect r) {
   glEnable(GL_BLEND);
 }
 
+void gfx_hole_round(GfxRect r, float radius) {
+  glBlendFuncSeparate(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
+  gfx_color(r, radius, 0, 0, 0, 1);
+  glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+}
+
 void gfx_texture(GfxRect r, GLuint tex) {
   gfx_rect(r, tex, GFX_CARD, 0, 0, 0, 0.0f, 0, 0, 0, 1);
 }

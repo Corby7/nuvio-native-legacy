@@ -27,6 +27,8 @@
 #include "simklauth.h"
 #include "js.h"
 #include "homerows.h"
+#include "pointer.h"
+#include "app.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -465,6 +467,15 @@ static float animSec[SETTING_N_SECTIONS];
 // One scroll per level, so coming back from a section finds the list where it was.
 static float scrollSec = 0.0f;
 static float scrollY = 0.0f;
+// Whether the list's scroll follows the focus. A row the Magic Remote's pointer
+// focused leaves it where it is (goalScroll): bringing a half-shown row into view
+// would slide the next under a pointer that had not moved. Any arrow, the
+// wheel's included, hands it back.
+static int follow = 1;
+static float goalScroll;
+// Where the focused row's "‹" was drawn, so a click on it steps back rather than
+// forward. Written by drawStepper each frame.
+static float stepLtX0, stepLtX1;
 static int wantsExit = 0;
 static int requestMenu = 0;   // LEFT on a row LEFT cannot change
 
@@ -1012,9 +1023,56 @@ static float scrollFor(float current, int i) {
   return target;
 }
 
+// --- THE MAGIC REMOTE'S POINTER -------------------------------------------
+// Pointing at a row focuses it. A click on a section opens it (OK); on an option
+// it does what the remote's arrows do — the "‹" steps back, anywhere else steps
+// forward — or runs it if it is an action; on a home row it picks the row up
+// (OK), or shows / hides it from the arrows beside the value.
+static void sendKey(SDL_Keycode k) {
+  SDL_Event ev;
+  SDL_zero(ev);
+  ev.type = SDL_KEYDOWN;
+  ev.key.keysym.sym = k;
+  settings_event(&ev);
+  follow = 0;
+}
+static int onStepBack(void) {
+  float x = pointer_x();
+  return stepLtX1 > stepLtX0 && x >= stepLtX0 - 24.0f && x <= stepLtX1 + 24.0f;
+}
+static void pointSection(int s, int unused) {
+  (void)unused;
+  if (level == 0 && s >= 0 && s < SETTING_N_SECTIONS) { focusSec = s; follow = 0; }
+}
+static void pointOption(int op, int unused) {
+  (void)unused;
+  if (level == 1) { focusOp = op; follow = 0; }
+}
+static void clickOption(int op, int unused) {
+  (void)unused;
+  if (level != 1) return;
+  focusOp = op;
+  if (OPTIONS[op].kind == OP_ACTION) sendKey(SDLK_RETURN);
+  else if (mutable(op)) sendKey(onStepBack() ? SDLK_LEFT : SDLK_RIGHT);
+}
+static void pointHomeRow(int i, int unused) {
+  (void)unused;
+  if (level == 2 && !rowHolding) { rowFocus = i; follow = 0; }
+}
+static void clickHomeRow(int i, int unused) {
+  (void)unused;
+  if (level != 2) return;
+  if (!rowHolding) rowFocus = i;
+  if (!rowHolding && onStepBack()) sendKey(SDLK_RIGHT);
+  else if (!rowHolding && pointer_x() > SETTING_LIST_X + SETTING_LIST_W * 0.6f)
+    sendKey(SDLK_RIGHT);
+  else sendKey(SDLK_RETURN);
+}
+
 void settings_event(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+  if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) follow = 1;
 
   // A link in progress is a question: while it is standing, nothing else on the
   // screen answers the remote.
@@ -1126,6 +1184,26 @@ void settings_event(const SDL_Event *e) {
 void settings_update(float dt, Uint32 now) {
   (void)now;
   int reduced = settings_animations_reduced();
+  // A NEW LEVEL starts from its own scroll, whatever the pointer did on the last:
+  // the goal is shared, and a click that opened a section left it holding the
+  // section list's.
+  { static int seenLevel = -1;
+    if (level != seenLevel) {
+      seenLevel = level;
+      follow = 1;
+      goalScroll = level == 2 ? rowScroll : level ? scrollY : scrollSec;
+    } }
+  // THE POINTER RESTING ON THE LIST'S EDGE scrolls it; the focus stays put.
+  { float d = app_screen_in_front() && traktauth_state() != TRA_WAITING
+            ? pointer_edge_scroll(SETTING_LIST_X, SETTING_LIST_X + SETTING_LIST_W,
+                                  SETTING_TOP, SETTING_BASE, dt) : 0.0f;
+    int rows = level == 2 ? homerows_n() : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
+    if (d != 0.0f && rows > 0) {
+      float max = yOfRow(rows - 1) + SETTING_LINE_H - (SETTING_BASE - SETTING_TOP);
+      if (max < 0.0f) max = 0.0f;
+      goalScroll = anim_clamp(goalScroll + d, 0.0f, max);
+      follow = 0;
+    } }
   for (int i = 0; i < SETTING_N; i++) {
     float target = (level == 1 && i == focusOp) ? 1.0f : 0.0f;
     animFocus[i] = reduced ? target : anim_spring(animFocus[i], target, dt,
@@ -1143,13 +1221,17 @@ void settings_update(float dt, Uint32 now) {
                               target > rowAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     } }
   if (level == 0) {
-    float target = scrollFor(scrollSec, focusSec);
+    float target = follow ? scrollFor(scrollSec, focusSec) : goalScroll;
+    goalScroll = target;
     scrollSec = reduced ? target : anim_spring(scrollSec, target, dt, NV_SPRING_SCROLL);
   } else if (level == 2) {
-    float target = scrollFor(rowScroll, rowFocus);
+    float target = follow ? scrollFor(rowScroll, rowFocus) : goalScroll;
+    goalScroll = target;
     rowScroll = reduced ? target : anim_spring(rowScroll, target, dt, NV_SPRING_SCROLL);
   } else {
-    float target = scrollFor(scrollY, focusOp - SECTIONS[focusSec].start);
+    float target = follow ? scrollFor(scrollY, focusOp - SECTIONS[focusSec].start)
+                          : goalScroll;
+    goalScroll = target;
     scrollY = reduced ? target : anim_spring(scrollY, target, dt, NV_SPRING_SCROLL);
   }
 }
@@ -1347,6 +1429,9 @@ static void drawStepper(const char *v, float xr, float y, int c, float a, float 
   TxtLine g = txt_line(TXT_CALLOUT, gt, 210, 210, 214, 255);
   float gx = xr - g.w;
   float vx = gx - 26.0f - val.w;
+  // The focused row's only: a row fading out still draws its arrows for a frame
+  // or two, and must not move the target under the one that has the focus.
+  if (f > 0.5f) { stepLtX0 = vx - 26.0f - l.w; stepLtX1 = vx - 26.0f; }
   txt_draw_alpha(g, gx, y + (SETTING_LINE_H - g.h) * 0.5f, a * f);
   txt_draw_alpha(l, vx - 26.0f - l.w, y + (SETTING_LINE_H - l.h) * 0.5f, a * f);
   txt_draw_alpha(val, vx, y + (SETTING_LINE_H - val.h) * 0.5f, a);
@@ -2106,9 +2191,20 @@ void settings_draw(Uint32 now) {
   float scroll = level == 2 ? rowScroll : level ? scrollY : scrollSec;
   gfx_crop(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
                SETTING_LIST_W + NV_RING_FOCUS * 2, NV_SCREEN_H - SETTING_TOP);
+  pointer_clip(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
+               SETTING_LIST_W + NV_RING_FOCUS * 2, NV_SCREEN_H - SETTING_TOP);
+  stepLtX0 = stepLtX1 = 0.0f;
   for (int i = 0; i < rows; i++) {
     float y = SETTING_TOP - scroll + yOfRow(i);
     drawGroup(i, y);
+    if (level == 2)
+      pointer_zone_act(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H,
+                       pointHomeRow, clickHomeRow, i, 0);
+    else if (level)
+      pointer_zone_act(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H,
+                       pointOption, clickOption, SECTIONS[focusSec].start + i, 0);
+    else
+      pointer_zone(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H, pointSection, i, 0);
     if (level == 2) {
       drawHomeRow(i, rows, y, i < 512 ? rowAnim[i] : 0.0f);
     } else if (level) {
@@ -2119,6 +2215,7 @@ void settings_draw(Uint32 now) {
     }
   }
   gfx_no_crop();
+  pointer_no_clip();
 
   if (rows > 0) {
     float total = yOfRow(rows - 1) + SETTING_LINE_H;

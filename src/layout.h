@@ -19,6 +19,10 @@
 // .home-sidebar's 340. It was 392 while the row read "Profile and Stats", which
 // did not fit; the row is "Profile" now and the bar is the web's width again.
 #define NV_MENU_W_IS_OPEN       340.0f
+// With the rail collapsed, the strip at the screen's left edge where the Magic
+// Remote's pointer opens the bar. Narrower than the content's 104px pad, so it
+// leaves room for a row's left paging arrow (NV_HOME_PADDLE_W) beside it.
+#define NV_MENU_EDGE_ZONE_W      40.0f
 #define NV_LEGACY_CONTENT_X     248.0f
 #define NV_LEGACY_CONTENT_RIGHT 104.0f
 // The real rule, measured in both states: the content ALWAYS has a 104 inset, and
@@ -383,26 +387,15 @@
   (NV_COLLECTION_HERO_LOGO_Y + NV_COLLECTION_HERO_LOGO_MAX_H)
 // There is no caption token: the hero's "N lists · OK to explore" line was removed.
 
-// THE COLLECTION TILE'S FOCUS ANIMATION. Two shapes feed the same loop in
-// home.c's drawShortcuts:
+// THE COLLECTION TILE'S FOCUS ANIMATION. Two shapes, both in home.c's
+// drawShortcuts:
 //
 //  - PACKAGED collections carry a folder of numbered JPEGs (frameDir/%03d.jpg),
-//    written into the .ipk by tools/import-collections.mjs;
-//  - ACCOUNT collections carry one sprite sheet over the network
-//    (ColFolder.focusSheet), written by nuvio-assets/scripts/make-focus-sheet.sh.
+//    written into the .ipk by tools/import-collections.mjs, drawn as a flipbook;
+//  - ACCOUNT collections carry the ident's video URL (ColFolder.focusVideo),
+//    played on the video plane behind the tile (focusVideoStep).
 //
-// The sheet's grid is FIXED and needs no metadata from the account, because the
-// script loops short clips and truncates long ones to fill every cell — the
-// idents run from 2.5 s to 16 s, so a fixed frame rate over each clip's own
-// length would have made the count vary per service.
-//
-// 8x8 at 1920 wide, because tex_get_width clamps every decode to
-// NV_TEX_HERO_WIDTH_MAX: a wider sheet would come back downscaled, and since the
-// whole sheet shares one decode budget, every cell would pay for it in
-// sharpness. The cell coordinates are normalised and would still be correct.
-#define NV_FOCUS_SHEET_COLS  8
-#define NV_FOCUS_SHEET_ROWS  8
-// 15 fps, the rate the packaged path already chose for this same animation.
+// 15 fps, the flipbook's rate.
 #define NV_FOCUS_FRAME_MS    67
 // How long the tile has to KEEP the focus before it starts moving. It stops the
 // animation firing on every tile you merely pass through on the way to another.
@@ -963,6 +956,9 @@
 // Area util explicita da home: a rail pode variar, mas o texto e o foco nunca
 // encostam na safe area direita.
 #define NV_HOME_SAFE_RIGHT    NV_LEGACY_CONTENT_RIGHT
+// The disc behind a row's paging arrow, shown only to the Magic Remote's pointer
+// (drawPaddles in home.c). Shrinks to fit when the margin it sits in is narrower.
+#define NV_HOME_PADDLE_D      64.0f
 #define NV_HOME_TEXT_GUTTER   24.0f
 #define NV_HOLD_FEEDBACK_MS   110.0f
 
@@ -1498,6 +1494,9 @@
 #define NV_SEARCH_TRACK_X      0.0f
 #define NV_SEARCH_CARD_W     248.0f
 #define NV_SEARCH_CARD_STEP  272.0f   // 248 + the track's 24 gap
+// A results row's paging arrow, for the Magic Remote's pointer: the band at
+// each end of the row it answers in (drawPaddles in search.c).
+#define NV_SEARCH_PADDLE_W    96.0f
 #define NV_SEARCH_POSTER_H   372.0f
 #define NV_SEARCH_POSTER_R    22.0f   // calc(var(--home-poster-radius,24px) - 2px)
 #define NV_SEARCH_NAME_GAP    16.0f   // .search-result-name margin-top

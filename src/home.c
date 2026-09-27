@@ -10,6 +10,7 @@
 #include "text.h"
 #include "tex_cache.h"
 #include "focus.h"
+#include "pointer.h"
 #include "anim.h"
 #include "layout.h"
 #include "settings.h"
@@ -36,6 +37,9 @@ int   detail_is_exiting(void);
 // wordmark. seeall.h includes collections.h, not home.h, so this one is by hand
 // only to keep the three declarations together.
 int   seeall_owns_mark(void);
+int   detail_is_open(void);
+#include "player.h"
+#include "video.h"
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
@@ -152,6 +156,10 @@ static float scrollY = 0.0f;
 // The speeds of the glide's second-order springs. They sit next to the position
 // because anim_spring2() needs both. See anim.h.
 static float velX[MAX_FILTER];
+// Where each row's scroll is HEADED. While the Magic Remote's pointer drives, the
+// focus no longer pulls the row along (see home_update): the row holds this goal,
+// and only the paging arrows move it (pageRow).
+static float goalX[MAX_FILTER];
 static float velY = 0.0f;
 static int wantsExit = 0, requestOpen = 0, requestMenu = 0;
 static int requestPlay = -1;   // "Play on select": see home_requested_play
@@ -168,6 +176,21 @@ static float okHold = 0.0f;
 //   holdPulse  1 the instant the menu opens, fading: the glow that confirms it
 //   holdScale  the card pressed IN while held, springing back past 1 on success
 static float holdShown, holdDim, holdPulse, holdScale = 1.0f, holdScaleV;
+
+// THE POINTER'S SETTER: the Magic Remote landed on card (r, c). It does what the
+// arrows would have done to get there — the row's column is remembered on the
+// way out — and, like any arrow, it ends an OK hold that was on another card.
+static void pointAt(int r, int c) {
+  if (r < 0 || r >= focus.nRows || c < 0 || c >= focus.nColumns[r]) return;
+  if (focus.row == r && focus.column == c) return;
+  if (focus.row != r) focus.columnRemembered[focus.row] = focus.column;
+  focus.row = r;
+  focus.column = c;
+  okPressing = 0; okSince = 0; okHold = 0.0f; okLongFired = 0;
+}
+
+static void pageLeft(int r, int unused);
+static void pageRight(int r, int unused);
 
 // --- hero-carrossel ---
 static int heroCurrent = 0, heroPrevious = 0;
@@ -1385,6 +1408,7 @@ static void syncRows(void) {
   memset(animFocus, 0, sizeof animFocus);
   memset(velX, 0, sizeof velX);
   memset(scrollX, 0, sizeof scrollX);
+  memset(goalX, 0, sizeof goalX);
   for (r = 0; r < nRows; r++)
     for (int a = 0; a < nOld; a++)
       if (!strcmp(rows[r].key, old[a].key)) {
@@ -1394,6 +1418,7 @@ static void syncRows(void) {
           rows[r].stackN=0;rows[r].stackOpen=1;
         }
         scrollX[r] = oldX[a];
+        goalX[r] = oldX[a];
         velX[r] = oldVelX[a];
         // The whole row of springs, not just the focused card: the neighbours are
         // mid-way out of focus and restarting them shows as the same flicker.
@@ -1829,10 +1854,15 @@ void home_update(float dt, Uint32 now) {
   // on the remote. With the app navigable it gets in the way: it steals the focus in
   // the middle of any test.
 
+  // ON A PAGING ARROW THE CARD LETS GO: its ring and its growth fade as they do
+  // when the focus leaves, so only the arrow under the pointer reads as focused.
+  // The focus itself stays put — OK and the arrows carry on from that card.
+  int onPaddle = pointer_over(pageLeft, focus.row, 0) ||
+                 pointer_over(pageRight, focus.row, 0);
   for (int r = 0; r < nRows; r++) {
     int nAnim = rows[r].n > MAX_CARDS ? MAX_CARDS : rows[r].n;
     for (int c = 0; c < nAnim; c++) {
-      float target = focus_index(&focus, r, c) ? 1.0f : 0.0f;
+      float target = focus_index(&focus, r, c) && !onPaddle ? 1.0f : 0.0f;
       animFocus[r][c] = motionReduced
                      ? target
                      : anim_spring(animFocus[r][c], target, dt,
@@ -1854,12 +1884,20 @@ void home_update(float dt, Uint32 now) {
       float slack = lw * scaleOf(rows[r].kind) * 0.5f;
       // "First slot" (Settings > Poster focus) pins the focused card to the row's
       // start on every step instead, and the rest of the row slides past it.
-      if (settings_row_first_slot()) target = left;
+      //
+      // NEITHER RULE WHILE THE POINTER DRIVES. Pointing at a card must not move the
+      // row: any scroll slides another card under a pointer that has not moved,
+      // the slightest drift focuses that one, and the row runs away. The row holds
+      // its goal instead, and only the paging arrows change it — so every card on
+      // screen, cut by the edge or not, can be pointed at.
+      if (pointer_active()) target = goalX[r];
+      else if (settings_row_first_slot()) target = left;
       else {
         if (dir + slack - target > util)  target = dir + slack - util;
         if (left - target < 0.0f)  target = left;
       }
       if (target < 0) target = 0;
+      goalX[r] = target;
       scrollX[r] = anim_spring2_reduced(&velX[r], scrollX[r], target, dt,
                                        NV_SPRING2_SCROLL, motionReduced);
     }
@@ -3031,6 +3069,206 @@ static void drawBackground(void) {
 // Still a divergence, and a deliberate one for now: the frame. A collection card in
 // the web carries a `.home-poster-frame`, so it should have the NV_CARD_PAD gutter and
 // the border inside it, where this still paints the 4px ring OUTSIDE the box.
+// --- THE POINTER ON A ROW ----------------------------------------------------
+//
+// The rest of a row is reached by the arrows at its edges, a page at a time: the
+// row's goal moves by as many whole cards as fit, and the focus goes to the card
+// on the new page nearest the arrow that was clicked — the one the eye is on.
+static void pageRow(int r, int dir) {
+  if (r < 0 || r >= nRows || r >= focus.nRows || focus.nColumns[r] <= 0) return;
+  KindRow kind = rows[r].kind;
+  float lw = rows[r].stackN ? 680.0f : widthOf(kind), step = lw + gapOf(kind);
+  float util = NV_SCREEN_W - settings_content_x() - NV_HOME_SAFE_RIGHT;
+  float slack = lw * scaleOf(kind) * 0.5f;
+  int per = (int)((util + gapOf(kind)) / step);
+  if (per < 1) per = 1;
+  float end = rows[r].n * step - gapOf(kind) + slack - util;
+  if (end < 0) end = 0;
+  float goal = goalX[r] + dir * per * step;
+  if (goal > end) goal = end;
+  if (goal < 0) goal = 0;
+  goalX[r] = goal;
+  int c = dir > 0 ? (int)floorf((goal + util - lw - slack) / step + 0.01f)
+                  : (int)ceilf(goal / step - 0.01f);
+  if (c > focus.nColumns[r] - 1) c = focus.nColumns[r] - 1;
+  if (c < 0) c = 0;
+  pointAt(r, c);
+}
+
+static void pageLeft(int r, int unused)  { (void)unused; pageRow(r, -1); }
+static void pageRight(int r, int unused) { (void)unused; pageRow(r, +1); }
+
+// The two arrows, on the row the pointer is on and only while it is on screen:
+// the D-pad has no use for them. Each sits in the margin beside the cards — the
+// right one in the safe area, the left one between the bar and the content — so
+// it never covers a card that could be pointed at.
+static void drawPaddles(int r, float cardY, float lh, float lw, float step) {
+  if (!pointer_active() || r != focus.row) return;
+  float left0 = settings_rail_collapsed() ? NV_MENU_EDGE_ZONE_W : NV_LEGACY_RAIL_W;
+  float leftW = settings_content_x() - left0;
+  float rightX = NV_SCREEN_W - NV_HOME_SAFE_RIGHT;
+  float rowEnd = rows[r].n * step - (step - lw);
+  float util = rightX - settings_content_x();
+  // From the GOAL, not the animated scroll: the arrow that was just clicked to the
+  // end of the row goes away at the click, not when the glide lands.
+  int more[2] = { goalX[r] > 1.0f, rowEnd - goalX[r] > util + 1.0f };
+  float xs[2] = { left0, rightX }, ws[2] = { leftW, NV_HOME_SAFE_RIGHT };
+  for (int i = 0; i < 2; i++) {
+    if (!more[i] || ws[i] < 24.0f) continue;
+    float d = NV_HOME_PADDLE_D;
+    if (d > ws[i] - 8.0f) d = ws[i] - 8.0f;
+    GfxRect disc = { xs[i] + (ws[i] - d) * 0.5f, cardY + (lh - d) * 0.5f, d, d };
+    PointerFocus act = i ? pageRight : pageLeft;
+    // UNDER THE POINTER, the focus ring every card wears: a white disc behind the
+    // dark one, NV_RING_FOCUS wider all round.
+    if (pointer_over(act, r, 0)) {
+      float g = NV_RING_FOCUS;
+      gfx_rect((GfxRect){ disc.x - g, disc.y - g, d + 2 * g, d + 2 * g }, 0, GFX_DISK,
+               0, 0, 0, 0, .96f, .97f, .98f, 1.0f);
+    }
+    gfx_rect(disc, 0, GFX_DISK, 0, 0, 0, 0, 0.08f, 0.08f, 0.09f, 0.82f);
+    float ic = d * 0.5f;
+    gfx_icon((GfxRect){ disc.x + (d - ic) * 0.5f, disc.y + (d - ic) * 0.5f, ic, ic },
+             i ? "chevron_right" : "chevron_left", 1, 1, 1, 0.95f);
+    pointer_zone_click(xs[i], cardY, ws[i], lh, act, r, 0);
+  }
+}
+
+// THE COLLECTION TILE'S FOCUS VIDEO, for folders from the account (focusVideo).
+//
+// The web plays the ident in a <video> over the cover. Here the only video there
+// is lives on the hardware plane BEHIND the GL surface (video.h), so the tile
+// plays it there and cuts a rounded hole where the cover was. The plane's
+// rectangle cannot follow a moving card frame for frame, so the video SHOWS only
+// once the card has stopped moving — the focus growth and the row's glide both
+// have to be over — and hides the moment either starts again.
+//
+// It LOADS earlier than it shows. The pipeline's start-up (fetch, demux, first
+// decode) is most of the wait, so it begins after the web's own debounce
+// (NV_FOCUS_VIDEO_LOAD_MS, homeScreen.js COLLECTION_FOCUS_VIDEO_MOUNT_DELAY_MS)
+// while the card is still growing, aimed at the rectangle the card is growing
+// INTO (`rest`). The rectangle is set again from the real card once it is still,
+// which is a no-op unless a vertical glide moved it.
+//
+// Revealed on `playing`, not on the load: until then the cover stays, so a slow
+// load is a still tile and never a black one. It then fades in over
+// NV_FOCUS_VIDEO_FADE_MS like the web's 200 ms opacity transition.
+//
+// It plays ONCE and holds its last frame, as the web's <video> does (no `loop`):
+// after endOfStream the hole stays open on whatever the plane last showed.
+//
+// ONE PLANE, SHARED WITH THE PLAYER. The tile only ever loads while no other
+// screen could want it, and it remembers the video_session its load produced: a
+// different number means someone else has loaded over it, and then the tile lets
+// go without stopping anything. It is claimed per frame — a frame in which the
+// home did not draw the focused tile releases it (home_focus_video_end_frame).
+#define NV_FOCUS_VIDEO_LOAD_MS  240
+#define NV_FOCUS_VIDEO_STILL_MS 80
+#define NV_FOCUS_VIDEO_FADE_MS  200
+
+static struct {
+  char     url[512];
+  unsigned session;
+  // `failed`: this url could not load or errored; not asked again until the
+  // focus moves to another tile.
+  int      started, shown, claimed, errors, failed;
+  float    reveal;
+  GfxRect  last;
+  Uint32   still, tick;
+} fv;
+
+static int focusVideoOurs(void) {
+  return fv.started && video_session() == fv.session;
+}
+
+static void focusVideoRelease(void) {
+  if (focusVideoOurs()) video_stop();
+  fv.started = fv.shown = 0;
+  fv.reveal = 0.0f;
+}
+
+static void focusVideoWindow(GfxRect r) {
+  video_window((int)(r.x + 0.5f), (int)(r.y + 0.5f),
+               (int)(r.w + 0.5f), (int)(r.h + 0.5f));
+}
+
+// How much of the video shows through the card, 0..1. The caller cuts the hole
+// when it is above zero and draws the cover over it at 1 - reveal. `rest` is where
+// the card will settle once its growth and the row's glide are over.
+static float focusVideoStep(const char *url, GfxRect card, GfxRect rest,
+                            Uint32 focusedSince, Uint32 now) {
+  int moved = fabsf(card.x - fv.last.x) > 0.5f || fabsf(card.y - fv.last.y) > 0.5f ||
+              fabsf(card.w - fv.last.w) > 0.5f || fabsf(card.h - fv.last.h) > 0.5f;
+  float dt = fv.tick ? (float)(now - fv.tick) : 0.0f;
+  fv.tick = now;
+  fv.claimed = 1;
+  fv.last = card;
+  if (moved) fv.still = now;
+  if (strcmp(fv.url, url)) {
+    focusVideoRelease();
+    snprintf(fv.url, sizeof fv.url, "%s", url);
+    fv.failed = 0;
+  }
+  if (player_is_open() || detail_is_open() || detail_progress() > 0.001f ||
+      seeall_is_open()) {
+    focusVideoRelease();
+    return 0.0f;
+  }
+  if (fv.started && !focusVideoOurs()) {
+    // The player (or anything else) loaded over it. Nothing of ours to stop.
+    fv.started = fv.shown = 0;
+    fv.reveal = 0.0f;
+  }
+  if (!fv.started) {
+    if (fv.failed || now - focusedSince < NV_FOCUS_VIDEO_LOAD_MS) return 0.0f;
+    // The rectangle before the load: loadCompleted applies whatever was last
+    // asked for, so the first frame lands in the card and not full screen.
+    // Stretched to the card, the web's `object-fit: fill` on the same overlay.
+    focusVideoWindow(rest);
+    video_set_dv(0);
+    video_set_mp4(1);
+    if (!video_play(url)) {
+      // No plane (the Mac build, or no window id): keep the cover and do not
+      // ask again every frame. Another tile's url clears it.
+      fv.failed = 1;
+      return 0.0f;
+    }
+    fv.session = video_session();
+    fv.started = 1;
+    fv.shown = 0;
+    fv.errors = video_error_count();
+  }
+  // A pipeline error after the picture showed would leave a black hole: the
+  // cover comes back instead.
+  if (video_error_count() != fv.errors) {
+    focusVideoRelease();
+    fv.failed = 1;
+    return 0.0f;
+  }
+  if (!fv.shown && video_playing()) fv.shown = 1;
+  // MOVING: the plane cannot follow, so the cover comes back at once and the
+  // video carries on underneath, ready for when the card stops.
+  if (moved || now - fv.still < NV_FOCUS_VIDEO_STILL_MS) {
+    fv.reveal = 0.0f;
+    return 0.0f;
+  }
+  if (fv.shown) {
+    focusVideoWindow(card);
+    fv.reveal += dt / NV_FOCUS_VIDEO_FADE_MS;
+    if (fv.reveal > 1.0f) fv.reveal = 1.0f;
+  }
+  return fv.reveal;
+}
+
+void home_focus_video_end_frame(void) {
+  if (!fv.claimed && (fv.started || fv.url[0])) {
+    focusVideoRelease();
+    fv.url[0] = 0;
+    fv.tick = 0;
+  }
+  fv.claimed = 0;
+}
+
 static void drawShortcuts(int r, float y) {
   float lw = widthOf(ROW_CATALOGS), lh = heightOf(ROW_CATALOGS);
   static int last=-1;static Uint32 since;
@@ -3053,14 +3291,11 @@ static void drawShortcuts(int r, float y) {
     if (x + w < -lw || x > NV_SCREEN_W + lw) continue;
     float radius = radiusOf(w, h);
     GfxRect card = {x, y, w, h};
+    pointer_zone(x, y, w, h, pointAt, r, c);
     // WHAT THE GRID GROWS OUT OF. The scaled rect, not the resting one: the card is
     // focused at the moment OK is pressed, so the rect the viewer is looking at is
     // the one with the focus growth already in it.
     if (focus.row == r && focus.column == c) { collCardRect = card; collCardValid = 1; }
-    // The whole texture unless the focus animation below picks a cell out of a
-    // sprite sheet. Re-set per card, never carried over: leaving a cell set would
-    // crop the NEXT tile to one frame of the previous one's animation.
-    GfxRect cell = {0.0f, 0.0f, 1.0f, 1.0f};
     if (f > .01f) {
       float smaller = w < h ? w : h;
       gfx_color((GfxRect){x - NV_RING_FOCUS, y - NV_RING_FOCUS,
@@ -3142,44 +3377,26 @@ static void drawShortcuts(int r, float y) {
                                     : tex_get_width(art, coverW))
                  : 0;
       // The aspect the art is CROPPED to. It follows `tex` — when a frame of the
-      // focus animation replaces the cover below, the aspect has to become the
+      // packaged flipbook replaces the cover below, the aspect has to become the
       // frame's or the shader would crop the animation to the cover's shape.
       float texAspect = art && art[0] ? tex_aspect(art) : 0.0f;
       int animating = focus.row==r && focus.column==c &&
                       !settings_animations_reduced();
-      if(animating && (folder->frames>0 || folder->focusSheet[0])) {
+      float reveal = 0.0f;
+      if(animating && folder->focusVideo[0]) {
         int id=rows[r].folders[c];Uint32 now=SDL_GetTicks();
         if(last!=id){last=id;since=now;}
-        if(folder->focusSheet[0]) {
-          // ONE SPRITE SHEET, and the request is made from the moment the tile takes
-          // the focus rather than after the delay below. It is a CDN file, not a
-          // local one: asking only once the animation was due to start meant the
-          // first pass through the loop had nothing to draw and the tile sat still
-          // for as long as the download took. Asked for here, it is usually
-          // resident by the time the 350 ms are up.
-          //
-          // 1920 and not `w`: the cap tex_get_width applies is the DECODE width, and
-          // it is the WHOLE sheet being decoded, not one frame. Asking for the
-          // tile's 360 would give cells of 45 pixels to draw at 360. The cell
-          // arithmetic itself is unaffected — the coordinates below are normalised,
-          // so they survive any uniform scale — this is only about resolution.
-          // NV_TEX_HERO_WIDTH_MAX is 1920, the sheet's own width, so nothing is lost.
-          GLuint sheet = tex_get_width(folder->focusSheet, 1920.0f);
-          if(sheet && now-since>NV_FOCUS_DELAY_MS) {
-            int n = NV_FOCUS_SHEET_COLS * NV_FOCUS_SHEET_ROWS;
-            int index = (int)((now-since-NV_FOCUS_DELAY_MS)/NV_FOCUS_FRAME_MS) % n;
-            cell.x = (float)(index % NV_FOCUS_SHEET_COLS) / NV_FOCUS_SHEET_COLS;
-            cell.y = (float)(index / NV_FOCUS_SHEET_COLS) / NV_FOCUS_SHEET_ROWS;
-            cell.w = 1.0f / NV_FOCUS_SHEET_COLS;
-            cell.h = 1.0f / NV_FOCUS_SHEET_ROWS;
-            tex = sheet;
-            // The CELL's aspect, not the sheet's. They happen to be equal here (a
-            // grid of 16:9 cells is itself 16:9), but writing the sheet's would be
-            // right by accident and would break the day the grid stops being square.
-            texAspect = tex_aspect(folder->focusSheet)
-                      * (float)NV_FOCUS_SHEET_ROWS / (float)NV_FOCUS_SHEET_COLS;
-          }
-        } else if(now-since>NV_FOCUS_DELAY_MS) {
+        // Where this card comes to rest: fully grown, and at the row's scroll
+        // GOAL rather than wherever the glide is this frame.
+        float restW = lw * (1.0f + scaleOf(ROW_CATALOGS));
+        GfxRect rest = {settings_content_x() + c * stepOf(ROW_CATALOGS) - goalX[r]
+                          - (restW - lw) * 0.5f,
+                        y, restW, lh * (1.0f + scaleOf(ROW_CATALOGS))};
+        reveal = focusVideoStep(folder->focusVideo, card, rest, since, now);
+      } else if(animating && folder->frames>0) {
+        int id=rows[r].folders[c];Uint32 now=SDL_GetTicks();
+        if(last!=id){last=id;since=now;}
+        if(now-since>NV_FOCUS_DELAY_MS) {
           char frame[700];
           int index=(int)((now-since-NV_FOCUS_DELAY_MS)/NV_FOCUS_FRAME_MS)%folder->frames+1;
           snprintf(frame,sizeof frame,"%s/%03d.jpg",folder->frameDir,index);
@@ -3202,15 +3419,21 @@ static void drawShortcuts(int r, float y) {
         // right edge here than it does in the browser.
         //
         // Passing 0 is the documented way to ask for the stretch (tex_cache.h: an
-        // unknown aspect and "the shader would stretch the art"). It applies to the
-        // focus sheet too, deliberately: the web gives `.home-poster-focus-gif` the
-        // same `object-fit: fill` in that very rule.
+        // unknown aspect and "the shader would stretch the art"). The focus video
+        // gets the same stretch from its plane rectangle: the web gives
+        // `.home-poster-focus-gif` the same `object-fit: fill` in that very rule.
+        //
+        // With the focus video showing, the card is a rounded hole onto the plane
+        // and the cover fades out over it (see focusVideoStep).
         (void)texAspect;
-        gfx_tex_aspect_current = 0;
-        gfx_tex_cell_current = cell;
-        gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1);
-        gfx_tex_cell_current = (GfxRect){0.0f, 0.0f, 1.0f, 1.0f};
-        gfx_tex_aspect_current = 0;
+        if (reveal > 0.0f) gfx_hole_round(card, radius);
+        if (reveal < 1.0f) {
+          gfx_tex_aspect_current = 0;
+          gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1.0f - reveal);
+          gfx_tex_aspect_current = 0;
+        }
+      } else if (reveal > 0.0f) {
+        gfx_hole_round(card, radius);
       } else if (folder->title[0]) {
         // AND HERE THE SWEEP IS RIGHT: this branch is reached only while `tex` is 0,
         // which for a folder that HAS a cover means the file is still on its way.
@@ -3277,6 +3500,7 @@ void home_draw(Uint32 now) {
   // top appeared across the hero's block instead of disappearing. The hero does not
   // scroll: only its contents change with the focus.
   gfx_crop(0, NV_SHELF_TOP-96, NV_SCREEN_W, NV_SCREEN_H - NV_SHELF_TOP+96);
+  pointer_clip(0, NV_SHELF_TOP-96, NV_SCREEN_W, NV_SCREEN_H - NV_SHELF_TOP+96);
   // NV_SHELF_PAD_TOP is the web's `padding-top` on the scroll column, not a nudge:
   // the rows come to rest 46px below the viewport's top edge, clear of the mask
   // that fades it. See the note on the constant.
@@ -3350,6 +3574,7 @@ void home_draw(Uint32 now) {
       }
       if (kind == ROW_CATALOGS) {
         drawShortcuts(r, cardY);
+        drawPaddles(r, cardY, heightOf(kind), widthOf(kind), stepOf(kind));
         y += NV_LEGACY_ROW_HEAD_H + heightTotalOf(kind) + rowGap();
         continue;
       }
@@ -3398,6 +3623,7 @@ void home_draw(Uint32 now) {
             px += (w - nw) * 0.5f; py += (h - nh) * 0.5f;
             w = nw; h = nh;
           }
+          pointer_zone(px, py, w, h, pointAt, r, c);
 
           if (passe == 0) {
             // No shadow. It existed to separate the card from the background, but over
@@ -3934,11 +4160,13 @@ void home_draw(Uint32 now) {
           // "this card, and something is coming" without adding a shape.
         }
       }
+      drawPaddles(r, cardY, artH, lw, step);
     }
     y += NV_LEGACY_ROW_HEAD_H + heightTotalOf(kind) + rowGap();
   }
   gfx_opacity_group=1;
   gfx_no_crop();
+  pointer_no_clip();
 }
 
 void home_shutdown(void) {}

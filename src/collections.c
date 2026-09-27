@@ -47,38 +47,30 @@ const char *col_group_by_id(const char *id) {
   return NULL;
 }
 
-// The sprite sheet baked beside an MP4 focus animation, or "" when the URL is not
-// one this app has frames for.
+// The focus animation's URL when it is a video, or "" when it is not one this app
+// can play.
 //
-// THE RULE IS A CONVENTION AND IT IS DELIBERATELY NARROW. The asset repo lays the
-// idents out as .../heroes/<name>-ident.mp4 and make-focus-sheet.sh writes
-// .../focus/<name>-ident.jpg beside them, so the sheet is reachable by swapping
-// the folder and the extension. Nothing else is guessed: a URL that is not an
-// MP4 under /heroes/ gets no animation, exactly as before this existed.
+// The web's own test, isVideoCollectionAssetUrl in homeScreen.js: the extension
+// is one of mp4/m4v/webm/mov, ending the URL or followed by a query or fragment.
+// A .gif is NOT one of them — the web shows it in an <img>, and this app has no
+// GIF player, so the tile keeps its static cover.
 //
-// Guessing an art URL from another art URL is the mistake import-collections.mjs
-// records for portraits ("could turn a missing asset into the wrong image"). It
-// is safe HERE, and only here, because the two files are produced by one script
-// in one repo, and because a miss is silent: the texture cache 404s, tex_failed
-// goes true, and the tile keeps the static cover it already had.
-static void focusSheetOf(const char *gif, char *dst, size_t size) {
-  const char *slash, *dot;
-  size_t lead;
+// A URL longer than the field is REFUSED, not truncated: a cut URL is a
+// valid-looking string that points at nothing, and the pipeline would load it,
+// fail, and leave a hole with no picture in it.
+static void focusVideoOf(const char *gif, char *dst, size_t size) {
+  const char *end, *dot;
   dst[0] = 0;
-  if (!gif || !gif[0]) return;
-  slash = strstr(gif, "/heroes/");
-  if (!slash) return;
-  dot = strrchr(gif, '.');
-  if (!dot || dot < slash) return;
-  // Only the video extensions. The web's own test is the same list
-  // (isVideoCollectionAssetUrl in homeScreen.js); a .gif here is NOT one of them
-  // and must not be rewritten, because a GIF has no sheet beside it.
-  if (strcasecmp(dot, ".mp4") && strcasecmp(dot, ".m4v") &&
-      strcasecmp(dot, ".webm") && strcasecmp(dot, ".mov")) return;
-  lead = (size_t)(slash - gif);
-  if (lead + strlen("/focus/") + (size_t)(dot - slash - 8) + 5 >= size) return;
-  snprintf(dst, size, "%.*s/focus/%.*s.jpg",
-           (int)lead, gif, (int)(dot - (slash + 8)), slash + 8);
+  if (!gif || !gif[0] || strlen(gif) >= size) return;
+  end = gif + strcspn(gif, "?#");
+  for (dot = end; dot > gif && dot[-1] != '.' && dot[-1] != '/'; dot--) {}
+  if (dot == gif || dot[-1] != '.') return;
+  if ((size_t)(end - dot) > 4) return;
+  { char ext[5];
+    snprintf(ext, sizeof ext, "%.*s", (int)(end - dot), dot);
+    if (strcasecmp(ext, "mp4") && strcasecmp(ext, "m4v") &&
+        strcasecmp(ext, "webm") && strcasecmp(ext, "mov")) return; }
+  snprintf(dst, size, "%s", gif);
 }
 
 int col_load_account(const char *body) {
@@ -142,13 +134,14 @@ int col_load_account(const char *body) {
       v->frameDir[0] = 0;
       // THE FOCUS ANIMATION. `frames`/`frameDir` above stay empty because those are
       // the PACKAGED flipbook, a folder of numbered JPEGs that only exists inside
-      // the .ipk. An account collection gets the sprite sheet instead, which is one
-      // file over the network; home.c draws either.
-      { char gif[512];
+      // the .ipk. An account collection gets the video URL instead, which home.c
+      // plays on the video plane.
+      { char gif[1024];
         js_text(c, fe, "focusGifUrl", gif, sizeof gif);
+        v->focusVideo[0] = 0;
         if (js_flag(c, fe, "focusGifEnabled", 1))
-          focusSheetOf(gif, v->focusSheet, sizeof v->focusSheet);
-        if (v->focusSheet[0]) nFocus++; }
+          focusVideoOf(gif, v->focusVideo, sizeof v->focusVideo);
+        if (v->focusVideo[0]) nFocus++; }
       // `catalogSources` is the list already filtered down to ADDON sources, the
       // only ones this app can fetch. `sources` covers the older shape.
       s = js_array(c, fe, "catalogSources");
@@ -218,10 +211,10 @@ int col_load_account(const char *body) {
     printf("[col] sources this app cannot fetch: %d TMDB, %d Trakt\n",
            nTmdb, nTrakt);
   // Said out loud because the failure is otherwise INVISIBLE: a folder whose
-  // focusGifUrl is not an MP4 under /heroes/ simply never animates, and a static
-  // tile is exactly what a tile with no animation configured looks like.
+  // focusGifUrl is not a video simply never animates, and a static tile is
+  // exactly what a tile with no animation configured looks like.
   if (added)
-    printf("[col] focus sprite sheets: %d of %d folder(s)\n", nFocus, added);
+    printf("[col] focus videos: %d of %d folder(s)\n", nFocus, added);
   fflush(stdout);
   return added;
 }

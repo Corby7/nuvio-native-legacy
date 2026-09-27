@@ -43,6 +43,8 @@
 // ONE dimension, so the average distance between two letters is ~13 presses and
 // the worst case is over 37. The 6x7 grid puts the same key at 5+6 presses at
 // most and ~5 on average.
+#include "pointer.h"
+#include "app.h"
 #include "search.h"
 #include "gfx.h"
 #include "text.h"
@@ -59,6 +61,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
 
 // --- The fallback keyboard (see the top) -------------------------------------
 #define SEARCH_KEY_W     74.0f
@@ -128,6 +131,13 @@ static float animDiscover;
 static float animChip[NV_SEARCH_HIST_MAX];
 static float scrollY = 0.0f, scrollTarget = 0.0f;
 static float scrollX[SEARCH_MAX_ROWS];
+// Whether the results' scrolls follow the focus. A card the Magic Remote's
+// pointer focused leaves them where they are (goalX for the rows; the vertical
+// scroll keeps its target): scrolling it into view would slide another under a
+// pointer that had not moved. Any arrow, the wheel's included, hands them back,
+// and the arrows at a row's edges page it (pageRes).
+static int   follow = 1;
+static float goalX[SEARCH_MAX_ROWS];
 static HomeItem itemFocus;
 static int   hasItemFocus = 0;
 
@@ -632,6 +642,56 @@ static void submit(void) {
   if (nFilter > 0) panel = PANEL_RES;
 }
 
+// --- THE MAGIC REMOTE'S POINTER -------------------------------------------
+// Each setter does what the keys that reach the same place do; the click that
+// follows is the remote's OK. While the TV's own keyboard is up for the field,
+// it owns the pointer and nothing here moves.
+static void pointHead(int col, int unused) {
+  (void)unused;
+  if (ime_is_open() || !ime_usable()) return;
+  panel = PANEL_FIELD; headCol = col;
+}
+static void pointKey(int row, int col) {
+  if (ime_is_open()) return;
+  if (focusKb.row != row) focusKb.columnRemembered[focusKb.row] = focusKb.column;
+  panel = PANEL_KEYS; focusKb.row = row; focusKb.column = col;
+}
+static void pointChip(int i, int unused) {
+  (void)unused;
+  if (ime_is_open() || i < 0 || i >= nHist) return;
+  panel = PANEL_HIST; focusHist.row = chipRow[i]; focusHist.column = chipColumn[i];
+}
+static void pointRes(int r, int c) {
+  if (ime_is_open() || r < 0 || r >= nFilter) return;
+  if (focusRes.row != r) focusRes.columnRemembered[focusRes.row] = focusRes.column;
+  panel = PANEL_RES; focusRes.row = r; focusRes.column = c;
+  follow = 0;
+}
+// A page of a results row at a time: the row's goal moves by as many whole cards
+// as fit, and the focus goes to the card nearest the arrow that was clicked.
+static void pageRes(int r, int dir) {
+  float util = NV_SCREEN_W - (contentX() + NV_SEARCH_TRACK_X);
+  int nCols, per, c;
+  float end, goal;
+  if (ime_is_open() || r < 0 || r >= nFilter) return;
+  nCols = filter[r].n + (filter[r].seeAll ? 1 : 0);
+  per = (int)(util / NV_SEARCH_CARD_STEP);
+  if (per < 1) per = 1;
+  end = (nCols - 1) * NV_SEARCH_CARD_STEP + NV_SEARCH_CARD_W - util;
+  if (end < 0) end = 0;
+  goal = goalX[r] + dir * per * NV_SEARCH_CARD_STEP;
+  if (goal > end) goal = end;
+  if (goal < 0) goal = 0;
+  goalX[r] = goal;
+  c = dir > 0 ? (int)floorf((goal + util - NV_SEARCH_CARD_W) / NV_SEARCH_CARD_STEP + 0.01f)
+              : (int)ceilf(goal / NV_SEARCH_CARD_STEP - 0.01f);
+  if (c > nCols - 1) c = nCols - 1;
+  if (c < 0) c = 0;
+  pointRes(r, c);
+}
+static void pageResLeft(int r, int unused)  { (void)unused; pageRes(r, -1); }
+static void pageResRight(int r, int unused) { (void)unused; pageRes(r, +1); }
+
 void search_event(const SDL_Event *e) {
   if (e->type == SDL_QUIT) { wantsExit = 1; return; }
 
@@ -647,6 +707,7 @@ void search_event(const SDL_Event *e) {
 
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+  if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) follow = 1;
 
   if (k == SDLK_AC_BACK || k == SDLK_ESCAPE) { goBack(); return; }
 
@@ -869,8 +930,10 @@ void search_update(float dt, Uint32 now) {
   if (panel == PANEL_RES && nFilter > 0) {
     float top = focusRes.row * NV_SEARCH_ROW_STEP;
     float base = top + NV_SEARCH_ROW_RAIL + NV_SEARCH_CARD_H;
-    if (top - scrollTarget < 0.0f)          scrollTarget = top;
-    if (base - scrollTarget > areaH)        scrollTarget = base - areaH;
+    if (follow) {
+      if (top - scrollTarget < 0.0f)          scrollTarget = top;
+      if (base - scrollTarget > areaH)        scrollTarget = base - areaH;
+    }
 
     // Horizontal scrolling of the focused row, the same rule as the home's.
     int r = focusRes.row;
@@ -884,11 +947,28 @@ void search_update(float dt, Uint32 now) {
       if (dir - targetX > util) targetX = dir - util;
       if (left - targetX < 0.0f) targetX = left;
     }
+    if (!follow) targetX = goalX[r];
     if (targetX < 0.0f) targetX = 0.0f;
+    goalX[r] = targetX;
     scrollX[r] = anim_spring(scrollX[r], targetX, dt, NV_SPRING_SCROLL);
   } else {
     scrollTarget = 0.0f;
   }
+  // Only the focused row's scroll is driven above. The others keep their goal
+  // at the scroll they rest on, so paging any of them starts from what is seen.
+  for (int r = 0; r < SEARCH_MAX_ROWS; r++)
+    if (!(panel == PANEL_RES && r == focusRes.row)) goalX[r] = scrollX[r];
+  // THE POINTER RESTING ON THE RESULTS' EDGE scrolls them; the focus stays put.
+  { float d = app_screen_in_front() && nFilter > 0 && !ime_is_open()
+            ? pointer_edge_scroll(contentX(), NV_SCREEN_W, NV_SEARCH_BODY_Y - 30.0f,
+                                  NV_SCREEN_H, dt) : 0.0f;
+    if (d != 0.0f) {
+      float max = (nFilter - 1) * NV_SEARCH_ROW_STEP + NV_SEARCH_ROW_RAIL
+                + NV_SEARCH_CARD_H - areaH;
+      if (max < 0.0f) max = 0.0f;
+      scrollTarget = anim_clamp(scrollTarget + d, 0.0f, max);
+      follow = 0;
+    } }
   if (scrollTarget < 0.0f) scrollTarget = 0.0f;
   scrollY = anim_spring(scrollY, scrollTarget, dt, NV_SPRING_SCROLL);
 }
@@ -934,6 +1014,7 @@ static void pillFilled(GfxRect r, float edge, float fill, float a) {
 // and a cross on the right once there is something to clear.
 static void drawField(Uint32 now) {
   GfxRect field = rectField();
+  pointer_zone(field.x, field.y, field.w, field.h, pointHead, 0, 0);
   float f = animField;
   (void)0;
   float cx = field.x + NV_SEARCH_ICON_X + NV_SEARCH_ICON * 0.5f;
@@ -1039,6 +1120,7 @@ static void drawField(Uint32 now) {
 // microphone button would have added nothing to that and implied a great deal.
 static void drawDiscover(void) {
   GfxRect v = rectDiscover();
+  pointer_zone(v.x, v.y, v.w, v.h, pointHead, 1, 0);
   float f = animDiscover;
   float ink = anim_blend(1.0f, 0.055f, f);
   GfxRect ic = { v.x + (v.w - NV_SEARCH_BTN_ICON) * 0.5f,
@@ -1064,6 +1146,7 @@ static void drawKeyboard(void) {
     for (int c = 0; c < KB_COLUMNS[f]; c++) {
       float k = animKey[f][c];
       GfxRect base = rectKey(f, c);
+      pointer_zone(base.x, base.y, base.w, base.h, pointKey, f, c);
       float scale = 1.0f + SEARCH_KEY_SCALE * k;
       GfxRect t = { base.x - base.w * (scale - 1.0f) * 0.5f,
                     base.y - base.h * (scale - 1.0f) * 0.5f,
@@ -1109,6 +1192,7 @@ static void drawHistory(void) {
   for (i = 0; i < nHist; i++) {
     float f = animChip[i];
     GfxRect b = chipRect[i];
+    pointer_zone(b.x, b.y, b.w, b.h, pointChip, i, 0);
     // scale 1.06 from the CENTRE (the sheet sets no transform-origin, so it is
     // the default), which is why both axes are inset by half the growth.
     float scale = anim_blend(1.0f, NV_SEARCH_CHIP_FOCUS, f);
@@ -1214,6 +1298,35 @@ static void drawSeeAll(float x, float y, float f) {
               NV_SEARCH_SEEALL_ICO, ink, ink, ink, 1.0f);
 }
 
+// A row's paging arrows, for the pointer only and on the row it is on. The row
+// runs to the screen's edge here, so they sit OVER the cards at each end — the
+// ones the edge cuts — and win the pointer there.
+static void drawPaddles(int r, float trackX, float cardY) {
+  float util = NV_SCREEN_W - trackX;
+  int nCols = filter[r].n + (filter[r].seeAll ? 1 : 0);
+  float end = (nCols - 1) * NV_SEARCH_CARD_STEP + NV_SEARCH_CARD_W - util;
+  int more[2] = { goalX[r] > 1.0f, end - goalX[r] > 1.0f };
+  float w = NV_SEARCH_PADDLE_W, h = NV_SEARCH_POSTER_H;
+  float xs[2] = { trackX - 12.0f, NV_SCREEN_W - w };
+  if (!pointer_active() || panel != PANEL_RES || r != focusRes.row) return;
+  for (int i = 0; i < 2; i++) {
+    PointerFocus act = i ? pageResRight : pageResLeft;
+    float d = NV_HOME_PADDLE_D;
+    GfxRect disc = { xs[i] + (w - d) * 0.5f, cardY + (h - d) * 0.5f, d, d };
+    if (!more[i]) continue;
+    if (pointer_over(act, r, 0)) {
+      float g = NV_RING_FOCUS;
+      gfx_rect((GfxRect){ disc.x - g, disc.y - g, d + 2 * g, d + 2 * g }, 0, GFX_DISK,
+               0, 0, 0, 0, .96f, .97f, .98f, 1.0f);
+    }
+    gfx_rect(disc, 0, GFX_DISK, 0, 0, 0, 0, 0.08f, 0.08f, 0.09f, 0.82f);
+    { float ic = d * 0.5f;
+      gfx_icon((GfxRect){ disc.x + (d - ic) * 0.5f, disc.y + (d - ic) * 0.5f, ic, ic },
+               i ? "chevron_right" : "chevron_left", 1, 1, 1, 0.95f); }
+    pointer_zone_click(xs[i], cardY, w, h, act, r, 0);
+  }
+}
+
 static void drawResults(Uint32 now) {
   (void)now;
   float x0 = contentX();
@@ -1232,6 +1345,9 @@ static void drawResults(Uint32 now) {
   gfx_crop(x0 - 12.0f, NV_SEARCH_BODY_Y - 30.0f,
            (NV_SCREEN_W - x0) + 12.0f,
            (NV_SCREEN_H - NV_SEARCH_TOP) - NV_SEARCH_BODY_Y + 30.0f);
+  pointer_clip(x0 - 12.0f, NV_SEARCH_BODY_Y - 30.0f,
+               (NV_SCREEN_W - x0) + 12.0f,
+               (NV_SCREEN_H - NV_SEARCH_TOP) - NV_SEARCH_BODY_Y + 30.0f);
 
   for (int r = 0; r < nFilter; r++) {
     float ry = NV_SEARCH_BODY_Y + r * NV_SEARCH_ROW_STEP - scrollY;
@@ -1269,6 +1385,7 @@ static void drawResults(Uint32 now) {
         float cw = NV_SEARCH_CARD_W * scale;
         float cardX = px - (cw - NV_SEARCH_CARD_W) * 0.5f;
         GfxRect poster = { cardX, cardY, cw, NV_SEARCH_POSTER_H * scale };
+        pointer_zone(poster.x, poster.y, poster.w, poster.h, pointRes, r, c);
         // The SDF's radius is a fraction of the HEIGHT, not of the smaller side:
         // `p = (uv-0.5)*vec2(asp,1.0)` makes one SDF unit h pixels on both axes.
         // Dividing by the width rounded this poster half again too much. See the
@@ -1333,11 +1450,15 @@ static void drawResults(Uint32 now) {
           float px = trackX + c * NV_SEARCH_CARD_STEP - scrollX[r]
                    + (NV_SEARCH_SEEALL_GAP - (NV_SEARCH_CARD_STEP - NV_SEARCH_CARD_W));
           drawSeeAll(px, cardY + NV_SEARCH_SEEALL_Y, f);
+          pointer_zone(px, cardY + NV_SEARCH_SEEALL_Y, NV_SEARCH_SEEALL, NV_SEARCH_SEEALL,
+                       pointRes, r, c);
         }
       }
     }
+    drawPaddles(r, trackX, cardY);
   }
   gfx_no_crop();
+  pointer_no_clip();
   if (searchPending())
     drawSkeletonRows(NV_SEARCH_BODY_Y + nFilter * NV_SEARCH_ROW_STEP - scrollY, 1);
 }

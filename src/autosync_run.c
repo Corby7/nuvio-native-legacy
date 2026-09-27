@@ -136,15 +136,15 @@ static void apply(const AutoSyncResult *r, unsigned gen) {
   char m[96];
   // A result for a subtitle that is no longer on screen says nothing.
   if (subtitle_ready() != gen) return;
-  if (!r->ok) { player_toast("Couldn't sync subtitles"); return; }
-  if (r->inSync) { player_toast("Subtitles already in sync"); return; }
+  if (!r->ok) { player_toast("Couldn't sync subtitles", 0); return; }
+  if (r->inSync) { player_toast("Subtitles already in sync", 1); return; }
   if (!subtitle_retime(gen, r->scale, r->offset)) return;
   // Said the way the owner sees it: "+1.3 s" is the subtitle now coming LATER.
   if (r->scale != 1.0)
     snprintf(m, sizeof m, "Subtitles synced  \xc2\xb7  %+.1f s, frame rate adjusted", r->offset);
   else
     snprintf(m, sizeof m, "Subtitles synced  \xc2\xb7  %+.1f s", r->offset);
-  player_toast(m);
+  player_toast(m, 1);
 }
 
 void autosync_pump(void) {

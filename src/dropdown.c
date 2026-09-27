@@ -101,9 +101,18 @@ float dd_select_width(int n, DdLabel label, void *ctx) {
   return NV_DD_SEL_PADX * 2 + widest + NV_DD_SEL_GAP + NV_DD_CHEV;
 }
 
+static PointerFocus pointNext;
+void dd_menu_point(PointerFocus focus) { pointNext = focus; }
+static void pointPlate(int a, int b) { (void)a; (void)b; }
+
 void dd_menu(GfxRect anchor, int n, int focus, DdLabel label, void *ctx,
              float alpha) {
+  // The window's first row, kept between frames. Only one menu is ever open, so
+  // one is enough; a menu opening with a different list clamps it below.
+  static int kept;
+  PointerFocus point = pointNext;
   int vis, first, i;
+  pointNext = NULL;
   if (n <= 0 || !label || alpha <= 0.004f) return;
   vis = n < NV_DD_OPT_VIS ? n : NV_DD_OPT_VIS;
 
@@ -124,11 +133,16 @@ void dd_menu(GfxRect anchor, int n, int focus, DdLabel label, void *ctx,
              0.08f * alpha);
 
     // Which six. The focused option is kept in view by scrolling the WINDOW,
-    // not by moving the menu.
-    first = focus - vis + 1;
-    if (first < 0) first = 0;
-    if (first > n - vis) first = n - vis;
+    // not by moving the menu — and ONLY AS FAR AS NEEDED. Recomputing it from
+    // the focus alone slid the window whenever the focus moved inside it, so a
+    // pointer landing on an option scrolled another one under itself.
+    first = kept;
+    if (focus > first + vis - 1) first = focus - vis + 1;
     if (focus < first) first = focus;
+    if (first > n - vis) first = n - vis;
+    if (first < 0) first = 0;
+    kept = first;
+    if (point) pointer_zone_hover(box.x, box.y, box.w, box.h, pointPlate, 0, 0);
 
     for (i = 0; i < vis; i++) {
       int c = first + i;
@@ -136,6 +150,7 @@ void dd_menu(GfxRect anchor, int n, int focus, DdLabel label, void *ctx,
                      box.y + NV_DD_MENU_PADY + i * NV_DD_OPT_H,
                      box.w - NV_DD_MENU_PADX * 2, NV_DD_OPT_H };
       int on = (c == focus);
+      if (point) pointer_zone(op.x, op.y, op.w, op.h, point, c, 0);
       // The focused row inverts to #f5f5f5 with #111 ink; the rest are
       // transparent with white. The CURRENT value gets no mark of its own — the
       // list opened with the focus already on it.

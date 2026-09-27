@@ -1,3 +1,4 @@
+#include "pointer.h"
 #include "tracks.h"
 #include "player.h"
 #include "video.h"
@@ -1005,6 +1006,39 @@ static void eventStyle(SDL_Keycode k) {
   }
 }
 
+// --- THE MAGIC REMOTE'S POINTER -------------------------------------------
+//
+// Each setter puts the cursor where the arrows would have; the click that follows
+// is the remote's OK, so choosing works exactly as it does from the D-pad. The two
+// tabs change on the click only. Off the sheet, a click folds an open list, or
+// closes the sheet when none is open — Back's two answers.
+static void pointOpt(int c, int unused)  { (void)unused; if (is_open) optFocus = c; }
+static void pointLang(int c, int unused) { (void)unused; if (is_open) langCursor = c; }
+static void pointSelect(int z, int unused) {
+  (void)unused;
+  if (is_open && openSel == OPEN_NONE) zone = z;
+}
+static void clickTab(int t, int unused) {
+  (void)unused;
+  if (!is_open || mode != MODE_SUBTITLE) return;
+  openSel = OPEN_NONE; tab = t; zone = Z_TABS;
+}
+static void pointTile(int i, int unused) {
+  (void)unused;
+  if (!is_open || tab != TAB_STYLE) return;
+  zone = Z_TILE; tileFocus = i;
+}
+static void pointChip(int i, int unused) {
+  (void)unused;
+  if (!is_open || tab != TAB_STYLE) return;
+  zone = Z_CHIP; chipFocus = i;
+}
+static void pointOff(int a, int b) {
+  (void)a; (void)b;
+  if (openSel != OPEN_NONE) openSel = OPEN_NONE; else is_open = 0;
+}
+static void pointInert(int a, int b) { (void)a; (void)b; }
+
 void tracks_event(const SDL_Event *e) {
   SDL_Keycode k;
   if (!is_open || e->type != SDL_KEYDOWN) return;
@@ -1100,8 +1134,12 @@ static void drawHeader(float x, int count, float right, float a) {
 
   { float tabsW = tab_width("Tracks") + tab_width("Style") - NV_TAB_GAP;
     float px = x + (edge - tabsW - x) * right;
-    px += tab_draw(px, NV_TRK_TABS_Y, "Tracks", tab == TAB_TRACKS, tabsLit, a);
-    tab_draw(px, NV_TRK_TABS_Y, "Style", tab == TAB_STYLE, tabsLit, a); }
+    float w1 = tab_draw(px, NV_TRK_TABS_Y, "Tracks", tab == TAB_TRACKS, tabsLit, a);
+    pointer_zone_click(px, NV_TRK_TABS_Y, w1 - NV_TAB_GAP, NV_TAB_H, clickTab, TAB_TRACKS, 0);
+    px += w1;
+    tab_draw(px, NV_TRK_TABS_Y, "Style", tab == TAB_STYLE, tabsLit, a);
+    pointer_zone_click(px, NV_TRK_TABS_Y, tab_width("Style") - NV_TAB_GAP, NV_TAB_H,
+                       clickTab, TAB_STYLE, 0); }
 }
 
 static void quiet(const char *s, float x, float y, float w, float a) {
@@ -1199,6 +1237,7 @@ static void langList(GfxRect anchor, float limit, float a) {
     float right = r.x + r.w - NV_TRK_SEL_PADX, yc = r.y + r.h * 0.5f;
     char tail[24] = "";
     if (focused) optionGround(r, a);
+    pointer_zone(r.x, r.y, r.w, r.h, pointLang, c, 0);
     if (langs[c].active) right = onMark(right, yc, focused, 1, a) - 16.0f;
     if (c > 0) snprintf(tail, sizeof tail, "%d", langs[c].count);
     valueTail(TXT_TRK_OPT, TXT_TRK_OPTSUB, langs[c].name, tail,
@@ -1225,6 +1264,7 @@ static void optList(GfxRect anchor, float limit, int audio, float a) {
     float right = r.x + r.w - NV_TRK_SEL_PADX, tx = r.x + NV_TRK_SEL_PADX;
     int ink = focused ? 17 : 255, grey = focused ? 90 : 133;
     if (focused) optionGround(r, a);
+    pointer_zone(r.x, r.y, r.w, r.h, pointOpt, c, 0);
     if (on) right = onMark(right, r.y + r.h * 0.5f, focused, 1, a) - 16.0f;
     if (audio) {
       const VideoTrack *t = video_audio(c);
@@ -1254,6 +1294,9 @@ static void drawPanel(float a, float away) {
            0, GFX_SRC_VEIL, 0, 1, NV_TRK_VEIL_CLEAR, 0,
            NV_SRC_INK_R, NV_SRC_INK_G, NV_SRC_INK_B, a * NV_SRC_VEIL_A);
 
+  if (is_open && (mode == MODE_AUDIO || tab == TAB_TRACKS))
+    pointer_zone_hover(cx - NV_TRK_PAD, 0, NV_SCREEN_W - cx + NV_TRK_PAD, NV_SCREEN_H,
+                       pointInert, 0, 0);
   if (mode == MODE_AUDIO) {
     drawHeader(cx, video_n_audio(), 0.0f, a);
     // The audio sheet has no tabs; its list hangs where they would be.
@@ -1268,6 +1311,8 @@ static void drawPanel(float a, float away) {
                          langs[li].count == 1 ? "" : "s");
     selectRow(lang, li > 0 ? langs[li].name : "Subtitles off", count,
               zone == Z_LANGSEL && openSel == OPEN_NONE, openSel == OPEN_LANG, a);
+    if (tab == TAB_TRACKS)
+      pointer_zone(lang.x, lang.y, lang.w, lang.h, pointSelect, Z_LANGSEL, 0);
 
     if (shown) {
       langOptions(li, opts);
@@ -1282,12 +1327,17 @@ static void drawPanel(float a, float away) {
       } else snprintf(value, sizeof value, "Choose a subtitle");
       selectRow(sub, value, detail, zone == Z_SUBSEL && openSel == OPEN_NONE,
                 openSel == OPEN_SUB, a);
+      if (tab == TAB_TRACKS)
+        pointer_zone(sub.x, sub.y, sub.w, sub.h, pointSelect, Z_SUBSEL, 0);
     } else if (!nSubtitles()) {
       quiet(addons_subtitles_busy() ? "Searching OpenSubtitles\xe2\x80\xa6"
                                     : "No subtitles for this title.", cx, sub.y, cw, a);
     }
 
     // The open menu LAST, in front of the select below it.
+    // An open list: off it is "fold", and it covers the selects under it.
+    if (openSel != OPEN_NONE)
+      pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOff, 0, 0);
     if (openSel == OPEN_LANG) langList(lang, limit, a);
     if (openSel == OPEN_SUB)  optList(sub, limit, 0, a); }
 }
@@ -1325,6 +1375,8 @@ static void drawBar(float a) {
   // No flat dim over the rest: the picture is what the preview is judged against.
   gfx_rect((GfxRect){ 0, NV_TRK_SCRIM_Y, NV_SCREEN_W, NV_SCREEN_H - NV_TRK_SCRIM_Y }, 0,
            GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, a);
+  if (is_open && tab == TAB_STYLE)
+    pointer_zone_hover(0, tileY, NV_SCREEN_W, NV_SCREEN_H - tileY, pointInert, 0, 0);
 
   // The tiles: a spaced-capitals label over the value. The focused one turns
   // light, with the ‹ › that say it has a set of values under it.
@@ -1335,6 +1387,7 @@ static void drawBar(float a) {
     int ink = focused ? NV_TRK_FOCUS_INK : 255, lab = focused ? 92 : 128;
     float vx = r.x + NV_TRK_TILE_PADX, room = tw - NV_TRK_TILE_PADX * 2;
     char v[32];
+    if (tab == TAB_STYLE) pointer_zone(r.x, r.y, r.w, r.h, pointTile, i, 0);
     if (focused) {
       lightBox(r, a);
       gfx_rect(r, 0, GFX_RING_INSET, 0, NV_TRK_TILE_RING / r.h, 0, NV_TRK_BOX_R / r.h,
@@ -1373,6 +1426,7 @@ static void drawBar(float a) {
       float icon = reset ? NV_TRK_RESET_ICON + 10.0f : 0.0f;
       GfxRect r = { cx, chipY, l.w + icon + NV_TRK_CHIP_PAD * 2, NV_TRK_CHIP_H };
       if (reset) r.x = x + w - r.w;
+      if (tab == TAB_STYLE) pointer_zone(r.x, r.y, r.w, r.h, pointChip, i, 0);
       if (sel) lightBox(r, a); else quietBox(r, NV_TRK_CHIP_FILL, NV_TRK_CHIP_LINE, a);
       if (focused) ringAround(r, NV_TRK_BOX_R, a);
       if (reset) {
@@ -1389,6 +1443,8 @@ void tracks_draw(Uint32 now) {
   (void)now;
   if (anim < .01f) return;
   if (mode == MODE_SUBTITLE) buildLangs();
+  // FIRST, so everything the sheet draws wins over it: off the sheet.
+  if (is_open) pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOff, 0, 0);
   drawPanel(anim * (1.0f - styleAnim), styleAnim);
   if (mode != MODE_SUBTITLE) return;
   drawBar(anim * styleAnim);

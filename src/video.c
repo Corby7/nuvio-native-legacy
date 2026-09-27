@@ -156,6 +156,7 @@ const char *video_engine(void) { return "none (Mac preview)"; }
 double video_duration(void) { return 0; }
 double video_buffer_end(void) { return 0; }
 void video_set_dv(int dv) { (void)dv; }
+unsigned video_session(void) { return 0; }
 int  video_playing(void) { return 0; }
 int  video_ready(void) { return 0; }
 int  video_active(void) { return 0; }
@@ -1378,6 +1379,7 @@ void video_window_source(int sx, int sy, int sw, int sh,
 double video_pos(void)      { return posSeg; }
 double video_duration(void)  { return durationSeg; }
 double video_buffer_end(void) { return bufferSeg; }
+unsigned video_session(void) { return session; }
 int    video_playing(void)  { return playing; }
 int    video_ready(void)   { return ready; }
 // There is media loaded. The hole in the surface uses THIS and not loadCompleted:

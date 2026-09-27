@@ -40,6 +40,7 @@
 #include "video.h"   // video_launch_youtube(), the trailers' fallback
 #include "trailers.h"
 #include "tabs.h"    // the Library's underlined tab strip, at page size
+#include "pointer.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -198,6 +199,22 @@ static Focus focus;
 static float animFocus[N_SECTIONS][N_ITEMS];
 static float scrollSec[N_SECTIONS];    // each row's HORIZONTAL scroll
 static float scrollY = 0.0f;         // the document's VERTICAL scroll
+
+// WHETHER THE SCROLLS FOLLOW THE FOCUS. Every scroll on this page chases the
+// focus — the page snaps to the focused group, a row brings its card into view,
+// the episode and cast lists put the focused line second. A focus set by the
+// POINTER must not do that: the page would slide another line under a pointer
+// that had not moved, the next drift would focus it, and the page would run
+// away. So the pointer's setters clear `follow`, and every scroll then holds the
+// goal it had; any arrow — the wheel's included, which is how a pointer
+// scrolls — sets it again.
+static int follow = 1;
+static float goalY, goalSec[N_SECTIONS], goalAlso;
+// How far each episode row has OPENED to its whole synopsis. The same spring as the
+// row's focus while the keys drive; held at 0 for a row the pointer focused, which
+// is lit but stays closed — see epGrow's update in detail_update.
+static float epGrow[N_ITEMS];
+
 // THE VELOCITY OF BOTH SCROLLS, because anim_spring2 keeps position AND velocity.
 //
 // This page scrolled on the FIRST-ORDER spring while the home rows were moved to the
@@ -536,7 +553,9 @@ static void recomputeLayout(void) {
 //
 // Here there are two: cast (always) and ratings (when there is a score). Similar
 // titles and trailers have no source in this port; when they do, they go into this table.
-typedef enum { TAB_CAST, TAB_RATINGS, TAB_RELATED, TAB_COLLECTION,
+//
+// THE ORDER IS THE OWNER'S: "More like this" first, then the cast, then the ratings.
+typedef enum { TAB_RELATED, TAB_CAST, TAB_RATINGS, TAB_COLLECTION,
                TAB_COMMENTS, TAB_NFIXAS } TabInfoId;
 // THE LABELS ARE THE DEVICE'S, and not the web app's. Read off the bar of the series
 // "Furious" on the TCL: "Direction and Cast | Ratings | Recommendations | Trailer".
@@ -547,7 +566,7 @@ typedef enum { TAB_CAST, TAB_RATINGS, TAB_RELATED, TAB_COLLECTION,
 // series measured had neither a collection nor comments). Removing the two would be
 // hiding what the app already knows how to show.
 static const char *TAB_LABEL[TAB_NFIXAS] = {
-  "Cast & crew", "Ratings", "More like this", "Collection", "Comments"
+  "More like this", "Cast & crew", "Ratings", "Collection", "Comments"
 };
 
 // The open title's IMDb score, 0 when there is none.
@@ -786,6 +805,7 @@ static int historyPop(void) {
     // The person comes back from person.c's cache, so the poster that was pressed
     // is there to land on. castSelSeen matches, so the dwell does not reset the row.
     castSel = castSelSeen = p.castSel; castAlso = p.castAlso; alsoFocus = p.alsoFocus;
+    follow = 1;
     // IN PLACE, not opened: the flight is over (t = 1), and the page fades up from
     // the ground with its springs snapping to where the viewer left it.
     t = 1.0f; velT = 0.0f;
@@ -811,6 +831,7 @@ static void openState(const HomeItem *it, int shared) {
   t = 0.0f; velT = 0.0f; pg = 0.0f; scrollY = 0.0f; velY = 0.0f; tabInfo = 0; tabsLit = 0.0f; castDark = 0.0f; popFade = 1.0f;
   castSel = castAlso = alsoFocus = 0; castSelSeen = -1; castAsked = 0;
   alsoScroll = velAlso = 0.0f;
+  follow = 1; goalY = goalAlso = 0.0f; memset(goalSec, 0, sizeof goalSec);
   relFocus = 0; reqOpen = -1; ratTemp = 0;
   // Every held slot starts closed for the new title, and the clock on them starts
   // HERE rather than at the first draw — a title opened from another title would
@@ -1397,8 +1418,82 @@ static int actionIn(int n) {
   return n;
 }
 
+// --- THE MAGIC REMOTE'S POINTER -------------------------------------------
+//
+// The setters every zone on this page calls. Each does what the keys that reach
+// the same place do, and clears `follow` (declared with the scrolls, above).
+
+// A hero button. From the page below, a click on one (they stay on screen on a
+// film) brings the hero back with it focused, as UP would — never a surprise
+// jump just for passing over it.
+static void pointButton(int k, int unused) {
+  (void)unused;
+  if (seasonMenuOpen || level != 0 || k < 0 || k >= nButtons()) return;
+  button = k;
+}
+static void clickButtonFromPage(int k, int unused) {
+  (void)unused;
+  if (seasonMenuOpen || k < 0 || k >= nButtons()) return;
+  level = 0; button = k; follow = 1;
+}
+
+// Any item of a section's row, list or strip: what the arrows would leave.
+static void pointItem(int r, int c) {
+  if (seasonMenuOpen || level == 0 || r < 0 || r >= N_SECTIONS) return;
+  if (c < 0 || c >= focus.nColumns[r]) return;
+  if (focus.row != r) focus.columnRemembered[focus.row] = focus.column;
+  focus.row = r; focus.column = c;
+  castAlso = 0;
+  follow = 0;
+  if (r == SEC_EPISODES) epLanded = 1;
+}
+
+// A poster in a cast member's "Also in" row: the row is entered, as RIGHT does.
+static void pointAlso(int j, int unused) {
+  (void)unused;
+  if (seasonMenuOpen || level == 0 || j < 0 || j >= alsoN()) return;
+  focus.row = SEC_CAST;
+  castAlso = 1; alsoFocus = j;
+  follow = 0;
+}
+
+// "More like this" and the collection, when they sit behind the cast row's tab:
+// their own cursor (relFocus), not the row's columns.
+static void pointRel(int i, int unused) {
+  (void)unused;
+  if (seasonMenuOpen || level == 0) return;
+  focus.row = SEC_CAST;
+  castAlso = 0; relFocus = i;
+  follow = 0;
+}
+
+// A comment card: pointing focuses it where it stands; a click brings it the rest
+// of the way into view, which is how the pointer reaches the cards past the edge.
+static void clickComment(int r, int c) {
+  pointItem(r, c);
+  follow = 1;
+}
+// The per-episode ratings' season chips: a click changes season, as LEFT and
+// RIGHT do.
+static void clickRatSeason(int t, int unused) {
+  (void)unused;
+  if (seasonMenuOpen || level == 0) return;
+  focus.row = SEC_CAST;
+  ratTemp = t;
+}
+
+static void pointSeasonOpt(int c, int unused) {
+  (void)unused;
+  if (seasonMenuOpen && c >= 0 && c < nSeasonsOf()) seasonMenuFocus = c;
+}
+static void pointOffSeasons(int a, int b) { (void)a; (void)b; seasonMenuOpen = 0; }
+
 void detail_event(const SDL_Event *e) {
   if (exiting) return;
+  if (e->type == SDL_KEYDOWN) {
+    SDL_Keycode ka = e->key.keysym.sym;
+    if (ka == SDLK_UP || ka == SDLK_DOWN || ka == SDLK_LEFT || ka == SDLK_RIGHT) follow = 1;
+  }
 
   // THE SEASON LIST eats the events while it is expanded. It is a listbox over the
   // page: letting the arrows reach the page underneath would scroll the document
@@ -1858,6 +1953,18 @@ void detail_update(float dt, Uint32 now) {
                                  target > animFocus[r][c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     }
 
+  // AN EPISODE ROW OPENS ONLY FOR THE KEYS. Opened, a row pushes the ones below it
+  // down, and the one it closes above pulls them up: under a pointer that moves the
+  // next row into place, the next drift focuses it, and the list walks away. A row
+  // the pointer focused is lit and stays its resting height; the wheel or an arrow
+  // opens it.
+  for (int c = 0; c < N_ITEMS; c++) {
+    float target = (follow && level >= 1 &&
+                    focus_index(&focus, SEC_EPISODES, c)) ? 1.0f : 0.0f;
+    epGrow[c] = snap ? target : anim_spring(epGrow[c], target, dt,
+                          target > epGrow[c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
+
   // How lit the episode rows are: dimmed around the focused one while the list has
   // the focus, all at rest otherwise. A spring, so entering the list from the picker
   // dims the neighbours instead of cutting them.
@@ -1881,6 +1988,8 @@ void detail_update(float dt, Uint32 now) {
       else if (x < target + 24.0f)             target = x - 24.0f;
       if (target < 0.0f) target = 0.0f;
     }
+    if (!follow) target = goalAlso;
+    goalAlso = target;
     alsoScroll = anim_spring2_reduced(&velAlso, alsoScroll, target, dt,
                                       NV_SPRING2_SCROLL, snap); }
 
@@ -1961,7 +2070,9 @@ void detail_update(float dt, Uint32 now) {
         else if (x + w > target + view - 24.0f) target = x + w - view + 24.0f;
         else if (x < target + 24.0f)             target = x - 24.0f;
       }
+      if (!follow) target = goalSec[r];
       if (target < 0.0f) target = 0.0f;
+      goalSec[r] = target;
       // THE EPISODE LIST MOVES LIKE DISCOVER'S GRID, on the owner's word: the
       // first-order spring at NV_SPRING_GRID, which leaves at speed and settles,
       // rather than the second-order one the horizontal rows use (see velSec), which
@@ -2001,6 +2112,8 @@ void detail_update(float dt, Uint32 now) {
     if (targetY > maxY) targetY = maxY;
     if (targetY < 0.0f) targetY = 0.0f;
   }
+  if (!follow) targetY = goalY;
+  goalY = targetY;
   scrollY = anim_spring2_reduced(&velY, scrollY, targetY, dt, NV_SPRING2_SCROLL, snap);
 }
 
@@ -2703,6 +2816,8 @@ static void heroWeb(float a, float offset) {
     float bx = NV_DETW2_X;
     GfxRect rp = { bx, yActions, widthPrimary(rot), NV_DETWEB_BTN_H };
     drawButton(rp, rot, 0, level == 0 && button == nb, a);
+    if (level == 0) pointer_zone(rp.x, rp.y, rp.w, rp.h, pointButton, 0, 0);
+    else pointer_zone_click(rp.x, rp.y, rp.w, rp.h, clickButtonFromPage, 0, 0);
     bx += rp.w + NV_DETWEB_BTN_GAP; nb++;
     // The circles are drawn first and the TOOLTIPS after, in a second pass. They
     // overhang the button above them by 54px, and a tooltip drawn inside the loop
@@ -2714,6 +2829,8 @@ static void heroWeb(float a, float offset) {
       GfxRect r = { bx, cyBtn - NV_DETWEB_CIRC * 0.5f,
                     NV_DETWEB_CIRC, NV_DETWEB_CIRC };
       drawButton(r, NULL, actionIn(nb), level == 0 && button == nb, a);
+      if (level == 0) pointer_zone(r.x, r.y, r.w, r.h, pointButton, nb, 0);
+      else pointer_zone_click(r.x, r.y, r.w, r.h, clickButtonFromPage, nb, 0);
       rc[nc++] = r;
       bx += NV_DETWEB_CIRC + NV_DETWEB_BTN_GAP;
     }
@@ -3133,10 +3250,19 @@ static void drawSeasonMenu(GfxRect anchor, float a) {
 
   // Which six. The focused option is kept in view by scrolling the window, not by
   // moving the menu.
-  int first = seasonMenuFocus - vis + 1;
-  if (first < 0) first = 0;
-  if (first > n - vis) first = n - vis;
+  // ONLY AS FAR AS NEEDED, from where the window already was: recomputed from the
+  // focus alone it slid whenever the focus moved inside it, so the pointer landing
+  // on a season scrolled another under itself.
+  static int kept;
+  int first = kept;
+  if (seasonMenuFocus > first + vis - 1) first = seasonMenuFocus - vis + 1;
   if (seasonMenuFocus < first) first = seasonMenuFocus;
+  if (first > n - vis) first = n - vis;
+  if (first < 0) first = 0;
+  kept = first;
+  // Off the list closes it, as Back does; the plate itself is inert.
+  pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOffSeasons, 0, 0);
+  pointer_zone_hover(box.x, box.y, box.w, box.h, pointSeasonOpt, -1, 0);
 
   for (int i = 0; i < vis; i++) {
     int c = first + i;
@@ -3147,6 +3273,7 @@ static void drawSeasonMenu(GfxRect anchor, float a) {
                    box.y + NV_DETWEB_SEA_MENU_PADY + i * NV_DETWEB_SEA_OPT_H,
                    box.w - NV_DETWEB_SEA_MENU_PADX * 2, NV_DETWEB_SEA_OPT_H };
     int on = (c == seasonMenuFocus);
+    pointer_zone(op.x, op.y, op.w, op.h, pointSeasonOpt, c, 0);
     // The focused row inverts to #f5f5f5 with #111 ink; the rest are transparent with
     // white. The SELECTED season gets no mark of its own — the list opens with the
     // focus already on it, which is how the web shows which one you are on.
@@ -3263,7 +3390,7 @@ static float episodeFullH(int c) {
 // The height it has THIS frame, on its focus spring, so the rows under a row that is
 // opening slide down with it instead of jumping.
 static float episodeRowH(int c) {
-  float f = animFocus[SEC_EPISODES][c];
+  float f = c < N_ITEMS ? epGrow[c] : 0.0f;
   if (f < 0.001f) return NV_DETEP_ROW_H;
   return NV_DETEP_ROW_H + (episodeFullH(c) - NV_DETEP_ROW_H) * f;
 }
@@ -3341,7 +3468,9 @@ static void drawEpisodeMeta(const CatEp *ep, float x, float base, float xEnd,
 // crossfades — the one clipped line out, the whole text in — because a block of text
 // cannot be half-wrapped; its first line lands where the clipped one was, so only the
 // lines below it appear.
-static void drawEpisodeRow(float y, float h, int c, float f, float a) {
+// `g` is how far the row has opened (epGrow): the synopsis and the copy's travel
+// follow it, everything else follows the focus `f`.
+static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
   const CatEp *ep = epOfSeason(seasonNow(), c);
   int focused = level >= 1 && focus.row == SEC_EPISODES && focus.column == c;
   float rowA = a * (epListA + (1.0f - epListA) * f);
@@ -3420,7 +3549,7 @@ static void drawEpisodeRow(float y, float h, int c, float f, float a) {
   // synopsis line, focused for all of them, and travelling between the two on `f`.
   float base1 = mid - episodeInkH(syn ? 1 : 0) * 0.5f + cap;
   float baseN = mid - episodeInkH(full) * 0.5f + cap;
-  float base = focused ? base1 + (baseN - base1) * f : base1;
+  float base = focused ? base1 + (baseN - base1) * g : base1;
 
   // "EP3" and the title, on ONE BASELINE: the kicker is 21 and the title 34. No space
   // inside the kicker — the tracking already opens the letters up, and a word space
@@ -3447,7 +3576,7 @@ static void drawEpisodeRow(float y, float h, int c, float f, float a) {
   if (syn) {
     float yD = base + NV_DETEP_META_DY + NV_DETEP_DESC_DY
              - txt_baseline(TXT_DETWEB_EPD);
-    float aFull = focused ? f : 0.0f;
+    float aFull = focused ? g : 0.0f;
     if (aFull < 0.99f) {
       float restRight = episodeCopyRight(ep, 0);
       TxtLine l = txt_line_trim(TXT_DETWEB_EPD, syn, 170, 170, 170, 255,
@@ -3479,18 +3608,21 @@ static void drawEpisodeList(float y, float a) {
   if (n <= 0 || c1 <= c0) return;
   regionAdd("episodes", (GfxRect){ 0.0f, c0, NV_SCREEN_W, c1 - c0 });
   gfx_crop(0.0f, c0, NV_SCREEN_W, c1 - c0);
+  pointer_clip(0.0f, c0, NV_SCREEN_W, c1 - c0);
   float ry = y - scrollSec[SEC_EPISODES];
   for (int c = 0; c < n && c < N_ITEMS && ry < c1; c++) {
     float h = episodeRowH(c);
     float edge = anim_edge(ry, top, NV_DETEP_LIST_GAP);
     if (ry + h > c0 && edge > 0.004f) {
       gfx_opacity_group = edge;
-      drawEpisodeRow(ry, h, c, animFocus[SEC_EPISODES][c], a);
+      drawEpisodeRow(ry, h, c, animFocus[SEC_EPISODES][c], epGrow[c], a);
       gfx_opacity_group = 1.0f;
+      pointer_zone(NV_DETP_X, ry, NV_SCREEN_W - NV_DETP_X * 2, h, pointItem, SEC_EPISODES, c);
     }
     ry += h;
   }
   gfx_no_crop();
+  pointer_no_clip();
 }
 
 // Information tabs: the LIBRARY's strip (tabs.c) — bold words, the chosen one white
@@ -3698,6 +3830,7 @@ static void drawCastList(float y, float yEnd, float a) {
   float c1 = yEnd < NV_SCREEN_H ? yEnd : NV_SCREEN_H;
   if (n <= 0 || c1 <= c0) return;
   gfx_crop(0.0f, c0, NV_DETCP_PANEL_X - 24.0f, c1 - c0);
+  pointer_clip(0.0f, c0, NV_DETCP_PANEL_X - 24.0f, c1 - c0);
   float ry = y - scrollSec[SEC_CAST];
   for (int c = 0; c < n && c < N_ITEMS && ry < c1; c++) {
     float edge = anim_edge(ry, top, NV_DETEP_LIST_GAP);
@@ -3705,10 +3838,13 @@ static void drawCastList(float y, float yEnd, float a) {
       gfx_opacity_group = edge;
       drawCastRow(ry, c, animFocus[SEC_CAST][c], a);
       gfx_opacity_group = 1.0f;
+      pointer_zone(NV_DETP_X, ry, NV_DETCP_PANEL_X - 24.0f - NV_DETP_X, NV_DETCP_ROW_H,
+                   pointItem, SEC_CAST, c);
     }
     ry += NV_DETCP_ROW_H;
   }
   gfx_no_crop();
+  pointer_no_clip();
 }
 
 // The person column, for `castSel`: the photo, the name, "character · N episodes",
@@ -3811,6 +3947,7 @@ static void drawCastPanel(float y, float yEnd, float a) {
       if (px > NV_SCREEN_W || edge <= 0.004f) continue;
       gfx_opacity_group = edge;
       drawPosterCard(r, sc, po, f, a);
+      pointer_zone(r.x, r.y, r.w, r.h, pointAlso, j, 0);
       { int ink = (int)(200 + 55 * f);
         TxtLine lt = txt_line_trim(TXT_DET_META2, person_credit_title(i),
                                    ink, ink, ink, 255, NV_DETCP_POSTER_W);
@@ -3961,6 +4098,7 @@ static void drawScoresEpisode(float x, float y, float a) {
     float bx = x + t * (58.0f + RAT_TEMP_GAP);
     GfxRect r = { bx, y, 58.0f, RAT_TEMP_H };
     int sel = (t == ratTemp);
+    pointer_zone_click(r.x, r.y, r.w, r.h, clickRatSeason, t, 0);
     snprintf(rot, sizeof rot, "S%d", extras_season_number(t));
     gfx_color(r, 0.5f, 1, 1, 1, (sel ? 0.28f : 0.14f) * a);
     { TxtLine l = txt_line(TXT_DET_META2, rot, 241, 247, 254, 255);
@@ -4035,7 +4173,10 @@ static int relIndex(void) {
   return (focus.row == SEC_RELATED) ? focus.column : relFocus;
 }
 
-static void drawRelated(float x, float y, float a) {
+// `row` is the section it is drawn for: SEC_RELATED on a film, where the posters
+// are the row's own columns, or SEC_CAST behind a series' tab, where they have a
+// cursor of their own.
+static void drawRelated(float x, float y, float a, int row) {
   int n = extras_n_related(), i;
   for (i = 0; i < n && i < 7; i++) {
     float f = relAnim[i];
@@ -4046,6 +4187,8 @@ static void drawRelated(float x, float y, float a) {
     GfxRect r = { cx - (w - REL_CARD_W) * 0.5f, y, w, h };
     if (cx + REL_CARD_W > NV_SCREEN_W - NV_DETP_X) break;
     drawPosterCard(r, sc, extras_related_poster(i), f, a);
+    if (row == SEC_CAST) pointer_zone(r.x, r.y, r.w, r.h, pointRel, i, 0);
+    else pointer_zone(r.x, r.y, r.w, r.h, pointItem, SEC_RELATED, i);
     { int c = (int)(225 + 30 * f);
       float ty = y + h + 12.0f;
       TxtLine lt = txt_line_trim(TXT_DET_META2, extras_related_title(i),
@@ -4074,6 +4217,7 @@ static void drawCollection(float x, float y, float a) {
   for (i = 0; i < n && i < 7; i++) {
     float yl = y0 + i * 52.0f;
     int lit = (focus.row == SEC_CAST) && i == relFocus;
+    pointer_zone(x - 16.0f, yl - 8.0f, 940.0f, 48.0f, pointRel, i, 0);
     int c = lit ? 255 : 225;
     if (lit) {
       GfxRect track = { x - 16.0f, yl - 8.0f, 940.0f, 48.0f };
@@ -4257,6 +4401,7 @@ static float headerComments(float x, float y, float a) {
         GfxRect rc = { r.x - dw * 0.5f, r.y - dh * 0.5f, r.w + dw, r.h + dh };
         float luma = sel ? 0.961f : 0.176f;      // #F5F5F5 / #2D2D2D
         gfx_color(rc, NV_RADIUS_PILL, luma, luma, luma, a);
+        pointer_zone(rc.x, rc.y, rc.w, rc.h, pointItem, row, k);
         r = rc; }
       if (f > 0.01f && !sel) {
         GfxRect ring = { r.x - NV_RING_FOCUS, r.y - NV_RING_FOCUS,
@@ -4297,6 +4442,8 @@ static void drawComments(float x, float y, float a) {
     GfxRect card = { cx, y, COM_CARD_W, COM_CARD_H };
     int foc = (level >= 1 && focus.row == SEC_COMMENTS &&
                focus.column - nPillsCom() == i);
+    pointer_zone_act(card.x, card.y, card.w, card.h, pointItem, clickComment,
+                     SEC_COMMENTS, nPillsCom() + i);
     float px, width;
     // Off screen on either side: do not even draw it. There are up to 8 cards of 722
     // px, and painting the ones nobody sees costs fill on a device where fill is the
@@ -4371,7 +4518,7 @@ static void drawSection(int r, float a, Uint32 now) {
       return;
     }
     if (r == SEC_CAST && tab == TAB_RELATED) {
-      drawRelated(NV_DETP_X, yTab, a); return;
+      drawRelated(NV_DETP_X, yTab, a, SEC_CAST); return;
     }
     if (r == SEC_CAST && tab == TAB_COLLECTION) {
       drawCollection(NV_DETP_X, yTab, a); return;
@@ -4442,6 +4589,7 @@ static void drawSection(int r, float a, Uint32 now) {
         GfxRect b = { x, y, w, NV_DETWEB_SEA_H };
         regionAdd("picker", b);
         drawSeason(b, c, f, a);
+        pointer_zone(b.x, b.y, b.w, b.h, pointItem, SEC_SEASONS, c);
         // The expanded list is remembered, not drawn here: it hangs over the episode
         // row below and has to be painted after every section. See seasonMenuRect.
         if (seasonMenuOpen) seasonMenuAt = b;
@@ -4450,14 +4598,21 @@ static void drawSection(int r, float a, Uint32 now) {
       case SEC_TABS_INFO: {
         if (c == 0) regionAdd("tabs", (GfxRect){ x, y, NV_SCREEN_W - x, NV_DETP_TAB_H });
         drawTabInfo(x, y, c, f, a);
+        pointer_zone(x, y, w, NV_DETP_TAB_H, pointItem, SEC_TABS_INFO, c);
         break;
       }
-      case SEC_TRAILERS: drawTrailer(x, y, c, a); break;
+      case SEC_TRAILERS:
+        drawTrailer(x, y, c, a);
+        pointer_zone(x, y, NV_DETF_TR_W, NV_DETF_TR_VIDEO_H, pointItem, SEC_TRAILERS, c);
+        break;
       // They reuse the drawing that already served the series' TABS: it is the same
       // content, only now in a section of its own instead of behind a tab.
-      case SEC_RELATED: if (c == 0) drawRelated(NV_DETP_X, y, a); break;
+      case SEC_RELATED: if (c == 0) drawRelated(NV_DETP_X, y, a, SEC_RELATED); break;
       case SEC_COMMENTS:  drawComments(NV_DETP_X, y, a); break;
-      case SEC_DETAILS: drawDetails(x, y, f, a); break;
+      case SEC_DETAILS:
+        drawDetails(x, y, f, a);
+        pointer_zone(x, y, NV_DETF_DET_W, heightSection(SEC_DETAILS), pointItem, SEC_DETAILS, 0);
+        break;
       default: break;
     }
   }
