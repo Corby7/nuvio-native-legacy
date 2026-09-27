@@ -161,6 +161,33 @@ static char *fetchGuide(const char *url) {
   return raw;   // plain XML; net_download_bin terminates it
 }
 
+// What went wrong with a playlist download, in words that point at the fix.
+static void describeFailure(const IptvSource *src, const char *body, int status, int timedOut,
+                            char *dst, size_t n) {
+  if (timedOut) { snprintf(dst, n, "The playlist took too long to answer"); return; }
+  if (!body && !status) {
+    snprintf(dst, n, "Couldn't reach the server \xE2\x80\x94 check the address and the TV's connection");
+    return;
+  }
+  if (status == 404) { snprintf(dst, n, "No playlist at that address (404) \xE2\x80\x94 check it in a browser"); return; }
+  if (status == 401 || status == 403) {
+    snprintf(dst, n, src->kind == IPTV_SRC_XTREAM ? "The server refused this login (%d)"
+                                                  : "The server refused access (%d)", status);
+    return;
+  }
+  if (status >= 500) { snprintf(dst, n, "The server had an error (%d) \xE2\x80\x94 try again later", status); return; }
+  if (status >= 400) { snprintf(dst, n, "The server answered %d", status); return; }
+  // It answered, with something that is not a playlist. A guide is the usual
+  // mix-up: both come from the same provider page, one line apart.
+  if (body && (((unsigned char)body[0] == 0x1f && (unsigned char)body[1] == 0x8b) ||
+               strstr(body, "<tv") || !strncmp(body, "<?xml", 5))) {
+    snprintf(dst, n, "That's a TV guide, not a playlist \xE2\x80\x94 put it in the guide field");
+    return;
+  }
+  snprintf(dst, n, src->kind == IPTV_SRC_XTREAM ? "The server refused this login"
+                                                : "That address didn't return a playlist");
+}
+
 static void *loader(void *arg) {
   Job job = *(Job *)arg;
   char url[1400], gurl[1400];
@@ -179,34 +206,36 @@ static void *loader(void *arg) {
     }
   }
 
-  // Stage 1: the playlist.
+  // Stage 1: the playlist. With its HTTP status, so a failure can say WHICH
+  // failure it was: "couldn't reach" for a 404 sends people checking their
+  // network when the address is what is wrong.
   setStatus("Loading channels\xE2\x80\xA6");
   playlistUrl(&job.src, url, sizeof url);
-  text = net_download(url, IPTV_PLAYLIST_TIMEOUT_S);
-  if (job.gen != atomic_load(&generation)) goto out;
-  if (!text || !(l = parsePlaylist(text))) {
-    int timedOut = !text && net_timed_out();
-    printf("[iptv] playlist failed (%s)\n", !text ? (timedOut ? "timeout" : "no answer") : "not a playlist");
-    if (fromCache) {
-      setStatus("Offline \xC2\xB7 showing the saved channel list");
-      atomic_store(&state, IPTV_READY);
+  { int status = 0;
+    text = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &status);
+    if (text && status >= 400) { free(text); text = NULL; }
+    if (job.gen != atomic_load(&generation)) goto out;
+    l = text ? parsePlaylist(text) : NULL;
+    if (!l) {
+      char why[160];
+      describeFailure(&job.src, text, status, !text && net_timed_out(), why, sizeof why);
+      printf("[iptv] playlist failed: HTTP %d, %s\n", status, why);
+      if (fromCache) {
+        setStatus("Offline \xC2\xB7 showing the saved channel list");
+        atomic_store(&state, IPTV_READY);
+      } else {
+        setStatus(why);
+        atomic_store(&state, IPTV_FAILED);
+      }
+      atomic_store(&guideState, IPTV_FAILED);
+      free(text); text = cached; cached = NULL;
+      if (!fromCache) goto out;
     } else {
-      setStatus(!text ? (timedOut ? "The playlist took too long to answer"
-                                  : "Couldn't reach the playlist")
-                      : job.src.kind == IPTV_SRC_XTREAM
-                        ? "The server refused this login"
-                        : "That address didn't return a playlist");
-      atomic_store(&state, IPTV_FAILED);
-    }
-    atomic_store(&guideState, IPTV_FAILED);
-    free(text); text = cached; cached = NULL;
-    if (!fromCache) goto out;
-  } else {
-    printf("[iptv] %d channels, %d groups\n", l->nCh, l->nGroups);
-    data_write(IPTV_CACHE_FILE, text);
-    post(l, job.gen);
-    atomic_store(&state, IPTV_READY);
-  }
+      printf("[iptv] %d channels, %d groups\n", l->nCh, l->nGroups);
+      data_write(IPTV_CACHE_FILE, text);
+      post(l, job.gen);
+      atomic_store(&state, IPTV_READY);
+    } }
 
   // Stage 2: the guide, onto a fresh parse of the same playlist text — the
   // channel indices come out identical, which is what lets the screen keep its
