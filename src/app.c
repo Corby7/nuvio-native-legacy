@@ -31,8 +31,6 @@
 #include "search.h"
 #include "discoverui.h"
 #include "library.h"
-#include "profile.h"
-#include "social.h"
 #include "settings.h"
 #include "player.h"
 #include "trailers.h"
@@ -74,51 +72,6 @@ static void playSource(const Stream *s) {
   static char local[4200];
   addons_subtitles_file(s->videoHash, s->videoSize, s->file);
   player_set_source(proxy_wrap(s->url, s->headers, local, sizeof local));
-}
-
-static ProfileData profilePending;
-static int profileSuccess;
-static _Atomic int profileLoad; // 0=idle, 1=network, 2=snapshot ready
-static _Atomic unsigned profileGeneration = 1;
-static pthread_mutex_t profileLock = PTHREAD_MUTEX_INITIALIZER;
-typedef struct { unsigned generation; int profile; char account[96]; } ProfileRequest;
-static void *loadProfile(void *u) {
-  ProfileRequest *request=u;
-  ProfileData new={0};
-  int success=trakt_profile(&new);
-  pthread_mutex_lock(&profileLock);
-  // A change of account/profile invalidates the answer. The worker finishes, but
-  // never publishes an old identity nor leaves a stale snapshot in the queue.
-  if(request->generation==atomic_load_explicit(&profileGeneration,memory_order_acquire) &&
-     atomic_load_explicit(&profileLoad,memory_order_relaxed)==1 && session_loggedin() &&
-     profiles_active()==request->profile && !strcmp(session_user(),request->account)){
-    profileSuccess=success;
-    profilePending=new;
-    atomic_store_explicit(&profileLoad,2,memory_order_release);
-  }
-  pthread_mutex_unlock(&profileLock);
-  free(request);
-  return NULL;
-}
-static void invalidateProfile(void) {
-  atomic_fetch_add_explicit(&profileGeneration,1,memory_order_acq_rel);
-  atomic_store_explicit(&profileLoad,0,memory_order_release);
-  pthread_mutex_lock(&profileLock);memset(&profilePending,0,sizeof profilePending);profileSuccess=0;pthread_mutex_unlock(&profileLock);
-  profile_set_data(NULL);
-}
-static void requestProfile(void) {
-  pthread_t t;
-  int expected = 0;
-  ProfileRequest *request;
-  profile_set_loading(1);
-  if (!atomic_compare_exchange_strong(&profileLoad, &expected, 1)) return;
-  request=calloc(1,sizeof *request);
-  if(!request){atomic_store(&profileLoad,0);profile_set_error("Could not start the query. Try again.");return;}
-  request->generation=atomic_load_explicit(&profileGeneration,memory_order_acquire);
-  request->profile=profiles_active();
-  snprintf(request->account,sizeof request->account,"%s",session_user());
-  if (pthread_create(&t, NULL, loadProfile, request) == 0) pthread_detach(t);
-  else { free(request); atomic_store(&profileLoad,0); profile_set_error("Could not start the query. Try again."); }
 }
 
 // Verification makes one request per candidate source and blocks; on a thread of
@@ -319,7 +272,6 @@ static void swapScreen(Screen new) {
     case SCREEN_SEARCH:   if (kept) search_resume();   else search_start();   break;
     case SCREEN_DISCOVER: dui_start();         break;
     case SCREEN_LIBRARY:  if (kept) library_resume();  else library_start();  break;
-    case SCREEN_PROFILE:  profile_open(); requestProfile(); break;
     case SCREEN_SETTINGS: if (kept) settings_resume(); else settings_start(); break;
     default: break;
   }
@@ -360,7 +312,6 @@ int app_start(const char *dirArt) {
   if (!homeReady)
     printf("[app] no art in the package: home only appears after the first sync\n");
   menu_start();
-  profile_start();
   // With no account, the app opens on the login screen. With a stored session it
   // does not even pass through it — asking for the code again on every start
   // would be the same as never having stored it.
@@ -386,14 +337,6 @@ void app_event(const SDL_Event *e) {
   if (screen == SCREEN_LOGIN)          { login_event(e);     return; }
   if (screen == SCREEN_CHOICE_PROFILE) { profilesel_event(e); return; }
 
-  if(e->type==SDL_KEYDOWN && !e->key.repeat &&
-     (e->key.keysym.sym==SDLK_s || e->key.keysym.scancode==NV_SCANCODE_BLUE) &&
-     screen==SCREEN_HOME && !player_is_open() && !detail_is_open() && !seeall_is_open() && !menu_is_open()) {
-    if(profile_is_open() && profile_side())profile_close();
-    else {profile_open_side();requestProfile();}
-    return;
-  }
-
   // The source sheet sits above everything: it is a question, and while it is
   // standing nothing else should answer the D-pad.
   if (tracks_is_open()) { tracks_event(e); return; }
@@ -401,8 +344,18 @@ void app_event(const SDL_Event *e) {
   if (stream_sheet_is_open()) { stream_sheet_event(e); return; }
   if (player_is_open()) { player_event(e); return; }
   if (detail_is_open()) { detail_event(e); return; }
-  if (profile_is_open() && profile_side()) { profile_event(e); return; }
-  if (menu_is_open())   { menu_event(e);   return; }
+  if (menu_is_open()) {
+    menu_event(e);
+    // Back with the bar open over the home is the end of the chain: the home's
+    // own Back opened the bar, so this is the second press, and it leaves. Not on
+    // the Mac, where closing the window mid-test costs a relaunch (q quits there).
+#ifndef __APPLE__
+    if (menu_back_pressed() && screen == SCREEN_HOME) wantsExit = 1;
+#else
+    (void)menu_back_pressed();
+#endif
+    return;
+  }
   // "See all" sits BETWEEN the home and the detail: it covers the home and the
   // detail covers it. That is why it comes after the detail and before the
   // per-screen routing.
@@ -414,8 +367,6 @@ void app_event(const SDL_Event *e) {
     case SCREEN_SEARCH:      search_event(e);      break;
     case SCREEN_DISCOVER:   dui_event(e);         break;
     case SCREEN_LIBRARY: library_event(e); break;
-    case SCREEN_PROFILE:     profile_event(e);     break;
-    case SCREEN_SOCIAL:     social_event(e);     break;
     case SCREEN_SETTINGS:    settings_event(e);    break;
     default:              home_event(e);       break;
   }
@@ -430,8 +381,6 @@ void app_event(const SDL_Event *e) {
       case SCREEN_SEARCH:   wants = search_requested_menu();   break;
       case SCREEN_DISCOVER: wants = dui_requested_menu();      break;
       case SCREEN_LIBRARY:  wants = library_requested_menu();  break;
-      case SCREEN_PROFILE:  wants = profile_requested_menu();  break;
-      case SCREEN_SOCIAL:   wants = social_requested_menu();   break;
       case SCREEN_SETTINGS: wants = settings_requested_menu(); break;
       default:              wants = home_requested_menu();     break;
     }
@@ -503,7 +452,6 @@ void app_update(float dt, Uint32 now) {
   // honest way out. Staying on the home would show the package's sample catalogue
   // as though it were the person's.
   if (!session_loggedin()) {
-    invalidateProfile();
     forgetScreens();
     screen = SCREEN_LOGIN;
     login_start();
@@ -537,7 +485,6 @@ void app_update(float dt, Uint32 now) {
       // The profile has changed the sync's destination: running again brings THIS
       // profile's addons and progress, and not profile 1's, which the first cycle
       // picked up for want of a choice.
-      invalidateProfile();
       sync_reapply_settings();
       sync_start();
       screen = SCREEN_HOME;
@@ -567,27 +514,6 @@ void app_update(float dt, Uint32 now) {
   if (waitingSource != 2) addons_state();
   swapOfTitleIfRequested();
   markWatchedIfRequested();
-  if (atomic_load_explicit(&profileLoad, memory_order_acquire) == 2) {
-    ProfileData snapshot; int success;
-    pthread_mutex_lock(&profileLock); snapshot=profilePending; success=profileSuccess; pthread_mutex_unlock(&profileLock);
-    if (success) profile_set_data(&snapshot);
-    else if (!trakt_active()) profile_set_state(PROFILE_STATE_DISCONNECTED,
-                                                    "Trakt disconnected. Link the account to see your profile.");
-    else profile_set_state(PROFILE_STATE_UNAVAILABLE,
-                               "Profile unavailable. Your last summary is still safe, if there is one.");
-    atomic_store_explicit(&profileLoad, 0, memory_order_release);
-  }
-  if ((screen == SCREEN_PROFILE || profile_side()) && profile_requested_update()) requestProfile();
-  if (profile_requested_complete()) swapScreen(SCREEN_PROFILE);
-  if (screen==SCREEN_HOME) {
-    CatItem person;
-    if(home_requested_person_social(&person)) {
-      social_open(&person);swapScreen(SCREEN_SOCIAL);
-    }
-  }
-  if (screen==SCREEN_HOME && home_requested_social()) {
-    swapScreen(SCREEN_SETTINGS);menu_set_destination(MENU_SETTINGS);
-  }
   // The compass in the search header. It is the only way into Discover, so the
   // request is read here and nowhere else.
   //
@@ -612,8 +538,6 @@ void app_update(float dt, Uint32 now) {
   if (screen != SCREEN_HOME) {
     int shouldClose = (screen == SCREEN_SEARCH      && search_wants_exit())
               || (screen == SCREEN_LIBRARY && library_wants_exit())
-              || (screen == SCREEN_PROFILE      && profile_wants_exit())
-              || (screen == SCREEN_SOCIAL      && social_wants_exit())
               || (screen == SCREEN_SETTINGS    && settings_wants_exit());
     if (shouldClose) { swapScreen(SCREEN_HOME); menu_set_destination(MENU_START); }
   } else if (home_wants_exit()) {
@@ -624,7 +548,6 @@ void app_update(float dt, Uint32 now) {
   // destination: the two come out of the same menu, and whoever asked to switch
   // does not want to change tab.
   if (menu_requested_swap()) {
-    invalidateProfile();
     // A title asked for this frame belongs to the profile being left.
     wantOpen.pending = 0;
     screen = SCREEN_CHOICE_PROFILE;
@@ -637,10 +560,6 @@ void app_update(float dt, Uint32 now) {
     switch (menu_destination()) {
       case MENU_FETCH:     swapScreen(SCREEN_SEARCH);      break;
       case MENU_LIBRARY: swapScreen(SCREEN_LIBRARY); break;
-      // Already on the full profile: the side panel would only fold it back up.
-      case MENU_PROFILE:
-        if (screen != SCREEN_PROFILE) { profile_open_side(); requestProfile(); }
-        break;
       case MENU_SETTINGS:    swapScreen(SCREEN_SETTINGS);    break;
       default:              swapScreen(SCREEN_HOME);       break;
     }
@@ -660,18 +579,6 @@ void app_update(float dt, Uint32 now) {
     } else if (screen == SCREEN_LIBRARY && library_requested_open(&idx)) {
       if (library_item_focused(&it)) requestOpen(OPEN_CARD, it.index_, &it);
       else requestOpen(OPEN_BY_INDEX, idx, NULL);
-    } else if (screen == SCREEN_PROFILE) {
-      ProfileHighlight p;
-      if (profile_item_selected(&p) && p.id[0]) {
-        idx = cat_index_by_imdb(p.id);
-        if (idx >= 0) requestOpen(OPEN_BY_INDEX, idx, NULL); else disc_request_title(p.id);
-      }
-    } else if (screen == SCREEN_SOCIAL) {
-      SocialItemSelected s;
-      if (social_item_selected(&s) && s.imdb[0]) {
-        idx=cat_index_by_imdb(s.imdb);
-        if (idx >= 0) requestOpen(OPEN_BY_INDEX, idx, NULL); else disc_request_title(s.imdb);
-      }
     }
   }
 
@@ -973,6 +880,13 @@ void app_update(float dt, Uint32 now) {
   stream_sheet_update(dt, now);
 
   if (player_wants_exit() && !player_is_open()) player_shutdown();
+  // DETAILS FROM THE PLAYER. Opened from the title page, the page is still under
+  // the player and the exit fade uncovers it, exactly as Back does. Opened from
+  // anywhere else (Continue watching, the hold menu) there is no page under it,
+  // so one opens, centred, while the player fades off the top.
+  { int i = player_requested_details();
+    if (i >= 0 && !(detail_is_open() && !detail_is_exiting() && detail_index() == i))
+      requestOpen(OPEN_CENTRED, i, NULL); }
 
   player_update(dt, now);
   detail_update(dt, now);
@@ -1032,19 +946,16 @@ void app_update(float dt, Uint32 now) {
     case SCREEN_SEARCH:      search_update(dt, now);      break;
     case SCREEN_DISCOVER:   dui_update(dt, now);         break;
     case SCREEN_LIBRARY: library_update(dt, now); break;
-    case SCREEN_PROFILE:     break;
     case SCREEN_SETTINGS:    settings_update(dt, now);    break;
     default:              home_update(dt, now);       break;
   }
-  profile_update(dt, now);
-  if(screen==SCREEN_SOCIAL) social_update(dt, now);
 }
 
 // WHO OWNS THE KEYS, in exactly the order app_event routes them. The pointer
 // follows it: only the layer that would receive the arrows registers hit zones,
 // so pointing at the home through an open title or sheet moves nothing.
 typedef enum {
-  OWN_SCREEN, OWN_SEEALL, OWN_CTX, OWN_MENU, OWN_PROFILE_SIDE,
+  OWN_SCREEN, OWN_SEEALL, OWN_CTX, OWN_MENU,
   OWN_DETAIL, OWN_PLAYER, OWN_STREAMS, OWN_EPISODES, OWN_TRACKS
 } Owner;
 
@@ -1054,7 +965,6 @@ static Owner keyOwner(void) {
   if (stream_sheet_is_open())            return OWN_STREAMS;
   if (player_is_open())                  return OWN_PLAYER;
   if (detail_is_open())                  return OWN_DETAIL;
-  if (profile_is_open() && profile_side()) return OWN_PROFILE_SIDE;
   if (menu_is_open())                    return OWN_MENU;
   if (ctx_is_open())                     return OWN_CTX;
   if (seeall_is_open())                  return OWN_SEEALL;
@@ -1070,7 +980,10 @@ void app_draw(Uint32 now) {
   if (screen == SCREEN_CHOICE_PROFILE) { profilesel_draw(now); return; }
 
   // A real empty state, instead of a black screen that looks like a hang.
-  if (!homeReady && screen == SCREEN_HOME && !player_is_open() && !detail_is_open()) {
+  // Also while the catalogue is EMPTY: on a first run there is no cache and no
+  // packaged catalogue, and an empty home is a hero and rows with nothing in them.
+  if ((!homeReady || cat_n() == 0) && screen == SCREEN_HOME && !player_is_open() &&
+      !detail_is_open()) {
     GfxRect background = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     TxtLine t, sb;
     gfx_color(background, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
@@ -1115,8 +1028,6 @@ void app_draw(Uint32 now) {
         case SCREEN_SEARCH:      search_draw(now);      break;
         case SCREEN_DISCOVER:   dui_draw(now);         break;
         case SCREEN_LIBRARY: library_draw(now); break;
-        case SCREEN_PROFILE:     profile_draw(now);     break;
-        case SCREEN_SOCIAL:     social_draw(now);     break;
         case SCREEN_SETTINGS:    settings_draw(now);    break;
         default:              home_draw(now);       break;
       }
@@ -1152,8 +1063,6 @@ void app_draw(Uint32 now) {
     pointer_accept(owner == OWN_MENU || owner == OWN_SCREEN);
     if (menu_visible() && !detail_is_open())
       menu_draw(now);
-    pointer_accept(owner == OWN_PROFILE_SIDE);
-    if(profile_side() && !detail_is_open()) profile_draw(now);
   }
   pointer_accept(owner == OWN_PLAYER);
   player_draw(now);
@@ -1204,8 +1113,8 @@ int app_goto_detail(const char *imdb) {
 
 void app_where(char *out, size_t n) {
   static const char *NAME[] = { "login", "profile-picker", "home", "search",
-                                "library", "profile", "settings", "player",
-                                "social", "discover" };
+                                "library", "settings", "player",
+                                "discover" };
   // sizeof, not a literal. The bound was written as `< 9` and the tenth screen
   // arrived: every capture taken from the Discover screen was labelled "?",
   // which is the one thing a position log must never say. Counting the array
@@ -1242,7 +1151,6 @@ void app_shutdown(void) {
   player_shutdown();
   settings_shutdown();
   library_shutdown();
-  profile_shutdown();
   search_shutdown();
   dui_shutdown();
   home_shutdown();

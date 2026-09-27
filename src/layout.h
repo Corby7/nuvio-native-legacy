@@ -1496,6 +1496,9 @@
 #define NV_SEARCH_ICON_X      36.0f   // .search-input-icon left
 #define NV_SEARCH_CLEAR       32.0f   // .search-clear-btn svg
 #define NV_SEARCH_CLEAR_X     32.0f   // .search-clear-btn right
+// The disc behind the cross when it has the focus, and the pointer's target: a
+// 32px glyph alone is too small to aim the Magic Remote at.
+#define NV_SEARCH_CLEAR_HIT   64.0f
 // box-shadow: inset 0 0 0 3px rgb(255 255 255 / .96) on the focused field.
 // INSET is the whole point: the old outer halo washed the field out (see the
 // note in search.c), and an inset band cannot be clipped by a neighbour either.

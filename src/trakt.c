@@ -3,11 +3,15 @@
 #include "js.h"
 #include "watchedep.h"
 #include "jsw.h"
+#include "discover.h"
+#include "acclib.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/stat.h>
+#include "data.h"
 
 #define CINEMETA "https://v3-cinemeta.strem.io"
 
@@ -139,9 +143,31 @@ int trakt_load(const char *dirArt) {
 // The WORDS of a Cinemeta /meta body — name, synopsis, score, "year · runtime" —
 // into `d`, leaving its art alone. decorate() takes the art as well; describe()
 // takes only this.
-static void wordsOf(CatItem *d, const char *body) {
+static void wordsOf(CatItem *d, const char *body, const char *kind) {
   if (!d->title[0]) js_text(body, NULL, "name", d->title, sizeof d->title);
   js_text(body, NULL, "description", d->synopsis, sizeof d->synopsis);
+  // THE GENRES, off the same body, in the shape every reader expects: the type
+  // first, then each genre through disc_genre_label, joined by "  \xc2\xb7  ".
+  // Without them a Trakt card reached the hero as the bare "Movie", and the
+  // detail prefetch filled "Movie \xe2\x80\xa2 Action" in 400 ms into a rest on the
+  // card: the meta line grew under the eye on every card of these rows.
+  { const char *g = js_array(body, NULL, "genres");
+    char list[sizeof d->genre];
+    snprintf(list, sizeof list, "%s", strcmp(kind, "series") ? "Movie" : "TV Show");
+    while (g && *g == '"') {
+      const char *p = g + 1;
+      char raw[48]; size_t n = 0, used = strlen(list);
+      while (*p && *p != '"' && n + 1 < sizeof raw) raw[n++] = *p++;
+      raw[n] = 0;
+      if (raw[0])
+        snprintf(list + used, sizeof list - used, "  \xc2\xb7  %s", disc_genre_label(raw));
+      while (*p && *p != '"') p++;
+      if (*p == '"') p++;
+      while (*p == ' ') p++;
+      g = (*p == ',') ? p + 1 : NULL;
+      while (g && *g == ' ') g++;
+    }
+    snprintf(d->genre, sizeof d->genre, "%s", list); }
   // THE IMDb SCORE, off the same body. It was never read here, so every Continue
   // watching (and Library) item reached the hero with score 0 and the mark and
   // number simply did not draw — while the same title in any catalogue row had
@@ -186,12 +212,13 @@ static int decorate(CatItem *d, const char *kind) {
   // 8 s and not 20: there are up to EIGHT of these in series (one per history
   // item) before the home's first row exists. Measured on the Mac: 2.1 s in the
   // good case; with one slow item it was 20 s of screen with no content at all.
-  body = net_download(url, 8);
+  // Through the shared cache: the detail page and Next Up read this same body.
+  body = net_download_cached(url, 8, DISC_META_TTL_S);
   if (!body) return 0;
   ok = js_text(body, NULL, "poster", d->poster, sizeof d->poster);
   js_text(body, NULL, "background", d->backdrop, sizeof d->backdrop);
   js_text(body, NULL, "logo", d->logo, sizeof d->logo);
-  wordsOf(d, body);
+  wordsOf(d, body, kind);
   // The same rewrite discover.c does on this same field, and it was missing here:
   // these are the history and watchlist items, which fill Continue watching and
   // the Library — the rows the hero sits above. See cat_backdrop_shrink.
@@ -241,8 +268,6 @@ static int decorate(CatItem *d, const char *kind) {
     // than the backdrop's, though — this one is drawn at 640, not 1920.
     cat_backdrop_shrink(d->thumbEp, sizeof d->thumbEp, CAT_BACKDROP_THUMB_W);
   }
-  snprintf(d->genre, sizeof d->genre, "%s",
-           strcmp(kind, "series") ? "Movie" : "TV Show");
   snprintf(d->age_rating, sizeof d->age_rating, "14");
   free(body);
   return ok;
@@ -253,15 +278,75 @@ static int decorate(CatItem *d, const char *kind) {
 // TV cannot decode), and Cinemeta's own `poster` is exactly that /small/ URL, so
 // decorate() would trade a picture that draws for one that does not. Always 1:
 // a title Cinemeta does not know keeps its card, just without a synopsis.
+// THE WORDS, KEPT ON DISK BETWEEN LAUNCHES.
+//
+// describe() runs over the whole watchlist — up to 200 cards — on every build of
+// the home, and every launch builds at least once: 200 Cinemeta requests to learn
+// a synopsis, genres, a score and a runtime that change on the scale of weeks,
+// and a long series' /meta is ~400 KB for them. So the few fields wordsOf reads
+// are kept per title in data_dir()/words, and a launch within WORDS_TTL_S reads
+// them from there.
+//
+// The copy is the RAW JSON of exactly those keys, taken with js_raw from the same
+// body wordsOf reads, so wordsOf finds the same first occurrence of each key in
+// either — the two cannot drift into two parses.
+#define WORDS_TTL_S (3 * 86400)
+static const char *const WORDS_KEY[] = {
+  "name", "description", "genres", "imdbRating", "runtime", "releaseInfo"
+};
+
+static int wordsName(char *dst, size_t size, const char *kind, const char *id) {
+  if (!data_dir()[0] || strspn(id, "tt0123456789") != strlen(id)) return 0;
+  snprintf(dst, size, "words/%s-%s.json", kind, id);
+  return 1;
+}
+
+static char *wordsLoad(const char *name) {
+  char path[600];
+  struct stat st;
+  if (!data_path(path, sizeof path, name) || stat(path, &st) != 0) return NULL;
+  if (time(NULL) - st.st_mtime > WORDS_TTL_S) return NULL;
+  return data_read(name);
+}
+
+static void wordsStore(const char *name, const char *body) {
+  static int dirMade;
+  char out[8192], raw[4096];
+  size_t o = 0, i;
+  if (!dirMade) {
+    char dir[600];
+    if (data_path(dir, sizeof dir, "words")) mkdir(dir, 0755);
+    dirMade = 1;
+  }
+  out[o++] = '{';
+  for (i = 0; i < sizeof WORDS_KEY / sizeof *WORDS_KEY; i++) {
+    if (!js_raw(body, NULL, WORDS_KEY[i], raw, sizeof raw)) continue;
+    { int k = snprintf(out + o, sizeof out - o, "%s\"%s\":%s",
+                       o > 1 ? "," : "", WORDS_KEY[i], raw);
+      if (k < 0 || (size_t)k >= sizeof out - o - 1) return;   // would not fit: skip
+      o += (size_t)k; }
+  }
+  out[o++] = '}'; out[o] = 0;
+  data_write(name, out);
+}
+
 static int describe(CatItem *d, const char *kind) {
-  char url[300], series[24], *body, *dp;
+  char url[300], series[24], name[80], *body, *dp;
+  int stored;
   snprintf(series, sizeof series, "%s", d->imdb);
   dp = strchr(series, ':');
   if (dp) *dp = 0;
+  stored = wordsName(name, sizeof name, kind, series);
+  if (stored && (body = wordsLoad(name)) != NULL) {
+    wordsOf(d, body, kind);
+    free(body);
+    return 1;
+  }
   snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA, kind, series);
-  body = net_download(url, 8);
+  body = net_download_cached(url, 8, DISC_META_TTL_S);
   if (!body) return 1;
-  wordsOf(d, body);
+  wordsOf(d, body, kind);
+  if (stored) wordsStore(name, body);
   free(body);
   return 1;
 }
@@ -586,6 +671,9 @@ int trakt_resume(CatItem *output, int max) {
           const char *fb = js_end(strchr(block, '{'));
           js_text(block, fb, "title", d->title, sizeof d->title);
           js_text(block, fb, "imdb", imdb, sizeof imdb);
+          // Trakt's `ids` carry the TMDB id too: with it on the item the detail
+          // page's cast and fact sheet need no lookup of their own.
+          d->tmdb = (long)js_num(block, fb, "tmdb", 0);
         } }
       if (!imdb[0]) { p = js_next(f); continue; }
       if (series) {
@@ -615,259 +703,6 @@ int trakt_resume(CatItem *output, int max) {
   printf("[trakt] %d in progress\n", n);
   fflush(stdout);
   return n;
-}
-
-// Some clients get a 401 only on the aggregated feed. The graph and the
-// profiles' public history stay reachable with the same credential.
-static char *socialByFollowed(const char *const *header, int max) {
-  char *list=net_download_headers("https://api.trakt.tv/users/me/following?extended=full",10,header);
-  if(!list)return NULL;
-  char *out=calloc(1,262144);size_t used=1;int n=0,queried=0;
-  if(!out){free(list);return NULL;}out[0]='[';
-  const char *p=strchr(list,'[');p=p?p+1:NULL;
-  while(p&&*p&&n<max&&queried<8) {
-    while(*p&&(unsigned char)*p<=' ')p++;
-    if(*p!='{')break;
-    const char *f=js_end(p),*u=strstr(p,"\"user\"");
-    if(!u||u>=f){p=js_next(f);continue;}
-    u=strchr(u,'{');const char *uf=js_end(u);char id[128]="",url[400];
-    js_text(u,uf,"slug",id,sizeof id);
-    if(!id[0] || strspn(id,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")!=strlen(id)){p=js_next(f);continue;}
-    queried++;
-    snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/watching?extended=full",id);
-    char *body=net_download_headers(url,8,header);int now=body&&strchr(body,'{');
-    if(!now){free(body);snprintf(url,sizeof url,"https://api.trakt.tv/users/%s/history?limit=1&extended=full",id);body=net_download_headers(url,8,header);}
-    const char *b=body?strchr(body,'{'):NULL,*bf=b?js_end(b):NULL;
-    if(b&&bf&&bf>b+1) {
-      size_t un=(size_t)(uf-u),bn=(size_t)(bf-b-2);
-      if(used+un+bn+80<262144){
-        int k=snprintf(out+used,262144-used,"%s{\"user\":%.*s,%s%.*s}",n?",":"",(int)un,u,
-            now?"\"action\":\"watching\",":"",(int)bn,b+1);
-        used+=(size_t)k;n++;
-      }
-    }
-    free(body);p=js_next(f);
-  }
-  out[used++]=']';out[used]=0;free(list);
-  printf("[trakt] social: %d follows queried, %d activities\n",queried,n);
-  return out;
-}
-
-int trakt_social(CatItem *output, int max) {
-  const char *header[4];
-  char auth[200], key[140], *body;
-  const char *p;
-  int n = 0;
-  if (!on || max < 1) return 0;
-  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) return 0;
-  body = net_download_headers(
-    "https://api.trakt.tv/users/me/friends/activities?extended=full&page=1&limit=12",
-    20, header);
-  // Accounts without the new social scope may get a 401 on the `friends` graph,
-  // even though the token is still valid for history. `following` is the honest
-  // fallback: they are still people the owner chose, never global activity.
-  if (!body) body = net_download_headers(
-    "https://api.trakt.tv/users/me/following/activities?extended=full&page=1&limit=12",
-    20, header);
-  if (!body) body=socialByFollowed(header,max);
-  if (!body) { printf("[trakt] social feed unavailable\n"); return 0; }
-  p = strchr(body, '['); p = p ? p + 1 : NULL;
-  while (p && *p && n < max) {
-    const char *f, *bu, *bm, *bs, *be, *fb;
-    CatItem *d;
-    char imdb[24] = "", person[64] = "", action[32] = "";
-    while (*p && (unsigned char)*p <= ' ') p++;
-    if (*p != '{') break;
-    f = js_end(p);
-    bu = strstr(p, "\"user\"");
-    bm = strstr(p, "\"movie\"");
-    bs = strstr(p, "\"show\"");
-    be = strstr(p, "\"episode\"");
-    if (!bu || bu >= f || ((!bm || bm >= f) && (!bs || bs >= f))) {
-      p = js_next(f); continue;
-    }
-    d = &output[n]; memset(d, 0, sizeof *d);
-    fb = js_end(strchr(bu, '{'));
-    js_text(bu, fb, "name", person, sizeof person);
-    if (!person[0]) js_text(bu, fb, "username", person, sizeof person);
-    js_text(bu, fb, "slug", d->socialSlug, sizeof d->socialSlug);
-    const char *avatar = strstr(bu, "\"avatar\"");
-    if (avatar && avatar < fb) js_text(avatar, fb, "full", d->socialAvatar, sizeof d->socialAvatar);
-    snprintf(d->socialName, sizeof d->socialName, "%s", person[0] ? person : "Friend");
-    js_text(p, f, "action", action, sizeof action);
-    snprintf(d->country, sizeof d->country, "%s", person[0] ? person : "Friend");
-    snprintf(d->providerName, sizeof d->providerName, "%s",
-             !strcmp(action,"watching") ? "watching now" :
-             !strcmp(action, "watch") || !strcmp(action, "scrobble") ? "watched" :
-             !strcmp(action, "checkin") ? "checked in" :
-             !strcmp(action, "rating") ? "rated" : "recent activity");
-    snprintf(d->socialAction, sizeof d->socialAction, "%s", d->providerName);
-    if (bs && bs < f) {
-      fb = js_end(strchr(bs, '{'));
-      js_text(bs, fb, "title", d->title, sizeof d->title);
-      js_text(bs, fb, "imdb", imdb, sizeof imdb);
-      snprintf(d->kind, sizeof d->kind, "series");
-      if (be && be < f) {
-        const char *fe = js_end(strchr(be, '{'));
-        d->season = (int)js_num(be, fe, "season", 0);
-        d->episode = (int)js_num(be, fe, "number", 0);
-        js_text(be, fe, "title", d->nameEpisode, sizeof d->nameEpisode);
-        snprintf(d->directing, sizeof d->directing, "S%dE%d%s%s", d->season,
-                 d->episode, d->nameEpisode[0] ? "  \xc2\xb7  " : "",
-                 d->nameEpisode);
-      }
-    } else {
-      fb = js_end(strchr(bm, '{'));
-      js_text(bm, fb, "title", d->title, sizeof d->title);
-      js_text(bm, fb, "imdb", imdb, sizeof imdb);
-      snprintf(d->kind, sizeof d->kind, "movie");
-      snprintf(d->directing, sizeof d->directing, "Movie");
-    }
-    if (!imdb[0]) { p = js_next(f); continue; }
-    snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
-    n++;
-    p = js_next(f);
-  }
-  free(body);
-  // The feed already arrives ordered most-recent-first. The art is resolved in
-  // parallel, with the same limit of three connections Continue Watching uses.
-  if (n > 0) {
-    TaskDecorate *tasksSoc = calloc((size_t)n, sizeof *tasksSoc);
-    if (tasksSoc) {
-      pthread_t threads[TK_THREADS]; int created = 0, q;
-      decorateTasks = tasksSoc; decorateN = n; decorateNext = 0;
-      for (q = 0; q < n; q++) {
-        tasksSoc[q].d = &output[q];
-        snprintf(tasksSoc[q].kind, sizeof tasksSoc[q].kind, "%s", output[q].kind);
-      }
-      for (q = 0; q < TK_THREADS; q++)
-        if (pthread_create(&threads[created], NULL, threadDecorate, NULL) == 0) created++;
-      if (!created) threadDecorate(NULL);
-      for (q = 0; q < created; q++) pthread_join(threads[q], NULL);
-      // Unavailable art must not erase a real person from the feed.
-      free(tasksSoc); decorateTasks = NULL; decorateN = 0;
-    }
-  }
-  printf("[trakt] %d friend activities\n", n); fflush(stdout);
-  return n;
-}
-
-static void profileGenre(ProfileData *d, const char *name) {
-  int i;
-  if (!name || !*name) return;
-  static const char *en[]={"drama","science-fiction","comedy","crime","thriller","action","mystery","history","fantasy","horror","adventure","romance","documentary","animation"};
-  // Trakt sends lowercase slugs ("science-fiction"); these are the labels the
-  // interface shows.
-  static const char *label[]={"Drama","Science Fiction","Comedy","Crime","Thriller","Action","Mystery","History","Fantasy","Horror","Adventure","Romance","Documentary","Animation"};
-  for (unsigned k=0;k<sizeof en/sizeof *en;k++) if(!strcmp(name,en[k])) {name=label[k];break;}
-  for (i=0;i<d->nGenres;i++) if (!strcmp(d->genres[i].name,name)) {
-    d->genres[i].count++; return;
-  }
-  if (d->nGenres < PROFILE_MAX_GENRES) {
-    ProfileGenre *g=&d->genres[d->nGenres++];
-    snprintf(g->name,sizeof g->name,"%s",name); g->count=1;
-  }
-}
-
-static void profileGenresJson(ProfileData *d, const char *b, const char *f) {
-  const char *g = strstr(b,"\"genres\"");
-  if (!g || g >= f || !(g=strchr(g,'[')) || g>=f) return;
-  g++;
-  while (g < f) {
-    char name[40]; size_t n=0;
-    while (g<f && *g!='\"' && *g!=']') g++;
-    if (g>=f || *g==']') break;
-    g++;
-    while (g<f && *g!='\"' && n+1<sizeof name) name[n++]=*g++;
-    name[n]=0; profileGenre(d,name);
-    if (g<f) g++;
-  }
-}
-
-int trakt_profile(ProfileData *d) {
-  const char *header[4]; char auth[200],key[140],url[360],*body;
-  time_t now=time(NULL); struct tm tmv=*localtime(&now);
-  char start[48]; int daysInMonth;
-  ProfileHighlight *ranking;
-  int nRanking = 0;
-  if (!d || !on) return 0;
-  memset(d,0,sizeof *d);
-  if (!trakt_headers(header,auth,sizeof auth,key,sizeof key)) return 0;
-  static const char *months[]={"January","February","March","April","May","June","July","August","September","October","November","December"};
-  snprintf(d->period,sizeof d->period,"%s %d",months[tmv.tm_mon],tmv.tm_year+1900);
-  struct tm first=tmv;
-  first.tm_mday=1;first.tm_hour=first.tm_min=first.tm_sec=0;first.tm_isdst=-1;
-  time_t limit=mktime(&first);struct tm utc;
-  gmtime_r(&limit,&utc);
-  strftime(start,sizeof start,"%Y-%m-%dT%H%%3A%M%%3A%SZ",&utc);
-  // Profile and avatar. The avatar may be WebP on newer Trakt; the renderer only
-  // asks for it if the firmware accepts it, and the screen is still complete without it.
-  body=net_download_headers("https://api.trakt.tv/users/settings?extended=full",15,header);
-  if(body){ const char *u=strstr(body,"\"user\""); const char *fu=u?js_end(strchr(u,'{')):NULL;
-    if(u&&fu){js_text(u,fu,"name",d->name,sizeof d->name);js_text(u,fu,"username",d->user,sizeof d->user);
-      js_text(u,fu,"full",d->avatar,sizeof d->avatar);} free(body); }
-  snprintf(url,sizeof url,
-    "https://api.trakt.tv/users/me/history?start_at=%s&extended=full&page=1&limit=100",start);
-  body=net_download_headers(url,25,header);
-  if (!body || !strchr(body, '[')) { free(body); return 0; }
-  ranking = calloc(100, sizeof *ranking);
-  if (!ranking) { free(body); return 0; }
-  d->partial = 1;
-  snprintf(d->warning, sizeof d->warning,
-           "A slice of the 100 most recent plays this month. Runtimes reported by Trakt.");
-  { const char *p=strchr(body,'['); p=p?p+1:NULL;
-    while(p&&*p){
-      const char *f,*bm,*bs,*be,*obj,*fo; char watched[32]="",imdb[24]="",title[128]="";
-      int runtime=0,t=0,e=0,hi=-1;
-      while(*p&&(unsigned char)*p<=' ')p++; if(*p!='{')break; f=js_end(p);
-      js_text(p,f,"watched_at",watched,sizeof watched);
-      bm=strstr(p,"\"movie\""); bs=strstr(p,"\"show\""); be=strstr(p,"\"episode\"");
-      obj=(bs&&bs<f)?bs:((bm&&bm<f)?bm:NULL); if(!obj){p=js_next(f);continue;}
-      fo=js_end(strchr(obj,'{')); js_text(obj,fo,"title",title,sizeof title); js_text(obj,fo,"imdb",imdb,sizeof imdb);
-      runtime=(int)js_num(obj,fo,"runtime",0); profileGenresJson(d,obj,fo);
-      if(be&&be<f){const char *fe=js_end(strchr(be,'{'));t=(int)js_num(be,fe,"season",0);e=(int)js_num(be,fe,"number",0);
-        {int re=(int)js_num(be,fe,"runtime",0);if(re>0)runtime=re;} d->episodes++;}
-      else d->movies++;
-      d->plays++; if (runtime > 0) d->minutes += runtime;
-      // js_ms_iso and not a parse of its own: this was the third copy of the
-      // same ISO reading in the app. See the note on it in js.h.
-      { long long wms = js_ms_iso(watched);
-        if (wms) {
-          struct tm local; time_t stamp = (time_t)(wms / 1000);
-          localtime_r(&stamp,&local);
-          if(local.tm_year==tmv.tm_year&&local.tm_mon==tmv.tm_mon&&local.tm_mday>=1&&local.tm_mday<=31)
-            d->activity[local.tm_mday-1]++;
-        }
-      }
-      for(int i=0;i<nRanking;i++)if(imdb[0]&&!strcmp(ranking[i].id,imdb)){hi=i;break;}
-      if(hi<0&&imdb[0]&&nRanking<100){hi=nRanking++;ProfileHighlight *h=&ranking[hi];
-        snprintf(h->id,sizeof h->id,"%s",imdb);snprintf(h->title,sizeof h->title,"%s",title);
-        if(t>0&&e>0)snprintf(h->detail,sizeof h->detail,"S%dE%d",t,e);else snprintf(h->detail,sizeof h->detail,"Movie");
-        if(imdb[0]){snprintf(h->poster,sizeof h->poster,"https://images.metahub.space/poster/medium/%s/img",imdb);
-          snprintf(h->backdrop,sizeof h->backdrop,"https://images.metahub.space/background/medium/%s/img",imdb);}}
-      if(hi>=0){ranking[hi].plays++;if(runtime>0)ranking[hi].minutes+=runtime;}
-      p=js_next(f);
-    }
-  }
-  free(body);
-  for(int i=0;i<nRanking;i++)for(int j=i+1;j<nRanking;j++)
-    if(ranking[j].plays>ranking[i].plays){ProfileHighlight x=ranking[i];ranking[i]=ranking[j];ranking[j]=x;}
-  d->nHighlights=nRanking<PROFILE_MAX_HIGHLIGHTS?nRanking:PROFILE_MAX_HIGHLIGHTS;
-  memcpy(d->highlights,ranking,d->nHighlights*sizeof *ranking);
-  free(ranking);
-  daysInMonth=31; if(tmv.tm_mon==1) daysInMonth=((tmv.tm_year+1900)%4==0)?29:28;
-  else if(tmv.tm_mon==3||tmv.tm_mon==5||tmv.tm_mon==8||tmv.tm_mon==10)daysInMonth=30;
-  d->nDays=daysInMonth;
-  {struct tm first=tmv;first.tm_mday=1;mktime(&first);d->firstDayWeek=first.tm_wday;}
-  for(int i=0;i<d->nDays;i++)if(d->activity[i])d->daysActiveMonth++;
-  // A monthly slice does not prove annual activity.
-  d->daysActiveYear=0;
-  for(int i=tmv.tm_mday-1;i>=0&&i<d->nDays;i--){if(!d->activity[i])break;d->streakCurrent++;}
-  // Sorts highlights and genres by volume so the visual reading is honest.
-  for(int i=0;i<d->nHighlights;i++)for(int j=i+1;j<d->nHighlights;j++)if(d->highlights[j].plays>d->highlights[i].plays){ProfileHighlight x=d->highlights[i];d->highlights[i]=d->highlights[j];d->highlights[j]=x;}
-  for(int i=0;i<d->nGenres;i++)for(int j=i+1;j<d->nGenres;j++)if(d->genres[j].count>d->genres[i].count){ProfileGenre x=d->genres[i];d->genres[i]=d->genres[j];d->genres[j]=x;}
-  printf("[trakt] profile: %d plays, %d min, %d highlights\n",d->plays,d->minutes,d->nHighlights);fflush(stdout);
-  return 1;
 }
 
 // The fields every Trakt card shares, from the IMDb id alone.
@@ -939,6 +774,7 @@ int trakt_list(const char *which, CatItem *output, int max) {
           js_text(block, fb, "title", d->title, sizeof d->title);
           js_text(block, fb, "imdb", imdb, sizeof imdb);
           d->year = (int)js_num(block, fb, "year", 0);
+          d->tmdb = (long)js_num(block, fb, "tmdb", 0);
         }
         // The date on the list item itself, outside the movie/show block. A
         // collected show has no `collected_at`, only `last_collected_at`.
@@ -999,6 +835,7 @@ int trakt_recommendations(CatItem *output, int max) {
       js_text(p, f, "title", d->title, sizeof d->title);
       js_text(p, f, "imdb", imdb, sizeof imdb);
       d->year = (int)js_num(p, f, "year", 0);
+      d->tmdb = (long)js_num(p, f, "tmdb", 0);
       if (imdb[0]) { listArt(d, imdb, step); got[step]++; }
       p = js_next(f);
     }
@@ -1231,6 +1068,20 @@ static void *sendHistory(void *u) {
 
 int trakt_watched_kind(const char *imdb, const char *kind, int mark) {
   const char *dp;
+  // WITHOUT TRAKT the mark belongs to the Nuvio account (acclib.h), the way the
+  // web app keeps it when Trakt is not the source. The local mirror changes now
+  // and the account hears of it on the light cycle that follows, so the answer
+  // here is already "confirmed" — there is no request for the modal to wait on.
+  if (!on && acclib_active() && imdb && !strncmp(imdb, "tt", 2)) {
+    char id[24];
+    size_t k = strcspn(imdb, ":");
+    if (k >= sizeof id) k = sizeof id - 1;
+    memcpy(id, imdb, k); id[k] = 0;
+    acclib_watched(id, kind_item(kind, imdb), 0, 0, mark);
+    cat_history_set_id(id, kind_item(kind, imdb), mark);
+    stateWrite(&historyState, TK_OP_CONFIRMED);
+    return 1;
+  }
   if (!on || !imdb || imdb[0] != 't') {
     stateWrite(&historyState, TK_OP_FAILURE);
     return 0;
@@ -1261,6 +1112,12 @@ int trakt_watched_kind(const char *imdb, const char *kind, int mark) {
 
 int trakt_watchlist_kind(const char *imdb, const char *kind, int add) {
   const char *dp;
+  // Without Trakt, the account's own library — see trakt_watched_kind.
+  if (!on && acclib_active() && imdb && !strncmp(imdb, "tt", 2)) {
+    acclib_list(imdb, kind_item(kind, imdb), add);
+    stateWrite(&listState, TK_OP_CONFIRMED);
+    return 1;
+  }
   if (!on || !imdb || imdb[0] != 't') {
     stateWrite(&listState, TK_OP_FAILURE);
     return 0;

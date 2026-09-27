@@ -12,8 +12,10 @@
 int  plane_start(void *display, void *surface) { (void)display; (void)surface; return 0; }
 int  plane_ready(void) { return 0; }
 const char *plane_window_id(void) { return ""; }
-void plane_window(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh) {
+void plane_window(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh,
+                  int ow, int oh) {
   (void)sx; (void)sy; (void)sw; (void)sh; (void)dx; (void)dy; (void)dw; (void)dh;
+  (void)ow; (void)oh;
 }
 void plane_pump(void) {}
 void plane_forget(void) {}
@@ -47,6 +49,10 @@ struct WlInterface {
 //                          wl_webos_foreign.export_element = 1
 //                          wl_webos_exported.destroy    = 0
 //                          wl_webos_exported.set_exported_window = 1
+//                          wl_webos_exported.set_crop_region = 2
+// The exported table was read out of this TV's libwayland-webos-client
+// (webOS 11.2): destroy, set_exported_window "oo", set_crop_region "ooo",
+// set_property "ss" — set_crop_region is there at interface version 1.
 #define OP_GET_REGISTRY   1
 #define OP_BIND           0
 #define OP_CREATE_REGION  1
@@ -54,6 +60,7 @@ struct WlInterface {
 #define OP_REGION_ADD     1
 #define OP_EXPORT_ELEMENT 1
 #define OP_EXPORTED_WINDOW 1
+#define OP_CROP_REGION    2
 #define OP_DESTROY        0
 
 // webos_exported_type. The video plane is 0; the other three (subtitle,
@@ -95,6 +102,9 @@ static int  assigned;
 // srcW means "nothing applied yet".
 static int lastSx, lastSy, lastSw = -1, lastSh;
 static int lastDx, lastDy, lastDw, lastDh;
+// Whether the last request was a crop. Going back to the whole frame after one
+// clears the crop explicitly before the plain window goes out.
+static int lastCropped;
 
 // ---------------------------------------------------------------- listeners
 
@@ -278,34 +288,50 @@ int plane_ready(void) { return assigned && windowId[0]; }
 const char *plane_window_id(void) { return windowId; }
 
 void plane_window(int sx, int sy, int sw, int sh,
-                  int dx, int dy, int dw, int dh) {
-  void *src, *dst;
+                  int dx, int dy, int dw, int dh, int ow, int oh) {
+  void *src, *dst, *ori = NULL;
+  int cropped, withOri;
   if (!exported || !compositor) return;
   // A degenerate region is not a smaller picture, it is an undefined one. The
   // ACB path had the same guard for the same reason.
   if (sw < 2 || sh < 2 || dw < 1 || dh < 1) return;
   if (sx == lastSx && sy == lastSy && sw == lastSw && sh == lastSh &&
       dx == lastDx && dy == lastDy && dw == lastDw && dh == lastDh) return;
+  // Without the frame's size a crop has nothing to be a piece of.
+  cropped = ow > 1 && oh > 1 && (sx > 0 || sy > 0 || sw < ow || sh < oh);
+  // Leaving a crop also needs the original: see below.
+  withOri = ow > 1 && oh > 1 && (cropped || lastCropped);
 
   src = makeRegion(sx, sy, sw, sh);
   dst = makeRegion(dx, dy, dw, dh);
-  if (!src || !dst) {
-    dropRegion(src); dropRegion(dst);
+  if (withOri) ori = makeRegion(0, 0, ow, oh);
+  if (!src || !dst || (withOri && !ori)) {
+    dropRegion(src); dropRegion(dst); dropRegion(ori);
     printf("[plane] could not build the regions\n"); fflush(stdout);
     return;
   }
-  proxyMarshal(exported, OP_EXPORTED_WINDOW, src, dst);
+  if (cropped) {
+    proxyMarshal(exported, OP_CROP_REGION, ori, src, dst);
+  } else {
+    // Back to the whole frame after a crop: the whole frame goes out as the
+    // crop first, so a compositor that keeps a crop across set_exported_window
+    // cannot hold on to the zoom.
+    if (withOri) proxyMarshal(exported, OP_CROP_REGION, ori, ori, dst);
+    proxyMarshal(exported, OP_EXPORTED_WINDOW, src, dst);
+  }
   // The compositor reads the regions when it processes the request, and
   // requests are processed in order, so releasing them right after is safe and
   // is what keeps a resize from leaking one region pair per call.
   dropRegion(src);
   dropRegion(dst);
+  dropRegion(ori);
   displayFlush(display);
 
   lastSx = sx; lastSy = sy; lastSw = sw; lastSh = sh;
   lastDx = dx; lastDy = dy; lastDw = dw; lastDh = dh;
-  printf("[plane] source %d,%d %dx%d -> destination %d,%d %dx%d\n",
-         sx, sy, sw, sh, dx, dy, dw, dh);
+  lastCropped = cropped;
+  printf("[plane] %s %d,%d %dx%d of %dx%d -> destination %d,%d %dx%d\n",
+         cropped ? "crop" : "source", sx, sy, sw, sh, ow, oh, dx, dy, dw, dh);
   fflush(stdout);
 }
 
@@ -320,5 +346,6 @@ void plane_stop(void) {
   assigned = 0;
   windowId[0] = 0;
   lastSw = -1;
+  lastCropped = 0;
 }
 #endif

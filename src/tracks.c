@@ -143,43 +143,66 @@ static const char LANG_UNKNOWN[] = "Unknown";
 // language order asks every frame, and the file does not change under us.
 static char memShow[24], memLang[32];
 
+// The show's id without the episode: "tt0251439" out of "tt0251439:1:3". An
+// anime catalogue's id keeps its prefix — "kitsu:1234" — or every show from it
+// would share the one key "kitsu".
 static void showKey(char *dst, size_t size) {
   const CatItem *c = cat_item(player_index());
   const char *id = c ? c->imdb : "";
-  snprintf(dst, size, "%.*s", (int)strcspn(id, ":"), id);
+  size_t n = strcspn(id, ":");
+  if (id[n] && strncmp(id, "tt", 2)) n += 1 + strcspn(id + n + 1, ":");
+  snprintf(dst, size, "%.*s", (int)n, id);
+}
+
+// This show's line in `file`, "" for none. The value can hold a space
+// ("Portuguese (BR)"), so it is the rest of the line; the last line wins.
+static void memLookup(const char *file, char *out, size_t size) {
+  char path[600], line[96];
+  FILE *f;
+  out[0] = 0;
+  if (!memShow[0] || !data_path(path, sizeof path, file) || !(f = fopen(path, "r"))) return;
+  while (fgets(line, sizeof line, f)) {
+    char id[32], v[32];
+    line[strcspn(line, "\r\n")] = 0;
+    if (sscanf(line, "%31s %31[^\n]", id, v) == 2 && !strcmp(id, memShow))
+      snprintf(out, size, "%s", v);
+  }
+  fclose(f);
 }
 
 // The remembered language for this playback's show, or "" for none.
 static const char *memLanguage(void) {
-  char path[600], line[96];
-  FILE *f;
   if (memRead) return memLang;
   memRead = 1;
-  memLang[0] = 0;
   showKey(memShow, sizeof memShow);
-  if (!memShow[0] || !data_path(path, sizeof path, MEM_FILE) || !(f = fopen(path, "r")))
-    return memLang;
-  while (fgets(line, sizeof line, f)) {
-    char id[24], lang[32];
-    line[strcspn(line, "\r\n")] = 0;
-    // The name can hold a space ("Portuguese (BR)"), so it is the rest of the line.
-    if (sscanf(line, "%23s %31[^\n]", id, lang) == 2 && !strcmp(id, memShow))
-      snprintf(memLang, sizeof memLang, "%s", lang);   // the last line for a show wins
-  }
-  fclose(f);
+  memLookup(MEM_FILE, memLang, sizeof memLang);
   return memLang;
 }
 
-// Records `lang` for this playback's show: the show's old line goes, the new one
-// is appended, and the oldest shows fall off past MEM_MAX.
+static void memWrite(const char *file, const char *value);
+
+// Records `lang` for this playback's show.
 static void memRemember(const char *lang) {
-  char path[600], tmp[620], lines[MEM_MAX][96];
-  int n = 0, i, from;
-  FILE *f;
   memLanguage();
   if (!memShow[0] || !lang || !lang[0] || !strcmp(lang, LANG_UNKNOWN)) return;
   snprintf(memLang, sizeof memLang, "%s", lang);
-  if (!data_path(path, sizeof path, MEM_FILE)) return;
+  memWrite(MEM_FILE, lang);
+}
+
+// THE AUDIO, remembered the same way in audio-shows.txt: the language CODE of
+// the track the viewer picked in the sheet ("ja"), so the next episode of a show
+// watched in Japanese starts in Japanese even though the file's default is the
+// dub. It outranks both Settings rows, as the subtitle memory does.
+#define MEM_AUDIO_FILE "audio-shows.txt"
+
+// This show's line in `file` replaced by `value`: the old one goes, the new one
+// is appended, and the oldest shows fall off past MEM_MAX.
+static void memWrite(const char *file, const char *value) {
+  char path[600], tmp[620], lines[MEM_MAX][96];
+  const char *lang = value;
+  int n = 0, i, from;
+  FILE *f;
+  if (!memShow[0] || !data_path(path, sizeof path, file)) return;
   if ((f = fopen(path, "r"))) {
     char line[96];
     size_t k = strlen(memShow);
@@ -257,6 +280,29 @@ static void forcedTick(Uint32 now) {
   if (now - autoSince >= FORCED_WAIT_MS) forcedDone = 1;
 }
 
+// ANIME, for the Settings row of its own. The id says so when the title came
+// from an anime catalogue (kitsu:, mal:, anilist:, anidb:), and so does a
+// catalogue that tags "Anime". Otherwise it is Animation from Japan — Cinemeta
+// files Trigun and One Piece as Animation with country Japan. The country comes
+// from /meta, so a title played without its page open may not have it yet; then
+// a Japanese track in the file stands in for it.
+static int isAnime(void) {
+  static const char *const ID[] = { "kitsu:", "mal:", "anilist:", "anidb:" };
+  const CatItem *c = cat_item(player_index());
+  int i, n = video_n_audio(), ja = lang_of("ja");
+  if (!c) return 0;
+  for (i = 0; i < (int)(sizeof ID / sizeof *ID); i++)
+    if (!strncasecmp(c->imdb, ID[i], strlen(ID[i]))) return 1;
+  if (hasWord(c->genre, "anime")) return 1;
+  if (!hasWord(c->genre, "animation")) return 0;
+  if (c->country[0]) return hasWord(c->country, "japan");
+  for (i = 0; i < n; i++) {
+    const VideoTrack *t = video_audio(i);
+    if (t && ja >= 0 && lang_of(t->language) == ja) return 1;
+  }
+  return 0;
+}
+
 // THE AUDIO LANGUAGE, once per playback. The pipeline plays the file's default
 // track; with a language set in Settings, the first track in it replaces that —
 // skipping commentary and audio description, which share the language and are
@@ -265,11 +311,19 @@ static void forcedTick(Uint32 now) {
 // first frame, before anyone has settled into the scene; a track the viewer picks
 // in the sheet ends it (userChose).
 static void audioTick(void) {
-  int want = settings_audio_language(), n = video_n_audio(), cur, i;
+  int want, n = video_n_audio(), cur, i;
   const VideoTrack *c;
   if (audioDone) return;
-  if (want < 0 || userChose) { audioDone = 1; return; }
+  if (userChose) { audioDone = 1; return; }
   if (n < 1) return;                 // the track list has not arrived yet
+  // The show's remembered track first; then the Settings row, asked only now
+  // because isAnime may need the file's tracks.
+  { char code[32];
+    memLanguage();
+    memLookup(MEM_AUDIO_FILE, code, sizeof code);
+    want = code[0] ? lang_of(code) : -1; }
+  if (want < 0) want = isAnime() ? settings_anime_audio_language() : settings_audio_language();
+  if (want < 0) { audioDone = 1; return; }
   audioDone = 1;
   cur = video_audio_current();
   c = video_audio(cur);
@@ -716,8 +770,13 @@ static void optionText(int i, int ordinal, char *main, size_t mSize,
       else if (l->matchPct >= 0) snprintf(why, sizeof why, "%d%% name match", l->matchPct);
       if (l && l->aiTranslated)
         snprintf(why + strlen(why), sizeof why - strlen(why), "%sAI-translated", why[0] ? ", " : "");
-      snprintf(sub, sSize, "%s%s%s", l && l->source[0] ? l->source : "Addon",
-               why[0] ? "  \xc2\xb7  " : "", why); }
+      // The format too, as the embedded rows say it: ASS/SSA is the one that
+      // places signs and lines where the file puts them. Asking fetches it for
+      // the rows on screen, so it fills in a moment after the list opens.
+      { const char *kind = l ? subtitle_kind(l->url, 1) : NULL;
+        snprintf(sub, sSize, "%s%s%s%s%s", l && l->source[0] ? l->source : "Addon",
+                 kind ? "  \xc2\xb7  " : "", kind ? kind : "",
+                 why[0] ? "  \xc2\xb7  " : "", why); } }
   }
 }
 
@@ -929,7 +988,12 @@ static void eventAudio(SDL_Keycode k) {
   if (k == SDLK_UP   && optFocus > 0)     optFocus--;
   if (k == SDLK_DOWN && optFocus < n - 1) optFocus++;
   // Choosing closes the sheet: the choice is the whole errand.
-  if (isOk(k) && n > 0) { autoDone = 1; userChose = 1; video_choose_audio(optFocus); is_open = 0; }
+  if (isOk(k) && n > 0) {
+    const VideoTrack *t = video_audio(optFocus);
+    autoDone = 1; userChose = 1; video_choose_audio(optFocus); is_open = 0;
+    memLanguage();
+    if (t && t->language[0]) memWrite(MEM_AUDIO_FILE, t->language);
+  }
 }
 
 static void eventLangList(SDL_Keycode k) {

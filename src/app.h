@@ -14,14 +14,10 @@
 // an account there is no user catalogue, no addons and no progress — letting
 // home show through behind would be presenting the package's sample content as
 // if it were theirs.
-//
-// SCREEN_PROFILE_PICKER is the ACCOUNT's profile chooser; SCREEN_PROFILE, which
-// already existed, is the Trakt statistics screen. Close names, different
-// things.
 typedef enum {
   SCREEN_LOGIN, SCREEN_CHOICE_PROFILE,
-  SCREEN_HOME, SCREEN_SEARCH, SCREEN_LIBRARY, SCREEN_PROFILE, SCREEN_SETTINGS,
-  SCREEN_PLAYER, SCREEN_SOCIAL,
+  SCREEN_HOME, SCREEN_SEARCH, SCREEN_LIBRARY, SCREEN_SETTINGS,
+  SCREEN_PLAYER,
   // APPENDED, not inserted. Nothing indexes this enum by position today, but
   // the menu's destinations already learned that lesson once (see menu.h) and
   // the cost of appending is nothing.

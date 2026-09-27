@@ -132,6 +132,17 @@ int ime_edit(const SDL_Event *e, char *text, int *len, int max) {
     return 1;
   }
 
+  // "Clear all" on the LG keyboard. MEASURED in the TV's own libSDL2: the IME
+  // sends delete_surrounding_text with length -1, and LG's wayland backend turns
+  // exactly that into a press of SDL_SCANCODE_CLEAR. The scancode is checked as
+  // well as the sym so a keymap that names it differently still clears.
+  if (e->type == SDL_KEYDOWN && (e->key.keysym.sym == SDLK_CLEAR ||
+                                 e->key.keysym.scancode == SDL_SCANCODE_CLEAR)) {
+    *len = 0;
+    text[0] = 0;
+    return 1;
+  }
+
   if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_BACKSPACE) {
     int i = *len;
     if (i <= 0) return 1;

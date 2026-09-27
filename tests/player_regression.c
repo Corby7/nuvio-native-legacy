@@ -17,8 +17,6 @@
 #include "resume.h"
 #include "subtitle.h"
 #include "intro.h"
-#include "profile.h"
-#include "social.h"
 #include <SDL2/SDL_image.h>
 #include <assert.h>
 #include <stdio.h>
@@ -39,25 +37,6 @@ static void keyMenu(SDL_Keycode k) {
   SDL_Event e={0};e.type=SDL_KEYDOWN;e.key.keysym.sym=k;menu_event(&e);
 }
 static void testar(void) {
-  profile_start();profile_open_side();
-  assert(profile_side() && profile_is_open());
-  { ProfileData pd={0};
-    snprintf(pd.name,sizeof pd.name,"Test profile");
-    snprintf(pd.user,sizeof pd.user,"teste");
-    pd.period[0]='J'; pd.period[1]=0;
-    profile_set_data(&pd);
-    profile_set_loading(1);
-    profile_set_error("network unavailable");
-    profile_set_data(NULL);
-  }
-  SDL_Event pe={0};pe.type=SDL_KEYDOWN;pe.key.keysym.sym=SDLK_DOWN;
-  profile_event(&pe);pe.key.keysym.sym=SDLK_RETURN;profile_event(&pe);
-  assert(profile_requested_update());
-  pe.key.keysym.sym=SDLK_DOWN;profile_event(&pe);
-  pe.key.keysym.sym=SDLK_RETURN;profile_event(&pe);
-  assert(profile_requested_complete());
-  profile_open_side();pe.key.keysym.sym=SDLK_ESCAPE;profile_event(&pe);
-  assert(!profile_is_open() && profile_wants_exit());
   char json[24000];size_t p=0;
   SubtitleCue *lc=NULL;
   int nc=subtitle_parse("WEBVTT\n\n00:00:01.000 --> 00:00:03.250\n<i>Hello &amp; welcome</i>\n\n2\n00:00:04,000 --> 00:00:06,000\nSecond line\n",&lc);
@@ -162,9 +141,6 @@ static void capture(const char *name,SDL_Window *win,int panel) {
     stream_sheet_update(1.f/60,SDL_GetTicks());tracks_update(1.f/60,SDL_GetTicks());
     glClearColor(.025,.025,.03,1);glClear(GL_COLOR_BUFFER_BIT);
     if(panel<4) player_draw(SDL_GetTicks());
-    if(panel==5) {
-      profile_update(1.f/60,SDL_GetTicks());profile_draw(SDL_GetTicks());
-    }
     if(panel==4) {
       CatItem c=*cat_item(0);c.season=2;c.episode=4;c.remainingMin=85;c.progress=34;
       strcpy(c.nameEpisode,"The Harmonium");
@@ -192,13 +168,6 @@ int main(int argc,char **argv) {
   assert(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER)==0);
   testar();
   if(argc<2)return 0;
-  if(!strcmp(argv[1],"--social")) {
-    net_prepare();assert(trakt_load("deploy/app/art"));
-    CatItem *social=calloc(8,sizeof *social);assert(social);
-    int n=trakt_social(social,8);assert(n>0);
-    for(int i=0;i<n;i++)assert(social[i].imdb[0]&&social[i].country[0]&&social[i].title[0]);
-    printf("PASS: %d real activities, with author and title.\n",n);free(social);return 0;
-  }
   if(!strcmp(argv[1],"--live")) {
     net_prepare();
     addons_load("deploy/app/art");addons_fetch("tt14688458:2:4","series");
@@ -249,19 +218,6 @@ int main(int argc,char **argv) {
   glViewport(0,0,1920,1080);gfx_size_target(1920,1080);assert(gfx_start());
   assert(txt_start("deploy/app",1));tex_start(64);
   gfx_icons_dir("deploy/app/art");
-  if(!strcmp(argv[1],"--profile")) {
-    ProfileData d={0};net_prepare();
-    tex_cache_dir("deploy/app/art/cache");
-    assert(trakt_load("deploy/app/art"));assert(trakt_profile(&d));
-    profile_start();profile_open();profile_set_data(&d);
-    capture("/tmp/nuvio-profile.bmp",w,5);
-    SDL_Event e={0};e.type=SDL_KEYDOWN;e.key.keysym.sym=SDLK_DOWN;
-    profile_event(&e);capture("/tmp/nuvio-profile-calendar.bmp",w,5);
-    for(int i=0;i<6;i++)profile_event(&e);
-    capture("/tmp/nuvio-profile-ranks.bmp",w,5);
-    profile_open_side();capture("/tmp/nuvio-profile-sidebar.bmp",w,5);
-    return 0;
-  }
   cat_load("deploy/app/art");
   CatItem c={0};if(cat_n())c=*cat_item(0);
   for(int i=0;i<cat_n();i++) if(!strcmp(cat_item(i)->title,"Silo")){c=*cat_item(i);break;}

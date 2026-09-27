@@ -398,6 +398,122 @@ static void timingEnd(void *c, double start, const char *url) {
   pthread_mutex_unlock(&timingLock);
 }
 
+// --- THE RESPONSE CACHE ---------------------------------------------------------
+//
+// See net_download_cached in net.h. A flat array searched linearly: it holds at
+// most a few hundred entries and each lookup is followed by a network round trip
+// or a strdup of kilobytes, so a hash table would be optimising the wrong step.
+//
+// 8 MB, measured against what goes through it: a long series' Cinemeta /meta is
+// ~400 KB uncompressed (South Park), a film's ~3 KB; the aiometa catalogues are
+// 20-60 KB each, and the largest manifest (Xperience, 605 catalogues) ~250 KB.
+// The home's whole working set fits, with room for the titles being browsed.
+#define CACHE_BYTES   (8u * 1024u * 1024u)
+#define CACHE_ENTRIES 384
+
+typedef struct {
+  char  *url;
+  char  *body;        // NULL while the first request is still out
+  size_t n;
+  double at;          // nowMs() when it landed
+  int    pending;
+} Cached;
+static Cached cache[CACHE_ENTRIES];
+static size_t cacheBytes;
+static pthread_mutex_t cacheLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  cacheCond = PTHREAD_COND_INITIALIZER;
+
+static double nowMs(void);
+
+static void cacheFree(Cached *e) {
+  if (e->body) cacheBytes -= e->n;
+  free(e->url); free(e->body);
+  memset(e, 0, sizeof *e);
+}
+
+static Cached *cacheFind(const char *url) {
+  int i;
+  for (i = 0; i < CACHE_ENTRIES; i++)
+    if (cache[i].url && !strcmp(cache[i].url, url)) return &cache[i];
+  return NULL;
+}
+
+// Makes room for `need` bytes and returns a free slot. Pending entries are never
+// evicted: a thread is waiting on them.
+static Cached *cacheSlot(size_t need) {
+  for (;;) {
+    int i, oldest = -1, empty = -1;
+    for (i = 0; i < CACHE_ENTRIES; i++) {
+      if (!cache[i].url) { if (empty < 0) empty = i; continue; }
+      if (cache[i].pending) continue;
+      if (oldest < 0 || cache[i].at < cache[oldest].at) oldest = i;
+    }
+    if (empty >= 0 && cacheBytes + need <= CACHE_BYTES) return &cache[empty];
+    if (oldest < 0) return NULL;
+    cacheFree(&cache[oldest]);
+  }
+}
+
+char *net_download_cached(const char *url, int seconds, int ttlSeconds) {
+  Cached *e;
+  char *body, *copy = NULL;
+  size_t n;
+  if (!url || !*url) return NULL;
+  pthread_mutex_lock(&cacheLock);
+  for (;;) {
+    e = cacheFind(url);
+    if (!e) break;
+    if (e->pending) { pthread_cond_wait(&cacheCond, &cacheLock); continue; }
+    if (nowMs() - e->at <= ttlSeconds * 1000.0) {
+      copy = malloc(e->n + 1);
+      if (copy) { memcpy(copy, e->body, e->n + 1); }
+      pthread_mutex_unlock(&cacheLock);
+      return copy;
+    }
+    cacheFree(e);   // stale: fetched again below
+    break;
+  }
+  // Claims the URL, so a second thread asking now waits instead of sending the
+  // same request beside this one.
+  e = cacheSlot(0);
+  if (e) {
+    e->url = strdup(url);
+    if (e->url) e->pending = 1; else e = NULL;
+  }
+  pthread_mutex_unlock(&cacheLock);
+
+  body = net_download(url, seconds);
+
+  pthread_mutex_lock(&cacheLock);
+  if (e) {
+    n = body ? strlen(body) : 0;
+    // Too big for the budget, or failed: the claim goes and the waiters fetch
+    // for themselves (a failure is not remembered — the next ask retries).
+    if (!body || n + 1 > CACHE_BYTES / 4 ||
+        !(e->body = malloc(n + 1))) {
+      cacheFree(e);
+    } else {
+      memcpy(e->body, body, n + 1);
+      e->n = n;
+      e->at = nowMs();
+      e->pending = 0;
+      cacheBytes += n;
+      // Over budget now: evict the oldest complete entries, never this one.
+      while (cacheBytes > CACHE_BYTES) {
+        int i, oldest = -1;
+        for (i = 0; i < CACHE_ENTRIES; i++)
+          if (cache[i].url && !cache[i].pending && &cache[i] != e &&
+              (oldest < 0 || cache[i].at < cache[oldest].at)) oldest = i;
+        if (oldest < 0) break;
+        cacheFree(&cache[oldest]);
+      }
+    }
+    pthread_cond_broadcast(&cacheCond);
+  }
+  pthread_mutex_unlock(&cacheLock);
+  return body;
+}
+
 char *net_download_bin(const char *url, int seconds, long *size) {
   return net_download_internal(url, seconds, size, NULL, 0);
 }

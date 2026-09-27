@@ -30,6 +30,9 @@ void player_episode_current(int *season, int *episode);
 int player_index(void);
 const char *player_line_episode(void);
 int player_requested_sources(void);
+// The Details button: the catalogue index whose title page should open once the
+// player has left, or -1. Read once — it clears itself.
+int player_requested_details(void);
 int player_requested_next(int *season, int *episode);
 const CatEp *player_next_episode(void);
 // The next episode, once this one is close enough to its end that the next

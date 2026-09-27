@@ -34,6 +34,12 @@ unsigned subtitle_ready(void);
 int  subtitle_times(unsigned g, double **starts, double **ends);
 int  subtitle_retime(unsigned g, double scale, double offset);
 
+/* The subtitle format at `url` as the sheet names it — "ASS", "SSA", "SRT" or
+   "VTT" — from its extension or from the body of an earlier load. NULL while
+   not known; with `fetch`, an unknown one is downloaded in the background and
+   answers on a later call. The returned pointer is a shared buffer. */
+const char *subtitle_kind(const char *url, int fetch);
+
 /* Pure parser, also used by the regression test. The caller frees *out. */
 int subtitle_parse(const char *body, SubtitleCue **output);
 

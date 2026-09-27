@@ -11,6 +11,17 @@
 // came in the package instead of opening empty.
 #ifndef NV_DISCOVER_H
 #define NV_DISCOVER_H
+
+// How long a response may be answered from net_download_cached's memory.
+//
+// META: Cinemeta itself says three hours (Cache-Control: public, max-age=10800
+// on /meta), and every module that reads a title's /meta goes through this, so
+// Continue watching, the detail page and Next Up share one download.
+// ADDON: manifests and catalogues. Long enough to cover the rebuilds the account
+// sync triggers seconds after the first build (same addons, same URLs); short
+// enough that a catalogue that changes during the day is seen on the next home.
+#define DISC_META_TTL_S  10800
+#define DISC_ADDON_TTL_S 600
 #include <stddef.h>
 #include "catalog.h"
 
@@ -77,11 +88,29 @@ void disc_tmdb(const char *dirArt);
 // inside the .ipk and it is the key of whoever built the package — their quota,
 // for everyone who installs it.
 void disc_tmdb_set(const char *key);
+// Sign-out: the account's key goes, from memory and from disk.
+void disc_tmdb_forget(void);
 
 // The TMDB key as already loaded. Returns "" when art/tmdb.txt does not exist.
 // The `person` module needs it for the filmography, and reading the file twice
 // would give two sources of truth for the same secret.
 const char *disc_key_tmdb(void);
+
+// A title's TMDB id from its IMDb id. Cinemeta's /meta already carries it
+// (`moviedb_id`: 1396 for Breaking Bad, 278 for The Shawshank Redemption), and
+// that body is usually in the shared cache already, so this is normally free;
+// TMDB's /find is the fallback for the titles Cinemeta has no id for. 0 when
+// neither knows. `imdb` may carry an episode suffix. BLOCKS.
+long disc_tmdb_id(const char *imdb, int series);
+
+// ONE TMDB request per title, shared by every module that reads it: the details
+// with `append_to_response` carrying what each of them needs — the credits and
+// watch providers (discover.c's cast photos and streaming badge), the full cast
+// (person.c's cast page: aggregate_credits on a series, credits on a film), and
+// release_dates and videos (extras.c's fact sheet and trailers, films only).
+// These were five separate requests, three of them in series. Answered from
+// net_download_cached; the caller frees. NULL without a key. BLOCKS.
+char *disc_tmdb_title(long tmdbId, int series);
 
 // "2026-07-29" -> "29 July 2026". It lives here because discovery already needed
 // it for the episode date; the "Movie Details" table is the second consumer, and
@@ -240,6 +269,11 @@ int disc_episodes_loading(int indexItem);
 // end. Does not block. It serves an actor's credit and the "More like this"
 // item: without it, anything outside the owner's catalogue would not open.
 void disc_request_title(const char *imdb);
+// The same, when the caller KNOWS the kind ("movie" or "series") — a "More like
+// this" item is always the kind of the title it was listed under. Without it
+// the meta is tried as a film first and, failing that, as a series: two round
+// trips for every series.
+void disc_request_title_kind(const char *imdb, const char *kind);
 // The same thing starting from the TMDB id, which is what an actor's credit
 // carries. `type` is "movie" or "tv". It resolves the IMDb id through
 // external_ids before asking for the meta — one extra call, only when the owner

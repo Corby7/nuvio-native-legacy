@@ -27,6 +27,7 @@
 //      the video is paused. Paused with no controls, the user is left staring at a
 //      frozen frame with no idea what happened.
 #include "player.h"
+#include "acclib.h"
 #include "video.h"
 #include "tracks.h"
 #include "gfx.h"
@@ -164,8 +165,10 @@
 // a little more edge than that because the TV's overscan really does eat the strip
 // the browser never loses — but it is a CORNER now, not the 96/64 content gutter
 // the rest of the overlay uses, which had it floating in the middle of the frame.
-#define PLR_STATS_X         48.0f
-#define PLR_STATS_Y         40.0f
+// The prompts' own margins (NV_PJ_RIGHT / NV_PJ_BOTTOM), mirrored into the top-left
+// corner, so the stats panel keeps the same distance from the frame they do.
+#define PLR_STATS_X         NV_PJ_RIGHT
+#define PLR_STATS_Y         NV_PJ_BOTTOM
 #define PLR_SEEK_COMMIT_MS  1000u
 // The pill's fade once the seek is committed. The web app simply clears the text;
 // 200ms of fade costs nothing and stops it popping out of existence.
@@ -252,8 +255,11 @@ static float seekStepFor(int repeats) {
 // NEXT sits straight after play, as getControlDefinitions() puts "playNextEpisode":
 // it is the other half of "what plays now", and it only exists while there IS a
 // next episode.
+//
+// DETAILS closes the row: it leaves the player, so it is the one action that
+// ends what the others adjust, and it sits where the hand reaches it last.
 enum { PLR_PLAY, PLR_NEXT, PLR_CC, PLR_AUDIO, PLR_EPISODES,
-       PLR_SOURCES, PLR_ASPECT, PLR_STATS, PLR_NBTNS };
+       PLR_SOURCES, PLR_ASPECT, PLR_STATS, PLR_DETAILS, PLR_NBTNS };
 
 static int   is_open = 0, exiting = 0, requestedExit = 0;
 static int   idx = 0;
@@ -369,6 +375,7 @@ static char lineEp[220];          // "T1, E1 · <sinopse curta>", montada na abe
 
 static const CatItem *item(void) { return cat_item(idx); }
 static int epT, epE, reqSources, errorSource, reqNextT, reqNextE;
+static int reqDetails;   // the Details button: leave, and land on the title page
 // THE CARD CAN BE SENT AWAY. It is offered for the last two minutes of an episode,
 // or for the whole of the credits, and that is a long time to keep a panel in the
 // corner of a frame somebody is still watching.
@@ -405,6 +412,13 @@ static void reportReset(void);   // see REPORTING WHILE IT PLAYS
 static float  skipElapsed;
 static double skipChunkEnd;   // which chunk the count belongs to
 static int    skipAutoHidden;
+// HOW LONG THE PICTURE HAS BEEN ROLLING, in ms of unbroken forward play. The skip
+// button waits for PLR_SKIP_LEAD_MS of it. startImage alone is loadCompleted, not
+// playback: the button came up over the loading logo's fade, and on a resume it
+// flashed at 0:00 before the seek to the saved position landed. Any jump (a seek,
+// the resume, a skip) starts the count again; a pause only holds it.
+#define PLR_SKIP_LEAD_MS 1000.0f
+static float  rolledMs;
 static int introIdx=-1, introT=-1, introE=-1;
 static int resumeApplied, resumePct;
 
@@ -510,6 +524,9 @@ int player_index(void) { return idx; }
 const char *player_line_episode(void) { return lineEp; }
 void player_episode_current(int *t, int *e) { *t = epT; *e = epE; }
 int player_requested_sources(void) { int p = reqSources; reqSources = 0; return p; }
+int player_requested_details(void) {
+  int p = reqDetails ? idx : -1; reqDetails = 0; return p;
+}
 int player_requested_next(int *t,int *e) {
   if(!reqNextT||!reqNextE)return 0;
   if(t)*t=reqNextT;if(e)*e=reqNextE;reqNextT=reqNextE=0;return 1;
@@ -894,10 +911,11 @@ static void openSession(int indexCatalog, const char *url) {
     if (ci && ci->imdb[0]) parental_request(ci->imdb); }
   playing = 1; visible = 1; anim = 0.0f; entry = 0.0f; entryV = 0.0f;
   fromDetail = 0; flyFrom = (GfxRect){ 0, 0, 0, 0 }; flying = 0;
-  reqSources = errorSource = reqTracks = reqNextT = reqNextE = 0; startImage = 0;
+  reqSources = errorSource = reqTracks = reqNextT = reqNextE = reqDetails = 0;
+  startImage = 0;
   nextDismissed = 0; nextFocus = NEXT_PLAY; nextElapsed = 0;
   reportReset();
-  skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0;
+  skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0; rolledMs = 0;
   resumeApplied=0;
   button = PLR_PLAY;
   memset(focusB, 0, sizeof focusB);
@@ -1047,6 +1065,12 @@ void player_shutdown(void) {
       // and nothing here wrote it: it only appeared after the next Trakt read.
       // Set it now; that read corrects it if the server refused.
       if (done && epT > 0 && epE > 0) watchedep_set(ci->imdb, epT, epE, 1);
+      // Without Trakt, the finished film or episode goes into the ACCOUNT's
+      // watched list — the one the web and the phone read when Trakt is off.
+      if (done && acclib_active()) {
+        if (epT > 0 && epE > 0) acclib_watched(ci->imdb, "series", epT, epE, 1);
+        else if (strcmp(ci->kind, "series")) acclib_watched(ci->imdb, "movie", 0, 0, 1);
+      }
       // And to the ACCOUNT. Trakt and the account are two different destinations: not
       // every user turns Trakt on, and the official app's progress comes from the account.
       sync_dirty_progress();
@@ -1076,7 +1100,7 @@ void player_shutdown(void) {
   seekActive = 0; seekRepeats = 0; seekDir = 0;
   seekAt = seekEndAt = settleAt = 0;
   quickAt = 0; quickDelta = 0.0f; quickAnim = 0.0f; quickPulse = 0.0f;
-  startImage = 0;
+  startImage = 0; rolledMs = 0;
   episodes_close();
   intro_off(); introIdx=introT=introE=-1;
   subtitle_off();
@@ -1096,6 +1120,7 @@ static int rowButtons(int *out) {
   if (!trailerMode) out[n++] = PLR_SOURCES;
   out[n++] = PLR_ASPECT;
   out[n++] = PLR_STATS;
+  if (!trailerMode) out[n++] = PLR_DETAILS;
   return n;
 }
 
@@ -1224,7 +1249,7 @@ static int nextCardUp(void) {
 // screen — which is also the state in which OK belongs to it.
 static int skipUp(double *end, int *kind) {
   double e; int k;
-  if (!playbackReady()) return 0;
+  if (!playbackReady() || rolledMs < PLR_SKIP_LEAD_MS) return 0;
   if (nextCardUp()) return 0;
   if (!intro_active(posSeg, &e, &k) || k == INTRO_CREDITS) return 0;
   if (skipAutoHidden) return 0;
@@ -1275,7 +1300,8 @@ static void skipTick(float dt) {
   if (end != skipChunkEnd) {
     skipChunkEnd = end; skipElapsed = 0; skipAutoHidden = 0;
   }
-  if (visible || skipAutoHidden || !playbackReady()) return;
+  if (visible || skipAutoHidden || !playbackReady() || rolledMs < PLR_SKIP_LEAD_MS)
+    return;
   skipElapsed += dt * 1000.0f;
   if (skipElapsed >= PLR_SKIP_MS) {
     skipAutoHidden = 1;
@@ -1526,6 +1552,9 @@ void player_event(const SDL_Event *e) {
       case PLR_SOURCES:  reqSources = 1; break;
       case PLR_EPISODES: if (epT > 0) episodes_open(idx, epT, epE); break;
       case PLR_STATS:    statsOpen = !statsOpen; break;
+      // The same exit as Back — the fade, the progress saved on the way out — and
+      // then the title page, which app.c opens unless it is already underneath.
+      case PLR_DETAILS:  exiting = 1; requestedExit = 1; reqDetails = 1; return;
       default:          reqTracks = 1;     break;   // PLR_AUDIO, 1 = the audio column
     }
     wake();
@@ -1772,6 +1801,7 @@ void player_update(float dt, Uint32 now) {
   // The burst is over once the presses stop. ONE seek goes out, here.
   if (seekActive && now - seekAt > PLR_SEEK_COMMIT_MS) commitSeek();
 
+  float posBefore = posSeg;
   if (hasVideo && video_active()) {
     double d = video_duration();
     double vp = video_pos();
@@ -1794,6 +1824,9 @@ void player_update(float dt, Uint32 now) {
     posSeg += dt;
     if (posSeg >= durationSeg) { posSeg = durationSeg; playing = 0; }
   }
+  { float step = posSeg - posBefore;
+    if (step < 0.0f || step > 1.0f || settleAt) rolledMs = 0;
+    else if (playing && playbackReady() && !player_loading()) rolledMs += dt * 1000.0f; }
 
   // THE SUBTITLE CHOOSES ITSELF, once per playback, from the Settings row. Held
   // back until the first frame with a picture: before that the pipeline has no
@@ -1984,24 +2017,35 @@ static void subBlockDraw(const SubBlock *b,float x,float y,int column,float alph
 // An ASS line placed by the file: at its \pos point, or against the edge its
 // alignment names. The alignment also says which part of the text sits on the
 // point — 7 is its top-left corner, 2 the middle of its bottom edge — as in
-// libass. Always kept whole on screen.
-#define SUB_EDGE_X 80.f
-#define SUB_EDGE_Y 60.f
+// libass. Always kept whole on the picture.
+//
+// Both are measured on the PICTURE, not the screen: a point is a fraction of the
+// video frame, and libass puts it there. Mapped onto the whole screen, a 4:3
+// show (Trigun) had its signs pushed out into the pillarbox bars, and a
+// left-aligned line sat 80px from the panel's edge — in the black, well clear of
+// the picture it belongs to. The frame is the aspect mode's rectangle; the edges
+// are its visible part, so a zoomed mode keeps the text on screen.
+#define SUB_EDGE_X .042f
+#define SUB_EDGE_Y .056f
 static void drawSubtitlePlaced(const SubtitleCue *c,TxtStyle st,int r,int g,int bl,float alpha){
   char text[768];SubBlock b;
   int align=c->align?c->align:2,column=(align-1)%3,row=(align-1)/3;
+  PlrRect f=aspectRect(aspect),v=aspectVisible(aspect);
   float ax,ay,x,y;
   snprintf(text,sizeof text,"%s",c->text);
   if(!subBlockBuild(&b,text,st,r,g,bl))return;
-  if(c->positioned){ax=c->x*NV_SCREEN_W;ay=c->y*NV_SCREEN_H;}
+  if(v.w<1.f||v.h<1.f){f=v=(PlrRect){0,0,NV_SCREEN_W,NV_SCREEN_H};}
+  if(c->positioned){ax=f.x+c->x*f.w;ay=f.y+c->y*f.h;}
   else{
-    ax=column==0?SUB_EDGE_X:column==2?NV_SCREEN_W-SUB_EDGE_X:NV_SCREEN_W*.5f;
-    ay=row==2?SUB_EDGE_Y:row==1?NV_SCREEN_H*.5f:NV_SCREEN_H-SUB_EDGE_Y;
+    float ex=v.w*SUB_EDGE_X,ey=v.h*SUB_EDGE_Y;
+    ax=column==0?v.x+ex:column==2?v.x+v.w-ex:v.x+v.w*.5f;
+    ay=row==2?v.y+ey:row==1?v.y+v.h*.5f:v.y+v.h-ey;
   }
   x=column==0?ax:column==2?ax-b.w:ax-b.w*.5f;
   y=row==2?ay:row==1?ay-b.h*.5f:ay-b.h;
-  if(x>NV_SCREEN_W-b.w)x=NV_SCREEN_W-b.w;if(x<0)x=0;
-  if(y>NV_SCREEN_H-b.h)y=NV_SCREEN_H-b.h;if(y<0)y=0;
+  if(x>v.x+v.w-b.w)x=v.x+v.w-b.w;if(x<v.x)x=v.x;
+  if(y>v.y+v.h-b.h)y=v.y+v.h-b.h;if(y<v.y)y=v.y;
+  if(x<0)x=0;if(y<0)y=0;
   subBlockDraw(&b,x,y,column,alpha);
 }
 
@@ -2177,19 +2221,33 @@ static void drawStats(float alpha) {
     lb = txt_line(TXT_PLR_BADGE, badge, 255, 255, 255, 255);
     badgeW = (float)lb.w + 20.0f + 10.0f;   // pill padding + the gap to the value
   }
-  { float gap = 40.0f, rowGap = 12.0f, padX = 28.0f, padY = 24.0f;
+  // THE NEXT-EPISODE CARD'S SURFACE, so the player's floating panels read as one
+  // family: the same ink plate at the same radius, the same inset hairline (a
+  // GFX_RING straddles the edge and the quad clips its outer half), and a tracked
+  // grey kicker over the content the way "UP NEXT" heads the card. Labels are the
+  // kicker's quiet grey rather than white at half alpha, and a hairline parts the
+  // rows so the eye can run along one from label to reading.
+  { float gap = 48.0f, rowGap = 14.0f, padX = NV_NEXT_PADX + 4.0f, padY = NV_NEXT_PAD;
+    float kickH = (float)txt_line(TXT_NEXT_KICK, "STREAM STATS", 150, 152, 158, 255).h;
+    float headGap = 18.0f;
     float w = padX * 2.0f + lw + gap + vw + badgeW;
-    float h = padY * 2.0f + n * lineH + (n - 1) * rowGap;
+    float h = padY * 2.0f + kickH + headGap + n * lineH + (n - 1) * rowGap;
     float x = PLR_STATS_X, y = PLR_STATS_Y;
-    float rad = 16.0f / (w < h ? w : h);
+    float rad = NV_NEXT_R / (w < h ? w : h);
     GfxRect r = { x, y, w, h };
-    gfx_color(r, rad, 9 / 255.0f, 13 / 255.0f, 20 / 255.0f, 0.72f * alpha);
-    gfx_rect(r, 0, GFX_RING, 0, 0.0035f, 0, rad, 1, 1, 1, 0.10f * alpha);
+    gfx_color(r, rad, NV_TRK_INK_R, NV_TRK_INK_G, NV_TRK_INK_B, 0.92f * alpha);
+    gfx_rect(r, 0, GFX_RING_INSET, 0, 1.0f / (w < h ? w : h), 0, rad,
+             1, 1, 1, 0.10f * alpha);
+    txt_tracking(TXT_NEXT_KICK, "STREAM STATS", 150, 152, 158,
+                 x + padX, y + padY, alpha, NV_NEXT_KICK_TRACK);
     for (i = 0; i < n; i++) {
-      float ry = y + padY + i * (lineH + rowGap);
-      TxtLine l = txt_line(TXT_PLR_STATL, labels[i], 255, 255, 255, 255);
+      float ry = y + padY + kickH + headGap + i * (lineH + rowGap);
+      TxtLine l = txt_line(TXT_PLR_STATL, labels[i], 150, 152, 158, 255);
       TxtLine v = txt_line(TXT_PLR_STAT,  values[i], 255, 255, 255, 255);
       float vright = x + w - padX;
+      if (i > 0)
+        gfx_color((GfxRect){ x + padX, ry - rowGap * 0.5f - 0.5f, w - padX * 2.0f, 1.0f },
+                  0.0f, 1, 1, 1, 0.06f * alpha);
       // The badge rides at the right end of the row it rates, and the reading sits
       // to its left — the web app's `margin-left: 8px` inside the value span.
       if (i == 0 && badge) {
@@ -2201,8 +2259,8 @@ static void drawStats(float alpha) {
                        p.x + 10.0f, p.y + (ph - (float)lb.h) * 0.5f, alpha);
         vright -= pw + 10.0f;
       }
-      txt_draw_alpha(l, x + padX, ry + (lineH - (float)l.h) * 0.5f, alpha * 0.55f);
-      txt_draw_alpha(v, vright - v.w, ry, alpha * 0.95f);
+      txt_draw_alpha(l, x + padX, ry + (lineH - (float)l.h) * 0.5f, alpha);
+      txt_draw_alpha(v, vright - v.w, ry, alpha);
     } }
 }
 
@@ -3000,6 +3058,7 @@ static void drawPlayer(Uint32 now) {
         // and like them it does not fill on focus: the puck is the focus.
         case PLR_SOURCES:  iconFile(bcx, cyButtons, a, luma, "stack", PLR_ICON_H); break;
         case PLR_STATS:    iconFile(bcx, cyButtons, a, luma, "stats", PLR_ICON_H); break;
+        case PLR_DETAILS:  iconFile(bcx, cyButtons, a, luma, "details", PLR_ICON_H); break;
         default:           iconAspect(bcx, cyButtons, a, luma); break;   // PLR_ASPECT
       }
     }
@@ -3017,7 +3076,7 @@ static void drawPlayer(Uint32 now) {
       if (f > 0.004f) {
         static const char *NAMES[PLR_NBTNS] = {
           "Play", "Next episode", "Subtitles", "Audio", "Episodes", "Sources",
-          "Aspect Ratio", "Stream stats" };
+          "Aspect Ratio", "Stream stats", "Details" };
         // While the source opens, play has nothing to toggle yet: the design
         // labels it "Starting…" until there is a picture.
         const char *name = button != PLR_PLAY ? NAMES[button]

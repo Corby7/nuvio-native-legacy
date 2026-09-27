@@ -6,6 +6,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <dirent.h>
+#include <time.h>
+#include <utime.h>
 #include "layout.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -358,6 +361,79 @@ void tex_scale(float e) {
 
 static char dirCache[512];
 
+// --- THE DISK CACHE'S CEILING ------------------------------------------------------
+//
+// The cache used to keep every image forever — "a film's art does not change" —
+// and nothing ever took one away. MEASURED on the C3 (2026-09-27): 670 MB in 3947
+// files, growing with every catalogue and every title browsed, on a device with
+// 3 GB free.
+//
+// Once per launch, on a thread of its own, the oldest files go until the folder is
+// back under NV_TEX_DISK_TARGET_MB — only when it passed NV_TEX_DISK_MAX_MB, so a
+// cache that fits is never touched. "Oldest" is the mtime, which ensureLocal
+// refreshes on a hit (at most once a day per file), so what goes is what has not
+// been shown for longest, not what was downloaded first.
+//
+// ONLY THIS CACHE'S OWN FILES: the name is the url's hash in hex and an extension
+// (nameOfCache). Anything else in the folder is left alone.
+#define NV_TEX_DISK_MAX_MB    256
+#define NV_TEX_DISK_TARGET_MB 192
+#define NV_TEX_TOUCH_S        86400
+
+typedef struct { time_t at; off_t size; char name[40]; } DiskFile;
+
+static int olderFirst(const void *a, const void *b) {
+  const DiskFile *x = a, *y = b;
+  return x->at < y->at ? -1 : x->at > y->at ? 1 : 0;
+}
+
+static int ownName(const char *n) {
+  size_t k = strspn(n, "0123456789abcdef");
+  return (k == 8 || k == 16) && n[k] == '.' && strlen(n + k) <= 5;
+}
+
+static int threadPrune(void *arg) {
+  char dir[512], path[600];
+  DIR *d;
+  struct dirent *e;
+  DiskFile *files = NULL;
+  size_t n = 0, cap = 0, i;
+  long long total = 0, freed = 0;
+  int gone = 0;
+  snprintf(dir, sizeof dir, "%s", (const char *)arg);
+  free(arg);
+  if (!(d = opendir(dir))) return 0;
+  while ((e = readdir(d)) != NULL) {
+    struct stat st;
+    if (!ownName(e->d_name) || strlen(e->d_name) >= sizeof files[0].name) continue;
+    snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+    if (n == cap) {
+      DiskFile *more = realloc(files, (cap = cap ? cap * 2 : 1024) * sizeof *files);
+      if (!more) break;
+      files = more;
+    }
+    files[n].at = st.st_mtime;
+    files[n].size = st.st_size;
+    snprintf(files[n].name, sizeof files[n].name, "%s", e->d_name);
+    total += st.st_size;
+    n++;
+  }
+  closedir(d);
+  if (total > (long long)NV_TEX_DISK_MAX_MB * 1024 * 1024) {
+    qsort(files, n, sizeof *files, olderFirst);
+    for (i = 0; i < n && total - freed > (long long)NV_TEX_DISK_TARGET_MB * 1024 * 1024; i++) {
+      snprintf(path, sizeof path, "%s/%s", dir, files[i].name);
+      if (remove(path) == 0) { freed += files[i].size; gone++; }
+    }
+  }
+  printf("[tex] disk cache: %d files, %lld MB; pruned %d (%lld MB)\n", (int)n,
+         total / (1024 * 1024), gone, freed / (1024 * 1024));
+  fflush(stdout);
+  free(files);
+  return 0;
+}
+
 void tex_cache_dir(const char *dir) {
   if (!dir || !*dir) return;
   snprintf(dirCache, sizeof dirCache, "%s", dir);
@@ -380,6 +456,11 @@ void tex_cache_dir(const char *dir) {
     printf("[tex] CACHE FOLDER NOT WRITABLE: %s — every downloaded image will be"
            " discarded (check the owner; the deploy stamps the Mac uid)\n",
            dirCache);
+  else {
+    char *copy = strdup(dirCache);
+    SDL_Thread *t = copy ? SDL_CreateThread(threadPrune, "nv-prune", copy) : NULL;
+    if (t) SDL_DetachThread(t); else free(copy);
+  }
   fflush(stdout);
 }
 
@@ -508,9 +589,14 @@ static int ensureLocalWithin(const char *url, char *dst, size_t size, int second
   }
   if (!dirCache[0]) return 0;
   nameOfCache(url, dst, size);
-  f = fopen(dst, "rb");
-  if (f) { fseek(f, 0, SEEK_END); n = ftell(f); fclose(f);
-           if (n > 512) { sanitizeCached(dst, n); return 1; } }
+  { struct stat st;
+    if (stat(dst, &st) == 0 && st.st_size > 512) {
+      // A hit keeps the file young for the prune (see threadPrune). Once a day at
+      // most: a write per decode would be a write per card per scroll.
+      if (time(NULL) - st.st_mtime > NV_TEX_TOUCH_S) utime(dst, NULL);
+      sanitizeCached(dst, (long)st.st_size);
+      return 1;
+    } }
   // 8 s and not 25: this is an IMAGE. At 25 s, two dead URLs held both decode
   // threads for almost a minute and the whole screen stopped receiving art —
   // repeatedly, because nothing stores the failure. What runs out of time here

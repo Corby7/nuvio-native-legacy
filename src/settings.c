@@ -71,7 +71,7 @@
 // MIDDLE is safe: the file is keyed, not positional (see settings_dir).
 typedef enum {
   // Playback
-  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_AUDIO_LANG, SETTING_SUBS,
+  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_AUDIO_LANG, SETTING_AUDIO_ANIME, SETTING_SUBS,
   SETTING_SUBS_FORCED, SETTING_SEEK_COLOR, SETTING_NEXT_AUTOPLAY, SETTING_NEXT_COUNTDOWN,
   SETTING_NEXT_MODE, SETTING_NEXT_SECONDS, SETTING_NEXT_PERCENT,
   // Layout da Home
@@ -80,7 +80,6 @@ typedef enum {
   SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_RAIL_BLUR, SETTING_HERO, SETTING_HERO_CATALOGS,
   SETTING_DISCOVER, SETTING_LABELS, SETTING_NAME_ADDON, SETTING_SUFFIX_KIND,
   SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME, SETTING_GRADIENT_CLASSIC,
-  SETTING_SOCIAL,
   // Continue watching
   SETTING_CW_ON, SETTING_CW_STYLE, SETTING_CW_LOGO, SETTING_CW_PLAY, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
   SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN, SETTING_CW_ORDER,
@@ -126,8 +125,19 @@ static const char *V_AUDIO[] = { "File default",
   "Czech", "Hungarian", "Romanian", "Greek", "Turkish", "Arabic", "Hebrew",
   "Hindi", "Japanese", "Korean", "Chinese", "Thai", "Vietnamese", "Indonesian" };
 #define N_AUDIO (int)(sizeof V_AUDIO / sizeof *V_AUDIO)
+// The same for ANIME, which a household often watches in Japanese while every
+// other show plays dubbed. "Same as Audio language" defers to the row above;
+// from "File default" on it is that row's list shifted by one, so value k is
+// lang.h's language k - 2.
+static const char *V_AUDIO_ANIME[] = { "Same as Audio language", "File default",
+  "Portuguese", "English", "Spanish", "French", "German", "Italian", "Dutch",
+  "Polish", "Swedish", "Danish", "Norwegian", "Finnish", "Russian", "Ukrainian",
+  "Czech", "Hungarian", "Romanian", "Greek", "Turkish", "Arabic", "Hebrew",
+  "Hindi", "Japanese", "Korean", "Chinese", "Thai", "Vietnamese", "Indonesian" };
+#define N_AUDIO_ANIME (int)(sizeof V_AUDIO_ANIME / sizeof *V_AUDIO_ANIME)
 typedef char subtitle_names_match_lang[(N_SUBS == LANG_COUNT + 2) ? 1 : -1];
 typedef char audio_names_match_lang[(N_AUDIO == LANG_COUNT + 1) ? 1 : -1];
+typedef char anime_audio_names_match_lang[(N_AUDIO_ANIME == LANG_COUNT + 2) ? 1 : -1];
 // When the Up next card appears: a fixed lead before the end, or a share of the
 // episode — the web app's nextEpisodeThresholdMode, same two modes, same default.
 // The credits marker brings the card up earlier in either mode.
@@ -194,6 +204,7 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Dolby Vision",               V_ON, 2),
   ESC("Dolby Atmos",                V_ON, 2),
   ESC("Audio language",             V_AUDIO, N_AUDIO),
+  ESC("Anime audio language",       V_AUDIO_ANIME, N_AUDIO_ANIME),
   ESC("Subtitles",                  V_SUBS, N_SUBS),
   ESC("Forced subtitles",           V_ON, 2),
   ESC("Seek bar colour",            V_SEEK, 6),
@@ -224,7 +235,6 @@ static const Option OPTIONS[SETTING_N] = {
   ESC("Hide unreleased",       V_ON, 2),   // hideUnreleasedContent
   ESC("Overall ratings",          V_SCORES, 2),  // homeImdbRatingsVisibility
   ESC("Classic focus gradient", V_ON, 2),   // classicFocusGradientEnabled
-  ESC("Show \"Among friends\"",  V_ON, 2),   // socialRowEnabled
 
   ESC("Show \"Continue watching\"", V_ON, 2), // continueWatchingEnabled
   ESC("\"Continue watching\" style", V_CW, 3), // continueWatchingCardStyle
@@ -281,6 +291,8 @@ static const char *KEY[] = {
   // Local to this port, like the subtitle row below: the account's player
   // settings store the language as a code, and this row stores an index.
   "audioPreferredLanguageIndex",
+  // Local to this port too: the web app has no anime row.
+  "animeAudioPreferredLanguageIndex",
   // NOT "subtitleLanguage": that name exists in the web app's blob with values of
   // its own ("off", "eng", "system"), and sharing the name would have the account
   // feed a string this row cannot read on every sync. A name of this port's own
@@ -307,7 +319,6 @@ static const char *KEY[] = {
   "discoverLocation", "posterLabelsEnabled", "catalogAddonNameEnabled",
   "catalogTypeSuffixEnabled", "hideUnreleasedContent",
   "homeImdbRatingsVisibility", "classicFocusGradientEnabled",
-  "socialRowEnabled",
   "continueWatchingEnabled", "continueWatchingCardStyle",
   // Local to this port: the web app has no such key, so the blob never touches it.
   "continueWatchingTitleLogo", "continueWatchingPlayOnSelect",
@@ -345,11 +356,11 @@ typedef char checked_one_key_per_option[
 // panel says about a section before it is opened. `group` starts a new group
 // header on the list of sections; NULL continues the one above.
 static const struct { const char *group, *title; int start, n; const char *blurb; } SECTIONS[] = {
-  { "Playback", "Playback",          SETTING_QUALITY,              12,
+  { "Playback", "Playback",          SETTING_QUALITY,              13,
     "Quality, Dolby formats, languages, the seek bar and what happens at the end of an episode." },
   { "Home", "Home layout",       SETTING_LANDSCAPE,            4,
     "Poster shape and how the hero backdrop is drawn." },
-  { NULL, "Home content",      SETTING_RAIL,                13,
+  { NULL, "Home content",      SETTING_RAIL,                12,
     "The sidebar, the hero and what the Home rows show." },
   // No options of its own: `start` is SETTING_N, the marker openSection reads to
   // open the Home rows list (level 2) instead of a list of options.
@@ -382,6 +393,7 @@ static const struct { const char *group, *title; int start, n; const char *blurb
 static int value[SETTING_N] = {
   0, 0, 0,          /* quality, DV, Atmos */
   0,                /* audio language: the file's default */
+  0,                /* anime audio language: same as the row above */
   // AUTOMATIC and not "Off". Off is what the app did before this row existed —
   // nothing ever selected a subtitle, on any title — and it is the behaviour the
   // owner reported as "subtitles are not really a thing here". A default of Off
@@ -415,7 +427,6 @@ static int value[SETTING_N] = {
   1,                /* hide unreleased: off */
   0,                /* overall ratings: show (SHOW_ALL) */
   1,                /* classic focus gradient: off */
-  0,                /* "Among friends" row: on */
 
   0,                /* continue watching: on */
   0,                /* style: card */
@@ -495,6 +506,9 @@ int settings_subtitle_language(void) {
 }
 int settings_subtitle_forced(void)     { return on(SETTING_SUBS_FORCED); }
 int settings_audio_language(void)      { return value[SETTING_AUDIO_LANG] - 1; }
+int settings_anime_audio_language(void) {
+  return value[SETTING_AUDIO_ANIME] ? value[SETTING_AUDIO_ANIME] - 2 : settings_audio_language();
+}
 int settings_next_autoplay(void)       { return on(SETTING_NEXT_AUTOPLAY); }
 double settings_next_lead(double durationSeg) {
   if (value[SETTING_NEXT_MODE] == 1)
@@ -528,7 +542,6 @@ float settings_hero_band_scale(void) {
   return (float)value[SETTING_HERO_BAND] / 100.0f;
 }
 int settings_posters_landscape(void)   { return on(SETTING_LANDSCAPE); }
-int settings_social_row(void)          { return on(SETTING_SOCIAL); }
 int settings_gradient_focus_classic(void) { return on(SETTING_GRADIENT_CLASSIC); }
 
 int settings_labels_poster(void)      { return on(SETTING_LABELS); }
@@ -935,6 +948,7 @@ static const char *helpOption(int op) {
     case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead.";
     case SETTING_NEXT_COUNTDOWN: return "How long the Up next card waits before it plays the next episode.";
     case SETTING_AUDIO_LANG: return "The audio track to switch to when the file has one in this language. File default keeps the file's own choice.";
+    case SETTING_AUDIO_ANIME: return "The same, for anime only: Japanese animation, or a title from an anime catalogue. Same as Audio language follows the row above.";
     case SETTING_SUBS: return "The subtitle turned on when a title starts: the file's own track first, then an addon's.";
     case SETTING_SUBS_FORCED: return "When no subtitle is turned on, shows a forced track in the audio's language: signs and foreign dialogue only.";
     case SETTING_NEXT_AUTOPLAY: return "Plays the next episode when the Up next countdown ends. Off, the card waits for you.";
@@ -1603,8 +1617,8 @@ static int highlightOf(void) {
     case SETTING_DET_TRAILER: return HL_BUTTONS;
     case SETTING_DET_DATE_FULL: return HL_META;
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:
-    case SETTING_HIDE_UNRELEASED: case SETTING_SOCIAL: return HL_ROWS;
-    case SETTING_AUDIO_LANG: case SETTING_ANIM: return HL_NONE;
+    case SETTING_HIDE_UNRELEASED: return HL_ROWS;
+    case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM: return HL_NONE;
     default:
       if (focusOp >= SETTING_CW_ON && focusOp <= SETTING_CW_ORDER) return HL_CW;
       return HL_CARD;

@@ -106,14 +106,6 @@ static int nRows = 4;
 static int resumeIndex = -1;
 static char resumeId[64];
 static unsigned resumeRev, resumeApplied;
-static int requestSocial;
-static int requestPersonSocial;
-static CatItem personSocial;
-int home_requested_person_social(CatItem *output) {
-  if (!requestPersonSocial) return 0;
-  requestPersonSocial=0; if(output)*output=personSocial; return 1;
-}
-int home_requested_social(void) { int v=requestSocial;requestSocial=0;return v; }
 
 // It classifies only the catalogue's public names. It never inspects the URL (which
 // may contain tokens) and never invents awards or availability.
@@ -137,8 +129,7 @@ static KindRow profileCatalog(const char *name) {
   return ROW_NORMAL;
 }
 static int editorial(KindRow t) {
-  return t == ROW_HIGHLIGHT || t == ROW_COLLECTION || t == ROW_SERVICE
-      || t == ROW_SOCIAL;
+  return t == ROW_HIGHLIGHT || t == ROW_COLLECTION || t == ROW_SERVICE;
 }
 
 
@@ -312,8 +303,7 @@ static const char *colHeroArt(const ColFolder *f) {
 
 // THE HERO'S FAMILY, and the fade BETWEEN families.
 //
-// drawHero is not one drawing, it is three: the social row's, the collection rows' and
-// the poster rows'. Each already crossfades ALONG ITS OWN ROW — heroExits for the
+// drawHero is not one drawing, it is two: the collection rows' and the poster rows'. Each already crossfades ALONG ITS OWN ROW — heroExits for the
 // posters, colHeroFade for the collections — but WHICH of the three runs was decided
 // fresh every frame from rows[focus.row].kind, so going DOWN from a poster row onto a
 // collection row exchanged one whole drawing for another between two frames. The owner
@@ -324,8 +314,8 @@ static const char *colHeroArt(const ColFolder *f) {
 // `famFade` is the alpha of the picture being LEFT, on the same clock and at the same
 // NV_HERO_FADE_MS rate as the other two, and the arriving family's art AND copy come up
 // on 1-famFade. So every move on the home now dissolves: along a row, across rows, and
-// across the three kinds of row.
-typedef enum { FAM_POSTER, FAM_COLLECTION, FAM_SOCIAL } HeroFamily;
+// across the two kinds of row.
+typedef enum { FAM_POSTER, FAM_COLLECTION } HeroFamily;
 // What the focused family had on screen LAST FRAME — just the art, so the family it
 // hands over to can go on drawing it while it fades. The COPY is deliberately not here:
 // the poster path already documents why two hero texts must not overlap (they are
@@ -335,7 +325,6 @@ typedef enum { FAM_POSTER, FAM_COLLECTION, FAM_SOCIAL } HeroFamily;
 // — gone at the handover, faded in by the family arriving — and only the art crossfades.
 typedef struct {
   int     valid;
-  int     social;         // the GFX_SOCIAL ambience belongs under it
   char    art[512];
   GfxRect rect;
   GfxMode mode;
@@ -353,20 +342,18 @@ static float      famFade = 0.0f;
 static int        famHold = 0;
 static Uint32     famHoldIn = 0;
 
-// The three drawings, by the kind of row the focus is on. Every kind that is not the
-// social row or a collection row is a title on a poster row, whatever the card's shape,
-// and they all share one hero.
+// The two drawings, by the kind of row the focus is on. Every kind that is not a
+// collection row is a title on a poster row, whatever the card's shape, and they all
+// share one hero.
 static HeroFamily familyOfRow(int r) {
   if (r < 0 || r >= nRows) return FAM_POSTER;
-  if (rows[r].kind == ROW_SOCIAL)   return FAM_SOCIAL;
   if (rows[r].kind == ROW_CATALOGS) return FAM_COLLECTION;
   return FAM_POSTER;
 }
 
 static void heroShotArt(const char *art, GfxRect rect, GfxMode mode,
-                        float aspect, int social) {
-  heroShot.social = social;
-  heroShot.valid  = social || (art && art[0]);
+                        float aspect) {
+  heroShot.valid  = art && art[0];
   heroShot.rect   = rect;
   heroShot.mode   = mode;
   heroShot.aspect = aspect;
@@ -411,9 +398,6 @@ static void heroArtDraw(GfxRect r, GLuint tex, GfxMode mode, float alpha) {
 static void drawHeroLeaving(float alpha) {
   GLuint t;
   if (!heroLeaving.valid || alpha <= 0.004f) return;
-  if (heroLeaving.social)
-    gfx_rect((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H}, 0, GFX_SOCIAL,
-             0, 0, 0, 0, 1, 1, 1, alpha);
   if (!heroLeaving.art[0]) return;
   t = tex_get_hero(heroLeaving.art);
   if (!t) return;
@@ -450,7 +434,6 @@ static float widthOf(KindRow t) {
     case ROW_HIGHLIGHT: return 568.0f;
     case ROW_COLLECTION: return 480.0f;
     case ROW_SERVICE: return 360.0f;
-    case ROW_SOCIAL: return 540.0f;
     // The ranking's card is an ordinary portrait poster with a numeral beside it;
     // the web has no top-10 row to measure, so it follows the poster.
     case ROW_TOP10: return NV_CARD_W;
@@ -517,14 +500,14 @@ static int drawArtHero(GfxRect r, GfxMode mode, const CatItem *item,
   // out that was never faded in.
   if (!isPoster) {
     heroArtDraw(r, tex, mode, alpha);
-    if (alpha > 0.004f) heroShotArt(art, r, mode, gfx_tex_aspect_current, 0);
+    if (alpha > 0.004f) heroShotArt(art, r, mode, gfx_tex_aspect_current);
   } else {
     float ap = gfx_tex_aspect_current > 0.05f ? gfx_tex_aspect_current : (2.0f / 3.0f);
     float h = r.h, w = h * ap, limit = r.w * 0.42f;
     if (w > limit) { w = limit; h = w / ap; }
     GfxRect poster = { r.x + r.w - w, r.y + (r.h - h) * 0.5f, w, h };
     gfx_rect(poster, tex, GFX_HERO, 0, 0, 0, 0, 0, 0, 0, alpha);
-    if (alpha > 0.004f) heroShotArt(art, poster, GFX_HERO, gfx_tex_aspect_current, 0);
+    if (alpha > 0.004f) heroShotArt(art, poster, GFX_HERO, gfx_tex_aspect_current);
   }
   gfx_tex_aspect_current = 0.0f;
   return 1;
@@ -661,8 +644,7 @@ static const char *art_of_card(KindRow kind, int index_, int landscape) {
 static int focus_can_press_long(void) {
   if (focus.row < 0 || focus.row >= nRows) return 0;
   const Row *s = &rows[focus.row];
-  if (s->kind == ROW_CATALOGS || s->kind == ROW_SOCIAL ||
-      s->kind == ROW_TOP10) return 0;
+  if (s->kind == ROW_CATALOGS || s->kind == ROW_TOP10) return 0;
   return focus.column >= 0 && focus.column < s->n;
 }
 
@@ -673,7 +655,6 @@ static float heightOf(KindRow t) {
     case ROW_HIGHLIGHT: return 320.0f;
     case ROW_COLLECTION: return 270.0f;
     case ROW_SERVICE: return 203.0f;
-    case ROW_SOCIAL: return 240.0f;
     case ROW_RETURN: return 178.0f;
     case ROW_TOP10: return NV_CARD_H;
     // 384 * 0.5625, the 16:9 the web derives it at
@@ -843,13 +824,17 @@ int home_start(const char *dirArt) {
   col_load(dirArt);
   badges_load(dirArt);
   cat_load(dirArt);
-  // The LAST session's cache goes in over the package's catalogue, before any
-  // network. If it does not exist (a first run) or is from another build, it carries
-  // on with the package's, as it always did.
+  // The LAST session's cache, before any network. If it does not exist (a first
+  // run) or is from another build, the catalogue stays empty until discovery
+  // publishes — the package carries no catalogue of its own any more.
   if (cat_read_cache(dirArt)) mark("cached catalog on screen");
   loadsDir(dirArt, bd, &nBd, NULL);
   loadsDir(dirArt, pst, &nPst, "poster");
-  if (!nBd) { printf("home: no backdrop in %s\n", dirArt); return 0; }
+  // NO PACKAGED ART IS NORMAL. The package no longer carries a demo catalogue
+  // (40 titles that were nobody's), so a first run has nothing to show until the
+  // network publishes — and app.c keeps "Preparing your catalogue…" up while the
+  // catalogue is empty. Refusing to start here left that screen up for good.
+  if (!nBd) printf("home: no packaged backdrops in %s; waiting for the network\n", dirArt);
   if (!nPst) { printf("home: no portrait posters, Top 10 will use the backdrop\n"); }
 
   // In the modern legacy layout the hero is informational; the navigation starts on
@@ -898,8 +883,7 @@ static const char *rowHeading(const char *title, char *out, size_t size) {
 static void rowCatalog(int r, CtxCatalog *out) {
   memset(out, 0, sizeof *out);
   if (r < 0 || r >= nRows) return;
-  if (rows[r].kind == ROW_TOP10 || rows[r].kind == ROW_CATALOGS ||
-      rows[r].kind == ROW_SOCIAL) return;
+  if (rows[r].kind == ROW_TOP10 || rows[r].kind == ROW_CATALOGS) return;
   { char withoutSuffix[96];
     snprintf(out->title, sizeof out->title, "%s",
              rowHeading(rows[r].title, withoutSuffix, sizeof withoutSuffix)); }
@@ -962,13 +946,6 @@ void home_event(const SDL_Event *e) {
         focus.nColumns[focus.row]=s->n;
         return;
       }
-      if(rows[focus.row].kind==ROW_SOCIAL && rows[focus.row].start<0) {
-        requestSocial=1;return;
-      }
-      if(rows[focus.row].kind==ROW_SOCIAL) {
-        const CatItem *ci=cat_item_exact(rows[focus.row].start+focus.column);
-        if(ci){personSocial=*ci;requestPersonSocial=1;}return;
-      }
       if (rows[focus.row].kind == ROW_CATALOGS) {
         if (focus.column >= 0 && focus.column < rows[focus.row].n) {
           seeall_collection(col_folder(rows[focus.row].folders[focus.column]));
@@ -993,14 +970,18 @@ void home_event(const SDL_Event *e) {
 
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
+  // BACK ON THE HOME OPENS THE SIDEBAR; it does not leave. The bar is the last
+  // stop of every chain of Backs, and a Back pressed with it open is the one that
+  // exits (app.c). Leaving straight from the home threw the owner out of the app
+  // on one press too many. A held key's repeats are ignored, or the same press
+  // would open the bar and then leave through it.
+  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK) {
+    if (!e->key.repeat) requestMenu = 1;
+    return;
+  }
 #ifdef __APPLE__
-  // Running on the Mac, Back on the home does NOT close: closing the window in the
-  // middle of a test costs a recompile and a reopen. On the device it exits the app,
-  // as it should.
-  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE) return;
+  if (k == SDLK_BACKSPACE) return;
   if (k == SDLK_q) { wantsExit = 1; return; }
-#else
-  if (k == SDLK_ESCAPE || k == SDLK_AC_BACK) { wantsExit = 1; return; }
 #endif
   // OK NO LONGER ACTS ON THE KEYDOWN. Opening the title there made "holding"
   // impossible: by the time the key went up, the detail had been open for half a
@@ -1046,7 +1027,6 @@ static int subscriptionPrefs(void) {
        | (settings_cw_style() << 1)
        | (settings_posters_landscape() ? 8 : 0)
        | (settings_labels_poster() ? 16 : 0)
-       | (settings_social_row() ? 32 : 0)
        | (homerows_trakt_watchlist() ? 64 : 0)
        | (homerows_trakt_recs() ? 128 : 0);
 }
@@ -1058,11 +1038,11 @@ static int subscriptionPrefs(void) {
 // The "@Name" entries are packaged collection GROUPS, matched by title. The
 // account's own collections do not come through here: they arrive by id, in the
 // position the person gave them.
-static const char *const CURATED_ID[]={"continue_watching","social_activity","now_playing_movies","@Streaming",
+static const char *const CURATED_ID[]={"continue_watching","now_playing_movies","@Streaming",
   "trending_movies","trending_series","@Themes","ai_movies_for_you",
   "ai_series_for_you","snoak_top100_movies","snoak_top100_series",
   "@Awards","@Directors","@Genres"};
-static const char *const CURATED_NAME[]={"Continue watching","Among friends","Recent Release","Streaming",
+static const char *const CURATED_NAME[]={"Continue watching","Recent Release","Streaming",
   "Trending Movies","Trending Series","Themes","Picked for You · Movies",
   "Picked for You · Series","Top 100 · Movies","Top 100 · Series",
   "Awards","Directors","Genres"};
@@ -1095,9 +1075,8 @@ static void decorateRow(Row *row) {
     if(CURATED_ID[s][0]=='@')continue;
     if(strcmp(row->catId,CURATED_ID[s])&&strcmp(row->key,CURATED_ID[s]))continue;
     snprintf(row->title,sizeof row->title,"%s",CURATED_NAME[s]);
-    if(s==1)row->kind=ROW_SOCIAL;
-    else if(s==2)row->kind=ROW_HIGHLIGHT;
-    else if(s==9||s==10)row->kind=ROW_TOP10;
+    if(s==1)row->kind=ROW_HIGHLIGHT;
+    else if(s==8||s==9)row->kind=ROW_TOP10;
     else if(s!=0)row->kind=ROW_NORMAL;
     return;
   }
@@ -1166,9 +1145,9 @@ static void syncRows(void) {
     // does not empty it, it removes it. It is what renderModernHomeLayout does when
     // computeContinueWatchingRenderState returns the row switched off.
     if (!strcmp(cf->key, "continue_watching") && !settings_cw_on()) continue;
-    // Same rule for the friends' feed: turning it off REMOVES the row. The
-    // catalogue can still carry it — it was built while the option was on, or
-    if (!strcmp(cf->key, "social_activity") && !settings_social_row()) continue;
+    // The friends' feed is gone from the app, but a catalogue cached on disk by an
+    // older build can still carry its row.
+    if (!strcmp(cf->key, "social_activity")) continue;
     // The opt-in Trakt rows likewise: the cached catalogue may still carry them.
     if (!strcmp(cf->key, "trakt_watchlist") && !homerows_trakt_watchlist()) continue;
     if (!strcmp(cf->key, "trakt_recommendations") && !homerows_trakt_recs()) continue;
@@ -1196,7 +1175,6 @@ static void syncRows(void) {
     snprintf(rows[destination].catId, sizeof rows[destination].catId, "%s", cf->catId);
     snprintf(rows[destination].catKind, sizeof rows[destination].catKind, "%s", cf->kind);
     rows[destination].start = cf->start;
-    if(!strcmp(cf->key,"social_activity"))rows[destination].kind=ROW_SOCIAL;
     snprintf(rows[destination].key, sizeof rows[destination].key,
              "%s", cf->key);
     destination++;
@@ -1318,9 +1296,8 @@ static void syncRows(void) {
         if(dup)break;
         rows[destination]=orig[k];
         snprintf(rows[destination].title,sizeof rows[destination].title,"%s",names[s]);
-        if(s==1)rows[destination].kind=ROW_SOCIAL;
-        else if(s==2)rows[destination].kind=ROW_HIGHLIGHT;
-        else if(s==9||s==10)rows[destination].kind=ROW_TOP10;
+        if(s==1)rows[destination].kind=ROW_HIGHLIGHT;
+        else if(s==8||s==9)rows[destination].kind=ROW_TOP10;
         else if(s!=0)rows[destination].kind=ROW_NORMAL;
         destination++;break;
       }
@@ -1360,16 +1337,6 @@ static void syncRows(void) {
     if(s->kind==ROW_TOP10 && s->base[0] && s->catId[0]) {
       s->stackN=s->n;s->n=1;s->stackOpen=0;
     }
-  }
-  int socialExists=0;
-  for(int i=0;i<destination;i++)if(rows[i].kind==ROW_SOCIAL)socialExists=1;
-  if(!socialExists && settings_social_row() && destination<MAX_FILTER) {
-    int pos=destination>0?1:0;
-    memmove(rows+pos+1,rows+pos,(destination-pos)*sizeof *rows);
-    Row *s=&rows[pos];memset(s,0,sizeof *s);
-    s->kind=ROW_SOCIAL;s->start=-1;s->n=1;
-    snprintf(s->title,sizeof s->title,"Among friends");
-    snprintf(s->key,sizeof s->key,"social_activity");destination++;
   }
   // NO "Resume now" ROW. A return from the player used to push a one-card row above
   // everything; the owner asked for it gone — Continue watching already carries the
@@ -1557,7 +1524,7 @@ static void warmHero(int target, int previous) {
 // flies. Three is roughly the screen's remaining width at a walking pace.
 //
 // Only the rows that CAME FROM a catalogue can grow — "Continue watching", the
-// Trakt lists, the collections and the social feed have no `base` to ask.
+// Trakt lists and the collections have no `base` to ask.
 //
 // A TOP 10 IS THE EXCEPTION AMONG THE ONES THAT DO HAVE ONE. It has a catalogue
 // behind it and would page like any other, and its eleventh card would be a
@@ -1572,7 +1539,7 @@ static void growRow(void) {
   if (focus.row < 0 || focus.row >= nRows) return;
   s = &rows[focus.row];
   if (!s->base[0] || !s->catId[0]) return;
-  if (s->kind == ROW_TOP10 || s->kind == ROW_CATALOGS || s->kind == ROW_SOCIAL) return;
+  if (s->kind == ROW_TOP10 || s->kind == ROW_CATALOGS) return;
   if (s->n >= MAX_CARDS) return;
   if (focus.column < s->n - 3) return;
   disc_row_more(s->key, s->base, s->catKind, s->catId, s->n);
@@ -1713,7 +1680,7 @@ void home_update(float dt, Uint32 now) {
     // `driven` answers "is a card focused at all", which is NOT the same question as
     // "does the focused card name a title". Two cases give a target of -1 while the
     // focus is very much on something: a collection row (its hero is drawn on its own
-    // path, further down) and the social row's empty state. Reading -1 as "nobody is
+    // path, further down). Reading -1 as "nobody is
     // here" handed both back to the automatic carousel — walking a collection row
     // left the carousel turning UNSEEN behind its hero, then flashed whatever it had
     // landed on when the focus returned to a poster row.
@@ -2532,70 +2499,7 @@ static void drawHero(Uint32 now, float output) {
   // Cleared every frame and filled in by whichever branch draws: a family that puts no
   // art on screen this frame leaves it empty, and the next handover then correctly has
   // nothing to hold.
-  heroShot.valid = 0; heroShot.social = 0; heroShot.art[0] = '\0';
-
-  if(focus.row>=0 && focus.row<nRows && rows[focus.row].kind==ROW_SOCIAL) {
-    float x=settings_content_x(),a=(1-output)*famIn;
-    // The ambience is part of this hero, not a backdrop to all of them: it comes up
-    // with the rest of the family and the shot below carries it out again.
-    gfx_rect((GfxRect){0,0,NV_SCREEN_W,NV_SCREEN_H},0,GFX_SOCIAL,0,0,0,0,1,1,1,famIn);
-    const Row *s=&rows[focus.row];
-    const CatItem *p=(s->start>=0&&focus.column<s->n)
-                    ?cat_item_exact(s->start+focus.column):NULL;
-    if(p) {
-      const char *art=art_by_format(p, 1);
-      GLuint ta=art?tex_get_hero(art):0;
-      r=heroRectFor(art);
-      // The activity carries on with a discreet ambience, but once Trakt has brought
-      // real art it becomes the hero's subject. The person stays only on the social
-      // card, where the avatar has context and does not compete with the title.
-      if(ta){gfx_tex_aspect_current=tex_aspect(art);
-        heroArtDraw(r,ta,modeHero,aArt);gfx_tex_aspect_current=0;
-        heroShotArt(art,r,modeHero,tex_aspect(art),1);famHold=0;}
-      else if (!art) { drawArtMissing(r, 0.0f, p, aArt);
-        // No art is an arrival too: the ambience and the attribution are the hero here,
-        // and there is nothing further to wait for.
-        heroShotArt(NULL,r,modeHero,0.0f,1);famHold=0; }
-
-      const char *name=p->socialName[0]&&strcmp(p->socialName,"Friend")?p->socialName:NULL;
-      char authorship[240];
-      if(name&&p->socialAction[0])snprintf(authorship,sizeof authorship,"%s  ·  %s",name,p->socialAction);
-      else if(name)snprintf(authorship,sizeof authorship,"%s",name);
-      else snprintf(authorship,sizeof authorship,"%s",p->socialAction);
-      txt_draw_alpha(txt_line_trim(TXT_HERO_META,authorship,210,210,221,255,680),x,146,a);
-
-      GLuint tl=p->logo[0]?tex_get_width(p->logo,520):0;
-      if(tl&&tex_aspect(p->logo)>0){
-        float ap=tex_aspect(p->logo),w=520,h=w/ap;
-        if(h>104){h=104;w=h*ap;}
-        gfx_rect((GfxRect){x,208,w,h},tl,tex_brand_dark(p->logo)?GFX_BRAND:GFX_TEXT,
-                 0,0,0,0,1,1,1,a);
-      } else if(p->title[0]) {
-        txt_draw_alpha(txt_line_trim(TXT_TITLE1,p->title,244,243,247,255,680),x,208,a);
-      }
-      if(p->directing[0])
-        txt_draw_alpha(txt_line_trim(TXT_CALLOUT,p->directing,230,231,238,255,680),x,326,a);
-      if(p->meta[0])
-        txt_draw_alpha(txt_line_trim(TXT_HERO_META,p->meta,190,194,205,255,680),x,364,a);
-      if(p->synopsis[0])
-        txt_block(TXT_HERO_SIN,p->synopsis,229,231,237,x,402,700,31,a,2);
-    } else {
-      // The empty state is the ambience and the invitation, with no art behind it: it
-      // is ready the moment the focus lands, so the family's fade has nothing to wait
-      // for and the ambience is what the next family will carry out.
-      heroShotArt(NULL,r,modeHero,0.0f,1);famHold=0;
-      const char *brand=extras_path_brand_name("trakt_wordmark");
-      GLuint logo=tex_get(brand);
-      float brandAspect=logo?tex_aspect(brand):2.66f;
-      if(brandAspect<=0)brandAspect=2.66f;
-      if(logo)gfx_rect((GfxRect){x,144,44*brandAspect,44},logo,GFX_BRAND,0,0,0,0,.96f,.94f,.95f,a);
-      txt_draw_alpha(txt_line(TXT_HERO_META,"YOUR COMMUNITY",210,191,199,255),x+44*brandAspect+24,154,a);
-      txt_draw_alpha(txt_line(TXT_TITLE1,"Good stories connect us.",244,243,247,255),x,226,a);
-      txt_block(TXT_HERO_SIN,"Discover what your friends are watching.\nA new recommendation can start here.",187,190,202,x,330,740,36,a,2);
-    }
-    heroArtRect=r;
-    return;
-  }
+  heroShot.valid = 0; heroShot.art[0] = '\0';
 
   if(focus.row>=0&&focus.row<nRows&&rows[focus.row].kind==ROW_CATALOGS) {
     // WHICH folder the hero shows is not simply the focused one: it lags behind until
@@ -2668,7 +2572,7 @@ static void drawHero(Uint32 now, float output) {
         if(art)gfx_rect(header,art,GFX_TEXT,0,0,0,0,1,1,1,fadeIn*a);
         // The authored banner draws with no aspect override, so the shot carries none:
         // whatever family inherits it puts it back in this same rectangle.
-        if(art){heroShotArt(folder->hero,header,GFX_TEXT,0.0f,0);famHold=0;}
+        if(art){heroShotArt(folder->hero,header,GFX_TEXT,0.0f);famHold=0;}
         else if(!folder->hero[0])famHold=0;
         heroArtRect=header;
         int director=!strcasecmp(folder->group,"Directors");
@@ -2709,7 +2613,7 @@ static void drawHero(Uint32 now, float output) {
       // seconds after the focus arrives, and until one does the picture of the row just
       // left is the only thing there is to show. A folder that names no art at all is
       // ready by definition — the group, the title and the wordmark are its hero.
-      if(t){heroShotArt(art,r,modeHero,tex_aspect(art),0);famHold=0;}
+      if(t){heroShotArt(art,r,modeHero,tex_aspect(art));famHold=0;}
       else if(!art[0])famHold=0;
       heroArtRect=r;
       float x=settings_content_x(),a=(1-output)*famIn;
@@ -2908,7 +2812,7 @@ static void drawHero(Uint32 now, float output) {
     if (artReady) {
       // ARRIVING FROM ANOTHER KIND OF ROW, THE CROSSFADE THAT MATTERS IS THE FAMILY'S.
       // The picture being replaced is not the previous poster's — it is the collection's
-      // or the social row's, and it is already going out on famFade. Running heroExits
+      // and it is already going out on famFade. Running heroExits
       // as well would dissolve a backdrop nobody can see (it is behind the family's own
       // fade, at alpha 0) against one that is itself still coming up, which reads as the
       // new art arriving at half strength.
@@ -3551,13 +3455,6 @@ void home_draw(Uint32 now) {
       TxtLine tl = txt_line_trim(TXT_ROW_TITLE, rotFilter, 245, 246, 249, 255,
                                     NV_SCREEN_W - settings_content_x() - 180);
       txt_draw(tl, settings_content_x(), y);
-      if(kind==ROW_SOCIAL) {
-        const char *brand=extras_path_brand_name("trakt_wordmark");
-        GLuint logo=tex_get(brand);float ap=logo?tex_aspect(brand):2.66f;
-        if(ap<=0)ap=2.66f;
-        if(logo)gfx_rect((GfxRect){settings_content_x()+tl.w+18,y+(tl.h-30)*.5f,30*ap,30},
-                         logo,GFX_BRAND,0,0,0,0,.95f,.93f,.94f,1);
-      }
       if(!strncmp(rows[r].catId,"ai_",3)) {
         TxtLine ai=txt_line(TXT_HERO_META,"AI-powered",183,192,219,255);
         txt_draw(ai,settings_content_x()+tl.w+22,y+(tl.h-ai.h)*.5f);
@@ -3686,68 +3583,7 @@ void home_draw(Uint32 now) {
             if(focus.row==r)hasItemFocus=0;
             continue;
           }
-          if(kind==ROW_SOCIAL && rows[r].start<0) {
-            GfxRect b={px,py,w,h};
-            gfx_color(b,.055f,.115f,.09f,.15f,1);
-            if(f>.01f)gfx_rect(b,0,GFX_RING,0,.008f,0,.055f,.95f,.93f,.99f,f);
-            txt_draw(txt_line_trim(TXT_CALLOUT,"Among friends",240,234,248,255,w-48),px+24,py+24);
-            txt_draw(txt_line_trim(TXT_CAPTION,"No activity available right now.",195,183,211,255,w-48),px+24,py+91);
-            txt_draw(txt_line_trim(TXT_CAPTION,"Follow people on Trakt to discover more.",195,183,211,255,w-48),px+24,py+126);
-            txt_draw(txt_line_trim(TXT_CAPTION,"OK · Check connection",240,231,250,255,w-48),px+24,py+h-50);
-            if(focus.row==r)hasItemFocus=0;
-            continue;
-          }
           const CatItem *cItem = cat_item_exact(idxCat);
-          if(kind==ROW_SOCIAL && cItem) {
-            if(focus.row==r)hasItemFocus=0;
-            // Social activity needs context, not a second hero. No panel and no
-            // outline: the home's neutral stage does the background work. The image
-            // has a lesser editorial role, a thumbnail of the work, while the
-            // authorship and the action breathe directly on the screen.
-            const float contentTop=py+24.0f;
-            const float contentBase=py+h-24.0f;
-            const float artW=134.0f;
-            const float artX=px+w-24.0f-artW;
-            const char *thumbPath=cItem->poster[0]?cItem->poster:
-                                  (cItem->backdrop[0]?cItem->backdrop:NULL);
-            if(thumbPath){GLuint thumb=tex_get_width(thumbPath,artW);
-              if(thumb){GfxRect tr={artX,contentTop,artW,contentBase-contentTop};
-                gfx_tex_aspect_current=tex_aspect(thumbPath);
-                gfx_rect(tr,thumb,GFX_CARD,0,0,0,.055f,0,0,0,1);gfx_tex_aspect_current=0;
-              }
-            }
-            // A larger avatar, centred on the same vertical band as the art.
-            // The shared axis gives the composition the look of an editorial card,
-            // rather than an avatar floating at the top with a separate thumbnail below.
-            float d=120.0f, ax=px+24.0f, ay=py+(h-d)*.5f;
-            GfxRect avatar={ax,ay,d,d};
-            GLuint photo=cItem->socialAvatar[0]?tex_get_width(cItem->socialAvatar,220):0;
-            // The focus is a disc behind the image, never a stroke over it.
-            // That way the two circles share the same centre and the rim stays even,
-            // including at the row's upper limit.
-            float pad=5.0f*f;
-            if(f>.01f)gfx_rect(avatar,0,GFX_DISK,0,0,0,0,.96f,.96f,.98f,f);
-            GfxRect core={ax+pad,ay+pad,d-pad*2,d-pad*2};
-            gfx_rect(core,0,GFX_DISK,0,0,0,0,.15f,.16f,.18f,1);
-            if(photo){gfx_tex_aspect_current=tex_aspect(cItem->socialAvatar);
-              gfx_rect(core,photo,GFX_AVATAR,0,0,0,0,1,1,1,1);gfx_tex_aspect_current=0;}
-            else {char initial[8]="?";const char *name=cItem->socialName[0]?cItem->socialName:cItem->country;
-              if(name[0]){size_t z=1;while(z<4 && (name[z]&0xc0)==0x80)z++;memcpy(initial,name,z);initial[z]=0;}
-              TxtLine l=txt_line(TXT_TITLE2,initial,235,236,240,255);txt_draw(l,ax+(d-l.w)*.5f,ay+(d-l.h)*.5f);}
-            float tx=ax+d+24.0f,tw=thumbPath?artX-tx-24.0f:w-192.0f;
-            TxtLine name=txt_line_trim(TXT_CW_TITLE,cItem->socialName[0]?cItem->socialName:cItem->country,245,245,247,255,tw);
-            txt_draw(name,tx,contentTop);
-            TxtLine action=txt_line_trim(TXT_MINI,cItem->socialAction[0]?cItem->socialAction:cItem->providerName,181,185,196,255,tw);
-            txt_draw(action,tx,contentTop+38.0f);
-            TxtLine title=txt_line_trim(TXT_CW_META,cItem->title,228,231,239,255,tw);
-            txt_draw(title,tx,contentTop+92.0f);
-            TxtLine ep=txt_line_trim(TXT_MINI,cItem->season?cItem->directing:"Movie",181,185,196,255,tw);
-            txt_draw(ep,tx,contentTop+130.0f);
-            TxtLine source=txt_line_trim(TXT_MINI,cItem->providerName[0]?cItem->providerName:"Trakt",155,161,174,255,tw);
-            txt_draw(source,tx,contentBase-14.0f);
-            if(f>.1f){TxtLine see=txt_line(TXT_MINI,"See profile",235,237,244,255);txt_draw_alpha(see,tx,contentBase-40.0f,f);}
-            continue;
-          }
           const char *path = NULL;
           // A LANDSCAPE card calls for landscape art. In the web app the landscape
           // card's poster comes from `landscapePoster` -> `background` -> `backdrop`
@@ -3824,9 +3660,8 @@ void home_draw(Uint32 now) {
           // both would decode every frame, for ever. Both heroes that could want a
           // poster take it only as a fallback (`artOfItem` here, `artOf` in detail.c,
           // each gated on an empty backdrop), so a poster whose item HAS a backdrop
-          // is provably never asked for at 1920. Smaller non-exact callers (the
-          // social panel's 96) cannot start the fight: they promote upward or not at
-          // all. The landscape/open art IS the backdrop, so it keeps tex_get_width.
+          // is provably never asked for at 1920. Smaller non-exact callers cannot
+          // start the fight: they promote upward or not at all. The landscape/open art IS the backdrop, so it keeps tex_get_width.
           int sharp = cItem && path == cItem->poster && cItem->backdrop[0];
           GLuint t = path ? (sharp ? tex_get_exact(path, wAsk)
                                    : tex_get_width(path, wAsk)) : 0;

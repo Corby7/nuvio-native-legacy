@@ -270,11 +270,11 @@ const char *homerows_kind(int i) {
 int homerows_enabled(int i) { HomeRow *r = at(i); return r ? r->enabled : 0; }
 
 // The cap is discover's: CAT_FILTER_MAX rows of catalogue, "Continue watching"
-// and the friends' feed included. Collections are placed by the Home and do not
+// included. Collections are placed by the Home and do not
 // count. An estimate — a catalogue that comes back empty frees its slot — but
 // it is the difference between "hidden" and "shown, and still not there".
 int homerows_over_cap(int i) {
-  int slots = CAT_FILTER_MAX - (settings_cw_on() ? 1 : 0) - (settings_social_row() ? 1 : 0);
+  int slots = CAT_FILTER_MAX - (settings_cw_on() ? 1 : 0);
   int k, used = 0;
   HomeRow *r = at(i);
   if (!r || !r->enabled || r->kind == HR_COLLECTION) return 0;

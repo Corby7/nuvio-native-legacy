@@ -15,6 +15,7 @@
 #include "extras.h"
 #include "collections.h"
 #include "homerows.h"
+#include "acclib.h"
 #include "js.h"
 #include "jsw.h"
 #include <stdio.h>
@@ -29,6 +30,12 @@
 
 static pthread_t thread;
 static int threadAlive, threadReady;
+// THE EARLY HALF OF A CYCLE. Set by the sync thread once everything that shapes
+// the home has landed (addons, keys, collections, settings, row order), so the
+// main thread can apply it without waiting for the progress, the library and
+// the pushes behind it. Read and written through __atomic: the main thread reads
+// the blobs it guards only after seeing it set.
+static int earlyReady, earlyApplied;
 static SyncState state = SYNC_STOPPED;
 static char summary[220] = "not synced";
 static unsigned lastOk;
@@ -69,7 +76,7 @@ static int nProgressRemote;
 
 // Counts of what has been pulled but the app does not consume yet. They exist so
 // the summary can tell the truth instead of saying "synced" without qualifying it.
-static int cWatched, cLib, cSaved, cCollections, hasSettingsProfile, hasCatHome;
+static int cWatched, cLib, cCollections, hasSettingsProfile, hasCatHome;
 
 // The profile's settings blob, raw, waiting to be applied on the main thread.
 // `applySettings` starts on: at boot there is no local change to preserve, and
@@ -600,25 +607,6 @@ static void pullTracker(void) {
   free(r);
 }
 
-static int countRpc(const char *func, const char *body) {
-  char *r;
-  int st = 0, k = 0;
-  const char *p;
-  if (alreadyMissing(func)) return -1;
-  r = session_rpc(func, body, &st);
-  if (!ok2xx(r, st)) {
-    if (r && cloud_error_missing(r)) {
-      printf("[sync] %s does not exist on this server\n", func);
-      if (nMissing < SY_MISSING) missing[nMissing++] = func;
-    }
-    free(r);
-    return -1;
-  }
-  for (p = js_root_array(r); p; p = js_next(js_end(p))) k++;
-  free(r);
-  return k;
-}
-
 // The settings blob is NOT counted, it is read: it is the person's layout. Until
 // now this RPC only fed a number in the summary, and the ~40 preferences came
 // from defaults transcribed by hand from the profile of whoever built the package.
@@ -788,25 +776,16 @@ static int applyHomeCatalog(const char *r) {
   return n;
 }
 
-static void pullSoRead(void) {
+// What shapes the HOME: the collections, the settings profile and the row order.
+// Pulled in the early half of the cycle; see earlyReady.
+static void pullHomeState(void) {
   char body[160];
   int profile = profiles_active();
 
   snprintf(body, sizeof body, "{\"p_profile_id\":%d}", profile);
-  cLib   = countRpc("sync_pull_library", body);
   // COLLECTIONS: downloaded in full now, not merely counted. The body is kept
   // for the main thread to apply (see collectionsBlob).
   cCollections = pullCollections(body);
-
-  // MEASURED: `p_page` starts at 1. With 0 the server answers 400 "OFFSET must
-  // not be negative" — its arithmetic is (p_page - 1) * p_page_size.
-  snprintf(body, sizeof body,
-           "{\"p_profile_id\":%d,\"p_page\":1,\"p_page_size\":200}", profile);
-  cWatched = countRpc("sync_pull_watched_items", body);
-
-  snprintf(body, sizeof body,
-           "{\"p_profile_id\":%d,\"p_limit\":200,\"p_offset\":0}", profile);
-  cSaved = countRpc("sync_pull_saved_library", body);
 
   snprintf(body, sizeof body,
            "{\"p_profile_id\":%d,\"p_platform\":\"tv\"}", profile);
@@ -817,13 +796,54 @@ static void pullSoRead(void) {
   hasCatHome = pullHomeCatalog(body);
 }
 
+static void pullSoRead(void) {
+  char body[160];
+  int profile = profiles_active();
+
+  snprintf(body, sizeof body, "{\"p_profile_id\":%d}", profile);
+
+  // THE LIBRARY AND THE WATCHED LIST. Without Trakt they are the account's, and
+  // acclib reads them in full and pushes this TV's edits (see acclib.h for why
+  // the library push has to be built on a complete pull). With Trakt linked,
+  // Trakt is the source and they are only counted, as before.
+  if (acclib_active()) {
+    acclib_sync();
+    cLib = acclib_count_library();
+    cWatched = acclib_count_watched();
+  } else {
+    // NOT COUNTED ANY MORE. With Trakt linked these two lists are not what the
+    // TV shows — Trakt is — and the only reader of the count was the summary
+    // line in Settings. Counting meant downloading up to 200 items of each, on
+    // every cycle, for two numbers; the summary now leaves them out.
+    // (sync_pull_saved_library, counted here too, is gone for the same reason:
+    // nothing read it, and the server reports it does not exist.)
+    cLib = cWatched = -1;
+  }
+}
+
 // ---------------------------------------------------------------- cycle
+
+// A LIGHT cycle carries only the library and the watched list: it is what a
+// gesture on the TV asks for (sync_soon), and the other eight requests of a full
+// cycle have nothing to do with it.
+static int light;
 
 static void *run(void *u) {
   (void)u;
+  if (light) {
+    acclib_sync();
+    state = SYNC_READY;
+    threadReady = 1;
+    return NULL;
+  }
   profiles_pull();
   pullAddons();
   pullCredentials();
+  pullHomeState();
+  // Everything the home is built from is in hand: the main thread applies it now
+  // (sync_step), and the rebuild it asks for runs beside the rest of this cycle
+  // instead of after it. That rest used to be five or six more round trips.
+  __atomic_store_n(&earlyReady, 1, __ATOMIC_RELEASE);
   pullTracker();
   pullProgress();
   pullSoRead();
@@ -832,11 +852,15 @@ static void *run(void *u) {
   if (dirtyAddons)    pushAddons();
   if (dirtyProgress) pushProgress();
 
-  snprintf(summary, sizeof summary,
-           "%d addons · %d progress · %d watched · %d in list · %d collections%s",
-           nAddonsRemote, nProgressRemote, cWatched < 0 ? 0 : cWatched,
-           cLib < 0 ? 0 : cLib, cCollections < 0 ? 0 : cCollections,
-           hasTraktRemote ? " · Trakt" : "");
+  { char lists[64] = "";
+    // Unknown (-1) when Trakt is the source: see pullSoRead.
+    if (cWatched >= 0 && cLib >= 0)
+      snprintf(lists, sizeof lists, " · %d watched · %d in list", cWatched, cLib);
+    snprintf(summary, sizeof summary,
+             "%d addons · %d progress%s · %d collections%s",
+             nAddonsRemote, nProgressRemote, lists,
+             cCollections < 0 ? 0 : cCollections,
+             hasTraktRemote ? " · Trakt" : ""); }
   state = SYNC_READY;
   threadReady = 1;
   return NULL;
@@ -864,28 +888,77 @@ int sync_delete_progress(const char *const *keys, int n) {
   return ok;
 }
 
-void sync_start(void) {
+// A gesture on the TV (a title saved, an episode marked) waiting for its cycle.
+static int soon;
+static unsigned soonSeen;
+
+static void begin(int isLight, const char *why) {
   if (threadAlive || !session_loggedin()) return;
   if (cloud_brake_active()) return;
+  light = isLight;
+  // A full cycle carries the library and watched list too, so it answers any
+  // pending gesture as well.
+  soon = 0;
   state = SYNC_RUNNING;
   threadReady = 0;
+  __atomic_store_n(&earlyReady, 0, __ATOMIC_RELEASE);
+  earlyApplied = 0;
+  // SYNC.LOG in the data folder, readable over ssh: the periodic cycle was
+  // implemented and never seen firing on the TV, because nothing on the device
+  // recorded that it had.
+  data_log("sync.log", "cycle start (%s%s)", why, isLight ? ", light" : "");
   if (pthread_create(&thread, NULL, run, NULL) == 0) { pthread_detach(thread); threadAlive = 1; }
   else { state = SYNC_FAILED; snprintf(summary, sizeof summary, "no thread to sync with"); }
 }
 
-// One automatic cycle, if the interval has passed. Returns 1 when it fired.
+void sync_start(void) { begin(0, "requested"); }
+
+void sync_soon(void) { soon = 1; soonSeen = 0; }
+
+// Coming back after this long without a frame counts as coming back to the app.
+#define SYNC_RESUME_GAP_MS 20000u
+// ...but not if a cycle finished this recently.
+#define SYNC_RESUME_MIN_MS 30000u
+// How long a gesture waits, so a burst of them (three titles saved in a row)
+// travels in one cycle.
+#define SYNC_SOON_DELAY_MS 1500u
+
+// One automatic cycle, if one is due. Returns 1 when it fired.
 // Separate from sync_step because the caller knows whether the moment is right:
 // during playback it is NOT — a burst of HTTP in the middle of the video
 // competes for CPU and network with the decoder, and one stutter costs more
 // than 5 minutes of delay on the progress.
 int sync_periodic(unsigned nowMs) {
+  // THE TV COMING BACK. Two ways it shows here, and neither needs an event from
+  // the system: a frozen app sees a long gap in its own clock between two
+  // frames; a TV back from standby does NOT (CLOCK_MONOTONIC stops in suspend)
+  // but the wall clock has jumped ahead of it. Either way what was done on the
+  // phone meanwhile should be on screen now, not up to five minutes later.
+  static unsigned lastTick;
+  static time_t lastWall;
+  time_t wall = time(NULL);
+  int resumed = 0;
+  if (lastTick) {
+    unsigned tickGap = nowMs - lastTick;
+    long long wallGapMs = (long long)(wall - lastWall) * 1000LL;
+    if (tickGap > SYNC_RESUME_GAP_MS ||
+        wallGapMs > (long long)tickGap + (long long)SYNC_RESUME_GAP_MS) resumed = 1;
+  }
+  lastTick = nowMs;
+  lastWall = wall;
+
   if (!session_loggedin() || threadAlive) return 0;
   if (cloud_brake_active()) return 0;
+  if (resumed && lastOk && nowMs - lastOk > SYNC_RESUME_MIN_MS) { begin(0, "resume"); return 1; }
+  if (soon) {
+    if (!soonSeen) soonSeen = nowMs ? nowMs : 1;
+    if (nowMs - soonSeen >= SYNC_SOON_DELAY_MS) { begin(1, "local edit"); return 1; }
+  }
   // With no successful cycle yet, whoever called sync_start is in charge — there
   // is no point insisting on top of a failure the brake is already holding.
   if (!lastOk) return 0;
   if (nowMs - lastOk < SYNC_INTERVAL_MS) return 0;
-  sync_start();
+  begin(0, "periodic");
   return 1;
 }
 
@@ -947,6 +1020,8 @@ void sync_restore(void) {
   }
   if ((body = stateRead(&lastHome, "home-catalog"))) applyHomeCatalog(body);
   if ((body = stateRead(&lastCollections, "collections"))) col_load_account(body);
+  // The account library too, so the first build already carries its cards.
+  acclib_restore();
   mark("account state restored");
 }
 
@@ -955,11 +1030,10 @@ static void stateForget(void) {
   lastAddons = lastHome = lastCollections = NULL;
 }
 
-void sync_step(unsigned nowMs) {
-  if (!threadAlive || !threadReady) return;
-  threadAlive = 0;
-  threadReady = 0;
-
+// The early half: what the home is built from. Its flags are only ever written
+// by the sync thread BEFORE earlyReady, so reading them here once it is set is
+// safe while the thread goes on with the rest of the cycle.
+static void applyEarly(void) {
   if (hasAddonsRemote) {
     addons_set_list(addonsRemote, nAddonsRemote);
     hasAddonsRemote = 0;
@@ -1007,15 +1081,6 @@ void sync_step(unsigned nowMs) {
     homeBlob = NULL;
     hasHomeBlob = 0;
   }
-  if (hasTraktRemote) {
-    // Only on the TRANSITION to active: the pull repeats on every cycle, and
-    // rebuilding the whole home each time would throw the rows away every few
-    // minutes. Going from "no credential" to "credential" is the one moment
-    // the "continue watching" row can exist and does not.
-    int wasOn = trakt_active();
-    if (trakt_set(traktToken, cloud_trakt_client()) && !wasOn) { mark("rebuild: trakt on"); disc_rebuild(); }
-    hasTraktRemote = 0;
-  }
   // extras.c fetches the TMDB fact sheet with disc_key_tmdb(), so this key landing
   // changes what a fetch can return — and that module caches per title id. Without
   // the notice, any title opened in the second before the account answered kept an
@@ -1028,6 +1093,29 @@ void sync_step(unsigned nowMs) {
     settingsBlob = NULL;
     hasSettingsBlob = 0;
     applySettings = 0;   // from here on, what the person changes on the TV stays
+  }
+}
+
+void sync_step(unsigned nowMs) {
+  if (!threadAlive) return;
+  if (!earlyApplied && __atomic_load_n(&earlyReady, __ATOMIC_ACQUIRE)) {
+    earlyApplied = 1;
+    applyEarly();
+  }
+  if (!threadReady) return;
+  threadAlive = 0;
+  threadReady = 0;
+  // A light cycle never reaches earlyReady; a full one has applied it above.
+  if (!earlyApplied) applyEarly();
+
+  if (hasTraktRemote) {
+    // Only on the TRANSITION to active: the pull repeats on every cycle, and
+    // rebuilding the whole home each time would throw the rows away every few
+    // minutes. Going from "no credential" to "credential" is the one moment
+    // the "continue watching" row can exist and does not.
+    int wasOn = trakt_active();
+    if (trakt_set(traktToken, cloud_trakt_client()) && !wasOn) { mark("rebuild: trakt on"); disc_rebuild(); }
+    hasTraktRemote = 0;
   }
   if (nProgressRemote) {
     static CatProgress mine[CAT_PROGRESS_MAX];
@@ -1077,7 +1165,13 @@ void sync_step(unsigned nowMs) {
            " (%d older than what is here)\n", applied, nProgressRemote, kept);
     nProgressRemote = 0;
   }
-  if (state == SYNC_READY) lastOk = nowMs;
+  // The account library: a title saved or removed on another device changes
+  // which cards the catalogue has to carry.
+  if (acclib_step()) { mark("rebuild: account library"); disc_rebuild(); }
+  if (state == SYNC_READY) {
+    lastOk = nowMs;
+    data_log("sync.log", "cycle done: %s", light ? "library and watched" : summary);
+  }
 }
 
 SyncState  sync_state(void)      { return state; }
@@ -1154,9 +1248,10 @@ void sync_forget_user(void) {
   nAddonsRemote = 0; hasAddonsRemote = 0;
   traktToken[0] = 0; hasTraktRemote = 0;
   memset(tmdbKey, 0, sizeof tmdbKey); hasTmdb = 0;
+  disc_tmdb_forget();
   memset(mdbKey, 0, sizeof mdbKey);   hasMdb = 0;
   nProgressRemote = 0;
-  cWatched = cLib = cSaved = cCollections = 0;
+  cWatched = cLib = cCollections = 0;
   hasSettingsProfile = hasCatHome = 0;
   state = SYNC_STOPPED;
   lastOk = 0;
@@ -1169,6 +1264,8 @@ void sync_forget_user(void) {
   // The saved account state goes too, for every profile: the addon rows carry
   // debrid keys inside their URLs.
   stateForget();
+  acclib_forget();
+  soon = 0;
   { static const char *const WHAT[] = { "addons", "home-catalog", "collections" };
     char name[64];
     int p, w;

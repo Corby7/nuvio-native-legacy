@@ -1,0 +1,8 @@
+<!-- The player's Stream stats button: a stepped bar chart in Phosphor's BOLD
+     weight (a 24-unit stroke on a 256 grid), the weight of every glyph on the
+     transport row. It used to be the web app's ic_player_stats.svg, which is an
+     info circle — the glyph the app means "details" by — so it now belongs to
+     the Details button (details.png) and stats got a mark of its own.
+
+     THE ALPHA IS THE GLYPH: rsvg-convert with no background flag. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" stroke="#ffffff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"><path d="M28 212H228"/><path d="M48 212V140H100V92H156V44H208V212"/><path d="M100 140V212"/><path d="M156 92V212"/></svg>

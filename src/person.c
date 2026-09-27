@@ -49,7 +49,7 @@ static int castFind(long id) {
 static void *castFetch(void *arg) {
   (void)arg;
   for (;;) {
-    char url[400], *body;
+    char *body;
     CastList *got;
     long id;
     int series, k = 0;
@@ -65,14 +65,18 @@ static void *castFetch(void *arg) {
     // AGGREGATE credits on a series: /tv/<id>/credits is only the LATEST season's
     // cast, so a series that recast lost everyone who had left. The aggregate is the
     // whole run, and it carries each actor's episode count.
-    snprintf(url, sizeof url, "%s/%s/%ld/%s?api_key=%s&language=en-US", TMDB,
-             series ? "tv" : "movie", id,
-             series ? "aggregate_credits" : "credits", key);
-    body = net_download(url, 20);
+    //
+    // Off the ONE shared title request (disc_tmdb_title), which the detail page's
+    // enrichment has usually already made: this used to be a second download of the
+    // same credits, right after the first.
+    body = disc_tmdb_title(id, series);
     got = calloc(1, sizeof *got);
     if (body && got) {
-      // The first "cast" of the document is the cast array; "crew" comes after it.
-      const char *p = js_array(body, NULL, "cast");
+      // Anchored on the appended block's own key: the body carries both "credits"
+      // and, on a series, "aggregate_credits", each with a "cast" of its own. The
+      // quote before the key keeps "credits" from matching inside the other.
+      const char *block = strstr(body, series ? "\"aggregate_credits\"" : "\"credits\"");
+      const char *p = block ? js_array(block, NULL, "cast") : NULL;
       while (p && k < CAST_MAX) {
         const char *end = js_end(p);
         Member *mb = &got->m[k];

@@ -194,107 +194,114 @@ static void numaLine(char *s) {
   for (; *s; s++) if (*s == '\n' || *s == '\r' || *s == '\t') *s = ' ';
 }
 
-static void *fetch(void *arg) {
-  const char *header[4];
-  char auth[200], key[140], url[200], id[24];
-  const char *kind;
-  char *body;
+// --- THE FETCH, AS INDEPENDENT TASKS ---------------------------------------------
+//
+// It used to be one thread walking thirteen requests IN SERIES: watched episodes,
+// the Trakt rating, the show's status, SEVEN mdbList POSTs, comments, per-episode
+// ratings, TMDB's fact sheet, the collection, related. At the ~150 ms a Trakt GET
+// costs on the TV that is two seconds before "More like this" appears, although
+// only one pair depends on the other (the film's details name its collection).
+//
+// Now each is a task and EX_THREADS workers take them in the list's order, so the
+// most visible one — what was already watched — still leaves first. Every task
+// writes only under `lock` and only while its title is still the one asked for,
+// exactly as the serial version did, so the order they land in changes nothing.
+#define EX_THREADS 4
+
+typedef struct Job Job;
+typedef void (*Task)(Job *, int);
+struct Job {
+  char id[24];
+  const char *kind;              // "shows" | "movies"
   int series;
   long tmdbId;
+  const char *header[4];
+  char auth[200], key[140];
+  struct { Task fn; int arg; } task[EX_NSOURCES + 12];
+  int nTask, next;
+  pthread_mutex_t take;
+};
+
+// --- episodes already watched (series only) ---
+//
+// WHAT HAS ALREADY BEEN WATCHED COMES FIRST. It is the most visible piece of data
+// on the screen and the one that decides the primary button's label
+// ("Resume"/"Next"), so it is the first task in the list.
+static void taskProgress(Job *j, int arg) {
+  const char *const *header = j->header;
+  const char *id = j->id;
+  char url[200], *body;
   (void)arg;
-
-  pthread_mutex_lock(&lock);
-  snprintf(id, sizeof id, "%s", idInProgress);
-  series = seriesInProgress;
-  tmdbId = tmdbInProgress;
-  kind = series ? "shows" : "movies";
-  pthread_mutex_unlock(&lock);
-
-  if (!trakt_headers(header, auth, sizeof auth, key, sizeof key)) {
-    finishSearch(id);
-    return NULL;
-  }
-
-  // WHAT HAS ALREADY BEEN WATCHED COMES FIRST.
-  //
-  // It used to be LAST, after ratings, comments and a
-  // `seasons?extended=episodes,full` that brings the whole series — four round
-  // trips before the watched mark appeared on the episode card. And it is the
-  // most visible piece of data on the screen and the one that decides the
-  // primary button's label ("Resume"/"Next"), so it was exactly the last to
-  // arrive and the first the owner notices missing.
-  // --- episodes already watched (series only) ---
-  if (series) {
-    snprintf(url, sizeof url,
-             "https://api.trakt.tv/shows/%s/progress/watched", id);
-    body = net_download_headers(url, 20, header);
-    if (body) {
-      unsigned char new[EX_VIS_T][EX_VIS_E];
-      const char *p = js_array(body, NULL, "seasons");
-      memset(new, 0, sizeof new);
-      while (p) {
-        const char *f = js_end(p);
-        int t = (int)js_num(p, f, "number", -1.0);
-        if (t >= 0 && t < EX_VIS_T) {
-          const char *q = js_array(p, f, "episodes");
-          while (q) {
-            const char *qf = js_end(q);
-            int en = (int)js_num(q, qf, "number", -1.0);
-            // "completed" is a boolean; js_num does not read true/false, so the
-            // read goes through the text — that is how the first version marked
-            // everything as unwatched with no error at all.
-            const char *c = strstr(q, "\"completed\"");
-            int watched = 0;
-            if (c && c < qf) { const char *v = c + 12;
-                               while (*v == ' ' || *v == ':') v++;
-                               watched = (*v == 't'); }
-            if (watched && en > 0 && en < EX_VIS_E) new[t][en] = 1;
-            // THE SAME PARSE FEEDS THE EPISODE MAP, with no second request.
-            //
-            // `new` above is this title's grid and it is bounded: EX_VIS_T 20
-            // seasons by EX_VIS_E 40 episodes, so a long-running series loses
-            // its later marks silently. It also dies when the screen changes
-            // title. watchedep has neither limit and holds for the session,
-            // which is what the marking gestures need — they have to enumerate
-            // which episodes exist before they can mark a batch of them.
-            //
-            // It records the 0 as well as the 1: this response enumerates the
-            // whole series and says yes or no per line, so after it a state of
-            // -1 means only "never asked about this series".
-            if (en > 0 && t >= 0) watchedep_set(id, t, en, watched);
-            q = js_next(qf);
-          }
-        }
-        p = js_next(f);
-      }
-      int pt = 0, pe = 0;
-      const char *next = strstr(body, "\"next_episode\"");
-      if (next && (next = strchr(next, ':'))) {
-        next++;
-        while (*next == ' ' || *next == '\n' || *next == '\r' || *next == '\t') next++;
-        if (*next == '{') {
-          const char *end = js_end(next);
-          pt = (int)js_num(next, end, "season", 0);
-          pe = (int)js_num(next, end, "number", 0);
+  snprintf(url, sizeof url,
+           "https://api.trakt.tv/shows/%s/progress/watched", id);
+  body = net_download_headers(url, 20, header);
+  if (body) {
+    unsigned char new[EX_VIS_T][EX_VIS_E];
+    const char *p = js_array(body, NULL, "seasons");
+    memset(new, 0, sizeof new);
+    while (p) {
+      const char *f = js_end(p);
+      int t = (int)js_num(p, f, "number", -1.0);
+      if (t >= 0 && t < EX_VIS_T) {
+        const char *q = js_array(p, f, "episodes");
+        while (q) {
+          const char *qf = js_end(q);
+          int en = (int)js_num(q, qf, "number", -1.0);
+          // "completed" is a boolean; js_num does not read true/false, so the
+          // read goes through the text — that is how the first version marked
+          // everything as unwatched with no error at all.
+          const char *c = strstr(q, "\"completed\"");
+          int watched = 0;
+          if (c && c < qf) { const char *v = c + 12;
+                             while (*v == ' ' || *v == ':') v++;
+                             watched = (*v == 't'); }
+          if (watched && en > 0 && en < EX_VIS_E) new[t][en] = 1;
+          // THE SAME PARSE FEEDS THE EPISODE MAP, with no second request.
+          //
+          // `new` above is this title's grid and it is bounded: EX_VIS_T 20
+          // seasons by EX_VIS_E 40 episodes, so a long-running series loses
+          // its later marks silently. It also dies when the screen changes
+          // title. watchedep has neither limit and holds for the session,
+          // which is what the marking gestures need — they have to enumerate
+          // which episodes exist before they can mark a batch of them.
+          //
+          // It records the 0 as well as the 1: this response enumerates the
+          // whole series and says yes or no per line, so after it a state of
+          // -1 means only "never asked about this series".
+          if (en > 0 && t >= 0) watchedep_set(id, t, en, watched);
+          q = js_next(qf);
         }
       }
-      int valid = strstr(body, "\"seasons\"") != NULL;
-      free(body);
-      pthread_mutex_lock(&lock);
-      if (!strcmp(id, idRequest) && valid) {
-        memcpy(watched, new, sizeof watched);
-        nextT = pt; nextE = pe; progressReady = 1;
-      }
-      pthread_mutex_unlock(&lock);
+      p = js_next(f);
     }
+    int pt = 0, pe = 0;
+    const char *next = strstr(body, "\"next_episode\"");
+    if (next && (next = strchr(next, ':'))) {
+      next++;
+      while (*next == ' ' || *next == '\n' || *next == '\r' || *next == '\t') next++;
+      if (*next == '{') {
+        const char *end = js_end(next);
+        pt = (int)js_num(next, end, "season", 0);
+        pe = (int)js_num(next, end, "number", 0);
+      }
+    }
+    int valid = strstr(body, "\"seasons\"") != NULL;
+    free(body);
+    pthread_mutex_lock(&lock);
+    if (!strcmp(id, idRequest) && valid) {
+      memcpy(watched, new, sizeof watched);
+      nextT = pt; nextE = pe; progressReady = 1;
+    }
+    pthread_mutex_unlock(&lock);
   }
+}
 
-  // The user has already opened another title. Do not spend several optional
-  // round trips on a screen that no longer exists; hand the thread over.
-  if (!requestStillCurrent(id)) { finishSearch(id); return NULL; }
-
-
-  // --- nota ---
+// --- the Trakt score ---
+static void taskRating(Job *j, int arg) {
+  const char *const *header = j->header;
+  const char *id = j->id, *kind = j->kind;
+  char url[200], *body;
+  (void)arg;
   snprintf(url, sizeof url, "https://api.trakt.tv/%s/%s/ratings", kind, id);
   body = net_download_headers(url, 12, header);
   if (body) {
@@ -315,52 +322,56 @@ static void *fetch(void *arg) {
     }
     pthread_mutex_unlock(&lock);
   }
+}
 
-  // --- mdbList scores, if the owner has a key ---
-  if (series && requestStillCurrent(id)) {
-    snprintf(url,sizeof url,"https://api.trakt.tv/shows/%s?extended=full",id);
-    body=net_download_headers(url,8,header);
-    if(body) {
-      char state[32]="";
-      js_text(body,NULL,"status",state,sizeof state);
-      free(body);
+// --- the show's status (series only) ---
+static void taskStatus(Job *j, int arg) {
+  const char *const *header = j->header;
+  const char *id = j->id;
+  char url[200], *body;
+  (void)arg;
+  snprintf(url,sizeof url,"https://api.trakt.tv/shows/%s?extended=full",id);
+  body=net_download_headers(url,8,header);
+  if(body) {
+    char state[32]="";
+    js_text(body,NULL,"status",state,sizeof state);
+    free(body);
+    pthread_mutex_lock(&lock);
+    if(!strcmp(id,idRequest)) snprintf(profileStatus,sizeof profileStatus,"%s",state);
+    pthread_mutex_unlock(&lock);
+  }
+}
+
+// --- mdbList scores, one provider per task ---
+//
+// One POST per provider, as the web app does (fetchProviderRating): the API
+// accepts "ids" in bulk but only one provider per call. Seven short calls, and
+// now seven tasks, so they are no longer seven round trips end to end.
+static void taskMdb(Job *j, int k) {
+  const char *headerJ[2] = { "content-type: application/json", NULL };
+  char bodyPost[80], u[300], *rp;
+  snprintf(bodyPost, sizeof bodyPost,
+           "{\"ids\":[\"%s\"],\"provider\":\"imdb\"}", j->id);
+  snprintf(u, sizeof u, "https://api.mdblist.com/rating/%s/%s?apikey=%s",
+           j->series ? "show" : "movie", SOURCE[k], mdbKey);
+  rp = net_post(u, 12, headerJ, bodyPost);
+  if (!rp) return;
+  { double v = js_num(rp, NULL, "rating", -1.0);
+    free(rp);
+    if (v >= 0.0) {
+      int c = inTenths(v);
       pthread_mutex_lock(&lock);
-      if(!strcmp(id,idRequest)) snprintf(profileStatus,sizeof profileStatus,"%s",state);
+      if (!strcmp(j->id, idRequest)) scores[k] = c;
       pthread_mutex_unlock(&lock);
-    }
-  }
+    } }
+}
 
-  //
-  // One POST per provider, as the web app does (fetchProviderRating): the API
-  // accepts "ids" in bulk but only one provider per call. That is seven short
-  // calls; the thread is already our own, so it does not hold up the drawing.
-  if (mdbKey[0]) {
-    const char *headerJ[3];
-    char kj[64];
-    char bodyPost[80];
-    int k;
-    snprintf(kj, sizeof kj, "content-type: application/json");
-    headerJ[0] = kj; headerJ[1] = NULL; headerJ[2] = NULL;
-    snprintf(bodyPost, sizeof bodyPost,
-             "{\"ids\":[\"%s\"],\"provider\":\"imdb\"}", id);
-    for (k = 0; k < EX_NSOURCES; k++) {
-      char u[300], *rp;
-      snprintf(u, sizeof u, "https://api.mdblist.com/rating/%s/%s?apikey=%s",
-               series ? "show" : "movie", SOURCE[k], mdbKey);
-      rp = net_post(u, 12, headerJ, bodyPost);
-      if (!rp) continue;
-      { double v = js_num(rp, NULL, "rating", -1.0);
-        free(rp);
-        if (v >= 0.0) {
-          int c = inTenths(v);
-          pthread_mutex_lock(&lock);
-          if (!strcmp(id, idRequest)) scores[k] = c;
-          pthread_mutex_unlock(&lock);
-        } }
-    }
-  }
-
-  // --- comments, the most-liked first ---
+// --- comments, the most-liked first ---
+static void taskComments(Job *j, int arg) {
+  const char *const *header = j->header;
+  const char *id = j->id, *kind = j->kind;
+  char url[200], *body;
+  (void)arg;
   snprintf(url, sizeof url,
            "https://api.trakt.tv/%s/%s/comments/likes?limit=%d", kind, id,
            EX_COMMENT_MAX);
@@ -400,220 +411,214 @@ static void *fetch(void *arg) {
     }
     pthread_mutex_unlock(&lock);
   }
+}
 
-  // --- per-episode scores, series only ---
-  if (series) {
-    snprintf(url, sizeof url,
-             "https://api.trakt.tv/shows/%s/seasons?extended=episodes,full", id);
-    body = net_download_headers(url, 20, header);
-    if (body) {
-      int nt = 0;
-      const char *p = strchr(body, '[');
-      p = p ? p + 1 : NULL;
-      while (p && nt < EX_TEMP_MAX) {
-        const char *f = js_end(p);
-        int num = (int)js_num(p, f, "number", -1.0);
-        // Season 0 is "specials"; the web app filters on `value > 0`.
-        if (num > 0) {
-          const char *q = js_array(p, f, "episodes");
-          int ne = 0;
-          while (q && ne < EX_EP_MAX) {
-            const char *qf = js_end(q);
-            int en = (int)js_num(q, qf, "number", -1.0);
-            double r = js_num(q, qf, "rating", 0.0);
-            if (en > 0) {
-              seasons[nt].eps[ne].ep = en;
-              seasons[nt].eps[ne].score = (int)(r * 10.0 + 0.5);
-              ne++;
-            }
-            q = js_next(qf);
+// --- per-episode scores, series only ---
+static void taskSeasons(Job *j, int arg) {
+  const char *const *header = j->header;
+  const char *id = j->id;
+  char url[200], *body;
+  (void)arg;
+  snprintf(url, sizeof url,
+           "https://api.trakt.tv/shows/%s/seasons?extended=episodes,full", id);
+  body = net_download_headers(url, 20, header);
+  if (body) {
+    int nt = 0;
+    const char *p = strchr(body, '[');
+    p = p ? p + 1 : NULL;
+    while (p && nt < EX_TEMP_MAX) {
+      const char *f = js_end(p);
+      int num = (int)js_num(p, f, "number", -1.0);
+      // Season 0 is "specials"; the web app filters on `value > 0`.
+      if (num > 0) {
+        const char *q = js_array(p, f, "episodes");
+        int ne = 0;
+        while (q && ne < EX_EP_MAX) {
+          const char *qf = js_end(q);
+          int en = (int)js_num(q, qf, "number", -1.0);
+          double r = js_num(q, qf, "rating", 0.0);
+          if (en > 0) {
+            seasons[nt].eps[ne].ep = en;
+            seasons[nt].eps[ne].score = (int)(r * 10.0 + 0.5);
+            ne++;
           }
-          if (ne > 0) { seasons[nt].number = num; seasons[nt].nEps = ne; nt++; }
+          q = js_next(qf);
         }
+        if (ne > 0) { seasons[nt].number = num; seasons[nt].nEps = ne; nt++; }
+      }
+      p = js_next(f);
+    }
+    free(body);
+    pthread_mutex_lock(&lock);
+    if (!strcmp(id, idRequest)) nSeasons = nt;
+    pthread_mutex_unlock(&lock);
+  }
+}
+
+// --- the fact sheet, the trailers and the collection (films only) ---
+//
+// The film's TMDB details come from disc_tmdb_title — the ONE request the detail
+// page's cast enrichment and the cast page also read — and the id from
+// disc_tmdb_id, which takes it off the Cinemeta meta instead of asking /find.
+static void taskTmdbFilm(Job *j, int arg) {
+  const char *id = j->id;
+  const char *key = disc_key_tmdb();
+  char url[200], *body;
+  long idCol = 0, idMovie = j->tmdbId;
+  char name[80] = "";
+  (void)arg;
+  if (!key || !key[0]) return;
+  // The TMDB id only lands in the catalogue AFTER the detail enrichment; on the
+  // FIRST opening of a title it may still be 0, and the tab would not appear on
+  // precisely the visit the owner is looking at.
+  if (idMovie <= 0) idMovie = disc_tmdb_id(id, 0);
+  if (idMovie <= 0) return;
+  body = disc_tmdb_title(idMovie, 0);
+  if (body) {
+    // The fact sheet below writes several globals. It holds the same lock
+    // extras_request uses so that a change of title cannot clear the fields
+    // mid-parse and then receive half of the old sheet.
+    pthread_mutex_lock(&lock);
+    if (strcmp(id, idRequest)) {
+      pthread_mutex_unlock(&lock);
+      free(body);
+      return;
+    }
+    const char *endC = body + strlen(body);
+    const char *b = strstr(body, "\"belongs_to_collection\"");
+    if (b) {
+      const char *o = strchr(b, '{');
+      if (o) { const char *of = js_end(o);
+               idCol = (long)js_num(o, of, "id", 0.0);
+               js_text(o, of, "name", name, sizeof name); }
+    }
+
+    // --- ficha tecnica ---
+    js_text(body, endC, "status", profileStatus, sizeof profileStatus);
+    js_text(body, endC, "release_date", profileRelease, sizeof profileRelease);
+    profileDuration = (int)js_num(body, endC, "runtime", 0.0);
+
+    // production_countries is an array of objects; it joins the names with
+    // commas, as the reference shows ("United States of America, Canada").
+    // It stops appending when the field fills, instead of cutting a name in half.
+    // um nome pela metade.
+    { const char *p2 = js_array(body, endC, "production_countries");
+      profileCountries[0] = 0;
+      while (p2) {
+        char pn[80] = "";
+        const char *pf = js_end(p2);
+        js_text(p2, pf, "name", pn, sizeof pn);
+        if (pn[0]) {
+          size_t used = strlen(profileCountries);
+          size_t fits  = sizeof profileCountries - used;
+          size_t wants  = strlen(pn) + (used ? 2 : 0) + 1;
+          if (wants > fits) break;
+          snprintf(profileCountries + used, fits, "%s%s", used ? ", " : "", pn);
+        }
+        p2 = js_next(pf);
+      } }
+
+    // Age rating: release_dates.results[] has one block per country, and
+    // each block has release_dates[] with `certification`. We prefer BR;
+    // failing that, US; failing both, the first non-empty one that turns up.
+    // Many countries carry the key with an EMPTY string, and accepting the
+    // first occurrence without looking at the contents filled the badge with nothing.
+    { const char *rd = strstr(body, "\"release_dates\"");
+      const char *res = rd ? js_array(rd, endC, "results") : NULL;
+      char br[12] = "", us[12] = "", qq[12] = "";
+      while (res) {
+        const char *rf = js_end(res);
+        char country[8] = "", c[12] = "";
+        js_text(res, rf, "iso_3166_1", country, sizeof country);
+        { const char *d = js_array(res, rf, "release_dates");
+          while (d && !c[0]) {
+            const char *df = js_end(d);
+            js_text(d, df, "certification", c, sizeof c);
+            d = js_next(df);
+          } }
+        if (c[0]) {
+          if      (!strcmp(country, "BR")) snprintf(br, sizeof br, "%s", c);
+          else if (!strcmp(country, "US")) snprintf(us, sizeof us, "%s", c);
+          else if (!qq[0])              snprintf(qq, sizeof qq, "%s", c);
+        }
+        res = js_next(rf);
+      }
+      snprintf(profileCert, sizeof profileCert, "%s",
+               br[0] ? br : us[0] ? us : qq); }
+
+    // Trailers: videos.results[]. YouTube only (the only host whose
+    // thumbnail is obtainable from a predictable URL) and only what is a
+    // Trailer or a Teaser — TMDB mixes featurettes, clips and behind-the-scenes in there.
+    { const char *v = NULL;
+      // `results` appears several times in the body (watch/providers,
+      // release_dates, videos); it searches from the videos block so as not
+      // to pick the wrong one.
+      const char *vid = strstr(body, "\"videos\"");
+      if (vid) v = js_array(vid, endC, "results");
+      while (v && nTrailer < EX_TRAILER_MAX) {
+        const char *vf = js_end(v);
+        char site[24] = "", kind[24] = "", key[16] = "", nm[80] = "";
+        js_text(v, vf, "site", site, sizeof site);
+        js_text(v, vf, "type", kind, sizeof kind);
+        js_text(v, vf, "key",  key,  sizeof key);
+        js_text(v, vf, "name", nm,   sizeof nm);
+        if (key[0] && !strcmp(site, "YouTube") &&
+            (!strcmp(kind, "Trailer") || !strcmp(kind, "Teaser"))) {
+          int k = nTrailer++;
+          snprintf(trailer[k].yt,   sizeof trailer[k].yt,   "%s", key);
+          snprintf(trailer[k].name, sizeof trailer[k].name, "%s",
+                   nm[0] ? nm : "Trailer");
+          snprintf(trailer[k].mini, sizeof trailer[k].mini,
+                   "https://img.youtube.com/vi/%s/hqdefault.jpg", key);
+        }
+        v = js_next(vf);
+      } }
+
+    pthread_mutex_unlock(&lock);
+    free(body);
+  }
+  if (idCol > 0) {
+    snprintf(url, sizeof url, "%s/collection/%ld?api_key=%s&language=en-US",
+             "https://api.themoviedb.org/3", idCol, key);
+    body = net_download_cached(url, 15, DISC_META_TTL_S);
+    if (body) {
+      struct { char t[120], a[8]; long id; } ach[EX_COL_MAX];
+      int nc = 0;
+      const char *p = js_array(body, NULL, "parts");
+      while (p && nc < EX_COL_MAX) {
+        const char *f = js_end(p);
+        char date[16] = "";
+        ach[nc].t[0] = ach[nc].a[0] = 0;
+        js_text(p, f, "title", ach[nc].t, sizeof ach[nc].t);
+        js_text(p, f, "release_date", date, sizeof date);
+        if (strlen(date) >= 4) { memcpy(ach[nc].a, date, 4); ach[nc].a[4] = 0; }
+        ach[nc].id = (long)js_num(p, f, "id", 0.0);
+        if (ach[nc].t[0] && ach[nc].id > 0) nc++;
         p = js_next(f);
       }
       free(body);
       pthread_mutex_lock(&lock);
-      if (!strcmp(id, idRequest)) nSeasons = nt;
+      if (!strcmp(id, idRequest)) {
+        int k;
+        snprintf(colName, sizeof colName, "%s", name);
+        for (k = 0; k < nc; k++) {
+          snprintf(col[k].title, sizeof col[k].title, "%s", ach[k].t);
+          snprintf(col[k].year, sizeof col[k].year, "%s", ach[k].a);
+          col[k].tmdb = ach[k].id;
+        }
+        nCol = nc;
+      }
       pthread_mutex_unlock(&lock);
     }
   }
+}
 
-  // --- collection (film only, and only once we know the TMDB id) ---
-  if (!series) {
-    const char *key = disc_key_tmdb();
-    long idCol = 0, idMovie = tmdbId;
-    char name[80] = "";
-    // The TMDB id only lands in the catalogue AFTER the cast enrichment; on the
-    // FIRST opening of a title it is still 0, and the tab would not appear on
-    // precisely the visit the owner is looking at. /find resolves it on the spot.
-    if (key && key[0] && idMovie <= 0) {
-      snprintf(url, sizeof url,
-               "https://api.themoviedb.org/3/find/%s?api_key=%s"
-               "&external_source=imdb_id", id, key);
-      body = net_download(url, 15);
-      if (body) {
-        const char *v = js_array(body, NULL, "movie_results");
-        if (v) idMovie = (long)js_num(v, js_end(v), "id", 0.0);
-        free(body);
-      }
-    }
-    if (key && key[0] && idMovie > 0) {
-      // `append_to_response` makes TMDB return release_dates and videos INSIDE
-      // this same body. This call already happened before and the parse read
-      // only belongs_to_collection: status, runtime, release_date and the
-      // countries arrived and were thrown away. Now the whole fact sheet and
-      // the trailers come from here, with no extra round trip.
-      snprintf(url, sizeof url,
-               "%s/movie/%ld?api_key=%s&language=en-US"
-               "&append_to_response=release_dates,videos",
-               "https://api.themoviedb.org/3", idMovie, key);
-      body = net_download(url, 15);
-      if (body) {
-        // The fact sheet below writes several globals. It holds the same lock
-        // extras_request uses so that a change of title cannot clear the fields
-        // mid-parse and then receive half of the old sheet.
-        pthread_mutex_lock(&lock);
-        if (strcmp(id, idRequest)) {
-          pthread_mutex_unlock(&lock);
-          free(body);
-          finishSearch(id);
-          return NULL;
-        }
-        const char *endC = body + strlen(body);
-        const char *b = strstr(body, "\"belongs_to_collection\"");
-        if (b) {
-          const char *o = strchr(b, '{');
-          if (o) { const char *of = js_end(o);
-                   idCol = (long)js_num(o, of, "id", 0.0);
-                   js_text(o, of, "name", name, sizeof name); }
-        }
-
-        // --- ficha tecnica ---
-        js_text(body, endC, "status", profileStatus, sizeof profileStatus);
-        js_text(body, endC, "release_date", profileRelease, sizeof profileRelease);
-        profileDuration = (int)js_num(body, endC, "runtime", 0.0);
-
-        // production_countries is an array of objects; it joins the names with
-        // commas, as the reference shows ("United States of America, Canada").
-        // It stops appending when the field fills, instead of cutting a name in half.
-        // um nome pela metade.
-        { const char *p2 = js_array(body, endC, "production_countries");
-          profileCountries[0] = 0;
-          while (p2) {
-            char pn[80] = "";
-            const char *pf = js_end(p2);
-            js_text(p2, pf, "name", pn, sizeof pn);
-            if (pn[0]) {
-              size_t used = strlen(profileCountries);
-              size_t fits  = sizeof profileCountries - used;
-              size_t wants  = strlen(pn) + (used ? 2 : 0) + 1;
-              if (wants > fits) break;
-              snprintf(profileCountries + used, fits, "%s%s", used ? ", " : "", pn);
-            }
-            p2 = js_next(pf);
-          } }
-
-        // Age rating: release_dates.results[] has one block per country, and
-        // each block has release_dates[] with `certification`. We prefer BR;
-        // failing that, US; failing both, the first non-empty one that turns up.
-        // Many countries carry the key with an EMPTY string, and accepting the
-        // first occurrence without looking at the contents filled the badge with nothing.
-        { const char *res = js_array(body, endC, "results");
-          char br[12] = "", us[12] = "", qq[12] = "";
-          while (res) {
-            const char *rf = js_end(res);
-            char country[8] = "", c[12] = "";
-            js_text(res, rf, "iso_3166_1", country, sizeof country);
-            { const char *d = js_array(res, rf, "release_dates");
-              while (d && !c[0]) {
-                const char *df = js_end(d);
-                js_text(d, df, "certification", c, sizeof c);
-                d = js_next(df);
-              } }
-            if (c[0]) {
-              if      (!strcmp(country, "BR")) snprintf(br, sizeof br, "%s", c);
-              else if (!strcmp(country, "US")) snprintf(us, sizeof us, "%s", c);
-              else if (!qq[0])              snprintf(qq, sizeof qq, "%s", c);
-            }
-            res = js_next(rf);
-          }
-          snprintf(profileCert, sizeof profileCert, "%s",
-                   br[0] ? br : us[0] ? us : qq); }
-
-        // Trailers: videos.results[]. YouTube only (the only host whose
-        // thumbnail is obtainable from a predictable URL) and only what is a
-        // Trailer or a Teaser — TMDB mixes featurettes, clips and behind-the-scenes in there.
-        { const char *v = js_array(body, endC, "results");
-          // `results` appears twice in the body (release_dates and videos); it
-          // searches from the videos block so as not to pick the wrong one.
-          const char *vid = strstr(body, "\"videos\"");
-          if (vid) v = js_array(vid, endC, "results");
-          while (v && nTrailer < EX_TRAILER_MAX) {
-            const char *vf = js_end(v);
-            char site[24] = "", kind[24] = "", key[16] = "", nm[80] = "";
-            js_text(v, vf, "site", site, sizeof site);
-            js_text(v, vf, "type", kind, sizeof kind);
-            js_text(v, vf, "key",  key,  sizeof key);
-            js_text(v, vf, "name", nm,   sizeof nm);
-            if (key[0] && !strcmp(site, "YouTube") &&
-                (!strcmp(kind, "Trailer") || !strcmp(kind, "Teaser"))) {
-              int k = nTrailer++;
-              snprintf(trailer[k].yt,   sizeof trailer[k].yt,   "%s", key);
-              snprintf(trailer[k].name, sizeof trailer[k].name, "%s",
-                       nm[0] ? nm : "Trailer");
-              snprintf(trailer[k].mini, sizeof trailer[k].mini,
-                       "https://img.youtube.com/vi/%s/hqdefault.jpg", key);
-            }
-            v = js_next(vf);
-          } }
-
-        pthread_mutex_unlock(&lock);
-        free(body);
-      }
-    }
-    if (idCol > 0) {
-      snprintf(url, sizeof url, "%s/collection/%ld?api_key=%s&language=en-US",
-               "https://api.themoviedb.org/3", idCol, key);
-      body = net_download(url, 15);
-      if (body) {
-        struct { char t[120], a[8]; long id; } ach[EX_COL_MAX];
-        int nc = 0;
-        const char *p = js_array(body, NULL, "parts");
-        while (p && nc < EX_COL_MAX) {
-          const char *f = js_end(p);
-          char date[16] = "";
-          ach[nc].t[0] = ach[nc].a[0] = 0;
-          js_text(p, f, "title", ach[nc].t, sizeof ach[nc].t);
-          js_text(p, f, "release_date", date, sizeof date);
-          if (strlen(date) >= 4) { memcpy(ach[nc].a, date, 4); ach[nc].a[4] = 0; }
-          ach[nc].id = (long)js_num(p, f, "id", 0.0);
-          if (ach[nc].t[0] && ach[nc].id > 0) nc++;
-          p = js_next(f);
-        }
-        free(body);
-        pthread_mutex_lock(&lock);
-        if (!strcmp(id, idRequest)) {
-          int k;
-          snprintf(colName, sizeof colName, "%s", name);
-          for (k = 0; k < nc; k++) {
-            snprintf(col[k].title, sizeof col[k].title, "%s", ach[k].t);
-            snprintf(col[k].year, sizeof col[k].year, "%s", ach[k].a);
-            col[k].tmdb = ach[k].id;
-          }
-          nCol = nc;
-        }
-        pthread_mutex_unlock(&lock);
-      }
-    }
-  }
-
-  // Related titles are optional and may cost another round trip. If the user
-  // has already opened another work, chain the most recent one now instead of
-  // prolonging the wait with data that will be discarded.
-  if (!requestStillCurrent(id)) { finishSearch(id); return NULL; }
-
-  // --- related ---
+// --- related ---
+static void taskRelated(Job *j, int arg) {
+  const char *const *header = j->header;
+  const char *id = j->id, *kind = j->kind;
+  char url[200], *body;
+  (void)arg;
   snprintf(url, sizeof url,
            "https://api.trakt.tv/%s/%s/related?limit=%d&extended=images",
            kind, id, EX_REL_MAX);
@@ -671,6 +676,67 @@ static void *fetch(void *arg) {
     }
     pthread_mutex_unlock(&lock);
   }
+}
+
+static void *jobWorker(void *u) {
+  Job *j = u;
+  for (;;) {
+    int mine;
+    pthread_mutex_lock(&j->take);
+    mine = j->next < j->nTask ? j->next++ : -1;
+    pthread_mutex_unlock(&j->take);
+    if (mine < 0) return NULL;
+    // The user has already opened another title: the rest of the list is for a
+    // screen that no longer exists.
+    if (!requestStillCurrent(j->id)) continue;
+    j->task[mine].fn(j, j->task[mine].arg);
+  }
+}
+
+static void jobAdd(Job *j, Task fn, int arg) {
+  if (j->nTask < (int)(sizeof j->task / sizeof j->task[0])) {
+    j->task[j->nTask].fn = fn;
+    j->task[j->nTask].arg = arg;
+    j->nTask++;
+  }
+}
+
+static void *fetch(void *arg) {
+  Job *j = calloc(1, sizeof *j);
+  pthread_t th[EX_THREADS];
+  int created = 0, q;
+  char id[24];
+  (void)arg;
+
+  pthread_mutex_lock(&lock);
+  snprintf(id, sizeof id, "%s", idInProgress);
+  if (j) {
+    snprintf(j->id, sizeof j->id, "%s", idInProgress);
+    j->series = seriesInProgress;
+    j->tmdbId = tmdbInProgress;
+    j->kind = j->series ? "shows" : "movies";
+  }
+  pthread_mutex_unlock(&lock);
+
+  if (!j || !trakt_headers(j->header, j->auth, sizeof j->auth, j->key, sizeof j->key)) {
+    free(j);
+    finishSearch(id);
+    return NULL;
+  }
+  pthread_mutex_init(&j->take, NULL);
+  if (j->series) jobAdd(j, taskProgress, 0);
+  jobAdd(j, taskRating, 0);
+  if (j->series) jobAdd(j, taskStatus, 0);
+  if (!j->series) jobAdd(j, taskTmdbFilm, 0);
+  jobAdd(j, taskComments, 0);
+  if (mdbKey[0]) for (q = 0; q < EX_NSOURCES; q++) jobAdd(j, taskMdb, q);
+  if (j->series) jobAdd(j, taskSeasons, 0);
+  jobAdd(j, taskRelated, 0);
+
+  for (q = 0; q < EX_THREADS && q < j->nTask; q++)
+    if (pthread_create(&th[created], NULL, jobWorker, j) == 0) created++;
+  if (!created) jobWorker(j);            // no threads: in series, same result
+  for (q = 0; q < created; q++) pthread_join(th[q], NULL);
 
   { int k, q = 0;
     for (k = 0; k < EX_NSOURCES; k++) if (scores[k]) q++;
@@ -679,6 +745,8 @@ static void *fetch(void *arg) {
   printf("[extras] collection \"%s\" -> %d | rel[0] poster=%s\n", colName, nCol,
          nRel ? rel[0].poster : "(none)"); fflush(stdout);
   fflush(stdout);
+  pthread_mutex_destroy(&j->take);
+  free(j);
   finishSearch(id);
   return NULL;
 }

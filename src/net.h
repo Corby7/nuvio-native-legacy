@@ -13,6 +13,19 @@
 // own, never from the draw loop.
 char *net_download(const char *url, int seconds);
 
+// net_download, answered from memory when the same URL was fetched less than
+// `ttlSeconds` ago. A fresh copy every time; the caller frees it as usual.
+//
+// WHY: the same public JSON was asked for by several modules, seconds apart. One
+// Cinemeta /meta went out from Continue watching's decorate, again from the
+// detail page, again from Next Up; every rebuild of the home asked for every
+// manifest and catalogue again with the addons unchanged. Two threads asking for
+// the same URL at the same time share ONE request: the second waits for the
+// first. Only successful answers are kept, and only up to a byte budget, oldest
+// first out. Never for anything carrying a credential in a header — there is no
+// header parameter, on purpose.
+char *net_download_cached(const char *url, int seconds, int ttlSeconds);
+
 // The same, but for BINARY content: returns the size in *n. The version above
 // is NUL-terminated and suits JSON; an image has zeros in the middle and strlen
 // would lie.

@@ -55,8 +55,12 @@ audio:ic_player_audio_outline
 episodes:ic_player_episodes
 sources:ic_player_source
 aspect:ic_player_aspect_ratio
-stats:ic_player_stats
+details:ic_player_stats
 "
+# ic_player_stats is an info circle, and the info circle is what this app means by
+# "details" (the hold menu's See details wears it too). So it rasterises into the
+# Details button, and Stream stats draws its own bar chart from assets/icons/stats.svg
+# instead — built below alongside the web's glyphs.
 
 for pair in $MAP; do
   name="${pair%%:*}"; svg="${pair##*:}"
@@ -64,6 +68,9 @@ for pair in $MAP; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "$SRC/$svg.svg" -o "$OUT/$name.png"
   echo "    $name.png <- $svg.svg"
 done
+
+rsvg-convert -w "$SIZE" -h "$SIZE" assets/icons/stats.svg -o "$OUT/stats.png"
+echo "    stats.png <- assets/icons/stats.svg"
 
 echo "==> $OUT, ${SIZE}px, from $SRC"
 echo "    the TV only sees these after a new .ipk — bash tools/arm.sh --ipk"

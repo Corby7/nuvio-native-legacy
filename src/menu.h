@@ -5,9 +5,9 @@
 // in two places, on purpose:
 //   - there is no menu_shutdown: text and icons use text.c's and gfx.c's caches;
 //     the module owns no allocations of its own.
-//   - there is no menu_wants_exit: closing the menu never closes the app. Back
-//     here only hands focus back to the content, and the home remains the one
-//     that decides about leaving.
+//   - there is no menu_wants_exit: the menu does not know what is under it.
+//     menu_back_pressed reports that Back closed it, and the app decides: over
+//     the home that Back leaves the app, anywhere else it only closes the bar.
 //
 // The cycle on the device: focus is on the first column of a row, the user
 // presses LEFT, the bar slides in from the edge and takes focus. OK picks the
@@ -28,7 +28,6 @@ typedef enum {
   MENU_START,
   MENU_FETCH,
   MENU_LIBRARY,
-  MENU_PROFILE,
   MENU_SETTINGS,
   MENU_N
 } MenuDestination;
@@ -70,6 +69,8 @@ const char *menu_label(int destination);
 // MenuDestination: switching profile is not a tab of the app, it is an action
 // that returns the person to the picker screen.
 int  menu_requested_swap(void);
+// 1 exactly once, on the frame Back (not RIGHT) closed the bar. Consumes the flag.
+int  menu_back_pressed(void);
 
 void menu_event(const SDL_Event *e);
 void menu_update(float dt, Uint32 now);

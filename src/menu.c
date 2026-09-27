@@ -139,7 +139,7 @@
 
 // Labels and order checked against the reference. "Search" is the noun, not the
 // verb: the other entries are nouns too, and a verb among them read as odd.
-static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Profile", "Settings" };
+static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Settings" };
 
 // FOOTER: who is using the app, and the door to switching. It is one EXTRA focus
 // item, at index MENU_N — it deliberately did not go into the enum, because
@@ -154,6 +154,7 @@ static const char *LABELS[MENU_N] = { "Home", "Search", "Library", "Profile", "S
 #define MENU_FOOTER         MENU_N
 
 static int   requestedSwap = 0;
+static int   backPressed = 0;     // Back closed the bar; see menu_back_pressed
 static int   is_open  = 0;
 static int   destination = MENU_START;
 static int   line   = MENU_START;   // the highlight; it only becomes the destination on choosing
@@ -313,6 +314,7 @@ static void choose(void) {
 }
 
 int menu_requested_swap(void) { int p = requestedSwap; requestedSwap = 0; return p; }
+int menu_back_pressed(void) { int p = backPressed; backPressed = 0; return p; }
 
 void menu_event(const SDL_Event *e) {
   if (!is_open || e->type != SDL_KEYDOWN) return;
@@ -321,8 +323,13 @@ void menu_event(const SDL_Event *e) {
   // The same set of "back" keys the detail screen accepts: on the remote it is
   // Back, on a keyboard everyone reaches a different one.
   // RIGHT is the way back to the content, so it closes like Back does.
-  if (k == SDLK_AC_BACK || k == SDLK_ESCAPE || k == SDLK_BACKSPACE ||
-      k == SDLK_DELETE || k == SDLK_RIGHT) { menu_close(); return; }
+  // Back is also REMEMBERED, apart from RIGHT: over the home it means "leave",
+  // and only the app knows which screen is under the bar.
+  if (k == SDLK_AC_BACK || k == SDLK_ESCAPE) {
+    if (!e->key.repeat) backPressed = 1;
+    menu_close(); return;
+  }
+  if (k == SDLK_BACKSPACE || k == SDLK_DELETE || k == SDLK_RIGHT) { menu_close(); return; }
 
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { choose(); return; }
   // No wrap-around at the ends: the bar is short and the user sees all four rows
@@ -356,9 +363,9 @@ void menu_update(float dt, Uint32 now) {
 // sidebarNavigation.js carries an `iconMarkup` and a `filledIconMarkup` per
 // entry, and the CSS swaps one for the other on `.selected` — that swap is the
 // selected row's main signal, and drawing the outline in both states loses it.
-// The paths were taken from that file and rasterised into art/icons; only
-// "Profile" had to be chosen, because the web has no such row (its
-// account entry is the avatar itself, which is this bar's footer).
+// The paths were taken from that file and rasterised into art/icons. There is
+// no Profile row, as on the web: the account entry is the avatar itself, which
+// is this bar's footer.
 //
 // The colour is always WHITE and the state rides on the alpha: the CSS does the
 // same (`.home-nav-icon-wrap { color: var(--text-color); opacity: .5 }`), and its
@@ -366,8 +373,8 @@ void menu_update(float dt, Uint32 now) {
 // is composited. Here the reason is smaller but points the same way: one tint
 // means the two variants cannot drift apart in colour.
 static void icon(int d, int filled, float cx, float cy, float s, float a) {
-  static const char *names[MENU_N] = {"menu_home", "menu_search", "menu_library", "menu_profile", "menu_settings"};
-  static const char *fills[MENU_N] = {"menu_home_fill", "menu_search_fill", "menu_library_fill", "menu_profile_fill", "menu_settings_fill"};
+  static const char *names[MENU_N] = {"menu_home", "menu_search", "menu_library", "menu_settings"};
+  static const char *fills[MENU_N] = {"menu_home_fill", "menu_search_fill", "menu_library_fill", "menu_settings_fill"};
   if (d < 0 || d >= MENU_N) return;
   gfx_icon((GfxRect){cx-s*.5f, cy-s*.5f, s, s}, filled ? fills[d] : names[d],
            1.0f, 1.0f, 1.0f, a);
@@ -506,7 +513,7 @@ static void drawFooter(float px, float w, float alpha, float focus) {
       //
       // GFX_AVATAR rather than a rounded GFX_CARD for the reason gfx.h gives: at
       // 44px the rectangle SDF's corner rounding leaves burrs on the rim, and the
-      // disc's own radial mask does not. The same pair social.c and profile.c use.
+      // disc's own radial mask does not. The same pair social.c uses.
       gfx_tex_aspect_current = tex_aspect(url);
       gfx_rect(av, tex, GFX_AVATAR, 0, 0, 0, 0.0f, 1, 1, 1, alpha);
       gfx_tex_aspect_current = 0.0f;

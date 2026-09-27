@@ -13,6 +13,9 @@ int         disc_prefs_n(void) { return 0; }
 const char *disc_prefs_key(int i) { (void)i; return ""; }
 int         disc_prefs_hidden(const char *key) { (void)key; return 0; }
 const char *disc_prefs_title(const char *key) { (void)key; return NULL; }
+// The opt-in Trakt rows (homerows.c) are off, as on a first run.
+int         homerows_trakt_watchlist(void) { return 0; }
+int         homerows_trakt_recs(void) { return 0; }
 
 int main(void) {
   assert(MAX_FILTER <= FOCUS_MAX_ROWS);
@@ -41,10 +44,9 @@ int main(void) {
   snprintf(filters[15].title, sizeof filters[15].title, "Oscar - Movie");
   cat_set_all(itemsTeste, 48, filters, 16);
   syncRows();
-  assert(nRows == 17);
-  assert(focus.nRows == 17);
-  assert(rows[1].kind == ROW_SOCIAL && rows[1].start == -1 && rows[1].n == 1);
-  assert(rows[2].kind == ROW_HIGHLIGHT);
+  assert(nRows == 16);
+  assert(focus.nRows == 16);
+  assert(rows[1].kind == ROW_HIGHLIGHT);
   for (int i = 0; i < 16; i++) {
     int found = 0;
     for (int r = 0; r < nRows; r++)
@@ -52,8 +54,8 @@ int main(void) {
     assert(found == 1); // no catalogue removed or duplicated
   }
   focus.row = 0; focus.column = 0;
-  for (int i = 0; i < 16; i++) assert(focus_move(&focus, 0, 1));
-  assert(focus.row == 16);
+  for (int i = 0; i < 15; i++) assert(focus_move(&focus, 0, 1));
+  assert(focus.row == 15);
   assert(!focus_move(&focus, 0, 1));
   // Same count, different order: keep key, column and scroll.
   focus.row = 5; focus.column = 2; scrollX[5] = 123;
@@ -76,34 +78,31 @@ int main(void) {
   // declared by the addon. The fixture has eight keys outside the editorial
   // table.
   assert(nRows>=11);
-  assert(rows[1].kind==ROW_SOCIAL);
-  assert(!strcmp(rows[2].title,"Recent Release"));
-  assert(!strcmp(rows[3].title,"Streaming"));
-  assert(rows[3].kind==ROW_CATALOGS);
-  assert(!strcmp(col_folder(rows[3].folders[0])->title,"Netflix"));
-  assert(!strcmp(rows[4].title,"Trending Movies"));
-  assert(!strcmp(rows[6].title,"Themes"));
-  assert(!strcmp(rows[7].catId,"ai_movies_for_you"));
+  assert(!strcmp(rows[1].title,"Recent Release"));
+  assert(!strcmp(rows[2].title,"Streaming"));
+  assert(rows[2].kind==ROW_CATALOGS);
+  assert(!strcmp(col_folder(rows[2].folders[0])->title,"Netflix"));
+  assert(!strcmp(rows[3].title,"Trending Movies"));
+  assert(!strcmp(rows[5].title,"Themes"));
+  assert(!strcmp(rows[6].catId,"ai_movies_for_you"));
+  assert(rows[8].kind==ROW_TOP10);
   assert(rows[9].kind==ROW_TOP10);
-  assert(rows[10].kind==ROW_TOP10);
-  assert(rows[9].stackN==3 && rows[9].n==1);
+  assert(rows[8].stackN==3 && rows[8].n==1);
   for (int i=8; i<16; i++) {
     int found=0;
     for (int r=0; r<nRows; r++)
       if (!strcmp(rows[r].key, filters[i].key)) found=1;
     assert(found);
   }
-  rows[9].n=3;rows[9].stackN=0;rows[9].stackOpen=1;
+  rows[8].n=3;rows[8].stackN=0;rows[8].stackOpen=1;
   for(int i=0;i<nRows;i++)assert(strcmp(rows[i].title,"Your catalogues"));
   snprintf(filters[15].key,sizeof filters[15].key,"social_activity");
   filters[15].base[0]=filters[15].catId[0]=0;
   cat_set_all(itemsTeste,48,filters,16);syncRows();
-  int social=0;
-  for(int i=0;i<nRows;i++)if(rows[i].kind==ROW_SOCIAL){
-    social++;assert(rows[i].start==45 && rows[i].n==3);
-  }
-  assert(social==1); // real data replaces empty, never duplicates the row
-  assert(rows[9].stackN==0 && rows[9].n==3 && rows[9].stackOpen);
+  // The friends' feed is gone: a cached catalogue that still carries its row
+  // loses it, and nothing takes its place.
+  for(int i=0;i<nRows;i++)assert(strcmp(rows[i].key,"social_activity"));
+  assert(rows[8].stackN==0 && rows[8].n==3 && rows[8].stackOpen);
 
   // Another title's art is never a silent fallback, even when the index is
   // beyond the local library. With no catalogue, the local arrays stay available

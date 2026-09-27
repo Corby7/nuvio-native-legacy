@@ -538,7 +538,11 @@ Two crashes on the device during the session:
 4. **Surfaces with no push** (library, watched, collections, home catalogues):
    deliberate while there is no screen that edits them — a push with no screen
    would send an empty list and erase the data on the other devices.
-5. **The package is 172 MB** of prebaked art. Not a secret, but it is weight.
+5. ~~The package is 172 MB of prebaked art.~~ The demo catalogue (40 titles
+   with their backdrops, posters, logos, episode stills and cast photos, ~21 MB)
+   was removed on 2026-09-27; a first run shows "Preparing your catalogue…"
+   until the network publishes. What ships in art/ now is UI assets and the
+   built-in collections' editorial covers (~6 MB).
 
 ---
 

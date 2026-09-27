@@ -1326,7 +1326,7 @@ static void pushWindow(void) {
     sw = vidW > 1 ? vidW : 1920;
     sh = vidH > 1 ? vidH : 1080;
   }
-  plane_window(sx, sy, sw, sh, windowX, windowY, windowW, windowH);
+  plane_window(sx, sy, sw, sh, windowX, windowY, windowW, windowH, vidW, vidH);
 }
 
 void video_window(int x, int y, int w, int h) {

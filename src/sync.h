@@ -19,8 +19,10 @@
 // it; until then this app's Trakt link still comes from art/trakt.txt, which
 // CANNOT go in the package.
 //   ONLY PULLS (the app reads, but has no local editing to push):
-//     profiles, watched, library, saved, collections, profile settings, home
-//     catalogues.
+//     profiles, saved, collections, profile settings, home catalogues.
+//   LIBRARY AND WATCHED, when Trakt is not linked: pulled in full and pushed
+//     edit by edit, through acclib.c — see acclib.h for the server's contract
+//     and why the library push is always a complete list.
 //
 // This is NOT laziness, it is safety rule number 2 from section 1.6 of the plan.
 // Pushing a surface the app does not edit would mean sending an EMPTY list to
@@ -84,10 +86,17 @@ unsigned sync_last_ok(void);
 // applies it to the app (addon list, Trakt credential, progress).
 void sync_step(unsigned nowMs);
 
-// Fires a cycle if SYNC_INTERVAL_MS has passed since the last successful one.
-// Does not run with a cycle in progress, with the brake on, or before the first
-// success. 1 when it fired.
+// Fires a cycle when one is due: SYNC_INTERVAL_MS since the last successful
+// one; the app coming back after being frozen or the TV waking from standby; or
+// a gesture that asked for sync_soon. Does not run with a cycle in progress or
+// with the brake on. 1 when it fired. Every cycle is recorded in sync.log in
+// the data folder.
 int  sync_periodic(unsigned nowMs);
+
+// A local edit to the library or the watched list (acclib.c): a LIGHT cycle —
+// those two lists only — runs a moment later, instead of waiting up to five
+// minutes for the periodic one.
+void sync_soon(void);
 
 // Erases from the device everything belonging to whoever was signed in. Call it
 // TOGETHER with session_exit() — the session alone is not enough.

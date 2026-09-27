@@ -105,6 +105,7 @@ int  ime_shown(void);
 // size including the terminator. Handled here:
 //   SDL_TEXTINPUT    appends, refusing anything that would not fit
 //   SDL_KEYDOWN of BACKSPACE  removes one CHARACTER, not one byte
+//   SDL_KEYDOWN of CLEAR      empties it: the LG keyboard's "clear all" key
 //
 // WHY THE BACKSPACE LIVES HERE. The system keyboard sends real text, and real
 // text from an LG keyboard is UTF-8: an accented letter is two bytes and an

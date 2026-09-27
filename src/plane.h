@@ -49,9 +49,16 @@ int plane_ready(void);
 const char *plane_window_id(void);
 
 // Places the video: `s*` crops the SOURCE (decoded-frame coordinates), `d*` is
-// the rectangle on the 1920x1080 screen. Asking for a smaller piece of the
-// source for the same destination is what zooms in, and what takes a frame's
-// baked-in black bars out of view.
+// the rectangle on the 1920x1080 screen, `ow`/`oh` the whole decoded frame.
+// Asking for a smaller piece of the source for the same destination is what
+// zooms in, and what takes a frame's baked-in black bars out of view.
+//
+// A CROP GOES THROUGH set_crop_region, NOT set_exported_window. The compositor
+// reads set_exported_window's source region as a piece of the exported
+// SURFACE, not of the video: a smaller source there does nothing to the
+// picture, which is why every aspect mode used to look the same. Only
+// set_crop_region (original_input, source, destination) crops the frame, and
+// it needs the whole frame's size to know what the source is a piece of.
 //
 // BOTH regions are always sent as real wl_region objects. The protocol marks
 // neither argument allow-null, and libwayland catches that on the CLIENT side:
@@ -62,7 +69,7 @@ const char *plane_window_id(void);
 //
 // Render thread only, like plane_start.
 void plane_window(int sx, int sy, int sw, int sh,
-                  int dx, int dy, int dw, int dh);
+                  int dx, int dy, int dw, int dh, int ow, int oh);
 
 // Call ONCE PER FRAME, from the render thread, until the id arrives.
 //

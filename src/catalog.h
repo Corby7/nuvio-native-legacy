@@ -143,8 +143,6 @@ typedef struct {
   // not match, so an old cache is discarded rather than read crooked.
   char imdb[24];
   char kind[8];
-  // Authorship of the social feed, kept separate from the film's metadata.
-  char socialName[96], socialSlug[128], socialAvatar[768], socialAction[64];
   // The title's id on TMDB, when the search by imdb_id has already resolved it
   // (see castPhotos in discover.c). It used to be discarded; it is the route to
   // the film's COLLECTION, which TMDB only exposes by its own id.

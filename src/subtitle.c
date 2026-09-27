@@ -42,6 +42,8 @@ static void entity(char *s) {
   *w=0;
 }
 
+static int srtTags(char *s);
+
 static int parseSrt(const char *body, SubtitleCue **output) {
   char *buf,*p,*line; int n=0,cap=128;
   SubtitleCue *v;
@@ -73,9 +75,14 @@ static int parseSrt(const char *body, SubtitleCue **output) {
       if(l>remains)l=remains;memcpy(text+used,p,l);used+=l;text[used]=0;
       p=nl?nl:p+strlen(p);
     }
-    entity(text); if(!text[0])continue;
+    entity(text);
+    int align=srtTags(text);
+    if(!text[0])continue;
     if(n==cap){cap*=2;SubtitleCue *nv=realloc(v,(size_t)cap*sizeof *v);if(!nv)break;v=nv;}
-    v[n].start=start;v[n].end=end;snprintf(v[n].text,sizeof v[n].text,"%s",text);n++;
+    // Zeroed: realloc's new half is not, and a stray `positioned` sent every cue
+    // past the 128th to a random corner.
+    memset(&v[n],0,sizeof v[n]);
+    v[n].start=start;v[n].end=end;v[n].align=align;snprintf(v[n].text,sizeof v[n].text,"%s",text);n++;
   }
   free(buf);
   if(!n){free(v);return 0;}
@@ -205,6 +212,28 @@ static int assPoint(const char *s, float *x, float *y) {
     *x = (float)v[2]; *y = (float)v[3]; return 1;
   }
   return 0;
+}
+
+// ASS tags left inside an SRT by converters and fansub tools: {\an8}, {\i1},
+// \N. A block that starts "{\" goes, its \an kept as the cue's alignment
+// (returned, 0 when none); \N and \n become line breaks, \h a space. A '{' with
+// no backslash after it is dialogue and stays. Trimmed after, so a cue that was
+// only tags or a lone space comes out empty.
+static int srtTags(char *s) {
+  int align = assInlineAlign(s);
+  char *r = s, *w = s, *close;
+  while (*r) {
+    if (r[0] == '{' && r[1] == '\\' && (close = strchr(r, '}'))) r = close + 1;
+    else if (r[0] == '\\' && (r[1] == 'N' || r[1] == 'n')) { *w++ = '\n'; r += 2; }
+    else if (r[0] == '\\' && r[1] == 'h') { *w++ = ' '; r += 2; }
+    else *w++ = *r++;
+  }
+  *w = 0;
+  { char *a = s, *z = s + strlen(s);
+    while (*a && isspace((unsigned char)*a)) a++;
+    while (z > a && isspace((unsigned char)z[-1])) z--;
+    *z = 0; memmove(s, a, (size_t)(z - a) + 1); }
+  return align;
 }
 
 // A style's name and alignment, from [V4+ Styles] (numpad) or [V4 Styles] (SSA).
@@ -350,6 +379,123 @@ int subtitle_parse(const char *body, SubtitleCue **output) {
   return n;
 }
 
+// --- THE FORMAT, for the sheet -------------------------------------------------
+//
+// "ASS", "SSA", "SRT" or "VTT", as the embedded rows already say it. An addon
+// names none, and most of its URLs carry no extension (OpenSubtitles serves
+// /file/1954191548), so the body is what says. The kinds are kept per URL for the
+// session: every subtitle loaded records its own, and subtitle_kind can fetch the
+// ones the sheet is showing, one at a time on a thread of its own. The host does
+// not honour Range, so a probe is the whole file — tens of KB, and only for the
+// rows on screen.
+
+static const char *bodyKind(const char *b) {
+  if (!strncmp(b, "\xef\xbb\xbf", 3)) b += 3;
+  while (isspace((unsigned char)*b)) b++;
+  if (!strncmp(b, "WEBVTT", 6)) return "VTT";
+  if (!looksLikeAss(b) && !strstr(b, "[Script Info]")) return "SRT";
+  // SSA is v4.00 with [V4 Styles]; ASS is v4.00+ with [V4+ Styles].
+  if (strstr(b, "[V4 Styles]") || strstr(b, "[v4 Styles]")) return "SSA";
+  { const char *t = strstr(b, "ScriptType:");
+    if (t) { t += 11; while (*t == ' ') t++;
+             if (!strncasecmp(t, "v4.00", 5) && t[5] != '+') return "SSA"; } }
+  return "ASS";
+}
+
+// The extension of a URL's path, when it is one of the four.
+static const char *urlKind(const char *url) {
+  size_t n = strcspn(url, "?#");
+  const char *dot;
+  char ext[5] = "";
+  for (dot = url + n; dot > url && dot[-1] != '.' && dot[-1] != '/'; dot--) {}
+  if (dot == url || dot[-1] != '.' || url + n - dot > 3) return NULL;
+  memcpy(ext, dot, (size_t)(url + n - dot)); ext[url + n - dot] = 0;
+  if (!strcasecmp(ext, "ass")) return "ASS";
+  if (!strcasecmp(ext, "ssa")) return "SSA";
+  if (!strcasecmp(ext, "srt")) return "SRT";
+  if (!strcasecmp(ext, "vtt")) return "VTT";
+  return NULL;
+}
+
+#define KIND_MAX 256
+// kind "" with `queued` = waiting for the probe; "?" = the probe failed.
+static struct { unsigned hash; char kind[4]; int queued; char *url; } kinds[KIND_MAX];
+static int nKinds, prober;
+
+static unsigned urlHash(const char *s) {
+  unsigned h = 2166136261u;
+  for (; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u;
+  return h ? h : 1;
+}
+
+// The entry for `url`, made when missing (the oldest goes when full); the caller
+// holds the lock.
+static int kindSlot(const char *url, int make) {
+  unsigned h = urlHash(url);
+  int i;
+  for (i = 0; i < nKinds; i++) if (kinds[i].hash == h) return i;
+  if (!make) return -1;
+  if (nKinds == KIND_MAX) {
+    free(kinds[0].url);
+    memmove(kinds, kinds + 1, (KIND_MAX - 1) * sizeof *kinds);
+    nKinds--;
+  }
+  memset(&kinds[nKinds], 0, sizeof *kinds);
+  kinds[nKinds].hash = h;
+  return nKinds++;
+}
+
+static void kindSet(const char *url, const char *kind) {
+  int i;
+  pthread_mutex_lock(&lock);
+  i = kindSlot(url, 1);
+  snprintf(kinds[i].kind, sizeof kinds[i].kind, "%s", kind);
+  kinds[i].queued = 0; free(kinds[i].url); kinds[i].url = NULL;
+  pthread_mutex_unlock(&lock);
+}
+
+static void *probe(void *unused) {
+  (void)unused;
+  for (;;) {
+    char *url = NULL;
+    int i;
+    pthread_mutex_lock(&lock);
+    // Newest first: the rows on screen now, not the ones scrolled past.
+    for (i = nKinds - 1; i >= 0; i--)
+      if (kinds[i].queued && kinds[i].url) { url = kinds[i].url; kinds[i].url = NULL; break; }
+    if (!url) { prober = 0; pthread_mutex_unlock(&lock); return NULL; }
+    pthread_mutex_unlock(&lock);
+    { long size = 0; const char *charset = "";
+      char *raw = net_download_bin(url, 15, &size);
+      char *body = raw ? subcharset_utf8(raw, size, "", &charset) : NULL;
+      kindSet(url, body ? bodyKind(body) : "?");
+      free(raw); free(body); }
+    free(url);
+  }
+}
+
+const char *subtitle_kind(const char *url, int fetch) {
+  static char out[4];
+  const char *k;
+  int i;
+  if (!url || !*url) return NULL;
+  if ((k = urlKind(url))) return k;
+  pthread_mutex_lock(&lock);
+  i = kindSlot(url, fetch);
+  out[0] = 0;
+  if (i >= 0 && kinds[i].kind[0] && strcmp(kinds[i].kind, "?")) snprintf(out, sizeof out, "%s", kinds[i].kind);
+  else if (i >= 0 && fetch && !kinds[i].kind[0] && !kinds[i].queued) {
+    kinds[i].queued = 1; kinds[i].url = strdup(url);
+    if (!prober) {
+      pthread_t t;
+      prober = 1;
+      if (pthread_create(&t, NULL, probe, NULL) == 0) pthread_detach(t); else prober = 0;
+    }
+  }
+  pthread_mutex_unlock(&lock);
+  return out[0] ? out : NULL;
+}
+
 typedef struct { char url[1400]; char language[8]; unsigned g; } Request;
 
 // Frees the loaded cues; the caller holds the lock.
@@ -360,6 +506,7 @@ static void *download(void *u) {
   char *raw=net_download_bin(p->url,20,&size),*body=raw?subcharset_utf8(raw,size,p->language,&charset):NULL;
   SubtitleCue *v=NULL; double *r=NULL;
   int n=body?subtitle_parse(body,&v):0,i;
+  if(body)kindSet(p->url,bodyKind(body));
   free(raw);free(body);
   if(n&&(r=malloc((size_t)n*sizeof *r))!=NULL)
     for(i=0;i<n;i++)r[i]=i&&r[i-1]>v[i].end?r[i-1]:v[i].end;

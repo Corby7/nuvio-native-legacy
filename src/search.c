@@ -93,8 +93,12 @@ static Focus  focusKb;
 static Focus  focusRes;
 static Focus  focusHist;
 static int   panel;
-// Which of the header's two controls has the focus: 0 the field, 1 the voice
-// button. It is not a Focus because a row of two needs no column memory.
+// Which of the header's controls has the focus: 0 the field, 1 the Discover
+// button, HEAD_CLEAR the cross inside the field. It is not a Focus because a row
+// this short needs no column memory. The cross is numbered last so the 0 and 1
+// every other line here tests keep their meaning; it sits BETWEEN them on
+// screen, and the arrows below step through it in that order.
+#define HEAD_CLEAR 2
 static int   headCol;
 static char  query[SEARCH_MAX_QUERY];
 static int   nQuery = 0;
@@ -133,6 +137,7 @@ static float animKey[SEARCH_KB_ROWS][SEARCH_KB_COLS];
 static float animRes[SEARCH_MAX_ROWS][SEARCH_MAX_PER_FILTER + 1];
 static float animField;
 static float animDiscover;
+static float animClear;
 static float animChip[NV_SEARCH_HIST_MAX];
 static float scrollY = 0.0f, scrollTarget = 0.0f;
 static float scrollX[SEARCH_MAX_ROWS];
@@ -190,6 +195,16 @@ static GfxRect rectField(void) {
                 NV_SEARCH_RIGHT - NV_SEARCH_X - NV_SEARCH_BTN - NV_SEARCH_BTN_GAP,
                 NV_SEARCH_HEAD_H };
   return f;
+}
+
+// The cross's focus disc, centred on the glyph at the field's right end.
+static GfxRect rectClear(void) {
+  GfxRect f = rectField();
+  float cx = f.x + f.w - NV_SEARCH_CLEAR_X - NV_SEARCH_CLEAR * 0.5f;
+  float cy = f.y + f.h * 0.5f;
+  GfxRect r = { cx - NV_SEARCH_CLEAR_HIT * 0.5f, cy - NV_SEARCH_CLEAR_HIT * 0.5f,
+                NV_SEARCH_CLEAR_HIT, NV_SEARCH_CLEAR_HIT };
+  return r;
 }
 
 // WHERE A LINE OF TEXT GOES SO THAT IT READS CENTRED IN `h`.
@@ -578,6 +593,7 @@ int search_start(void) {
   hasItemFocus = 0;
   animField = 0.0f;
   animDiscover = 0.0f;
+  animClear = 0.0f;
   headCol = 0;
   memset(animKey, 0, sizeof animKey);
   memset(animRes, 0, sizeof animRes);
@@ -639,6 +655,16 @@ static void goBack(void) {
   wantsExit = 1;
 }
 
+// The cross. The focus goes back to the field because the cross is gone the
+// moment the query is empty; a system keyboard that is up stays up, so the
+// owner can type the next term straight away.
+static void clearQuery(void) {
+  nQuery = 0;
+  query[0] = 0;
+  headCol = 0;
+  refilter();
+}
+
 // ENTER on the field: the term joins the history and the focus moves to the
 // results, which is what runSearchFromInput does on the web with
 // `autoFocusResults: true`.
@@ -657,6 +683,12 @@ static void pointHead(int col, int unused) {
   (void)unused;
   if (ime_is_open() || !ime_usable()) return;
   panel = PANEL_FIELD; headCol = col;
+}
+// The cross's click clears directly instead of sending OK: with the keyboard up,
+// an OK on the field means submit, and the click has to mean clear either way.
+static void clickClear(int unused1, int unused2) {
+  (void)unused1; (void)unused2;
+  if (nQuery) clearQuery();
 }
 static void pointKey(int row, int col) {
   if (ime_is_open()) return;
@@ -734,7 +766,8 @@ void search_event(const SDL_Event *e) {
         // OK on a field that is not yet taking text RAISES the keyboard; OK
         // again, with it up, is the submit. Two meanings for one key, and they
         // cannot be confused because only one of the two states is ever current.
-        if (headCol == 1) {
+        if (headCol == HEAD_CLEAR) clearQuery();
+        else if (headCol == 1) {
           // The keyboard must come DOWN before another screen takes over, or it
           // stays up over a grid that has no field in it. See ime.h.
           ime_close();
@@ -746,16 +779,26 @@ void search_event(const SDL_Event *e) {
       case SDLK_BACKSPACE:
         // Reachable only with the keyboard DOWN — with it up, ime_edit above has
         // already taken it.
-        if (headCol == 0 && nQuery > 0) {
+        if (headCol != 1 && nQuery > 0) {
           ime_edit(e, query, &nQuery, SEARCH_MAX_QUERY); refilter();
+          if (!nQuery) headCol = 0;
         }
         break;
+      case SDLK_CLEAR:
+        // The keyboard's "clear all" arriving after it went down on its own.
+        if (headCol != 1 && nQuery > 0) clearQuery();
+        break;
+      // On screen the order is field, cross, Discover — the cross only while
+      // there is something to clear.
       case SDLK_RIGHT:
-        if (!ime_is_open()) headCol = 1;
+        if (!ime_is_open()) headCol = (headCol == 0 && nQuery) ? HEAD_CLEAR : 1;
         break;
       case SDLK_LEFT:
         // From the field itself LEFT is the edge of the screen: the side menu.
-        if (!ime_is_open()) { if (headCol == 0) requestMenu = 1; headCol = 0; }
+        if (!ime_is_open()) {
+          if (headCol == 0) requestMenu = 1;
+          headCol = (headCol == 1 && nQuery) ? HEAD_CLEAR : 0;
+        }
         break;
       case SDLK_DOWN:
         if (ime_is_open()) break;          // the keyboard owns the D-pad
@@ -893,8 +936,19 @@ void search_update(float dt, Uint32 now) {
       lastRemote = -1;
     } }
 
+  // The cross can vanish under the focus — the keyboard's own delete emptied the
+  // query — and the focus must not stay on something that is not drawn.
+  if (headCol == HEAD_CLEAR && !nQuery) headCol = 0;
+
   { float wantField = (panel == PANEL_FIELD && headCol == 0) ? 1.0f : 0.0f;
     float wantVoice  = (panel == PANEL_FIELD && headCol == 1) ? 1.0f : 0.0f;
+    // The pointer lights the cross even while the keyboard is up. The focus
+    // cannot move then (pointHead refuses, the keyboard owns the field), but the
+    // click still clears, so the owner has to see what they are about to hit.
+    float wantClear  = ((panel == PANEL_FIELD && headCol == HEAD_CLEAR) ||
+                        (nQuery && pointer_over(pointHead, HEAD_CLEAR, 0))) ? 1.0f : 0.0f;
+    animClear = anim_spring(animClear, wantClear, dt,
+                            wantClear > animClear ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     animField = anim_spring(animField, wantField, dt,
                             wantField > animField ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     animDiscover = anim_spring(animDiscover, wantVoice, dt,
@@ -1070,14 +1124,26 @@ static void drawField(Uint32 now) {
                               textW - NV_SEARCH_CLEAR - 12.0f);
     txt_draw(l, tx, textCenterY(TXT_CALLOUT, field.y, field.h));
     tx += (float)l.w + 6.0f;
-    // .search-clear-btn, shown by `.search-input-field.has-value`. It is drawn
-    // and NOT focusable, exactly as on the web (`tabindex="-1"`): clearing is
-    // what the keyboard's own delete does, and a target the D-pad can land on
-    // between the field and the results would be one more stop on the way down.
-    { float luma = anim_blend(0.502f, 0.702f, f);
+    // .search-clear-btn, shown by `.search-input-field.has-value`. Unlike the
+    // web (`tabindex="-1"`) it IS focusable: RIGHT from the field lands on it,
+    // and the pointer can click it. It sits beside the field, not below it, so
+    // it is no extra stop on the way down to the results. Focused it takes the
+    // header's own cue: a white disc with the glyph gone dark.
+    { GfxRect hit = rectClear();
+      float c = animClear;
+      float luma = anim_blend(anim_blend(0.502f, 0.702f, f), 0.055f, c);
       GfxRect x = { field.x + field.w - NV_SEARCH_CLEAR_X - NV_SEARCH_CLEAR,
                     cy - NV_SEARCH_CLEAR * 0.5f, NV_SEARCH_CLEAR, NV_SEARCH_CLEAR };
-      gfx_icon(x, "search_clear", luma, luma, luma, 1.0f); }
+      if (c > 0.01f) gfx_color(hit, NV_SEARCH_PILL, 1.0f, 1.0f, 1.0f, c);
+      gfx_icon(x, "search_clear", luma, luma, luma, 1.0f);
+      // The label rides above it, the same way Discover's does.
+      if (c > 0.01f) {
+        TxtLine l = txt_line(TXT_DETWEB_TIP, "Clear", 255, 255, 255, 255);
+        txt_draw_alpha(l, hit.x + (hit.w - (float)l.w) * 0.5f,
+                       field.y - 16.0f - (float)l.h, 0.92f * c);
+      }
+      // Registered after the field's zone, so it wins where the two overlap.
+      pointer_zone_act(hit.x, hit.y, hit.w, hit.h, pointHead, clickClear, HEAD_CLEAR, 0); }
   } else {
     // The web app's placeholder, verbatim, at --text-tertiary.
     TxtLine l = txt_line(TXT_CALLOUT, "Search movies & series", 128, 128, 128, 255);

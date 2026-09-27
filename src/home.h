@@ -12,7 +12,6 @@ typedef enum {
   ROW_TOP10,       // the ranking uses a portrait poster in legacy
   ROW_COLLECTION,     // awards / collections: mid-size landscape
   ROW_SERVICE,     // catalogue by service: compact landscape
-  ROW_SOCIAL,      // friends' activity: wide editorial with attribution
   ROW_RETURN,     // a just-interrupted session: compact resume band
   ROW_CATALOGS    // shortcuts to existing catalogues, not titles
 } KindRow;
@@ -75,7 +74,5 @@ int  home_requested_open(void);   // OK pressed: consumes the request
 // to play, or -1. Consumed once, like the open.
 int  home_requested_play(void);
 int  home_requested_menu(void);    // LEFT in the first column: calls up the menu
-int home_requested_social(void);
-int home_requested_person_social(CatItem *output);
 
 #endif

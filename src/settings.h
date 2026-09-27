@@ -46,6 +46,8 @@ int settings_subtitle_language(void);
 int settings_subtitle_forced(void);
 // The preferred AUDIO language as a lang.h index, -1 for the file's default.
 int settings_audio_language(void);
+// The same for an anime title, the row above's value when set to follow it.
+int settings_anime_audio_language(void);
 // 1 when the Up next countdown plays the next episode on its own.
 int settings_next_autoplay(void);
 // Seconds before the end at which the Up next card appears, for an episode of
@@ -75,9 +77,6 @@ int   settings_hero_top_band(void);     // heroBackdropArea == "Top band"
 float settings_hero_band_scale(void);   // heroBackdropScale
 int   settings_posters_landscape(void);  // modernLandscapePostersEnabled
 int   settings_gradient_focus_classic(void); // classicFocusGradientEnabled
-// socialRowEnabled: the "Among friends" row on Home. Local to this port — the
-// web app has no equivalent key, so the account blob never touches it.
-int   settings_social_row(void);
 // The x where the content starts. Not a constant: the inset is always 104 and
 // the rail adds its own 144 when it is fixed.
 float settings_content_x(void);

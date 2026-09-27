@@ -1597,7 +1597,7 @@ void detail_event(const SDL_Event *e) {
           const char *id = extras_related_imdb(relFocus);
           int target = cat_index_by_imdb(id);
           if (target >= 0) reqOpen = target;
-          else if (id[0]) disc_request_title(id);
+          else if (id[0]) disc_request_title_kind(id, isSeries() ? "series" : "movie");
         }
         return; }
       default: break;
@@ -1657,7 +1657,7 @@ void detail_event(const SDL_Event *e) {
       const char *id = extras_related_imdb(focus.column);
       int target = id[0] ? cat_index_by_imdb(id) : -1;
       if (target >= 0) reqOpen = target;
-      else if (id[0]) disc_request_title(id);
+      else if (id[0]) disc_request_title_kind(id, isSeries() ? "series" : "movie");
     } else if (focus.row == SEC_SEASONS && sectionN(SEC_SEASONS) > 0) {
       // OK EXPANDS THE LIST; it no longer switches season on its own, because there is
       // no longer one control per season to switch to. The list opens with its focus on

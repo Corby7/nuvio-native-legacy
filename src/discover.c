@@ -1,4 +1,5 @@
 #include "discover.h"
+#include "acclib.h"
 #include "mark.h"
 #include <SDL2/SDL.h>
 #include "catalog.h"
@@ -9,6 +10,7 @@
 #include "settings.h"
 #include "homerows.h"
 #include "watchedep.h"
+#include "data.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -69,11 +71,29 @@ static int completeOnScreen;
 // the cache and a previous complete build count as the owner's.
 static int partialAllowed(void) { return !cat_do_cache() && !completeOnScreen; }
 
+// THE ACCOUNT'S KEY IS KEPT ON DISK. It arrives with the sync, a second or two
+// after launch, and every title opened before that got nothing from TMDB — no
+// cast photos, no streaming badge, no fact sheet — on EVERY launch. Kept, it is
+// there from the first frame of the next one; sign-out erases it with the rest
+// of the account (disc_tmdb_forget).
+#define TMDB_KEY_FILE "tmdb-key"
+
 void disc_tmdb_set(const char *key) {
   if (!key || !*key) return;
+  if (strcmp(tmdbKey, key)) data_write(TMDB_KEY_FILE, key);
   snprintf(tmdbKey, sizeof tmdbKey, "%s", key);
   printf("[disc] tmdb: key from the account\n");
   fflush(stdout);
+}
+
+void disc_tmdb_forget(void) {
+  data_erase(TMDB_KEY_FILE);
+  tmdbKey[0] = 0;
+  // Back to the packaged key, if there is one. Through a copy: disc_tmdb writes
+  // dirArtDisc from its argument.
+  { char dir[sizeof dirArtDisc];
+    snprintf(dir, sizeof dir, "%s", dirArtDisc);
+    disc_tmdb(dir); }
 }
 
 void disc_tmdb(const char *dirArt) {
@@ -82,12 +102,20 @@ void disc_tmdb(const char *dirArt) {
   snprintf(dirArtDisc, sizeof dirArtDisc, "%s", dirArt ? dirArt : ".");
   snprintf(path, sizeof path, "%s/tmdb.txt", dirArt ? dirArt : ".");
   f = fopen(path, "r");
-  if (!f) return;
-  if (fgets(tmdbKey, sizeof tmdbKey, f)) {
-    char *end = tmdbKey + strlen(tmdbKey);
-    while (end > tmdbKey && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0;
+  if (f) {
+    if (fgets(tmdbKey, sizeof tmdbKey, f)) {
+      char *end = tmdbKey + strlen(tmdbKey);
+      while (end > tmdbKey && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0;
+    }
+    fclose(f);
   }
-  fclose(f);
+  // The account's key, from the last sync, wins over the packaged one.
+  { char *kept = data_read(TMDB_KEY_FILE);
+    if (kept && kept[0] && strlen(kept) < sizeof tmdbKey) {
+      snprintf(tmdbKey, sizeof tmdbKey, "%s", kept);
+      printf("[disc] tmdb: key from the last sync\n");
+    }
+    free(kept); }
   printf("[disc] tmdb %s\n", tmdbKey[0] ? "ok" : "missing");
 }
 
@@ -141,31 +169,57 @@ static int providerBetween(const char *start, const char *end, const char *key,
   return 1;
 }
 
-// Fills in the cast's photo and character. Cinemeta gives only the NAME; the
-// character and the portrait come from TMDB, which needs two round trips: finding
-// its id from the IMDb id and only then asking for the credits.
-static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
-  char url[400], *body;
-  long idTmdb = 0;
-  if (!tmdbKey[0] || d->nCast < 1) return;
+long disc_tmdb_id(const char *imdb, int series) {
+  char url[400], id[24], *body, *dp;
+  long found = 0;
+  if (!imdb || imdb[0] != 't') return 0;
+  snprintf(id, sizeof id, "%s", imdb);
+  dp = strchr(id, ':');
+  if (dp) *dp = 0;
+  snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA,
+           series ? "series" : "movie", id);
+  body = net_download_cached(url, 20, DISC_META_TTL_S);
+  if (body) { found = (long)js_num(body, NULL, "moviedb_id", 0); free(body); }
+  if (found > 0 || !tmdbKey[0]) return found;
   snprintf(url, sizeof url, "%s/find/%s?api_key=%s&external_source=imdb_id",
-           TMDB, imdbSeries, tmdbKey);
-  body = net_download(url, 20);
-  if (!body) return;
-  { const char *vet = series ? "tv_results" : "movie_results";
-    const char *p = js_array(body, NULL, vet);
-    if (p) idTmdb = (long)js_num(p, js_end(p), "id", 0); }
+           TMDB, id, tmdbKey);
+  body = net_download_cached(url, 20, DISC_META_TTL_S);
+  if (!body) return 0;
+  { const char *p = js_array(body, NULL, series ? "tv_results" : "movie_results");
+    if (p) found = (long)js_num(p, js_end(p), "id", 0); }
   free(body);
-  if (!idTmdb) return;
-  d->tmdb = idTmdb;
+  return found;
+}
 
-  snprintf(url, sizeof url, "%s/%s/%ld/credits?api_key=%s",
-           TMDB, series ? "tv" : "movie", idTmdb, tmdbKey);
-  body = net_download(url, 20);
+char *disc_tmdb_title(long tmdbId, int series) {
+  char url[400];
+  if (tmdbId <= 0 || !tmdbKey[0]) return NULL;
+  snprintf(url, sizeof url,
+           "%s/%s/%ld?api_key=%s&language=en-US&append_to_response=%s", TMDB,
+           series ? "tv" : "movie", tmdbId, tmdbKey,
+           series ? "credits,aggregate_credits,watch/providers"
+                  : "credits,watch/providers,release_dates,videos");
+  return net_download_cached(url, 20, DISC_META_TTL_S);
+}
+
+// Fills in the cast's photo and character and the streaming badge. Cinemeta
+// gives only the NAME; the character and the portrait come from TMDB. It used to
+// take three round trips in series — /find, /credits, /watch/providers — and now
+// takes none of its own: the id comes off the Cinemeta meta and the rest off the
+// one shared title request (disc_tmdb_title).
+static void photosOfCast(CatItem *d, long idTmdb, int series) {
+  char *body;
+  if (idTmdb <= 0) return;
+  d->tmdb = idTmdb;
+  if (d->nCast < 1 && !tmdbKey[0]) return;
+  body = disc_tmdb_title(idTmdb, series);
   if (!body) return;
-  { const char *p = js_array(body, NULL, "cast");
+  // `"credits"` and not the first "cast" of the body: on a series the appended
+  // aggregate_credits carries a "cast" of its own, in a different order. The
+  // quote before the key keeps "aggregate_credits" from matching.
+  { const char *cr = strstr(body, "\"credits\"");
+    const char *p = cr ? js_array(cr, NULL, "cast") : NULL;
     int k = 0;
-    (void)0;
     while (p && k < d->nCast) {
       const char *f = js_end(p);
       char pathPhoto[128] = "";
@@ -181,20 +235,19 @@ static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
       k++;
       p = js_next(f);
     } }
-  free(body);
 
-  // Where to watch. The providerLogo/providerName fields existed in CatItem and
-  // were NEVER filled in on the dynamic path — the streaming badge was empty on
-  // every title. TMDB answers by region; BR is the owner's.
-  snprintf(url, sizeof url, "%s/%s/%ld/watch/providers?api_key=%s",
-           TMDB, series ? "tv" : "movie", idTmdb, tmdbKey);
-  body = net_download(url, 20);
-  if (body) {
-    const char *br = strstr(body, "\"BR\"");
+  // Where to watch. TMDB answers by region; BR is the owner's. The search starts
+  // INSIDE watch/providers: the details before it carry "BR" as a plain value too
+  // (production_countries, origin_country), and the first "BR" of the body is not
+  // necessarily the region's object.
+  { const char *wp = strstr(body, "\"watch/providers\"");
+    const char *wpObj = wp ? strchr(wp, '{') : NULL;
+    const char *wpEnd = wpObj ? js_end(wpObj) : NULL;
+    const char *br = wpObj ? ate(wpObj, wpEnd, "\"BR\"") : NULL;
     if (br) {
       const char *brObj = strchr(br, '{');
       const char *brEnd = brObj ? js_end(brObj) : NULL;
-      if (brObj && brEnd && brEnd > brObj) {
+      if (brObj && brEnd && brEnd > brObj && brEnd <= wpEnd) {
         // flatrate = included in the subscription; rent = rental; buy = purchase.
         // If the title is not on streaming here, the badge stays empty ON PURPOSE,
         // instead of advertising a rental as though it were catalogue.
@@ -208,9 +261,8 @@ static void photosOfCast(CatItem *d, const char *imdbSeries, int series) {
                       d->compName, sizeof d->compName,
                       d->compLogo, sizeof d->compLogo);
       }
-    }
-    free(body);
-  }
+    } }
+  free(body);
 }
 
 // Defined further down, along with the rest of the Stremio meta parse; declared
@@ -695,7 +747,7 @@ static int readCatalog(const char *base, const char *kind, const char *id,
   // It is the same lesson already recorded in the texture cache — there the timeout
   // dropped from 25 to 8 for the same reason, with two dead URLs blocking both
   // decode threads. A catalogue that does not answer in 8 s is not going to answer.
-  body = net_download(url, 8);
+  body = net_download_cached(url, 8, DISC_ADDON_TTL_S);
   if (!body) return 0;
   p = js_array(body, NULL, "metas");
   while (p && n < max && n < count) {
@@ -973,7 +1025,7 @@ static int readManifest(const char *base, Decl *output, int max) {
   int n = 0;
   snprintf(url, sizeof url, "%s/manifest.json", base);
   hostOf(url, host, sizeof host);
-  body = net_download(url, 20);
+  body = net_download_cached(url, 20, DISC_ADDON_TTL_S);
   // WHY THIS IS LOGGED. An addon that does not answer, or answers something with
   // no "catalogs", produced exactly the same visible result as an addon that
   // simply has no catalogues: the home fell back to the packaged catalogue and
@@ -1370,8 +1422,6 @@ typedef struct {
   int  found, nextS, nextE;
 } NextUp;
 
-static char *metaCacheGet(const char *id);
-static void  metaCacheStore(const char *id, const char *body);
 
 // Today in UTC as "YYYY-MM-DD". Cinemeta's `released` is ISO-8601 in UTC, so
 // comparing the first ten characters as text answers "has it come out yet"
@@ -1422,15 +1472,11 @@ static void *threadNextUp(void *u) {
   const char *v;
   int bestS = 0, bestE = 0;
 
-  body = metaCacheGet(t->imdb);
-  if (!body) {
-    snprintf(url, sizeof url, "%s/meta/series/%s.json", CINEMETA, t->imdb);
-    // 8 s, the same ceiling trakt.c's decorate uses, and for the same reason:
-    // this sits on the path to the home's FIRST row.
-    body = net_download(url, 8);
-    if (!body) return NULL;
-    metaCacheStore(t->imdb, body);
-  }
+  snprintf(url, sizeof url, "%s/meta/series/%s.json", CINEMETA, t->imdb);
+  // 8 s, the same ceiling trakt.c's decorate uses, and for the same reason:
+  // this sits on the path to the home's FIRST row.
+  body = net_download_cached(url, 8, DISC_META_TTL_S);
+  if (!body) return NULL;
   // The FIRST episode after the anchor that survives every rule — found as a
   // minimum rather than by walking in order, because `videos` arrives in
   // whatever order the addon felt like and publishEpisodes below sorts its own
@@ -1619,14 +1665,14 @@ static int buildResume(CatItem *output, int max) {
 // None of these depends on the catalogues, nor the catalogues on them.
 //
 // So they run on two threads of their own from the top of build(): A brings the
-// rows that go FIRST (continue watching, friend activity) and is joined just
+// rows that go FIRST (continue watching) and is joined just
 // before the catalogue rows are assembled after them; B brings the ones that go
 // LAST (watchlist, collection) and is joined at the very end. Each writes only
 // into its own buffers; build() copies them into the batch in the same order as
 // before.
 typedef struct {
-  CatItem resume[8], social[8];
-  int nResume, nSocial;
+  CatItem resume[8];
+  int nResume;
 } TraktFirst;
 typedef struct {
   CatItem *items;
@@ -1642,11 +1688,6 @@ static void *traktFirst(void *u) {
   TraktFirst *t = (TraktFirst *)u;
   t->nResume = buildResume(t->resume, 8);
   mark("continue watching, both sources");
-  // The official social feed is a row of its own, right after the return to what
-  // was being watched. With the row turned off in Settings there is nobody to
-  // show it to, and the feed is one more Trakt GET — so it is not fetched at all.
-  t->nSocial = settings_social_row() ? trakt_social(t->social, 8) : 0;
-  mark("trakt friend activity");
   return NULL;
 }
 
@@ -1659,6 +1700,14 @@ static void *traktLast(void *u) {
   TraktLast *t = (TraktLast *)u;
   int nWatch;
   if (!t->items) return NULL;
+  // WITHOUT TRAKT the Library is the Nuvio account's own (acclib.h). Its rows
+  // already carry the name, the art, the year, the genres and the synopsis, so
+  // there is no Cinemeta round per card here, and no home row: the Watchlist
+  // row is Trakt's.
+  if (acclib_active()) {
+    t->n = acclib_items(t->items, t->cap);
+    return NULL;
+  }
   nWatch = trakt_list("watchlist", t->items, t->cap);
   t->n = nWatch;
   t->n += trakt_list("collection", t->items + t->n, t->cap - t->n);
@@ -1710,7 +1759,7 @@ static void *build(void *u) {
   int cap = 128;
   CatItem *lote = malloc(sizeof(CatItem) * (size_t)cap);
   int n = 0;
-  int nResume = 0, nSocial = 0;
+  int nResume = 0;
   // Slots kept free for the opt-in Trakt rows: they land after every catalogue
   // has been read, and a catalogue loop that had filled the array would leave
   // them nowhere to go.
@@ -1727,7 +1776,7 @@ static void *build(void *u) {
   // THE MANIFESTS LEAVE FIRST AND THE TRAKT ROWS RUN BESIDE THEM, on threads of
   // their own (see traktFirst/traktLast): neither depends on the other, and
   // Trakt is expensive — /sync/playback and /sync/history are two GETs of up to
-  // 25 s each, and the social feed is one more.
+  // 25 s each.
   //
   // The search-target reset comes along because every searchable catalogue
   // registers itself INSIDE readManifest — clearing it afterwards would erase
@@ -1837,11 +1886,9 @@ static void *build(void *u) {
         // running since the top of build().
         if (okFirst) pthread_join(thFirst, NULL);
         nResume = first.nResume;
-        nSocial = first.nSocial;
-        ENSURES(nResume + nSocial);
+        ENSURES(nResume);
         memcpy(lote, first.resume, sizeof(CatItem) * (size_t)nResume);
-        memcpy(lote + nResume, first.social, sizeof(CatItem) * (size_t)nSocial);
-        n = nResume + nSocial;
+        n = nResume;
         // Row 0 is "Continue watching". It is SYNTHETIC: it is not in the web
         // app's order and cannot be switched off by key — in the app it exists
         // whenever there is progress.
@@ -1852,14 +1899,6 @@ static void *build(void *u) {
           snprintf(f0->title, sizeof f0->title, "Continue watching");
           snprintf(f0->kind,   sizeof f0->kind,   "movie");
           f0->start = 0; f0->n = nResume;
-        }
-        if (nSocial > 0) {
-          CatRow *fs = &filter[nFilter++];
-          memset(fs, 0, sizeof *fs);
-          snprintf(fs->key, sizeof fs->key, "social_activity");
-          snprintf(fs->title, sizeof fs->title, "Friends watching");
-          snprintf(fs->kind, sizeof fs->kind, "social");
-          fs->start = nResume; fs->n = nSocial;
         }
         // Published at once when the home is still empty: "Continue watching" is
         // the FIRST row, and it has no reason to wait for the catalogues.
@@ -1996,8 +2035,7 @@ static void *build(void *u) {
     n += last.n;
     // The opt-in Trakt rows go where the owner's order puts them (see
     // homerows.h): before the first catalogue row the order places after them.
-    // With no position in the order, right after "Continue watching" and the
-    // friends' feed. Their slots were kept free above, so nRowsBuilt + 2 fits.
+    // With no position in the order, right after "Continue watching". Their slots were kept free above, so nRowsBuilt + 2 fits.
     { CatRow rowsTrakt[2];
       int nt = 0, t, k;
       if (last.nWatch > 0 && last.nWatch <= last.n)
@@ -2009,8 +2047,7 @@ static void *build(void *u) {
       for (t = 0; t < nt && nRowsBuilt < CAT_FILTER_MAX; t++) {
         int mine = prefIndex(rowsTrakt[t].key), at = 0;
         for (k = 0; k < nRowsBuilt; k++)
-          if (!strcmp(filtersBuilt[k].key, "continue_watching") ||
-              !strcmp(filtersBuilt[k].key, "social_activity")) at = k + 1;
+          if (!strcmp(filtersBuilt[k].key, "continue_watching")) at = k + 1;
         if (mine >= 0)
           for (k = at; k < nRowsBuilt; k++) {
             int theirs = prefIndex(filtersBuilt[k].key);
@@ -2027,6 +2064,13 @@ static void *build(void *u) {
   free(last.items);
 #undef ENSURES
 
+  // A title in the account library is saved on EVERY card that shows it, not only
+  // on the copy the library brought: the detail page's "+" reads the card it was
+  // opened from.
+  if (acclib_active()) {
+    int k;
+    for (k = 0; k < n; k++) if (!lote[k].inList && acclib_has(lote[k].imdb)) lote[k].inList = 1;
+  }
   if (n) {
     cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
     cat_cache_replaced();
@@ -2078,51 +2122,6 @@ void disc_step(void) {
 }
 
 // --- episodes on demand ------------------------------------------------------
-
-// AN LRU CACHE OF THE SERIES' /meta.
-//
-// ONE Cinemeta response carries ALL the seasons: `videos` comes whole and the
-// per-season filtering happens down here, for free. Even so, every season change
-// re-downloaded the whole body — on a long series that is hundreds of kilobytes of
-// JSON per pill pressed, and that is what the owner felt as "it takes ages to
-// update when you change season".
-//
-// Keeping only the last series meant going back to the previous title repeated the
-// whole transfer. Four responses cover normal back-and-forth navigation without
-// letting memory use grow without limit.
-#define META_CACHE_N 4
-static struct { char id[24]; char *body; unsigned usage; } metaCache[META_CACHE_N];
-static unsigned metaClock;
-static pthread_mutex_t metaLock = PTHREAD_MUTEX_INITIALIZER;
-
-static char *metaCacheGet(const char *id) {
-  char *r = NULL;
-  pthread_mutex_lock(&metaLock);
-  for (int i = 0; i < META_CACHE_N; i++)
-    if (metaCache[i].body && !strcmp(metaCache[i].id, id)) {
-      metaCache[i].usage = ++metaClock;
-      r = strdup(metaCache[i].body); /* the thread works on a stable copy */
-      break;
-    }
-  pthread_mutex_unlock(&metaLock);
-  return r;
-}
-
-static void metaCacheStore(const char *id, const char *body) {
-  int slot = 0;
-  char *copy = strdup(body);
-  if (!copy) return;
-  pthread_mutex_lock(&metaLock);
-  for (int i = 0; i < META_CACHE_N; i++) {
-    if (metaCache[i].body && !strcmp(metaCache[i].id, id)) { slot = i; break; }
-    if (!metaCache[i].body || metaCache[i].usage < metaCache[slot].usage) slot = i;
-  }
-  free(metaCache[slot].body);
-  metaCache[slot].body = copy;
-  metaCache[slot].usage = ++metaClock;
-  snprintf(metaCache[slot].id, sizeof metaCache[slot].id, "%s", id);
-  pthread_mutex_unlock(&metaLock);
-}
 
 // THE EPISODE CARDS' IMDb SCORES.
 //
@@ -2183,6 +2182,13 @@ static void episodeScores(long tmdb, int targetItem) {
     printf("[disc] episode scores: %d of %d matched an episode on screen\n",
            filled, seen); }
   free(body);
+}
+
+typedef struct { long tmdb; int targetItem; } EpScores;
+static void *threadEpisodeScores(void *u) {
+  const EpScores *e = u;
+  episodeScores(e->tmdb, e->targetItem);
+  return NULL;
 }
 
 // It publishes the critical part before any optional enrichment. That way the
@@ -2270,14 +2276,13 @@ static void *fetchEps(void *u) {
     snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA,
              isMovie ? "movie" : "series", series); }
 
-  body = metaCacheGet(series);
-  mark(body ? "episodes: meta from cache" : "episodes: downloading meta");
-
-  if (!body) {
-    body = net_download(url, 25);
-    if (!body) { threadEpAlive = 0; return NULL; }
-    metaCacheStore(series, body);
-  }
+  // ONE Cinemeta response carries ALL the seasons, and this used to download it
+  // again on every season pill — hundreds of kilobytes per press on a long series.
+  // The shared cache also answers when Continue watching or Next Up already
+  // fetched this title's meta moments ago.
+  mark("episodes: meta");
+  body = net_download_cached(url, 25, DISC_META_TTL_S);
+  if (!body) { threadEpAlive = 0; return NULL; }
   if (!isMovie && stillTarget(targetItem, it->imdb))
     publishEpisodes(body, targetItem, it->title);
   // The SAME response carries the cast, the directing and the season list. Fetching
@@ -2378,19 +2383,27 @@ static void *fetchEps(void *u) {
               edit.seasons[i2] = edit.seasons[j2];
               edit.seasons[j2] = tmp;
             } } }
+    // THE TMDB ID IS IN THIS SAME BODY (`moviedb_id`), so it goes out with the first
+    // publish: the cast page (person.c) and the fact sheet (extras.c) are keyed by
+    // it and start their request now instead of after the enrichment below. Only a
+    // title Cinemeta has no id for pays TMDB's /find.
+    { long idTmdb = (long)js_num(body, NULL, "moviedb_id", 0);
+      if (idTmdb <= 0) idTmdb = disc_tmdb_id(it->imdb, !isMovie);
+      if (idTmdb > 0) edit.tmdb = idTmdb; }
     // It publishes text, genres and seasons before the image enrichment.
     if (stillTarget(targetItem, it->imdb)) cat_update_item(targetItem, &edit);
     mark("detail: basic meta on screen");
-    { char idBase[24];
-      const char *dp;
-      snprintf(idBase, sizeof idBase, "%s", it->imdb);
-      dp = strchr(idBase, ':');
-      if (dp) *(char *)dp = 0;
-      photosOfCast(&edit, idBase, !strcmp(it->kind, "series")); }
-    // AFTER photosOfCast, because that is what resolves the TMDB id, and the ratings
-    // API is keyed by it. Called before this, `edit.tmdb` is still 0 and the fetch
-    // returned without a word — which is exactly how it failed the first time.
-    if (!isMovie) episodeScores(edit.tmdb, targetItem);
+    // The episode ratings and the TMDB title are two different hosts and neither
+    // needs the other, so they run side by side. The ratings used to wait for the
+    // whole TMDB chain because that chain was what found the id.
+    { EpScores sc = { edit.tmdb, targetItem };
+      pthread_t th;
+      int threaded = 0;
+      if (!isMovie && edit.tmdb > 0)
+        threaded = pthread_create(&th, NULL, threadEpisodeScores, &sc) == 0;
+      photosOfCast(&edit, edit.tmdb, !isMovie);
+      if (threaded) pthread_join(th, NULL);
+      else if (!isMovie) episodeScores(edit.tmdb, targetItem); }
     if (stillTarget(targetItem, it->imdb)) cat_update_item(targetItem, &edit);
     printf("[disc] %s: %d actors, dir='%s', %d seasons\n",
            edit.title, edit.nCast, edit.directing, edit.nSeasons);
@@ -2776,10 +2789,13 @@ static void *fetchTitle(void *arg) {
       if (j >= 0) { sobIndex = j; sobThreadAlive = 0; return NULL; } }
   }
 
+  // The kind that is KNOWN goes first: a TMDB credit says movie/tv, a related
+  // item inherits its title's. Only an unknown kind needs the second guess.
+  { int seriesFirst = !strcmp(sobKind, "tv") || !strcmp(sobKind, "series");
   for (step = 0; step < 2 && found < 0; step++) {
-    const char *kind = step ? "series" : "movie";
+    const char *kind = (step ^ seriesFirst) ? "series" : "movie";
     snprintf(url, sizeof url, "%s/meta/%s/%s.json", CINEMETA, kind, id);
-    body = net_download(url, 20);
+    body = net_download_cached(url, 20, DISC_META_TTL_S);
     if (!body) continue;
     { const char *m = strstr(body, "\"meta\"");
       CatItem it;
@@ -2791,7 +2807,7 @@ static void *fetchTitle(void *arg) {
         found = cat_append(&it);
       } }
     free(body);
-  }
+  } }
   printf("[disc] on demand %s -> index %d\n", id, found); fflush(stdout);
   sobIndex = found;
   sobThreadAlive = 0;
@@ -2810,6 +2826,10 @@ void disc_request_title_tmdb(long tmdbId, const char *kind) {
 }
 
 void disc_request_title(const char *imdb) {
+  disc_request_title_kind(imdb, NULL);
+}
+
+void disc_request_title_kind(const char *imdb, const char *kind) {
   char id[24];
   const char *dp;
   if (!imdb || imdb[0] != 't' || sobThreadAlive) return;
@@ -2821,6 +2841,7 @@ void disc_request_title(const char *imdb) {
   else snprintf(id, sizeof id, "%s", imdb);
   if (cat_index_by_imdb(id) >= 0) return;   // ja temos
   snprintf(sobId, sizeof sobId, "%s", id);
+  snprintf(sobKind, sizeof sobKind, "%s", kind ? kind : "");
   sobTmdb = 0;
   sobIndex = -1;
   sobThreadAlive = 1;

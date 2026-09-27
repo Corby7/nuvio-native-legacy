@@ -110,6 +110,51 @@ static void testLayout(void) {
   puts("ASS layout: ok");
 }
 
+static void testSrtTags(void) {
+  SubtitleCue *v = NULL;
+  char *big;
+  size_t k = 0;
+  int n, i;
+  // ASS tags a converter left in an SRT: gone, \an8 kept as the placement.
+  n = subtitle_parse("1\n00:00:01,000 --> 00:00:02,000\n{\\an8}Top sign\n\n"
+                     "2\n00:00:03,000 --> 00:00:04,000\nOne\\Ntwo{\\i1} three{\\i0}\n\n"
+                     "3\n00:00:05,000 --> 00:00:06,000\n {braces} stay\n\n"
+                     "4\n00:00:07,000 --> 00:00:08,000\n \n", &v);
+  assert(n == 3);
+  assert(v[0].align == 8 && !strcmp(v[0].text, "Top sign"));
+  assert(!v[1].align && !strcmp(v[1].text, "One\ntwo three"));
+  assert(!strcmp(v[2].text, "{braces} stay"));
+  free(v);
+  // Past the first 128 cues the array is realloc'd: its layout stays zero.
+  big = malloc(400 * 64);
+  for (i = 0; i < 400; i++)
+    k += (size_t)snprintf(big + k, 400 * 64 - k, "%d\n00:%02d:%02d,000 --> 00:%02d:%02d,500\nLine %d\n\n",
+                         i + 1, i / 60, i % 60, i / 60, i % 60, i);
+  n = subtitle_parse(big, &v);
+  assert(n == 400);
+  for (i = 0; i < n; i++) assert(!v[i].align && !v[i].positioned && v[i].x == 0 && v[i].y == 0);
+  free(v); free(big);
+  puts("SRT tags and layout: ok");
+}
+
+static void testKind(void) {
+  const char *ssa = "[Script Info]\nScriptType: v4.00\n\n[V4 Styles]\n\n[Events]\n"
+                    "Dialogue: Marked=0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi\n";
+  assert(!strcmp(subtitle_kind("https://x/a.ASS?x=1", 0), "ASS"));
+  assert(!strcmp(subtitle_kind("https://x/a.srt", 0), "SRT"));
+  assert(!subtitle_kind("https://x/file/123", 0));
+  // Learned from the load, then answered without a fetch.
+  load(ssa, (long)strlen(ssa), "eng");
+  assert(!strcmp(subtitle_kind("https://subs.example/x", 0), "SSA"));
+  subtitle_off();
+  // A probe answers on a later call.
+  served = "1\n00:00:01,000 --> 00:00:02,000\nx\n"; servedSize = (long)strlen(served);
+  assert(!subtitle_kind("https://subs.example/probe", 1));
+  for (int i = 0; i < 200 && !subtitle_kind("https://subs.example/probe", 0); i++) usleep(5000);
+  assert(!strcmp(subtitle_kind("https://subs.example/probe", 0), "SRT"));
+  puts("Format kinds: ok");
+}
+
 static void testOverlap(void) {
   char text[768];
   const char *ass =
@@ -183,6 +228,8 @@ static void testCharset(void) {
 int main(void) {
   testAss();
   testLayout();
+  testSrtTags();
+  testKind();
   testOverlap();
   testCharset();
   return 0;

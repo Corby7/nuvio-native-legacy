@@ -14,7 +14,6 @@
 #define NV_TRAKT_H
 #include "catalog.h"
 #include "watchedep.h"
-#include "profile.h"
 #include <stddef.h>
 
 int  trakt_load(const char *dirArt);   // 1 when a credential is present
@@ -77,17 +76,6 @@ int  trakt_decorate_batch(CatItem *output, int n);
 // already right (the Trakt watchlist and recommendations rows). Keeps every item,
 // known to Cinemeta or not. BLOCKS; safe beside trakt_decorate_batch.
 int  trakt_describe_batch(CatItem *output, int n);
-
-// The recent activity of the owner's FRIENDS. It uses Trakt's official social
-// feed (/users/me/friends/activities), keeping the normal title and art in the
-// CatItem and the social data in the presentation fields: `country` = the
-// friend's name, `provName` = the action and `directing` = the episode's
-// context. BLOCKS.
-int  trakt_social(CatItem *output, int max);
-
-// The monthly snapshot used by the Profile and Stats screen. It makes its calls
-// on the app's worker thread and must never run in the draw loop.
-int  trakt_profile(ProfileData *output);
 
 // Reports where the owner stopped. `imdb` may carry an episode ("tt123:4:9").
 // Until now the app only READ Trakt; without this, watching here did not move
