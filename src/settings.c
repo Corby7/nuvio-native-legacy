@@ -48,7 +48,7 @@
 // bar collapsed the list also starts at 104 — leaving 248 hard-coded here made
 // the Settings screen the only one misaligned with the others.
 #define SETTING_LIST_X      settings_content_x()
-#define SETTING_LIST_W      980.0f
+#define SETTING_LIST_W      880.0f
 #define SETTING_PAD           24.0f    // row edge to text
 // The title is the same as Library's and Search's: TITLE3 with 1px tracking, at
 // the same height. Inside a section the title becomes the path, "‹ Settings /
@@ -61,40 +61,47 @@
 // normalised): 12px over a height of 68.
 #define SETTING_RADIUS           0.18f
 // The preview panel: its gap from the list and its widest.
-#define SETTING_PANEL_GAP   110.0f
-#define SETTING_PANEL_MAX_W 600.0f
+#define SETTING_PANEL_GAP    80.0f
+#define SETTING_PANEL_MAX_W 780.0f
 // The brand violet, for what the preview points at.
 #define SETTING_ACCENT_R  (0x83 / 255.0f)
 #define SETTING_ACCENT_G  (0x67 / 255.0f)
 #define SETTING_ACCENT_B  (0xF5 / 255.0f)
 
-// The enum's order = the order in the key file and in the tables. Adding in the
-// MIDDLE is safe: the file is keyed, not positional (see settings_dir).
+// The enum's order is the order the rows appear in: each section is a run of it
+// (SECTIONS below), and the group headers inside a section fall where
+// groupOfOption says. The tables are indexed by NAME ([SETTING_X] = ...) and the
+// file is keyed (see settings_dir), so moving a row is moving its name here.
 typedef enum {
   // Playback
-  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS, SETTING_AUDIO_LANG, SETTING_AUDIO_ANIME, SETTING_SUBS,
-  SETTING_SUBS_FORCED, SETTING_SEEK_COLOR, SETTING_NEXT_AUTOPLAY, SETTING_NEXT_COUNTDOWN,
-  SETTING_NEXT_MODE, SETTING_NEXT_SECONDS, SETTING_NEXT_PERCENT, SETTING_PAUSE_DELAY,
-  // Layout da Home
-  SETTING_LANDSCAPE, SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
-  // Conteudo da Home
-  SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_RAIL_BLUR, SETTING_HERO, SETTING_HERO_CATALOGS,
-  SETTING_DISCOVER, SETTING_LABELS, SETTING_NAME_ADDON, SETTING_SUFFIX_KIND,
-  SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME, SETTING_GRADIENT_CLASSIC,
-  // Continue watching
-  SETTING_CW_ON, SETTING_CW_STYLE, SETTING_CW_LOGO, SETTING_CW_PLAY, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
-  SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN, SETTING_CW_ORDER,
-  // Detail page
-  SETTING_DET_BLUR_NOT_WATCHED, SETTING_DET_TRAILER, SETTING_DET_META_EXT, SETTING_DET_DATE_FULL,
-  // Poster focus
-  SETTING_EXPAND, SETTING_EXPAND_DELAY, SETTING_NAV_FAST, SETTING_ROW_SCROLL,
+  SETTING_QUALITY, SETTING_DV, SETTING_ATMOS,
+  SETTING_AUDIO_LANG, SETTING_AUDIO_ANIME, SETTING_SUBS, SETTING_SUBS_FORCED,
+  SETTING_NEXT_AUTOPLAY, SETTING_NEXT_COUNTDOWN, SETTING_NEXT_MODE, SETTING_NEXT_SECONDS,
+  SETTING_NEXT_PERCENT,
+  SETTING_SEEK_COLOR, SETTING_PAUSE_DELAY,
+  // Hero
+  SETTING_HERO, SETTING_HERO_CATALOGS,
+  SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
+  // Catalogue rows
+  SETTING_SUFFIX_KIND, SETTING_NAME_ADDON, SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME,
+  // Continue watching. SETTING_CW_ON leads and SETTING_CW_NOT_SHOWN closes: the
+  // checks for "a row that needs Continue watching on" read that range.
+  SETTING_CW_ON, SETTING_CW_ORDER, SETTING_CW_PLAY,
+  SETTING_CW_STYLE, SETTING_CW_LOGO, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
+  SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN,
+  // Sidebar and navigation
+  SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_RAIL_BLUR, SETTING_DISCOVER,
+  SETTING_NAV_FAST, SETTING_ROW_SCROLL,
+  SETTING_ANIM,
+  // Posters
+  SETTING_LANDSCAPE, SETTING_LABELS,
+  SETTING_EXPAND, SETTING_EXPAND_DELAY, SETTING_GRADIENT_CLASSIC,
+  SETTING_WIDTH_DP, SETTING_RADIUS_DP,
   // Depth
   SETTING_DEPTH, SETTING_DEPTH_BORDER, SETTING_DEPTH_BRIGHTNESS, SETTING_DEPTH_COVERAGE,
   SETTING_DEPTH_POSTERS, SETTING_DEPTH_CW, SETTING_DEPTH_EPS, SETTING_DEPTH_CAST, SETTING_DEPTH_TRAILERS,
-  // Item size
-  SETTING_WIDTH_DP, SETTING_RADIUS_DP,
-  // Interface
-  SETTING_ANIM,
+  // Detail page
+  SETTING_DET_TRAILER, SETTING_DET_META_EXT, SETTING_DET_BLUR_NOT_WATCHED, SETTING_DET_DATE_FULL,
   // Account
   SETTING_PROFILE_ACTIVE, SETTING_SYNC, SETTING_TRAKT, SETTING_SIMKL, SETTING_EXIT,
   // About
@@ -201,86 +208,86 @@ typedef struct {
 #define ACTION(rot)           { rot, OP_ACTION,    NULL, 0, 0, 0, 0, NULL }
 
 static const Option OPTIONS[SETTING_N] = {
-  ESC("Maximum quality",           V_QUALITY, 4),
-  ESC("Dolby Vision",               V_ON, 2),
-  ESC("Dolby Atmos",                V_ON, 2),
-  ESC("Audio language",             V_AUDIO, N_AUDIO),
-  ESC("Anime audio language",       V_AUDIO_ANIME, N_AUDIO_ANIME),
-  ESC("Subtitles",                  V_SUBS, N_SUBS),
-  ESC("Forced subtitles",           V_ON, 2),
-  ESC("Seek bar colour",            V_SEEK, 6),
-  ESC("Autoplay next episode",      V_ON, 2),
-  NUM("Next episode countdown",     5, 30, 5, " s"),
-  ESC("Up next appears",            V_NEXT_MODE, 2),
-  NUM("Up next before the end",     0, 210, 30, " s"),
-  NUM("Up next at",                 90, 100, 1, "%"),
+  [SETTING_QUALITY] = ESC("Maximum quality",           V_QUALITY, 4),
+  [SETTING_DV] = ESC("Dolby Vision",               V_ON, 2),
+  [SETTING_ATMOS] = ESC("Dolby Atmos",                V_ON, 2),
+  [SETTING_AUDIO_LANG] = ESC("Audio language",             V_AUDIO, N_AUDIO),
+  [SETTING_AUDIO_ANIME] = ESC("Anime audio language",       V_AUDIO_ANIME, N_AUDIO_ANIME),
+  [SETTING_SUBS] = ESC("Subtitles",                  V_SUBS, N_SUBS),
+  [SETTING_SUBS_FORCED] = ESC("Forced subtitles",           V_ON, 2),
+  [SETTING_SEEK_COLOR] = ESC("Seek bar colour",            V_SEEK, 6),
+  [SETTING_NEXT_AUTOPLAY] = ESC("Autoplay next episode",      V_ON, 2),
+  [SETTING_NEXT_COUNTDOWN] = NUM("Next episode countdown",     5, 30, 5, " s"),
+  [SETTING_NEXT_MODE] = ESC("Up next appears",            V_NEXT_MODE, 2),
+  [SETTING_NEXT_SECONDS] = NUM("Up next before the end",     0, 210, 30, " s"),
+  [SETTING_NEXT_PERCENT] = NUM("Up next at",                 90, 100, 1, "%"),
   // 0 is Off: textValue draws it as a word, not as "0 s".
-  NUM("Pause overlay after",        0, 60, 5, " s"),
+  [SETTING_PAUSE_DELAY] = NUM("Pause overlay after",        0, 60, 5, " s"),
 
-  ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
-  ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
-  ESC("Backdrop area",               V_HERO_AREA, 2), // heroBackdropArea (local)
+  [SETTING_LANDSCAPE] = ESC("Landscape posters",       V_ON, 2),   // modernLandscapePostersEnabled
+  [SETTING_HERO_FULL] = ESC("Full-screen backdrop",        V_ON, 2),   // modernHeroFullScreenBackdropEnabled
+  [SETTING_HERO_AREA] = ESC("Backdrop area",               V_HERO_AREA, 2), // heroBackdropArea (local)
   // heroBackdropScale (local). A percentage of the SCREEN'S WIDTH, and it is a row
   // rather than a constant because it is judged by eye from the sofa: every value
   // tried in the source costs an ARM build and a deploy. Steps of 5 — 1% of 1920
   // is 19px and nobody is choosing between 1536 and 1555.
-  NUM("Backdrop size",               50, 100, 5, "%"),  // heroBackdropScale
+  [SETTING_HERO_BAND] = NUM("Backdrop size",               50, 100, 5, "%"),  // heroBackdropScale
 
-  ESC("Sidebar",              V_RAIL, 2),   // collapseSidebar
-  ESC("Modern sidebar",      V_ON, 2),   // modernSidebar
-  ESC("Modern sidebar blur",  V_ON, 2),   // modernSidebarBlur
-  ESC("Show hero",           V_ON, 2),   // heroSectionEnabled
-  READ("Hero catalogues"),                   // heroCatalogKeys (a count)
-  ESC("Discover location",         V_DISCOVER, 3), // discoverLocation
-  ESC("Poster labels",       V_ON, 2),   // posterLabelsEnabled
-  ESC("Addon name in the catalogue",  V_ON, 2),   // catalogAddonNameEnabled
-  ESC("Content type",           V_ON, 2),   // catalogTypeSuffixEnabled
-  ESC("Hide unreleased",       V_ON, 2),   // hideUnreleasedContent
-  ESC("Overall ratings",          V_SCORES, 2),  // homeImdbRatingsVisibility
-  ESC("Classic focus gradient", V_ON, 2),   // classicFocusGradientEnabled
+  [SETTING_RAIL] = ESC("Sidebar",              V_RAIL, 2),   // collapseSidebar
+  [SETTING_RAIL_MODERN] = ESC("Modern sidebar",      V_ON, 2),   // modernSidebar
+  [SETTING_RAIL_BLUR] = ESC("Modern sidebar blur",  V_ON, 2),   // modernSidebarBlur
+  [SETTING_HERO] = ESC("Show hero",           V_ON, 2),   // heroSectionEnabled
+  [SETTING_HERO_CATALOGS] = READ("Hero catalogues"),                   // heroCatalogKeys (a count)
+  [SETTING_DISCOVER] = ESC("Discover location",         V_DISCOVER, 3), // discoverLocation
+  [SETTING_LABELS] = ESC("Poster labels",       V_ON, 2),   // posterLabelsEnabled
+  [SETTING_NAME_ADDON] = ESC("Addon name in the catalogue",  V_ON, 2),   // catalogAddonNameEnabled
+  [SETTING_SUFFIX_KIND] = ESC("Content type",           V_ON, 2),   // catalogTypeSuffixEnabled
+  [SETTING_HIDE_UNRELEASED] = ESC("Hide unreleased",       V_ON, 2),   // hideUnreleasedContent
+  [SETTING_SCORES_HOME] = ESC("Overall ratings",          V_SCORES, 2),  // homeImdbRatingsVisibility
+  [SETTING_GRADIENT_CLASSIC] = ESC("Classic focus gradient", V_ON, 2),   // classicFocusGradientEnabled
 
-  ESC("Show \"Continue watching\"", V_ON, 2), // continueWatchingEnabled
-  ESC("\"Continue watching\" style", V_CW, 3), // continueWatchingCardStyle
-  ESC("Show logo",              V_ON, 2),   // local: the title's logo for its name
-  ESC("Play on select",         V_ON, 2),   // local: OK plays, skipping the detail
-  ESC("Episode thumbnail",      V_ON, 2),   // useEpisodeThumbnailsInCw
-  ESC("Blur next episode",  V_ON, 2),   // blurContinueWatchingNextUp
-  ESC("Next from the furthest episode", V_ON, 2),// nextUpFromFurthestEpisode
-  ESC("Show unaired episodes", V_ON, 2),// showUnairedNextUp
-  ESC("Sort order",                  V_CW_ORDER, 3), // continueWatchingSortMode
+  [SETTING_CW_ON] = ESC("Show \"Continue watching\"", V_ON, 2), // continueWatchingEnabled
+  [SETTING_CW_STYLE] = ESC("\"Continue watching\" style", V_CW, 3), // continueWatchingCardStyle
+  [SETTING_CW_LOGO] = ESC("Show logo",              V_ON, 2),   // local: the title's logo for its name
+  [SETTING_CW_PLAY] = ESC("Play on select",         V_ON, 2),   // local: OK plays, skipping the detail
+  [SETTING_CW_THUMB] = ESC("Episode thumbnail",      V_ON, 2),   // useEpisodeThumbnailsInCw
+  [SETTING_CW_BLUR_NEXT] = ESC("Blur next episode",  V_ON, 2),   // blurContinueWatchingNextUp
+  [SETTING_CW_FURTHEST] = ESC("Next from the furthest episode", V_ON, 2),// nextUpFromFurthestEpisode
+  [SETTING_CW_NOT_SHOWN] = ESC("Show unaired episodes", V_ON, 2),// showUnairedNextUp
+  [SETTING_CW_ORDER] = ESC("Sort order",                  V_CW_ORDER, 3), // continueWatchingSortMode
 
-  ESC("Blur unwatched",    V_ON, 2),   // blurUnwatchedEpisodes
-  ESC("Trailer button",           V_ON, 2),   // detailPageTrailerButtonEnabled
-  ESC("Prefer external metadata", V_ON, 2), // preferExternalMetaAddonDetail
-  ESC("Full release date", V_ON, 2),  // showFullReleaseDate
+  [SETTING_DET_BLUR_NOT_WATCHED] = ESC("Blur unwatched",    V_ON, 2),   // blurUnwatchedEpisodes
+  [SETTING_DET_TRAILER] = ESC("Trailer button",           V_ON, 2),   // detailPageTrailerButtonEnabled
+  [SETTING_DET_META_EXT] = ESC("Prefer external metadata", V_ON, 2), // preferExternalMetaAddonDetail
+  [SETTING_DET_DATE_FULL] = ESC("Full release date", V_ON, 2),  // showFullReleaseDate
 
-  ESC("Expand poster on focus",   V_ON, 2),   // focusedPosterBackdropExpandEnabled
-  NUM("Expansion delay",         0, 10, 1, " s"), // ...ExpandDelaySeconds
-  ESC("Fast horizontal navigation", V_ON, 2),  // fastHorizontalNavigationEnabled
-  ESC("Row scrolling",             V_ROW_SCROLL, 2), // local: rowScrollAnchor
+  [SETTING_EXPAND] = ESC("Expand poster on focus",   V_ON, 2),   // focusedPosterBackdropExpandEnabled
+  [SETTING_EXPAND_DELAY] = NUM("Expansion delay",         0, 10, 1, " s"), // ...ExpandDelaySeconds
+  [SETTING_NAV_FAST] = ESC("Fast horizontal navigation", V_ON, 2),  // fastHorizontalNavigationEnabled
+  [SETTING_ROW_SCROLL] = ESC("Row scrolling",             V_ROW_SCROLL, 2), // local: rowScrollAnchor
 
-  ESC("Depth effect",     V_ON, 2),   // cardDepthEnabled
-  NUM("Edge brightness",            0, 100, 2, "%"), // cardDepthEdgeStrength
-  NUM("Sheen",                      0, 100, 2, "%"), // cardDepthSheenStrength
-  NUM("Edge coverage",         0, 100, 2, "%"), // cardDepthEdgeCoverage
-  ESC("Depth on posters",  V_ON, 2),
-  ESC("Depth on \"Continue\"", V_ON, 2),
-  ESC("Depth on episodes", V_ON, 2),
-  ESC("Depth on cast",     V_ON, 2),
-  ESC("Depth on trailers",  V_ON, 2),
+  [SETTING_DEPTH] = ESC("Depth effect",     V_ON, 2),   // cardDepthEnabled
+  [SETTING_DEPTH_BORDER] = NUM("Edge brightness",            0, 100, 2, "%"), // cardDepthEdgeStrength
+  [SETTING_DEPTH_BRIGHTNESS] = NUM("Sheen",                      0, 100, 2, "%"), // cardDepthSheenStrength
+  [SETTING_DEPTH_COVERAGE] = NUM("Edge coverage",         0, 100, 2, "%"), // cardDepthEdgeCoverage
+  [SETTING_DEPTH_POSTERS] = ESC("Depth on posters",  V_ON, 2),
+  [SETTING_DEPTH_CW] = ESC("Depth on \"Continue\"", V_ON, 2),
+  [SETTING_DEPTH_EPS] = ESC("Depth on episodes", V_ON, 2),
+  [SETTING_DEPTH_CAST] = ESC("Depth on cast",     V_ON, 2),
+  [SETTING_DEPTH_TRAILERS] = ESC("Depth on trailers",  V_ON, 2),
 
-  NUM("Item width",            72, 200, 2, " dp"), // posterCardWidthDp
-  NUM("Corner radius",              0, 40, 1, " dp"),   // posterCardCornerRadiusDp
+  [SETTING_WIDTH_DP] = NUM("Item width",            72, 200, 2, " dp"), // posterCardWidthDp
+  [SETTING_RADIUS_DP] = NUM("Corner radius",              0, 40, 1, " dp"),   // posterCardCornerRadiusDp
 
-  ESC("Animations",                  V_ANIM, 2),
+  [SETTING_ANIM] = ESC("Animations",                  V_ANIM, 2),
 
-  READ("Profile"),
-  READ("Sync"),
-  ACTION("Trakt"),
-  ACTION("Simkl"),
-  ACTION("Sign out"),
-  READ("Version"),
-  READ("Memory used by images"),
+  [SETTING_PROFILE_ACTIVE] = READ("Profile"),
+  [SETTING_SYNC] = READ("Sync"),
+  [SETTING_TRAKT] = ACTION("Trakt"),
+  [SETTING_SIMKL] = ACTION("Simkl"),
+  [SETTING_EXIT] = ACTION("Sign out"),
+  [SETTING_VERSION_I] = READ("Version"),
+  [SETTING_SPACE] = READ("Memory used by images"),
 };
 
 // Each option's name in the file. The format used to be POSITIONAL — one line per
@@ -290,61 +297,61 @@ static const Option OPTIONS[SETTING_N] = {
 // old ones stay where they were. The names follow the web app's where there is a
 // counterpart.
 static const char *KEY[] = {
-  "quality", "dolbyVision", "dolbyAtmos",
+  [SETTING_QUALITY] = "quality", [SETTING_DV] = "dolbyVision", [SETTING_ATMOS] = "dolbyAtmos",
   // Local to this port, like the subtitle row below: the account's player
   // settings store the language as a code, and this row stores an index.
-  "audioPreferredLanguageIndex",
+  [SETTING_AUDIO_LANG] = "audioPreferredLanguageIndex",
   // Local to this port too: the web app has no anime row.
-  "animeAudioPreferredLanguageIndex",
+  [SETTING_AUDIO_ANIME] = "animeAudioPreferredLanguageIndex",
   // NOT "subtitleLanguage": that name exists in the web app's blob with values of
   // its own ("off", "eng", "system"), and sharing the name would have the account
   // feed a string this row cannot read on every sync. A name of this port's own
   // never matches in the blob, which is what keeps the row local — and, unlike a
   // "-" key, it is still written to settings.txt.
-  "subtitlePreferredGroup",
+  [SETTING_SUBS] = "subtitlePreferredGroup",
   // The web's useForcedSubtitles lives inside its subtitleStyle object, which
   // the blob never flattens into this file; a name of the port's own.
-  "subtitleForcedFallback",
+  [SETTING_SUBS_FORCED] = "subtitleForcedFallback",
   // Local to this port: the web app has no such key, so the blob never touches it.
-  "seekBarColor",
+  [SETTING_SEEK_COLOR] = "seekBarColor",
   // The web's autoplayNextEpisode, under a name of the port's own for the same
   // reason as the subtitle row: the account's copy is not this file's format.
-  "nextEpisodeAutoplay",
+  [SETTING_NEXT_AUTOPLAY] = "nextEpisodeAutoplay",
   // Local to this port as well: how long the Up next card waits before it plays.
-  "nextEpisodeCountdownSeconds",
+  [SETTING_NEXT_COUNTDOWN] = "nextEpisodeCountdownSeconds",
   // nextEpisodeThresholdMode / ...MinutesBeforeEnd / ...Percent, in this port's
   // units: an index, seconds and whole percent.
-  "nextEpisodeTriggerMode", "nextEpisodeSecondsBeforeEnd", "nextEpisodePercentWatched",
+  [SETTING_NEXT_MODE] = "nextEpisodeTriggerMode", [SETTING_NEXT_SECONDS] = "nextEpisodeSecondsBeforeEnd", [SETTING_NEXT_PERCENT] = "nextEpisodePercentWatched",
   // Local to this port: NuvioTV has an on/off switch at a fixed 5 s; this is one
   // row, seconds, with 0 for off.
-  "pauseOverlayDelaySeconds",
-  "modernLandscapePostersEnabled", "modernHeroFullScreenBackdropEnabled",
-  "heroBackdropArea", "heroBackdropScale",
-  "collapseSidebar", "modernSidebar", "modernSidebarBlur",
-  "heroSectionEnabled", "-heroCatalogKeys",
-  "discoverLocation", "posterLabelsEnabled", "catalogAddonNameEnabled",
-  "catalogTypeSuffixEnabled", "hideUnreleasedContent",
-  "homeImdbRatingsVisibility", "classicFocusGradientEnabled",
-  "continueWatchingEnabled", "continueWatchingCardStyle",
+  [SETTING_PAUSE_DELAY] = "pauseOverlayDelaySeconds",
+  [SETTING_LANDSCAPE] = "modernLandscapePostersEnabled", [SETTING_HERO_FULL] = "modernHeroFullScreenBackdropEnabled",
+  [SETTING_HERO_AREA] = "heroBackdropArea", [SETTING_HERO_BAND] = "heroBackdropScale",
+  [SETTING_RAIL] = "collapseSidebar", [SETTING_RAIL_MODERN] = "modernSidebar", [SETTING_RAIL_BLUR] = "modernSidebarBlur",
+  [SETTING_HERO] = "heroSectionEnabled", [SETTING_HERO_CATALOGS] = "-heroCatalogKeys",
+  [SETTING_DISCOVER] = "discoverLocation", [SETTING_LABELS] = "posterLabelsEnabled", [SETTING_NAME_ADDON] = "catalogAddonNameEnabled",
+  [SETTING_SUFFIX_KIND] = "catalogTypeSuffixEnabled", [SETTING_HIDE_UNRELEASED] = "hideUnreleasedContent",
+  [SETTING_SCORES_HOME] = "homeImdbRatingsVisibility", [SETTING_GRADIENT_CLASSIC] = "classicFocusGradientEnabled",
+  [SETTING_CW_ON] = "continueWatchingEnabled", [SETTING_CW_STYLE] = "continueWatchingCardStyle",
   // Local to this port: the web app has no such key, so the blob never touches it.
-  "continueWatchingTitleLogo", "continueWatchingPlayOnSelect",
-  "useEpisodeThumbnailsInCw", "blurContinueWatchingNextUp",
-  "nextUpFromFurthestEpisode", "showUnairedNextUp", "continueWatchingSortMode",
-  "blurUnwatchedEpisodes", "detailPageTrailerButtonEnabled",
-  "preferExternalMetaAddonDetail", "showFullReleaseDate",
-  "focusedPosterBackdropExpandEnabled", "focusedPosterBackdropExpandDelaySeconds",
-  "fastHorizontalNavigationEnabled",
+  [SETTING_CW_LOGO] = "continueWatchingTitleLogo", [SETTING_CW_PLAY] = "continueWatchingPlayOnSelect",
+  [SETTING_CW_THUMB] = "useEpisodeThumbnailsInCw", [SETTING_CW_BLUR_NEXT] = "blurContinueWatchingNextUp",
+  [SETTING_CW_FURTHEST] = "nextUpFromFurthestEpisode", [SETTING_CW_NOT_SHOWN] = "showUnairedNextUp", [SETTING_CW_ORDER] = "continueWatchingSortMode",
+  [SETTING_DET_BLUR_NOT_WATCHED] = "blurUnwatchedEpisodes", [SETTING_DET_TRAILER] = "detailPageTrailerButtonEnabled",
+  [SETTING_DET_META_EXT] = "preferExternalMetaAddonDetail", [SETTING_DET_DATE_FULL] = "showFullReleaseDate",
+  [SETTING_EXPAND] = "focusedPosterBackdropExpandEnabled", [SETTING_EXPAND_DELAY] = "focusedPosterBackdropExpandDelaySeconds",
+  [SETTING_NAV_FAST] = "fastHorizontalNavigationEnabled",
   // Local to this port: the web app has no such key, so the blob never touches it.
-  "rowScrollAnchor",
-  "cardDepthEnabled", "cardDepthEdgeStrength", "cardDepthSheenStrength",
-  "cardDepthEdgeCoverage", "cardDepthPostersEnabled",
-  "cardDepthContinueWatchingEnabled", "cardDepthEpisodeCardsEnabled",
-  "cardDepthCastEnabled", "cardDepthTrailersEnabled",
-  "posterCardWidthDp", "posterCardCornerRadiusDp",
-  "reducedAnimations",
+  [SETTING_ROW_SCROLL] = "rowScrollAnchor",
+  [SETTING_DEPTH] = "cardDepthEnabled", [SETTING_DEPTH_BORDER] = "cardDepthEdgeStrength", [SETTING_DEPTH_BRIGHTNESS] = "cardDepthSheenStrength",
+  [SETTING_DEPTH_COVERAGE] = "cardDepthEdgeCoverage", [SETTING_DEPTH_POSTERS] = "cardDepthPostersEnabled",
+  [SETTING_DEPTH_CW] = "cardDepthContinueWatchingEnabled", [SETTING_DEPTH_EPS] = "cardDepthEpisodeCardsEnabled",
+  [SETTING_DEPTH_CAST] = "cardDepthCastEnabled", [SETTING_DEPTH_TRAILERS] = "cardDepthTrailersEnabled",
+  [SETTING_WIDTH_DP] = "posterCardWidthDp", [SETTING_RADIUS_DP] = "posterCardCornerRadiusDp",
+  [SETTING_ANIM] = "reducedAnimations",
   // Account: these are local rows; they neither come from nor go to the cloud profile.
-  "-profile", "-sync", "-trakt", "-simkl", "-exit",
-  "-version", "-space",
+  [SETTING_PROFILE_ACTIVE] = "-profile", [SETTING_SYNC] = "-sync", [SETTING_TRAKT] = "-trakt", [SETTING_SIMKL] = "-simkl", [SETTING_EXIT] = "-exit",
+  [SETTING_VERSION_I] = "-version", [SETTING_SPACE] = "-space",
 };
 
 // The compiler CHECKS that there is one key per option. Without this, adding an
@@ -363,30 +370,28 @@ typedef char checked_one_key_per_option[
 // header on the list of sections; NULL continues the one above.
 static const struct { const char *group, *title; int start, n; const char *blurb; } SECTIONS[] = {
   { "Playback", "Playback",          SETTING_QUALITY,              14,
-    "Quality, Dolby formats, languages, the seek bar and what happens at the end of an episode." },
-  { "Home", "Home layout",       SETTING_LANDSCAPE,            4,
-    "Poster shape and how the hero backdrop is drawn." },
-  { NULL, "Home content",      SETTING_RAIL,                12,
-    "The sidebar, the hero and what the Home rows show." },
+    "Quality, Dolby formats, languages, subtitles, what happens at the end of an episode and the player's controls." },
+  { "Home", "Hero",                  SETTING_HERO,                 5,
+    "The featured title at the top of Home: whether it shows, and how its backdrop is drawn." },
   // No options of its own: `start` is SETTING_N, the marker openSection reads to
   // open the Home rows list (level 2) instead of a list of options.
-  { NULL, "Home rows",         SETTING_N,                    0,
+  { NULL, "Home rows",               SETTING_N,                    0,
     "The order of the Home rows and which of them show. Saved to your account, so the web app follows it." },
-  { NULL, "Continue watching", SETTING_CW_ON,                9,
-    "Whether the resume row appears, how it looks and how it is sorted." },
-  { "Appearance", "Detail page",       SETTING_DET_BLUR_NOT_WATCHED, 4,
-    "Spoilers, the trailer button, metadata and release dates on a title's page." },
-  { NULL, "Poster focus",      SETTING_EXPAND,               4,
-    "What a poster does when it is focused, and how rows follow it." },
-  { NULL, "Depth effect",      SETTING_DEPTH,                9,
+  { NULL, "Catalogue rows",          SETTING_SUFFIX_KIND,          4,
+    "What the catalogue rows say about themselves and which titles they leave out." },
+  { NULL, "Continue watching",       SETTING_CW_ON,                9,
+    "Whether the resume row appears, how it is sorted, how its cards look and what counts as next up." },
+  { "Interface", "Sidebar and navigation", SETTING_RAIL,           7,
+    "The sidebar, where Discover lives, how rows scroll and motion across the app." },
+  { NULL, "Posters",                 SETTING_LANDSCAPE,            7,
+    "Poster shape, labels, what a focused poster does and its size." },
+  { NULL, "Depth effect",            SETTING_DEPTH,                9,
     "The lit edge and sheen on cards, and which cards get it." },
-  { NULL, "Item size",         SETTING_WIDTH_DP,             2,
-    "Poster width and corner radius." },
-  { NULL, "Interface",         SETTING_ANIM,                 1,
-    "Motion across the app." },
-  { "Account", "Account",           SETTING_PROFILE_ACTIVE,       5,
+  { NULL, "Detail page",             SETTING_DET_TRAILER,          4,
+    "The trailer button, metadata, spoilers and release dates on a title's page." },
+  { "Account", "Account",            SETTING_PROFILE_ACTIVE,       5,
     "Profile, sync, Trakt, Simkl and signing out." },
-  { NULL, "About",             SETTING_VERSION_I,            2,
+  { NULL, "About",                   SETTING_VERSION_I,            2,
     "Version and image memory." },
 };
 #define SETTING_N_SECTIONS (int)(sizeof SECTIONS / sizeof *SECTIONS)
@@ -397,75 +402,77 @@ static const struct { const char *group, *title; int start, n; const char *blurb
 // factory settings on are born as they left them, because that is what they see
 // today. All of them are changeable here, which was the point.
 static int value[SETTING_N] = {
-  0, 0, 0,          /* quality, DV, Atmos */
-  0,                /* audio language: the file's default */
-  0,                /* anime audio language: same as the row above */
+  [SETTING_QUALITY] = 0, [SETTING_DV] = 0, [SETTING_ATMOS] = 0,          /* quality, DV, Atmos */
+  [SETTING_AUDIO_LANG] = 0,                /* audio language: the file's default */
+  [SETTING_AUDIO_ANIME] = 0,                /* anime audio language: same as the row above */
   // AUTOMATIC and not "Off". Off is what the app did before this row existed —
   // nothing ever selected a subtitle, on any title — and it is the behaviour the
   // owner reported as "subtitles are not really a thing here". A default of Off
   // would ship the same complaint with a switch next to it.
-  1,                /* subtitles: automatic (English) */
-  1,                /* forced subtitles: off (the web's default) */
-  0,                /* seek bar colour: violet */
-  0,                /* autoplay next episode: on */
-  15,               /* next episode countdown: 15 s */
-  0,                /* up next appears: before the end (the web's default) */
-  120,              /* up next lead: 2 min, the web's default and the old fixed value */
-  99,               /* up next share: 99% (the web's default) */
-  10,               /* pause overlay: after 10 s paused */
+  [SETTING_SUBS] = 1,                /* subtitles: automatic (English) */
+  [SETTING_SUBS_FORCED] = 1,                /* forced subtitles: off (the web's default) */
+  [SETTING_SEEK_COLOR] = 0,                /* seek bar colour: violet */
+  [SETTING_NEXT_AUTOPLAY] = 0,                /* autoplay next episode: on */
+  [SETTING_NEXT_COUNTDOWN] = 15,               /* next episode countdown: 15 s */
+  [SETTING_NEXT_MODE] = 0,                /* up next appears: before the end (the web's default) */
+  [SETTING_NEXT_SECONDS] = 120,              /* up next lead: 2 min, the web's default and the old fixed value */
+  [SETTING_NEXT_PERCENT] = 99,               /* up next share: 99% (the web's default) */
+  [SETTING_PAUSE_DELAY] = 10,               /* pause overlay: after 10 s paused */
 
-  0,                /* landscape posters: ON (the owner's profile; factory: off) */
-  0,                /* full-screen backdrop: ON (profile; factory: off) */
-  0,                /* backdrop area: the whole screen, which is what it did before */
-  NV_HERO_FIT_PCT_DEFAULT, /* backdrop size, % of the screen's width */
+  [SETTING_LANDSCAPE] = 0,                /* landscape posters: ON (the owner's profile; factory: off) */
+  [SETTING_HERO_FULL] = 0,                /* full-screen backdrop: ON (profile; factory: off) */
+  [SETTING_HERO_AREA] = 0,                /* backdrop area: the whole screen, which is what it did before */
+  [SETTING_HERO_BAND] = NV_HERO_FIT_PCT_DEFAULT, /* backdrop size, % of the screen's width */
 
-  0,                /* sidebar: collapsed (profile; factory: fixed) */
-  1,                /* modern sidebar: off */
-  0,                /* modern bar blur: on (profile) */
-  0,                /* show hero: on */
-  0,                /* hero catalogues: read-only */
-  0,                /* discover location: in search */
+  [SETTING_RAIL] = 0,                /* sidebar: collapsed (profile; factory: fixed) */
+  [SETTING_RAIL_MODERN] = 1,                /* modern sidebar: off */
+  [SETTING_RAIL_BLUR] = 0,                /* modern bar blur: on (profile) */
+  [SETTING_HERO] = 0,                /* show hero: on */
+  [SETTING_HERO_CATALOGS] = 0,                /* hero catalogues: read-only */
+  [SETTING_DISCOVER] = 0,                /* discover location: in search */
   // OFF by default: the poster already carries the title printed on the art, and
   // repeating the name just below is the same information twice taking up row
   // height. It is still a setting — anyone who wants the label turns it on in Settings.
-  1,                /* poster labels: off */
-  0,                /* addon name: on */
-  0,                /* content type: on */
-  1,                /* hide unreleased: off */
-  0,                /* overall ratings: show (SHOW_ALL) */
-  1,                /* classic focus gradient: off */
+  [SETTING_LABELS] = 1,                /* poster labels: off */
+  [SETTING_NAME_ADDON] = 0,                /* addon name: on */
+  [SETTING_SUFFIX_KIND] = 0,                /* content type: on */
+  [SETTING_HIDE_UNRELEASED] = 1,                /* hide unreleased: off */
+  [SETTING_SCORES_HOME] = 0,                /* overall ratings: show (SHOW_ALL) */
+  [SETTING_GRADIENT_CLASSIC] = 1,                /* classic focus gradient: off */
 
-  0,                /* continue watching: on */
-  0,                /* style: card */
-  1,                /* show logo: off */
-  1,                /* play on select: off */
-  0,                /* episode thumbnail: on */
-  1,                /* blur next up: off */
-  0,                /* next from the furthest episode: on */
-  0,                /* show unaired: on */
-  0,                /* sort order: default */
+  [SETTING_CW_ON] = 0,                /* continue watching: on */
+  [SETTING_CW_STYLE] = 0,                /* style: card */
+  [SETTING_CW_LOGO] = 1,                /* show logo: off */
+  [SETTING_CW_PLAY] = 1,                /* play on select: off */
+  [SETTING_CW_THUMB] = 0,                /* episode thumbnail: on */
+  [SETTING_CW_BLUR_NEXT] = 1,                /* blur next up: off */
+  [SETTING_CW_FURTHEST] = 0,                /* next from the furthest episode: on */
+  [SETTING_CW_NOT_SHOWN] = 0,                /* show unaired: on */
+  [SETTING_CW_ORDER] = 0,                /* sort order: default */
 
-  1,                /* blur unwatched: off */
-  0,                /* trailer button: on */
-  0,                /* external metadata: on */
-  0,                /* full date: on */
+  [SETTING_DET_BLUR_NOT_WATCHED] = 1,                /* blur unwatched: off */
+  [SETTING_DET_TRAILER] = 0,                /* trailer button: on */
+  [SETTING_DET_META_EXT] = 0,                /* external metadata: on */
+  [SETTING_DET_DATE_FULL] = 0,                /* full date: on */
 
-  0,                /* expand poster on focus: on (the web's DEFAULT) */
-  3,                /* delay: 3s */
-  1,                /* fast horizontal navigation: off (factory) */
-  0,                /* row scrolling: minimal, what it always did */
+  [SETTING_EXPAND] = 0,                /* expand poster on focus: on (the web's DEFAULT) */
+  [SETTING_EXPAND_DELAY] = 3,                /* delay: 3s */
+  [SETTING_NAV_FAST] = 1,                /* fast horizontal navigation: off (factory) */
+  [SETTING_ROW_SCROLL] = 0,                /* row scrolling: minimal, what it always did */
 
-  1,                /* depth effect: off (factory) */
-  28,               /* edge brightness */
-  10,               /* sheen */
-  0,                /* edge coverage */
-  0, 0, 0, 0, 0,    /* depth on posters, cw, episodes, cast, trailers */
+  [SETTING_DEPTH] = 1,                /* depth effect: off (factory) */
+  [SETTING_DEPTH_BORDER] = 28,               /* edge brightness */
+  [SETTING_DEPTH_BRIGHTNESS] = 10,               /* sheen */
+  [SETTING_DEPTH_COVERAGE] = 0,                /* edge coverage */
+  /* depth on posters, cw, episodes, cast, trailers: all on */
+  [SETTING_DEPTH_POSTERS] = 0, [SETTING_DEPTH_CW] = 0, [SETTING_DEPTH_EPS] = 0,
+  [SETTING_DEPTH_CAST] = 0, [SETTING_DEPTH_TRAILERS] = 0,
 
-  126,              /* item width, dp (factory; the owner's profile uses 120) */
-  12,               /* corner rounding, dp */
+  [SETTING_WIDTH_DP] = 126,              /* item width, dp (factory; the owner's profile uses 120) */
+  [SETTING_RADIUS_DP] = 12,               /* corner rounding, dp */
 
-  0, 0,             /* language, animations */
-  0, 0,             /* version, space */
+  [SETTING_ANIM] = 0,                /* animations: full */
+  // The account and about rows hold no value; they are left at zero.
 };
 
 // Two levels: 0 is the list of sections, 1 is the options of section `focusSec`.
@@ -926,7 +933,7 @@ static const char *helpOption(int op) {
     if (op == SETTING_RAIL) return "Turn off the modern sidebar to choose between collapsed and fixed.";
     if (op == SETTING_RAIL_BLUR) return "Turn on the modern sidebar to use the blur.";
     if (op == SETTING_HERO_CATALOGS) return "Turn on Show hero to display catalogues at the top of Home.";
-    if (op >= SETTING_CW_STYLE && op <= SETTING_CW_ORDER)
+    if (op > SETTING_CW_ON && op <= SETTING_CW_NOT_SHOWN)
       return op == SETTING_CW_BLUR_NEXT && settings_cw_on()
         ? "Turn on Episode thumbnail to blur the next episode image."
         : op == SETTING_CW_LOGO && settings_cw_on()
@@ -985,26 +992,27 @@ static const char *helpOption(int op) {
 static const char *groupOfOption(int op) {
   switch (op) {
     case SETTING_QUALITY:        return "Picture and sound";
-    case SETTING_SUBS:           return "Subtitles";
-    case SETTING_SEEK_COLOR:     return "Player";
+    case SETTING_AUDIO_LANG:     return "Audio and subtitles";
     case SETTING_NEXT_AUTOPLAY:  return "Up next";
-    case SETTING_LANDSCAPE:      return "Posters";
-    case SETTING_HERO_FULL:      return "Hero backdrop";
-    case SETTING_RAIL:           return "Sidebar";
+    case SETTING_SEEK_COLOR:     return "Player";
     case SETTING_HERO:           return "Hero";
-    case SETTING_DISCOVER:       return "Catalogue";
-    case SETTING_SCORES_HOME:    return "Extras";
+    case SETTING_HERO_FULL:      return "Backdrop";
+    case SETTING_SUFFIX_KIND:    return "Row titles";
+    case SETTING_HIDE_UNRELEASED: return "Content";
     case SETTING_CW_ON:          return "Row";
     case SETTING_CW_STYLE:       return "Cards";
-    case SETTING_CW_BLUR_NEXT:   return "Next up";
-    case SETTING_DET_BLUR_NOT_WATCHED: return "Episodes";
-    case SETTING_DET_TRAILER:    return "Page";
+    case SETTING_CW_FURTHEST:    return "Next up";
+    case SETTING_RAIL:           return "Sidebar";
+    case SETTING_DISCOVER:       return "Discover";
+    case SETTING_NAV_FAST:       return "Scrolling";
+    case SETTING_ANIM:           return "Motion";
+    case SETTING_LANDSCAPE:      return "Posters";
     case SETTING_EXPAND:         return "Focus";
-    case SETTING_NAV_FAST:       return "Navigation";
+    case SETTING_WIDTH_DP:       return "Size";
     case SETTING_DEPTH:          return "Effect";
     case SETTING_DEPTH_POSTERS:  return "Where it applies";
-    case SETTING_WIDTH_DP:       return "Poster";
-    case SETTING_ANIM:           return "Motion";
+    case SETTING_DET_TRAILER:    return "Page";
+    case SETTING_DET_BLUR_NOT_WATCHED: return "Episodes";
     case SETTING_PROFILE_ACTIVE: return "Profile";
     case SETTING_TRAKT:          return "Services";
     case SETTING_EXIT:           return "Session";
@@ -1287,7 +1295,7 @@ static const char *needsOf(int op) {
     case SETTING_NEXT_SECONDS:   return "Before the end";
     case SETTING_NEXT_PERCENT:   return "Share watched";
     default:
-      if (op >= SETTING_CW_STYLE && op <= SETTING_CW_ORDER) return "Continue watching";
+      if (op > SETTING_CW_ON && op <= SETTING_CW_NOT_SHOWN) return "Continue watching";
       return "Depth effect";
   }
 }
@@ -1354,8 +1362,8 @@ static void drawRule(int i, int rows, int focusedRow, float y, float a) {
 static const char *iconOfSection(int s) {
   switch (SECTIONS[s].start) {
     case SETTING_QUALITY:              return "set_playback";
-    case SETTING_LANDSCAPE:            return "set_home";
-    case SETTING_DET_BLUR_NOT_WATCHED: return "set_appearance";
+    case SETTING_HERO:                 return "set_home";
+    case SETTING_RAIL:                 return "set_appearance";
     case SETTING_PROFILE_ACTIVE:       return "set_account";
     default:                           return NULL;
   }
@@ -1523,15 +1531,15 @@ static void drawSection(int s, float y, float f) {
 // the picture — so it costs a few dozen quads and nothing to load. What the
 // focused option touches is outlined in the brand violet.
 
-enum { PV_NONE, PV_HOME, PV_PLAYER, PV_DETAIL };
+enum { PV_NONE, PV_HOME, PV_PLAYER, PV_DETAIL, PV_EPISODES };
 enum { HL_NONE, HL_RAIL, HL_HERO, HL_BACKDROP, HL_ROWS, HL_CW, HL_CARD,
        HL_BADGES, HL_SUBS, HL_SEEK, HL_NEXT, HL_BUTTONS, HL_EPISODES, HL_META };
 
 static int sceneOf(int s) {
   switch (SECTIONS[s].start) {
     case SETTING_QUALITY:              return PV_PLAYER;
-    case SETTING_DET_BLUR_NOT_WATCHED: return PV_DETAIL;
-    case SETTING_ANIM: case SETTING_PROFILE_ACTIVE: case SETTING_VERSION_I: return PV_NONE;
+    case SETTING_DET_TRAILER:          return PV_DETAIL;
+    case SETTING_PROFILE_ACTIVE: case SETTING_VERSION_I: return PV_NONE;
     default:                           return PV_HOME;
   }
 }
@@ -1572,7 +1580,7 @@ static int highlightOf(void) {
     case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM:
     case SETTING_PAUSE_DELAY: return HL_NONE;
     default:
-      if (focusOp >= SETTING_CW_ON && focusOp <= SETTING_CW_ORDER) return HL_CW;
+      if (focusOp >= SETTING_CW_ON && focusOp <= SETTING_CW_NOT_SHOWN) return HL_CW;
       return HL_CARD;
   }
 }
@@ -1625,6 +1633,19 @@ static void pvGlow(Pv v, float x, float y, float blur, float a) {
   gfx_glow((GfxRect){ r.x - 2.0f, r.y - 2.0f, 4.0f, 4.0f }, 2.0f, blur * v.k, 1.0f, 1.0f, 1.0f, a);
 }
 
+// Placeholder copy in the picture: the screen's own style at its own size times
+// `k`, so the lines keep the proportions they have to each other on the screen.
+static TxtLine pvLine(Pv v, TxtStyle st, const char *s, float px, int lum) {
+  return txt_line_px(st, s, px * v.k, lum, lum, lum, 255);
+}
+
+// A line of placeholder copy with its corner at a point in SCREEN coordinates.
+static void pvWrite(Pv v, TxtStyle st, const char *s, float px, int lum,
+                    float x, float y, float a) {
+  GfxRect r = pvR(v, x, y, 0, 0);
+  txt_draw_alpha(pvLine(v, st, s, px, lum), r.x, r.y, a);
+}
+
 // The Home as home.c lays it out: the hero's art (banded at 555,0 1421x670, the
 // whole screen, or the top-right band), its copy from y 187, the rows' viewport
 // from NV_SHELF_TOP whether the hero is on or not, and the fixed rail (menu.c)
@@ -1648,16 +1669,26 @@ static void drawHomeScene(Pv v, int hl) {
     if (artR.x > 0.0f) pvFade(v, artR, 0, artR.w * 0.35f);
     pvFade(v, artR, 1, artR.h * (full && !band ? 0.55f : 0.4f));
 
-    // The copy: logo, meta line, two lines of synopsis. Banded, it sits 70px
-    // lower than full-screen.
-    { float y0 = full ? 123.0f : 193.0f;
-      pvPlate(v, cx0, y0, 510.0f, 165.0f, 10.0f, 0.86f, 1.0f);
-      pvPlate(v, cx0, y0 + 214.0f, 700.0f, 20.0f, 4.0f, 0.72f, 0.6f);
-      pvPlate(v, cx0, y0 + 266.0f, 760.0f, 20.0f, 4.0f, 0.72f, 0.45f);
-      pvPlate(v, cx0, y0 + 301.0f, 760.0f, 20.0f, 4.0f, 0.72f, 0.45f);
-      pvPlate(v, cx0, y0 + 336.0f, 740.0f, 20.0f, 4.0f, 0.72f, 0.45f);
-      pvPlate(v, cx0, y0 + 371.0f, 80.0f, 20.0f, 4.0f, 0.72f, 0.45f);
-      heroR = (GfxRect){ cx0, y0, 760.0f, 391.0f }; }
+    // The copy, stacked bottom-up as home.c stacks it, from 48 above the first
+    // row's title — the same place whatever the backdrop does: four lines of
+    // synopsis (24/400 on 35), the meta line (21/500 at rgb 179) 16 above, and
+    // the logo 24 above that — here the name set as a wordmark in its place.
+    { static const char *SIN[] = {
+        "A placeholder synopsis for the featured title. It runs",
+        "to a few lines, the way a real description does, so",
+        "the copy here takes the room it takes on the Home",
+        "itself." };
+      float base = NV_SHELF_TOP + NV_SHELF_PAD_TOP - NV_HERO_COPY_GAP;
+      float ySin = base - 4 * 35.0f, yMeta = ySin - 16.0f - 26.0f, logoFoot = yMeta - 24.0f;
+      int l;
+      TxtLine logo = pvLine(v, TXT_TITLE1, "Title Logo", 92.0f, 255);
+      GfxRect at = pvR(v, cx0, logoFoot, 0, 0);
+      txt_draw(logo, at.x, at.y - logo.h);
+      pvWrite(v, TXT_HERO_META, "2024  \xc2\xb7  Drama  \xc2\xb7  2 Seasons", 21.0f, 179,
+              cx0, yMeta, 1.0f);
+      for (l = 0; l < 4; l++)
+        pvWrite(v, TXT_HERO_SIN, SIN[l], 24.0f, 255, cx0, ySin + l * 35.0f, 0.85f);
+      heroR = (GfxRect){ cx0, logoFoot - NV_LOGO_HERO_H, NV_HERO_SIN_W, base - logoFoot + NV_LOGO_HERO_H }; }
   }
 
   // The rows: the viewport starts at NV_SHELF_TOP + its padding; each row is its
@@ -1667,7 +1698,7 @@ static void drawHomeScene(Pv v, int hl) {
   { float y = NV_SHELF_TOP + NV_SHELF_PAD_TOP;
     int land = settings_posters_landscape(), labels = settings_labels_poster();
     int cwRow0 = settings_cw_on() && settings_cw_style() != 2;
-    int focusRow = (hl == HL_CARD && cwRow0) ? 1 : 0, r;
+    int focusRow = (hl == HL_CARD && cwRow0) ? 1 : 0, r, catalog = 0;
     float rad = settings_radius_poster_px();
     rowsR = (GfxRect){ cx0, y, NV_SCREEN_W - cx0 - 16.0f, NV_SCREEN_H - y - 16.0f };
     for (r = 0; y < NV_SCREEN_H && r < 5; r++) {
@@ -1676,24 +1707,41 @@ static void drawHomeScene(Pv v, int hl) {
       float h = cw ? NV_HIGHLIGHT_H : land ? NV_CARD_LAND_H : NV_CARD_H;
       float x = cx0, cy = y + NV_LEGACY_ROW_HEAD_H;
       int c;
-      pvPlate(v, cx0, y + 4.0f, cw ? 250.0f : settings_suffix_kind() ? 330.0f : 230.0f,
-              24.0f, 6.0f, 0.8f, 0.7f);
+      // The row's heading, 28/600: " - Movie" only while the type suffix is on.
+      { char t[48];
+        if (!cw) catalog++;
+        if (cw) snprintf(t, sizeof t, "Continue Watching");
+        else snprintf(t, sizeof t, "Catalog Row %d%s", catalog,
+                      settings_suffix_kind() ? (catalog % 2 ? " - Movie" : " - Series") : "");
+        pvWrite(v, TXT_ROW_TITLE, t, 28.0f, 246, cx0, y, 1.0f); }
       for (c = 0; x < NV_SCREEN_W && c < 12; c++) {
         int focus = r == focusRow && c == 0;
         float ww = w;
         if (focus && !cw && !land && settings_expand_poster()) ww = h * 16.0f / 9.0f;
         pvPlate(v, x, cy, ww, h, rad, focus ? 0.32f : 0.18f, 1.0f);
         if (cw) {
-          // The resume card's foot: the title's logo, or its name, and the
-          // progress bar along the bottom edge.
-          if (settings_cw_logo()) pvPlate(v, x + 24.0f, cy + h - 84.0f, 150.0f, 44.0f, 6.0f, 0.86f, 0.9f);
-          else {
-            pvPlate(v, x + 24.0f, cy + h - 76.0f, 70.0f, 12.0f, 3.0f, 0.7f, 0.6f);
-            pvPlate(v, x + 24.0f, cy + h - 56.0f, 200.0f, 24.0f, 5.0f, 0.86f, 0.9f);
+          // The resume card's copy, bottom-up from 22 above its base as resume.c
+          // builds it: the episode's name (21, dimmed), the title's logo or its
+          // name (30/600), the "S1 E3" kicker (17) — then the progress bar.
+          float base = cy + h - 22.0f;
+          pvWrite(v, TXT_CWC_SUB, "Episode Name", 21.0f, 255, x + 24.0f, base - 27.0f, 0.62f);
+          base -= 30.0f;
+          if (settings_cw_logo()) {
+            pvWrite(v, TXT_TITLE1, "Title Logo", 44.0f, 255, x + 24.0f, base - 58.0f, 1.0f);
+            base -= 58.0f;
+          } else {
+            pvWrite(v, TXT_CWC_TITLE, "Series Title", 30.0f, 255, x + 24.0f, base - 37.0f, 1.0f);
+            base -= 37.0f;
           }
+          pvWrite(v, TXT_CWC_KICKER, "S1 E3", 17.0f, 255, x + 24.0f, base - 26.0f, 0.62f);
           pvPlate(v, x, cy + h - 6.0f, ww * 0.45f, 6.0f, 0.0f, 0.92f, 0.9f);
         }
-        if (labels && !cw) pvPlate(v, x, cy + h + 14.0f, ww * 0.7f, 20.0f, 5.0f, 0.72f, 0.5f);
+        // Labels are the landscape card's only: its name (22) and genre (15)
+        // inside the frame, 14 in and 12 up. home.c draws none under a poster.
+        if (labels && land && !cw) {
+          pvWrite(v, TXT_CAPTION, "Title", 22.0f, 245, x + 14.0f, cy + h - 12.0f - 20.0f - 4.0f - 28.0f, 0.98f);
+          pvWrite(v, TXT_MINI, "Genre", 15.0f, 200, x + 14.0f, cy + h - 12.0f - 20.0f, 0.85f);
+        }
         if (focus) {
           GfxRect fr = pvR(v, x, cy, ww, h);
           float m = fr.w < fr.h ? fr.w : fr.h;
@@ -1708,19 +1756,21 @@ static void drawHomeScene(Pv v, int hl) {
       if (cw) cwR = (GfxRect){ cx0, y, NV_SCREEN_W - cx0 - 16.0f, NV_LEGACY_ROW_HEAD_H + h };
       // A poster option touches the catalogue rows only, not the resume row.
       else if (level == 1 && rowsR.y < y) rowsR = (GfxRect){ cx0, y, rowsR.w, NV_SCREEN_H - y - 16.0f };
-      y = cy + h + (labels && !cw ? 54.0f : 0.0f) + (cw || land ? NV_ROW_GAP_LAND : NV_ROW_GAP);
+      y = cy + h + (cw || land ? NV_ROW_GAP_LAND : NV_ROW_GAP);
     } }
 
-  // The fixed rail: frosted glass 144 wide, the five icons centred down it on
-  // 116px lines with the current one lit, the profile at the foot.
+  // The fixed rail: frosted glass 144 wide, menu.c's four glyphs centred down
+  // it on 116px lines — Home filled and lit, the rest at half — the profile at the foot.
   if (!settings_rail_collapsed()) {
+    static const char *ICON[] = { "menu_home_fill", "menu_search", "menu_library", "menu_settings" };
     int i;
-    float y0 = (NV_SCREEN_H - 5 * 116.0f) * 0.5f;
+    float y0 = (NV_SCREEN_H - 4 * 116.0f) * 0.5f;
     railR = (GfxRect){ 0, 0, NV_LEGACY_RAIL_W, NV_SCREEN_H };
     pvPlate(v, 0, 0, NV_LEGACY_RAIL_W, NV_SCREEN_H, 0.0f, 0.16f, 0.92f);
-    for (i = 0; i < 5; i++)
-      pvPlate(v, 72.0f - 22.0f, y0 + i * 116.0f + 36.0f, 44.0f, 44.0f, 12.0f, 0.9f, i == 0 ? 1.0f : 0.45f);
-    pvPlate(v, 72.0f - 24.0f, NV_SCREEN_H - 96.0f, 48.0f, 48.0f, 24.0f, 0.6f, 1.0f);
+    for (i = 0; i < 4; i++)
+      gfx_icon(pvR(v, 72.0f - 22.0f, y0 + i * 116.0f + 36.0f, 44.0f, 44.0f), ICON[i],
+               1.0f, 1.0f, 1.0f, i == 0 ? 1.0f : 0.5f);
+    pvPlate(v, 72.0f - 24.0f, NV_SCREEN_H - 96.0f, 48.0f, 48.0f, 24.0f, 0.3f, 1.0f);
   }
 
   switch (hl) {
@@ -1747,31 +1797,53 @@ static void drawHomeScene(Pv v, int hl) {
 // over the bar, the bar 96px in from each side at y 882, the button row under
 // it. With an Up next option focused, the card player.c raises above the
 // controls, bottom-right.
+//
+// The copy is placeholder words at the player's sizes (layout.h: title 56,
+// episode line 30, subtitles at the default 120% = 48, the card's 17/28/23).
+// The stream's facts, the clock and the time readout are left out: they would
+// be words no option here changes.
 static void drawPlayerScene(Pv v, int hl) {
-  float r, g, bl, i;
+  // rowButtons() for an episode with a next one: every button the row can hold,
+  // in its order, with the glyph player.c draws — pause, since it is playing.
+  static const char *ICONS[] = { "pause", "skip_next", "subtitles", "audio", "episodes",
+                                 "stack", "aspect", "stats", "details" };
+  float r, g, bl;
+  int i;
   const float barX = 96.0f, barW = NV_SCREEN_W - 192.0f, barY = 882.0f;
-  GfxRect subR = { 560.0f, 668.0f, 800.0f, 96.0f };
-  GfxRect nextR = { NV_SCREEN_W - 64.0f - 747.0f, NV_SCREEN_H - 236.0f - 180.0f, 747.0f, 180.0f };
+  GfxRect subR = { 560.0f, 604.0f, 800.0f, 104.0f }, nextR = { 0 };
   settings_seek_color(&r, &g, &bl);
 
   pvGlow(v, 960.0f, 380.0f, 520.0f, 0.12f);
   pvFade(v, (GfxRect){ 0, 560.0f, NV_SCREEN_W, 520.0f }, 1, 520.0f);
 
-  // Subtitles, when the player would turn one on by itself: a full line pair,
-  // or a lone short line for a forced track.
+  // Subtitles, when the player would turn one on by itself: a line pair, or a
+  // lone short line for a forced track — centred, their foot at the 700 the
+  // player lifts them to while the controls are up.
   // Not under the Up next card: the player hides the subtitles' band behind it.
-  if (hl == HL_NEXT) ;
-  else if (value[SETTING_SUBS]) {
-    pvPlate(v, 580.0f, 680.0f, 760.0f, 32.0f, 8.0f, 0.95f, 0.9f);
-    pvPlate(v, 700.0f, 724.0f, 520.0f, 32.0f, 8.0f, 0.95f, 0.9f);
-  } else if (settings_subtitle_forced()) {
-    pvPlate(v, 780.0f, 724.0f, 360.0f, 32.0f, 8.0f, 0.95f, 0.5f);
+  if (hl != HL_NEXT && (value[SETTING_SUBS] || settings_subtitle_forced())) {
+    const char *l1 = value[SETTING_SUBS] ? "We should have left an hour ago." : NULL;
+    const char *l2 = value[SETTING_SUBS] ? "Nobody ever listens to me." : "Over here!";
+    GfxRect foot = pvR(v, 960.0f, 700.0f, 0, 0);
+    TxtLine lb = pvLine(v, TXT_SUB_120, l2, 48.0f, 255);
+    float y = foot.y - lb.h;
+    txt_draw_shadow(lb, foot.x - lb.w * 0.5f, y + 1.0f, 0.8f);
+    txt_draw(lb, foot.x - lb.w * 0.5f, y);
+    if (l1) {
+      TxtLine lt = pvLine(v, TXT_SUB_120, l1, 48.0f, 255);
+      txt_draw_shadow(lt, foot.x - lt.w * 0.5f, y - lt.h + 1.0f, 0.8f);
+      txt_draw(lt, foot.x - lt.w * 0.5f, y - lt.h);
+    }
   }
 
-  // Name, episode line, and the stream's facts at the far end.
-  pvPlate(v, barX, 752.0f, 380.0f, 40.0f, 8.0f, 0.92f, 1.0f);
-  pvPlate(v, barX, 806.0f, 260.0f, 24.0f, 6.0f, 0.72f, 0.6f);
-  pvPlate(v, barX + barW - 300.0f, 810.0f, 300.0f, 20.0f, 5.0f, 0.72f, 0.45f);
+  // The name, then the episode line in its two weights, on the bar's 40px gap.
+  { GfxRect base = pvR(v, barX, barY - 40.0f, 0, 0);
+    TxtLine lc = pvLine(v, TXT_PLR_EPCODE, "S1 E3", 30.0f, 255);
+    TxtLine ln = pvLine(v, TXT_PLR_EPNAME, "Episode Name", 30.0f, 255);
+    TxtLine lt = pvLine(v, TXT_PLR_TITLE, "Series Title", 56.0f, 255);
+    float ye = base.y - (lc.h > ln.h ? lc.h : ln.h);
+    txt_draw_alpha(lc, base.x, ye, 0.55f);
+    txt_draw_alpha(ln, base.x + lc.w + 16.0f * v.k, ye, 0.92f);
+    txt_draw(lt, base.x, ye - 8.0f * v.k - lt.h); }
 
   // The bar: neutral track, the played part and (focused) the knob in the colour.
   pvPlate(v, barX, barY, barW, 8.0f, 4.0f, 1.0f, 0.26f);
@@ -1780,19 +1852,67 @@ static void drawPlayerScene(Pv v, int hl) {
     gfx_color(f, 0.5f, r, g, bl, 1.0f);
     if (hl == HL_SEEK) gfx_color(kn, 0.5f, r, g, bl, 1.0f); }
 
-  // The button row, from the bar's left edge.
-  for (i = 0; i < 7; i++)
-    pvPlate(v, barX + i * 104.0f, 926.0f, 90.0f, 90.0f, 45.0f, i == 0 ? 0.9f : 0.24f, 0.95f);
+  // The button row, from the bar's left edge, 90px circles 14 apart: the glyphs
+  // bare, the focused one on its white puck — player.c draws no circle under the rest.
+  for (i = 0; i < (int)(sizeof ICONS / sizeof *ICONS); i++) {
+    float cx = barX + 45.0f + i * 104.0f, cy = 971.0f;
+    float lum = i == 0 ? 0.13f : 0.94f;
+    if (i == 0) pvPlate(v, cx - 45.0f, cy - 45.0f, 90.0f, 90.0f, 45.0f, 1.0f, 1.0f);
+    gfx_icon(pvR(v, cx - 24.0f, cy - 24.0f, 48.0f, 48.0f), ICONS[i], lum, lum, lum, 0.94f);
+  }
 
+  // The card, as drawNextCard builds it: the still, "UP NEXT · Playing in Ns"
+  // (the count only with autoplay on), the episode's title, the two pills — and
+  // as wide as its copy, anchored to the raised prompt corner.
   if (hl == HL_NEXT) {
-    float x = nextR.x, y = nextR.y, tx = x + 24.0f + 235.0f + 24.0f;
-    pvPlate(v, x, y, nextR.w, nextR.h, 20.0f, 0.1f, 0.96f);
-    pvPlate(v, x + 24.0f, y + 24.0f, 235.0f, 132.0f, 12.0f, 0.28f, 1.0f);
-    pvPlate(v, tx, y + 24.0f, 96.0f, 14.0f, 3.0f, 0.62f, 0.7f);
-    if (settings_next_autoplay()) pvPlate(v, tx + 110.0f, y + 24.0f, 150.0f, 14.0f, 3.0f, 0.95f, 1.0f);
-    pvPlate(v, tx, y + 52.0f, 380.0f, 28.0f, 6.0f, 0.92f, 1.0f);
-    pvPlate(v, tx, y + 112.0f, 170.0f, 44.0f, 22.0f, 0.94f, 1.0f);
-    pvPlate(v, tx + 180.0f, y + 112.0f, 150.0f, 44.0f, 22.0f, 0.3f, 1.0f);
+    char count[32];
+    TxtLine kick, dot = { 0 }, cnt = { 0 }, code, sep, name, play, notNow;
+    float k = v.k, titleW, pillPlay, pillNot, rowW, copyW, w, h, x, y, cx, py, ph;
+    snprintf(count, sizeof count, "Playing in %ds", settings_next_countdown());
+    kick = pvLine(v, TXT_NEXT_KICK, "UP NEXT", 17.0f, 150);
+    if (settings_next_autoplay()) {
+      dot = pvLine(v, TXT_NEXT_COUNT, "\xc2\xb7", 17.0f, 82);
+      cnt = pvLine(v, TXT_NEXT_COUNT, count, 17.0f, 255);
+    }
+    code = pvLine(v, TXT_NEXT_TITLE, "S1 E4", 28.0f, 255);
+    sep  = pvLine(v, TXT_NEXT_TITLE, "\xc2\xb7", 28.0f, 150);
+    name = pvLine(v, TXT_NEXT_TITLE, "Next Episode", 28.0f, 255);
+    play = pvLine(v, TXT_NEXT_PILL, "Play now", 23.0f, 226);
+    notNow = pvLine(v, TXT_NEXT_PILL, "Not now", 23.0f, 226);
+    titleW = code.w + sep.w + name.w + 24.0f * k;
+    pillPlay = (28.0f * 2 + 18.0f * 0.6875f + 12.0f) * k + play.w;
+    pillNot = 28.0f * 2 * k + notNow.w;
+    rowW = pillPlay + 12.0f * k + pillNot;
+    copyW = titleW > rowW ? titleW : rowW;
+    w = (24.0f * 2 + 148.0f * 16.0f / 9.0f + 24.0f) * k + copyW;
+    h = (24.0f * 2 + 148.0f) * k;
+    x = v.box.x + (NV_SCREEN_W - 64.0f) * k - w;
+    y = v.box.y + (NV_SCREEN_H - 236.0f) * k - h;
+    nextR = (GfxRect){ (x - v.box.x) / k, (y - v.box.y) / k, w / k, h / k };
+    pvPlate(v, nextR.x, nextR.y, nextR.w, nextR.h, 20.0f, 0.043f, 0.97f);
+    pvPlate(v, nextR.x + 24.0f, nextR.y + 24.0f, 148.0f * 16.0f / 9.0f, 148.0f, 12.0f, 0.28f, 1.0f);
+    cx = x + (24.0f + 148.0f * 16.0f / 9.0f + 24.0f) * k;
+    y += 24.0f * k;
+    txt_draw(kick, cx, y);
+    if (cnt.tex) {
+      txt_draw(dot, cx + kick.w + 6.0f * k, y);
+      txt_draw(cnt, cx + kick.w + (16.0f) * k + dot.w, y);
+    }
+    txt_draw(code, cx, y + 28.0f * k);
+    txt_draw(sep, cx + code.w + 12.0f * k, y + 28.0f * k);
+    txt_draw(name, cx + code.w + sep.w + 24.0f * k, y + 28.0f * k);
+    ph = 56.0f * k;
+    py = y + (148.0f - 56.0f) * k;
+    { GfxRect p1 = { cx, py, pillPlay, ph }, p2 = { cx + pillPlay + 12.0f * k, py, pillNot, ph };
+      float ib = 18.0f * k;
+      gfx_color(p1, 0.5f, 0.110f, 0.114f, 0.129f, 1.0f);
+      gfx_color(p2, 0.5f, 0.110f, 0.114f, 0.129f, 1.0f);
+      gfx_rect(p1, 0, GFX_RING_INSET, 0, 1.5f / ph, 0, 0.5f, 0.227f, 0.235f, 0.259f, 1.0f);
+      gfx_rect(p2, 0, GFX_RING_INSET, 0, 1.5f / ph, 0, 0.5f, 0.227f, 0.235f, 0.259f, 1.0f);
+      gfx_icon((GfxRect){ p1.x + 28.0f * k - ib * 0.25f, py + (ph - ib) * 0.5f, ib, ib },
+               "play", 0.886f, 0.886f, 0.886f, 1.0f);
+      txt_draw(play, p1.x + (28.0f + 18.0f * 0.6875f + 12.0f) * k, py + (ph - play.h) * 0.5f);
+      txt_draw(notNow, p2.x + 28.0f * k, py + (ph - notNow.h) * 0.5f); }
   }
 
   switch (hl) {
@@ -1802,38 +1922,152 @@ static void drawPlayerScene(Pv v, int hl) {
   }
 }
 
-// A title's page: art at the right, logo, meta line (the year alone, or the
-// whole date), synopsis, the button row — the trailer button only when it is
-// on — and the episodes under it.
+// A white focus ring `wPx` wide round a rect in screen coordinates, outside it,
+// with `radius` a fraction of the ringed rect's height.
+static void pvRing(Pv v, GfxRect s, float wPx, float radius) {
+  GfxRect r = pvR(v, s.x - wPx, s.y - wPx, s.w + wPx * 2.0f, s.h + wPx * 2.0f);
+  if (r.h <= 1.0f) return;
+  gfx_rect(r, 0, GFX_RING_INSET, 0, wPx * v.k / r.h, 0, radius, 1.0f, 1.0f, 1.0f, 1.0f);
+}
+
+// The separators of detail.c's meta lines: a 2x18 bar (128) with 30 either side
+// between groups, a 6px dot with 11 either side inside one. Both return the new x.
+static float pvBar(Pv v, float x, float yc) {
+  pvPlate(v, x + 30.0f, yc - 9.0f, 2.0f, 18.0f, 0.0f, 0.5f, 1.0f);
+  return x + 62.0f;
+}
+static float pvDot(Pv v, float x, float yc) {
+  pvPlate(v, x + 11.0f, yc - 3.0f, 6.0f, 6.0f, 3.0f, 0.5f, 1.0f);
+  return x + 28.0f;
+}
+// A line of copy on the meta line's centre `yc`, returning where it ends — in
+// screen coordinates, so the separators can follow it.
+static float pvMeta(Pv v, TxtStyle st, const char *s, float px, int lum, float x, float yc) {
+  TxtLine l = pvLine(v, st, s, px, lum);
+  GfxRect r = pvR(v, x, yc, 0, 0);
+  txt_draw(l, r.x, r.y - l.h * 0.5f);
+  return x + l.w / v.k;
+}
+
+// A series' page as detail.c stacks it, bottom-up from its base at 1048 over the
+// full-screen backdrop: the logo 98 above the actions, the row of buttons (Play
+// focused, then List, Sources and — when it is on — Trailer), "Writer:", three
+// lines of synopsis (26 on 40), then the two meta lines.
 static void drawDetailScene(Pv v, int hl) {
-  float x0 = settings_content_x(), bx, k;
-  GfxRect art = { 640.0f, 0, NV_SCREEN_W - 640.0f, 760.0f }, metaR, btnR;
+  static const char *SIN[] = {
+    "A placeholder synopsis for the title. It runs to a few lines,",
+    "the way a real description does, so the column takes the room",
+    "it takes on the page itself." };
+  const float x0 = 96.0f;
+  float yMeta2 = 1048.0f - 49.0f, yMeta1 = yMeta2 - 31.0f - 30.0f;
+  float ySin = yMeta1 - 33.0f - 3 * 40.0f, ySup = ySin - 62.0f;
+  float yAct = ySup - 37.0f - 96.0f, x, k = v.k;
+  GfxRect art = { 0, 0, NV_SCREEN_W, NV_SCREEN_H }, btnR;
+  int l;
+
   pvPlate(v, art.x, art.y, art.w, art.h, 0.0f, 0.19f, 1.0f);
-  pvGlow(v, art.x + art.w * 0.6f, 300.0f, 380.0f, 0.14f);
-  pvFade(v, art, 0, art.w * 0.45f);
-  pvFade(v, art, 1, 300.0f);
+  pvGlow(v, art.w * 0.68f, 330.0f, 480.0f, 0.14f);
+  pvFade(v, (GfxRect){ 0, 0, 1300.0f, NV_SCREEN_H }, 0, 1300.0f);
+  pvFade(v, art, 1, 560.0f);
 
-  pvPlate(v, x0, 170.0f, 460.0f, 110.0f, 10.0f, 0.86f, 1.0f);
-  metaR = (GfxRect){ x0, 318.0f, settings_date_full() ? 420.0f : 300.0f, 22.0f };
-  pvPlate(v, metaR.x, metaR.y, metaR.w, metaR.h, 5.0f, 0.72f, 0.65f);
-  pvPlate(v, x0, 368.0f, 760.0f, 20.0f, 5.0f, 0.72f, 0.4f);
-  pvPlate(v, x0, 402.0f, 600.0f, 20.0f, 5.0f, 0.72f, 0.4f);
+  // The logo — the name set as a wordmark — on its base 98 above the actions.
+  { TxtLine lg = pvLine(v, TXT_TITLE1, "Title Logo", 120.0f, 255);
+    GfxRect at = pvR(v, x0, yAct - 98.0f, 0, 0);
+    txt_draw(lg, at.x, at.y - lg.h); }
 
-  pvPlate(v, x0, 460.0f, 250.0f, 72.0f, 36.0f, 0.94f, 1.0f);
-  bx = x0 + 270.0f;
-  if (settings_button_trailer()) { pvPlate(v, bx, 460.0f, 72.0f, 72.0f, 36.0f, 0.26f, 1.0f); bx += 88.0f; }
-  pvPlate(v, bx, 460.0f, 72.0f, 72.0f, 36.0f, 0.26f, 1.0f);
-  pvPlate(v, bx + 88.0f, 460.0f, 72.0f, 72.0f, 36.0f, 0.26f, 1.0f);
-  btnR = (GfxRect){ x0, 460.0f, bx + 160.0f - x0, 72.0f };
+  // The actions: the primary pill (padding 36, the 36px glyph, 24, the label 32/600,
+  // 36) focused in #f5f5f5 with #111 ink and a 4px white ring, then 96px circles
+  // in #222 with 44px white glyphs, 24 apart.
+  { TxtLine lp = pvLine(v, TXT_DETWEB_BTN, "Play", 32.0f, 17);
+    float pw = 36.0f + 36.0f + 24.0f + lp.w / k + 36.0f;
+    static const char *ICON[] = { "detail_library_add", "detail_stack", "detail_trailer" };
+    int n = settings_button_trailer() ? 3 : 2, i;
+    GfxRect p = { x0, yAct, pw, 96.0f }, t = pvR(v, x0 + 36.0f + 36.0f + 24.0f, yAct, 0, 96.0f);
+    pvPlate(v, p.x, p.y, p.w, p.h, 48.0f, 0.961f, 1.0f);
+    pvRing(v, p, 4.0f, 0.5f);
+    gfx_icon(pvR(v, x0 + 36.0f, yAct + 30.0f, 36.0f, 36.0f), "detail_play", 0.067f, 0.067f, 0.067f, 1.0f);
+    txt_draw(lp, t.x, t.y + (t.h - lp.h) * 0.5f);
+    x = x0 + pw + 24.0f;
+    for (i = 0; i < n; i++, x += 96.0f + 24.0f) {
+      pvPlate(v, x, yAct, 96.0f, 96.0f, 48.0f, 0.133f, 1.0f);
+      gfx_icon(pvR(v, x + 26.0f, yAct + 26.0f, 44.0f, 44.0f), ICON[i], 1.0f, 1.0f, 1.0f, 1.0f);
+    }
+    btnR = (GfxRect){ x0, yAct, x - 24.0f - x0, 96.0f }; }
 
-  pvPlate(v, x0, 640.0f, 200.0f, 26.0f, 6.0f, 0.8f, 0.7f);
-  for (k = 0; k < 5; k++)
-    pvPlate(v, x0 + k * 440.0f, 690.0f, 416.0f, 234.0f, 16.0f, 0.2f, 1.0f);
+  // "Writer:" at 128 and the name at 179, both 26/400 like the synopsis.
+  { TxtLine lr = pvLine(v, TXT_DET_SIN, "Writer: ", 26.0f, 128);
+    TxtLine ln = pvLine(v, TXT_DET_SIN, "Writer Name", 26.0f, 179);
+    GfxRect at = pvR(v, x0, ySup, 0, 0);
+    txt_draw(lr, at.x, at.y);
+    txt_draw(ln, at.x + lr.w, at.y); }
+  for (l = 0; l < 3; l++) pvWrite(v, TXT_DET_SIN, SIN[l], 26.0f, 255, x0, ySin + l * 40.0f, 1.0f);
 
-  switch (hl) {
-    case HL_META:    pvMark(v, metaR); break;
-    case HL_BUTTONS: pvMark(v, btnR); break;
+  // Meta line 1: genres (a dot between them) | year | IMDb score.
+  { float yc = yMeta1 + 15.0f;
+    x = pvMeta(v, TXT_DET_SIN, "Drama", 26.0f, 179, x0, yc);
+    x = pvDot(v, x, yc);
+    x = pvMeta(v, TXT_DET_SIN, "Thriller", 26.0f, 179, x, yc);
+    x = pvBar(v, x, yc);
+    x = pvMeta(v, TXT_DET_SIN, "2024", 26.0f, 179, x, yc);
+    x = pvBar(v, x, yc);
+    pvMeta(v, TXT_DET_SIN, "IMDb 8.1", 26.0f, 179, x, yc); }
+  // Meta line 2: the status in its outline badge (49 tall, radius 8, 2px), then
+  // duration and country.
+  { float yc = yMeta2 + 24.5f;
+    TxtLine lb = pvLine(v, TXT_DET_SIN, "Returning Series", 26.0f, 255);
+    GfxRect b = { x0, yMeta2, 16.0f * 2 + lb.w / k, 49.0f }, br = pvR(v, b.x, b.y, b.w, b.h);
+    gfx_rect(br, 0, GFX_RING_INSET, 0, 2.0f * k / br.h, 0, 8.0f / 49.0f, 1.0f, 1.0f, 1.0f, 0.5f);
+    txt_draw(lb, br.x + 16.0f * k, br.y + (br.h - lb.h) * 0.5f);
+    x = pvBar(v, b.x + b.w, yc);
+    x = pvMeta(v, TXT_DET_SIN, "52min", 26.0f, 179, x, yc);
+    x = pvBar(v, x, yc);
+    pvMeta(v, TXT_DET_SIN, "United States", 26.0f, 179, x, yc); }
+
+  if (hl == HL_BUTTONS) pvMark(v, btnR);
+}
+
+// The page under the hero: the season picker (an 80px pill, "Season 1 · 8 Eps"
+// and its chevron) 56 from the top, then the episode rows, 228 apart — the 320x180
+// still, and beside it at 472 the "EP 1" kicker, the name (34/600), the meta line
+// (23/400: duration · the date, spelled out or the year alone) and the synopsis.
+static void drawEpisodesScene(Pv v, int hl) {
+  static const char *DATE[] = { "9 August 2025", "16 August 2025", "23 August 2025", "30 August 2025" };
+  const float x0 = 96.0f, tx = 96.0f + 320.0f + 56.0f;
+  float y = 56.0f + 80.0f + 24.0f, k = v.k;
+  GfxRect metaR = { 0 };
+  int i;
+
+  pvGlow(v, 1500.0f, 200.0f, 500.0f, 0.06f);
+
+  { TxtLine ls = pvLine(v, TXT_DETWEB_SEA, "Season 1", 30.0f, 255);
+    TxtLine le = pvLine(v, TXT_DETWEB_SEA_EPS, " \xc2\xb7 8 Eps", 30.0f, 179);
+    float w = 36.0f + (ls.w + le.w) / k + 24.0f + 32.0f + 36.0f;
+    GfxRect p = pvR(v, x0, 56.0f, w, 80.0f);
+    gfx_color(p, 0.5f, 0.133f, 0.133f, 0.14f, 1.0f);
+    gfx_rect(p, 0, GFX_RING_INSET, 0, 1.0f / p.h, 0, 0.5f, 1.0f, 1.0f, 1.0f, 0.12f);
+    txt_draw(ls, p.x + 36.0f * k, p.y + (p.h - ls.h) * 0.5f);
+    txt_draw(le, p.x + 36.0f * k + ls.w, p.y + (p.h - le.h) * 0.5f);
+    gfx_icon(pvR(v, x0 + w - 36.0f - 32.0f, 56.0f + 24.0f, 32.0f, 32.0f), "chevron_down",
+             0.702f, 0.702f, 0.702f, 1.0f); }
+
+  for (i = 0; i < 4 && y < NV_SCREEN_H; i++, y += 228.0f) {
+    char code[8], meta[48];
+    float xm;
+    snprintf(code, sizeof code, "EP %d", i + 1);
+    snprintf(meta, sizeof meta, "52min");
+    pvPlate(v, x0, y + 24.0f, 320.0f, 180.0f, 12.0f, 0.18f, 1.0f);
+    pvWrite(v, TXT_DETWEB_EP_BADGE, code, 21.0f, 255, tx, y + 34.0f, 0.55f);
+    pvWrite(v, TXT_DETWEB_EP_TITLE, "Episode Name", 34.0f, 255, tx, y + 62.0f, 1.0f);
+    xm = pvMeta(v, TXT_DETWEB_EP_META, meta, 23.0f, 175, tx, y + 124.0f);
+    xm = pvDot(v, xm, y + 124.0f);
+    { float x1 = xm;
+      xm = pvMeta(v, TXT_DETWEB_EP_META, settings_date_full() ? DATE[i] : "2025", 23.0f, 175, xm, y + 124.0f);
+      if (i == 0) metaR = (GfxRect){ x1, y + 110.0f, xm - x1, 28.0f }; }
+    pvWrite(v, TXT_DETWEB_EPD, "A placeholder line about what happens in this episode.",
+            25.0f, 255, tx, y + 150.0f, 0.55f);
   }
+
+  if (hl == HL_META) pvMark(v, metaR);
 }
 
 // The picture box: the screen at 16:9, a hairline edge, the scene clipped inside.
@@ -1844,6 +2078,7 @@ static float drawScene(int scene, float x, float y, float w) {
   gfx_crop(v.box.x, v.box.y, v.box.w, v.box.h);
   if (scene == PV_HOME) drawHomeScene(v, highlightOf());
   else if (scene == PV_PLAYER) drawPlayerScene(v, highlightOf());
+  else if (scene == PV_EPISODES) drawEpisodesScene(v, highlightOf());
   else drawDetailScene(v, highlightOf());
   gfx_no_crop();
   gfx_rect(v.box, 0, GFX_RING_INSET, 0, 1.5f / v.box.h, 0, rad, 1.0f, 1.0f, 1.0f, 0.08f);
@@ -1862,28 +2097,35 @@ static float drawPair(const char *k, const char *v, float x, float y, float w) {
 
 // Every value of a choice as a chip, the current one filled. A long list (the
 // thirty languages) shows the five around the current one.
-static void drawChips(int op, float x, float y, float w) {
+// EVERY value, always: a window of five that slid with the focus had values
+// arriving from nowhere as it moved. A long list (thirty subtitle languages)
+// steps down a size until it fits; `draw` 0 only measures.
+static const struct { TxtStyle st; float h, gap, pad; } CHIP[] = {
+  { TXT_BODY, 50.0f, 12.0f, 24.0f },
+  { TXT_SRC_META, 38.0f, 8.0f, 16.0f },
+  { TXT_SRC_TEXT, 32.0f, 6.0f, 12.0f },
+};
+#define CHIP_N ((int)(sizeof CHIP / sizeof *CHIP))
+
+static float drawChips(int op, float x, float y, float w, int size, int draw) {
   const Option *o = &OPTIONS[op];
-  int cur = value[op], first = 0, last = o->n - 1, k;
-  float cx = x, cy = y, h = 50.0f;
-  if (o->n > 6) {
-    first = cur - 2;
-    if (first < 0) first = 0;
-    last = first + 4;
-    if (last > o->n - 1) { last = o->n - 1; first = last - 4; }
-  }
-  for (k = first; k <= last; k++) {
-    int sel = k == cur;
+  float cx = x, cy = y, h = CHIP[size].h, gap = CHIP[size].gap, pad = CHIP[size].pad;
+  int k;
+  for (k = 0; k < o->n; k++) {
+    int sel = k == value[op];
     int c = sel ? 22 : 226;
-    TxtLine t = txt_line(TXT_BODY, o->values[k], c, c, c + 2, 255);
-    float cw = t.w + 48.0f;
-    if (cx + cw > x + w && cx > x) { cx = x; cy += h + 12.0f; }
-    GfxRect r = { cx, cy, cw, h };
-    if (sel) gfx_color(r, 0.22f, 0.93f, 0.93f, 0.94f, 1.0f);
-    else gfx_rect(r, 0, GFX_RING_INSET, 0, 1.5f / h, 0, 0.22f, 1.0f, 1.0f, 1.0f, 0.18f);
-    txt_draw(t, cx + 24.0f, cy + (h - t.h) * 0.5f);
-    cx += cw + 12.0f;
+    float cw = txt_width(CHIP[size].st, o->values[k]) + pad * 2.0f;
+    if (cx + cw > x + w && cx > x) { cx = x; cy += h + gap; }
+    if (draw) {
+      TxtLine t = txt_line(CHIP[size].st, o->values[k], c, c, c + 2, 255);
+      GfxRect r = { cx, cy, cw, h };
+      if (sel) gfx_color(r, 0.22f, 0.93f, 0.93f, 0.94f, 1.0f);
+      else gfx_rect(r, 0, GFX_RING_INSET, 0, 1.5f / h, 0, 0.22f, 1.0f, 1.0f, 1.0f, 0.18f);
+      txt_draw(t, cx + pad, cy + (h - t.h) * 0.5f);
+    }
+    cx += cw + gap;
   }
+  return cy + h - y;
 }
 
 // A number's range: the bar at full width, the ends under it.
@@ -1909,7 +2151,7 @@ static void drawRange(int op, float x, float y, float w) {
 // its current values or its choices.
 static void drawPanel(float hx, float hw) {
   const char *head, *help;
-  int scene;
+  int scene, chipSize;
   float y = SETTING_TOP + 22.0f;
 
   if (level == 0) {
@@ -1930,6 +2172,12 @@ static void drawPanel(float hx, float hw) {
     head = OPTIONS[focusOp].label;
     help = helpOption(focusOp);
     scene = sceneOf(focusSec);
+    // A picture with nothing marked is the same for every row — quality, the audio
+    // languages, animations — and says nothing about any of them. Nor does one for
+    // a row the app does not act on: nothing in it changes.
+    if (notWired(focusOp) || highlightOf() == HL_NONE) scene = PV_NONE;
+    // The full date is the episode list's: the page's own hero shows the year alone.
+    else if (focusOp == SETTING_DET_DATE_FULL) scene = PV_EPISODES;
   }
 
   y += drawKicker(scene != PV_NONE ? "Preview" : level ? "Details" : "Section", hx, y, 0.0f, 1.0f) + 14.0f;
@@ -1941,7 +2189,22 @@ static void drawPanel(float hx, float hw) {
                    SETTING_ACCENT_R * 255 + 40, SETTING_ACCENT_G * 255 + 60, 255, hx, y, hw, 32, 1, 2);
   }
   y += 26.0f;
-  if (scene != PV_NONE) y += drawScene(scene, hx, y, hw) + 32.0f;
+  // The choices must all fit under the picture: the chips step down a size, and
+  // when even the smallest does not fit, the picture gives up the height.
+  { int chips = level == 1 && !inactive(focusOp) && OPTIONS[focusOp].kind == OP_CHOICE;
+    float bottom = NV_SCREEN_H - NV_MARGIN_Y, sw = hw;
+    float kick = (float)txt_line(TXT_CWC_KICKER, "OPTIONS", 128, 130, 136, 255).h + 16.0f;
+    chipSize = 0;
+    if (chips) {
+      float room = bottom - y - kick - (scene != PV_NONE ? 32.0f : 0.0f), need = 0.0f;
+      for (chipSize = 0; chipSize < CHIP_N; chipSize++) {
+        need = drawChips(focusOp, hx, 0.0f, hw, chipSize, 0);
+        if (need <= room - (scene != PV_NONE ? hw * 0.5625f : 0.0f)) break;
+      }
+      if (chipSize == CHIP_N) chipSize = CHIP_N - 1;
+      if (scene != PV_NONE && (room - need) / 0.5625f < sw) sw = (room - need) / 0.5625f;
+    }
+    if (scene != PV_NONE && sw > 120.0f) y += drawScene(scene, hx, y, sw) + 32.0f; }
 
   if (level == 0) {
     int s = focusSec, k;
@@ -1975,12 +2238,8 @@ static void drawPanel(float hx, float hw) {
   }
   if (inactive(focusOp)) return;
   if (OPTIONS[focusOp].kind == OP_CHOICE) {
-    char k[48];
-    if (OPTIONS[focusOp].n > 6)
-      snprintf(k, sizeof k, "Options \xc2\xb7 %d of %d", value[focusOp] + 1, OPTIONS[focusOp].n);
-    else snprintf(k, sizeof k, "Options");
-    y += drawKicker(k, hx, y, 0.0f, 1.0f) + 16.0f;
-    drawChips(focusOp, hx, y, hw);
+    y += drawKicker("Options", hx, y, 0.0f, 1.0f) + 16.0f;
+    drawChips(focusOp, hx, y, hw, chipSize, 1);
   } else if (OPTIONS[focusOp].kind == OP_NUMBER) {
     y += drawKicker("Range", hx, y, 0.0f, 1.0f) + 18.0f;
     drawRange(focusOp, hx, y, hw);
@@ -2137,7 +2396,6 @@ static void drawHeader(float right) {
 }
 
 void settings_draw(Uint32 now) {
-  (void)now;
   // An opaque background of its own: the screen covers everything and cannot
   // depend on whoever drew before it — without this the home shows between the
   // rows of the list.
