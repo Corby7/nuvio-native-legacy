@@ -540,21 +540,16 @@ void cat_save_progress_ep(int index_, double posSeg, double durationSeg, int sea
   cat_save_progress_at(index_, posSeg, durationSeg, season, episode, 0, 1);
 }
 
-void cat_save_progress_at(int index_, double posSeg, double durationSeg,
-                          int season, int episode, long long whenMs, int origin) {
+// See the note on the declaration in catalog.h.
+int cat_save_progress_id(const char *imdb, double posSeg, double durationSeg,
+                         int season, int episode, long long whenMs, int origin) {
   char path[600], tmp[600], line[256], work[24];
   FILE *e, *s;
-  const CatItem *it;
-  int i;
-  if (durationSeg <= 1.0 || !dirWriting[0]) return;
-  i = cat_n(); if (i < 1) return;
-  index_ = ((index_ % i) + i) % i;
-  it = &items[index_];
-  if (!it->imdb[0]) return;
+  if (durationSeg <= 1.0 || !dirWriting[0] || !imdb) return 0;
 
   // THE LINE IS KEYED BY THE WORK, never by the composite id.
   //
-  // `it->imdb` is "tt123" on an item that came from a catalogue and
+  // `imdb` is "tt123" on an item that came from a catalogue and
   // "tt123:4:9" on one built for "Continue watching", and both name the same
   // series. The dedupe below used to compare the whole string, so the two
   // spellings never matched each other and the file accumulated a second line
@@ -567,14 +562,14 @@ void cat_save_progress_at(int index_, double posSeg, double durationSeg,
   //
   // The season and episode keep their own columns, which is where they are
   // reliable; see cat_progress_read.
-  snprintf(work, sizeof work, "%.*s", (int)strcspn(it->imdb, ":"), it->imdb);
-  if (!work[0]) return;
+  snprintf(work, sizeof work, "%.*s", (int)strcspn(imdb, ":"), imdb);
+  if (!work[0]) return 0;
   // A caller that does not know the episode but holds a composite id knows it
   // after all — it is in the id. This is what stops the sync, which learns
   // season and episode only when the account bothered to send them, from
   // writing 0/0 over an episode the id itself names.
   if (season <= 0 && episode <= 0) {
-    const char *dp = strchr(it->imdb, ':');
+    const char *dp = strchr(imdb, ':');
     if (dp) sscanf(dp + 1, "%d:%d", &season, &episode);
   }
 
@@ -584,7 +579,7 @@ void cat_save_progress_at(int index_, double posSeg, double durationSeg,
   snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
   snprintf(tmp, sizeof tmp, "%s/progress.tmp", dirWriting);
   s = fopen(tmp, "w");
-  if (!s) return;
+  if (!s) return 0;
   e = fopen(path, "r");
   if (e) {
     while (fgets(line, sizeof line, e)) {
@@ -631,6 +626,25 @@ void cat_save_progress_at(int index_, double posSeg, double durationSeg,
   // Write to a temporary and rename: a power cut mid-write would leave the file
   // half-written and the app would come up with no progress at all.
   rename(tmp, path);
+  return 1;
+}
+
+void cat_save_progress_at(int index_, double posSeg, double durationSeg,
+                          int season, int episode, long long whenMs, int origin) {
+  const CatItem *it;
+  int i;
+  i = cat_n(); if (i < 1) return;
+  index_ = ((index_ % i) + i) % i;
+  it = &items[index_];
+  if (!it->imdb[0]) return;
+  // The episode may only be in the composite id; the file write reads it from
+  // there, and the item below needs it too.
+  if (season <= 0 && episode <= 0) {
+    const char *dp = strchr(it->imdb, ':');
+    if (dp) sscanf(dp + 1, "%d:%d", &season, &episode);
+  }
+  if (!cat_save_progress_id(it->imdb, posSeg, durationSeg, season, episode,
+                            whenMs, origin)) return;
 
   items[index_].progress = cat_pct(posSeg, durationSeg);
   items[index_].remainingMin = (int)((durationSeg - posSeg) / 60.0 + 0.5);
@@ -851,6 +865,45 @@ int cat_row_grow(int r, const CatItem *v, int count) {
   ensureTracks(nAllocated);
   applyProgress(at, at + count);
   return count;
+}
+
+// See the note on the declaration in catalog.h.
+int cat_row_drop(int r, const char *imdb) {
+  static CatItem *garbage;
+  CatItem *new;
+  int k, at = -1, gone = 0, newN, w;
+  if (r < 0 || r >= nFilters || !imdb || !imdb[0] || n < 1) return 0;
+  for (k = 0; k < filters[r].n; k++) {
+    int i = filters[r].start + k;
+    if (i < n && sameTitle(items[i].imdb, imdb)) { if (at < 0) at = i; gone++; }
+  }
+  if (!gone || gone >= n) return 0;
+  newN = n - gone;
+  new = malloc(sizeof(CatItem) * (size_t)newN);
+  if (!new) return 0;
+  for (k = 0, w = 0; k < n; k++) {
+    int inRow = k >= filters[r].start && k < filters[r].start + filters[r].n;
+    if (inRow && sameTitle(items[k].imdb, imdb)) continue;
+    new[w++] = items[k];
+  }
+  // The same order as cat_row_grow, and for the same drawing thread: this runs
+  // between two frames, so nobody is mid-row when the windows move.
+  free(garbage);
+  garbage = items;
+  items = new;
+  nAllocated = newN;
+  n = newN;
+  filters[r].n -= gone;
+  for (k = 0; k < nFilters; k++)
+    if (k != r && filters[k].start > at) filters[k].start -= gone;
+  // An emptied row goes, rather than standing as a title over nothing.
+  if (filters[r].n < 1) {
+    memmove(&filters[r], &filters[r + 1], sizeof filters[0] * (size_t)(nFilters - r - 1));
+    nFilters--;
+  }
+  nEps = 0;
+  ensureTracks(nAllocated);
+  return gone;
 }
 
 // Reapplies progress.txt over the items in [from, to).
@@ -1094,6 +1147,38 @@ int cat_progress_read(CatProgress *out, int max) {
 }
 
 // See the note on the declaration in catalog.h.
+// See the note on the declaration in catalog.h.
+void cat_progress_mark_synced(const char *imdb, long long ms) {
+  char path[600], tmp[600], line[256];
+  FILE *e, *s;
+  if (!imdb || !imdb[0] || ms <= 0 || !dirWriting[0]) return;
+  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
+  snprintf(tmp, sizeof tmp, "%s/progress.tmp", dirWriting);
+  e = fopen(path, "r");
+  if (!e) return;
+  s = fopen(tmp, "w");
+  if (!s) { fclose(e); return; }
+  while (fgets(line, sizeof line, e)) {
+    char id[24];
+    double pos, duration;
+    int season, episode, origin;
+    long long when;
+    // Only the very line that was pushed: same work, same instant, still
+    // origin 1. Playback here since then carries a newer instant and stays 1.
+    if (sscanf(line, "%23s %lf %lf %d %d %lld %d", id, &pos, &duration,
+               &season, &episode, &when, &origin) == 7 &&
+        origin == 1 && when == ms && sameTitle(id, imdb)) {
+      fprintf(s, "%s\t%.0f\t%.0f\t%d\t%d\t%lld\t2\n", id, pos, duration,
+              season, episode, when);
+      continue;
+    }
+    fputs(line, s);
+  }
+  fclose(e);
+  fclose(s);
+  rename(tmp, path);
+}
+
 void cat_progress_remove(const char *imdb) {
   char path[600], tmp[600], line[256];
   FILE *e, *s;

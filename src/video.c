@@ -1518,10 +1518,10 @@ static void applyStyle(void) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"charEdgeType\":\"%s\"}",
              media, ed);
     call("setSubtitleCharacterEdge", b, soLog); }
-  if (style.delayMs) {
-    snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"sync\":%d}", media, style.delayMs);
-    call("setSubtitleSync", b, soLog);
-  }
+  // Sent at zero too: skipping it left the track at its last offset when the
+  // delay was stepped back to 0.0 s.
+  snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"sync\":%d}", media, style.delayMs);
+  call("setSubtitleSync", b, soLog);
 }
 
 void video_subtitle_style(const VideoSubtitleStyle *e) {

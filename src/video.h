@@ -183,7 +183,7 @@ typedef struct {
   int background;      // 0 none; 1..4 = dark 25/50/75/100%
   int position;    // 0..7  -> position -3..4 in the uMS
   int border;      // 0 none, 1 outline, 2 shadow
-  int delayMs;   // negative brings it forward
+  int delayMs;   // positive shows the subtitle later, negative earlier
   int opacity;  // 0..3 = text 100/75/50/25%
   int family;    // TxtFamilia; applied to the external overlay (OpenSubtitles)
 } VideoSubtitleStyle;

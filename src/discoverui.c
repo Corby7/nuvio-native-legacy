@@ -48,6 +48,7 @@ static int   wantsExit;
 static int   requestMenu;   // LEFT off the screen's left edge
 static int   request = -1;
 static float scrollY, scrollTarget, scrollV;
+static ScrollBar bar;
 // Whether the grid's scroll follows the focus. A card the Magic Remote's pointer
 // focused leaves it where it is: snapping that card's row to the top would slide
 // another under a pointer that had not moved. Any arrow, the wheel's included,
@@ -473,7 +474,7 @@ static void drawMenu(void) {
 // The grid. 252-wide posters, six across, the focused one scaled 1.05 from its
 // TOP edge with the 4px border on the INSIDE — "Android TV uses the inside
 // focus border, not an outer halo", says the stylesheet's own comment.
-static void drawGrid(void) {
+static void drawGrid(Uint32 now) {
   int n = gridN(), i;
   hasItemFocus = 0;
 
@@ -586,13 +587,15 @@ static void drawGrid(void) {
       }
     }
   gfx_opacity_group = 1.0f;
+  grid_bar_draw(&bar, (int)(scrollTarget / grid_line_step() + 0.5f),
+                (n + grid_cols() - 1) / grid_cols(), grid_line_step(),
+                NV_DSC_GRID_Y, NV_DSC_GRID_BOTTOM - NV_DSC_FADE, 1.0f, now);
   gfx_no_crop();
   pointer_no_clip();
 }
 
 void dui_draw(Uint32 now) {
   int p;
-  (void)now;
   // No background fill: main.c has already cleared to #0d0d0d, and a
   // full-screen layer thrown away per frame is the dominant cost on this GPU.
   // See the note in gfx.c.
@@ -621,7 +624,7 @@ void dui_draw(Uint32 now) {
     drawPicker(p);
     pointer_zone(r.x, r.y, r.w, r.h, pointPick, p, 0);
   }
-  drawGrid();
+  drawGrid(now);
   // LAST, over everything: an open list covers the grid and the pickers beside
   // it, and it carries a shadow that has to fall on them.
   drawMenu();

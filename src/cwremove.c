@@ -44,11 +44,40 @@ static void addKey(int season, int episode) {
   nKeys++;
 }
 
-static void *run(void *u) {
-  int okTrakt, okAccount;
+static int okAccount;
+
+static void *runAccount(void *u) {
   (void)u;
-  okTrakt = trakt_playback_remove(work);
+  // EVERY row the account has for this work, not only the ones progress.txt
+  // names. The file keeps one line per series, so it knew one episode; the
+  // account keeps one row per episode, and the rest survived the delete. They
+  // came straight back on the phone, and on this TV the moment the removal
+  // list was lost (a fresh install starts without it).
+  { static char remote[CW_KEYS_MAX][40];
+    int i, n = sync_progress_keys(work, remote, CW_KEYS_MAX);
+    for (i = 0; i < n; i++) {
+      int j, dup = 0;
+      for (j = 0; j < nKeys && !dup; j++) dup = !strcmp(keyBuf[j], remote[i]);
+      if (dup || nKeys == CW_KEYS_MAX) continue;
+      snprintf(keyBuf[nKeys], sizeof keyBuf[nKeys], "%s", remote[i]);
+      keys[nKeys] = keyBuf[nKeys];
+      nKeys++;
+    } }
   okAccount = sync_delete_progress(keys, nKeys);
+  return NULL;
+}
+
+static void *run(void *u) {
+  int okTrakt;
+  pthread_t account;
+  int split;
+  (void)u;
+  // The two sources side by side: they share nothing, and in a row the card
+  // waited for the sum of both (two round trips on the account side alone).
+  split = pthread_create(&account, NULL, runAccount, NULL) == 0;
+  if (!split) runAccount(NULL);
+  okTrakt = trakt_playback_remove(work);
+  if (split) pthread_join(account, NULL);
   printf("[cw] removed %s: trakt %s, account %s\n", work,
          okTrakt ? "ok" : "FAILED", okAccount ? "ok" : "FAILED");
   fflush(stdout);
@@ -96,6 +125,14 @@ void cw_remove_step(void) {
   localDoneAt = SDL_GetTicks();
   cat_cw_dismiss(work);
   cat_progress_remove(work);
+  // OFF THE ROW NOW, not when the rebuild below publishes: that is the whole
+  // home again, every catalogue included, and on the C3 it took ~20 s — all of
+  // it spent with the card sitting there circling.
+  { int r, nr = cat_n_rows();
+    for (r = 0; r < nr; r++) {
+      const CatRow *c = cat_row(r);
+      if (c && !strcmp(c->key, "continue_watching")) { cat_row_drop(r, work); break; }
+    } }
   // Built again now the remote copies are gone too: the row settles on what the
   // sources now say.
   disc_rebuild();

@@ -13,7 +13,9 @@
 // it answers "how far is the sofa from THIS screen".
 #ifndef NV_GRIDSIZE_H
 #define NV_GRIDSIZE_H
+#include <SDL2/SDL.h>
 #include "gfx.h"
+#include "scrollbar.h"
 
 #define GRID_COLS_MIN 4
 #define GRID_COLS_MAX 8
@@ -45,4 +47,11 @@ void  grid_cycle(void);
 // `alpha` fades all of it, for a header that comes in as a whole. Returns its
 // rectangle, so the screen can place what sits beside it.
 GfxRect grid_button_draw(float right, float y, float focus, float alpha);
+
+// The grid's scrollbar (scrollbar.h), segmented one per row, in the gutter to
+// the right of the grid. `row` is the row the scroll is going to, `rows` the
+// grid's count, `step` the row pitch; a grid that fits on one screen gets no
+// bar. Call once a frame, from the draw.
+void grid_bar_draw(ScrollBar *b, int row, int rows, float step, float top,
+                   float bottom, float alpha, Uint32 now);
 #endif

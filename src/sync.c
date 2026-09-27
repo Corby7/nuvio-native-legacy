@@ -73,6 +73,14 @@ typedef struct { char imdb[40]; double pos, duration; int temp, ep; long long ms
                  int origin; } ProgressItem;
 static ProgressItem progressRemote[SY_PROGRESS_MAX];
 static int nProgressRemote;
+// 1 when the last pull returned the account's WHOLE list — an array, not cut
+// short by SY_PROGRESS_MAX. Only then may a line missing from it be read as
+// "deleted on another device"; see pruneDeleted in sync_step.
+static int progressComplete;
+// What the last push put on the account, so the main thread can hand those
+// lines over to the account (origin 1 -> 2) once it has applied the pull.
+static struct { char imdb[40]; long long ms; } pushedMark[SY_PROGRESS_MAX];
+static int nPushedMark;
 
 // Counts of what has been pulled but the app does not consume yet. They exist so
 // the summary can tell the truth instead of saying "synced" without qualifying it.
@@ -331,6 +339,7 @@ static void pullProgress(void) {
   int st = 0, k = 0;
   const char *p;
 
+  progressComplete = 0;
   jsw_start(&w);
   jsw_obj_start(&w);
   jsw_ci(&w, "p_profile_id", profiles_active());
@@ -380,9 +389,37 @@ static void pullProgress(void) {
     progressRemote[k].ms = remoteInstantMs(p, f);
     k++;
   }
+  // Whole only when the body really was an array and the loop ran out of rows
+  // rather than out of room.
+  { const char *b = r;
+    while (*b == ' ' || *b == '\n' || *b == '\r' || *b == '\t') b++;
+    progressComplete = *b == '[' && !(p && k == SY_PROGRESS_MAX); }
   free(r);
   // Empty deletes nothing: the consumer only applies what arrived.
   nProgressRemote = k;
+}
+
+int sync_progress_keys(const char *work, char (*out)[40], int max) {
+  Jsw w;
+  char *r;
+  int st = 0, n = 0;
+  const char *p;
+  if (!work || !work[0] || max <= 0 || !session_loggedin()) return 0;
+  jsw_start(&w);
+  jsw_obj_start(&w);
+  jsw_ci(&w, "p_profile_id", profiles_active());
+  jsw_obj_end(&w);
+  r = session_rpc("sync_pull_watch_progress", jsw_text_final(&w), &st);
+  jsw_free(&w);
+  if (!ok2xx(r, st)) { free(r); return 0; }
+  for (p = js_root_array(r); p && n < max; p = js_next(js_end(p))) {
+    const char *f = js_end(p);
+    char id[40];
+    if (!js_text(p, f, "content_id", id, sizeof id) || strcmp(id, work)) continue;
+    if (js_text(p, f, "progress_key", out[n], sizeof out[n]) && out[n][0]) n++;
+  }
+  free(r);
+  return n;
 }
 
 // Reads the progress THIS device recorded. It is the only surface where the
@@ -457,11 +494,17 @@ static void pushProgress(void) {
   // permanently — with something this device made up. Neither has anything to
   // tell the account that the account does not already know: both came FROM it.
   // Playback here always qualifies, so nothing this TV actually did is lost.
+  //
+  // AND A LINE THAT CAME FROM THE ACCOUNT IS NEVER PUSHED BACK, instant or not.
+  // It has nothing to tell the account — and the push upserts, so re-sending a
+  // copy re-creates the row if another device has deleted it since. Every push
+  // (after any playback here) used to re-send every copy in the file, which is
+  // how a title removed from "Continue watching" on the phone came back.
   { int r, w;
     for (r = 0, w = 0; r < n; r++)
-      if (local[r].origin == 1 || local[r].ms > 0) { if (w != r) local[w] = local[r]; w++; }
+      if (local[r].origin == 1) { if (w != r) local[w] = local[r]; w++; }
     if (w != n) printf("[sync] %d local progress line(s) held back:"
-                       " no instant this device can vouch for\n", n - w);
+                       " copies of the account, not playback here\n", n - w);
     n = w; }
   if (n <= 0) return;
 
@@ -518,7 +561,16 @@ static void pushProgress(void) {
   r = session_rpc("sync_push_watch_progress", jsw_text_final(&w), &st);
   jsw_free(&w);
   if (!ok2xx(r, st)) printf("[sync] progress push failed (HTTP %d)\n", st);
-  else dirtyProgress = 0;
+  else {
+    dirtyProgress = 0;
+    // Now on the account: from here on the account's copy is the record. See
+    // the hand-over at the end of the progress block in sync_step.
+    for (i = 0; i < n && i < SY_PROGRESS_MAX; i++) {
+      snprintf(pushedMark[i].imdb, sizeof pushedMark[i].imdb, "%s", local[i].imdb);
+      pushedMark[i].ms = local[i].ms;
+    }
+    nPushedMark = n < SY_PROGRESS_MAX ? n : SY_PROGRESS_MAX;
+  }
   free(r);
 }
 
@@ -1124,8 +1176,23 @@ void sync_step(unsigned nowMs) {
     for (i = 0; i < nProgressRemote; i++) {
       int idx = cat_index_by_imdb(progressRemote[i].imdb), j;
       long long local = 0;
-      int localOrigin = 0;
-      if (idx < 0) continue;
+      int localOrigin = 0, newer = 0;
+      // ONE ROW PER SERIES, THE NEWEST. The account keeps a row per EPISODE,
+      // but progress.txt keeps one line per work, and every write below replaces
+      // that line. Applying them all in turn let whichever row came LAST win —
+      // and the RPC answers newest first, so that was the oldest episode.
+      // Measured on Trigun: E8 at 2 min, then E7, E6, E5, E3, and finally an
+      // 8-of-8-second S1E1 from days earlier, which is what landed on disk. Its
+      // duration is under the row's 60 s floor, so the series dropped out of
+      // "Continue watching"; when it did show, it resumed S1E1.
+      for (j = 0; j < nProgressRemote; j++)
+        if (j != i && sameWorkId(progressRemote[j].imdb, progressRemote[i].imdb) &&
+            (progressRemote[j].ms > progressRemote[i].ms ||
+             (progressRemote[j].ms == progressRemote[i].ms && j < i))) {
+          newer = 1;
+          break;
+        }
+      if (newer) continue;
       // THE REMOTE ROW ONLY LOSES TO PLAYBACK THAT HAPPENED HERE, AND ONLY WHEN
       // THAT IS NEWER.
       //
@@ -1156,14 +1223,55 @@ void sync_step(unsigned nowMs) {
       // the version without season/episode would lose which episode the person
       // stopped on, which is the information that makes the "continue watching"
       // row worth anything on a series.
-      cat_save_progress_at(idx, progressRemote[i].pos, progressRemote[i].duration,
-                              progressRemote[i].temp, progressRemote[i].ep,
-                              progressRemote[i].ms, 2);
+      //
+      // A title the catalogue has not loaded still gets its line: "Continue
+      // watching" is built from the file, not from the catalogue. Skipping it
+      // is what kept Trigun's stale line frozen — that line hid the series from
+      // the row, so it was never loaded, so the sync never replaced the line.
+      if (idx >= 0)
+        cat_save_progress_at(idx, progressRemote[i].pos, progressRemote[i].duration,
+                                progressRemote[i].temp, progressRemote[i].ep,
+                                progressRemote[i].ms, 2);
+      else if (!cat_save_progress_id(progressRemote[i].imdb, progressRemote[i].pos,
+                                     progressRemote[i].duration, progressRemote[i].temp,
+                                     progressRemote[i].ep, progressRemote[i].ms, 2))
+        continue;
       applied++;
     }
-    printf("[sync] %d of %d progress entries matched the catalog"
+    printf("[sync] %d of %d progress entries applied"
            " (%d older than what is here)\n", applied, nProgressRemote, kept);
+
+    // DELETED ON ANOTHER DEVICE: a copy of the account (origin 2) whose work
+    // the account no longer has at all goes too. The pull only ever ADDED, so a
+    // title removed from "Continue watching" on the phone lived on here for good.
+    // Playback here (origin 1) is never dropped this way — it may simply not be
+    // pushed yet. Only a whole pull may judge; `mine` was read before the rows
+    // above were applied, so nothing written this pass is in it.
+    if (progressComplete) {
+      int dropped = 0;
+      for (i = 0; i < nMine; i++) {
+        int j, present = 0;
+        if (mine[i].origin != 2) continue;
+        for (j = 0; j < nProgressRemote && !present; j++)
+          present = sameWorkId(mine[i].imdb, progressRemote[j].imdb);
+        if (present) continue;
+        cat_progress_remove(mine[i].imdb);
+        dropped++;
+      }
+      if (dropped) printf("[sync] %d progress line(s) gone from the account: dropped\n", dropped);
+    }
     nProgressRemote = 0;
+  }
+  progressComplete = 0;
+  // The lines the push just put on the account are the account's now (origin 1
+  // -> 2), so a delete made elsewhere later is followed here and never undone
+  // by a second push. AFTER the apply above: the pull ran before the push, and
+  // until this point origin 1 is what kept that older pull from overwriting them.
+  if (nPushedMark) {
+    int i;
+    for (i = 0; i < nPushedMark; i++)
+      cat_progress_mark_synced(pushedMark[i].imdb, pushedMark[i].ms);
+    nPushedMark = 0;
   }
   // The account library: a title saved or removed on another device changes
   // which cards the catalogue has to carry.

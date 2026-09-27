@@ -83,3 +83,18 @@ GfxRect grid_button_draw(float right, float y, float focus, float alpha) {
                  r.y + (r.h - (float)t.h) * 0.5f, alpha);
   return r;
 }
+
+// Centred in Library's and Discover's 64px right gutter (NV_DSC_X), the only
+// room right of those grids; the collection grid's gutter is wider still.
+#define GRID_BAR_AXIS (NV_SCREEN_W - NV_DSC_X * 0.5f)
+
+void grid_bar_draw(ScrollBar *b, int row, int rows, float step, float top,
+                   float bottom, float alpha, Uint32 now) {
+  // ONE SCREENFUL: nothing to report.
+  if (rows < 1 || (float)rows * step - (step - grid_poster_h()) <= NV_SCREEN_H - top) {
+    b->seen = 0;
+    return;
+  }
+  scrollbar_rows(b, GRID_BAR_AXIS, top, bottom, row, rows,
+                 (NV_SCREEN_H - top) / step, alpha, now);
+}

@@ -852,10 +852,12 @@ static void optionText(int i, int ordinal, char *main, size_t mSize,
 // Eight tiles, one per setting. Every change applies AT ONCE — the viewer has to
 // SEE the subtitle change in order to choose it.
 #define FX_N_TILE 8
-enum { ST_SIZE, ST_FONT, ST_COLOUR, ST_OPACITY, ST_BACKGROUND, ST_POSITION,
-       ST_EDGE, ST_DELAY };
+// Delay leads: an out-of-sync subtitle is the errand that brings you here most,
+// and the sheet opens with the cursor on the first tile.
+enum { ST_DELAY, ST_SIZE, ST_FONT, ST_COLOUR, ST_OPACITY, ST_BACKGROUND,
+       ST_POSITION, ST_EDGE };
 static const char *const ST_LABEL[FX_N_TILE] = {
-  "SIZE", "FONT", "COLOUR", "OPACITY", "BACKGROUND", "HEIGHT", "EDGE", "DELAY"
+  "DELAY", "SIZE", "FONT", "COLOUR", "OPACITY", "BACKGROUND", "HEIGHT", "EDGE"
 };
 static const char *const ST_BACKGROUND_LABEL[5] = { "None", "Dark 25%", "Dark 50%",
                                                     "Dark 75%", "Solid" };
