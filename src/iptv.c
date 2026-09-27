@@ -1,12 +1,14 @@
 // Live TV's source, loader and small persistent state. See iptv.h.
 #include "iptv.h"
 #include "data.h"
+#include "js.h"
 #include "net.h"
 #include "proxy.h"
 #include <SDL2/SDL.h>
 #include <ctype.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -122,6 +124,102 @@ static void guideUrl(const IptvSource *s, const IptvList *l, char *dst, size_t n
   snprintf(dst, n, "%s", l && l->epgUrl[0] ? l->epgUrl : "");
 }
 
+// A query parameter of `url`, percent-decoded. 0 when absent or empty.
+static int queryParam(const char *url, const char *key, char *dst, size_t n) {
+  const char *q = strchr(url, '?');
+  size_t kl = strlen(key), k = 0;
+  if (!q || !n) return 0;
+  for (q++; *q; ) {
+    const char *end = q + strcspn(q, "&#");
+    if ((size_t)(end - q) > kl && !strncmp(q, key, kl) && q[kl] == '=') {
+      for (q += kl + 1; q < end && k + 1 < n; q++) {
+        unsigned v;
+        if (*q == '%' && q + 2 < end && sscanf(q + 1, "%2x", &v) == 1) { dst[k++] = (char)v; q += 2; }
+        else dst[k++] = *q == '+' ? ' ' : *q;
+      }
+      dst[k] = 0;
+      return k > 0;
+    }
+    if (*end != '&') break;
+    q = end + 1;
+  }
+  return 0;
+}
+
+// AN XTREAM LOGIN PASTED AS A PLAYLIST. Providers hand out
+// "http://host/get.php?username=…&password=…&type=m3u_plus&output=ts" as "your
+// M3U link", and people paste it as one. It is an Xtream login, and loading it
+// as one reaches the API that panels which refuse get.php still answer.
+static int xtreamFromUrl(const IptvSource *in, IptvSource *out) {
+  const char *g;
+  IptvSource s;
+  if (in->kind != IPTV_SRC_M3U || !(g = strstr(in->url, "/get.php?"))) return 0;
+  memset(&s, 0, sizeof s);
+  s.kind = IPTV_SRC_XTREAM;
+  if (!queryParam(in->url, "username", s.user, sizeof s.user) ||
+      !queryParam(in->url, "password", s.pass, sizeof s.pass)) return 0;
+  if ((size_t)(g - in->url) >= sizeof s.server) return 0;
+  memcpy(s.server, in->url, (size_t)(g - in->url));
+  s.server[g - in->url] = 0;
+  snprintf(s.epg, sizeof s.epg, "%s", in->epg);
+  *out = s;
+  return 1;
+}
+
+// THE XTREAM API: the account, then the live categories and streams, written
+// out as the playlist get.php would have served (iptv_xtream_m3u). NULL when
+// the API is not there or refused; `why` then says so when the answer was
+// specific (a refused login, an expired account), and stays empty otherwise so
+// get.php can be tried.
+static char *xtreamApi(const IptvSource *src, char *why, size_t n) {
+  char base[600], u[400], p[400], api[1400], url[1500], state[40] = "", ext[8] = "m3u8";
+  char *acct, *cats, *streams, *m3u;
+  int st = 0;
+  why[0] = 0;
+  serverBase(src->server, base, sizeof base);
+  urlEncode(src->user, u, sizeof u);
+  urlEncode(src->pass, p, sizeof p);
+  snprintf(api, sizeof api, "%s/player_api.php?username=%s&password=%s", base, u, p);
+  acct = net_download_st(api, IPTV_PLAYLIST_TIMEOUT_S, NULL, &st);
+  if (!acct || st >= 400 || !strstr(acct, "user_info")) {
+    printf("[iptv] xtream api: HTTP %d, %s\n", st, acct ? "not an account answer" : "no answer");
+    free(acct);
+    return NULL;
+  }
+  { int auth = (int)js_num(acct, NULL, "auth", -1);
+    const char *f = strstr(acct, "\"allowed_output_formats\"");
+    const char *fe = f ? strchr(f, ']') : NULL;
+    js_text(acct, NULL, "status", state, sizeof state);
+    // HLS when the account allows it, for the reason playlistUrl gives; raw TS
+    // when that is all it may use.
+    if (f && fe) {
+      char list[128];
+      size_t k = (size_t)(fe - f) < sizeof list - 1 ? (size_t)(fe - f) : sizeof list - 1;
+      memcpy(list, f, k); list[k] = 0;
+      if (!strstr(list, "\"m3u8\"") && strstr(list, "\"ts\"")) snprintf(ext, sizeof ext, "ts");
+    }
+    printf("[iptv] xtream api: auth %d, status '%s', streams as .%s\n", auth, state, ext);
+    free(acct);
+    if (auth == 0) { snprintf(why, n, "The server refused this login \xE2\x80\x94 check the username and password"); return NULL; }
+    if (!strcasecmp(state, "Expired")) { snprintf(why, n, "This IPTV subscription has expired"); return NULL; }
+    if (state[0] && strcasecmp(state, "Active")) {
+      snprintf(why, n, "The provider says this account is %s", state);
+      return NULL;
+    } }
+  snprintf(url, sizeof url, "%s&action=get_live_categories", api);
+  cats = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &st);
+  if (cats && st >= 400) { free(cats); cats = NULL; }
+  snprintf(url, sizeof url, "%s&action=get_live_streams", api);
+  streams = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &st);
+  if (streams && st >= 400) { free(streams); streams = NULL; }
+  // The stream addresses carry the login as the panel knows it, unencoded, the
+  // way get.php writes them.
+  m3u = streams ? iptv_xtream_m3u(streams, cats, base, src->user, src->pass, ext) : NULL;
+  printf("[iptv] xtream api: %s\n", m3u ? "streams read" : streams ? "streams unreadable" : "no streams");
+  free(cats); free(streams);
+  return m3u;
+}
+
 static void updateLabel(void) {
   char host[80] = "";
   if (source.kind == IPTV_SRC_XTREAM) hostOf(source.server, host, sizeof host);
@@ -175,6 +273,12 @@ static void describeFailure(const IptvSource *src, const char *body, int status,
                                                   : "The server refused access (%d)", status);
     return;
   }
+  // Xtream-style panels answer 884, 458 and the like when they turn an app
+  // away: a blocked playlist download, a blocked device, too many connections.
+  if (status >= 600) {
+    snprintf(dst, n, "The provider refused the playlist download (%d)", status);
+    return;
+  }
   if (status >= 500) { snprintf(dst, n, "The server had an error (%d) \xE2\x80\x94 try again later", status); return; }
   if (status >= 400) { snprintf(dst, n, "The server answered %d", status); return; }
   // It answered, with something that is not a playlist. A guide is the usual
@@ -195,6 +299,8 @@ static void *loader(void *arg) {
   IptvList *l;
   int fromCache = 0;
   free(arg);
+  if (xtreamFromUrl(&job.src, &job.src))
+    printf("[iptv] the playlist address is an Xtream login; loading it as one\n");
 
   // Stage 0: the cached playlist, so the screen has channels at once.
   if (!job.hasList && (cached = data_read(IPTV_CACHE_FILE))) {
@@ -210,15 +316,21 @@ static void *loader(void *arg) {
   // failure it was: "couldn't reach" for a 404 sends people checking their
   // network when the address is what is wrong.
   setStatus("Loading channels\xE2\x80\xA6");
-  playlistUrl(&job.src, url, sizeof url);
   { int status = 0;
-    text = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &status);
-    if (text && status >= 400) { free(text); text = NULL; }
+    char why[160] = "";
+    text = NULL;
+    // Xtream: the API first, get.php only when there is no API answer at all.
+    if (job.src.kind == IPTV_SRC_XTREAM) text = xtreamApi(&job.src, why, sizeof why);
+    if (!text && !why[0]) {
+      playlistUrl(&job.src, url, sizeof url);
+      text = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &status);
+      if (text && status >= 400) { free(text); text = NULL; }
+    }
     if (job.gen != atomic_load(&generation)) goto out;
     l = text ? parsePlaylist(text) : NULL;
     if (!l) {
-      char why[160];
-      describeFailure(&job.src, text, status, !text && net_timed_out(), why, sizeof why);
+      if (!why[0])
+        describeFailure(&job.src, text, status, !text && net_timed_out(), why, sizeof why);
       printf("[iptv] playlist failed: HTTP %d, %s\n", status, why);
       if (fromCache) {
         setStatus("Offline \xC2\xB7 showing the saved channel list");

@@ -275,6 +275,56 @@ static void testGunzip(const char *path) {
   free(raw);
 }
 
+// Xtream's JSON as panels send it: PHP's json_encode escapes every non-ASCII
+// character and every slash, ids arrive as numbers or as strings, nulls where a
+// field is missing, and objects nested where nothing here looks.
+static void testXtream(void) {
+  static const char *CATS =
+    "[{\"category_id\":\"1\",\"category_name\":\"T\\u00fcrkiye | Ulusal\",\"parent_id\":0},"
+    " {\"category_id\":\"2\",\"category_name\":\"Sport \\\"HD\\\"\",\"parent_id\":0}]";
+  static const char *STREAMS =
+    "[{\"num\":1,\"name\":\"TRT 1 \\ud83d\\udcfa\",\"stream_type\":\"live\",\"stream_id\":1234,"
+    "\"stream_icon\":\"http:\\/\\/logos.example\\/trt1.png\",\"epg_channel_id\":\"trt1.tr\","
+    "\"added\":\"1700000000\",\"category_id\":\"1\",\"tv_archive\":1,\"tv_archive_duration\":\"3\","
+    "\"extra\":{\"name\":\"not this\",\"list\":[1,{\"a\":\"]\"}]}},\n"
+    " {\"num\":\"2\",\"name\":\"Sky Sports News, HD\",\"stream_id\":\"77\",\"stream_icon\":\"\","
+    "\"epg_channel_id\":null,\"category_id\":\"2\",\"tv_archive\":0,\"tv_archive_duration\":0},"
+    " {\"num\":3,\"name\":\"\",\"stream_id\":5},"
+    " {\"num\":4,\"name\":\"No group\",\"stream_id\":9,\"category_id\":\"99\"}]";
+  IptvList l;
+  char *m3u = iptv_xtream_m3u(STREAMS, CATS, "http://p.example:8080", "user", "pass", "m3u8");
+  assert(m3u);
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, m3u) == 3);             // the nameless one is dropped
+  assert(!strcmp(l.ch[0].name, "TRT 1 \xF0\x9F\x93\xBA"));   // a surrogate pair, whole
+  assert(!strcmp(l.ch[0].url, "http://p.example:8080/live/user/pass/1234.m3u8"));
+  assert(!strcmp(l.ch[0].logo, "http://logos.example/trt1.png"));
+  assert(!strcmp(l.ch[0].tvgId, "trt1.tr"));
+  assert(!strcmp(l.ch[0].group, "T\xC3\xBCrkiye | Ulusal"));
+  assert(l.ch[0].number == 1 && l.ch[0].catchupDays == 3);
+  // A comma in the name survives as a low comma; a quote in a group as '.
+  assert(!strcmp(l.ch[1].name, "Sky Sports News\xE2\x80\x9A HD"));
+  assert(!strcmp(l.ch[1].group, "Sport 'HD'"));
+  assert(!strcmp(l.ch[1].url, "http://p.example:8080/live/user/pass/77.m3u8"));
+  assert(l.ch[1].number == 2 && l.ch[1].catchupDays == 0 && !l.ch[1].tvgId[0]);
+  assert(!strcmp(l.ch[2].name, "No group") && !l.ch[2].group[0]);
+  iptv_list_free(&l);
+  free(m3u);
+  // Raw TS when that is what the account allows; no categories at all.
+  m3u = iptv_xtream_m3u(STREAMS, NULL, "http://p.example", "u", "p", "ts");
+  assert(m3u && strstr(m3u, "http://p.example/live/u/p/1234.ts\n"));
+  free(m3u);
+  // Not an array: an expired account's object, an HTML page.
+  assert(!iptv_xtream_m3u("{\"user_info\":{\"auth\":0}}", NULL, "h", "u", "p", "m3u8"));
+  assert(!iptv_xtream_m3u("<html>884</html>", NULL, "h", "u", "p", "m3u8"));
+  // An empty array is a playlist with no channels, which the loader reports.
+  m3u = iptv_xtream_m3u("[]", "[]", "h", "u", "p", "m3u8");
+  iptv_list_init(&l);
+  assert(m3u && iptv_parse_m3u(&l, m3u) == 0);
+  iptv_list_free(&l);
+  free(m3u);
+}
+
 int main(int argc, char **argv) {
   IptvList l;
   if (argc > 3 && !strcmp(argv[1], "--dump-xml")) {
@@ -294,7 +344,8 @@ int main(int argc, char **argv) {
   iptv_list_free(&l);
   testTagsAndIcons();
   testScale();
+  testXtream();
   if (argc > 1) testGunzip(argv[1]);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; gzip.");
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; gzip.");
   return 0;
 }

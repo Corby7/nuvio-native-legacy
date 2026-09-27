@@ -783,3 +783,260 @@ char *iptv_gunzip(const char *in, long n, long *outN) {
   if (outN) *outN = len;
   return out;
 }
+
+// --- Xtream Codes' JSON API ----------------------------------------------------------
+// A small reader of its own rather than js.h: that one turns \uXXXX into a
+// space, which is right for its synopses and wrong for a channel called
+// "Türkiye 1".
+static const char *jwhite(const char *p) {
+  while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+  return p;
+}
+
+static unsigned jhex4(const char *p) {
+  unsigned v = 0;
+  for (int i = 0; i < 4; i++) {
+    int c = p[i], d = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                    : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    if (d < 0) return 0xFFFFFFFFu;
+    v = v * 16 + (unsigned)d;
+  }
+  return v;
+}
+
+static size_t jutf8(unsigned cp, char *o) {
+  if (cp < 0x80) { o[0] = (char)cp; return 1; }
+  if (cp < 0x800) { o[0] = (char)(0xC0 | cp >> 6); o[1] = (char)(0x80 | (cp & 63)); return 2; }
+  if (cp < 0x10000) {
+    o[0] = (char)(0xE0 | cp >> 12); o[1] = (char)(0x80 | (cp >> 6 & 63));
+    o[2] = (char)(0x80 | (cp & 63)); return 3;
+  }
+  o[0] = (char)(0xF0 | cp >> 18); o[1] = (char)(0x80 | (cp >> 12 & 63));
+  o[2] = (char)(0x80 | (cp >> 6 & 63)); o[3] = (char)(0x80 | (cp & 63)); return 4;
+}
+
+// The string at `p` (on its opening quote), decoded into dst and cut to fit on
+// a character boundary. Returns the position after the closing quote, NULL
+// when malformed.
+static const char *jstring(const char *p, char *dst, size_t n) {
+  size_t k = 0;
+  int full = 0;
+  if (*p != '"') return NULL;
+  for (p++; *p && *p != '"'; ) {
+    char tmp[4];
+    size_t w = 1;
+    if (*p == '\\') {
+      p++;
+      switch (*p) {
+        case 'n': case 'r': case 't': case 'b': case 'f': tmp[0] = ' '; p++; break;
+        case 'u': {
+          unsigned cp = jhex4(p + 1);
+          if (cp == 0xFFFFFFFFu) return NULL;
+          p += 5;
+          if (cp >= 0xD800 && cp < 0xDC00 && p[0] == '\\' && p[1] == 'u') {
+            unsigned lo = jhex4(p + 2);
+            if (lo >= 0xDC00 && lo < 0xE000) { cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00); p += 6; }
+          }
+          if (cp >= 0xD800 && cp < 0xE000) cp = 0xFFFD;   // a lone half
+          if (cp < 0x20) cp = ' ';
+          w = jutf8(cp, tmp);
+          break;
+        }
+        case 0: return NULL;
+        default: tmp[0] = *p++;   // \" \\ \/
+      }
+    } else {
+      tmp[0] = *p++;
+    }
+    // Whole characters only, and nothing after the first that does not fit:
+    // half a character would show as garbage.
+    if (dst && !full) { if (k + w < n) { memcpy(dst + k, tmp, w); k += w; } else full = 1; }
+  }
+  if (*p != '"') return NULL;
+  if (dst && n) dst[k] = 0;
+  return p + 1;
+}
+
+// Past any value at `p`. NULL when malformed.
+static const char *jskip(const char *p) {
+  p = jwhite(p);
+  if (*p == '"') return jstring(p, NULL, 0);
+  if (*p == '{' || *p == '[') {
+    int depth = 0;
+    for (; *p; p++) {
+      if (*p == '"') { if (!(p = jstring(p, NULL, 0))) return NULL; p--; continue; }
+      if (*p == '{' || *p == '[') depth++;
+      else if ((*p == '}' || *p == ']') && --depth == 0) return p + 1;
+    }
+    return NULL;
+  }
+  while (*p && *p != ',' && *p != '}' && *p != ']') p++;
+  return p;
+}
+
+// A scalar at `p` as text: a string decoded, a number or literal as written
+// ("null" and "false" as empty). Returns the position after it.
+static const char *jscalar(const char *p, char *dst, size_t n) {
+  const char *s;
+  p = jwhite(p);
+  dst[0] = 0;
+  if (*p == '"') return jstring(p, dst, n);
+  if (*p == '{' || *p == '[') return jskip(p);
+  s = p;
+  while (*p && *p != ',' && *p != '}' && *p != ']' && !isspace((unsigned char)*p)) p++;
+  if (!(p - s == 4 && !strncmp(s, "null", 4)) && !(p - s == 5 && !strncmp(s, "false", 5))) {
+    size_t k = (size_t)(p - s) < n - 1 ? (size_t)(p - s) : n - 1;
+    memcpy(dst, s, k); dst[k] = 0;
+  }
+  return p;
+}
+
+// Calls `fn` for every object in the root array, with its members as a flat
+// list of key/value pairs (scalars only; nested values are skipped).
+#define XT_FIELDS 8
+typedef struct { const char *key; char *val; size_t n; } XtField;
+
+static int jeach(const char *json, XtField *f, int nf, void (*fn)(void *, XtField *), void *u) {
+  const char *p = jwhite(json);
+  int count = 0;
+  if (*p != '[') return -1;
+  p = jwhite(p + 1);
+  while (*p && *p != ']') {
+    if (*p == '{') {
+      for (int i = 0; i < nf; i++) f[i].val[0] = 0;
+      p = jwhite(p + 1);
+      while (*p && *p != '}') {
+        char key[40];
+        int hit = -1;
+        if (!(p = jstring(p, key, sizeof key))) return count;
+        p = jwhite(p);
+        if (*p != ':') return count;
+        p = jwhite(p + 1);
+        for (int i = 0; i < nf; i++) if (!strcmp(key, f[i].key)) { hit = i; break; }
+        p = hit >= 0 ? jscalar(p, f[hit].val, f[hit].n) : jskip(p);
+        if (!p) return count;
+        p = jwhite(p);
+        if (*p == ',') p = jwhite(p + 1);
+      }
+      if (*p != '}') return count;
+      p++;
+      fn(u, f);
+      count++;
+    } else if (!(p = jskip(p))) {
+      return count;
+    }
+    p = jwhite(p);
+    if (*p == ',') p = jwhite(p + 1);
+  }
+  return count;
+}
+
+typedef struct { char *p; size_t n, cap; int bad; } XtBuf;
+static void xput(XtBuf *b, const char *s, size_t k) {
+  if (b->bad) return;
+  if (b->n + k + 1 > b->cap) {
+    size_t cap = b->cap ? b->cap : 65536;
+    char *q;
+    while (b->n + k + 1 > cap) cap *= 2;
+    if (!(q = realloc(b->p, cap))) { b->bad = 1; return; }
+    b->p = q; b->cap = cap;
+  }
+  memcpy(b->p + b->n, s, k);
+  b->n += k;
+  b->p[b->n] = 0;
+}
+static void xputs(XtBuf *b, const char *s) { xput(b, s, strlen(s)); }
+// An attribute value or a name: no quote to end the attribute early, no line
+// break to end the entry, and in a name no comma, since the display name is
+// what follows the last one.
+static void xputClean(XtBuf *b, const char *s, int name) {
+  for (; *s; s++) {
+    if (*s == '"') xputs(b, "'");
+    else if (*s == '\n' || *s == '\r' || *s == '\t') xputs(b, " ");
+    else if (name && *s == ',') xputs(b, "\xE2\x80\x9A");   // U+201A, a low comma
+    else xput(b, s, 1);
+  }
+}
+
+typedef struct { char **id, **name; int n, cap; } XtCats;
+static void addCat(void *u, XtField *f) {
+  XtCats *c = u;
+  if (!f[0].val[0]) return;
+  if (c->n == c->cap) {
+    int cap = c->cap ? c->cap * 2 : 64;
+    char **a = realloc(c->id, cap * sizeof *a), **b;
+    if (!a) return;
+    c->id = a;
+    if (!(b = realloc(c->name, cap * sizeof *b))) return;
+    c->name = b; c->cap = cap;
+  }
+  c->id[c->n] = strdup(f[0].val);
+  c->name[c->n] = strdup(f[1].val);
+  if (c->id[c->n] && c->name[c->n]) c->n++;
+  else { free(c->id[c->n]); free(c->name[c->n]); }
+}
+
+typedef struct { XtBuf out; XtCats cats; const char *base, *user, *pass, *ext; } XtJob;
+enum { XS_NAME, XS_ID, XS_ICON, XS_EPG, XS_CAT, XS_NUM, XS_ARCHIVE, XS_ARCHIVE_DAYS };
+static void addStream(void *u, XtField *f) {
+  XtJob *j = u;
+  const char *group = "";
+  int num = atoi(f[XS_NUM].val), days = atoi(f[XS_ARCHIVE_DAYS].val);
+  char line[64];
+  if (!f[XS_ID].val[0] || !f[XS_NAME].val[0]) return;
+  for (int i = 0; i < j->cats.n; i++)
+    if (!strcmp(j->cats.id[i], f[XS_CAT].val)) { group = j->cats.name[i]; break; }
+  xputs(&j->out, "#EXTINF:-1 tvg-id=\"");
+  xputClean(&j->out, f[XS_EPG].val, 0);
+  xputs(&j->out, "\" tvg-name=\"");
+  xputClean(&j->out, f[XS_NAME].val, 0);
+  xputs(&j->out, "\" tvg-logo=\"");
+  xputClean(&j->out, f[XS_ICON].val, 0);
+  xputs(&j->out, "\" group-title=\"");
+  xputClean(&j->out, group, 0);
+  xputs(&j->out, "\"");
+  if (num > 0) { snprintf(line, sizeof line, " tvg-chno=\"%d\"", num); xputs(&j->out, line); }
+  if (atoi(f[XS_ARCHIVE].val) && days > 0) {
+    snprintf(line, sizeof line, " catchup-days=\"%d\"", days);
+    xputs(&j->out, line);
+  }
+  xputs(&j->out, ",");
+  xputClean(&j->out, f[XS_NAME].val, 1);
+  xputs(&j->out, "\n");
+  xputs(&j->out, j->base); xputs(&j->out, "/live/");
+  xputs(&j->out, j->user); xputs(&j->out, "/");
+  xputs(&j->out, j->pass); xputs(&j->out, "/");
+  xputClean(&j->out, f[XS_ID].val, 0);
+  xputs(&j->out, "."); xputs(&j->out, j->ext); xputs(&j->out, "\n");
+}
+
+char *iptv_xtream_m3u(const char *streams, const char *categories, const char *base,
+                      const char *user, const char *pass, const char *ext) {
+  XtJob j;
+  char v[XT_FIELDS][512];
+  int n;
+  memset(&j, 0, sizeof j);
+  j.base = base; j.user = user; j.pass = pass; j.ext = ext && *ext ? ext : "m3u8";
+  if (!streams) return NULL;
+  if (categories) {
+    XtField cf[2] = { { "category_id", v[0], sizeof v[0] }, { "category_name", v[1], sizeof v[1] } };
+    jeach(categories, cf, 2, addCat, &j.cats);
+  }
+  { XtField sf[XT_FIELDS] = {
+      [XS_NAME] = { "name", v[0], sizeof v[0] },
+      [XS_ID] = { "stream_id", v[1], sizeof v[1] },
+      [XS_ICON] = { "stream_icon", v[2], sizeof v[2] },
+      [XS_EPG] = { "epg_channel_id", v[3], sizeof v[3] },
+      [XS_CAT] = { "category_id", v[4], sizeof v[4] },
+      [XS_NUM] = { "num", v[5], sizeof v[5] },
+      [XS_ARCHIVE] = { "tv_archive", v[6], sizeof v[6] },
+      [XS_ARCHIVE_DAYS] = { "tv_archive_duration", v[7], sizeof v[7] },
+    };
+    xputs(&j.out, "#EXTM3U\n");
+    n = jeach(streams, sf, XT_FIELDS, addStream, &j);
+  }
+  for (int i = 0; i < j.cats.n; i++) { free(j.cats.id[i]); free(j.cats.name[i]); }
+  free(j.cats.id); free(j.cats.name);
+  if (n < 0 || j.out.bad) { free(j.out.p); return NULL; }
+  return j.out.p;
+}

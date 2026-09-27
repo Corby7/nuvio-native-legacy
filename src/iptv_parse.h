@@ -90,6 +90,22 @@ int iptv_programme_after(const IptvList *l, int ch, long long t);
 // libz; *outN gets the size.
 char *iptv_gunzip(const char *in, long n, long *outN);
 
+// XTREAM CODES' JSON API AS A PLAYLIST. Many panels refuse get.php (the M3U
+// download) and answer only player_api.php, the API every IPTV app uses: the
+// live streams (`action=get_live_streams`, a root array of objects) and their
+// categories (`action=get_live_categories`). This writes the M3U text get.php
+// would have given, so everything after the download — the cache, the guide,
+// the channel indices — is the same code either way.
+//
+// Each stream becomes base/live/user/pass/<stream_id>.<ext>, with its name,
+// stream_icon, epg_channel_id (as tvg-id), category name (as group-title), num
+// (as tvg-chno) and tv_archive_duration (as catchup-days). JSON strings are
+// fully decoded, \uXXXX and surrogate pairs included: these names are
+// Arabic, Greek, Turkish as often as English. `categories` may be NULL.
+// Returns a malloc'd playlist, or NULL when `streams` is not an array.
+char *iptv_xtream_m3u(const char *streams, const char *categories, const char *base,
+                      const char *user, const char *pass, const char *ext);
+
 // Decodes XML entities (&amp; &#233; &#x2019; …) in place, into UTF-8.
 void iptv_xml_unescape(char *s);
 
