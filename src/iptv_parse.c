@@ -811,6 +811,59 @@ static int bareName(const char *s, char *dst, size_t size) {
   return cut && n;
 }
 
+// A LOOSE KEY for a channel name, the last resort after the name as written and
+// bareName: lower case, letters and digits only, with what IPTV playlists hang
+// on a name and guides do not — a country tag in front ("UK: ", "UK | ",
+// "|UK| "), anything in square brackets, and quality words anywhere (HD, FHD,
+// UHD, 4K, HEVC, 1080p, 50fps…). "UK: SKY SPORTS F1 UHD" and the guide's "Sky
+// Sports F1" both become "skysportsf1". A "+1" keeps its 1, and "(East)" its
+// east: those really are other schedules. Bytes past ASCII are kept as they
+// are. Returns 1 when a key is left.
+static int qualityWord(const char *w, size_t n) {
+  static const char *words[] = { "hd", "fhd", "uhd", "sd", "hq", "4k", "8k", "hevc", "h264",
+                                 "h265", "hdr", "hdr10", "raw", "vip", "backup" };
+  size_t d = 0;
+  for (size_t i = 0; i < sizeof words / sizeof *words; i++)
+    if (strlen(words[i]) == n && !strncasecmp(w, words[i], n)) return 1;
+  while (d < n && isdigit((unsigned char)w[d])) d++;
+  if (d && d + 1 == n && (w[d] == 'p' || w[d] == 'i' || w[d] == 'P' || w[d] == 'I')) return 1;
+  if (d && d + 3 == n && !strncasecmp(w + d, "fps", 3)) return 1;
+  return 0;
+}
+
+static int looseName(const char *s, char *dst, size_t size) {
+  size_t k = 0;
+  const char *p = s;
+  if (!size) return 0;
+  while (*p == ' ' || *p == '|' || *p == '[') p++;
+  // A country tag: two or three letters, then ':' or '|' or ']'.
+  { size_t a = 0;
+    while (a < 3 && isalpha((unsigned char)p[a])) a++;
+    if (a >= 2) {
+      const char *q = p + a;
+      while (*q == ' ') q++;
+      if (*q == ':' || *q == '|' || *q == ']') { p = q + 1; }
+    } }
+  while (*p) {
+    const char *w;
+    size_t n;
+    if (*p == '[') {                     // a tag: skip to its end
+      const char *e = strchr(p, ']');
+      if (!e) break;
+      p = e + 1;
+      continue;
+    }
+    if (!isalnum((unsigned char)*p) && (unsigned char)*p < 0x80) { p++; continue; }
+    w = p;
+    while (*p && (isalnum((unsigned char)*p) || (unsigned char)*p >= 0x80)) p++;
+    n = (size_t)(p - w);
+    if (qualityWord(w, n)) continue;
+    for (size_t i = 0; i < n && k + 1 < size; i++) dst[k++] = (char)tolower((unsigned char)w[i]);
+  }
+  dst[k] = 0;
+  return k > 0;
+}
+
 // The guide's <icon src="…"> for a channel whose playlist line has no tvg-logo:
 // iptv-org's source lists carry none, and the guides that match them do. Every
 // channel chained to `ch` that has no logo of its own gets it.
@@ -824,6 +877,52 @@ static void takeIcon(IptvList *l, int ch, const int *link, const char *a, const 
       if (!logo) logo = arenaDup(l, src, strlen(src));
       l->ch[k].logo = logo;
     }
+}
+
+static int byChannelStart(const void *x, const void *y);
+
+// Each channel's firstPg/nPg from the sorted programmes.
+static void indexProgrammes(IptvList *l) {
+  for (int i = 0; i < l->nCh; i++) l->ch[i].firstPg = l->ch[i].nPg = 0;
+  for (int i = 0; i < l->nPg; i++) {
+    IptvChannel *c = &l->ch[l->pg[i].channel];
+    if (!c->nPg) c->firstPg = i;
+    c->nPg++;
+  }
+}
+
+// A CHANNEL WITH NO GUIDE BORROWS ITS SIBLING'S. Playlists carry one channel in
+// several copies — "Sky Sports F1 HD", "Sky Sports F1 4K", "UK: SKY SPORTS F1
+// UHD" — and a provider tags only one of them with the guide's id; a name match
+// reaches only the first channel of a name. Every copy left without programmes
+// takes those of a copy with the same looseName that has them: the same
+// programmes, the strings shared.
+static void shareSiblings(IptvList *l) {
+  Map donors;
+  int n0 = l->nPg;
+  char key[256];
+  if (!mapInit(&donors, l->nCh)) return;
+  for (int i = 0; i < l->nCh; i++)
+    if (l->ch[i].nPg && looseName(l->ch[i].name, key, sizeof key))
+      mapPut(&donors, arenaDup(l, key, strlen(key)), i);
+  for (int i = 0; i < l->nCh; i++) {
+    int d;
+    if (l->ch[i].nPg || !looseName(l->ch[i].name, key, sizeof key)) continue;
+    if ((d = mapGet(&donors, key, strlen(key))) < 0) continue;
+    for (int k = 0; k < l->ch[d].nPg; k++) {
+      IptvProgramme pg;
+      if (!grow((void **)&l->pg, &l->capPg, l->nPg + 1, sizeof *l->pg)) goto out;
+      pg = l->pg[l->ch[d].firstPg + k];
+      pg.channel = i;
+      l->pg[l->nPg++] = pg;
+    }
+  }
+out:
+  mapFree(&donors);
+  if (l->nPg != n0) {
+    qsort(l->pg, (size_t)l->nPg, sizeof *l->pg, byChannelStart);
+    indexProgrammes(l);
+  }
 }
 
 static int byChannelStart(const void *x, const void *y) {
@@ -844,7 +943,7 @@ static int addProgramme(IptvList *l, int ch, long long start, long long stop,
 }
 
 int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to) {
-  Map byId, byName, byXml;
+  Map byId, byName, byXml, byLoose;
   int *link;
   const char *p, *xmlEnd;
   // The XMLTV channel ids seen in <channel> blocks, with the channel they map to.
@@ -859,8 +958,10 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
   xmlEnd = xml + strlen(xml);
 
   link = malloc((size_t)l->nCh * sizeof *link);
-  if (!link || !mapInit(&byId, l->nCh) || !mapInit(&byName, l->nCh * 2)) {
-    free(link); return 0;
+  memset(&byLoose, 0, sizeof byLoose);
+  if (!link || !mapInit(&byId, l->nCh) || !mapInit(&byName, l->nCh * 2) ||
+      !mapInit(&byLoose, l->nCh * 2)) {
+    free(link); mapFree(&byId); mapFree(&byName); mapFree(&byLoose); return 0;
   }
   // Chains: a channel's tvg-id first, then its names. `link` chains the id
   // table; the name table keeps only the first channel per name.
@@ -883,6 +984,15 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
       mapPut(&byName, arenaDup(l, bare, strlen(bare)), i);
     if (bareName(l->ch[i].name, bare, sizeof bare))
       mapPut(&byName, arenaDup(l, bare, strlen(bare)), i);
+  }
+  // And loosest of all (looseName), for the guide's display names that match
+  // nothing above.
+  for (int i = 0; i < l->nCh; i++) {
+    char loose[256];
+    if (looseName(l->ch[i].name, loose, sizeof loose))
+      mapPut(&byLoose, arenaDup(l, loose, strlen(loose)), i);
+    if (looseName(l->ch[i].tvgName, loose, sizeof loose))
+      mapPut(&byLoose, arenaDup(l, loose, strlen(loose)), i);
   }
   memset(&byXml, 0, sizeof byXml);
 
@@ -917,6 +1027,10 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
           if (ch < 0) {
             char bare[256];
             if (bareName(name, bare, sizeof bare)) ch = mapGet(&byName, bare, strlen(bare));
+          }
+          if (ch < 0) {
+            char loose[256];
+            if (looseName(name, loose, sizeof loose)) ch = mapGet(&byLoose, loose, strlen(loose));
           } }
         if (ch >= 0) break;
         d = e;
@@ -966,7 +1080,7 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
   }
 done:
   free(link);
-  mapFree(&byId); mapFree(&byName); mapFree(&byXml);
+  mapFree(&byId); mapFree(&byName); mapFree(&byXml); mapFree(&byLoose);
   free(xmlIds);
 
   if (!l->nPg) return 0;
@@ -985,11 +1099,8 @@ done:
     int hasNext = i + 1 < l->nPg && l->pg[i + 1].channel == c->channel;
     if (c->stop <= c->start) c->stop = hasNext ? l->pg[i + 1].start : c->start + 1800;
   }
-  for (int i = 0; i < l->nPg; i++) {
-    IptvChannel *c = &l->ch[l->pg[i].channel];
-    if (!c->nPg) c->firstPg = i;
-    c->nPg++;
-  }
+  indexProgrammes(l);
+  shareSiblings(l);
   return l->nPg;
 }
 

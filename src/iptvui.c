@@ -173,7 +173,9 @@ static Uint32 streamAt;
 // THE OVERLAY OVER A PLAYING CHANNEL, Y5's four amounts, each one more press:
 //   TOAST  ▲▼ with nothing showing: a card bottom-left, identity only, 3 s.
 //   BAR    OK: what is this and what is next, the controls under it, 6 s.
-//   PEEK   ▲▼ with the bar open: a rail of channels; the stream stays put.
+//   PEEK   ▲▼ with the bar open: the title rolls into a vertical carousel of
+//          channels by what is on now; OK zaps to the one in the middle, and
+//          until then the stream stays put.
 //   WALK   ◀▶ with the bar open: the same block, a later programme.
 // Only OK retunes (peek) or changes anything (walk: the reminder). Timers
 // restart on every press and never stack; the bar stays while a control has
@@ -188,7 +190,8 @@ static Uint32 ovUntil;
 static float toastA, barA;
 static int barCtl = -1;         // the focused control's id, -1 while the block has it
 static float ctlFocus[CTL_N];   // each control's puck, faded like the film player's
-static int peekRow;
+static int peekRow;               // into view[]: the channel in the middle
+static int peekPos;               // the same, unwrapped, so a wrap animates one row
 static float peekScroll, peekScrollV;
 static int walkPg = -1;         // the walked programme's index, -1 = now
 // The picture's zoom, cycled by the Aspect control. Live has no per-title
@@ -1225,8 +1228,11 @@ static void startPeek(int step) {
   int r = viewIndex(tuned);
   if (!nView) return;
   if (r < 0) r = 0;
-  peekRow = ((r + step) % nView + nView) % nView;
-  peekScroll = (float)peekRow;
+  // From the tuned channel, one row on: the title visibly rolls.
+  peekPos = r + step;
+  peekScroll = (float)r;
+  peekScrollV = 0.0f;
+  peekRow = ((peekPos % nView) + nView) % nView;
   overlay(OV_PEEK);
 }
 
@@ -1352,8 +1358,10 @@ static void fullEvent(SDL_Keycode k) {
       else if (isBack(k)) ov = OV_NONE;
       return;
     case OV_PEEK:
-      if (k == SDLK_UP || k == SDLK_LEFT || k == SDLK_PAGEDOWN) peekRow = (peekRow - 1 + nView) % nView;
-      else if (k == SDLK_DOWN || k == SDLK_RIGHT || k == SDLK_PAGEUP) peekRow = (peekRow + 1) % nView;
+      if (up || down) {
+        peekPos += down ? 1 : -1;
+        peekRow = ((peekPos % nView) + nView) % nView;
+      }
       else if (isOk(k) && peekRow < nView) {
         // The one press that retunes.
         fRow = peekRow; rememberFocus();
@@ -1668,7 +1676,7 @@ void iptvui_update(float dt, Uint32 now) {
     sheetWasUp = sheet;
     toastA = anim_spring(toastA, full && ov == OV_TOAST && !sheet ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
     barA = anim_spring(barA, full && ov >= OV_BAR && !sheet ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS); }
-  peekScroll = anim_spring2_reduced(&peekScrollV, peekScroll, (float)peekRow, dt, NV_SPRING2_PAGE, reduced);
+  peekScroll = anim_spring2_reduced(&peekScrollV, peekScroll, (float)peekPos, dt, NV_SPRING2_PAGE, reduced);
   for (int i = 0; i < CTL_N; i++) {
     float target = (full && ov == OV_BAR && barCtl == i && shownIndex(i) >= 0) ? 1.0f : 0.0f;
     ctlFocus[i] = anim_spring(ctlFocus[i], target, dt, target > ctlFocus[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
@@ -2823,6 +2831,14 @@ static void drawBlock(float a) {
     TxtLine title = txt_line_trim(TXT_LIVE_TITLE, pg ? pg->title : c->name, HEXI(0xF5F6F8), 255, titleW);
     float titleY = idBottom - title.h + 6.0f, kickY = titleY - 9.0f - 16.0f;
     txt_draw_alpha(title, tx, titleY, a);
+    // The title has the focus: ▲▼ beside it say it rolls (the peek).
+    if (ov == OV_BAR && barCtl < 0 && !scrubbing && nView > 1) {
+      TxtLine u = txt_line(TXT_LIVE_TAG, "\xE2\x96\xB2", HEXI(0xC1C7CD), 255);
+      TxtLine d = txt_line(TXT_LIVE_TAG, "\xE2\x96\xBC", HEXI(0xC1C7CD), 255);
+      float ax = tx + title.w + 20.0f, cy = titleY + title.h * 0.5f + 2.0f;
+      txt_draw_alpha(u, ax, cy - 11.0f - u.h * 0.5f, 0.6f * a);
+      txt_draw_alpha(d, ax, cy + 11.0f - d.h * 0.5f, 0.6f * a);
+    }
     if (walking) {
       // LATER, outlined, and when.
       float w = tagWidth("LATER") + 22.0f, kx = tx;
@@ -2937,46 +2953,76 @@ static void drawBlock(float a) {
   gfx_opacity_group = 1.0f;
 }
 
-// 3 · THE PEEK. A rail of channels with their now; the stream stays put.
+// 3 · THE PEEK: the bar's title rolls into a vertical carousel. The channel in
+// the middle stands where the title stood, at the title's size, with its tile,
+// number and name above and its programme's progress under; its neighbours
+// above and below shrink and fade with distance. ▲▼ roll it, OK zaps to the
+// middle, Back puts the bar back. The stream stays put until OK.
+#define PK_STEP 112.0f
 static void drawPeek(float a) {
   const IptvList *l = iptv_list();
   const IptvChannel *tc = chan(tuned);
   long long now = nowMinute();
-  float cw = 328.0f, ch = 170.0f, gap = 26.0f, top = NV_SCREEN_H - 155.0f - ch;
+  float x = 96.0f, right = NV_SCREEN_W - 96.0f;
+  float cy = NV_SCREEN_H - 300.0f;          // the middle row's centre
+  float half = (float)(nView - 1) * 0.5f;
   if (!l || !nView) return;
   gfx_opacity_group = a;
-  for (int k = -2; k <= 5; k++) {
+  for (int k = -5; k <= 4; k++) {
     int r = (int)floorf(peekScroll) + k;
-    float x = 96.0f + ((float)r - peekScroll + 1.0f) * (cw + gap);
-    int idx = ((r % nView) + nView) % nView, f = idx == peekRow && fabsf((float)r - peekScroll) < 0.5f;
+    float d = (float)r - peekScroll, ad = fabsf(d);
+    float y = cy + d * PK_STEP;
+    float f = ad < 1.0f ? 1.0f - ad : 0.0f;              // 1 in the middle
+    float ca = ad < 1.0f ? 1.0f - 0.5f * ad : ad < 3.0f ? 0.5f - 0.18f * (ad - 1.0f)
+             : 0.14f * (4.0f - ad);
+    // Below the middle there is room for one row: the next fades out sooner.
+    if (d > 1.0f) ca *= 1.0f - (d - 1.0f) * 2.0f;
+    float tile = 58.0f + 26.0f * f, tx = x + tile + 26.0f, titleW = right - tx - 520.0f;
+    int idx = ((r % nView) + nView) % nView, mid = ad < 0.5f;
     const IptvChannel *c;
     const IptvProgramme *pg;
-    float dist = fabsf((float)r - peekScroll), ca;
-    GfxRect card = { x, top, cw, ch };
-    char label[300];
-    if (x < 96.0f - 1.0f || x > NV_SCREEN_W) continue;
-    if (nView < 4 && (r < 0 || r >= nView)) continue;
+    char kick[300];
+    // A short list shows each channel once, never wrapped round to itself.
+    if (ad > half + 0.5f || ca <= 0.01f) continue;
+    // Above, up to the clock; below, one row, clear of the STILL ON line.
+    if (y < 190.0f || y > cy + PK_STEP * 1.5f) continue;
     c = &l->ch[view[idx]];
     pg = programmeAt(view[idx], now);
-    ca = f ? 1.0f : dist < 2.5f ? 0.5f : 0.32f;
-    if (f) {
-      gfx_color((GfxRect){ x - 3.0f, top - 3.0f, cw + 6.0f, ch + 6.0f }, 23.0f / (ch + 6.0f), HEXF(C_PAPER), a);
-      gfx_color(card, 20.0f / ch, 0.10f, 0.11f, 0.12f, a);
-      gfx_color(card, 20.0f / ch, 1, 1, 1, 0.12f * a);
+    identity(c, (GfxRect){ x, y - tile * 0.5f, tile, tile }, 10.0f + 4.0f * f, mid ? C_PLATE_F : C_PLATE,
+             mid ? 0xF5F6F8 : 0xC1C7CD, a * ca);
+    snprintf(kick, sizeof kick, "%d \xC2\xB7 %s", c->number, c->name);
+    if (mid) {
+      TxtLine t = txt_line_trim(TXT_LIVE_TITLE, pg ? pg->title : c->name, HEXI(0xF5F6F8), 255, titleW);
+      inkTrim(TXT_LIVE_NAME, kick, 0x9AA1A9, tx, y - t.h * 0.5f - 30.0f, titleW, a * ca);
+      txt_draw_alpha(t, tx, y - t.h * 0.5f, a * ca);
+      if (pg) {
+        char a1[16], b1[16], w[48];
+        float bw = titleW < 640.0f ? titleW : 640.0f, by = y + t.h * 0.5f + 16.0f;
+        progressBar(tx, by, bw, 5.0f, (float)(now - pg->start) / (float)(pg->stop - pg->start), 0.22f, a * ca);
+        clockText(pg->start, a1, sizeof a1); clockText(pg->stop, b1, sizeof b1);
+        snprintf(w, sizeof w, "%s \xE2\x80\x93 %s", a1, b1);
+        inkMid(TXT_LIVE_META, w, 0x8A9199, tx + bw + 16.0f, by + 2.5f, 240.0f, a * ca);
+      }
+      // The right: what follows on it, as the bar's NEXT.
+      { const IptvProgramme *nx = programmeAfter(view[idx], now, 0);
+        if (nx) {
+          char a1[16], line[300];
+          TxtLine n;
+          float wN = tagWidth("NEXT");
+          clockText(nx->start, a1, sizeof a1);
+          snprintf(line, sizeof line, "%s \xE2\x80\x82%s", a1, nx->title);
+          n = txt_line_trim(TXT_PLR_META3, line, HEXI(0xA9B0B8), 255, 480.0f);
+          txt_draw_alpha(n, right - n.w, y - n.h * 0.5f + 10.0f, a * ca);
+          txt_tracking(TXT_LIVE_TAG, "NEXT", HEXI(0x7C838B), right - wN, y - n.h * 0.5f - 14.0f, a * ca, 2.2f);
+        } }
     } else {
-      gfx_color(card, 20.0f / ch, 1, 1, 1, 0.07f * a * ca);
+      // A neighbour: its name and now on one line each, smaller.
+      inkTrim(TXT_LIVE_NAME, kick, 0x8A9199, tx, y - 26.0f, titleW, a * ca);
+      inkTrim(TXT_PLR_EPCODE, pg ? pg->title : "No guide data", pg ? 0xE4E7EA : 0x8A9199, tx, y + 2.0f,
+              titleW, a * ca);
     }
-    identity(c, (GfxRect){ x + 26.0f, top + 22.0f, 48.0f, 48.0f }, 10.0f, f ? C_PLATE_F : C_PLATE,
-             f ? 0xF5F6F8 : 0xC1C7CD, a * ca);
-    snprintf(label, sizeof label, "%d %s", c->number, c->name);
-    inkMid(TXT_SRC_TAB, label, f ? 0xF5F6F8 : 0xE4E7EA, x + 26.0f + 48.0f + 16.0f, top + 22.0f + 24.0f,
-           cw - 26.0f - 48.0f - 16.0f - 22.0f, a * ca);
-    inkTrim(TXT_PLR_META3, pg ? pg->title : "No guide data", f ? 0xE4E7EA : 0x9AA1A9, x + 26.0f, top + 88.0f,
-            cw - 52.0f, a * ca);
-    if (pg) progressBar(x + 26.0f, top + ch - 30.0f, cw - 52.0f, 5.0f,
-                        (float)(now - pg->start) / (float)(pg->stop - pg->start), f ? 0.22f : 0.18f, a * ca);
   }
-  // Still on 103: the one line that makes browsing safe.
+  // Under it: still on 103, and what OK does.
   if (tc) {
     char still[40];
     float r, g, b, w, by = NV_SCREEN_H - 55.0f - 38.0f;
@@ -2985,6 +3031,7 @@ static void drawPeek(float a) {
     w = tagWidth(still) + 30.0f;
     gfx_color((GfxRect){ 96.0f, by, w, 38.0f }, 10.0f / 38.0f, r, g, b, 0.20f * a);
     tagText(still, 0xA896FA, 96.0f + 15.0f, by + 19.0f, a);
+    inkMid(TXT_LIVE_NOTE, "OK to watch \xC2\xB7 Back to stay", 0x8A9199, 96.0f + w + 18.0f, by + 19.0f, 600.0f, a);
   }
   gfx_opacity_group = 1.0f;
 }
@@ -3219,7 +3266,7 @@ static void drawFull(void) {
     // The player's own scrims, one quad each: a shader gradient, never a blur
     // and never stacked bands (this is live video under them).
     gfx_rect((GfxRect){ 0.0f, 0.0f, NV_SCREEN_W, 190.0f }, 0, GFX_VEIL_TOP, 0, 0, 0, 0.0f, 0, 0, 0, 0.72f * barA);
-    { float h = ov == OV_PEEK ? 440.0f : 560.0f;
+    { float h = ov == OV_PEEK ? 860.0f : 560.0f;
       gfx_rect((GfxRect){ 0.0f, NV_SCREEN_H - h, NV_SCREEN_W, h }, 0, GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, barA); }
     drawClock(barA);
     if (ov == OV_PEEK) drawPeek(barA); else drawBlock(barA);

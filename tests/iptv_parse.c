@@ -370,6 +370,45 @@ static void testPlain(void) {
     iptv_list_free(&l); }
 }
 
+// A channel in several copies, only one with the guide's id, and names dressed
+// as IPTV playlists dress them: every copy gets the guide; a +1 does not.
+static void testLooseMatch(void) {
+  IptvList l;
+  long long st = iptv_xmltv_time("20260927180000 +0000");
+  const char *m3u =
+    "#EXTM3U\n"
+    "#EXTINF:-1 tvg-id=\"ssf1.uk\",Sky Sports F1 HD\n"                 "http://x/1\n"
+    "#EXTINF:-1,Sky Sports F1 4K\n"                                      "http://x/2\n"
+    "#EXTINF:-1,UK: SKY SPORTS F1 \xE1\xB5\x81\xE1\xB4\xB4\xE1\xB4\xB0 HEVC\n" "http://x/3\n"
+    "#EXTINF:-1,|NL| NPO 1 FHD [50fps]\n"                                "http://x/4\n"
+    "#EXTINF:-1,Discovery +1\n"                                          "http://x/5\n"
+    "#EXTINF:-1 tvg-id=\"disc.uk\",Discovery\n"                         "http://x/6\n";
+  const char *xml =
+    "<tv><channel id=\"ssf1.uk\"><display-name>Sky Sports F1</display-name></channel>"
+    "<channel id=\"npo1.nl\"><display-name>NPO 1</display-name></channel>"
+    "<channel id=\"disc.uk\"><display-name>Discovery</display-name></channel>"
+    "<programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"ssf1.uk\"><title>Qualifying</title></programme>"
+    "<programme start=\"20260927190000 +0000\" stop=\"20260927200000 +0000\" channel=\"ssf1.uk\"><title>Race</title></programme>"
+    "<programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"npo1.nl\"><title>Journaal</title></programme>"
+    "<programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"disc.uk\"><title>Gold Rush</title></programme>"
+    "</tv>";
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, m3u) == 6);
+  iptv_parse_xmltv(&l, xml, st - 3600, st + 86400);
+  for (int c = 0; c < 3; c++) {
+    int p = iptv_programme_at(&l, c, st + 60);
+    assert(l.ch[c].nPg == 2 && p >= 0 && !strcmp(l.pg[p].title, "Qualifying"));
+  }
+  assert(l.ch[3].nPg == 1 && !strcmp(l.pg[l.ch[3].firstPg].title, "Journaal"));
+  assert(l.ch[4].nPg == 0);                         // +1 is another schedule
+  assert(l.ch[5].nPg == 1);
+  // Sorted, and each channel's range is its own.
+  for (int i = 1; i < l.nPg; i++)
+    assert(l.pg[i - 1].channel < l.pg[i].channel ||
+           (l.pg[i - 1].channel == l.pg[i].channel && l.pg[i - 1].start < l.pg[i].start));
+  iptv_list_free(&l);
+}
+
 static void testCatchup(void) {
   IptvList l;
   char u[1024];
@@ -455,7 +494,8 @@ int main(int argc, char **argv) {
   testXtream();
   testPlain();
   testCatchup();
+  testLooseMatch();
   if (argc > 1) testGunzip(argv[1]);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; gzip.");
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; loose guide matching; gzip.");
   return 0;
 }
