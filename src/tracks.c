@@ -60,7 +60,7 @@ const char *tracks_external_language(void) { return subExternal >= 0 ? externalL
 // Loads an addon subtitle, remembering its language.
 static void loadExternal(const Subtitle *l) {
   snprintf(externalLang, sizeof externalLang, "%s", l->language);
-  video_choose_subtitle(-1); subtitle_load(l->url);
+  video_choose_subtitle(-1); subtitle_load(l->url, l->language);
 }
 
 void tracks_reset(void) {

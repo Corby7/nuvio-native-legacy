@@ -2419,7 +2419,7 @@ static int pendingItem = -1, pendingTemp;
 
 static CatItem  seeallItems[SEEALL_MAX];
 static int      seeallN;
-static char     seeallBase[600], seeallKind[8], seeallCat[96], seeallGenre[96];
+static char     seeallBase[600], seeallKind[8], seeallCat[96], seeallGenre[96], seeallTerm[256];
 static int      seeallPage, seeallEnd, seeallThreadAlive, seeallError;
 static unsigned seeallGeneration;
 static pthread_mutex_t seeallLock = PTHREAD_MUTEX_INITIALIZER;
@@ -2427,19 +2427,26 @@ static pthread_mutex_t seeallLock = PTHREAD_MUTEX_INITIALIZER;
 static void *threadSeeAll(void *u) {
   (void)u;
   for (;;) {
-  char url[1600], base[600], type[8], id[96], genre[96], encoded[290], *body;
+  char url[1600], base[600], type[8], id[96], genre[96], encoded[290], term[256], esc[800], *body;
   int raw=0, skip, cap;unsigned generation;
   pthread_mutex_lock(&seeallLock);
   skip=seeallPage;generation=seeallGeneration;
   snprintf(base,sizeof base,"%s",seeallBase);snprintf(type,sizeof type,"%s",seeallKind);
   snprintf(id,sizeof id,"%s",seeallCat);snprintf(genre,sizeof genre,"%s",seeallGenre);
+  snprintf(term,sizeof term,"%s",seeallTerm);
   pthread_mutex_unlock(&seeallLock);
   int z=0;
   for(const unsigned char *c=(const unsigned char *)genre;*c&&z<(int)sizeof encoded-4;c++) {
     if((*c>='a'&&*c<='z')||(*c>='A'&&*c<='Z')||(*c>='0'&&*c<='9')||*c=='-'||*c=='_')encoded[z++]=*c;
     else {snprintf(encoded+z,4,"%%%02X",*c);z+=3;}
   }encoded[z]=0;
-  if(genre[0])snprintf(url,sizeof url,"%s/catalog/%s/%s/genre=%s&skip=%d.json",base,type,id,encoded,skip);
+  // A search row's grid: the term rides every page. Most addons ignore `skip`
+  // on a search and send the same page back, which the duplicate check below
+  // reads as the end — so the grid is one page there and pages where it can.
+  if(term[0]){urlEscape(term,esc,sizeof esc);
+    if(skip)snprintf(url,sizeof url,"%s/catalog/%s/%s/search=%s&skip=%d.json",base,type,id,esc,skip);
+    else snprintf(url,sizeof url,"%s/catalog/%s/%s/search=%s.json",base,type,id,esc);}
+  else if(genre[0])snprintf(url,sizeof url,"%s/catalog/%s/%s/genre=%s&skip=%d.json",base,type,id,encoded,skip);
   else if(skip)snprintf(url,sizeof url,"%s/catalog/%s/%s/skip=%d.json",base,type,id,skip);
   else snprintf(url,sizeof url,"%s/catalog/%s/%s.json",base,type,id);
   body=net_download(url,10);
@@ -2488,23 +2495,34 @@ static void seeallFire(void) {
 void disc_seeall_open(const char *base, const char *kind, const char *catId) {
   disc_seeall_filter(base,kind,catId,"");
 }
-void disc_seeall_filter(const char *base, const char *kind, const char *catId,const char *genre) {
+static void seeallStart(const char *base, const char *kind, const char *catId,
+                        const char *genre, const char *term) {
   if (!base || !kind || !catId) return;
+  if (!genre) genre = "";
+  if (!term) term = "";
   pthread_mutex_lock(&seeallLock);
   // The same catalogue that is already open: it keeps what has been read instead of
   // starting from scratch (the owner may have gone back and come in again).
   if (!strcmp(seeallBase, base) && !strcmp(seeallKind, kind) && !strcmp(seeallCat, catId)
-      && !strcmp(seeallGenre,genre?genre:"") && seeallN > 0) {
+      && !strcmp(seeallGenre,genre) && !strcmp(seeallTerm,term) && seeallN > 0) {
     pthread_mutex_unlock(&seeallLock);
     return;
   }
   snprintf(seeallBase, sizeof seeallBase, "%s", base);
   snprintf(seeallKind, sizeof seeallKind, "%s", kind);
   snprintf(seeallCat,  sizeof seeallCat,  "%s", catId);
-  snprintf(seeallGenre,sizeof seeallGenre,"%s",genre?genre:"");
+  snprintf(seeallGenre,sizeof seeallGenre,"%s",genre);
+  snprintf(seeallTerm,sizeof seeallTerm,"%s",term);
   seeallN = 0; seeallPage = 0; seeallEnd = 0;seeallError=0;seeallGeneration++;
   pthread_mutex_unlock(&seeallLock);
   seeallFire();
+}
+
+void disc_seeall_filter(const char *base, const char *kind, const char *catId,const char *genre) {
+  seeallStart(base, kind, catId, genre, "");
+}
+void disc_seeall_search(const char *base, const char *kind, const char *catId, const char *term) {
+  seeallStart(base, kind, catId, "", term);
 }
 
 void disc_seeall_more(void) { seeallFire(); }

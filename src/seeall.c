@@ -82,7 +82,7 @@
 
 
 static int   is_open, focus, reqOpen = -1;
-static float anim, animV, scrollY;
+static float anim, animV, scrollY, scrollV;
 // WHERE THE VIEW GREW FROM: the collection card that was focused when OK was
 // pressed. The grid does not simply appear — it opens out of that card, so the
 // screen the viewer gets is visibly the thing they chose. 0 when the grid was
@@ -320,7 +320,7 @@ static void openSource(void) {
   const ColSource *s=&collection->sources[source];
   snprintf(catalogId,sizeof catalogId,"%s",s->catId);
   ranked=strstr(s->catId,"top100")||strstr(s->catId,"top250")||strstr(s->catId,"top10");
-  focus=0;scrollY=0;orderN=-1;
+  focus=0;scrollY=scrollV=0;orderN=-1;
   // col_source_base and not s->base: a collection from the account stores the
   // addon's ID, and the address comes from the INSTALLED addon with that id.
   { const char *base=col_source_base(s);
@@ -342,7 +342,7 @@ void seeall_collection(const ColFolder *folder) {
   // grid covers the screen, and by then the rect would be a frame out of date.
   fromValid = home_collection_card_rect(&fromCard.x, &fromCard.y,
                                         &fromCard.w, &fromCard.h);
-  anim = 0.0f; animV = 0.0f; scrollY = 0.0f; focus = 0;
+  anim = 0.0f; animV = 0.0f; scrollY = scrollV = 0.0f; focus = 0;
   animCard = 0.0f;
   collection=folder;source=0;is_open=1;reqOpen=-1;followFocus=1;
   timeline=!strcmp(folder->group,"Directors");
@@ -366,10 +366,15 @@ void seeall_collection(const ColFolder *folder) {
 // title.
 void seeall_open(const char *base, const char *kind, const char *catId,
                    const char *heading) {
+  seeall_search(base, kind, catId, heading, "");
+}
+
+void seeall_search(const char *base, const char *kind, const char *catId,
+                   const char *heading, const char *term) {
   // A home row's "See all" card is not a collection card and has no wordmark to
   // carry: that path keeps the plain fade it has always had.
   fromValid = 0;
-  is_open = 1; focus = 0; scrollY = 0.0f; reqOpen = -1; followFocus = 1;
+  is_open = 1; focus = 0; scrollY = scrollV = 0.0f; reqOpen = -1; followFocus = 1;
   animCard = 0.0f;
   snprintf(title, sizeof title, "%s", heading ? heading : "");
   collection=col_by_catalog(base,kind,catId);timeline=collection&&!strcmp(collection->group,"Directors");
@@ -383,7 +388,8 @@ void seeall_open(const char *base, const char *kind, const char *catId,
   buildPickers();
   snprintf(catalogId,sizeof catalogId,"%s",catId);
   ranked=strstr(catId,"top100")||strstr(catId,"top250")||strstr(catId,"top10");
-  disc_seeall_open(base, kind, catId);
+  if (term && term[0]) disc_seeall_search(base, kind, catId, term);
+  else disc_seeall_open(base, kind, catId);
 }
 
 int seeall_is_open(void) { return is_open; }
@@ -689,7 +695,8 @@ void seeall_update(float dt, Uint32 now) {
   { float d = app_seeall_in_front() && menuOpen < 0 && n > 0
             ? pointer_edge_scroll(0.0f, NV_SCREEN_W, SEEALL_CLIP_TOP, NV_SCREEN_H, dt) : 0.0f;
     if (d != 0.0f) { target = goalY = anim_clamp(goalY + d, 0.0f, maxY); followFocus = 0; } }
-  scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
+  scrollY = anim_spring2_reduced(&scrollV, scrollY, target, dt, NV_SPRING2_PAGE,
+                                settings_animations_reduced());
 }
 
 // THE RIGHT-HAND PANEL IS GONE, and this is where it was.

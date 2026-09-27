@@ -32,6 +32,11 @@ int  seeall_owns_mark(void);
 // Opens with the catalogue behind a home row.
 void seeall_open(const char *base, const char *kind, const char *catId,
                    const char *title);
+// The same, for a search row: the catalogue is fetched WITH `search=<term>`,
+// because a search catalogue asked for without it has nothing to list. An empty
+// term is seeall_open.
+void seeall_search(const char *base, const char *kind, const char *catId,
+                   const char *title, const char *term);
 int  seeall_is_open(void);
 void seeall_event(const SDL_Event *e);
 void seeall_update(float dt, Uint32 now);

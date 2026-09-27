@@ -5,12 +5,22 @@
 typedef struct {
   double start, end;
   char text[768];
+  // Where an ASS line goes; all zero for SRT/VTT, which means the usual band.
+  // `align` is the numpad position (1 bottom-left .. 9 top-right), 0 unknown.
+  // With `positioned`, (x, y) is a point as a fraction of the video frame and
+  // `align` says which corner or edge of the text sits on it.
+  int align, positioned;
+  float x, y;
 } SubtitleCue;
 
-/* OpenSubtitles is drawn by the UI, above the video plane. */
-void subtitle_load(const char *url);
+/* OpenSubtitles is drawn by the UI, above the video plane. `language` is the
+   addon's code for it, the hint subcharset.c decodes a non-UTF-8 file by. */
+void subtitle_load(const char *url, const char *language);
 void subtitle_off(void);
 int  subtitle_text(double posSeg, int delayMs, char *dst, size_t size);
+/* The cues on screen at posSeg, oldest first and with their layout, a repeated
+   one only once. Returns how many went into `out`. */
+int  subtitle_shown(double posSeg, int delayMs, SubtitleCue *out, int max);
 
 /* For AutoSync (autosync.c). A subtitle is identified by its GENERATION, which
    changes on every load and every off: a result worked out for one subtitle can

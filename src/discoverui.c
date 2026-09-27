@@ -47,7 +47,7 @@ static int   focus;            // index into the grid
 static int   wantsExit;
 static int   requestMenu;   // LEFT off the screen's left edge
 static int   request = -1;
-static float scrollY, scrollTarget;
+static float scrollY, scrollTarget, scrollV;
 // Whether the grid's scroll follows the focus. A card the Magic Remote's pointer
 // focused leaves it where it is: snapping that card's row to the top would slide
 // another under a pointer that had not moved. Any arrow, the wheel's included,
@@ -152,7 +152,7 @@ static void rebuild(int keepCatalogue) {
   if (genreSel > genreN()) genreSel = 0;
 
   focus = 0;
-  scrollY = scrollTarget = 0.0f;
+  scrollY = scrollTarget = scrollV = 0.0f;
   animCard = 0.0f;
   r = currentCat();
   if (r) disc_seeall_filter(r->base, r->kind, r->catId,
@@ -217,7 +217,7 @@ static void chooseOption(int p, int i) {
       // Not rebuild(1): the catalogue was just chosen BY HAND, and "keep the
       // one you were on" would undo the choice.
       { const CatRow *r = currentCat();
-        focus = 0; scrollY = scrollTarget = 0.0f; animCard = 0.0f;
+        focus = 0; scrollY = scrollTarget = scrollV = 0.0f; animCard = 0.0f;
         if (r) disc_seeall_filter(r->base, r->kind, r->catId, ""); }
       break;
     case PICK_GENRE:
@@ -429,7 +429,8 @@ void dui_update(float dt, Uint32 now) {
       follow = 0;
     } }
   if (scrollTarget < 0.0f) scrollTarget = 0.0f;
-  scrollY = anim_spring(scrollY, scrollTarget, dt, NV_SPRING_GRID);
+  scrollY = anim_spring2_reduced(&scrollV, scrollY, scrollTarget, dt, NV_SPRING2_PAGE,
+                                settings_animations_reduced());
 }
 
 // --- Drawing -----------------------------------------------------------------

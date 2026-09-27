@@ -1947,21 +1947,81 @@ static void colorSubtitle(int i,int *r,int *g,int *b){
 
 /* The C9's uMS limits the font and the scale. OpenSubtitles goes through this
  * SDL/GLES overlay, exactly like the web app's HTML overlay. */
+
+// Up to four lines of cue text, measured, in the viewer's subtitle style.
+typedef struct { TxtLine color[4],border[4]; int n; float w,h; } SubBlock;
+
+static int subBlockBuild(SubBlock *b,char *text,TxtStyle st,int r,int g,int bl){
+  char *line,*salva;TxtFamily fam=(TxtFamily)subStyle.family;
+  b->n=0;b->w=b->h=0;
+  line=strtok_r(text,"\n",&salva);
+  while(line&&b->n<4){
+    int i=b->n;
+    b->color[i]=txt_line_trim_family(st,line,r,g,bl,255,1660,fam);
+    b->border[i]=subStyle.border?txt_line_trim_family(st,line,0,0,0,255,1660,fam):(TxtLine){0};
+    if(b->color[i].w>b->w)b->w=(float)b->color[i].w;
+    b->h+=b->color[i].h+(i?5:0);
+    b->n++;line=strtok_r(NULL,"\n",&salva);
+  }
+  return b->n;
+}
+
+// Draws a block with its top-left at (x, y); `column` lines each line up inside
+// it: 0 left, 1 centre, 2 right.
+static void subBlockDraw(const SubBlock *b,float x,float y,int column,float alpha){
+  for(int i=0;i<b->n;i++){
+    TxtLine l=b->color[i];
+    float lx=column==0?x:column==2?x+b->w-l.w:x+(b->w-l.w)*.5f;
+    if(subStyle.background){float fa=subStyle.background*.16f*alpha;gfx_color((GfxRect){lx-18,y-6,l.w+36,l.h+12},.16f,0,0,0,fa);}
+    if(b->border[i].tex){float d=subStyle.border==2?4.f:2.f;
+      txt_draw_alpha(b->border[i],lx+d,y+d,.82f*alpha);
+      if(subStyle.border==1){txt_draw_alpha(b->border[i],lx-d,y,.82f*alpha);txt_draw_alpha(b->border[i],lx,y-d,.82f*alpha);}
+    }
+    txt_draw_alpha(l,lx,y,alpha);y+=l.h+5;
+  }
+}
+
+// An ASS line placed by the file: at its \pos point, or against the edge its
+// alignment names. The alignment also says which part of the text sits on the
+// point — 7 is its top-left corner, 2 the middle of its bottom edge — as in
+// libass. Always kept whole on screen.
+#define SUB_EDGE_X 80.f
+#define SUB_EDGE_Y 60.f
+static void drawSubtitlePlaced(const SubtitleCue *c,TxtStyle st,int r,int g,int bl,float alpha){
+  char text[768];SubBlock b;
+  int align=c->align?c->align:2,column=(align-1)%3,row=(align-1)/3;
+  float ax,ay,x,y;
+  snprintf(text,sizeof text,"%s",c->text);
+  if(!subBlockBuild(&b,text,st,r,g,bl))return;
+  if(c->positioned){ax=c->x*NV_SCREEN_W;ay=c->y*NV_SCREEN_H;}
+  else{
+    ax=column==0?SUB_EDGE_X:column==2?NV_SCREEN_W-SUB_EDGE_X:NV_SCREEN_W*.5f;
+    ay=row==2?SUB_EDGE_Y:row==1?NV_SCREEN_H*.5f:NV_SCREEN_H-SUB_EDGE_Y;
+  }
+  x=column==0?ax:column==2?ax-b.w:ax-b.w*.5f;
+  y=row==2?ay:row==1?ay-b.h*.5f:ay-b.h;
+  if(x>NV_SCREEN_W-b.w)x=NV_SCREEN_W-b.w;if(x<0)x=0;
+  if(y>NV_SCREEN_H-b.h)y=NV_SCREEN_H-b.h;if(y<0)y=0;
+  subBlockDraw(&b,x,y,column,alpha);
+}
+
 static void drawSubtitleExternal(void){
-  char text[768],*line,*salva;TxtLine color[4],border[4];int n=0,r,g,b;
-  if(!subtitle_text(posSeg,subStyle.delayMs,text,sizeof text))return;
+  SubtitleCue shown[8];char text[768];size_t used=0;SubBlock band;int r,g,b,n;
+  n=subtitle_shown(posSeg,subStyle.delayMs,shown,8);
+  if(!n)return;
   int pct=subStyle.size;if(pct<50)pct=50;if(pct>200)pct=200;pct=(pct/10)*10;
   TxtStyle st=(TxtStyle)(TXT_SUB_50+(pct-50)/10);colorSubtitle(subStyle.color,&r,&g,&b);
   float alpha=(subStyle.opacity==3?.25f:subStyle.opacity==2?.5f:subStyle.opacity==1?.75f:1.f)*entry;
-  line=strtok_r(text,"\n",&salva);
-  while(line&&n<4){
-    TxtFamily fam=(TxtFamily)subStyle.family;
-    color[n]=txt_line_trim_family(st,line,r,g,b,255,1660,fam);
-    border[n]=subStyle.border?txt_line_trim_family(st,line,0,0,0,255,1660,fam):(TxtLine){0};
-    n++;line=strtok_r(NULL,"\n",&salva);
+  // Everything the file does not place goes to the usual band at the bottom:
+  // SRT and VTT, and ASS lines that are bottom-aligned with no point of their own.
+  text[0]=0;
+  for(int i=0;i<n;i++){
+    const SubtitleCue *c=&shown[i];
+    if(c->positioned||c->align>3){drawSubtitlePlaced(c,st,r,g,b,alpha);continue;}
+    int w=snprintf(text+used,sizeof text-used,"%s%s",used?"\n":"",c->text);
+    if(w>0&&(size_t)w<sizeof text-used)used+=(size_t)w;
   }
-  if(!n)return;
-  float total=0;for(int i=0;i<n;i++)total+=color[i].h+(i?5:0);
+  if(!used||!subBlockBuild(&band,text,st,r,g,b))return;
   // The lift the subtitle takes when the controls come up. 760 was the clearance
   // over the OLD transport; the ported one is ~66px taller (a 64 bottom inset
   // instead of 48, and the web app's 40/36 gaps instead of 12/32), which left the
@@ -1976,16 +2036,7 @@ static void drawSubtitleExternal(void){
   // Kept clear of the Style bar's tiles while it is up, on the bar's own curve.
   { float bar=tracks_style_shown();
     if(bar>0.f&&base>NV_TRK_PREVIEW_FLOOR)base+=(NV_TRK_PREVIEW_FLOOR-base)*bar; }
-  float y=base-total;
-  for(int i=0;i<n;i++){
-    TxtLine l=color[i];float x=(NV_SCREEN_W-l.w)*.5f;
-    if(subStyle.background){float fa=subStyle.background*.16f*alpha;gfx_color((GfxRect){x-18,y-6,l.w+36,l.h+12},.16f,0,0,0,fa);}
-    if(border[i].tex){float d=subStyle.border==2?4.f:2.f;
-      txt_draw_alpha(border[i],x+d,y+d,.82f*alpha);
-      if(subStyle.border==1){txt_draw_alpha(border[i],x-d,y,.82f*alpha);txt_draw_alpha(border[i],x,y-d,.82f*alpha);}
-    }
-    txt_draw_alpha(l,x,y,alpha);y+=l.h+5;
-  }
+  subBlockDraw(&band,(NV_SCREEN_W-band.w)*.5f,base-band.h,1,alpha);
 }
 
 // --- THE STREAM STATS PANEL (#playerStatsOverlay) ----------------------------

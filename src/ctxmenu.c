@@ -40,7 +40,6 @@ enum { CTX_PENDING = 1, CTX_CONFIRMED = 2, CTX_FAILURE = 3 };
 #define CTX_META_GAP  10.0f     // title to meta line
 #define CTX_HEAD_GAP  20.0f     // meta line to the first row
 #define CTX_CARD_GAP  32.0f     // card edge to panel edge
-#define CTX_BELOW     24.0f     // how far the panel runs past the card's bottom
 #define CTX_MARGIN    48.0f     // nearest the panel comes to a screen edge
 #define CTX_SLIDE     24.0f     // travel away from the card while it appears
 #define CTX_SCRIM      0.80f
@@ -487,14 +486,18 @@ void ctx_draw(Uint32 now) {
              (float)nOps * (CTX_LINE + CTX_GAP) - CTX_GAP;
 
     // Beside the card, on its right; on its left when the right runs out of screen.
-    // Bottom-aligned just past the card, so the panel grows UP beside it, and kept
+    // Bottom-aligned FLUSH with the card, so the panel grows UP beside it, and kept
     // on screen whichever row the card is in.
     if (hasAnchor) {
       int left = anchor.x + anchor.w + CTX_CARD_GAP + CTX_W > NV_SCREEN_W - CTX_MARGIN;
       x = left ? anchor.x - CTX_CARD_GAP - CTX_W
                : anchor.x + anchor.w + CTX_CARD_GAP;
       if (x < CTX_MARGIN) x = CTX_MARGIN;
-      y = anchor.y + anchor.h + CTX_BELOW - height;
+      // The anchor is taken mid-hold, with the card pressed in about its centre to
+      // NV_HOLD_PRESS_SCALE; it springs back out as the menu opens. Align to the
+      // bottom it comes to rest on, or the panel ends up ~6px below it.
+      { float press = settings_animations_reduced() ? 1.0f : NV_HOLD_PRESS_SCALE;
+        y = anchor.y + anchor.h * (0.5f + 0.5f / press) - height; }
       if (y > NV_SCREEN_H - CTX_MARGIN - height) y = NV_SCREEN_H - CTX_MARGIN - height;
       if (y < CTX_MARGIN) y = CTX_MARGIN;
       // Slides out from the card as it appears.

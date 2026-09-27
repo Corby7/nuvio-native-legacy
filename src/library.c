@@ -78,7 +78,7 @@ static float animPick[PICK_N];
 static float animCard;           // one spring: only ever one card is focused
 static float animTabs;           // the cursor on the Saved / Collection strip
 static float animHead;           // the grid-size button
-static float scrollY;
+static float scrollY, scrollV;
 // Whether the grid's scroll follows the focus. A card the Magic Remote's pointer
 // focused leaves it where it is (goalY): scrolling that card's row into place
 // would slide another under a pointer that had not moved. Any arrow, the wheel's
@@ -184,7 +184,7 @@ int library_start(void) {
   zone = ZONE_TABS; pickSel = 0; menuOpen = -1;
   memset(animPick, 0, sizeof animPick);
   animTabs = 1.0f;   // born on the strip, already lit
-  scrollY = 0.0f;
+  scrollY = scrollV = 0.0f;
   wantsExit = 0; request = -1;
   hasItemFocus = 0;
   rebuild();
@@ -436,7 +436,8 @@ void library_update(float dt, Uint32 now) {
       target = goalY = anim_clamp(goalY + d, 0.0f, max);
       follow = 0;
     } }
-  scrollY = anim_spring(scrollY, target, dt, NV_SPRING_GRID);
+  scrollY = anim_spring2_reduced(&scrollV, scrollY, target, dt, NV_SPRING2_PAGE,
+                                settings_animations_reduced());
 }
 
 // --- Drawing -----------------------------------------------------------------

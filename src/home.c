@@ -3113,10 +3113,13 @@ static void drawPaddles(int r, float cardY, float lh, float lw, float step) {
   // end of the row goes away at the click, not when the glide lands.
   int more[2] = { goalX[r] > 1.0f, rowEnd - goalX[r] > util + 1.0f };
   float xs[2] = { left0, rightX }, ws[2] = { leftW, NV_HOME_SAFE_RIGHT };
+  // ONE SIZE FOR BOTH, the narrower margin's: sized each to its own margin, the
+  // left one beside the collapsed rail came out visibly smaller than the right.
+  float d = NV_HOME_PADDLE_D;
+  if (d > ws[0]) d = ws[0];
+  if (d > ws[1]) d = ws[1];
   for (int i = 0; i < 2; i++) {
     if (!more[i] || ws[i] < 24.0f) continue;
-    float d = NV_HOME_PADDLE_D;
-    if (d > ws[i] - 8.0f) d = ws[i] - 8.0f;
     GfxRect disc = { xs[i] + (ws[i] - d) * 0.5f, cardY + (lh - d) * 0.5f, d, d };
     PointerFocus act = i ? pageRight : pageLeft;
     // UNDER THE POINTER, the focus ring every card wears: a white disc behind the

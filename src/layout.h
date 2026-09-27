@@ -21,8 +21,11 @@
 #define NV_MENU_W_IS_OPEN       340.0f
 // With the rail collapsed, the strip at the screen's left edge where the Magic
 // Remote's pointer opens the bar. Narrower than the content's 104px pad, so it
-// leaves room for a row's left paging arrow (NV_HOME_PADDLE_W) beside it.
-#define NV_MENU_EDGE_ZONE_W      40.0f
+// leaves room for a row's left paging arrow (NV_HOME_PADDLE_D) beside it.
+// 16 and not 40: at 40 the arrow had only 64px and came out smaller than the
+// right one. The edge stops the pointer, so a pointer pushed left still lands
+// in 16px as surely as in 40.
+#define NV_MENU_EDGE_ZONE_W      16.0f
 #define NV_LEGACY_CONTENT_X     248.0f
 #define NV_LEGACY_CONTENT_RIGHT 104.0f
 // The real rule, measured in both states: the content ALWAYS has a 104 inset, and
@@ -958,7 +961,10 @@
 #define NV_HOME_SAFE_RIGHT    NV_LEGACY_CONTENT_RIGHT
 // The disc behind a row's paging arrow, shown only to the Magic Remote's pointer
 // (drawPaddles in home.c). Shrinks to fit when the margin it sits in is narrower.
-#define NV_HOME_PADDLE_D      64.0f
+// 80 and not 64: at 64 it was a small target to land a hand-held pointer on
+// from the sofa. 80 fills the right margin and search's 96px band with air to
+// spare, and the left margin beside the collapsed rail is 88 (NV_MENU_EDGE_ZONE_W).
+#define NV_HOME_PADDLE_D      80.0f
 #define NV_HOME_TEXT_GUTTER   24.0f
 #define NV_HOLD_FEEDBACK_MS   110.0f
 
@@ -1171,7 +1177,25 @@
 // 12 and not the 8 the Library used: 8 matched the Library's own feel, and the
 // Library was itself called slow. At 12 the three grids land at 167-217 ms to
 // first sight and settle by ~520 ms.
+//
+// The three poster grids have since moved to NV_SPRING2_PAGE (below); this is
+// still the stiffness of the streams list, the episode rail and the detail's
+// secondary rows.
 #define NV_SPRING_GRID     12.0f
+// THE POSTER GRIDS' PAGE SCROLL, SECOND-ORDER AND FAST — the Library, Discover
+// and the collection grid.
+//
+// What the first-order spring at 12 got wrong was reported as the scroll being
+// "jarring": it leaves at maximum speed, so at the TV's ~30 Hz a third of a row
+// step (~160 px) happens in the first frame, and a held DOWN restarts it at full
+// speed on every repeat — the stutter anim.h describes. The earlier spring2 try
+// failed on the opposite end, a soft start at 11.5 that delayed the incoming row.
+//
+// 20 keeps both: p(t) = 1-(1+wt)e^-wt is 14% in at 33 ms (not 33%), 59% at
+// 100 ms, and from 150 ms on it is level with the first-order curve it replaces
+// (83/80% at 150, 91/91% at 200, 95/96% at 250). The row arrives just as soon;
+// it just does not lurch to get there, and a held key carries its velocity.
+#define NV_SPRING2_PAGE    20.0f
 // The frequency (rad/s) of the second-order spring that scrolls the home's rows. It
 // takes the k of the TAIL measured on the reference's glide (~12.5 /s); 11.5 is the
 // value that makes the whole curve match, because in this spring the tail is only
@@ -2452,6 +2476,22 @@
 // rather than a state — the focused row was legible mostly because its type was
 // brighter, which is not something that carries across a room.
 #define NV_SRC_FOCUS_FILL   0.12f
+
+// SOURCES ARRIVE, THEY DO NOT POP. The list grows while the sheet is up, one
+// addon at a time (stream_insert), and each answer used to appear in a single
+// frame — worse, rows landing above others shoved them down a whole card pitch
+// in one frame too, so the list twitched every time an addon answered.
+//
+// Now an answer's rows fade in and rise NV_SRC_IN_RISE into place, one after
+// another, and rows they displace slide down on the list's own scroll spring.
+// Same spring as the scroll on purpose: when the cursor's row is pushed down and
+// the scroll follows it, the two motions cancel and the row being read holds
+// still while the new ones open up around it.
+#define NV_SRC_IN_MS       280.0f  // one row's fade and rise
+#define NV_SRC_IN_STAGGER   45.0f  // between consecutive rows of one answer
+#define NV_SRC_IN_GAP      110.0f  // held back while displaced rows make room
+#define NV_SRC_IN_CAP          8   // rows past this many start together
+#define NV_SRC_IN_RISE      18.0f
 
 #define NV_FT_SRC_TITLE   40  // "Sources"
 #define NV_FT_SRC_COUNT   22  // "12 found", and the episode the sheet was opened on

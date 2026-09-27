@@ -604,7 +604,13 @@ static int tabAvailable(int id) {
   }
 }
 // Translates the visible position `c` into the tab's id.
+//
+// A FILM HAS NO TAB STRIP, so its SEC_CAST slot is always the cast. Without this
+// guard the film read tabInfo 0 like a series does, and once "More like this" moved
+// to the front of the tabs, the related titles arriving turned the cast page into
+// the related row, drawn at the series' page-3 y, off screen: a black page.
 static int tabIdOf(int c) {
+  if (!isSeries()) return TAB_CAST;
   for (int id = 0, v = 0; id < TAB_NFIXAS; id++)
     if (tabAvailable(id) && v++ == c) return id;
   return TAB_CAST;

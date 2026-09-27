@@ -56,6 +56,7 @@
 #include "catalog.h"
 #include "discover.h"
 #include "seeall.h"
+#include "detail.h"   // NV_DETWEB_TIP_*, the circle-button tooltip
 #include "data.h"
 #include "ime.h"
 #include <string.h>
@@ -114,6 +115,10 @@ static struct {
   char base[600];       // the catalogue itself, for the "See All" button …
   char kind[8];         // … which needs all three, or it cannot be drawn
   char catId[96];
+  // The term an ADDON row was searched with; empty on a row filtered out of the
+  // home. See All has to send it on: a search catalogue fetched without its
+  // `search=` extra answers with nothing, which is why the grid opened empty.
+  char term[SEARCH_MAX_QUERY * 2];
   int items[SEARCH_MAX_PER_FILTER];
   int n;
   int seeAll;           // 1 when the row ends with the "See All" button
@@ -406,6 +411,7 @@ static void refilter(void) {
                  disc_search_target_kind(targetIdx));
         snprintf(filter[nFilter].catId, sizeof filter[nFilter].catId, "%s",
                  disc_search_target_id(targetIdx));
+        snprintf(filter[nFilter].term, sizeof filter[nFilter].term, "%s", target);
         filter[nFilter].n = found;
         // THE BUTTON APPEARS ONLY ON A FULL ROW, and that is a guess dressed up
         // honestly rather than a fact. The web app knows whether there is more
@@ -444,6 +450,7 @@ static void refilter(void) {
     snprintf(filter[nFilter].base,  sizeof filter[nFilter].base,  "%s", cf->base);
     snprintf(filter[nFilter].kind,  sizeof filter[nFilter].kind,  "%s", cf->kind);
     snprintf(filter[nFilter].catId, sizeof filter[nFilter].catId, "%s", cf->catId);
+    filter[nFilter].term[0] = 0;
     filter[nFilter].n = found;
     // These rows are a FILTER over what the home already holds, so `found` is
     // bounded by what is in memory and never says anything about the catalogue's
@@ -854,8 +861,9 @@ void search_event(const SDL_Event *e) {
         int c = focusRes.column;
         if (c < filter[focusRes.row].n) request = filter[focusRes.row].items[c];
         else if (filter[focusRes.row].seeAll)
-          seeall_open(filter[focusRes.row].base, filter[focusRes.row].kind,
-                      filter[focusRes.row].catId, filter[focusRes.row].title);
+          seeall_search(filter[focusRes.row].base, filter[focusRes.row].kind,
+                        filter[focusRes.row].catId, filter[focusRes.row].title,
+                        filter[focusRes.row].term);
       }
       break;
     default: break;
@@ -1296,6 +1304,24 @@ static void drawSeeAll(float x, float y, float f) {
   }
   gfx_icon_at(ic, f > 0.5f ? "search_seeall_fill" : "search_seeall",
               NV_SEARCH_SEEALL_ICO, ink, ink, ink, 1.0f);
+  // THE LABEL, focused only: the circle is an arrow and nothing else, so without
+  // it the owner has to guess what it opens. Drawn the way the detail screen's
+  // circle buttons draw theirs — bold white, 16px above the button, no pill and a
+  // stacked black shadow so it reads over a poster — and it rides the focus
+  // animation, rising 4px as it fades in.
+  if (f > 0.01f) {
+    const char *label = "See All";
+    float al = f * NV_DETWEB_TIP_ALPHA;
+    TxtLine l = txt_line(TXT_DETWEB_TIP, label, 255, 255, 255, 255);
+    TxtLine sh = txt_line(TXT_DETWEB_TIP, label, 0, 0, 0, 255);
+    float ty = y - NV_DETWEB_TIP_GAP - NV_DETWEB_TIP_H + NV_DETWEB_TIP_PADY
+             + (NV_DETWEB_TIP_LH - l.h) * 0.5f + (1.0f - f) * NV_DETWEB_TIP_RISE;
+    float tx = x + (NV_SEARCH_SEEALL - l.w) * 0.5f;
+    txt_draw_alpha(sh, tx, ty + 2.0f, al * 0.80f);
+    txt_draw_alpha(sh, tx - 1.0f, ty + 3.0f, al * 0.40f);
+    txt_draw_alpha(sh, tx + 1.0f, ty + 3.0f, al * 0.40f);
+    txt_draw_alpha(l, tx, ty, al);
+  }
 }
 
 // A row's paging arrows, for the pointer only and on the row it is on. The row

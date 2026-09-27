@@ -216,6 +216,8 @@ int  disc_row_collect(void);
 // not repeat the request.
 void disc_seeall_open(const char *base, const char *kind, const char *catId);
 void disc_seeall_filter(const char *base, const char *kind, const char *catId, const char *genre);
+// The grid behind a search row: every page carries `search=<term>`.
+void disc_seeall_search(const char *base, const char *kind, const char *catId, const char *term);
 int disc_seeall_error(void);
 // Asks for the next page, if there is one. Nothing happens if the last one came
 // back short — the protocol's end-of-list signal.

@@ -25,6 +25,24 @@ int stream_sheet_reload(void) { int r = reload; reload = 0; return r; }
 
 static int is_open = 0, focus = 0, choice = -1;
 static float anim = 0.0f, scroll = 0.0f;
+
+// EACH ROW'S ENTRANCE, parallel to `list` and moved with it — see NV_SRC_IN_MS
+// in layout.h. `in` climbs from <= 0 (still waiting its turn) to 1 (settled);
+// `dy` is how far above its slot a displaced row still sits. NULL when an
+// allocation failed, and then every row is simply drawn settled.
+typedef struct { float in, dy; } RowFx;
+static RowFx *fx;
+
+// Queues row `i`'s entrance, `order` rows into its answer and `wait` ms late.
+// With the sheet down there is nobody to show it to, so it lands settled.
+static void fxArrive(int i, int order, float wait) {
+  if (!fx) return;
+  fx[i].dy = 0.0f;
+  if (!is_open) { fx[i].in = 1.0f; return; }
+  if (order > NV_SRC_IN_CAP) order = NV_SRC_IN_CAP;
+  fx[i].in = -(wait + (float)order * NV_SRC_IN_STAGGER) / NV_SRC_IN_MS;
+}
+static float fxIn(int i) { return fx && i >= 0 && i < n ? anim_smooth(fx[i].in) : 1.0f; }
 static float tipA[2];   // the header tooltips' fades: Reload, Close
 // Whether the list's scroll follows the cursor. A row the Magic Remote's pointer
 // focused leaves it where it is (goalScroll): centring that row would slide
@@ -82,6 +100,9 @@ void stream_set_list(const Stream *l, int count) {
   free(list); list = new; n = new ? k : 0; current = -1;
   listGen++;
   pthread_mutex_unlock(&seeLock);
+  // A Reload with the sheet up cascades the new list in from the top.
+  free(fx); fx = n ? malloc(sizeof(RowFx) * (size_t)n) : NULL;
+  for (i = 0; i < n; i++) fxArrive(i, i, 0.0f);
   preferred = -1;
   focus = 0;
   // A NEW LIST IS A NEW TITLE, so the runtime goes with the old one. Keeping it
@@ -476,6 +497,25 @@ int stream_insert(int at, const Stream *l, int count) {
   n += k;
   listGen++;
   pthread_mutex_unlock(&seeLock);
+  // The entrances move with their rows. A table that was already lost stays
+  // lost rather than being grown over rows it never described.
+  if (fx || n == k) {
+    RowFx *g = realloc(fx, sizeof(RowFx) * (size_t)n);
+    if (!g) { free(fx); fx = NULL; }
+    else {
+      int shown = 0, displaced = at < n - k;
+      fx = g;
+      memmove(fx + at + k, fx + at, sizeof(RowFx) * (size_t)(n - k - at));
+      for (i = at; i < at + k; i++)
+        if (!filter || !strcmp(list[i].provider, providers[filter])) shown++;
+      // Rows pushed down start where they were drawn and slide to their slot;
+      // the newcomers wait for the gap to open before they fade into it.
+      if (is_open)
+        for (i = at + k; i < n; i++) fx[i].dy -= (float)shown * NV_SRC_ROW;
+      for (i = at; i < at + k; i++)
+        fxArrive(i, i - at, displaced ? NV_SRC_IN_GAP : 0.0f);
+    }
+  }
   // Every index held into the list moves with the rows it pointed at.
   if (current >= at) current += k;
   if (preferred >= at) preferred += k;
@@ -545,6 +585,9 @@ void stream_sheet_event(const SDL_Event *e) {
 }
 // The cursor on the provider tabs, 0..1 — see tab_draw.
 static float tabsLit;
+// The trailing placeholder's strength and the searching dots' beside the count:
+// both 1 while the addons are still out.
+static float skelA;
 void stream_sheet_update(float dt, Uint32 now) {
   (void)now;
   // IT ARRIVES AS THE PLAYER'S OTHER PANELS DO — audio, subtitles, episodes: a
@@ -570,6 +613,16 @@ void stream_sheet_update(float dt, Uint32 now) {
   // Discover's grid spring, so the three lists that scroll row by row — Discover,
   // the title's episodes and this one — all move the same way.
   scroll=anim_spring(scroll,target,dt,NV_SPRING_GRID);
+  // The displaced rows ride the SAME spring as the scroll — see NV_SRC_IN_MS.
+  if(fx) { int i;
+    for(i=0;i<n;i++) {
+      if(fx[i].in<1.0f) fx[i].in=anim_ramp(fx[i].in,1.0f,dt,NV_SRC_IN_MS);
+      if(fx[i].dy!=0.0f) {
+        fx[i].dy=anim_spring(fx[i].dy,0.0f,dt,NV_SPRING_GRID);
+        if(fabsf(fx[i].dy)<0.25f) fx[i].dy=0.0f;
+      }
+    } }
+  skelA=anim_spring(skelA,is_open && addons_busy()?1.0f:0.0f,dt,NV_SPRING_SCREEN);
 }
 int stream_sheet_chose(int *out) {
   if(choice<0) return 0;
@@ -884,6 +937,49 @@ static void sheetRow(int row, float y, float cx, float cw, Uint32 now) {
 #endif
 }
 
+// THE PLACEHOLDER: one card's ground with grey bars where the chips, the line
+// under them and the size go, breathing slowly, one slot past the last row while
+// the slow addons are still out. It says "more are coming" in the shape they will
+// take, at the place they will land. It comes in with the last arrival rather
+// than a frame ahead of it, and an empty list has the sentence instead.
+static void placeholder(int nf, float cx, float cw, float fadeTop, Uint32 now) {
+  static const float CHIP_W[3]={58.0f,50.0f,88.0f};
+  float y=NV_SRC_TOP+nf*NV_SRC_ROW-scroll, a, x, p, ba;
+  float left=cx+NV_SRC_CARD_PADX, right=cx+cw-NV_SRC_CARD_PADX;
+  float top=y+(NV_SRC_CARD_H-NV_SRC_ROW_H)*0.5f;
+  GfxRect card={cx,y,cw,NV_SRC_CARD_H};
+  float rad=NV_SRC_CARD_R/NV_SRC_CARD_H;
+  int k;
+  if(!nf || skelA<0.004f || y>NV_SCREEN_H) return;
+  a=skelA*anim*anim_edge(y,fadeTop,NV_SRC_TOP-fadeTop)*fxIn(filtered(nf-1));
+  if(a<=0.004f) return;
+  p=0.5f+0.5f*sinf((float)now*0.0042f);
+  ba=a*(0.06f+0.05f*p);
+  gfx_color(card,rad,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,NV_SRC_CARD_BASE*a);
+  gfx_color(card,rad,1,1,1,NV_SRC_CARD_FILL*NV_SRC_DIM*a);
+  for(x=left,k=0;k<3;k++) {
+    gfx_color((GfxRect){x,top+NV_SRC_CHIP_Y,CHIP_W[k],NV_SRC_CHIP_H},
+              NV_SRC_CHIP_R/NV_SRC_CHIP_H,1,1,1,ba);
+    x+=CHIP_W[k]+NV_SRC_CHIP_GAP;
+  }
+  gfx_color((GfxRect){left,top+NV_SRC_META_Y+4.0f,240.0f,16.0f},0.5f,1,1,1,ba);
+  gfx_color((GfxRect){right-96.0f,top+NV_SRC_SIZE_Y+4.0f,96.0f,24.0f},
+            8.0f/24.0f,1,1,1,ba);
+}
+
+// Three dots after the count, lit in turn, while the addons are still answering:
+// the rows in front of you are not the whole list yet. The empty sheet counts
+// its own dots in the sentence, so these wait for the first row.
+static void searchingDots(float x, float midY, Uint32 now) {
+  int i;
+  if(!n || skelA<0.004f) return;
+  for(i=0;i<3;i++) {
+    float p=0.5f+0.5f*sinf((float)now*0.0065f-i*0.9f);
+    gfx_color((GfxRect){x+i*13.0f,midY-3.5f,7.0f,7.0f},0.5f,
+              1,1,1,(0.22f+0.55f*p)*skelA*anim);
+  }
+}
+
 void stream_sheet_draw(Uint32 now) {
   if(anim<.005f) return;
   // The short slide the track menus use — see the update.
@@ -922,8 +1018,10 @@ void stream_sheet_draw(Uint32 now) {
     // The count ONLY. The episode used to follow it when the sheet was opened
     // from the player, and it is already on screen in the player behind.
     snprintf(count,sizeof count,"%d found",n);
-    txt_draw_alpha(txt_line_trim(TXT_SRC_COUNT,count,132,135,142,255,cw-(float)title.w-300.0f),
-                   cx+(float)title.w+18.0f,by,anim); }
+    { TxtLine c=txt_line_trim(TXT_SRC_COUNT,count,132,135,142,255,cw-(float)title.w-340.0f);
+      txt_draw_alpha(c,cx+(float)title.w+18.0f,by,anim);
+      searchingDots(cx+(float)title.w+18.0f+(float)c.w+12.0f,
+                    by+(capC+txt_baseline(TXT_SRC_COUNT))*0.5f,now); } }
 
   // Reload and Close: TWO ICONS IN ONE PILL, as the design draws them. The pill
   // is a faint fill and a hairline, so at rest it reads as one quiet control;
@@ -989,14 +1087,16 @@ void stream_sheet_draw(Uint32 now) {
       if(filtered(row)==current) { if(row*NV_SRC_ROW<scroll) pin=row; break; }
 #endif
     for(row=0;row<nf;row++) {
-      float y=NV_SRC_TOP+row*NV_SRC_ROW-scroll;
+      int i=filtered(row);
+      float y=NV_SRC_TOP+row*NV_SRC_ROW-scroll+(fx?fx[i].dy:0.0f), in=fxIn(i);
       float edge=pin>=0 ? anim_edge(y,pinBottom,NV_SRC_TOP+NV_SRC_ROW-pinBottom)
                         : anim_edge(y,fadeTop,NV_SRC_TOP-fadeTop);
       if(row==pin) continue;
       if(y+NV_SRC_ROW<fadeTop || y>NV_SCREEN_H) continue;
-      if(edge<=0.004f) continue;
-      gfx_opacity_group=edge;
-      sheetRow(row,y,cx,cw,now);
+      if(edge<=0.004f || in<=0.004f) continue;
+      gfx_opacity_group=edge*in;
+      // The rise is drawing only: the pointer's zone stays on the row's slot.
+      sheetRow(row,y+(1.0f-in)*NV_SRC_IN_RISE,cx,cw,now);
       pointer_zone(cx,y,cw,NV_SRC_ROW,pointRow,row,0);
       // PUT IT BACK before anything else is drawn: a group opacity left set bleeds
       // onto every later draw call in the frame.
@@ -1006,9 +1106,17 @@ void stream_sheet_draw(Uint32 now) {
       sheetRow(pin,NV_SRC_TOP,cx,cw,now);
       pointer_zone(cx,NV_SRC_TOP,cw,NV_SRC_ROW,pointRow,pin,0);
     } }
+  placeholder(nf,cx,cw,fadeTop,now);
   if(!nf) {
-    const char *msg=addons_busy()?"Fetching sources from the addons\xE2\x80\xA6":"No direct source available. Use Reload to try again.";
-    txt_block(TXT_SRC_TEXT,msg,166,169,176,cx,NV_SRC_TOP+28.0f,cw,32.0f,anim,3);
+    // While the addons answer, the dots count 1, 2, 3 and round again, so a wait
+    // reads as work in progress and not as a frozen sheet. The text is
+    // left-aligned, so only the dots move and the words stay put.
+    static const char *const FETCHING[3]={
+      "Fetching sources from the addons.",
+      "Fetching sources from the addons..",
+      "Fetching sources from the addons..."};
+    const char *msg=addons_busy()?FETCHING[(now/450u)%3u]:"No direct source available. Use Reload to try again.";
+    txt_block(TXT_SRCH_EMPTY,msg,166,169,176,cx,NV_SRC_TOP+28.0f,cw,34.0f,anim,3);
   }
   gfx_no_crop();
   pointer_no_clip();

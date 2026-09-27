@@ -1,4 +1,5 @@
 #include "subtitle.h"
+#include "subcharset.h"
 #include "net.h"
 #include <pthread.h>
 #include <stdlib.h>
@@ -9,6 +10,11 @@
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static SubtitleCue *cues;
+// reach[i] is the latest end among cues[0..i]. The cues are sorted by start but
+// may overlap — an ASS sign held on screen while the dialogue runs under it —
+// so the end times are not sorted, and this is what tells subtitle_text where
+// to stop looking back.
+static double *reach;
 static int nCues, on;
 static unsigned generation, retimed;
 
@@ -36,7 +42,7 @@ static void entity(char *s) {
   *w=0;
 }
 
-int subtitle_parse(const char *body, SubtitleCue **output) {
+static int parseSrt(const char *body, SubtitleCue **output) {
   char *buf,*p,*line; int n=0,cap=128;
   SubtitleCue *v;
   if (output) *output=NULL;
@@ -76,28 +82,309 @@ int subtitle_parse(const char *body, SubtitleCue **output) {
   *output=v;return n;
 }
 
-typedef struct { char url[1400]; unsigned g; } Request;
+// --- ASS / SSA ----------------------------------------------------------------
+//
+// The text, and WHERE it goes: the alignment (\an, the older \a, or the style's
+// own Alignment) and a \pos point, which is the subset the web app keeps. A
+// \move is placed at its end point, still, as the web's fallback does. Fonts,
+// colours, fades and karaoke are dropped; the viewer's own subtitle style is
+// used for every line. A vector drawing ({\p1}...) has no text at all and is
+// skipped, or its path commands would be shown as words.
+
+// "0:01:02.50" -> 62.5, the fraction optional; -1 when it is not an ASS time.
+// Only '.' starts a fraction: the time is read in place, and the ',' after it
+// is the next column.
+static double assTime(const char *s) {
+  int h, m, sec, frac = 0, digits = 0, used = 0;
+  while (*s == ' ') s++;
+  if (sscanf(s, "%d:%d:%d%n", &h, &m, &sec, &used) != 3 || h < 0 || m < 0 || sec < 0) return -1;
+  s += used;
+  if (*s == '.') {
+    s++;
+    while (isdigit((unsigned char)*s)) { if (digits < 3) { frac = frac * 10 + (*s - '0'); digits++; } s++; }
+    while (digits++ < 3) frac *= 10;
+  }
+  while (*s == ' ') s++;
+  if (*s && *s != ',') return -1;
+  return h * 3600.0 + m * 60.0 + sec + frac / 1000.0;
+}
+
+// Override blocks out, \N and \n to line breaks, \h to a space. 0 when the
+// line is a drawing.
+static int assText(const char *in, char *out, size_t size) {
+  size_t w = 0;
+  while (*in && w + 1 < size) {
+    if (*in == '{') {
+      const char *close = strchr(in, '}'), *q;
+      if (!close) break;
+      for (q = in; q < close; q++)
+        if (q[0] == '\\' && q[1] == 'p' && q[2] >= '1' && q[2] <= '9') return 0;
+      in = close + 1;
+    } else if (in[0] == '\\' && (in[1] == 'N' || in[1] == 'n')) { out[w++] = '\n'; in += 2; }
+    else if (in[0] == '\\' && in[1] == 'h') { out[w++] = ' '; in += 2; }
+    else out[w++] = *in++;
+  }
+  out[w] = 0;
+  // Trim, including the empty lines a leading or trailing \N leaves behind.
+  { char *a = out, *z = out + strlen(out);
+    while (*a && isspace((unsigned char)*a)) a++;
+    while (z > a && isspace((unsigned char)z[-1])) z--;
+    *z = 0; memmove(out, a, (size_t)(z - a) + 1); }
+  return out[0] != 0;
+}
+
+// The columns of a Dialogue line. `nFields` counts them, Text always last.
+typedef struct { int start, end, style, nFields; } AssFormat;
+
+static int assFormat(const char *list, AssFormat *f) {
+  int i = 0, text = -1; AssFormat r = { -1, -1, -1, 0 };
+  while (*list) {
+    char name[16]; size_t k = 0;
+    while (*list == ' ') list++;
+    while (*list && *list != ',' && k + 1 < sizeof name) name[k++] = (char)tolower((unsigned char)*list++);
+    while (k && name[k - 1] == ' ') k--;
+    name[k] = 0;
+    if (!strcmp(name, "start")) r.start = i;
+    else if (!strcmp(name, "end")) r.end = i;
+    else if (!strcmp(name, "text")) text = i;
+    else if (!strcmp(name, "style")) r.style = i;
+    i++;
+    if (*list == ',') list++;
+    else if (*list) while (*list && *list != ',') list++;
+  }
+  // A Styles section has a Format line too; only an Events one names all three.
+  if (r.start < 0 || r.end < 0 || text != i - 1) return 0;
+  r.nFields = i; *f = r;
+  return 1;
+}
+
+// A headerless body (some proxies strip the sections) still carries its timing:
+// either "Start,End,Text" or the standard ten columns behind a Layer or Marked.
+static int assInferFormat(const char *rest, AssFormat *f) {
+  const char *c1 = strchr(rest, ','), *c2 = c1 ? strchr(c1 + 1, ',') : NULL;
+  if (c1 && assTime(rest) >= 0 && assTime(c1 + 1) >= 0) {
+    f->start = 0; f->end = 1; f->style = -1; f->nFields = 3; return 1;
+  }
+  if (c2 && assTime(c1 + 1) >= 0 && assTime(c2 + 1) >= 0) {
+    f->start = 1; f->end = 2; f->style = 3; f->nFields = 10; return 1;
+  }
+  return 0;
+}
+
+// SSA's \a numbering (1-3 bottom, +4 top, +8 middle) as the numpad one \an uses.
+static int ssaToNumpad(int a) {
+  if (a >= 1 && a <= 3) return a;
+  if (a >= 5 && a <= 7) return a + 2;
+  if (a >= 9 && a <= 11) return a - 5;
+  return 0;
+}
+
+// The first \anN or \aN inside the override blocks, as numpad; 0 when none.
+static int assInlineAlign(const char *s) {
+  for (const char *o = strchr(s, '{'); o; o = strchr(o + 1, '{')) {
+    const char *close = strchr(o, '}');
+    if (!close) break;
+    for (const char *q = o; q < close; q++) {
+      if (q[0] != '\\' || q[1] != 'a') continue;
+      if (q[2] == 'n' && q[3] >= '1' && q[3] <= '9') return q[3] - '0';
+      if (isdigit((unsigned char)q[2])) return ssaToNumpad(atoi(q + 2));
+    }
+  }
+  return 0;
+}
+
+// The point of a \pos(x,y), or the end point of a \move(x1,y1,x2,y2[,t1,t2]).
+static int assPoint(const char *s, float *x, float *y) {
+  const char *q;
+  double v[4];
+  if ((q = strstr(s, "\\pos(")) && sscanf(q + 5, "%lf , %lf", &v[0], &v[1]) == 2) {
+    *x = (float)v[0]; *y = (float)v[1]; return 1;
+  }
+  if ((q = strstr(s, "\\move(")) &&
+      sscanf(q + 6, "%lf , %lf , %lf , %lf", &v[0], &v[1], &v[2], &v[3]) == 4) {
+    *x = (float)v[2]; *y = (float)v[3]; return 1;
+  }
+  return 0;
+}
+
+// A style's name and alignment, from [V4+ Styles] (numpad) or [V4 Styles] (SSA).
+typedef struct { char name[48]; int align; } AssStyle;
+#define ASS_STYLES 128
+
+static int parseAss(const char *body, SubtitleCue **output) {
+  const char *p = body;
+  int n = 0, cap = 128, haveFormat = 0, nStyles = 0, styleName = -1, styleAlign = -1, ssa = 0;
+  double resX = 0, resY = 0;
+  AssFormat format = { 0 };
+  AssStyle *styles = calloc(ASS_STYLES, sizeof *styles);
+  SubtitleCue *v = calloc((size_t)cap, sizeof *v);
+  if (!v || !styles) { free(v); free(styles); return 0; }
+  while (*p) {
+    const char *eol = strchr(p, '\n'), *next = eol ? eol + 1 : p + strlen(p);
+    size_t len = (size_t)(next - p);
+    char line[4096], *rest;
+    if (len >= sizeof line) { p = next; continue; }
+    memcpy(line, p, len); line[len] = 0; p = next;
+    { char *q = line + strlen(line); while (q > line && (q[-1] == '\n' || q[-1] == '\r')) *--q = 0; }
+    rest = line; while (*rest == ' ' || *rest == '\t') rest++;
+    if (!strncasecmp(rest, "[V4 Styles", 10)) { ssa = 1; continue; }
+    if (!strncasecmp(rest, "[V4+ Styles", 11)) { ssa = 0; continue; }
+    if (!strncasecmp(rest, "PlayResX:", 9)) { resX = atof(rest + 9); continue; }
+    if (!strncasecmp(rest, "PlayResY:", 9)) { resY = atof(rest + 9); continue; }
+    if (!strncasecmp(rest, "Format:", 7)) {
+      if (assFormat(rest + 7, &format)) { haveFormat = 1; continue; }
+      // The Styles section's Format: where Name and Alignment sit.
+      int i = 0; styleName = styleAlign = -1;
+      for (const char *q = rest + 7; *q; i++) {
+        while (*q == ' ') q++;
+        if (!strncasecmp(q, "Name", 4) && (q[4] == ',' || q[4] == ' ' || !q[4])) styleName = i;
+        if (!strncasecmp(q, "Alignment", 9)) styleAlign = i;
+        q = strchr(q, ','); if (!q) break; q++;
+      }
+      continue;
+    }
+    if (!strncasecmp(rest, "Style:", 6)) {
+      const char *q = rest + 6; int i = 0;
+      if (styleName < 0 || styleAlign < 0 || nStyles == ASS_STYLES) continue;
+      AssStyle st = { "", 0 };
+      for (; q; i++) {
+        while (*q == ' ') q++;
+        if (i == styleName) {
+          size_t k = strcspn(q, ",");
+          if (k >= sizeof st.name) k = sizeof st.name - 1;
+          memcpy(st.name, q, k); st.name[k] = 0;
+          while (k && st.name[k - 1] == ' ') st.name[--k] = 0;
+        }
+        if (i == styleAlign) st.align = ssa ? ssaToNumpad(atoi(q)) : atoi(q);
+        q = strchr(q, ','); if (q) q++;
+      }
+      if (st.align < 1 || st.align > 9) st.align = 0;
+      if (st.name[0]) styles[nStyles++] = st;
+      continue;
+    }
+    if (strncasecmp(rest, "Dialogue:", 9)) continue;
+    rest += 9; while (*rest == ' ') rest++;
+    AssFormat f = format;
+    if (!haveFormat && !assInferFormat(rest, &f)) continue;
+    // Every column but the last ends at a comma; Text keeps its own commas.
+    const char *col[32]; int i;
+    if (f.nFields > 32) continue;
+    col[0] = rest;
+    for (i = 1; i < f.nFields; i++) {
+      const char *c = strchr(col[i - 1], ',');
+      if (!c) break;
+      col[i] = c + 1;
+    }
+    if (i < f.nFields) continue;
+    double start = assTime(col[f.start]), end = assTime(col[f.end]);
+    const char *raw = col[f.nFields - 1];
+    char text[768];
+    if (start < 0 || end <= start || !assText(raw, text, sizeof text)) continue;
+    if (n == cap) { SubtitleCue *nv = realloc(v, (size_t)cap * 2 * sizeof *v); if (!nv) break; v = nv; cap *= 2; }
+    SubtitleCue *c = &v[n];
+    memset(c, 0, sizeof *c);
+    c->start = start; c->end = end;
+    snprintf(c->text, sizeof c->text, "%s", text);
+    c->align = assInlineAlign(raw);
+    if (!c->align && f.style >= 0) {
+      char name[48]; size_t k;
+      const char *q = col[f.style];
+      while (*q == ' ') q++;
+      k = strcspn(q, ",");
+      if (k >= sizeof name) k = sizeof name - 1;
+      memcpy(name, q, k); name[k] = 0;
+      while (k && name[k - 1] == ' ') name[--k] = 0;
+      // "*Default" is how some writers mark the default style.
+      for (int s = 0; s < nStyles; s++)
+        if (!strcasecmp(styles[s].name, name) ||
+            (name[0] == '*' && !strcasecmp(styles[s].name, name + 1))) { c->align = styles[s].align; break; }
+    }
+    c->positioned = assPoint(raw, &c->x, &c->y);
+    n++;
+  }
+  free(styles);
+  if (!n) { free(v); return 0; }
+  // A point is in script pixels: the script's PlayRes, with the defaults libass
+  // uses when it is missing (384x288, or one side derived from the other).
+  if (resX <= 0 && resY <= 0) { resX = 384; resY = 288; }
+  else if (resX <= 0) resX = resY == 1024 ? 1280 : resY * 4 / 3;
+  else if (resY <= 0) resY = resX == 1280 ? 1024 : resX * 3 / 4;
+  for (int i = 0; i < n; i++) {
+    if (!v[i].positioned) continue;
+    v[i].x = (float)(v[i].x / resX); v[i].y = (float)(v[i].y / resY);
+    if (v[i].x < 0) v[i].x = 0; if (v[i].x > 1) v[i].x = 1;
+    if (v[i].y < 0) v[i].y = 0; if (v[i].y > 1) v[i].y = 1;
+  }
+  *output = v;
+  return n;
+}
+
+// Whether a line of the body starts with "Dialogue:" — an ASS event. An SRT
+// whose dialogue merely mentions the word does not start a line with it.
+static int looksLikeAss(const char *body) {
+  const char *p = body;
+  while (p && *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+    if (!strncasecmp(p, "Dialogue:", 9)) return 1;
+    p = strchr(p, '\n'); if (p) p++;
+  }
+  return 0;
+}
+
+static int byStart(const void *a, const void *b) {
+  const SubtitleCue *x = a, *y = b;
+  if (x->start != y->start) return x->start < y->start ? -1 : 1;
+  return (x->end > y->end) - (x->end < y->end);
+}
+
+// SRT/VTT or ASS/SSA, told apart by the body: addons mislabel the extension. The
+// cues come back sorted by start, which neither format promises and
+// subtitle_text's search needs.
+int subtitle_parse(const char *body, SubtitleCue **output) {
+  int n = 0;
+  if (output) *output = NULL;
+  if (!body || !output) return 0;
+  if (looksLikeAss(body)) n = parseAss(body, output);
+  if (!n) n = parseSrt(body, output);
+  if (n > 1) qsort(*output, (size_t)n, sizeof **output, byStart);
+  return n;
+}
+
+typedef struct { char url[1400]; char language[8]; unsigned g; } Request;
+
+// Frees the loaded cues; the caller holds the lock.
+static void dropCues(void) { free(cues); free(reach); cues=NULL; reach=NULL; nCues=0; }
+
 static void *download(void *u) {
-  Request *p=u; char *body=net_download(p->url,20); SubtitleCue *v=NULL;
-  int n=body?subtitle_parse(body,&v):0; free(body);
+  Request *p=u; long size=0; const char *charset="";
+  char *raw=net_download_bin(p->url,20,&size),*body=raw?subcharset_utf8(raw,size,p->language,&charset):NULL;
+  SubtitleCue *v=NULL; double *r=NULL;
+  int n=body?subtitle_parse(body,&v):0,i;
+  free(raw);free(body);
+  if(n&&(r=malloc((size_t)n*sizeof *r))!=NULL)
+    for(i=0;i<n;i++)r[i]=i&&r[i-1]>v[i].end?r[i-1]:v[i].end;
+  else if(n){free(v);v=NULL;n=0;}
   pthread_mutex_lock(&lock);
-  if(p->g==generation&&on){free(cues);cues=v;nCues=n;v=NULL;}
+  if(p->g==generation&&on){dropCues();cues=v;reach=r;nCues=n;v=NULL;r=NULL;}
   pthread_mutex_unlock(&lock);
-  free(v);printf("[subtitle] OpenSubtitles: %d blocks%s\n",n,n?"":" (failed)");fflush(stdout);
+  free(v);free(r);
+  printf("[subtitle] OpenSubtitles: %d blocks, %s%s\n",n,charset[0]?charset:"no body",n?"":" (failed)");
+  fflush(stdout);
   free(p);return NULL;
 }
 
-void subtitle_load(const char *url) {
+void subtitle_load(const char *url,const char *language) {
   Request *p; pthread_t thread;
   if(!url||!*url)return;
   p=calloc(1,sizeof *p);if(!p)return;
-  pthread_mutex_lock(&lock);on=1;p->g=++generation;free(cues);cues=NULL;nCues=0;pthread_mutex_unlock(&lock);
+  pthread_mutex_lock(&lock);on=1;p->g=++generation;dropCues();pthread_mutex_unlock(&lock);
   snprintf(p->url,sizeof p->url,"%s",url);
+  snprintf(p->language,sizeof p->language,"%s",language?language:"");
   if(pthread_create(&thread,NULL,download,p)==0)pthread_detach(thread);else free(p);
 }
 
 void subtitle_off(void) {
-  pthread_mutex_lock(&lock);on=0;generation++;free(cues);cues=NULL;nCues=0;pthread_mutex_unlock(&lock);
+  pthread_mutex_lock(&lock);on=0;generation++;dropCues();pthread_mutex_unlock(&lock);
 }
 
 unsigned subtitle_ready(void) {
@@ -119,23 +406,58 @@ int subtitle_times(unsigned g,double **starts,double **ends) {
   return n;
 }
 
-// The lines stay sorted: a positive scale and one offset keep their order.
+// The lines stay sorted: a positive scale and one offset keep their order, and
+// move reach[] exactly as they move the ends it was taken from.
 int subtitle_retime(unsigned g,double scale,double offset) {
   int i,done=0;
   if(scale<=0)return 0;
   pthread_mutex_lock(&lock);
   if(g&&g==generation&&on&&retimed!=g){
-    for(i=0;i<nCues;i++){cues[i].start=cues[i].start*scale+offset;cues[i].end=cues[i].end*scale+offset;}
+    for(i=0;i<nCues;i++){
+      cues[i].start=cues[i].start*scale+offset;cues[i].end=cues[i].end*scale+offset;
+      reach[i]=reach[i]*scale+offset;
+    }
     retimed=g;done=1;
   }
   pthread_mutex_unlock(&lock);
   return done;
 }
 
+// Every cue on screen at `t`, oldest first. ASS files overlap cues all the
+// time (a sign over the dialogue) and repeat the same line on several layers
+// for its outline or shadow; a repeat in the same place is kept once.
+int subtitle_shown(double posSeg,int delayMs,SubtitleCue *out,int max) {
+  int lo=0,hi,last,i,k,hits[16],nHits=0; double t=posSeg+(double)delayMs/1000.0;
+  if(!out||max<=0)return 0;
+  if(max>16)max=16;
+  pthread_mutex_lock(&lock);
+  // The last cue that has started by t.
+  hi=nCues-1;last=-1;
+  while(lo<=hi){int m=(lo+hi)/2;if(cues[m].start<=t){last=m;lo=m+1;}else hi=m-1;}
+  for(i=last;i>=0&&reach[i]>=t&&nHits<max;i--){
+    const SubtitleCue *c=&cues[i];
+    if(c->end<t)continue;
+    for(k=0;k<nHits;k++){
+      const SubtitleCue *h=&cues[hits[k]];
+      if(!strcmp(h->text,c->text)&&h->align==c->align&&h->positioned==c->positioned&&
+         h->x==c->x&&h->y==c->y)break;
+    }
+    if(k==nHits)hits[nHits++]=i;
+  }
+  for(k=0;k<nHits;k++)out[k]=cues[hits[nHits-1-k]];
+  pthread_mutex_unlock(&lock);return nHits;
+}
+
+// The same cues as one block of text, one per line.
 int subtitle_text(double posSeg,int delayMs,char *dst,size_t size) {
-  int ok=0,lo=0,hi; double t=posSeg+(double)delayMs/1000.0;
+  SubtitleCue shown[8]; size_t used=0;
+  int n,k;
   if(!dst||!size)return 0;dst[0]=0;
-  pthread_mutex_lock(&lock);hi=nCues-1;
-  while(lo<=hi){int m=(lo+hi)/2;if(t<cues[m].start)hi=m-1;else if(t>cues[m].end)lo=m+1;else{snprintf(dst,size,"%s",cues[m].text);ok=1;break;}}
-  pthread_mutex_unlock(&lock);return ok;
+  n=subtitle_shown(posSeg,delayMs,shown,8);
+  for(k=0;k<n;k++){
+    int w=snprintf(dst+used,size-used,"%s%s",used?"\n":"",shown[k].text);
+    if(w<0||(size_t)w>=size-used)break;
+    used+=(size_t)w;
+  }
+  return n>0;
 }
