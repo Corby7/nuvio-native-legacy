@@ -47,14 +47,19 @@ int main(int argc, char **argv) {
   { char relay[4200];
     const char *u = iptv_play_url(0, relay, sizeof relay);
     printf("stream: %s\n", u);
-    // HLS: this account allows it.
-    assert(strstr(u, "/live/d5fe/fa10/101.m3u8")); }
+    // TS: the link asked for output=ts, and the account allows it.
+    assert(strstr(u, "/live/d5fe/fa10/101.ts")); }
   // The guide came from xmltv.php, the Xtream one, not from the playlist.
   assert(iptv_guide_state() == IPTV_READY && iptv_list()->ch[0].nPg == 1);
 
   // The same as an Xtream login: the same channels.
   load(IPTV_SRC_XTREAM, "", base, "d5fe", "fa10");
   assert(iptv_state() == IPTV_READY && iptv_list()->nCh == 2);
+  // No link to ask for a container: HLS, which the account allows; the other
+  // one is there for a stream that will not play.
+  { char relay[4200];
+    assert(strstr(iptv_play_url(0, relay, sizeof relay), "/live/d5fe/fa10/101.m3u8"));
+    assert(strstr(iptv_play_url_alt(0, relay, sizeof relay), "/live/d5fe/fa10/101.ts")); }
 
   // A wrong password: said as such, not as an 884.
   load(IPTV_SRC_XTREAM, "", base, "d5fe", "wrong");
@@ -67,6 +72,6 @@ int main(int argc, char **argv) {
   assert(strstr(iptv_status(), "expired"));
 
   iptv_shutdown();
-  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link; login and expiry said.");
+  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link and its output=ts; login and expiry said.");
   return 0;
 }
