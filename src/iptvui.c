@@ -34,6 +34,7 @@
 #include "iptvui.h"
 #include "iptv.h"
 #include "app.h"
+#include "detail.h"
 #include "anim.h"
 #include "gfx.h"
 #include "hold.h"
@@ -106,8 +107,6 @@
 #define LIVE_ZAP_MS        350u    // CH+/CH- held down tunes only where it stops
 #define LIVE_DIGITS_MS    1600u
 #define LIVE_TOAST_MS     2600u
-#define LIVE_QUICK_W      720.0f
-#define LIVE_QUICK_ROW    84.0f
 
 // Colours, as hex from the mockups. HEXF for gfx (floats), HEXI for text (ints).
 #define HEXF(h) ((h) >> 16 & 255) / 255.0f, ((h) >> 8 & 255) / 255.0f, ((h) & 255) / 255.0f
@@ -182,8 +181,22 @@ static float lastZoom = -1.0f;
 #define REMIND_MAX 32
 static struct { char name[256]; char title[200]; int number; long long start; } reminders[REMIND_MAX];
 static int nReminders;
+// THE CHANNELS PANEL, over a playing channel: the film player's episode selector
+// (episodes.c) with channels for episodes — the same column at the right, veil,
+// slide, heading, pill, rows, opening row and list motion, all from its NV_EPL_*
+// measures, so the two players' panels are one design. The group pill sits where
+// the season pill does and is walked the same way: ◀▶ from anywhere, OK for its
+// menu. OK on a row is the one press that retunes.
 static int quickOpen, quickRow;
-static float quickScroll, quickScrollV;
+static float quickA, quickScroll;
+static int quickZone;              // Q_PILL or Q_LIST
+static int quickFromBar;           // opened from the bar's controls: close back to it
+static int gmOpen, gmCursor, gmScroll;
+static float *quickOpened;         // each row's opening, 0..1, as episodes.c's `opened`
+static int quickOpenedCap;
+static int quickSnap;
+enum { Q_PILL, Q_LIST };
+static int sheetWasUp;             // a tracks sheet or this panel was up last frame
 static char digits[6];
 static Uint32 digitsAt;
 static int lastWin[4] = { -1, -1, -1, -1 };
@@ -675,7 +688,9 @@ static void pointCell(int row, int t) {
 }
 static void pointAct(int a, int unused) { (void)unused; zone = ZONE_ACTIONS; actSel = a; }
 static void pointSetup(int i, int unused) { (void)unused; if (!ime_is_open()) setupRow = i; }
-static void pointQuick(int r, int unused) { (void)unused; quickRow = r; }
+static void pointQuick(int r, int unused) { (void)unused; if (!gmOpen) { quickRow = r; quickZone = Q_LIST; } }
+static void pointQuickPill(int a, int b) { (void)a; (void)b; if (!gmOpen) quickZone = Q_PILL; }
+static void pointGroupMenu(int g, int unused) { (void)unused; if (gmOpen && g >= 0) gmCursor = g; }
 
 // --- Lifecycle ---------------------------------------------------------------------------
 int iptvui_start(void) {
@@ -716,6 +731,7 @@ void iptvui_shutdown(void) {
   iptvui_leave();
   free(view); view = NULL; nView = capView = 0;
   free(chipW); chipW = NULL; nChipW = 0;
+  free(quickOpened); quickOpened = NULL; quickOpenedCap = 0;
   if (dashTex) { gfx_tex_forget(dashTex); glDeleteTextures(1, &dashTex); dashTex = 0; }
   iptv_shutdown();
 }
@@ -791,8 +807,13 @@ static void control(int ctl) {
       break;
     case CTL_CHANNELS:
       quickOpen = 1;
+      quickFromBar = barCtl >= 0;
+      quickZone = Q_LIST; gmOpen = 0;
+      // Opens on the playing channel, as the episode panel opens on the
+      // playing season: a group without it gives way to All channels.
+      if (viewIndex(tuned) < 0) chooseGroup(GROUP_ALL);
       quickRow = viewIndex(tuned) >= 0 ? viewIndex(tuned) : 0;
-      quickScroll = (float)quickRow;
+      quickSnap = 1;
       break;
     case CTL_SUBS: case CTL_AUDIO:
       tracks_embedded_only(1);
@@ -816,20 +837,59 @@ static void startPeek(int step) {
   overlay(OV_PEEK);
 }
 
+static int gmVisible(void) { int n = nGroups(); return n < NV_EPL_SMENU_VIS ? n : NV_EPL_SMENU_VIS; }
+static void gmKeep(void) {
+  int vis = gmVisible();
+  if (gmCursor < gmScroll) gmScroll = gmCursor;
+  if (gmCursor >= gmScroll + vis) gmScroll = gmCursor - vis + 1;
+  if (gmScroll < 0) gmScroll = 0;
+}
+
+// Another group in the panel: its list from the top, unless the playing channel
+// is in it, where it lands on that one — episodes.c's courtesy for a season.
+static void quickGroup(int g) {
+  if (g < 0 || g >= nGroups() || g == group) return;
+  chooseGroup(g);
+  quickRow = viewIndex(tuned) >= 0 ? viewIndex(tuned) : 0;
+  quickSnap = 1;
+}
+
+static void closeQuick(void) {
+  quickOpen = 0; gmOpen = 0;
+  // From the bar's Channels button, Back returns to the bar and its button.
+  if (quickFromBar) overlay(OV_BAR); else ov = OV_NONE;
+}
+
+static void quickEvent(SDL_Keycode k) {
+  if (gmOpen) {
+    if (k == SDLK_UP && gmCursor > 0) gmCursor--;
+    else if (k == SDLK_DOWN && gmCursor < nGroups() - 1) gmCursor++;
+    else if (isOk(k)) { quickGroup(gmCursor); gmOpen = 0; quickZone = Q_LIST; }
+    else if (isBack(k)) gmOpen = 0;
+    gmKeep();
+    return;
+  }
+  if (isBack(k)) { closeQuick(); return; }
+  if (k == SDLK_LEFT)  { quickGroup(group - 1); return; }
+  if (k == SDLK_RIGHT) { quickGroup(group + 1); return; }
+  if (k == SDLK_UP) { if (quickZone == Q_LIST && quickRow > 0) quickRow--; else quickZone = Q_PILL; return; }
+  if (k == SDLK_DOWN) { if (quickZone == Q_PILL) quickZone = Q_LIST; else if (quickRow + 1 < nView) quickRow++; return; }
+  if (k == SDLK_PAGEUP)   { quickZone = Q_LIST; quickRow = quickRow > 6 ? quickRow - 6 : 0; return; }
+  if (k == SDLK_PAGEDOWN) { quickZone = Q_LIST; quickRow = quickRow + 6 < nView ? quickRow + 6 : (nView ? nView - 1 : 0); return; }
+  if (!isOk(k)) return;
+  if (quickZone == Q_PILL) { gmOpen = 1; gmCursor = group; gmScroll = 0; gmKeep(); return; }
+  if (quickRow < nView) {
+    fRow = quickRow; rememberFocus();
+    if (view[quickRow] != tuned) tune(view[quickRow], 1);
+    quickOpen = 0; gmOpen = 0;
+    overlay(OV_TOAST);
+  }
+}
+
 static void fullEvent(SDL_Keycode k) {
   int d = digitOf(k);
   int up = k == SDLK_UP || k == SDLK_PAGEDOWN, down = k == SDLK_DOWN || k == SDLK_PAGEUP;
-  if (quickOpen) {
-    if (k == SDLK_UP)        { if (quickRow > 0) quickRow--; }
-    else if (k == SDLK_DOWN) { if (quickRow + 1 < nView) quickRow++; }
-    else if (k == SDLK_PAGEUP)   { quickRow = quickRow > 8 ? quickRow - 8 : 0; }
-    else if (k == SDLK_PAGEDOWN) { quickRow = quickRow + 8 < nView ? quickRow + 8 : nView - 1; }
-    else if (isOk(k) && quickRow < nView) {
-      fRow = quickRow; rememberFocus(); tune(view[quickRow], 1); quickOpen = 0; overlay(OV_TOAST);
-    }
-    else if (isBack(k) || k == SDLK_RIGHT) quickOpen = 0;
-    return;
-  }
+  if (quickOpen) { quickEvent(k); return; }
   if (d >= 0) { typeDigit(d); return; }
 
   switch (ov) {
@@ -838,7 +898,7 @@ static void fullEvent(SDL_Keycode k) {
       // the toast says where you landed. The retune waits for the keys to stop.
       if (up || down) { zap(down ? +1 : -1); overlay(OV_TOAST); }
       else if (isOk(k) || k == SDLK_i || k == SDLK_RIGHT) overlay(OV_BAR);
-      else if (k == SDLK_LEFT) control(CTL_CHANNELS);
+      else if (k == SDLK_LEFT) { barCtl = -1; control(CTL_CHANNELS); }
       else if (isBack(k)) {
         // Back to the screen; the picture carries on in the preview.
         full = 0; ov = OV_NONE;
@@ -1001,6 +1061,63 @@ static float followRow(float current, int row, int visible, int n) {
   return (float)(int)target;
 }
 
+// The panel's layout, episodes.c's: a closed row's pitch, where the text starts
+// (further in on the focused row, whose plate has grown), the list's window.
+#define Q_PITCH      (NV_EPL_ROW_H + NV_EPL_ROW_GAP)
+#define Q_VIEW_H     (NV_EPL_VIEW_BOTTOM - NV_EPL_VIEW_TOP)
+#define Q_TEXT_X(f)  (NV_EPL_PADX + NV_EPL_THUMB_W * (1.0f + (NV_EPL_THUMB_GROW - 1.0f) * (f)) \
+                      + NV_EPL_TEXT_GAP + NV_EPL_TEXT_GROW * (f))
+#define Q_TEXT_W(f)  (NV_EPL_W - NV_EPL_PADX - Q_TEXT_X(f))
+
+static const IptvProgramme *quickProgramme(int row) {
+  return row >= 0 && row < nView ? programmeAt(view[row], nowMinute()) : NULL;
+}
+static int quickSynLines(const IptvProgramme *pg) {
+  int n;
+  if (!pg || !pg->desc[0]) return 0;
+  n = txt_block_lines(TXT_TRK_OPTSUB, pg->desc, Q_TEXT_W(1.0f));
+  return n > NV_EPL_SYN_LINES ? NV_EPL_SYN_LINES : n;
+}
+static float quickFullBlock(const IptvProgramme *pg) {
+  int n = quickSynLines(pg);
+  return n > 0 ? NV_EPL_SYN_DY + n * NV_EPL_SYN_LD - (NV_EPL_SYN_LD - 22.0f) : NV_EPL_BLOCK_H;
+}
+static float quickOpenExtra(const IptvProgramme *pg) {
+  float h = quickFullBlock(pg) + NV_EPL_PADY * 2 - NV_EPL_ROW_H;
+  return h > 0.0f ? h : 0.0f;
+}
+
+static void quickUpdate(float dt) {
+  quickA = anim_spring(quickA, quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
+  if (!quickOpen && quickA < 0.005f) return;
+  if (quickOpenedCap < nView) {
+    float *o = realloc(quickOpened, (size_t)nView * sizeof *o);
+    if (!o) return;
+    for (int i = quickOpenedCap; i < nView; i++) o[i] = 0.0f;
+    quickOpened = o; quickOpenedCap = nView;
+  }
+  if (quickRow >= nView) quickRow = nView ? nView - 1 : 0;
+  // Only the focused row opens, and none while the pill has the cursor.
+  for (int i = 0; i < nView; i++) {
+    float want = i == quickRow && quickZone == Q_LIST ? 1.0f : 0.0f;
+    if (quickSnap) quickOpened[i] = want;
+    else if (quickOpened[i] > 0.0f || want > 0.0f)
+      quickOpened[i] = anim_spring(quickOpened[i], want, dt, NV_SPRING_GRID);
+  }
+  // The focused row held in the window's middle, whole rows at the top, the
+  // list stopping at both ends — episodes.c's offset, measured where the rows
+  // are heading.
+  { float fh = NV_EPL_ROW_H + quickOpenExtra(quickProgramme(quickRow));
+    float total = nView * Q_PITCH - NV_EPL_ROW_GAP + (fh - NV_EPL_ROW_H);
+    float max = total - Q_VIEW_H;
+    float target = quickRow * Q_PITCH - (Q_VIEW_H - fh) * 0.5f;
+    target = roundf(target / Q_PITCH) * Q_PITCH;
+    if (target > max) target = max;
+    if (target < 0) target = 0;
+    quickScroll = quickSnap ? target : anim_spring(quickScroll, target, dt, NV_SPRING_GRID); }
+  if (nView) quickSnap = 0;
+}
+
 void iptvui_update(float dt, Uint32 now) {
   long long t = nowSec();
   int reduced = settings_animations_reduced();
@@ -1047,8 +1164,15 @@ void iptvui_update(float dt, Uint32 now) {
   if (full && ov != OV_NONE && now >= ovUntil && !(ov == OV_BAR && barCtl >= 0) && !tracks_is_open())
     ov = OV_NONE;
   if (!full) ov = OV_NONE;
-  toastA = anim_spring(toastA, full && ov == OV_TOAST && !quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
-  barA = anim_spring(barA, full && ov >= OV_BAR && !quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
+  // ANY SHEET OVER THE PICTURE HIDES THE BAR, as the film player hides its
+  // transport under its sheets: subtitles, audio, the channels panel. When the
+  // sheet goes the bar comes back with its clock restarted and its focus where
+  // it was, so Back from Subtitles lands on the Subtitles button.
+  { int sheet = quickOpen || tracks_is_open();
+    if (sheetWasUp && !sheet && full && ov == OV_BAR) overlay(OV_BAR);
+    sheetWasUp = sheet;
+    toastA = anim_spring(toastA, full && ov == OV_TOAST && !sheet ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS);
+    barA = anim_spring(barA, full && ov >= OV_BAR && !sheet ? 1.0f : 0.0f, dt, NV_SPRING_FOCUS); }
   peekScroll = anim_spring2_reduced(&peekScrollV, peekScroll, (float)peekRow, dt, NV_SPRING2_PAGE, reduced);
   for (int i = 0; i < CTL_N; i++) {
     float target = (full && ov == OV_BAR && barCtl == i) ? 1.0f : 0.0f;
@@ -1082,14 +1206,7 @@ void iptvui_update(float dt, Uint32 now) {
     }
     chipScroll = anim_spring2_reduced(&chipScrollV, chipScroll, target, dt, NV_SPRING2_PAGE, reduced); }
 
-  { float q = quickScroll;
-    int rows = (int)((NV_SCREEN_H - 200.0f) / LIVE_QUICK_ROW);
-    if (quickRow < q + 1) q = (float)quickRow - 1;
-    if (quickRow > q + rows - 2) q = (float)(quickRow - rows + 2);
-    if (q > (float)(nView - rows)) q = (float)(nView - rows);
-    if (q < 0) q = 0;
-    quickScroll = anim_spring2_reduced(&quickScrollV, quickScroll, (float)(int)q, dt,
-                                       NV_SPRING2_PAGE, reduced); }
+  quickUpdate(dt);
 }
 
 // --- Drawing: shared parts ----------------------------------------------------------------
@@ -2299,38 +2416,211 @@ static void drawClock(float a) {
     txt_draw_alpha(u, NV_SCREEN_W - 96.0f - u.w, 66.0f + t.h + 2.0f, a); }
 }
 
-static void drawQuick(void) {
-  const IptvList *l = iptv_list();
-  long long now = nowMinute();
-  int rows = (int)((NV_SCREEN_H - 200.0f) / LIVE_QUICK_ROW);
-  gfx_color((GfxRect){ 0.0f, 0.0f, LIVE_QUICK_W, NV_SCREEN_H }, 0.0f, 0.04f, 0.04f, 0.05f, 0.92f);
-  ink(TXT_HEADLINE, groupLabel(group), 0xFFFFFF, 64.0f, 64.0f, 1.0f);
-  gfx_crop(0.0f, 140.0f, LIVE_QUICK_W, NV_SCREEN_H - 170.0f);
-  pointer_clip(0.0f, 140.0f, LIVE_QUICK_W, NV_SCREEN_H - 170.0f);
-  for (int r = (int)quickScroll; r < nView && r < (int)quickScroll + rows + 2; r++) {
-    float y = 150.0f + (r - quickScroll) * LIVE_QUICK_ROW;
-    int ch = view[r], f = r == quickRow;
-    const IptvChannel *c = &l->ch[ch];
-    GfxRect row = { 40.0f, y, LIVE_QUICK_W - 80.0f, LIVE_QUICK_ROW - 8.0f };
-    char num[16];
-    int p = iptv_programme_at(l, ch, now);
-    float nx = row.x + 172.0f;
-    if (f) gfx_color(row, 12.0f / row.h, HEXF(C_PAPER), 1.0f);
-    snprintf(num, sizeof num, "%d", c->number);
-    inkMid(TXT_LIVE_META_B, num, f ? 0x4A5058 : 0x9AA1A9, row.x + 20.0f, y + row.h * 0.5f, 60.0f, 1.0f);
-    identity(c, (GfxRect){ row.x + 90.0f, y + (row.h - 58.0f) * 0.5f, 58.0f, 58.0f }, 11.0f,
-             f ? C_PLATE_F : C_PLATE, f ? 0xF5F6F8 : 0xC1C7CD, 1.0f);
-    { TxtLine t = txt_line_trim(TXT_SRC_TAB, c->name, HEXI(f ? C_INK : 0xF5F6F8), 255,
-                                row.w - 200.0f - (ch == tuned ? EQ_W + 12.0f : 0.0f));
-      float top = y + (p >= 0 ? 12.0f : (row.h - t.h) * 0.5f);
-      txt_draw(t, nx, top);
-      if (ch == tuned) equaliser(nx + t.w + 12.0f, top + t.h - 4.0f, 16.0f, 1.0f);
-      if (p >= 0)
-        inkTrim(TXT_LIVE_NOTE, l->pg[p].title, f ? 0x4A5058 : 0x8A9199, nx, top + t.h + 4.0f, row.w - 200.0f, 1.0f); }
-    pointer_zone(row.x, row.y, row.w, row.h, pointQuick, r, 0);
+// The episode selector's equaliser: white, on the detail line's baseline.
+static void quickEq(float x, float base, float a) {
+  static const float SPEED[3] = { 0.0091f, 0.0067f, 0.0113f };
+  static const float PHASE[3] = { 0.0f, 2.1f, 4.2f };
+  Uint32 now = SDL_GetTicks();
+  for (int i = 0; i < 3; i++) {
+    float s = 0.5f + 0.5f * sinf((float)now * SPEED[i] + PHASE[i]);
+    float h = NV_SRC_EQ_H * (NV_SRC_EQ_MIN + (1.0f - NV_SRC_EQ_MIN) * s);
+    gfx_color((GfxRect){ x + i * (NV_SRC_EQ_W + NV_SRC_EQ_GAP), base - h, NV_SRC_EQ_W, h },
+              NV_SRC_EQ_R / h, 1, 1, 1, a);
   }
-  gfx_no_crop();
-  pointer_no_clip();
+}
+#define Q_EQ_W (3 * NV_SRC_EQ_W + 2 * NV_SRC_EQ_GAP)
+
+static float quickMeta(TxtStyle st, const char *text, float x, float y, int first, int c, int dim, float a) {
+  if (!text || !text[0]) return x;
+  if (!first) {
+    TxtLine d = txt_line(TXT_SRC_META, "\xC2\xB7", 255, 255, 255, dim);
+    txt_draw_alpha(d, x, y, a);
+    x += (float)d.w + 10.0f;
+  }
+  { TxtLine l = txt_line(st, text, c, c, c, 255);
+    txt_draw_alpha(l, x, y, a);
+    return x + (float)l.w + 10.0f; }
+}
+
+// One channel row, laid out as an episode row: the channel's plate where the
+// still is (the logo, or its monogram, on a 16:9 plate), its number and name,
+// the programme on now as the detail line, and the synopsis as the row opens.
+static void quickRowDraw(int row, float cx, float y, float h, int sel, float open, float a, float vt, float vb) {
+  const IptvList *l = iptv_list();
+  int ch = view[row];
+  const IptvChannel *c = &l->ch[ch];
+  const IptvProgramme *pg = quickProgramme(row);
+  long long now = nowMinute();
+  float sc = 1.0f + (NV_EPL_THUMB_GROW - 1.0f) * open;
+  GfxRect th = { cx + NV_EPL_PADX, y + (h - NV_EPL_THUMB_H * sc) * 0.5f, NV_EPL_THUMB_W * sc, NV_EPL_THUMB_H * sc };
+  float tx = cx + Q_TEXT_X(open), right = cx + NV_EPL_W - NV_EPL_PADX;
+  float blockH = NV_EPL_BLOCK_H + (quickFullBlock(pg) - NV_EPL_BLOCK_H) * open;
+  float bt = y + (h - blockH) * 0.5f;
+  int current = ch == tuned;
+  int lit = sel || current;
+  int inkC = lit ? 255 : NV_EPL_DIM, sub = lit ? 178 : NV_EPL_DIM_SUB, dim = lit ? 104 : 80;
+  char line[300];
+
+  if (sel) {
+    GfxRect band = { cx - NV_EPL_BAND_LEAD, y, NV_SCREEN_W - cx + NV_EPL_BAND_LEAD, h };
+    gfx_rect(band, 0, GFX_MENU_FEATHER, 0, NV_EPL_BAND_FEATHER / band.w, 0, 0, 1, 1, 1, NV_EPL_BAND * a);
+    { float g = NV_RING_FOCUS;
+      GfxRect r = { th.x - g, th.y - g, th.w + g * 2, th.h + g * 2 };
+      gfx_rect(r, 0, GFX_RING_INSET, 0, g / r.h, 0, (NV_EPL_THUMB_R + g) / r.h,
+               1, 1, 1, 0.96f * a * (open > 0.2f ? 1.0f : open * 5.0f)); }
+  }
+  // The plate: identity() at the thumb's size, dimmed with a resting row.
+  identity(c, th, NV_EPL_THUMB_R, C_PLATE, 0xC1C7CD, a * (lit ? 1.0f : NV_EPL_DIM_THUMB));
+  // What has aired of the programme on now, along the plate's base.
+  if (pg) {
+    float f = (float)(now - pg->start) / (float)(pg->stop - pg->start);
+    if (f < 0) f = 0;
+    if (f > 1) f = 1;
+    gfx_color((GfxRect){ th.x, th.y + th.h - NV_EPL_PROG_H, th.w, NV_EPL_PROG_H }, 0, 0, 0, 0, 0.55f * a);
+    gfx_color((GfxRect){ th.x, th.y + th.h - NV_EPL_PROG_H, th.w * f, NV_EPL_PROG_H }, 0, 1, 1, 1,
+              a * (lit ? 1.0f : NV_EPL_DIM_THUMB));
+  }
+  // A favourite's star on the plate's corner, where the watched mark sits.
+  if (iptv_is_favourite(ch)) {
+    float d = NV_EPL_CHECK, in = 8.0f;
+    GfxRect st = { th.x + th.w - in - d, th.y + in, d, d };
+    gfx_color(st, 0.5f, 0.05f, 0.05f, 0.06f, 0.72f * a);
+    gfx_icon((GfxRect){ st.x + d * 0.2f, st.y + d * 0.2f, d * 0.6f, d * 0.6f }, "live_star_fill", 1, 1, 1, 0.9f * a);
+  }
+
+  snprintf(line, sizeof line, "%d \xC2\xB7 %s", c->number, c->name);
+  txt_draw_alpha(txt_line_trim(TXT_TRK_VALUE, line, inkC, inkC, inkC, 255, right - tx), tx, bt, a);
+
+  // The detail line: on the playing channel the equaliser and "Playing"; then
+  // the programme on now and what is left of it.
+  { float my = bt + NV_EPL_SUB_DY, x = tx;
+    int first = 1;
+    if (current) {
+      quickEq(x, my + txt_baseline(TXT_SRC_META), a);
+      x += Q_EQ_W + 9.0f;
+      x = quickMeta(TXT_SRC_STATE, "Playing", x, my, 1, 244, dim, a);
+      first = 0;
+    }
+    if (pg) {
+      TxtLine t;
+      if (!first) {
+        TxtLine d = txt_line(TXT_SRC_META, "\xC2\xB7", 255, 255, 255, dim);
+        txt_draw_alpha(d, x, my, a);
+        x += (float)d.w + 10.0f;
+      }
+      snprintf(line, sizeof line, "%lld min left", (pg->stop - now + 59) / 60);
+      { float leftW = txt_width(TXT_SRC_META, line) + 30.0f;
+        t = txt_line_trim(TXT_SRC_META, pg->title, sub, sub, sub, 255, right - x - leftW);
+        txt_draw_alpha(t, x, my, a);
+        x += (float)t.w + 10.0f; }
+      quickMeta(TXT_SRC_META, line, x, my, 0, sub, dim, a);
+    } else {
+      quickMeta(TXT_SRC_META, iptv_guide_state() == IPTV_LOADING ? "Loading guide\xE2\x80\xA6" : "No guide data",
+                x, my, first, sub, dim, a);
+    } }
+
+  // The synopsis, faded in as the row opens and cut to the row's height.
+  if (open > 0.01f && pg && pg->desc[0]) {
+    float cy0 = y > vt ? y : vt, cy1 = y + h < vb ? y + h : vb;
+    if (cy1 > cy0) {
+      gfx_crop(0, cy0, NV_SCREEN_W, cy1 - cy0);
+      txt_block_trim(TXT_TRK_OPTSUB, pg->desc, 176, 178, 184, tx, bt + NV_EPL_SYN_DY, right - tx,
+                     NV_EPL_SYN_LD, a * open * open, NV_EPL_SYN_LINES);
+      gfx_crop(0, vt, NV_SCREEN_W, vb - vt);
+    }
+  }
+}
+
+// The group pill, the season pill's twin (pillDraw in episodes.c).
+static GfxRect quickPill(float x, float y, float a) {
+  float f = quickZone == Q_PILL || gmOpen ? 1.0f : 0.0f;
+  GfxRect r = { x, y, NV_EPL_PILL_W, NV_EPL_PILL_H };
+  TxtLine l = txt_line_trim(TXT_TRK_VALUE, groupLabel(group), 255, 255, 255, 255,
+                            NV_EPL_PILL_W - NV_EPL_PILL_PADX * 2 - 16.0f - NV_EPL_PILL_CHEV);
+  { float luma = NV_DETWEB_REST + (NV_DETWEB_SEA_FOCUS_BG - NV_DETWEB_REST) * f;
+    gfx_color(r, NV_RADIUS_PILL, luma, luma, luma, NV_PLR_DD_A * a); }
+  if (f < 0.99f) gfx_rect(r, 0, GFX_RING, 0, NV_DETWEB_SEA_BORDER / r.h, 0, NV_RADIUS_PILL, 1, 1, 1, 0.10f * a);
+  else gfx_rect(r, 0, GFX_RING_INSET, 0, NV_DETWEB_SEA_RING / r.h, 0, NV_RADIUS_PILL, 1, 1, 1, 0.96f * a);
+  txt_draw_alpha(l, x + NV_EPL_PILL_PADX, y + (r.h - l.h) * 0.5f, a);
+  gfx_icon((GfxRect){ r.x + r.w - NV_EPL_PILL_PADX - NV_EPL_PILL_CHEV, y + (r.h - NV_EPL_PILL_CHEV) * 0.5f,
+                      NV_EPL_PILL_CHEV, NV_EPL_PILL_CHEV }, "chevron_down", 0.702f, 0.702f, 0.702f, a);
+  return r;
+}
+
+// Its menu, the season menu's (seasonMenu in episodes.c).
+static void quickGroupMenu(GfxRect pill, float a) {
+  int vis = gmVisible();
+  float w = pill.w, radius;
+  GfxRect box;
+  for (int i = gmScroll; i < gmScroll + vis; i++) {
+    float need = txt_width(TXT_TRK_OPT, groupLabel(i)) + (NV_DETWEB_SEA_MENU_PADX + NV_DETWEB_SEA_OPT_PADX) * 2;
+    if (need > w) w = need > 620.0f ? 620.0f : need;
+  }
+  box = (GfxRect){ pill.x, pill.y + pill.h + NV_DETWEB_SEA_MENU_GAP, w,
+                   NV_DETWEB_SEA_MENU_PADY * 2 + vis * NV_EPL_SMENU_ROW };
+  radius = 32.0f / box.h;
+  gfx_color(box, radius, NV_DETWEB_REST, NV_DETWEB_REST, NV_DETWEB_REST, NV_PLR_DD_A * a);
+  gfx_rect(box, 0, GFX_RING, 0, 1.0f / box.h, 0, radius, 1, 1, 1, 0.08f * a);
+  for (int i = 0; i < vis; i++) {
+    int g = gmScroll + i, on = g == gmCursor, ink = on ? 17 : 255;
+    GfxRect op = { box.x + NV_DETWEB_SEA_MENU_PADX, box.y + NV_DETWEB_SEA_MENU_PADY + i * NV_EPL_SMENU_ROW,
+                   box.w - NV_DETWEB_SEA_MENU_PADX * 2, NV_EPL_SMENU_ROW };
+    pointer_zone(op.x, op.y, op.w, op.h, pointGroupMenu, g, 0);
+    if (on) gfx_color(op, NV_RADIUS_PILL, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS, a);
+    { TxtLine t = txt_line_trim(TXT_TRK_OPT, groupLabel(g), ink, ink, ink, 255, op.w - NV_DETWEB_SEA_OPT_PADX * 2);
+      txt_draw_alpha(t, op.x + NV_DETWEB_SEA_OPT_PADX, op.y + (op.h - t.h) * 0.5f, a); }
+  }
+}
+
+static void drawQuick(void) {
+  float an = quickA, slide = (1.0f - an) * NV_EPL_VEIL_W * NV_TRK_SLIDE;
+  float cx = NV_SCREEN_W - NV_EPL_PAD - NV_EPL_W + slide, vt = NV_EPL_VIEW_TOP, y;
+  GfxRect pill;
+  if (an < 0.005f) return;
+  // The episode panel's veil, heading and count.
+  gfx_rect((GfxRect){ NV_SCREEN_W - NV_EPL_VEIL_W + slide, 0, NV_EPL_VEIL_W, NV_SCREEN_H }, 0, GFX_SRC_VEIL, 0,
+           1, 0, 0, NV_SRC_INK_R, NV_SRC_INK_G, NV_SRC_INK_B, an * NV_SRC_VEIL_A);
+  { TxtLine t = txt_line(TXT_PANEL_TITLE, "Channels", 240, 241, 243, 255);
+    txt_draw_alpha(t, cx + NV_EPL_PADX, NV_TRK_TITLE_Y, an);
+    if (nView) {
+      char c[32];
+      float capT = txt_cap_inset(TXT_PANEL_TITLE), capC = txt_cap_inset(TXT_SRC_COUNT);
+      float mid = NV_TRK_TITLE_Y + (capT + txt_baseline(TXT_PANEL_TITLE)) * 0.5f;
+      snprintf(c, sizeof c, "%d channel%s", nView, nView == 1 ? "" : "s");
+      txt_draw_alpha(txt_line(TXT_SRC_COUNT, c, 132, 135, 142, 255), cx + NV_EPL_PADX + (float)t.w + 18.0f,
+                     mid - (capC + txt_baseline(TXT_SRC_COUNT)) * 0.5f, an);
+    } }
+  pill = quickPill(cx + NV_EPL_PADX, NV_TRK_TABS_Y, an);
+  pointer_zone(pill.x, pill.y, pill.w, pill.h, pointQuickPill, 0, 0);
+
+  if (!nView) {
+    txt_block(TXT_TRK_OPTSUB, group == GROUP_FAV ? "No favourites yet." : "No channels in this group.",
+              133, 134, 136, cx + NV_EPL_PADX, vt + 16.0f, NV_EPL_W - NV_EPL_PADX * 2, 28.0f, an, 3);
+  } else if (quickOpenedCap >= nView) {
+    float fadeTop = NV_TRK_TABS_Y + NV_EPL_PILL_H + NV_RING_FOCUS;
+    gfx_crop(0, fadeTop, NV_SCREEN_W, NV_SCREEN_H - fadeTop);
+    pointer_clip(0, fadeTop, NV_SCREEN_W, NV_SCREEN_H - fadeTop);
+    // Only the rows near the window: a playlist can be thousands of channels.
+    { int first = (int)(quickScroll / Q_PITCH) - 1;
+      if (first < 0) first = 0;
+      y = vt - quickScroll + first * Q_PITCH;
+      // The rows above `first` are closed, bar the focused one which is below it.
+      for (int i = first; i < nView && y < NV_SCREEN_H; i++) {
+        float op = quickOpened[i], h = NV_EPL_ROW_H, edge;
+        if (op > 0.001f) h += quickOpenExtra(quickProgramme(i)) * op;
+        edge = anim_edge(y, fadeTop, vt - fadeTop);
+        if (y + h > fadeTop && edge > 0.004f) {
+          gfx_opacity_group = edge;
+          quickRowDraw(i, cx, y, h, quickZone == Q_LIST && i == quickRow, op, an, fadeTop, NV_SCREEN_H);
+          gfx_opacity_group = 1.0f;
+          pointer_zone(cx, y, NV_EPL_W, h, pointQuick, i, 0);
+        }
+        y += h + NV_EPL_ROW_GAP;
+      } }
+    gfx_no_crop();
+    pointer_no_clip();
+  }
+  if (gmOpen) quickGroupMenu(pill, an);
 }
 
 static void drawFull(void) {
@@ -2350,7 +2640,7 @@ static void drawFull(void) {
     if (ov == OV_PEEK) drawPeek(barA); else drawBlock(barA);
   }
   drawZapToast(toastA);
-  if (quickOpen) drawQuick();
+  drawQuick();
   drawDigits();
   drawToast();
 }

@@ -64,18 +64,33 @@ focus changes text, never the stream; only OK tunes.
 | List, guide | Back | guide → list; list: stop the preview, then the chips, then leave |
 | Full screen, nothing showing | ▲▼, CH+ / CH− | zap; a toast bottom-left names the channel (3 s). Presses in a run swap its contents without replaying it, and the stream retunes once, when the keys stop |
 | Full screen, nothing showing | OK, → | the bar (6 s) |
-| Full screen, nothing showing | ← | the quick channel list |
+| Full screen, nothing showing | ← | the **channels panel** (below) |
+| Channels panel | ▲▼ / ◀▶ | channels / the group; ▲ past the first row is the group pill, whose OK opens the group menu |
+| Channels panel | OK, Back | OK tunes the row (on the playing one: just closes); Back closes, back to the bar when opened from its Channels button |
 | Bar | ▲▼ | **peek**: a rail of channel cards with what each is showing; "Still on 101" — the stream does not move. OK switches, Back stays |
 | Bar | ◀▶ | **walk the schedule**: the same block, a later programme on this channel, its bar empty at 40%. OK: remind me. ◀ back to now |
-| Bar | OK, ▼ | the controls: Guide, Channels, Subtitles, Audio, Aspect (Fit / Slight zoom / Cinema zoom), Favourite |
+| Bar | OK | the controls: Guide, Channels, Subtitles, Audio, Aspect (Fit / Slight zoom / Cinema zoom), Favourite |
 | Bar | Back | hide the bar |
 | Full screen | 0–9 | type a channel number |
 | Full screen, nothing showing | Back | back to the screen; the picture keeps playing in the preview |
 
 The Magic Remote pointer works on the header, the chips, the list, the guide's
-channels and programmes, the buttons, the setup form and the quick list.
+channels and programmes, the buttons, the setup form and the channels panel.
 
 ### Over a playing channel (Y4, Y5)
+
+**The channels panel** is the film player's episode panel, for channels: the
+same veil sliding in from the right on the screen spring, a "Channels" heading
+with its count, the group as a pill with its drop-down menu where the season
+pill sits, and rows at the episode rows' pitch. The focused row lifts onto a
+band with a ring on its tile, grows, and opens to the programme's synopsis on
+the grid spring; each tile is the channel's identity with the programme's
+progress along its base, the playing one marked with the equaliser. It opens on
+the playing channel (falling back to All channels when the group lacks it), and
+browsing never retunes: only OK does.
+
+While the channels panel, subtitles or audio is open, the bar and the toast step
+aside, and come back on close if the bar was up — the film player's rule.
 
 Live has no scrub, so the overlay is not a transport: it answers *what is this
 and what is next*. The bar is the film player's block minus the transport — **no
@@ -172,7 +187,10 @@ current time, drives the screen with key events, and asserts the focus model
 (the guide's time-keeping ↓, → and ←, ← onto the channel cell and then the side
 bar), the favourite and the history round-trips. It captures the list, the list's
 actions, the guide (now, later, on a channel cell), an empty category, a
-category, full screen, the quick list and the setup form. It also walks the full-screen overlay (bar, peek, walk, controls, zap toast) and
+category, full screen, the channels panel (sliding in, settled, walked, its group
+menu, from the bar) and the setup form. It also walks the full-screen overlay
+(bar, peek, walk, controls, zap toast, the bar stepping aside for the subtitles
+sheet) and
 asserts from the watch history that peeking and walking never retune while a
 zap and the peek's OK do. It runs on the Mac, and on Linux under `xvfb-run` with
 a GLES context, with `tests/video_stub.c` standing in for the pipeline: it plays

@@ -14,6 +14,7 @@
 #include "pointer.h"
 #include "tex_cache.h"
 #include "text.h"
+#include "tracks.h"
 #include <SDL2/SDL_image.h>
 #include <assert.h>
 #include <stdio.h>
@@ -26,6 +27,8 @@ static void key(SDL_Keycode k) {
   SDL_Event e;
   memset(&e, 0, sizeof e);
   e.type = SDL_KEYDOWN; e.key.keysym.sym = k;
+  // As app.c routes them: the tracks sheet, when open, owns the keys.
+  if (tracks_is_open()) { tracks_event(&e); e.type = SDL_KEYUP; tracks_event(&e); return; }
   iptvui_event(&e);
   e.type = SDL_KEYUP;
   iptvui_event(&e);
@@ -37,8 +40,10 @@ static void frames(int n, const char *capture) {
     pointer_frame_begin();
     txt_new_frame(); tex_new_frame(); tex_pump(6);
     iptvui_update(1.0f / 60, SDL_GetTicks());
+    tracks_update(1.0f / 60, SDL_GetTicks());
     glClearColor(0.051f, 0.051f, 0.051f, 1); glClear(GL_COLOR_BUFFER_BIT);
     iptvui_draw(SDL_GetTicks());
+    tracks_draw(SDL_GetTicks());
     if (capture && i == n - 1) {
       unsigned char *pix = malloc(1920 * 1080 * 4);
       SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, 1920, 1080, 32, SDL_PIXELFORMAT_RGBA32);
@@ -193,9 +198,40 @@ int main(int argc, char **argv) {
     free(after); free(before); }
   key(SDLK_AC_BACK);
   frames(10, NULL);
+  // The channels panel: LEFT with nothing showing slides it in, the episode
+  // panel's way — mid-slide, then settled, then walked and the group menu.
   key(SDLK_LEFT);
-  snprintf(path, sizeof path, "%s/nuvio-live-quicklist.bmp", out); frames(30, path);
+  snprintf(path, sizeof path, "%s/nuvio-live-channels-slide.bmp", out); frames(6, path);
+  snprintf(path, sizeof path, "%s/nuvio-live-channels.bmp", out); frames(30, path);
+  { char *before = data_read("iptv_recent.txt"), *after;
+    key(SDLK_DOWN); key(SDLK_DOWN); key(SDLK_DOWN);
+    snprintf(path, sizeof path, "%s/nuvio-live-channels-down.bmp", out); frames(30, path);
+    for (int i = 0; i < 60; i++) key(SDLK_UP);   // past the first row: the pill
+    key(SDLK_RETURN);
+    snprintf(path, sizeof path, "%s/nuvio-live-channels-groups.bmp", out); frames(20, path);
+    key(SDLK_AC_BACK);
+    key(SDLK_RIGHT);   // ◀▶ step the group without the menu
+    snprintf(path, sizeof path, "%s/nuvio-live-channels-group.bmp", out); frames(30, path);
+    after = data_read("iptv_recent.txt");
+    assert(before && after && !strcmp(before, after));   // browsing never retunes
+    free(before); free(after); }
   key(SDLK_AC_BACK);
+  frames(30, NULL);
+  assert(iptvui_fullscreen());
+  // From the bar's Channels control; BACK returns to the bar.
+  key(SDLK_RETURN); key(SDLK_RETURN); key(SDLK_RIGHT); key(SDLK_RETURN);
+  snprintf(path, sizeof path, "%s/nuvio-live-channels-from-bar.bmp", out); frames(30, path);
+  key(SDLK_AC_BACK);
+  snprintf(path, sizeof path, "%s/nuvio-live-channels-back-to-bar.bmp", out); frames(30, path);
+  // Subtitles: the sheet slides in and the bar steps out of its way.
+  key(SDLK_RIGHT); key(SDLK_RETURN);
+  assert(tracks_is_open());
+  snprintf(path, sizeof path, "%s/nuvio-live-subs-sheet.bmp", out); frames(30, path);
+  key(SDLK_AC_BACK);
+  frames(30, NULL);
+  assert(!tracks_is_open());
+  key(SDLK_AC_BACK); key(SDLK_AC_BACK);
+  frames(10, NULL);
   key(SDLK_AC_BACK);
   assert(!iptvui_fullscreen());
 
