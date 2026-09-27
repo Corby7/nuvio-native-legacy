@@ -97,22 +97,40 @@ int main(int argc, char **argv) {
     assert(l && l->nCh == 48 && l->nGroups == 4);
     assert(l->ch[0].nPg > 0); }
   frames(40, NULL);
+  // The landing is the channel list (Y2).
+  snprintf(path, sizeof path, "%s/nuvio-live-list.bmp", out); frames(30, path);
+  // DOWN twice, then RIGHT: the Watch / Favourite actions beside the list.
+  key(SDLK_DOWN); key(SDLK_DOWN); key(SDLK_RIGHT);
+  snprintf(path, sizeof path, "%s/nuvio-live-list-actions.bmp", out); frames(30, path);
+  key(SDLK_LEFT); key(SDLK_UP); key(SDLK_UP);
+
+  // UP from the first row is the chips, UP again the header, whose first
+  // button is the Guide toggle (Y1).
+  key(SDLK_UP); key(SDLK_UP); key(SDLK_RETURN);
+  key(SDLK_DOWN); key(SDLK_DOWN);
   snprintf(path, sizeof path, "%s/nuvio-live-guide.bmp", out); frames(30, path);
 
-  // The focus model: DOWN keeps the instant, RIGHT walks programmes, LEFT from
-  // what is on now leaves for the groups.
+  // The focus model: DOWN keeps the instant, RIGHT walks programmes, LEFT
+  // walks back to what is on now, then onto the channel's own cell, then the
+  // side bar — two axes, no third rail (Y3).
   key(SDLK_DOWN); key(SDLK_DOWN);
   key(SDLK_RIGHT); key(SDLK_RIGHT);
   snprintf(path, sizeof path, "%s/nuvio-live-guide-later.bmp", out); frames(40, path);
   key(SDLK_LEFT); key(SDLK_LEFT);
-  // Back at "now": one more LEFT reaches the groups. DOWN picks each group as
-  // it passes: Favourites (empty), Recent (empty), then the playlist's News.
   key(SDLK_LEFT);
-  key(SDLK_DOWN);
-  snprintf(path, sizeof path, "%s/nuvio-live-empty.bmp", out); frames(30, path);
-  key(SDLK_DOWN); key(SDLK_DOWN);
-  snprintf(path, sizeof path, "%s/nuvio-live-groups.bmp", out); frames(40, path);
+  snprintf(path, sizeof path, "%s/nuvio-live-guide-channel.bmp", out); frames(20, path);
+  assert(!iptvui_requested_menu());
+  key(SDLK_LEFT);
+  assert(iptvui_requested_menu());
+
+  // The chips: UP from the top row, RIGHT through Favourites (empty) and Recent
+  // (empty) to the playlist's News.
+  key(SDLK_UP); key(SDLK_UP); key(SDLK_UP);
   key(SDLK_RIGHT);
+  snprintf(path, sizeof path, "%s/nuvio-live-empty.bmp", out); frames(30, path);
+  key(SDLK_RIGHT); key(SDLK_RIGHT);
+  key(SDLK_DOWN);
+  snprintf(path, sizeof path, "%s/nuvio-live-group.bmp", out); frames(40, path);
 
   // Favourites: a hold on OK. The hold fires on time, so run frames while held.
   { SDL_Event e; memset(&e, 0, sizeof e);
@@ -136,16 +154,16 @@ int main(int argc, char **argv) {
   { char *r = data_read("iptv_recent.txt"); assert(r && r[0]); free(r); }
 
   // --- Setup ------------------------------------------------------------------------
-  // UP from the top row reaches the header; RIGHT to Source; OK.
-  for (int i = 0; i < 8; i++) key(SDLK_UP);
+  // To the header, RIGHT to Source, OK; then Xtream Codes.
+  for (int i = 0; i < 12; i++) key(SDLK_UP);
   key(SDLK_RIGHT);
   key(SDLK_RETURN);
-  key(SDLK_RIGHT);   // Xtream Codes
+  key(SDLK_RIGHT);
   snprintf(path, sizeof path, "%s/nuvio-live-setup.bmp", out); frames(30, path);
   key(SDLK_AC_BACK);
   assert(!iptvui_wants_exit());
 
   iptvui_shutdown();
-  puts("PASS iptv_ui: guide loaded from file://, focus model, favourite, tune, setup.");
+  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, tune, setup.");
   return 0;
 }

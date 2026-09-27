@@ -20,41 +20,71 @@ Text is typed on the TV's own keyboard, the same one Search uses. Where there
 is no on-screen keyboard, the source can be written by hand into `iptv.txt` in
 the app's data folder (see *Files* below).
 
-After that, Live TV opens on the guide:
+After that, Live TV opens on the **channel list**; the **guide** is one press
+away in the header. Both share the header and the category chips, so switching
+changes only the body. The screens follow the Y1 (guide), Y2 (list) and Y3
+(mechanics) mockups.
 
 ```
- Live TV                                   host · 312 channels   [Reload] [Source]
- 101 · BBC One                                              ┌──────────────────┐
- The Programme Title                                        │  preview: the    │
- 20:00 – 21:00 · 25 min left · Drama                        │  channel last    │
- ▬▬▬▬▬▬▬▬▬▬▬▬───────                                        │  tuned           │
- Synopsis, three lines…                                     └──────────────────┘
- All channels   Sun 27 Sep │20:00        │20:30        │21:00        │21:30
- Favourites     101 [logo] BBC One   │ Programme          │ Next one  │ …
- Recent         102 [logo] …         │ …
- News …
+ Live TV                                      IPTV · 312 channels  [Guide] [Source]
+ (All channels) (Favourites) (Recent) (News) (Sport) …
+ 101 [WN] World News    The Big Match ▬▬──   Next · Weather   ┌────────────────┐
+ 102 [N24] News 24      Market Watch ▬▬▬▬─   Next · Science   │ LIVE  preview  │
+┃103 [BT] Business Today The Big Match ▬▬─   Next · Cooking ┃ │ of the TUNED   │
+ 104 …                                                        └────────────────┘
+                                                               ON NOW 20:00 – 21:00
+                                                               The Big Match
+                                                               THEN 21:00 … · 21:30 …
+                                                               [▶ Watch] [☆ Favourite]
 ```
+
+The list answers "what can I watch right now", which is how most live-TV
+sessions start. The guide answers "what's on at 21:30": channels down, two hours
+across, a now line in the seek bar's colour with the minute on its cap, and the
+aired part of every programme on air tinted.
+
+**Watching is not pointing.** The preview always plays the **tuned** channel,
+marked with the Sources panel's equaliser wherever it is listed. Moving the
+focus changes text, never the stream; only OK tunes.
 
 ### Remote
 
 | Where | Key | Does |
 |---|---|---|
+| Header | ← → · OK | Guide/Channels toggle, Source (setup; Reload lives there) |
+| Chips | ← → | choose a category, applied at once · ← from the first opens the side bar |
+| List | ↑ ↓, CH+ / CH− | channels; ↑ from the top row reaches the chips |
+| List | → | the Watch / Favourite buttons beside the list |
+| List | ← | the side bar |
 | Guide | ↑ ↓ | channel; the focus keeps its **time**, so ↓ from a 21:00 film lands on what the next channel shows at 21:00 |
-| Guide | → ← | next / previous programme; ← from what is on now goes to the groups |
-| Guide | CH+ / CH− | page through channels |
-| Guide | OK | watch full screen |
-| Guide | hold OK | add to / remove from Favourites |
-| Guide | 0–9 | type a channel number |
-| Guide | Back | stop the preview; again: to the groups; again: leave |
-| Groups | ↑ ↓ | choose a group (applies at once) · ← opens the side bar |
-| Full screen | ↑ ↓, CH+ / CH− | zap through the group being browsed (debounced: holding CH+ opens one stream, not ten) |
+| Guide | → ← | next / previous programme, paging the timeline in 30-minute jumps; ← from what is on now lands on the channel's own cell, ← again opens the side bar |
+| List, guide | OK | watch full screen (on the channel already playing: just full screen) |
+| List, guide | hold OK | add to / remove from Favourites |
+| List, guide | 0–9 | type a channel number |
+| List, guide | Back | guide → list; list: stop the preview, then the chips, then leave |
+| Full screen | ↑ ↓, CH+ / CH− | zap through the category being browsed (debounced: holding CH+ opens one stream, not ten) |
 | Full screen | ← or OK | the quick channel list |
 | Full screen | → | the channel banner (now / next, progress, clock) |
 | Full screen | 0–9 | type a channel number |
-| Full screen | Back | back to the guide; the picture keeps playing in the preview |
+| Full screen | Back | back to the screen; the picture keeps playing in the preview |
 
-The Magic Remote pointer works on the guide, the groups, the header buttons, the
-setup form and the quick list.
+The Magic Remote pointer works on the header, the chips, the list, the guide's
+channels and programmes, the buttons, the setup form and the quick list.
+
+### Degrading well
+
+An EPG is a bad-data problem, so every channel and programme has a floor:
+
+- **Channel identity, three tiers.** A 54/58 px tile, always drawn and always
+  filled: the logo on a `#1A1D21` plate with 9 px of air; else a monogram from the
+  name ("News 24" → N24; provider noise like `|UK|`, `[FHD]`, `HD` skipped); else
+  the bare number. A logo that 404s looks like a channel that never had one, and
+  the texture cache remembers the failure.
+- **Block widths.** At 200 px and over, a programme shows its title and both
+  times; from 96 px, the title and the start; under 96 px, no text, just a dot.
+  The focused programme's full title is always in the detail band.
+- **No guide data.** One dashed block spanning the row — absence, not a very long
+  programme. The dashes are one texture per row size, not a hundred rects.
 
 ## Files
 
@@ -74,8 +104,9 @@ The guide is not cached: stale programme data is worse than a "loading" line.
 |---|---|
 | `src/iptv_parse.[ch]` | M3U and XMLTV parsing into one `IptvList`; gzip through the TV's own `libz` (dlopen, like libcurl). No SDL, no network — `tests/iptv_parse.sh` covers it under ASan/UBSan |
 | `src/iptv.[ch]` | the source, the loader thread, the playlist cache, favourites and history |
-| `src/iptvui.[ch]` | the screen: setup, guide, full-screen playback |
+| `src/iptvui.[ch]` | the screen: setup, channel list, guide, full-screen playback |
 | `deploy/app/art/icons/menu_live*.png` | the side-bar glyph, drawn on Phosphor's 256 grid to match the others |
+| `deploy/app/art/icons/live_*.png` | the header, button and favourite glyphs, from the mockups' SVGs |
 
 Things worth knowing before changing them:
 
@@ -109,34 +140,40 @@ bash tests/iptv_ui.sh      # the screen off the TV, over file://; writes /tmp/nu
 ```
 
 `iptv_ui.sh` generates a 48-channel playlist and a gzipped guide around the
-current time, drives the screen with key events, asserts the focus model, the
-favourite and the history round-trips, and captures the guide, a group, full
-screen, the quick list and the setup form. It runs on the Mac, and on Linux
-under `xvfb-run` with a GLES context.
+current time, drives the screen with key events, and asserts the focus model
+(the guide's time-keeping ↓, → and ←, ← onto the channel cell and then the side
+bar), the favourite and the history round-trips. It captures the list, the list's
+actions, the guide (now, later, on a channel cell), an empty category, a
+category, full screen, the quick list and the setup form. It runs on the Mac,
+and on Linux under `xvfb-run` with a GLES context. Off the TV there is no video
+pipeline, so previews show their idle face and full screen its error banner.
 
 ## Performance
 
 Measured off the TV on an x86 core, 2026-09-27. The TV's cores are several
 times slower, so read these as proportions, not as the C3's numbers.
 
-**Frames** (the guide, 48 channels, main-thread CPU time; the GPU was a
-software rasteriser, so GPU time is not meaningful here):
+**Frames** (48 channels, main-thread CPU time; the GPU was a software
+rasteriser, so GPU time is not meaningful here):
 
 | | CPU / frame | draw calls | text settles in |
 |---|---|---|---|
-| Guide, steady | ~1.0 ms | ~130 rects, ~90 texture binds | — |
-| First open | worst 2.4 ms | | 34 frames (~0.57 s) |
-| Six programmes to the right | worst 2.2 ms | | 18 frames (~0.3 s) |
-| Two pages down | worst 2.4 ms | | 23 frames (~0.38 s) |
-| Holding DOWN through 20 rows | worst 3.0 ms | | 16 frames after stopping |
+| List, steady | ~1.0 ms | ~140 rects, ~85 texture binds | — |
+| List, first open | worst 2.6 ms | | 32 frames (~0.53 s) |
+| List, holding DOWN through 20 rows | worst 2.7 ms | | 5 frames after stopping |
+| Guide, steady | ~1.1 ms | ~165 rects, ~90 texture binds | — |
+| Guide, first open | worst 2.9 ms | | 33 frames (~0.55 s) |
+| Guide, six programmes to the right | worst 2.0 ms | | 12 frames (~0.2 s) |
+| Guide, two pages down | worst 1.9 ms | | 26 frames (~0.43 s) |
+| Guide, holding DOWN through 20 rows | worst 2.6 ms | | 16 frames after stopping |
 
 The frame cost is low; what is visible is **text arriving**. `text.c`
 rasterises at most two new lines per frame (`TXT_PER_FRAME`, set from a
-measurement on the TV), and a fresh guide page carries 60-100 distinct strings
-— titles, times, channel names. So after opening or paging, cells fill in over
-a quarter to half a second. The budget is the app's, deliberately; the guide's
-lever is drawing fewer distinct strings (for example, times only on the focused
-row) if this reads as slow on the TV.
+measurement on the TV), and a fresh page carries 60-100 distinct strings —
+titles, times, channel names. So after opening or paging, cells fill in over a
+quarter to half a second. The budget is the app's, deliberately. Y3's block
+tiers already help (narrow blocks draw no text, mid-width ones only the start
+time); the next lever, if this reads as slow on the TV, is fewer strings still.
 
 **Loading** (`iptv_parse.c`, -O2, run on the loader thread, never on a frame):
 

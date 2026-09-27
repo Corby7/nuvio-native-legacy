@@ -171,6 +171,15 @@ typedef enum {
   TXT_PAUSE_EP,      // "S1 E3  Name"                        28 / 700
   TXT_PAUSE_SIN,     // the synopsis                         25 / 400
   TXT_PAUSE_CLOCK,   // the corner clock                     32 / 500
+  // Live TV (iptvui.c), the sizes the Y1/Y2 mockups set that no style above has.
+  // Everything else on that screen reuses a style of the same size and weight.
+  TXT_LIVE_TITLE,    // the focused programme's title        42 / 600
+  TXT_LIVE_META,     // chips, the detail line, "Then" items 19 / 500
+  TXT_LIVE_META_B,   // the chosen chip, channel numbers     19 / 600
+  TXT_LIVE_NAME,     // a channel's name in the guide        21 / 500
+  TXT_LIVE_NOTE,     // "Next · …", "Watching — …"           17 / 500
+  TXT_LIVE_TIME,     // a programme block's times            16 / 500
+  TXT_LIVE_TAG,      // LIVE, ON NOW, the now line's cap     13 / 700
   TXT_NFONTS
 } TxtStyle;
 
@@ -278,6 +287,11 @@ void txt_draw_shadow(TxtLine l, float x, float y, float alpha);
 // measure only, without drawing.
 float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
                    float x, float y, float alpha, float tracking);
+
+// How wide `s` would be in `style`, in layout units, WITHOUT rasterising it or
+// taking a slot in the line cache. For laying out many labels of which only a
+// few will be drawn — Live TV's category chips can number in the hundreds.
+float txt_width(TxtStyle style, const char *s);
 
 // Draws text WRAPPED into lines that fit `width`, returning the height used.
 // Without this, any variable-length text (an episode synopsis, a title's name)

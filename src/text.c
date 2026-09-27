@@ -352,6 +352,13 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { NV_FT_PAUSE_EP,    WEIGHT_BOLD    }, // TXT_PAUSE_EP
   { NV_FT_PAUSE_SIN,   WEIGHT_REGULAR }, // TXT_PAUSE_SIN
   { NV_FT_PAUSE_CLOCK, WEIGHT_MEDIUM  }, // TXT_PAUSE_CLOCK
+  { 42, WEIGHT_BOLD    },   // TXT_LIVE_TITLE
+  { 19, WEIGHT_MEDIUM  },   // TXT_LIVE_META
+  { 19, WEIGHT_BOLD    },   // TXT_LIVE_META_B
+  { 21, WEIGHT_MEDIUM  },   // TXT_LIVE_NAME
+  { 17, WEIGHT_MEDIUM  },   // TXT_LIVE_NOTE
+  { 16, WEIGHT_MEDIUM  },   // TXT_LIVE_TIME
+  { 13, WEIGHT_BOLD    },   // TXT_LIVE_TAG
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
@@ -1160,6 +1167,10 @@ float txt_tracking(TxtStyle style, const char *s, int r, int g, int b,
 // the link passed; the first call brought down the ARM build with "undefined
 // reference". On the Mac that does NOT show up: `cc -fsyntax-only` on a loose file
 // links nothing.
+float txt_width(TxtStyle style, const char *s) {
+  return (s && *s) ? widthOf(style, s, TXT_FAMILY_INTER) : 0.0f;
+}
+
 TxtLine txt_line_trim(TxtStyle style, const char *s, int r, int g, int b,
                          int a, float maxW) {
   return txt_line_trim_family(style, s, r, g, b, a, maxW,
