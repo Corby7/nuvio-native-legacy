@@ -133,11 +133,18 @@
 enum { MODE_BROWSE, MODE_SETUP };
 enum { VIEW_LIST, VIEW_GUIDE };
 enum { ZONE_HEAD, ZONE_CHIPS, ZONE_BODY, ZONE_ACTIONS };
-enum { HEAD_TOGGLE, HEAD_SOURCE, HEAD_N };
+enum { HEAD_SEARCH, HEAD_TOGGLE, HEAD_SOURCE, HEAD_N };
 enum { ACT_WATCH, ACT_FAV, ACT_N };
 enum { GROUP_ALL, GROUP_FAV, GROUP_RECENT, GROUP_FIRST };
 
-static int mode, viewMode = VIEW_LIST, zone = ZONE_BODY, headSel, actSel;
+static int mode, viewMode = VIEW_LIST, zone = ZONE_BODY, headSel = HEAD_TOGGLE, actSel;
+// SEARCH (the header's first button): a field where the chips were, the TV's
+// keyboard over it, and the list and the guide narrowed to what matches as it
+// is typed. While `searching`, ZONE_CHIPS is the field.
+static int searching;
+static char query[96];
+static int queryLen;
+static void closeSearch(void);
 static int wantsExit, requestMenu;
 
 // The chips and the channels they select.
@@ -376,13 +383,59 @@ static void measureChips(void) {
 
 // Rebuilds the channels of `group`, keeping the focus on the channel it was on
 // when that channel is still in the list.
+// Where `needle` first occurs in `hay`, ASCII case folded; -1 when it does not.
+static int foldFind(const char *hay, const char *needle) {
+  size_t n = strlen(needle);
+  if (!n) return 0;
+  for (size_t i = 0; hay[i]; i++) {
+    size_t k = 0;
+    while (k < n && hay[i + k] && tolower((unsigned char)hay[i + k]) == tolower((unsigned char)needle[k])) k++;
+    if (k == n) return (int)i;
+  }
+  return -1;
+}
+
+// The search's view, best first, each tier in playlist order: a name (or a
+// number) that starts with the query; a word in the name that does; a name
+// that has it anywhere; then a channel whose programme on now or later in the
+// guide has it in its title. An empty query is every channel.
+static void searchView(const IptvList *l) {
+  unsigned char *tier = calloc((size_t)l->nCh, 1);
+  long long now = nowSec();
+  int digits = queryLen > 0;
+  if (!tier) return;
+  for (int i = 0; i < queryLen; i++) if (!isdigit((unsigned char)query[i])) digits = 0;
+  for (int c = 0; c < l->nCh; c++) {
+    int at;
+    if (!queryLen) { tier[c] = 1; continue; }
+    if (digits) {
+      char num[16];
+      snprintf(num, sizeof num, "%d", l->ch[c].number);
+      if (!strncmp(num, query, (size_t)queryLen)) { tier[c] = 1; continue; }
+    }
+    at = foldFind(l->ch[c].name, query);
+    if (at == 0) tier[c] = 1;
+    else if (at > 0) tier[c] = isalnum((unsigned char)l->ch[c].name[at - 1]) ? 3 : 2;
+  }
+  if (queryLen >= 2)
+    for (int p = 0; p < l->nPg; p++) {
+      const IptvProgramme *pg = &l->pg[p];
+      if (!tier[pg->channel] && pg->stop > now && foldFind(pg->title, query) >= 0) tier[pg->channel] = 4;
+    }
+  for (int t = 1; t <= 4; t++)
+    for (int c = 0; c < l->nCh; c++) if (tier[c] == t) pushView(c);
+  free(tier);
+}
+
 static void rebuildView(void) {
   const IptvList *l = iptv_list();
   int keep = -1;
   nView = 0;
   if (!l) { fRow = 0; return; }
   if (group >= nGroups()) group = GROUP_ALL;
-  if (group == GROUP_RECENT) {
+  if (searching) {
+    searchView(l);
+  } else if (group == GROUP_RECENT) {
     // iptv_recent answers -1 for a channel the current playlist no longer has,
     // as well as past the end: walk the whole history, skipping the gone.
     for (int i = 0; i < 30; i++) {
@@ -1043,6 +1096,7 @@ static void phoneStep(Uint32 now) {
 // --- Pointer ---------------------------------------------------------------------------
 static void pointHead(int b, int unused) { (void)unused; zone = ZONE_HEAD; headSel = b; }
 static void pointChip(int g, int unused) { (void)unused; zone = ZONE_CHIPS; chooseGroup(g); }
+static void pointSearch(int a, int b) { (void)a; (void)b; zone = ZONE_CHIPS; }
 static void pointRow(int row, int unused) {
   (void)unused;
   zone = ZONE_BODY;
@@ -1088,6 +1142,7 @@ void iptvui_resume(void) {
 
 void iptvui_leave(void) {
   phonelink_close();
+  if (searching) closeSearch();
   stopStream();
   full = 0; quickOpen = 0;
   if (ime_is_open()) ime_close();
@@ -1386,12 +1441,64 @@ static void fullEvent(SDL_Keycode k) {
   }
 }
 
+// The field, where the chips stand.
+static GfxRect searchField(void) { return (GfxRect){ X0(), L_CHIPS_Y, 760.0f, L_CHIP_H }; }
+
+static void raiseKeyboard(void) {
+  if (!ime_usable()) { say("This TV has no on-screen keyboard"); return; }
+  if (!ime_is_open()) ime_open(searchField());
+}
+
+static void openSearch(void) {
+  searching = 1;
+  query[0] = 0; queryLen = 0;
+  zone = ZONE_CHIPS;
+  focusName[0] = 0;
+  rebuildView();
+  scrollRows = 0.0f; scrollRowsV = 0.0f;
+  fChan = 0;
+  raiseKeyboard();
+}
+
+static void closeSearch(void) {
+  if (ime_is_open()) ime_close();
+  searching = 0;
+  query[0] = 0; queryLen = 0;
+  rememberFocus();
+  rebuildView();
+}
+
+// Keys while the field has the focus. The keyboard's own text comes through
+// ime_edit in iptvui_event, before this.
+static void searchEvent(SDL_Keycode k) {
+  if (ime_is_open()) {
+    // OK is "done typing": to the results, as the setup form's fields go on.
+    if (isOk(k)) {
+      ime_close();
+      if (nView) { zone = ZONE_BODY; fRow = 0; rememberFocus(); fTime = nowSec(); keepWindowOnFocus(); }
+      return;
+    }
+    // Arrows with the keyboard not on screen close it and move as usual.
+    if (ime_shown() || !(k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT)) return;
+    ime_close();
+  }
+  if (isOk(k)) raiseKeyboard();
+  else if (k == SDLK_UP) zone = ZONE_HEAD;
+  else if (k == SDLK_DOWN && nView) {
+    zone = ZONE_BODY;
+    fTime = nowSec();
+    keepWindowOnFocus();
+  }
+  else if (k == SDLK_LEFT) requestMenu = 1;
+}
+
 static void headEvent(SDL_Keycode k) {
   if (k == SDLK_LEFT) { if (headSel > 0) headSel--; else requestMenu = 1; }
   else if (k == SDLK_RIGHT) { if (headSel + 1 < HEAD_N) headSel++; }
   else if (k == SDLK_DOWN) zone = ZONE_CHIPS;
   else if (isOk(k)) {
     if (headSel == HEAD_SOURCE) openSetup();
+    else if (headSel == HEAD_SEARCH) { if (searching) { zone = ZONE_CHIPS; raiseKeyboard(); } else openSearch(); }
     else {
       // The same header and chips either way: switching changes only the body.
       viewMode = viewMode == VIEW_LIST ? VIEW_GUIDE : VIEW_LIST;
@@ -1452,13 +1559,23 @@ void iptvui_event(const SDL_Event *e) {
     }
     return;
   }
+  // The search field's text, from the TV's keyboard.
+  if (searching && ime_is_open() && ime_edit(e, query, &queryLen, (int)sizeof query)) {
+    focusName[0] = 0;
+    rebuildView();
+    scrollRows = 0.0f; scrollRowsV = 0.0f;
+    return;
+  }
   if (e->type != SDL_KEYDOWN) return;
   k = e->key.keysym.sym;
 
   if (isBack(k)) {
     // Back climbs, one step at a time: the actions to their row; the guide to
     // the list, which is the landing; a playing preview stops; then the chips;
-    // then out.
+    // then out. Searching, the field is where the chips were: Back there
+    // lowers the keyboard, then ends the search.
+    if (searching && ime_is_open()) { ime_close(); return; }
+    if (searching && zone == ZONE_CHIPS) { closeSearch(); return; }
     if (zone == ZONE_ACTIONS) { zone = ZONE_BODY; return; }
     if (zone == ZONE_HEAD) { zone = ZONE_CHIPS; return; }
     if (zone == ZONE_BODY && viewMode == VIEW_GUIDE) { viewMode = VIEW_LIST; fChan = 0; return; }
@@ -1468,7 +1585,7 @@ void iptvui_event(const SDL_Event *e) {
     return;
   }
   if (zone == ZONE_HEAD) { headEvent(k); return; }
-  if (zone == ZONE_CHIPS) { chipsEvent(k); return; }
+  if (zone == ZONE_CHIPS) { if (searching) searchEvent(k); else chipsEvent(k); return; }
   if (zone == ZONE_ACTIONS) { actionsEvent(k); return; }
 
   { int d = digitOf(k); if (d >= 0) { typeDigit(d); return; } }
@@ -1888,6 +2005,8 @@ static void drawHeader(void) {
   { GfxRect r = headButton(right, viewMode == VIEW_LIST ? "live_guide" : "live_list",
                            viewMode == VIEW_LIST ? "Guide" : "Channels",
                            zone == ZONE_HEAD && headSel == HEAD_TOGGLE, HEAD_TOGGLE);
+    right = r.x - 24.0f; }
+  { GfxRect r = headButton(right, "search_glass", "Search", zone == ZONE_HEAD && headSel == HEAD_SEARCH, HEAD_SEARCH);
     right = r.x - 28.0f; }
   { const char *st = iptv_status();
     if (l) snprintf(line, sizeof line, "%s%s%s\xE2\x80\xAF\xC2\xB7\xE2\x80\xAF%d channels",
@@ -1897,9 +2016,42 @@ static void drawHeader(void) {
       txt_draw(t, right - t.w, L_BTN_Y + (L_BTN_H - t.h) * 0.5f); } }
 }
 
+// The search field, in the chips' place: the glass, what is typed (or what can
+// be), a caret while the keyboard is up, and how many channels match.
+static void drawSearchField(void) {
+  GfxRect f = searchField();
+  int focused = zone == ZONE_CHIPS, typing = ime_is_open();
+  char count[48];
+  if (focused) gfx_color((GfxRect){ f.x - 3.0f, f.y - 3.0f, f.w + 6.0f, f.h + 6.0f }, 0.5f, 1, 1, 1, 0.30f);
+  gfx_color(f, 0.5f, 1, 1, 1, focused ? 0.14f : 0.07f);
+  gfx_icon((GfxRect){ f.x + 20.0f, f.y + (f.h - 20.0f) * 0.5f, 20.0f, 20.0f }, "search_glass", HEXF(0xC1C7CD), 1.0f);
+  { float tx = f.x + 54.0f, maxW = f.w - 54.0f - 24.0f;
+    if (queryLen) {
+      TxtLine t = txt_line(TXT_LIVE_META_B, query, HEXI(0xF5F6F8), 255);
+      const char *q = query;
+      // The end is what is being typed: trim from the left.
+      while (t.w > maxW && *q) {
+        q++;
+        while (((unsigned char)*q & 0xC0) == 0x80) q++;
+        t = txt_line(TXT_LIVE_META_B, q, HEXI(0xF5F6F8), 255);
+      }
+      txt_draw(t, tx, f.y + (f.h - t.h) * 0.5f);
+      tx += t.w;
+    } else {
+      inkMid(TXT_LIVE_META, "Channels and programmes", 0x8A9199, tx, f.y + f.h * 0.5f, maxW, 1.0f);
+    }
+    if (typing && (SDL_GetTicks() / 530u) % 2u == 0u)
+      gfx_color((GfxRect){ tx + 3.0f, f.y + 12.0f, 2.0f, f.h - 24.0f }, 0.0f, 1, 1, 1, 1); }
+  if (queryLen) snprintf(count, sizeof count, nView == 1 ? "1 match" : "%d matches", nView);
+  else snprintf(count, sizeof count, "Type to search \xC2\xB7 Back to close");
+  inkMid(TXT_LIVE_META, count, 0x7C838B, f.x + f.w + 24.0f, f.y + f.h * 0.5f, L_RIGHT - f.x - f.w - 24.0f, 1.0f);
+  pointer_zone(f.x, f.y, f.w, f.h, pointSearch, 0, 0);
+}
+
 static void drawChips(void) {
   float x = X0() - chipScroll, y = L_CHIPS_Y;
   int n = nGroups();
+  if (searching) { drawSearchField(); return; }
   if (nChipW != n) measureChips();
   gfx_crop(X0() - 8.0f, y - 8.0f, L_RIGHT - X0() + 16.0f, L_CHIP_H + 16.0f);
   pointer_clip(X0() - 8.0f, y - 8.0f, L_RIGHT - X0() + 16.0f, L_CHIP_H + 16.0f);
@@ -2060,6 +2212,7 @@ static int drawEmpty(float top) {
   if (l && nView) return 0;
   if (!l && iptv_state() == IPTV_FAILED) { l1 = iptv_status(); l2 = "Check the address or login under Source, above."; }
   else if (!l) { l1 = "Loading channels\xE2\x80\xA6"; l2 = "Large playlists can take a few seconds."; }
+  else if (searching) { l1 = "Nothing matches"; l2 = "Try part of a channel's name, its number, or a programme's title."; }
   else if (group == GROUP_FAV) { l1 = "No favourites yet"; l2 = "Hold OK on a channel to add it here."; }
   else if (group == GROUP_RECENT) { l1 = "Nothing watched yet"; l2 = "Channels you watch appear here."; }
   else { l1 = "No channels in this group"; l2 = ""; }

@@ -42,6 +42,9 @@ int ime_usable(void) {
   // every call rather than cached, so it can also be flipped at run time from a
   // debugger.
   if (getenv("NUVIO_NO_IME")) return 0;
+  // The review harnesses have no screen keyboard; they type SDL_TEXTINPUT
+  // events themselves, as the TV's keyboard does.
+  if (getenv("NUVIO_FAKE_IME")) return 1;
 #ifdef __APPLE__
   // See the note in ime.h: the preview has a real keyboard, so the app never
   // needs to draw one.

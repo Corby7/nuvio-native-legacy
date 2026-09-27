@@ -47,6 +47,15 @@ static void key(SDL_Keycode k) {
   iptvui_event(&e);
 }
 
+// Text as the TV's keyboard sends it.
+static void type(const char *s) {
+  SDL_Event e;
+  memset(&e, 0, sizeof e);
+  e.type = SDL_TEXTINPUT;
+  snprintf(e.text.text, sizeof e.text.text, "%s", s);
+  iptvui_event(&e);
+}
+
 static void frames(int n, const char *capture) {
   for (int i = 0; i < n; i++) {
     SDL_PumpEvents();
@@ -457,6 +466,41 @@ int main(int argc, char **argv) {
   key(SDLK_AC_BACK); key(SDLK_AC_BACK);
   frames(10, NULL);
 
+  // --- Search -------------------------------------------------------------------------
+  // The header's Search: the field in the chips' place, the keyboard up, the
+  // list narrowed as it is typed. Names first; then programme titles.
+  setenv("NUVIO_FAKE_IME", "1", 1);
+  for (int i = 0; i < 12; i++) key(SDLK_UP);
+  key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_LEFT);
+  key(SDLK_RETURN);
+  type("s"); type("po"); type("rt");
+  snprintf(path, sizeof path, "%s/nuvio-live-search.bmp", out); frames(20, path);
+  { char *before = data_read("iptv_recent.txt"), *after;
+    key(SDLK_RETURN);          // done typing: to the results
+    key(SDLK_RETURN);          // watch the first
+    frames(3, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(iptvui_fullscreen() && !strncmp(after, "Sport One", 9));
+    free(before); free(after); }
+  key(SDLK_AC_BACK); key(SDLK_AC_BACK);    // the bar, then to the screen, the search still on
+  frames(5, NULL);
+  assert(!iptvui_fullscreen());
+  // A programme's title: "oceans" is no channel's name.
+  for (int i = 0; i < 12; i++) key(SDLK_UP);
+  key(SDLK_DOWN);                          // the field
+  key(SDLK_RETURN);                        // the keyboard again
+  { SDL_Event bs; memset(&bs, 0, sizeof bs); bs.type = SDL_KEYDOWN; bs.key.keysym.sym = SDLK_CLEAR;
+    iptvui_event(&bs); }
+  type("oceans");
+  snprintf(path, sizeof path, "%s/nuvio-live-search-programme.bmp", out); frames(20, path);
+  type("zzzz");
+  snprintf(path, sizeof path, "%s/nuvio-live-search-none.bmp", out); frames(10, path);
+  key(SDLK_AC_BACK);                       // the keyboard down
+  key(SDLK_AC_BACK);                       // the search closed
+  frames(5, NULL);
+  unsetenv("NUVIO_FAKE_IME");
+  key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_DOWN);   // leave the header on Guide, as found
+
   // --- Setup ------------------------------------------------------------------------
   // To the header, RIGHT to Source, OK; then Xtream Codes.
   for (int i = 0; i < 60; i++) key(SDLK_UP);
@@ -494,6 +538,6 @@ int main(int argc, char **argv) {
 
   iptvui_shutdown();
   puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), "
-       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, setup, phone form.");
+       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, search, setup, phone form.");
   return 0;
 }
