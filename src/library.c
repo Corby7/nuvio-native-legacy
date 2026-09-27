@@ -85,6 +85,7 @@ static float scrollY, scrollV;
 // included, hands it back.
 static int follow = 1;
 static float goalY;
+static ScrollBar bar;
 static int wantsExit = 0, request = -1, requestMenu = 0;
 static HomeItem itemFocus;
 static int hasItemFocus;
@@ -472,7 +473,7 @@ static void drawEmpty(void) {
 
 // Discover's grid, card for card — see drawGrid in discoverui.c for why each
 // piece is the way it is. Only the data source differs.
-static void drawGrid(void) {
+static void drawGrid(Uint32 now) {
   hasItemFocus = 0;
   if (!nFilter) { drawEmpty(); return; }
 
@@ -545,12 +546,14 @@ static void drawGrid(void) {
       }
     }
   gfx_opacity_group = 1.0f;
+  grid_bar_draw(&bar, (int)(goalY / grid_line_step() + 0.5f),
+                (nFilter + grid_cols() - 1) / grid_cols(), grid_line_step(),
+                NV_LIB_GRID_Y, NV_DSC_GRID_BOTTOM - NV_LIB_FADE, 1.0f, now);
   gfx_no_crop();
   pointer_no_clip();
 }
 
 void library_draw(Uint32 now) {
-  (void)now;
   // No background fill: main.c has already cleared to #0d0d0d, and a
   // full-screen layer thrown away per frame is the dominant cost on this GPU.
   txt_tracking(TXT_TITLE3, "Library", 255, 255, 255,
@@ -584,7 +587,7 @@ void library_draw(Uint32 now) {
     pointer_zone(r.x, r.y, r.w, r.h, pointPick, p, 0);
   }
 
-  drawGrid();
+  drawGrid(now);
   // LAST, over everything: an open list covers the grid under it.
   if (menuOpen >= 0) {
     pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOffMenu, 0, 0);

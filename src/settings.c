@@ -16,6 +16,7 @@
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
+#include "scrollbar.h"
 #include "anim.h"
 #include "layout.h"
 #include "session.h"
@@ -498,6 +499,7 @@ static float scrollY = 0.0f;
 // wheel's included, hands it back.
 static int follow = 1;
 static float goalScroll;
+static ScrollBar bar;
 // Where the focused row's "‹" was drawn, so a click on it steps back rather than
 // forward. Written by drawStepper each frame.
 static float stepLtX0, stepLtX1;
@@ -2445,14 +2447,15 @@ void settings_draw(Uint32 now) {
   if (rows > 0) {
     float total = yOfRow(rows - 1) + SETTING_LINE_H;
     float window = SETTING_BASE - SETTING_TOP;
-    if (total > window) {
-      float height = window * window / total;
-      float sy = SETTING_TOP + (window - height) * anim_clamp(scroll / (total - window), 0, 1);
-      gfx_color((GfxRect){ SETTING_LIST_X + SETTING_LIST_W + 18, SETTING_TOP, 3, window },
-              0.5f, 0.60f, 0.62f, 0.66f, 0.10f);
-      gfx_color((GfxRect){ SETTING_LIST_X + SETTING_LIST_W + 18, sy, 3, height },
-              0.5f, 0.80f, 0.82f, 0.86f, 0.6f);
-    }
+    // The continuous scrollbar (scrollbar.h), at the scroll's GOAL so it moves
+    // on the press and not along the spring. No count chip: it would sit over
+    // the rows' values.
+    if (total > window)
+      scrollbar_draw(&bar, SETTING_LIST_X + SETTING_LIST_W + 28.0f, SETTING_TOP,
+                     SETTING_TOP + window, goalScroll / (total - window),
+                     window / total, 0, 0, 1.0f, now);
+    else
+      bar.seen = 0;
   }
 
   if (hw > 240.0f) drawPanel(hx, hw);

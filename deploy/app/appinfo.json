@@ -1,6 +1,6 @@
 {
   "id": "io.github.corby7.nuvio",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "vendor": "Corby7",
   "type": "native",
   "main": "nuvio-proto",

@@ -2136,8 +2136,8 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
   if (nSin > 4) nSin = 4;
   if (nSin < 1) nSin = 1;
 
-  float hSin = synopsis[0] ? txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, -1, 0,
-                                      NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, nSin)
+  float hSin = synopsis[0] ? txt_block_trim(TXT_HERO_SIN, synopsis, 255, 255, 255, -1, 0,
+                                           NV_HERO_SIN_W, NV_LD_HERO_SIN, 0.0f, nSin)
                           : 0.0f;
   float ySin  = base - hSin;
   // The synopsis carries its own 4px of margin on top of the column's gap; the rest
@@ -2354,8 +2354,8 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
   }
 
   if (synopsis[0])
-    txt_block(TXT_HERO_SIN, synopsis, 255, 255, 255, x, ySin, NV_HERO_SIN_W,
-              NV_LD_HERO_SIN, alpha, nSin);
+    txt_block_trim(TXT_HERO_SIN, synopsis, 255, 255, 255, x, ySin, NV_HERO_SIN_W,
+                   NV_LD_HERO_SIN, alpha, nSin);
   // IS THE BLOCK SETTLED? Anything above zero means it would arrive in pieces —
   // which is exactly the "streaming in" this whole path exists to stop — so
   // heroCopy holds it back for another frame.
