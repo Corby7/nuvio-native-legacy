@@ -325,6 +325,51 @@ static void testXtream(void) {
   free(m3u);
 }
 
+// Decorated names as they come in real playlists, and real scripts left alone.
+static void testPlain(void) {
+  static const struct { const char *in, *out; } CASES[] = {
+    { "BBC One \xE1\xB4\xB4\xE1\xB4\xB0", "BBC One HD" },                          // ᴴᴰ
+    { "\xE1\xB5\x81\xE1\xB4\xB4\xE1\xB4\xB0 \xE2\x81\xB4\xE1\xB4\xB7", "UHD 4K" },   // ᵁᴴᴰ ⁴ᴷ
+    { "\xCA\x80\xE1\xB4\x80\xE1\xB4\xA1", "RAW" },                                 // ʀᴀᴡ
+    { "\xF0\x9D\x90\x92\xF0\x9D\x90\xA4\xF0\x9D\x90\xB2 1", "Sky 1" },             // 𝐒𝐤𝐲 (bold)
+    { "\xF0\x9D\x98\x9A\xF0\x9D\x98\xB1\xF0\x9D\x98\xB0", "Spo" },                // 𝘚𝘱𝘰 (sans italic)
+    { "\xF0\x9D\x9F\x8F\xF0\x9D\x9F\x8E", "10" },                                  // 𝟏𝟎
+    { "\xE2\x93\x88\xE2\x93\x9F\xE2\x93\x9E", "Spo" },                            // Ⓢⓟⓞ
+    { "\xEF\xBC\xB5\xEF\xBC\xAB\xEF\xBC\x9A News", "UK: News" },                     // ＵＫ：
+    { "\xF0\x9F\x85\xB7\xF0\x9F\x85\xB3 Cinema", "HD Cinema" },                      // 🅷🅳
+    { "Channel \xE2\x91\xB3", "Channel 20" },                                          // ⑳
+    { "\xE2\x84\x8D\xE2\x84\x99", "HP" },                                            // ℍℙ
+    // Left alone: accents, Greek, Cyrillic, Arabic, CJK, and the symbols text.c drops.
+    { "T\xC3\xBCrkiye \xCE\x95\xCE\xA1\xCE\xA4 \xD0\x9F\xD0\xB5\xD1\x80\xD0\xB2\xD1\x8B\xD0\xB9",
+      "T\xC3\xBCrkiye \xCE\x95\xCE\xA1\xCE\xA4 \xD0\x9F\xD0\xB5\xD1\x80\xD0\xB2\xD1\x8B\xD0\xB9" },
+    { "\xD8\xA7\xD9\x84\xD8\xAC\xD8\xB2\xD9\x8A\xD8\xB1\xD8\xA9 \xE6\x97\xA5\xE6\x9C\xAC",
+      "\xD8\xA7\xD9\x84\xD8\xAC\xD8\xB2\xD9\x8A\xD8\xB1\xD8\xA9 \xE6\x97\xA5\xE6\x9C\xAC" },
+    { "\xE2\x9A\xA1 Live \xF0\x9F\x87\xAC\xF0\x9F\x87\xA7", "\xE2\x9A\xA1 Live \xF0\x9F\x87\xAC\xF0\x9F\x87\xA7" },
+    { "bad \xFF\xC3 end", "bad \xFF\xC3 end" },                                        // not UTF-8
+  };
+  for (size_t i = 0; i < sizeof CASES / sizeof CASES[0]; i++) {
+    char b[128];
+    snprintf(b, sizeof b, "%s", CASES[i].in);
+    iptv_plain_text(b);
+    if (strcmp(b, CASES[i].out)) { printf("plain %zu: '%s' -> '%s'\n", i, CASES[i].in, b); assert(0); }
+  }
+  // Through the parser: the name and the group come out plain, tvg-name as
+  // written (the guide matches on it).
+  { IptvList l;
+    iptv_list_init(&l);
+    assert(iptv_parse_m3u(&l, "#EXTM3U\n#EXTINF:-1 tvg-name=\"BBC \xE1\xB4\xB4\xE1\xB4\xB0\" "
+                              "group-title=\"\xEF\xBC\xB5\xEF\xBC\xAB\",BBC \xE1\xB4\xB4\xE1\xB4\xB0\n"
+                              "http://x/1\n"
+                              "#EXTINF:-1 tvg-name=\"\xCA\x80\xE1\xB4\x80\xE1\xB4\xA1\",\n"
+                              "http://x/2\n") == 2);
+    assert(!strcmp(l.ch[0].name, "BBC HD") && !strcmp(l.ch[0].group, "UK"));
+    assert(!strcmp(l.ch[0].tvgName, "BBC \xE1\xB4\xB4\xE1\xB4\xB0"));
+    assert(!strcmp(l.ch[1].name, "RAW"));            // named from tvg-name, plain
+    assert(!strcmp(l.ch[1].tvgName, "\xCA\x80\xE1\xB4\x80\xE1\xB4\xA1"));
+    assert(l.nGroups == 1 && !strcmp(l.groups[0], "UK"));
+    iptv_list_free(&l); }
+}
+
 int main(int argc, char **argv) {
   IptvList l;
   if (argc > 3 && !strcmp(argv[1], "--dump-xml")) {
@@ -345,7 +390,8 @@ int main(int argc, char **argv) {
   testTagsAndIcons();
   testScale();
   testXtream();
+  testPlain();
   if (argc > 1) testGunzip(argv[1]);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; gzip.");
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; gzip.");
   return 0;
 }

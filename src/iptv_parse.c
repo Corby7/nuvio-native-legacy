@@ -189,6 +189,104 @@ static void extHttp(Pending *pd, const char *p, const char *end) {
   }
 }
 
+// --- Stylised Latin --------------------------------------------------------------------
+// The single-codepoint lookalikes, as (codepoint, letter) pairs, sorted.
+static const struct { unsigned cp; char to; } LOOKALIKE[] = {
+  { 0x00B2, '2' }, { 0x00B3, '3' }, { 0x00B9, '1' },
+  { 0x0262, 'G' }, { 0x026A, 'I' }, { 0x0274, 'N' }, { 0x0280, 'R' }, { 0x028F, 'Y' },
+  { 0x0299, 'B' }, { 0x029C, 'H' }, { 0x029F, 'L' },
+  { 0x02B0, 'h' }, { 0x02B2, 'j' }, { 0x02B3, 'r' }, { 0x02B7, 'w' }, { 0x02B8, 'y' },
+  { 0x02E1, 'l' }, { 0x02E2, 's' }, { 0x02E3, 'x' },
+  { 0x1D00, 'A' }, { 0x1D04, 'C' }, { 0x1D05, 'D' }, { 0x1D07, 'E' }, { 0x1D0A, 'J' },
+  { 0x1D0B, 'K' }, { 0x1D0D, 'M' }, { 0x1D0F, 'O' }, { 0x1D18, 'P' }, { 0x1D1B, 'T' },
+  { 0x1D1C, 'U' }, { 0x1D20, 'V' }, { 0x1D21, 'W' }, { 0x1D22, 'Z' },
+  { 0x1D2C, 'A' }, { 0x1D2E, 'B' }, { 0x1D30, 'D' }, { 0x1D31, 'E' }, { 0x1D33, 'G' },
+  { 0x1D34, 'H' }, { 0x1D35, 'I' }, { 0x1D36, 'J' }, { 0x1D37, 'K' }, { 0x1D38, 'L' },
+  { 0x1D39, 'M' }, { 0x1D3A, 'N' }, { 0x1D3C, 'O' }, { 0x1D3E, 'P' }, { 0x1D3F, 'R' },
+  { 0x1D40, 'T' }, { 0x1D41, 'U' }, { 0x1D42, 'W' },
+  { 0x1D43, 'a' }, { 0x1D47, 'b' }, { 0x1D48, 'd' }, { 0x1D49, 'e' }, { 0x1D4D, 'g' },
+  { 0x1D4F, 'k' }, { 0x1D50, 'm' }, { 0x1D52, 'o' }, { 0x1D56, 'p' }, { 0x1D57, 't' },
+  { 0x1D58, 'u' }, { 0x1D5B, 'v' }, { 0x1D9C, 'c' }, { 0x1DA0, 'f' }, { 0x1DBB, 'z' },
+  { 0x2070, '0' }, { 0x2071, 'i' }, { 0x2074, '4' }, { 0x2075, '5' }, { 0x2076, '6' },
+  { 0x2077, '7' }, { 0x2078, '8' }, { 0x2079, '9' }, { 0x207A, '+' }, { 0x207F, 'n' },
+  { 0x2102, 'C' }, { 0x210A, 'g' }, { 0x210B, 'H' }, { 0x210C, 'H' }, { 0x210D, 'H' },
+  { 0x210E, 'h' }, { 0x2110, 'I' }, { 0x2111, 'I' }, { 0x2112, 'L' }, { 0x2113, 'l' },
+  { 0x2115, 'N' }, { 0x2119, 'P' }, { 0x211A, 'Q' }, { 0x211B, 'R' }, { 0x211C, 'R' },
+  { 0x211D, 'R' }, { 0x2124, 'Z' }, { 0x2128, 'Z' }, { 0x212C, 'B' }, { 0x212D, 'C' },
+  { 0x212F, 'e' }, { 0x2130, 'E' }, { 0x2131, 'F' }, { 0x2133, 'M' }, { 0x2134, 'o' },
+  { 0x24EA, '0' }, { 0xA731, 'S' },
+};
+
+// What `cp` imitates, written into `out` (at most two characters); 0 when it
+// is not a lookalike.
+static int lookalike(unsigned cp, char *out) {
+  int lo = 0, hi = (int)(sizeof LOOKALIKE / sizeof LOOKALIKE[0]) - 1;
+  if (cp >= 0x2080 && cp <= 0x2089) { out[0] = (char)('0' + cp - 0x2080); return 1; }  // subscripts
+  if (cp >= 0x2460 && cp <= 0x2473) {                    // circled 1-20
+    return snprintf(out, 3, "%u", cp - 0x2460 + 1);
+  }
+  if (cp >= 0x24B6 && cp <= 0x24CF) { out[0] = (char)('A' + cp - 0x24B6); return 1; }
+  if (cp >= 0x24D0 && cp <= 0x24E9) { out[0] = (char)('a' + cp - 0x24D0); return 1; }
+  if (cp >= 0xFF01 && cp <= 0xFF5E) { out[0] = (char)(cp - 0xFEE0); return 1; }         // fullwidth
+  // Mathematical alphabets: thirteen styles of A-Z a-z, then five of 0-9.
+  if (cp >= 0x1D400 && cp <= 0x1D6A3) {
+    unsigned k = (cp - 0x1D400) % 52;
+    out[0] = (char)(k < 26 ? 'A' + k : 'a' + k - 26);
+    return 1;
+  }
+  if (cp >= 0x1D7CE && cp <= 0x1D7FF) { out[0] = (char)('0' + (cp - 0x1D7CE) % 10); return 1; }
+  // Squared, negative circled and negative squared capitals.
+  if ((cp >= 0x1F130 && cp <= 0x1F149) || (cp >= 0x1F150 && cp <= 0x1F169) ||
+      (cp >= 0x1F170 && cp <= 0x1F189)) {
+    out[0] = (char)('A' + (cp - 0x1F130) % 32);
+    return 1;
+  }
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    if (LOOKALIKE[mid].cp == cp) { out[0] = LOOKALIKE[mid].to; return 1; }
+    if (LOOKALIKE[mid].cp < cp) lo = mid + 1; else hi = mid - 1;
+  }
+  return 0;
+}
+
+void iptv_plain_text(char *s) {
+  unsigned char *r = (unsigned char *)s;
+  char *w = s;
+  if (!s) return;
+  while (*r) {
+    unsigned cp;
+    int len;
+    char rep[3];
+    int k;
+    if (*r < 0x80) { *w++ = (char)*r++; continue; }
+    if ((*r & 0xE0) == 0xC0 && (r[1] & 0xC0) == 0x80) {
+      cp = (unsigned)(*r & 0x1F) << 6 | (r[1] & 0x3F); len = 2;
+    } else if ((*r & 0xF0) == 0xE0 && (r[1] & 0xC0) == 0x80 && (r[2] & 0xC0) == 0x80) {
+      cp = (unsigned)(*r & 0x0F) << 12 | (unsigned)(r[1] & 0x3F) << 6 | (r[2] & 0x3F); len = 3;
+    } else if ((*r & 0xF8) == 0xF0 && (r[1] & 0xC0) == 0x80 && (r[2] & 0xC0) == 0x80 &&
+               (r[3] & 0xC0) == 0x80) {
+      cp = (unsigned)(*r & 0x07) << 18 | (unsigned)(r[1] & 0x3F) << 12 |
+           (unsigned)(r[2] & 0x3F) << 6 | (r[3] & 0x3F); len = 4;
+    } else {
+      *w++ = (char)*r++;   // not UTF-8: left as it came
+      continue;
+    }
+    // Every replacement is shorter than what it replaces ("⑳", 3 bytes, is the
+    // longest one: "20"), so the write never overtakes the read.
+    if ((k = lookalike(cp, rep)) > 0) { memcpy(w, rep, (size_t)k); w += k; }
+    else { memmove(w, r, (size_t)len); w += len; }
+    r += len;
+  }
+  *w = 0;
+}
+
+// A display string: the arena copy, with stylised Latin made plain.
+static const char *plainDup(IptvList *l, const char *s, size_t n) {
+  char *d = (char *)arenaDup(l, s, n);
+  if (d && d[0]) iptv_plain_text(d);
+  return d;
+}
+
 static int addChannel(IptvList *l, Pending *pd, const char *url, size_t nUrl) {
   IptvChannel *c;
   const char *v; size_t n;
@@ -208,13 +306,14 @@ static int addChannel(IptvList *l, Pending *pd, const char *url, size_t nUrl) {
     if (attr(pd->attrs, pd->attrsEnd, "catchup-days", &v, &n) ||
         attr(pd->attrs, pd->attrsEnd, "tvg-rec", &v, &n))
       c->catchupDays = atoi(v);
-    c->name = arenaDup(l, pd->name, pd->nName);
+    c->name = plainDup(l, pd->name, pd->nName);
+    if (c->group[0]) c->group = plainDup(l, c->group, strlen(c->group));
   } else {
     c->tvgId = c->tvgName = c->logo = c->group = "";
   }
-  if (!c->group[0] && pd->nGrp) c->group = arenaDup(l, pd->grp, pd->nGrp);
+  if (!c->group[0] && pd->nGrp) c->group = plainDup(l, pd->grp, pd->nGrp);
   if (!c->name || !c->name[0]) {
-    if (c->tvgName[0]) c->name = c->tvgName;
+    if (c->tvgName[0]) c->name = plainDup(l, c->tvgName, strlen(c->tvgName));
     else { nameFromUrl(url, nUrl, &v, &n); c->name = arenaDup(l, v, n); }
   }
   c->headers = arenaDup(l, pd->headers, pd->nHeaders);

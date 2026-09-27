@@ -106,6 +106,15 @@ char *iptv_gunzip(const char *in, long n, long *outN);
 char *iptv_xtream_m3u(const char *streams, const char *categories, const char *base,
                       const char *user, const char *pass, const char *ext);
 
+// STYLISED LATIN AS PLAIN LETTERS, in place. Channel names are decorated with
+// Unicode lookalikes — "BBC One ᴴᴰ", "ʀᴀᴡ", "𝐒𝐤𝐲 𝐒𝐩𝐨𝐫𝐭𝐬", "Ⓢⓟⓞⓡⓣ",
+// "ＵＫ" — that no font on the TV draws: superscript and small-capital letters,
+// the mathematical alphabets, enclosed and fullwidth letters. Each becomes the
+// ASCII letter or digit it imitates. Real scripts (accents, Greek, Cyrillic,
+// Arabic, CJK) are left alone; text.c finds a font for those. The text never
+// grows, so this works in place.
+void iptv_plain_text(char *s);
+
 // Decodes XML entities (&amp; &#233; &#x2019; …) in place, into UTF-8.
 void iptv_xml_unescape(char *s);
 

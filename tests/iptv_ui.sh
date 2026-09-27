@@ -25,7 +25,9 @@ tmp, root = sys.argv[1], sys.argv[2]
 random.seed(7)
 groups = ["News", "Sport", "Movies", "Kids"]
 names = {
-  "News": ["World News", "News 24", "Business Today", "Politics Live", "Weather Now", "Morning Desk",
+  # Two names decorated the way real playlists do, which must draw as plain
+  # letters (iptv_plain_text), never as boxes.
+  "News": ["World News", "News 24 \u1d34\u1d30", "\U0001d401\U0001d42e\U0001d42c\U0001d422\U0001d427\U0001d41e\U0001d42c\U0001d42c Today", "Politics Live", "Weather Now", "Morning Desk",
            "Global Report", "City News", "Tech Brief", "Evening Post", "Headlines", "Parliament"],
   "Sport": ["Sport One", "Sport Two", "Football Plus", "Tennis TV", "Motor Racing", "Golf Channel",
             "Cycling Live", "Olympic Stories", "Fight Night", "Basketball HD", "Cricket 1", "Rugby World"],
@@ -43,7 +45,7 @@ chans = []
 n = 1
 for g in groups:
   for nm in names[g]:
-    cid = nm.lower().replace(" ", "").replace(":", "") + ".tv"
+    cid = "".join(ch for ch in nm.lower() if ch.isascii() and ch.isalnum()) + ".tv"
     logo = logos[n % 4] if n % 3 else ""
     m3u.append('#EXTINF:-1 tvg-id="%s" tvg-name="%s" tvg-logo="%s" group-title="%s" tvg-chno="%d",%s'
                % (cid, nm, logo, g, 100 + n, nm))
