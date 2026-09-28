@@ -34,7 +34,7 @@ SIZE="${NUVIO_ICON_PX:-128}"
 for name in instant reload reset close ep_watched stack detail_stack detail_stack_filled \
             ctx_info ctx_plus ctx_minus ctx_check ctx_x ctx_grid \
             ctx_play ctx_restart ctx_hide \
-            set_playback set_home set_appearance set_account \
+            set_playback set_home set_appearance set_account set_live \
             src_refresh src_ok src_warn src_fail live_caret_up live_caret_down; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "assets/icons/$name.svg" -o "$OUT/$name.png"
   echo "    $name.png <- assets/icons/$name.svg"

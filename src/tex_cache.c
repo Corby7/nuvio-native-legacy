@@ -44,6 +44,12 @@ typedef struct {
   // it grows. Set on the request, not on the file: the same art asked for by an
   // ordinary caller as well would lose it, which is why only UI furniture uses it.
   int exact;
+  // THE WIDEST EXACT REQUEST this frame and the last. Two callers drawing one
+  // icon at two sizes at once (the rail's 44 and a 20px header) each moved the
+  // width, and the file re-decoded every frame, flickering on both. Contested,
+  // the item keeps the larger width; a caller gone for a frame stops counting.
+  unsigned long exactFrame;
+  int exactNow, exactPrev;
   // The width ceiling REQUESTED for this item. The full-screen hero needs 1920; a
   // 212 poster does not. A single ceiling for all served both badly: at 960 the
   // hero was decoded at half the resolution and stretched to 1920 on screen, which
@@ -1347,6 +1353,15 @@ static GLuint tex_get_limit_mode(const char *path, int limit, int exact) {
     items[i].lastRequest = SDL_GetTicks();
     items[i].usage = ++lruClock;
     items[i].exact = exact;
+    if (exact) {
+      if (items[i].exactFrame != frameCurrent) {
+        items[i].exactPrev = items[i].exactFrame + 1 == frameCurrent ? items[i].exactNow : 0;
+        items[i].exactFrame = frameCurrent;
+        items[i].exactNow = limit;
+      } else if (limit > items[i].exactNow) items[i].exactNow = limit;
+      if (limit < items[i].exactNow) limit = items[i].exactNow;
+      if (limit < items[i].exactPrev) limit = items[i].exactPrev;
+    }
     // AN EXACT ITEM ALSO GOES DOWN. The promotion below only ever redoes a decode
     // that turned out too SMALL, which is right for art whose ceiling is a budget;
     // here the ceiling is the drawing size itself, and a texture larger than it is
@@ -1419,6 +1434,9 @@ static GLuint tex_get_limit_mode(const char *path, int limit, int exact) {
       items[new].hash = h;
       items[new].limit = limit;
       items[new].exact = exact;
+      items[new].exactFrame = frameCurrent;
+      items[new].exactNow = limit;
+      items[new].exactPrev = 0;
       items[new].state = PENDING;
       items[new].usage = ++lruClock;
       items[new].lastFrame = frameCurrent;
@@ -1494,6 +1512,17 @@ float tex_aspect(const char *path) {
   }
   SDL_UnlockMutex(mtx);
   return a;
+}
+
+int tex_source_width(const char *path) {
+  if (!path || !*path) return 0;
+  int w = 0;
+  unsigned long h = hashPath(path);
+  int i; SEARCH_MEASURE(i, path, h);
+  // Gated as tex_aspect is: on the texture existing, answered from the file.
+  if (i >= 0 && items[i].h > 0) w = items[i].srcW > 0 ? items[i].srcW : items[i].w;
+  SDL_UnlockMutex(mtx);
+  return w;
 }
 
 int tex_failed(const char *path) {

@@ -1402,7 +1402,9 @@ static void drawRule(int i, int rows, int focusedRow, float y, float a) {
 static const char *iconOfSection(int s) {
   switch (SECTIONS[s].start) {
     case SETTING_QUALITY:              return "set_playback";
-    case SETTING_LIVE_SOURCE:          return "menu_live";
+    // Not the rail's menu_live: icons decode at their drawing width, and one
+    // file asked for at 44 there and 20 here was re-decoded every frame.
+    case SETTING_LIVE_SOURCE:          return "set_live";
     case SETTING_HERO:                 return "set_home";
     case SETTING_RAIL:                 return "set_appearance";
     case SETTING_PROFILE_ACTIVE:       return "set_account";

@@ -20,14 +20,14 @@ Text is typed on the TV's own keyboard, the same one Search uses. Where there
 is no on-screen keyboard, the source can be written by hand into `iptv.txt` in
 the app's data folder (see *Files* below).
 
-After that, Live TV opens on the **channel list**; the **guide** is one press
+After that, Live TV opens on the **channel list**, on Favourites; the **guide** is one press
 away in the header. Both share the header and the category chips, so switching
 changes only the body. The screens follow the Y1 (guide), Y2 (list) and Y3
 (mechanics) mockups.
 
 ```
  Live TV                                      IPTV · 312 channels  [Guide] [Source]
- (All channels) (Favourites) (Recent) (News) (Sport) …
+ (Favourites) (All channels) (Recent) (News) (Sport) …
  101 [WN] World News    The Big Match ▬▬──   Next · Weather   ┌────────────────┐
  102 [N24] News 24      Market Watch ▬▬▬▬─   Next · Science   │ LIVE  preview  │
 ┃103 [BT] Business Today The Big Match ▬▬─   Next · Cooking ┃ │ of the TUNED   │
@@ -53,6 +53,7 @@ focus changes text, never the stream; only OK tunes.
 |---|---|---|
 | Header | ← → · OK | Guide/Channels toggle, Source (setup; Reload lives there) |
 | Chips | ← → | choose a category, applied at once · ← from the first opens the side bar |
+| Chips | hold ← | walks left; after 1.5 s jumps to the first chip (Favourites). A held ← never opens the side bar |
 | List | ↑ ↓, CH+ / CH− | channels; ↑ from the top row reaches the chips |
 | List | → | the Watch / Favourite buttons beside the list |
 | List | ← | the side bar |

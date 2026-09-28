@@ -38,6 +38,7 @@
 #endif
 #include "layout.h"
 #include "pointer.h"
+#include "tvlogos.h"
 
 // Screenshots on demand. The TV's framebuffer cannot be read even as root
 // ("Operation not permitted") and LG's capture service answers with an error, so
@@ -730,6 +731,8 @@ int main(int argc, char **argv) {
     tex_cache_dir(c); }
   // Os icones da interface saem de art/icones (SVG do app web rasterizados).
   gfx_icons_dir(dirArt);
+  // Live TV's better channel logos: art/tv-logos.txt, read on first use.
+  tvlogos_dir(dirArt);
   // The network catalogue. The package's is already loaded and stays on screen
   // until the answer arrives — opening empty while searching would be worse than
   // showing yesterday's for two seconds.

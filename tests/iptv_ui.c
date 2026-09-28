@@ -189,6 +189,9 @@ int main(int argc, char **argv) {
     assert(l && l->nCh == 49 && l->nGroups == 5);
     assert(l->ch[12].catchup == IPTV_CATCHUP_SHIFT && !l->ch[0].catchup);
     assert(l->ch[0].nPg > 0); }
+  // Live TV opens on Favourites, empty here: over to All channels, and down
+  // into its list, where the rest of this walk starts.
+  key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_DOWN);
   frames(40, NULL);
   // The landing is the channel list (Y2).
   snprintf(path, sizeof path, "%s/nuvio-live-list.bmp", out); frames(30, path);
@@ -198,11 +201,10 @@ int main(int argc, char **argv) {
   key(SDLK_LEFT); key(SDLK_UP); key(SDLK_UP);
 
   // UP from the first row is the chips, UP again the header, on the Guide |
-  // List switch's List (the view on show); LEFT is Guide (Y1).
+  // List switch: one stop, and OK flips it to the guide (Y1).
   key(SDLK_UP); key(SDLK_UP);
   snprintf(path, sizeof path, "%s/nuvio-live-header.bmp", out); frames(20, path);
-  key(SDLK_RETURN);                  // List is already on show: nothing moves
-  key(SDLK_LEFT); key(SDLK_RETURN);
+  key(SDLK_RETURN);
   key(SDLK_DOWN); key(SDLK_DOWN);
   snprintf(path, sizeof path, "%s/nuvio-live-guide.bmp", out); frames(30, path);
 
@@ -219,12 +221,13 @@ int main(int argc, char **argv) {
   key(SDLK_LEFT);
   assert(iptvui_requested_menu());
 
-  // The chips: UP from the top row, RIGHT through Favourites (empty) and Recent
-  // (empty) to the playlist's News.
+  // The chips: UP from the top row onto All channels, LEFT to Favourites
+  // (empty), then RIGHT past All channels and Recent (empty) to the
+  // playlist's News.
   key(SDLK_UP); key(SDLK_UP); key(SDLK_UP);
-  key(SDLK_RIGHT);
+  key(SDLK_LEFT);
   snprintf(path, sizeof path, "%s/nuvio-live-empty.bmp", out); frames(30, path);
-  key(SDLK_RIGHT); key(SDLK_RIGHT);
+  key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RIGHT);
   key(SDLK_DOWN);
   snprintf(path, sizeof path, "%s/nuvio-live-group.bmp", out); frames(40, path);
 
@@ -537,7 +540,7 @@ int main(int argc, char **argv) {
   // Names first; then programme titles.
   setenv("NUVIO_FAKE_IME", "1", 1);
   for (int i = 0; i < 12; i++) key(SDLK_UP);
-  key(SDLK_LEFT);                          // Guide -> the search circle, its tooltip
+  key(SDLK_LEFT);                          // the switch -> the search circle, its tooltip
   assert(!iptvui_requested_menu());
   snprintf(path, sizeof path, "%s/nuvio-live-header-search.bmp", out); frames(20, path);
   key(SDLK_RETURN);
@@ -571,13 +574,13 @@ int main(int argc, char **argv) {
   snprintf(path, sizeof path, "%s/nuvio-live-search-programme.bmp", out); frames(20, path);
   key(SDLK_AC_BACK);                       // the keyboard down, the filter kept
   // Guide | List stays in the header while searching: past the clear button
-  // to Guide, the same matches as a guide; then back to List.
+  // to the switch, OK the same matches as a guide; OK again, back to List.
   key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
   assert(!iptvui_requested_menu());
   snprintf(path, sizeof path, "%s/nuvio-live-search-guide.bmp", out); frames(30, path);
-  key(SDLK_RIGHT); key(SDLK_RETURN);
+  key(SDLK_RETURN);
   // The clear button empties the field and raises the keyboard again.
-  key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_RETURN);
+  key(SDLK_LEFT); key(SDLK_RETURN);
   // A long IPTV name still shows its hit; what follows it is what gets cut.
   type("olym");
   snprintf(path, sizeof path, "%s/nuvio-live-search-long.bmp", out); frames(40, path);
@@ -588,7 +591,7 @@ int main(int argc, char **argv) {
   key(SDLK_AC_BACK);                       // the search closed
   frames(5, NULL);
   unsetenv("NUVIO_FAKE_IME");
-  key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_DOWN);   // leave the header on Guide, as found
+  key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_DOWN);   // leave the header on the switch, as found
 
   // --- Setup ------------------------------------------------------------------------
   // To the header, RIGHT past List to Source, OK: the Source screen, the

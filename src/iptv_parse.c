@@ -954,6 +954,12 @@ static int addProgramme(IptvList *l, int ch, long long start, long long stop,
 static int parseGuide(IptvList *l, const char *xml, long long from, long long to, int fill) {
   Map byId, byName, byXml, byLoose;
   int *link;
+  // ONE GUIDE CHANNEL PER CHANNEL. A guide can reach the same channel twice,
+  // by its tvg-id and again by a display name ("Ziggo Sport 4" and "Ziggo
+  // Sport 4 HD" both loosen to it), and the two schedules interleaved into
+  // overlapping blocks. `claim` is the guide id that feeds each channel: an id
+  // match takes it outright, otherwise the first guide channel to arrive.
+  const char **claim;
   const char *p, *xmlEnd;
   // The XMLTV channel ids seen in <channel> blocks, with the channel they map to.
   struct XmlId { const char *id; int ch; } *xmlIds = NULL;
@@ -970,10 +976,11 @@ static int parseGuide(IptvList *l, const char *xml, long long from, long long to
   xmlEnd = xml + strlen(xml);
 
   link = malloc((size_t)l->nCh * sizeof *link);
+  claim = calloc((size_t)l->nCh, sizeof *claim);
   memset(&byLoose, 0, sizeof byLoose);
-  if (!link || !mapInit(&byId, l->nCh) || !mapInit(&byName, l->nCh * 2) ||
+  if (!link || !claim || !mapInit(&byId, l->nCh) || !mapInit(&byName, l->nCh * 2) ||
       !mapInit(&byLoose, l->nCh * 2)) {
-    free(link); mapFree(&byId); mapFree(&byName); mapFree(&byLoose); return 0;
+    free(link); free(claim); mapFree(&byId); mapFree(&byName); mapFree(&byLoose); return 0;
   }
   // Chains: a channel's tvg-id first, then its names. `link` chains the id
   // table; the name table keeps only the first channel per name.
@@ -1025,6 +1032,7 @@ static int parseGuide(IptvList *l, const char *xml, long long from, long long to
     if (!end) end = tagEnd;
     tagAttr(p, tagEnd, "id", id, sizeof id);
     if (id[0] && (ch = mapGet(&byId, id, strlen(id))) >= 0) {
+      for (int k = ch; k >= 0; k = link[k]) claim[k] = l->ch[k].tvgId;
       takeIcon(l, ch, link, tagEnd, end);
     } else if (id[0]) {
       for (const char *d = tagEnd; d && d < end; ) {
@@ -1050,8 +1058,11 @@ static int parseGuide(IptvList *l, const char *xml, long long from, long long to
         if (ch >= 0) break;
         d = e;
       }
+      // Already fed, by its id or an earlier name: this one is a second feed.
+      if (ch >= 0 && claim[ch] && claim[ch][0]) ch = -1;
       if (ch >= 0 && grow((void **)&xmlIds, &capXml, nXml + 1, sizeof *xmlIds)) {
         xmlIds[nXml].id = arenaDup(l, id, strlen(id));
+        claim[ch] = xmlIds[nXml].id;
         xmlIds[nXml++].ch = ch;
       }
       if (ch >= 0) takeIcon(l, ch, link, tagEnd, end);
@@ -1084,6 +1095,9 @@ static int parseGuide(IptvList *l, const char *xml, long long from, long long to
     }
     if (ch < 0) ch = mapGet(&byName, chId, strlen(chId));
     if (ch < 0) continue;
+    // Its feed, or the first to arrive for it when no <channel> block said.
+    if (claim[ch] && claim[ch][0] && strcmp(claim[ch], chId)) continue;
+    if (!claim[ch] || !claim[ch][0]) claim[ch] = arenaDup(l, chId, strlen(chId));
     { const char *title = element(l, tagEnd, end, "title", 200);
       const char *desc  = element(l, tagEnd, end, "desc", 600);
       const char *cat   = element(l, tagEnd, end, "category", 60);
@@ -1095,6 +1109,7 @@ static int parseGuide(IptvList *l, const char *xml, long long from, long long to
   }
 done:
   free(link);
+  free(claim);
   mapFree(&byId); mapFree(&byName); mapFree(&byXml); mapFree(&byLoose);
   free(xmlIds);
 
@@ -1114,6 +1129,22 @@ done:
     int hasNext = i + 1 < l->nPg && l->pg[i + 1].channel == c->channel;
     if (c->stop <= c->start) c->stop = hasNext ? l->pg[i + 1].start : c->start + 1800;
   }
+  // ONE TIMELINE PER CHANNEL. Providers merge feeds under one id: the same
+  // channel listed twice, ten minutes apart ("LaLiga Show" 15:00-15:25 and
+  // 15:10-15:35), drew as blocks on top of each other. A programme that starts
+  // well inside the one before it is the other schedule and goes; a few
+  // minutes' overlap is two listings rounding differently, and the earlier one
+  // ends where the next begins.
+  { int w = 0;
+    for (int r = 0; r < l->nPg; r++) {
+      IptvProgramme *c = &l->pg[r], *pv = w ? &l->pg[w - 1] : NULL;
+      if (pv && pv->channel == c->channel && c->start < pv->stop) {
+        if (pv->stop - c->start > 300) continue;
+        pv->stop = c->start;
+      }
+      l->pg[w++] = *c;
+    }
+    l->nPg = w; }
   indexProgrammes(l);
   shareSiblings(l);
   return l->nPg - n0 > 0 ? l->nPg - n0 : 0;

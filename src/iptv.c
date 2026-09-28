@@ -1,3 +1,4 @@
+#define _GNU_SOURCE   // strcasestr
 // Live TV's source, loader and small persistent state. See iptv.h.
 #include "iptv.h"
 #include "data.h"
@@ -34,6 +35,10 @@
 
 static IptvSource source;
 static char sourceLabel[96];
+// THE VIEWER'S NAME FOR THE SOURCE ("name=" in iptv.txt): the label everywhere
+// the host would be. Empty for the host. It belongs to the address: a source
+// on another address starts without one.
+static char sourceName[96];
 
 // The list the screen reads (main thread only) and the one the loader has just
 // finished (handed over under `mu`).
@@ -281,7 +286,15 @@ static void updateLabel(void) {
   char host[80] = "";
   if (source.kind == IPTV_SRC_XTREAM) hostOf(source.server, host, sizeof host);
   else if (source.kind == IPTV_SRC_M3U) hostOf(source.url, host, sizeof host);
-  snprintf(sourceLabel, sizeof sourceLabel, "%s", host[0] ? host : "IPTV");
+  snprintf(sourceLabel, sizeof sourceLabel, "%s", sourceName[0] ? sourceName : host[0] ? host : "IPTV");
+}
+
+// The address a source loads from: a new one is a different provider.
+static const char *addressOf(const IptvSource *s) {
+  return s->kind == IPTV_SRC_XTREAM ? s->server : s->url;
+}
+static void keepNameFor(const IptvSource *next) {
+  if (next->kind != source.kind || strcmp(addressOf(next), addressOf(&source))) sourceName[0] = 0;
 }
 
 // --- The loader ----------------------------------------------------------------------
@@ -841,6 +854,7 @@ static void startLoad(void) {
 static void readConfig(void) {
   char *s = data_read(IPTV_CONFIG_FILE), *line, *save = NULL;
   memset(&source, 0, sizeof source);
+  sourceName[0] = 0;
   if (!s) { updateLabel(); return; }
   for (line = strtok_r(s, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
     char *eq = strchr(line, '='), *v;
@@ -857,6 +871,7 @@ static void readConfig(void) {
     else if (!strcmp(line, "server")) snprintf(source.server, sizeof source.server, "%s", v);
     else if (!strcmp(line, "user"))   snprintf(source.user, sizeof source.user, "%s", v);
     else if (!strcmp(line, "pass"))   snprintf(source.pass, sizeof source.pass, "%s", v);
+    else if (!strcmp(line, "name"))   snprintf(sourceName, sizeof sourceName, "%s", v);
   }
   free(s);
   updateLabel();
@@ -864,9 +879,9 @@ static void readConfig(void) {
 
 static void writeConfig(void) {
   char buf[4096];
-  snprintf(buf, sizeof buf, "kind=%s\nurl=%s\nepg=%s\nserver=%s\nuser=%s\npass=%s\n",
+  snprintf(buf, sizeof buf, "kind=%s\nurl=%s\nepg=%s\nserver=%s\nuser=%s\npass=%s\nname=%s\n",
            source.kind == IPTV_SRC_XTREAM ? "xtream" : source.kind == IPTV_SRC_M3U ? "m3u" : "none",
-           source.url, source.epg, source.server, source.user, source.pass);
+           source.url, source.epg, source.server, source.user, source.pass, sourceName);
   data_write(IPTV_CONFIG_FILE, buf);
 }
 
@@ -910,6 +925,7 @@ void iptv_touch(void) {
 int iptv_step(void) {
   IptvList *l;
   if (atomic_exchange(&trialCommit, 0)) {
+    keepNameFor(&trialSrc);
     source = trialSrc;
     writeConfig();
     updateLabel();
@@ -1027,6 +1043,7 @@ void iptv_try_forget(void) {
 long long iptv_refreshed_at(void) { return atomic_load(&refreshedAt); }
 
 void iptv_set_source(const IptvSource *s) {
+  keepNameFor(s);
   source = *s;
   writeConfig();
   updateLabel();
@@ -1038,6 +1055,19 @@ const IptvList *iptv_list(void) { return live; }
 int iptv_state(void) { return atomic_load(&state); }
 int iptv_guide_state(void) { return atomic_load(&guideState); }
 const char *iptv_source_label(void) { return sourceLabel; }
+const char *iptv_source_name(void) { return sourceName; }
+
+void iptv_set_source_name(const char *name) {
+  size_t a = 0, b;
+  // Trimmed, and one line: iptv.txt is key=value per line.
+  while (name[a] == ' ') a++;
+  snprintf(sourceName, sizeof sourceName, "%s", name + a);
+  for (char *c = sourceName; *c; c++) if (*c == '\n' || *c == '\r') *c = ' ';
+  b = strlen(sourceName);
+  while (b && sourceName[b - 1] == ' ') sourceName[--b] = 0;
+  writeConfig();
+  updateLabel();
+}
 
 const char *iptv_status(void) {
   static char copy[160];

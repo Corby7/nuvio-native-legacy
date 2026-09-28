@@ -419,6 +419,57 @@ static void testLooseMatch(void) {
   iptv_list_free(&l);
 }
 
+// One guide reaching one channel twice, by its tvg-id and by another guide
+// channel's display name, feeds it ONE schedule: the id's. Two interleaved
+// schedules drew as overlapping blocks. With no id, the first name wins.
+static void testOneFeed(void) {
+  IptvList l;
+  long long st = iptv_xmltv_time("20260927180000 +0000");
+  const char *m3u =
+    "#EXTINF:-1 tvg-id=\"zs4.nl\",NL: ZIGGO SPORT 4\n"  "http://x/1\n"
+    "#EXTINF:-1,NL: ZIGGO SPORT 5\n"                     "http://x/2\n";
+  const char *xml =
+    "<tv><channel id=\"other4\"><display-name>Ziggo Sport 4 HD</display-name></channel>"
+    "<channel id=\"zs4.nl\"><display-name>Ziggo Sport 4</display-name></channel>"
+    "<channel id=\"a5\"><display-name>Ziggo Sport 5</display-name></channel>"
+    "<channel id=\"b5\"><display-name>Ziggo Sport 5 HD</display-name></channel>"
+    "<programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"other4\"><title>Wrong</title></programme>"
+    "<programme start=\"20260927181500 +0000\" stop=\"20260927191500 +0000\" channel=\"zs4.nl\"><title>Tennis</title></programme>"
+    "<programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"a5\"><title>Golf</title></programme>"
+    "<programme start=\"20260927183000 +0000\" stop=\"20260927193000 +0000\" channel=\"b5\"><title>Darts</title></programme>"
+    "</tv>";
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, m3u) == 2);
+  iptv_parse_xmltv(&l, xml, st - 3600, st + 86400);
+  assert(l.ch[0].nPg == 1 && !strcmp(l.pg[l.ch[0].firstPg].title, "Tennis"));
+  assert(l.ch[1].nPg == 1 && !strcmp(l.pg[l.ch[1].firstPg].title, "Golf"));
+  iptv_list_free(&l);
+}
+
+// One guide id carrying two schedules ten minutes apart, as a provider's
+// merged feed does: the first timeline stays, the programmes starting inside
+// it go, and a two-minute overlap is trimmed rather than dropped.
+static void testOneTimeline(void) {
+  IptvList l;
+  long long st = iptv_xmltv_time("20260928130000 +0000");
+  const char *m3u = "#EXTINF:-1 tvg-id=\"e1\",Eleven 1\n" "http://x/1\n";
+  const char *xml =
+    "<tv><programme start=\"20260928130000 +0000\" stop=\"20260928132500 +0000\" channel=\"e1\"><title>Show A</title></programme>"
+    "<programme start=\"20260928131000 +0000\" stop=\"20260928133500 +0000\" channel=\"e1\"><title>Show B</title></programme>"
+    "<programme start=\"20260928132500 +0000\" stop=\"20260928152700 +0000\" channel=\"e1\"><title>Ligue 1</title></programme>"
+    "<programme start=\"20260928133500 +0000\" stop=\"20260928140000 +0000\" channel=\"e1\"><title>Show B2</title></programme>"
+    "<programme start=\"20260928152500 +0000\" stop=\"20260928170000 +0000\" channel=\"e1\"><title>Late</title></programme>"
+    "</tv>";
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, m3u) == 1);
+  iptv_parse_xmltv(&l, xml, st - 3600, st + 86400);
+  assert(l.ch[0].nPg == 3);
+  { const IptvProgramme *p = &l.pg[l.ch[0].firstPg];
+    assert(!strcmp(p[0].title, "Show A") && !strcmp(p[1].title, "Ligue 1") && !strcmp(p[2].title, "Late"));
+    assert(p[1].stop == p[2].start); }
+  iptv_list_free(&l);
+}
+
 // A second guide fills the channels the first left empty, and only those: a
 // channel the first guide covers keeps that schedule even when the second one
 // also knows it.
@@ -606,6 +657,8 @@ int main(int argc, char **argv) {
   }
   testTime();
   testEntities();
+  testOneFeed();
+  testOneTimeline();
   iptv_list_init(&l);
   testM3u(&l);
   testXmltv(&l);

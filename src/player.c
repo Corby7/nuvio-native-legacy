@@ -1158,8 +1158,13 @@ static int streamFacts(char *dst, size_t n) {
   const char *f[3];
   int nf = 0;
   char res[16] = "";
+  // Every rung, 720p and SD included: the owner wants to see a poor source
+  // named, not a silence that looks the same as "nothing to report". By width,
+  // so a 1920x800 scope film is 1080p.
   if (video_width() >= 3840)      snprintf(res, sizeof res, "4K");
-  else if (video_width() >= 1920) snprintf(res, sizeof res, "HD");
+  else if (video_width() >= 1920) snprintf(res, sizeof res, "1080p");
+  else if (video_width() >= 1280) snprintf(res, sizeof res, "720p");
+  else if (video_width() > 0)     snprintf(res, sizeof res, "SD");
   if (res[0]) f[nf++] = res;
   if (video_has_dolby_vision())               f[nf++] = "Dolby Vision";
   else if (!strcasecmp(video_hdr(), "HDR10")) f[nf++] = "HDR10";

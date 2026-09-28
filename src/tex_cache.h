@@ -96,6 +96,11 @@ GLuint tex_get_exact(const char *path, float widthLayout);
 // aspect that chooses the next one.
 float tex_aspect(const char *path);
 
+// The source file's width in pixels, 0 until a texture exists. For art that
+// comes in small (IPTV logos are often 96px) and must not be blown up past what
+// it holds: the caller caps its drawing scale on it.
+int  tex_source_width(const char *path);
+
 // 1 when the cache has GIVEN UP on this art: the decode failed and the retries
 // are spent. It answers 0 while a request is still in flight.
 //

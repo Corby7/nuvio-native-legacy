@@ -99,6 +99,10 @@ const char *iptv_status(void);
 // A short name for the source, for the header: the playlist's host, or the
 // Xtream server's.
 const char *iptv_source_label(void);
+// The viewer's own name for the source, "" when it goes by its host; setting it
+// ("" to go back to the host) saves it with the source in iptv.txt.
+const char *iptv_source_name(void);
+void iptv_set_source_name(const char *name);
 
 // Favourites and history are keyed by the channel's NAME: a provider rotates
 // stream URLs (they carry the credentials) far more often than it renames.

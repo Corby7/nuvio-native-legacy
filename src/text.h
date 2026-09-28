@@ -175,6 +175,7 @@ typedef enum {
   // Live TV (iptvui.c), the sizes the Y1/Y2 mockups set that no style above has.
   // Everything else on that screen reuses a style of the same size and weight.
   TXT_LIVE_TITLE,    // the focused programme's title        42 / 600
+  TXT_LIVE_TITLE_F,  // the same with the focus: a step up    48 / 600
   TXT_LIVE_META,     // chips, the detail line, "Then" items 19 / 500
   TXT_LIVE_META_B,   // the chosen chip, channel numbers     19 / 600
   TXT_LIVE_NAME,     // a channel's name in the guide        21 / 500
