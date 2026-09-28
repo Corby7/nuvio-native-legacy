@@ -169,12 +169,27 @@ static void drawFooter(float px, float w, float alpha, float focus);
 static void drawGlass(float w, float alpha);
 static void pointRow(int row, int unused);
 
+// A DESTINATION CAN BE OFF: Live TV, until Settings turns it on. An off row is
+// not drawn, takes no room (the column closes up and stays centred) and the
+// highlight steps over it. Destinations keep their numbers either way.
+static int shown(int d) { return d != MENU_LIVE || settings_live_enabled(); }
+static int nShown(void) {
+  int n = 0;
+  for (int d = 0; d < MENU_N; d++) n += shown(d);
+  return n;
+}
+// The top of destination `d`'s line.
+static float rowY(int d) {
+  int slot = 0;
+  for (int i = 0; i < d && i < MENU_N; i++) slot += shown(i);
+  return (NV_SCREEN_H - nShown() * NV_MENU_LINE_H) * 0.5f + slot * NV_MENU_LINE_H;
+}
+
 // The top of the pill on focus `row`: a nav row, or the footer, which sits apart
 // at the bottom of the bar — the pill glides the whole gap to reach it.
 static float pillTop(int row) {
   if (row == MENU_FOOTER) return NV_SCREEN_H - NV_MARGIN_Y - NV_MENU_FOOTER_H;
-  return (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f
-       + row * NV_MENU_LINE_H + (NV_MENU_LINE_H - NV_MENU_PILL_H) * 0.5f;
+  return rowY(row) + (NV_MENU_LINE_H - NV_MENU_PILL_H) * 0.5f;
 }
 
 // THE FOCUS PILL: the faint lit edge and the #303030 stadium over it.
@@ -228,8 +243,9 @@ static void drawRailFixed(Uint32 now) {
   // and by this point in app_draw it holds the content and nothing of the menu.
   gfx_backdrop_grab((unsigned)now);
   drawGlass(NV_LEGACY_RAIL_W, 1.0f);
-  float y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
-  for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H) {
+  for (int i = 0; i < MENU_N; i++) {
+    float y = rowY(i);
+    if (!shown(i)) continue;
     // --text-color at opacity 1 for the row you are on, at 0.5 for the rest:
     // `.home-nav-icon-wrap { opacity: .5 }` and 1 on `.selected`. The colour is
     // white in both cases — it is the OPACITY that carries the state, which is
@@ -239,9 +255,8 @@ static void drawRailFixed(Uint32 now) {
          NV_MENU_ICON, current ? 1.0f : 0.5f);
   }
   drawFooter(0.0f, NV_LEGACY_RAIL_W, 1.0f, 0.0f);
-  y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
-  for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H)
-    pointer_zone_hover(0, y, NV_LEGACY_RAIL_W, NV_MENU_LINE_H, pointRow, i, 0);
+  for (int i = 0; i < MENU_N; i++)
+    if (shown(i)) pointer_zone_hover(0, rowY(i), NV_LEGACY_RAIL_W, NV_MENU_LINE_H, pointRow, i, 0);
   pointer_zone_hover(0, pillTop(MENU_FOOTER), NV_LEGACY_RAIL_W, NV_MENU_FOOTER_H,
                      pointRow, MENU_FOOTER, 0);
 }
@@ -334,8 +349,15 @@ void menu_event(const SDL_Event *e) {
   if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { choose(); return; }
   // No wrap-around at the ends: the bar is short and the user sees all four rows
   // at once, so wrapping at the end of the list reads as a fault, not a shortcut.
-  if (k == SDLK_DOWN && line < NV_MENU_FOCUSES - 1) line++;
-  else if (k == SDLK_UP && line > 0)       line--;
+  if (k == SDLK_DOWN) {
+    int l = line + 1;
+    while (l < MENU_N && !shown(l)) l++;
+    if (l < NV_MENU_FOCUSES) line = l;
+  } else if (k == SDLK_UP) {
+    int l = line - 1;
+    while (l >= 0 && !shown(l)) l--;
+    if (l >= 0) line = l;
+  }
   // LEFT dies here on purpose: the bar is already the edge of the screen.
 }
 
@@ -601,10 +623,10 @@ void menu_draw(Uint32 now) {
   drawFocusPill((GfxRect){ px + NV_MENU_PILL_PAD, pillY,
                            w - NV_MENU_PILL_PAD * 2.0f, NV_MENU_PILL_H }, slides);
 
-  float y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
-  for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H) {
+  for (int i = 0; i < MENU_N; i++) {
     float f = animFocus[i];
-    float cy = y + NV_MENU_LINE_H * 0.5f;
+    float cy = rowY(i) + NV_MENU_LINE_H * 0.5f;
+    if (!shown(i)) continue;
     int current = (i == destination);
 
     // Three states, and all three exist in the web app too: focused (white over
@@ -641,9 +663,8 @@ void menu_draw(Uint32 now) {
   if (is_open) {
     float wOpen = NV_MENU_W_IS_OPEN;
     pointer_zone_hover(wOpen, 0, NV_SCREEN_W - wOpen, NV_SCREEN_H, pointAway, 0, 0);
-    y = (NV_SCREEN_H - MENU_N * NV_MENU_LINE_H) * 0.5f;
-    for (int i = 0; i < MENU_N; i++, y += NV_MENU_LINE_H)
-      pointer_zone(0, y, wOpen, NV_MENU_LINE_H, pointRow, i, 0);
+    for (int i = 0; i < MENU_N; i++)
+      if (shown(i)) pointer_zone(0, rowY(i), wOpen, NV_MENU_LINE_H, pointRow, i, 0);
     pointer_zone(0, pillTop(MENU_FOOTER), wOpen, NV_MENU_FOOTER_H, pointRow, MENU_FOOTER, 0);
   }
 }

@@ -67,6 +67,9 @@ int settings_pause_overlay_ms(void);
 // harnesses; the screen changes them like any other row.
 int  settings_live_buffer_minutes(void);
 int  settings_live_preview(void);
+// Live TV at all (Settings → IPTV → Live TV), off by default: off, the side
+// bar has no Live TV row.
+int  settings_live_enabled(void);
 void settings_set_live(int bufferMinutes, int preview);
 // "Automatic", "4K", "1080p" or "720p" — the displayed label, so whatever picks
 // the video source shows exactly what the user chose.

@@ -763,6 +763,8 @@ static float metaItem(const char *text, float x, float y, int first,
 // picture it could not carry it far enough — from the sofa the row you were on
 // looked like the rows you were not. Brightening the ink costs nothing and is
 // the half of the pair that survives at distance.
+// The widest the source's name gets on the row's second line.
+#define SRC_WHO_MAX_W 320.0f
 static void drawRow(const Stream *s, float left, float w, float top, int playing,
                     int sel, Uint32 now, float a) {
   // Only the LEAD fact is bright on the focused row ("Instant", "Playing"); the
@@ -851,8 +853,21 @@ static void drawRow(const Stream *s, float left, float w, float top, int playing
     x += pw + 10.0f;
     first = 1;   // the chip carries its own separation
   }
-  x = metaItem(s->service[0] ? s->service : s->provider, x, y, first,
-                metaR, metaG, metaB, sep, a); first = 0;
+  // WHERE IT CAME FROM, trimmed: an addon's own name can be any length, and
+  // untrimmed it ran under the size and the quality bar on the right.
+  { const char *who = s->service[0] ? s->service : s->provider;
+    if (who[0]) {
+      TxtLine l;
+      if (!first) {
+        TxtLine d = txt_line(TXT_SRC_META, "\xC2\xB7", 255, 255, 255, sep);
+        ink(d, x, y, a);
+        x += (float)d.w + 10.0f;
+      }
+      l = txt_line_trim(TXT_SRC_META, who, metaR, metaG, metaB, 255, SRC_WHO_MAX_W);
+      ink(l, x, y, a);
+      x += (float)l.w + 10.0f;
+      first = 0;
+    } }
   x = metaItem(container, x, y, 0, metaR, metaG, metaB, sep, a);
   // THE SEED COUNT ONLY ON A TORRENT. On an instant row it is a number the
   // aggregator scraped from somewhere and it changes nothing about whether the

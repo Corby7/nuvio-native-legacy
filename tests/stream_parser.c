@@ -103,11 +103,26 @@ int main(void) {
     assert(s.cached == 1 && s.p2p == 0);
     assert(s.mbps > 48.9f && s.mbps < 49.1f); }
 
-  // An addon that IS the source leaves it empty, and the row falls back to the
-  // addon's own name.
+  // An addon that IS the source keeps its name, less the words the chips say.
   { Stream s = one("Torrentio 4k", "Film.2024.2160p.WEB-DL.mkv \\n\xF0\x9F\x91\xA4 9",
                    "https://example.invalid/g.mkv");
-    assert(!strcmp(s.service, "Torrentio 4k")); }
+    assert(!strcmp(s.service, "Torrentio")); }
+
+  // OTHER PEOPLE'S TEMPLATES: bracketed cache tags, emoji, the chips' words and
+  // the separators between them all go; what is left is the name.
+  { Stream s = one("[RD\xE2\x9A\xA1] AIOStreams 4K", "Film.2024.2160p.mkv",
+                   "https://example.invalid/h.mkv");
+    assert(!strcmp(s.service, "AIOStreams")); }
+  { Stream s = one("[RD+] Torrentio\\n4k DV | HDR", "Film.2024.2160p.mkv",
+                   "https://example.invalid/i.mkv");
+    assert(!strcmp(s.service, "Torrentio")); }
+  { Stream s = one("\xF0\x9F\xA7\xB2 Comet \xC2\xB7 2160p", "Film.2024.2160p.mkv",
+                   "https://example.invalid/j.mkv");
+    assert(!strcmp(s.service, "Comet")); }
+  // Nothing but a state and the chips' words: empty, so the row says the addon.
+  { Stream s = one("\xE2\x9A\xA1 1080p | HDR", "Film.2024.1080p.mkv",
+                   "https://example.invalid/k.mkv");
+    assert(!s.service[0]); }
 
   // The two spellings of the same file, from the same list: both have to reach
   // the same codec and the same channel count.

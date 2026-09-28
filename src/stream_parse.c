@@ -130,20 +130,50 @@ static void availability(Stream *s, const char *text) {
 //
 // What is left is the service, and it is the one part the row could not say
 // before: every row of a twelve-source list read "AIOStreams".
+//
+// OTHER PEOPLE'S TEMPLATES. That shape is the owner's AIOStreams formatter; the
+// default formatters, Torrentio and the rest name a stream "[RD⚡] AIOStreams
+// 4K" or "Torrentio\n4k DV" instead. Printed whole, that ran under the row's
+// right column with its emoji as hollow boxes. So the name is cleaned the same
+// way whatever its shape: bracketed tags ([RD+], (AD)) and anything Inter
+// cannot draw go, and so do the words the chips already say (4K, 1080p, DV,
+// HDR) and the separators left between them. The owner's names never contain
+// any of those, so they come out exactly as before.
+static int chipWord(const char *w, size_t n) {
+  static const char *WORDS[] = { "4k", "uhd", "fhd", "hd", "sd", "2160p", "1440p", "1080p",
+                                 "720p", "576p", "480p", "360p", "dv", "dovi", "hdr", "hdr10",
+                                 "hdr10+", "hlg", "sdr", "remux" };
+  for (size_t i = 0; i < sizeof WORDS / sizeof *WORDS; i++)
+    if (strlen(WORDS[i]) == n && !strncasecmp(w, WORDS[i], n)) return 1;
+  return 0;
+}
+static int separatorWord(const char *w, size_t n) {
+  for (size_t i = 0; i < n; i++)
+    if (isalnum((unsigned char)w[i]) || (unsigned char)w[i] >= 0x80) {
+      // The middle dot and the bullet are separators too, letters are not.
+      if (n == 2 && !strncmp(w, "\xC2\xB7", 2)) return 1;
+      if (n == 3 && !strncmp(w, "\xE2\x80\xA2", 3)) return 1;
+      return 0;
+    }
+  return 1;
+}
 static void serviceOf(const char *name, char *out, size_t cap) {
   static const char *DROP[] = { "\xE2\x80\x8B", "\xE2\x80\x8C", "\xE2\x80\x8D",
                                 "\xE2\x81\xA0", "\xE2\x81\xA1", "\xE2\x81\xA2",
-                                "\xE2\x81\xA3", "\xE2\x81\xA4", "\xEF\xBB\xBF" };
+                                "\xE2\x81\xA3", "\xE2\x81\xA4", "\xEF\xBB\xBF",
+                                "\xEF\xB8\x8F", "\xEF\xB8\x8E" };
   static const char *STOP[] = { "\xE2\x98\x85", "\xE2\x98\x86", "\xE2\xAD\x90" };
-  static const char *LEAD[] = { "not cached", "uncached", "cached", "instant",
+  static const char *LEAD[] = { "not", "uncached", "cached", "instant",
                                 "download", "p2p", "debrid", "torrent" };
   char buf[192];
-  size_t k = 0, i;
+  size_t k = 0, i, o = 0;
   const char *p = name, *q;
+  int kept = 0;
 
   out[0] = 0;
   for (; *p && k < sizeof buf - 1; ) {
     int skipped = 0;
+    unsigned char c = (unsigned char)*p;
     for (i = 0; i < sizeof STOP / sizeof *STOP; i++)
       if (!strncmp(p, STOP[i], 3)) { p = ""; skipped = 1; break; }
     if (!*p) break;
@@ -151,33 +181,51 @@ static void serviceOf(const char *name, char *out, size_t cap) {
     for (i = 0; i < sizeof DROP / sizeof *DROP; i++)
       if (!strncmp(p, DROP[i], 3)) { p += 3; skipped = 1; break; }
     if (skipped) continue;
-    // Every space-like character becomes one plain space, so the trimming below
-    // has a single thing to look for.
-    if ((unsigned char)*p < 32 || *p == ' ') { buf[k++] = ' '; p++; continue; }
+    // A bracketed tag, "[RD+]" or "(AD)": the cache state in shorthand.
+    if (c == '[' || c == '(') {
+      const char *close = strchr(p, c == '[' ? ']' : ')');
+      if (close) { p = close + 1; buf[k++] = ' '; continue; }
+    }
+    // Emoji (four-byte UTF-8) and the arrows, symbols and dingbats blocks
+    // (U+2190-U+2BFF: the bolt, the magnet's neighbours, the floppy): no glyph.
+    if (c >= 0xF0) { p += 4; buf[k++] = ' '; continue; }
+    if (c == 0xE2 && (unsigned char)p[1] >= 0x86 && (unsigned char)p[1] <= 0xAF) {
+      p += 3; buf[k++] = ' '; continue;
+    }
+    // Every space-like character becomes one plain space, so the words below
+    // have a single thing to split on.
+    if (c < 32 || c == ' ') { buf[k++] = ' '; p++; continue; }
     if (!strncmp(p, "\xE2\x80", 2) && (unsigned char)p[2] >= 0x80 &&
         (unsigned char)p[2] <= 0x8A) { buf[k++] = ' '; p += 3; continue; }
     buf[k++] = *p++;
   }
   buf[k] = 0;
 
-  q = buf;
-  for (;;) {
+  // Word by word: the state words only at the front, as before; the chips'
+  // words and bare separators anywhere.
+  for (q = buf; *q; ) {
+    const char *w;
+    size_t n;
     while (*q == ' ') q++;
-    for (i = 0; i < sizeof LEAD / sizeof *LEAD; i++) {
-      size_t n = strlen(LEAD[i]);
-      if (!strncasecmp(q, LEAD[i], n) && (q[n] == ' ' || !q[n])) { q += n; break; }
+    if (!*q) break;
+    w = q;
+    while (*q && *q != ' ') q++;
+    n = (size_t)(q - w);
+    if (!kept) {
+      for (i = 0; i < sizeof LEAD / sizeof *LEAD; i++)
+        if (strlen(LEAD[i]) == n && !strncasecmp(w, LEAD[i], n)) break;
+      if (i < sizeof LEAD / sizeof *LEAD) continue;
     }
-    if (i == sizeof LEAD / sizeof *LEAD) break;
+    if (chipWord(w, n) || separatorWord(w, n)) continue;
+    if (o + (o ? 1 : 0) + n >= cap) break;
+    if (o) out[o++] = ' ';
+    memcpy(out + o, w, n);
+    o += n;
+    kept = 1;
   }
-  while (*q == ' ') q++;
-  k = strlen(q);
-  while (k && q[k - 1] == ' ') k--;
-  // A name that was ONLY a state and some stars leaves nothing; the row then
-  // falls back to the addon, which is the honest answer.
-  if (!k) return;
-  if (k >= cap) k = cap - 1;
-  memcpy(out, q, k);
-  out[k] = 0;
+  // A name that was ONLY a state, tags and some stars leaves nothing; the row
+  // then falls back to the addon, which is the honest answer.
+  out[o] = 0;
 }
 static void tokens(Stream *s, const char *text) {
   const char *fmt = "", *ch = "";

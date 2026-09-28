@@ -6,6 +6,9 @@ with an XMLTV guide. It is independent of the Nuvio account and of the addons;
 nothing about it is synced, and it belongs to the TV rather than to a profile:
 every profile sees the same source, favourites and history.
 
+It is **off** until **Settings → IPTV → Live TV** turns it on. Off, the side
+bar has no Live TV row and the IPTV source row does not open.
+
 ## Using it
 
 The first visit opens the setup form:
