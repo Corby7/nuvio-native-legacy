@@ -2315,7 +2315,7 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
 //
 // `opacity` is the transition's own 0..1, kept per button by the caller so that
 // moving the focus crossfades the way the CSS does; it also carries the 4px rise.
-static void drawTooltip(GfxRect btn, const char *label, float opacity, float a) {
+void detail_tooltip(GfxRect btn, const char *label, float opacity, float a) {
   if (!label || !label[0] || opacity <= 0.01f) return;
   float al = a * opacity * NV_DETWEB_TIP_ALPHA;
   TxtLine l = txt_line(TXT_DETWEB_TIP, label, 255, 255, 255, 255);
@@ -2862,7 +2862,7 @@ static void heroWeb(float a, float offset) {
       bx += NV_DETWEB_CIRC + NV_DETWEB_BTN_GAP;
     }
     for (int k = 0; k < nc; k++)
-      drawTooltip(rc[k], tooltipOf(actionIn(k + 1)), tipA[k + 1], a);
+      detail_tooltip(rc[k], tooltipOf(actionIn(k + 1)), tipA[k + 1], a);
     regionAdd("actions", (GfxRect){ NV_DETW2_X, yActions,
                                     bx - NV_DETWEB_BTN_GAP - NV_DETW2_X,
                                     NV_DETWEB_BTN_H });

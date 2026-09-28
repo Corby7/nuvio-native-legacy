@@ -2107,25 +2107,17 @@ static GfxRect headSource(float right, float maxW, int focused) {
     return r; }
 }
 
-// "Search" under the circle while it has the focus: an icon alone says less
-// than a word, and the word is only needed while the icon is the one chosen.
-// It fades in and out over ~140 ms, on a dark pill so the chips under it do
-// not show through.
+// "Search" over the circle while it has the focus: the detail page's tooltip
+// (detail_tooltip), with its fade. An icon alone says less than a word, and
+// the word is only needed while the icon is the one chosen.
 static void headTooltip(GfxRect btn, int shown) {
   static float a;
   static Uint32 last;
   Uint32 t = SDL_GetTicks();
-  float step = last ? (float)(t - last) / 140.0f : 1.0f;
+  float dt = last ? (float)(t - last) / 1000.0f : 1.0f;
   last = t;
-  a += shown ? step : -step;
-  if (a < 0.0f) a = 0.0f;
-  if (a > 1.0f) a = 1.0f;
-  if (a <= 0.01f) return;
-  { TxtLine l = txt_line(TXT_SRC_TEXT, "Search", HEXI(0xF5F6F8), 255);
-    float w = l.w + 28.0f, h = l.h + 16.0f;
-    GfxRect r = { btn.x + (btn.w - w) * 0.5f, btn.y + btn.h + 14.0f - (1.0f - a) * 4.0f, w, h };
-    gfx_color(r, 0.5f, 0x26 / 255.0f, 0x29 / 255.0f, 0x2E / 255.0f, 0.96f * a);
-    txt_draw_alpha(l, r.x + 14.0f, r.y + (h - l.h) * 0.5f, a); }
+  a = anim_ramp(a, shown ? 1.0f : 0.0f, dt, NV_DETWEB_TIP_MS);
+  detail_tooltip(btn, "Search", a, 1.0f);
 }
 
 static void drawHeader(void) {
@@ -2894,6 +2886,24 @@ static void drawPhonePanel(void) {
   }
 }
 
+// "Guide on 980 of 1,240 channels", "The TV guide is loading…", or "" with no
+// list yet. Counted again only when the list or its programmes change.
+static void guideCoverage(char *dst, size_t n) {
+  static const IptvList *countedFor;
+  static int countedPg = -1, withGuide;
+  const IptvList *l = iptv_list();
+  dst[0] = 0;
+  if (!l) return;
+  if (iptv_guide_state() == IPTV_LOADING) { snprintf(dst, n, "The TV guide is loading\xE2\x80\xA6"); return; }
+  if (l != countedFor || l->nPg != countedPg) {
+    countedFor = l; countedPg = l->nPg; withGuide = 0;
+    for (int i = 0; i < l->nCh; i++) withGuide += l->ch[i].nPg > 0;
+  }
+  if (!l->nPg) snprintf(dst, n, "No TV guide for these channels yet");
+  else if (withGuide == l->nCh) snprintf(dst, n, "Guide on all %d channels", l->nCh);
+  else snprintf(dst, n, "Guide on %d of %d channels", withGuide, l->nCh);
+}
+
 static void drawSetup(void) {
   float x = X0();
   { TxtLine t = txt_line(TXT_TITLE3, "Live TV", 245, 246, 248, 255);
@@ -2932,6 +2942,16 @@ static void drawSetup(void) {
       int isEditing = editing == row && ime_is_open();
       char shown[1100];
       ink(TXT_LIVE_META, fieldLabel(row), 0x9AA1A9, x + 4.0f, y, 1.0f);
+      // Over the extra guides: how much of the list the guides read so far
+      // cover, the number that says whether one more is worth adding.
+      if (row == ROW_EPG) {
+        char cover[96];
+        guideCoverage(cover, sizeof cover);
+        if (cover[0]) {
+          TxtLine t = txt_line(TXT_LIVE_META, cover, HEXI(0x7C838B), 255);
+          txt_draw(t, f.x + f.w - 4.0f - t.w, y);
+        }
+      }
       if (focused) gfx_color((GfxRect){ f.x - 3.0f, f.y - 3.0f, f.w + 6.0f, f.h + 6.0f },
                              13.0f / (f.h + 6.0f), HEXF(C_PAPER), isEditing ? 1.0f : 0.85f);
       gfx_color(f, 10.0f / f.h, HEXF(0x16191D), 1.0f);

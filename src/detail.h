@@ -348,6 +348,12 @@ int  detail_requested_do_start(void);
 #define NV_DETWEB_TIP_MS     140.0f
 #define NV_DETWEB_TIP_RISE     4.0f
 
+// The circular buttons' tooltip: the label in bold white with a drop shadow,
+// no pill, centred NV_DETWEB_TIP_GAP above `btn`. `opacity` is the caller's
+// fade (anim_ramp over NV_DETWEB_TIP_MS); `a` the screen's own alpha. Live TV's
+// header search uses it too, so the two read as one control.
+void detail_tooltip(GfxRect btn, const char *label, float opacity, float a);
+
 // --- THE SEASON PICKER, MEASURED IN NuvioWeb -------------------------------
 //
 // IT IS A DROPDOWN, NOT A ROW OF PILLS. `.series-season-row` holds ONE
