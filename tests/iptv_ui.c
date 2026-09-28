@@ -245,19 +245,12 @@ int main(int argc, char **argv) {
   // Arriving, the bar.
   snprintf(path, sizeof path, "%s/nuvio-live-bar.bmp", out); frames(30, path);
   { char *before = data_read("iptv_recent.txt"), *after;
-    // 3 · Peek: ▲▼ with the bar open browses the channels, and the stream stays.
-    key(SDLK_DOWN); key(SDLK_DOWN);
-    snprintf(path, sizeof path, "%s/nuvio-live-peek.bmp", out); frames(40, path);
-    after = data_read("iptv_recent.txt");
-    assert(before && after && !strcmp(before, after));
-    free(after);
-    // BACK to stay: still the same channel.
-    key(SDLK_AC_BACK);
-    frames(10, NULL);
-    after = data_read("iptv_recent.txt");
-    assert(!strcmp(before, after));
-    free(after);
-    // 4 · Walk: ◀▶ with the bar open shows a later programme; OK reminds.
+    // The film player's keys: ▲ brings the controls up on Pause, ▲ again is
+    // the programme's track. ▶ there, at live, walks the schedule; OK reminds.
+    key(SDLK_UP);
+    snprintf(path, sizeof path, "%s/nuvio-live-bar-controls.bmp", out); frames(20, path);
+    key(SDLK_UP);
+    snprintf(path, sizeof path, "%s/nuvio-live-bar-track.bmp", out); frames(20, path);
     key(SDLK_RIGHT);
     snprintf(path, sizeof path, "%s/nuvio-live-walk.bmp", out); frames(30, path);
     key(SDLK_RIGHT);
@@ -266,17 +259,17 @@ int main(int argc, char **argv) {
     after = data_read("iptv_recent.txt");
     assert(!strcmp(before, after));
     free(after);
-    key(SDLK_LEFT); key(SDLK_LEFT);
-    // OK on the bar: the controls.
-    key(SDLK_RETURN);
-    snprintf(path, sizeof path, "%s/nuvio-live-bar-controls.bmp", out); frames(20, path);
-    key(SDLK_AC_BACK);
-    // BACK hides the bar; ▲▼ now zaps, and the toast names where it landed.
-    key(SDLK_AC_BACK);
+    key(SDLK_LEFT); key(SDLK_LEFT);          // back along the walk to the track
+    key(SDLK_DOWN);                          // the buttons
+    key(SDLK_DOWN);                          // and everything away
     frames(20, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
+    // With nothing up, ◀▶ change channel, and the toast names where it landed.
     // A lone press tunes on the frame it lands, not after the zap wait.
     SDL_Delay(400);
-    key(SDLK_DOWN);
+    key(SDLK_RIGHT);
     frames(1, NULL);
     after = data_read("iptv_recent.txt");
     assert(strcmp(before, after));
@@ -284,7 +277,7 @@ int main(int argc, char **argv) {
     // A run of presses tunes only where it stops.
     free(before);
     before = data_read("iptv_recent.txt");
-    key(SDLK_DOWN);
+    key(SDLK_RIGHT);
     frames(1, NULL);
     after = data_read("iptv_recent.txt");
     assert(!strcmp(before, after));
@@ -310,19 +303,17 @@ int main(int argc, char **argv) {
     after = data_read("iptv_recent.txt");
     assert(strcmp(before, after) && !strncmp(after, "Family", 6));
     free(after);
-    // The peek's OK is the other thing that retunes.
-    free(before);
-    before = data_read("iptv_recent.txt");
-    key(SDLK_RETURN); key(SDLK_UP); key(SDLK_RETURN);
-    frames(10, NULL);
-    after = data_read("iptv_recent.txt");
-    assert(strcmp(before, after));
-    free(after); free(before); }
-  key(SDLK_AC_BACK);
+    // OK with nothing up pauses, and again resumes.
+    key(SDLK_RETURN);
+    assert(video_stub_paused());
+    key(SDLK_RETURN);
+    assert(!video_stub_paused());
+    free(before); }
   frames(10, NULL);
-  // The channels panel: LEFT with nothing showing slides it in, the episode
-  // panel's way, mid-slide, then settled, then walked and the group menu.
-  key(SDLK_LEFT);
+  // The channels panel, from the bar's Channels button (Pause, Guide,
+  // Channels): it slides in the episode panel's way, mid-slide, then settled,
+  // then walked and the group menu.
+  key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
   snprintf(path, sizeof path, "%s/nuvio-live-channels-slide.bmp", out); frames(6, path);
   snprintf(path, sizeof path, "%s/nuvio-live-channels.bmp", out); frames(30, path);
   { char *before = data_read("iptv_recent.txt"), *after;
@@ -340,8 +331,8 @@ int main(int argc, char **argv) {
   key(SDLK_AC_BACK);
   frames(30, NULL);
   assert(iptvui_fullscreen());
-  // From the bar's Channels control; BACK returns to the bar.
-  key(SDLK_RETURN); key(SDLK_RETURN); key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
+  // BACK returned to the bar, on Channels; again, and BACK once more.
+  key(SDLK_RETURN);
   snprintf(path, sizeof path, "%s/nuvio-live-channels-from-bar.bmp", out); frames(30, path);
   key(SDLK_AC_BACK);
   snprintf(path, sizeof path, "%s/nuvio-live-channels-back-to-bar.bmp", out); frames(30, path);
@@ -352,9 +343,9 @@ int main(int argc, char **argv) {
   key(SDLK_AC_BACK);
   frames(30, NULL);
   assert(!tracks_is_open());
-  key(SDLK_AC_BACK); key(SDLK_AC_BACK);
+  key(SDLK_AC_BACK);                       // the bar away
   frames(10, NULL);
-  key(SDLK_AC_BACK);
+  key(SDLK_AC_BACK);                       // and out
   assert(!iptvui_fullscreen());
 
   // --- Pause and rewind ------------------------------------------------------------
@@ -362,22 +353,22 @@ int main(int argc, char **argv) {
   // honest about resuming live, and a long one does.
   number("102");
   assert(iptvui_fullscreen() && strstr(video_stub_url(), "/live/2.m3u8"));
-  key(SDLK_RETURN);            // the controls, Pause first
-  key(SDLK_RETURN);            // pause
+  key(SDLK_RETURN);            // OK pauses
   assert(video_stub_paused());
   snprintf(path, sizeof path, "%s/nuvio-live-paused.bmp", out); frames(30, path);
   { int plays = video_stub_plays();
     waitMs(5300);
     key(SDLK_RETURN);          // play, past the short-pause window: a new live load
     assert(video_stub_plays() == plays + 1 && !video_stub_paused()); }
-  key(SDLK_AC_BACK); key(SDLK_AC_BACK); frames(10, NULL);
-  key(SDLK_AC_BACK);
+  frames(10, NULL);
+  key(SDLK_AC_BACK);           // the bar was only informing: out
   assert(!iptvui_fullscreen());
 
   // 2 · Catch-up (Sport keeps a day, "shift"): ◀ on the bar rewinds into the
   // archive, OK lands it; Go live and Start over from the controls.
   number("113");
   assert(iptvui_fullscreen() && !strstr(video_stub_url(), "utc="));
+  key(SDLK_UP); key(SDLK_UP);  // the controls, then the track
   key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_LEFT);
   snprintf(path, sizeof path, "%s/nuvio-live-scrub.bmp", out); frames(8, path);
   key(SDLK_RETURN);
@@ -385,7 +376,7 @@ int main(int argc, char **argv) {
   { long long utc = atoll(strstr(video_stub_url(), "utc=") + 4), now = (long long)time(NULL);
     assert(utc < now - 100 && utc > now - 3600); }
   snprintf(path, sizeof path, "%s/nuvio-live-catchup.bmp", out); frames(30, path);
-  key(SDLK_RETURN);            // the controls: Pause, Start over, Go live, …
+  key(SDLK_DOWN);              // the buttons: Pause, Start over, Go live, …
   key(SDLK_RIGHT); key(SDLK_RIGHT);
   snprintf(path, sizeof path, "%s/nuvio-live-catchup-controls.bmp", out); frames(20, path);
   key(SDLK_RETURN);            // Go live
@@ -410,7 +401,7 @@ int main(int argc, char **argv) {
     long long utc = atoll(strstr(video_stub_url(), "utc=") + 4);
     int p = iptv_programme_at(l, 12, utc);
     assert(p >= 0 && l->pg[p].start == utc && l->pg[p].stop <= (long long)time(NULL) + 1); }
-  key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);
+  frames(10, NULL); key(SDLK_AC_BACK);
   assert(!iptvui_fullscreen());
 
   // 3 · The pause buffer, on the local MPEG-TS channel: the pipeline plays the
@@ -420,26 +411,26 @@ int main(int argc, char **argv) {
   { long long live = tsOffset(video_stub_url()), back;
     int plays;
     waitMs(3000);
-    key(SDLK_RETURN); key(SDLK_RETURN);        // pause
+    key(SDLK_RETURN);                          // pause
     assert(video_stub_paused());
     plays = video_stub_plays();
     waitMs(6500);                              // longer than a plain live pause may be
     key(SDLK_RETURN);                          // play: the same load, resumed
     assert(!video_stub_paused() && video_stub_plays() == plays);
     waitMs(10000);
-    key(SDLK_AC_BACK);                         // the block, not the controls
+    key(SDLK_UP); key(SDLK_UP);                // the controls, then the track
     key(SDLK_LEFT);                            // back as far as the buffer goes
     key(SDLK_RETURN);
     back = tsOffset(video_stub_url());
     // Back to the oldest kept: where playing began, within a sample (0.5 s).
     assert(video_stub_plays() == plays + 1 && back < live + 188 * 5000);
     snprintf(path, sizeof path, "%s/nuvio-live-buffer.bmp", out); frames(30, path);
-    key(SDLK_RETURN); key(SDLK_RIGHT);
+    key(SDLK_DOWN); key(SDLK_RIGHT);
     snprintf(path, sizeof path, "%s/nuvio-live-buffer-controls.bmp", out); frames(20, path);
     // Start over is not offered: the buffer began mid-programme. Go live is.
     key(SDLK_RETURN);
     assert(tsOffset(video_stub_url()) > back + 188 * 1000); }
-  key(SDLK_AC_BACK); key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);
+  key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);   // the bar away, then out
   assert(!iptvui_fullscreen());
 
   // 4 · Preview on focus: resting on a channel plays it, without counting it
@@ -463,7 +454,7 @@ int main(int argc, char **argv) {
     after = data_read("iptv_recent.txt");
     assert(strcmp(before, after));             // OK does
     free(before); free(after); }
-  key(SDLK_AC_BACK); frames(10, NULL); key(SDLK_AC_BACK);
+  frames(10, NULL); key(SDLK_AC_BACK);
   assert(!iptvui_fullscreen());
   key(SDLK_AC_BACK);           // stop the preview, as Back does in the list
   settings_set_live(15, 0);
@@ -486,7 +477,7 @@ int main(int argc, char **argv) {
   // A channel with no guide still has its bar: the clock hour, said as such.
   key(SDLK_1); key(SDLK_0); key(SDLK_5);
   frames(3, NULL);
-  key(SDLK_RETURN);
+  key(SDLK_UP);
   snprintf(path, sizeof path, "%s/nuvio-live-bar-noguide.bmp", out); frames(20, path);
   key(SDLK_AC_BACK); frames(10, NULL);
   key(SDLK_1); key(SDLK_0); key(SDLK_8);
@@ -516,7 +507,7 @@ int main(int argc, char **argv) {
     after = data_read("iptv_recent.txt");
     assert(iptvui_fullscreen() && !strncmp(after, "Sport One", 9));
     free(before); free(after); }
-  key(SDLK_AC_BACK); key(SDLK_AC_BACK);    // the bar, then to the screen, the search still on
+  key(SDLK_AC_BACK);                       // to the screen, the search still on
   frames(5, NULL);
   assert(!iptvui_fullscreen());
   // A programme's title: "oceans" is no channel's name.
@@ -642,7 +633,7 @@ int main(int argc, char **argv) {
   assert(!iptvui_requested_settings() && !iptvui_wants_exit());
 
   iptvui_shutdown();
-  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), "
+  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, the film player's keys (◀▶ change channel, OK pauses, ▲ the controls; the walk never retunes), "
        "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, search, source screen (a failed try keeps the source, a good one takes over; from Settings, Back returns there), phone form.");
   return 0;
 }
