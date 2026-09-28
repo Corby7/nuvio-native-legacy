@@ -238,6 +238,23 @@ int main(int argc, char **argv) {
     assert(favs == 1); }
   { char *f = data_read("iptv_favourites.txt"); assert(f && f[0]); free(f); }
 
+  // Right-to-left titles are drawn in visual order: Hebrew reversed, the
+  // Latin and the digits inside it kept as they read, brackets mirrored.
+  { char v[256];
+    assert(!strcmp(txt_visual_order("Next \xC2\xB7 Film", v, sizeof v), "Next \xC2\xB7 Film"));
+    // "חדשות הספורט" -> "טרופסה תושדח"
+    assert(!strcmp(txt_visual_order("\xD7\x97\xD7\x93\xD7\xA9\xD7\x95\xD7\xAA \xD7\x94\xD7\xA1\xD7\xA4\xD7\x95\xD7\xA8\xD7\x98", v, sizeof v),
+                   "\xD7\x98\xD7\xA8\xD7\x95\xD7\xA4\xD7\xA1\xD7\x94 \xD7\xAA\xD7\x95\xD7\xA9\xD7\x93\xD7\x97"));
+    // "Next · אב 2024": the year belongs to the Hebrew, so reads to its left.
+    assert(!strcmp(txt_visual_order("Next \xC2\xB7 \xD7\x90\xD7\x91 2024", v, sizeof v),
+                   "Next \xC2\xB7 2024 \xD7\x91\xD7\x90"));
+    // "Film 2: אב": digits after a Latin letter stay with it.
+    assert(!strcmp(txt_visual_order("Film 2: \xD7\x90\xD7\x91", v, sizeof v),
+                   "Film 2: \xD7\x91\xD7\x90"));
+    // "אב (2024)": a right-to-left line, the number and its brackets to the left.
+    assert(!strcmp(txt_visual_order("\xD7\x90\xD7\x91 (2024)", v, sizeof v),
+                   "(2024) \xD7\x91\xD7\x90")); }
+
   // --- Watching: Y4's bar and Y5's four levels ---------------------------------
   // (tests/video_stub.c plays everything, with a generated picture.)
   key(SDLK_RETURN);

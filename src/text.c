@@ -4,6 +4,7 @@
 #include "mark.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
+#include <ctype.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -610,6 +611,23 @@ static Uint32 firstNotAscii(const char *s) {
   return 0;
 }
 
+// Past the first non-ASCII character of `s` that is `cp` (as firstNotAscii
+// found it): where the next look starts.
+static const char *nextChar(const char *s, Uint32 cp) {
+  const unsigned char *p = (const unsigned char *)s;
+  for (; *p; p++) {
+    Uint32 c;
+    int len;
+    if (*p < 0x80) continue;
+    if      ((*p & 0xE0) == 0xC0 && p[1]) { c = (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F)); len = 2; }
+    else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { c = (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F)); len = 3; }
+    else return s + strlen(s);
+    if (c == cp) return (const char *)p + len;
+    p += len - 1;
+  }
+  return (const char *)p;
+}
+
 // Which fallback covers this codepoint. The ranges are the usual Unicode ones;
 // anything that is not Arabic/Hebrew or CJK falls into the third, which is
 // DroidSansFallback (it covers Cyrillic, Greek, Thai and more).
@@ -622,15 +640,129 @@ static Script scriptOf(Uint32 cp) {
   return SCRIPT_CYRILLIC_ETC;
 }
 
+// RIGHT-TO-LEFT LINES IN VISUAL ORDER. SDL_ttf lays every string out left to
+// right, so a Hebrew or Arabic title came out mirrored: "חדשות הספורט" read as
+// "טרופסה תושדח". This is the part of the Unicode bidi algorithm a single line
+// of a title needs: letters are strong right-to-left (Hebrew, Arabic) or strong
+// left-to-right (Latin and the rest, and digits, which keep their own order);
+// punctuation and spaces take the direction of the letters either side of them,
+// or the line's when those disagree; the line's direction is its first strong
+// letter's. Digits are the one wrinkle: they read left to right inside a
+// right-to-left run, and count as right-to-left for the punctuation around them
+// unless a left-to-right letter came before (rules W7, N1, I1). Then each run is reversed per the levels (rule L2), and brackets in
+// a right-to-left run are mirrored. Arabic letters are not joined here: that
+// needs a shaper this build does not have.
+//
+// A line with nothing right-to-left in it comes back untouched, and so does one
+// too long for `out`.
+static int rtlLetter(Uint32 cp) {
+  return (cp >= 0x0590 && cp <= 0x08FF) || (cp >= 0xFB1D && cp <= 0xFDFF) || (cp >= 0xFE70 && cp <= 0xFEFC);
+}
+static int neutralChar(Uint32 cp) {
+  if (cp < 0x80) return !isalnum((int)cp);
+  return (cp >= 0x0080 && cp <= 0x00BF) || cp == 0x00D7 || cp == 0x00F7 ||
+         (cp >= 0x2000 && cp <= 0x2BFF) || (cp >= 0x3000 && cp <= 0x303F) || cp == 0xFEFF;
+}
+static Uint32 mirrored(Uint32 cp) {
+  switch (cp) {
+    case '(': return ')'; case ')': return '(';
+    case '[': return ']'; case ']': return '[';
+    case '{': return '}'; case '}': return '{';
+    case '<': return '>'; case '>': return '<';
+    case 0x00AB: return 0x00BB; case 0x00BB: return 0x00AB;
+    default: return cp;
+  }
+}
+#define BIDI_MAX 512
+static const char *visualOrder(const char *s, char *out, size_t n) {
+  Uint32 cp[BIDI_MAX];
+  unsigned char cls[BIDI_MAX], lev[BIDI_MAX];   // cls: 0 L, 1 R, 2 neutral, 3 digit
+  const unsigned char *p = (const unsigned char *)s;
+  int m = 0, any = 0, para = 0, maxLev = 0;
+  size_t k = 0;
+  while (*p) {
+    Uint32 c;
+    int len;
+    if (m == BIDI_MAX) return s;
+    if      (*p < 0x80) { c = *p; len = 1; }
+    else if ((*p & 0xE0) == 0xC0 && p[1]) { c = (Uint32)((*p & 0x1F) << 6 | (p[1] & 0x3F)); len = 2; }
+    else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) { c = (Uint32)((*p & 0x0F) << 12 | (p[1] & 0x3F) << 6 | (p[2] & 0x3F)); len = 3; }
+    else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) {
+      c = (Uint32)((*p & 0x07) << 18 | (p[1] & 0x3F) << 12 | (p[2] & 0x3F) << 6 | (p[3] & 0x3F)); len = 4;
+    }
+    else return s;
+    cp[m] = c;
+    cls[m] = rtlLetter(c) ? 1 : c >= '0' && c <= '9' ? 3 : neutralChar(c) ? 2 : 0;
+    if (cls[m] == 1) any = 1;
+    m++;
+    p += len;
+  }
+  if (!any) return s;
+  for (int i = 0; i < m; i++) if (cls[i] < 2) { para = cls[i]; break; }
+  // W7: digits after a left-to-right letter are simply left-to-right.
+  { int strong = para;
+    for (int i = 0; i < m; i++) {
+      if (cls[i] < 2) strong = cls[i];
+      else if (cls[i] == 3 && strong == 0) cls[i] = 0;
+    } }
+  // Neutrals: the class either side when they agree (a digit counting as
+  // right-to-left), else the line's.
+  for (int i = 0; i < m; ) {
+    int j = i, before, after;
+    if (cls[i] != 2) { i++; continue; }
+    while (j < m && cls[j] == 2) j++;
+    before = i > 0 ? (cls[i - 1] == 3 ? 1 : cls[i - 1]) : para;
+    after = j < m ? (cls[j] == 3 ? 1 : cls[j]) : para;
+    for (int t = i; t < j; t++) cls[t] = (unsigned char)(before == after ? before : para);
+    i = j;
+  }
+  for (int i = 0; i < m; i++) {
+    lev[i] = (unsigned char)(cls[i] == 3 ? 2 : para ? (cls[i] ? 1 : 2) : (cls[i] ? 1 : 0));
+    if (lev[i] > maxLev) maxLev = lev[i];
+  }
+  for (int L = maxLev; L >= 1; L--)
+    for (int i = 0; i < m; ) {
+      int j = i;
+      if (lev[i] < L) { i++; continue; }
+      while (j < m && lev[j] >= L) j++;
+      for (int a = i, b = j - 1; a < b; a++, b--) {
+        Uint32 tc = cp[a]; unsigned char tl = lev[a];
+        cp[a] = cp[b]; lev[a] = lev[b];
+        cp[b] = tc; lev[b] = tl;
+      }
+      i = j;
+    }
+  for (int i = 0; i < m; i++) {
+    Uint32 c = lev[i] & 1 ? mirrored(cp[i]) : cp[i];
+    if (k + 5 > n) return s;
+    if (c < 0x80) out[k++] = (char)c;
+    else if (c < 0x800) { out[k++] = (char)(0xC0 | c >> 6); out[k++] = (char)(0x80 | (c & 0x3F)); }
+    else if (c < 0x10000) { out[k++] = (char)(0xE0 | c >> 12); out[k++] = (char)(0x80 | (c >> 6 & 0x3F)); out[k++] = (char)(0x80 | (c & 0x3F)); }
+    else { out[k++] = (char)(0xF0 | c >> 18); out[k++] = (char)(0x80 | (c >> 12 & 0x3F));
+           out[k++] = (char)(0x80 | (c >> 6 & 0x3F)); out[k++] = (char)(0x80 | (c & 0x3F)); }
+  }
+  out[k] = 0;
+  return out;
+}
+
+const char *txt_visual_order(const char *s, char *out, size_t n) { return visualOrder(s, out, n); }
+
 // The font line `s` should be drawn with. It returns the main one when that
 // copes — which is the case for the overwhelming majority of lines.
 static TTF_Font *fontOf(TxtStyle style, const char *s) {
-  Uint32 cp = firstNotAscii(s);
+  Uint32 cp = 0;
   Script e;
-  if (!cp || cp >= 0x10000) return fonts[style];
-  // Portuguese and Spanish accents are in Inter; only what it really lacks falls
-  // through to the fallback.
-  if (TTF_GlyphIsProvided(fonts[style], (Uint16)cp)) return fonts[style];
+  // The first character Inter LACKS decides, not merely the first that is not
+  // ASCII: "Next · <a Hebrew title>" met the middle dot first, which Inter has,
+  // and the Hebrew after it came out as a row of boxes. Portuguese and Spanish
+  // accents, the dot and the dashes are all Inter's; only what it really lacks
+  // falls through to the fallback.
+  for (const char *p = s; (cp = firstNotAscii(p)) != 0; ) {
+    if (cp >= 0x10000) return fonts[style];
+    if (!TTF_GlyphIsProvided(fonts[style], (Uint16)cp)) break;
+    p = nextChar(p, cp);
+  }
+  if (!cp) return fonts[style];
   e = scriptOf(cp);
   if (!pathFallback[e][0]) return fonts[style];
   if (!fallbacks[e][style]) {
@@ -975,7 +1107,9 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
   SDL_Color color = { (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a };
   TTF_Font *face = px > 0 ? sizedFont(style, px) : subtitleFontOf(style, s, family);
   if (!face) return empty;
-  SDL_Surface *sf = TTF_RenderUTF8_Blended(face, s, color);
+  // Drawn in visual order; cached, measured and trimmed in logical order.
+  char vis[1024];
+  SDL_Surface *sf = TTF_RenderUTF8_Blended(face, visualOrder(s, vis, sizeof vis), color);
   if (!sf) return empty;
   SDL_Surface *cv = SDL_ConvertSurfaceFormat(sf, SDL_PIXELFORMAT_ABGR8888, 0);
   SDL_FreeSurface(sf);

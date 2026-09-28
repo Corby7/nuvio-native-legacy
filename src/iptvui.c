@@ -2603,14 +2603,12 @@ static void drawVideo(GfxRect r, float radius) {
   }
 }
 
-// A darkening from the bottom of a picture up, for the text laid over it.
-static void pictureShade(GfxRect r, float h, float a) {
-  const int N = 8;
-  for (int i = 0; i < N; i++) {
-    float t = ((float)i + 0.5f) / (float)N;
-    gfx_color((GfxRect){ r.x, r.y + r.h - h + h * i / N, r.w, h / N + 0.5f }, 0.0f,
-              5 / 255.0f, 6 / 255.0f, 9 / 255.0f, a * t);
-  }
+// A darkening from the bottom of a picture up, for the text laid over it: one
+// shader gradient (GFX_VEIL_BOTTOM), rounded like the picture's own corners.
+// It was eight flat strips, each a step darker, and on a bright picture the
+// steps showed as bands.
+static void pictureShade(GfxRect r, float h, float radius, float a) {
+  gfx_rect((GfxRect){ r.x, r.y + r.h - h, r.w, h }, 0, GFX_VEIL_BOTTOM, 0, 0, 0, radius / h, 0, 0, 0, a);
 }
 
 // What stands in for a picture when nothing is tuned: the plate, the focused
@@ -2757,7 +2755,7 @@ static void guidePreview(void) {
   char s[300];
   if (ownsVideo() && tc) {
     drawVideo(r, G_PREV_R);
-    pictureShade(r, 56.0f, 0.86f);
+    pictureShade(r, 72.0f, G_PREV_R, 0.92f);
     liveTag(r.x + 14.0f, r.y + 14.0f, 30.0f, 1.0f);
     snprintf(s, sizeof s, "%d \xC2\xB7 %s", tc->number, tc->name);
     inkTrim(TXT_PLR_BADGE, s, 0xF5F6F8, r.x + 14.0f, r.y + r.h - 12.0f - 20.0f, r.w - 28.0f, 1.0f);
@@ -3057,7 +3055,7 @@ static float listPreview(float y) {
   const IptvProgramme *pg = ch >= 0 ? programmeAt(ch, now) : NULL;
   if (showTuned) {
     drawVideo(r, C_PREV_R);
-    pictureShade(r, r.h * 0.46f, 0.62f);
+    pictureShade(r, r.h * 0.5f, C_PREV_R, 0.8f);
     liveTag(r.x + 20.0f, r.y + 20.0f, 34.0f, 1.0f);
   } else {
     pictureIdle(r, C_PREV_R, ch, 132.0f);

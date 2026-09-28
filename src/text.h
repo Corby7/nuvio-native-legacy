@@ -3,6 +3,7 @@
 // rasterisation is expensive and the content here changes little.
 #ifndef NV_TEXT_H
 #define NV_TEXT_H
+#include <stddef.h>
 #include "gl_compat.h"
 
 // The tvOS scale. Each style carries a size AND a weight: on the device the
@@ -255,6 +256,12 @@ TxtLine txt_line(TxtStyle style, const char *s, int r, int g, int b, int a);
 // category chips can number in the hundreds), or deciding between sizes before
 // drawing any.
 float txt_width(TxtStyle style, const char *s);
+
+// `s` in the order it is drawn: a line with right-to-left letters (Hebrew,
+// Arabic) laid out as the bidi algorithm lays out one line; any other line, or
+// one too long for `out`, is `s` itself. The lines are drawn through this
+// already; it is here for the tests.
+const char *txt_visual_order(const char *s, char *out, size_t n);
 
 // The style's weight at `px` layout pixels rather than its own size: a
 // miniature of a screen (the settings previews) scales every line by the same
