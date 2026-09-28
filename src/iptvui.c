@@ -1178,7 +1178,9 @@ static int setupResult(char *dst, size_t n, unsigned *bad) {
     }
     return RS_FAIL;
   }
-  // No try on this screen yet, or one that worked: what the current source has.
+  // No try on this screen yet, or one that worked: what the current source has
+  // — only while the form still shows that source, not a half-typed other one.
+  if (!draftIsSource()) return RS_NONE;
   if (!configured() || !l) {
     if (configured() && iptv_state() == IPTV_FAILED) { snprintf(dst, n, "%s", iptv_status()); return RS_FAIL; }
     if (configured() && iptv_state() == IPTV_LOADING) { snprintf(dst, n, "Loading channels\xE2\x80\xA6"); return RS_BUSY; }

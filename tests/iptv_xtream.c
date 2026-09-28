@@ -91,6 +91,32 @@ int main(int argc, char **argv) {
     assert(h && atoi(h) == 1);
     free(h); }
 
+  // TRYING a source (the Source screen's Save and load): a wrong password
+  // fails as a sign-in, and the working source and its channels stay; the
+  // right one takes over.
+  { IptvSource t, before = *iptv_source();
+    int st, n0 = iptv_list()->nCh;
+    char why[160];
+    memset(&t, 0, sizeof t);
+    t.kind = IPTV_SRC_XTREAM;
+    snprintf(t.server, sizeof t.server, "%s", base);
+    snprintf(t.user, sizeof t.user, "d5fe");
+    snprintf(t.pass, sizeof t.pass, "wrong");
+    iptv_try_source(&t, 15);
+    for (int i = 0; i < 1500 && iptv_try_state() == IPTV_LOADING; i++) { iptv_step(); SDL_Delay(10); }
+    assert(iptv_try_state() == IPTV_FAILED);
+    assert(iptv_try_failure(&st, why, sizeof why) == IPTV_FAIL_LOGIN);
+    assert(!strcmp(iptv_source()->pass, before.pass) && iptv_list() && iptv_list()->nCh == n0);
+    settle();                                  // the interrupted load of the current one finishes
+    snprintf(t.pass, sizeof t.pass, "fa10");
+    snprintf(t.user, sizeof t.user, "d5fe");
+    iptv_try_source(&t, 15);
+    for (int i = 0; i < 1500 && iptv_try_state() == IPTV_LOADING; i++) { iptv_step(); SDL_Delay(10); }
+    assert(iptv_try_state() == IPTV_READY);
+    assert(!strcmp(iptv_source()->pass, "fa10"));
+    settle();
+    assert(iptv_list() && iptv_list()->nCh == 5); }
+
   // A wrong password: said as such, not as an 884.
   load(IPTV_SRC_XTREAM, "", base, "d5fe", "wrong");
   printf("status: '%s'\n", iptv_status());

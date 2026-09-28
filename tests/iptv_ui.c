@@ -538,7 +538,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 60; i++) key(SDLK_UP);
   key(SDLK_RIGHT); key(SDLK_RIGHT);
   key(SDLK_RETURN);
-  snprintf(path, sizeof path, "%s/nuvio-live-setup.bmp", out); frames(30, path);
+  snprintf(path, sizeof path, "%s/nuvio-live-setup.bmp", out); frames(60, path);
   { char good[1024];
     snprintf(good, sizeof good, "%s", iptv_source()->url);
 
