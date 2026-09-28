@@ -878,7 +878,7 @@ static void takeIcon(IptvList *l, int ch, const int *link, const char *a, const 
     }
 }
 
-static int byChannelStart(const void *x, const void *y);
+static void sortProgrammes(IptvList *l);
 
 // Each channel's firstPg/nPg from the sorted programmes.
 static void indexProgrammes(IptvList *l) {
@@ -919,7 +919,7 @@ static void shareSiblings(IptvList *l) {
 out:
   mapFree(&donors);
   if (l->nPg != n0) {
-    qsort(l->pg, (size_t)l->nPg, sizeof *l->pg, byChannelStart);
+    sortProgrammes(l);
     indexProgrammes(l);
   }
 }
@@ -928,7 +928,15 @@ static int byChannelStart(const void *x, const void *y) {
   const IptvProgramme *a = x, *b = y;
   if (a->channel != b->channel) return a->channel < b->channel ? -1 : 1;
   if (a->start != b->start) return a->start < b->start ? -1 : 1;
-  return 0;
+  return a->seq < b->seq ? -1 : a->seq > b->seq;
+}
+
+// qsort is not stable (the Mac's libc reverses ties that glibc keeps), and the
+// duplicate pass keeps the FIRST of a start: number them so the feed's order,
+// and what was already attached before a later guide, win on every libc.
+static void sortProgrammes(IptvList *l) {
+  for (int i = 0; i < l->nPg; i++) l->pg[i].seq = i;
+  qsort(l->pg, (size_t)l->nPg, sizeof *l->pg, byChannelStart);
 }
 
 static int addProgramme(IptvList *l, int ch, long long start, long long stop,
@@ -1091,7 +1099,7 @@ done:
   free(xmlIds);
 
   if (l->nPg == n0) return 0;
-  qsort(l->pg, (size_t)l->nPg, sizeof *l->pg, byChannelStart);
+  sortProgrammes(l);
   // Duplicates (two feeds merged by the provider) and missing stops: a
   // programme with no stop ends where the next one starts, or after half an hour.
   { int w = 0;

@@ -76,8 +76,13 @@ PANEL=$!
 trap 'kill $PANEL 2>/dev/null; rm -rf "$TMP"' EXIT
 until [ -s "$TMP/port" ]; do sleep 0.1; done
 
-cc -std=gnu99 -g -O1 tests/iptv_xtream.c src/iptv.c src/iptv_parse.c src/net.c src/neturl.c src/proxy.c src/js.c src/data.c \
-  -Isrc -I/usr/include/SDL2 -w -lSDL2 -ldl -lpthread -lm -o "$TMP/t"
+sources=(tests/iptv_xtream.c src/iptv.c src/iptv_parse.c src/net.c src/neturl.c src/proxy.c src/js.c src/data.c)
+if [ "$(uname)" = Darwin ]; then
+  cc -std=gnu99 -g -O1 "${sources[@]}" -Isrc -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
+    -L/opt/homebrew/lib -w -lSDL2 -o "$TMP/t"
+else
+  cc -std=gnu99 -g -O1 "${sources[@]}" -Isrc -I/usr/include/SDL2 -w -lSDL2 -ldl -lpthread -lm -o "$TMP/t"
+fi
 # The fake panel is on loopback: no proxy in between.
 NUVIO_AUTO_EPG_BASE="http://127.0.0.1:$(cat "$TMP/port")/auto/epg_ripper_" \
 NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 "$TMP/t" "$(cat "$TMP/port")"
