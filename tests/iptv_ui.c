@@ -495,15 +495,19 @@ int main(int argc, char **argv) {
   frames(10, NULL);
 
   // --- Search -------------------------------------------------------------------------
-  // The header's Search: the field in the chips' place, the keyboard up, the
-  // list narrowed as it is typed. Names first; then programme titles.
+  // The header's Search: the circle grows into the field where it stands, the
+  // source pill folds away, the keyboard up, the list narrowed as it is typed.
+  // Names first; then programme titles.
   setenv("NUVIO_FAKE_IME", "1", 1);
   for (int i = 0; i < 12; i++) key(SDLK_UP);
   key(SDLK_LEFT);                          // Guide -> the search circle, its tooltip
   assert(!iptvui_requested_menu());
   snprintf(path, sizeof path, "%s/nuvio-live-header-search.bmp", out); frames(20, path);
   key(SDLK_RETURN);
-  type("s"); type("po"); type("rt");
+  snprintf(path, sizeof path, "%s/nuvio-live-search-open.bmp", out); frames(20, path);
+  type("s"); type("po");
+  snprintf(path, sizeof path, "%s/nuvio-live-search-spo.bmp", out); frames(40, path);
+  type("rt");
   snprintf(path, sizeof path, "%s/nuvio-live-search.bmp", out); frames(20, path);
   { char *before = data_read("iptv_recent.txt"), *after;
     key(SDLK_RETURN);          // done typing: to the results
@@ -516,13 +520,21 @@ int main(int argc, char **argv) {
   frames(5, NULL);
   assert(!iptvui_fullscreen());
   // A programme's title: "oceans" is no channel's name.
-  for (int i = 0; i < 12; i++) key(SDLK_UP);
-  key(SDLK_DOWN);                          // the field
+  for (int i = 0; i < 12; i++) key(SDLK_UP);   // up out of the results: the field
   key(SDLK_RETURN);                        // the keyboard again
   { SDL_Event bs; memset(&bs, 0, sizeof bs); bs.type = SDL_KEYDOWN; bs.key.keysym.sym = SDLK_CLEAR;
     iptvui_event(&bs); }
   type("oceans");
   snprintf(path, sizeof path, "%s/nuvio-live-search-programme.bmp", out); frames(20, path);
+  key(SDLK_AC_BACK);                       // the keyboard down, the filter kept
+  // Guide | List stays in the header while searching: past the clear button
+  // to Guide, the same matches as a guide; then back to List.
+  key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
+  assert(!iptvui_requested_menu());
+  snprintf(path, sizeof path, "%s/nuvio-live-search-guide.bmp", out); frames(30, path);
+  key(SDLK_RIGHT); key(SDLK_RETURN);
+  // The clear button empties the field and raises the keyboard again.
+  key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_RETURN);
   type("zzzz");
   snprintf(path, sizeof path, "%s/nuvio-live-search-none.bmp", out); frames(10, path);
   key(SDLK_AC_BACK);                       // the keyboard down
