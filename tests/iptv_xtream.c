@@ -101,7 +101,18 @@ int main(int argc, char **argv) {
   printf("status: '%s'\n", iptv_status());
   assert(strstr(iptv_status(), "expired"));
 
+  // A one-off server error on the API: the second try loads the channels.
+  load(IPTV_SRC_XTREAM, "", base, "flaky", "fa10");
+  printf("status: '%s'\n", iptv_status());
+  assert(iptv_state() == IPTV_READY && iptv_list() && iptv_list()->nCh == 5);
+
+  // An API that keeps failing, with get.php refused as well: the API's error is
+  // the one said, not get.php's 884.
+  load(IPTV_SRC_XTREAM, "", base, "down", "fa10");
+  printf("status: '%s'\n", iptv_status());
+  assert(strstr(iptv_status(), "(513)") && !strstr(iptv_status(), "884"));
+
   iptv_shutdown();
-  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link and its output=ts; extra guides fill the gaps; country guides found by tag and kept; login and expiry said.");
+  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link and its output=ts; extra guides fill the gaps; country guides found by tag and kept; login and expiry said; a one-off API error retried, a lasting one said as itself.");
   return 0;
 }

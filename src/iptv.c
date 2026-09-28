@@ -206,19 +206,30 @@ static int xtreamFromUrl(const IptvSource *in, IptvSource *out, char *prefer, si
 // out as the playlist get.php would have served (iptv_xtream_m3u). NULL when
 // the API is not there or refused; `why` then says so when the answer was
 // specific (a refused login, an expired account), and stays empty otherwise so
-// get.php can be tried.
-static char *xtreamApi(const IptvSource *src, const char *prefer, char *why, size_t n) {
+// get.php can be tried. `apiStatus` gets the account call's HTTP status when
+// that call failed, and 0 when it answered.
+static char *xtreamApi(const IptvSource *src, const char *prefer, char *why, size_t n,
+                       int *apiStatus) {
   char base[600], u[400], p[400], api[1400], url[1500], state[40] = "", ext[8] = "m3u8";
   char *acct, *cats, *streams, *m3u;
   int st = 0;
   why[0] = 0;
+  *apiStatus = 0;
   serverBase(src->server, base, sizeof base);
   urlEncode(src->user, u, sizeof u);
   urlEncode(src->pass, p, sizeof p);
   snprintf(api, sizeof api, "%s/player_api.php?username=%s&password=%s", base, u, p);
   acct = net_download_st(api, IPTV_PLAYLIST_TIMEOUT_S, NULL, &st);
+  // Panels throw the odd one-off server error (a 513 seen in the wild, gone on
+  // the next request): one more try before giving up on the API.
+  if (!acct && st >= 500) {
+    printf("[iptv] xtream api: HTTP %d, trying once more\n", st);
+    SDL_Delay(1500);
+    acct = net_download_st(api, IPTV_PLAYLIST_TIMEOUT_S, NULL, &st);
+  }
   if (!acct || st >= 400 || !strstr(acct, "user_info")) {
     printf("[iptv] xtream api: HTTP %d, %s\n", st, acct ? "not an account answer" : "no answer");
+    *apiStatus = st;
     free(acct);
     return NULL;
   }
@@ -564,11 +575,12 @@ static void *loader(void *arg) {
   // failure it was: "couldn't reach" for a 404 sends people checking their
   // network when the address is what is wrong.
   setStatus("Loading channels\xE2\x80\xA6");
-  { int status = 0;
+  { int status = 0, apiStatus = 0;
     char why[160] = "";
     text = NULL;
     // Xtream: the API first, get.php only when there is no API answer at all.
-    if (job.src.kind == IPTV_SRC_XTREAM) text = xtreamApi(&job.src, prefer, why, sizeof why);
+    if (job.src.kind == IPTV_SRC_XTREAM)
+      text = xtreamApi(&job.src, prefer, why, sizeof why, &apiStatus);
     if (!text && !why[0]) {
       playlistUrl(&job.src, url, sizeof url);
       text = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &status);
@@ -577,6 +589,15 @@ static void *loader(void *arg) {
     if (job.gen != atomic_load(&generation)) goto out;
     l = text ? parsePlaylist(text) : NULL;
     if (!l) {
+      // The API broke and get.php failed after it: the API's error is the one
+      // that matters. Plenty of panels refuse get.php for good (884), and
+      // blaming the playlist download then hides the real answer. Panels also
+      // use 5xx for a login they don't know (World 8K: 513 for a mistyped
+      // username, 200 for the right one), so the login comes first in the hint.
+      if (!why[0] && apiStatus >= 500)
+        snprintf(why, sizeof why,
+                 "The provider refused the login (%d) \xE2\x80\x94 check the username and password",
+                 apiStatus);
       if (!why[0])
         describeFailure(&job.src, text, status, !text && net_timed_out(), why, sizeof why);
       printf("[iptv] playlist failed: HTTP %d, %s\n", status, why);

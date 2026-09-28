@@ -14,6 +14,7 @@ import http.server, json, sys, time, urllib.parse
 now = int(time.time())
 fmt = lambda t: time.strftime("%Y%m%d%H%M%S +0000", time.gmtime(t))
 autoHits = 0
+flakyHits = 0
 class H(http.server.BaseHTTPRequestHandler):
   def log_message(self, *a): pass
   def send(self, code, body, kind="application/json"):
@@ -53,6 +54,9 @@ class H(http.server.BaseHTTPRequestHandler):
     user, pw = q.get("username"), q.get("password")
     if pw != "fa10": return self.send(200, json.dumps({"user_info": {"auth": 0}}))
     if "action" not in q:
+      # The one-off server error a real panel threw (513): "flaky" once, "down" always.
+      global flakyHits; flakyHits += user == "flaky"
+      if user == "down" or (user == "flaky" and flakyHits == 1): return self.send(513, "", "text/html")
       return self.send(200, json.dumps({"user_info": {"auth": 1, "status": "Expired" if user == "old" else "Active",
         "allowed_output_formats": ["m3u8", "ts"]}, "server_info": {"url": "127.0.0.1"}}))
     if q["action"] == "get_live_categories":
