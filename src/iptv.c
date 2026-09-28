@@ -207,7 +207,7 @@ static int xtreamFromUrl(const IptvSource *in, IptvSource *out, char *prefer, si
 // the API is not there or refused; `why` then says so when the answer was
 // specific (a refused login, an expired account), and stays empty otherwise so
 // get.php can be tried.
-static char *xtreamApi(const IptvSource *src, const char *prefer, char *why, size_t n) {
+static char *xtreamApi(const IptvSource *src, const char *prefer, char *why, size_t n, int *kind) {
   char base[600], u[400], p[400], api[1400], url[1500], state[40] = "", ext[8] = "m3u8";
   char *acct, *cats, *streams, *m3u;
   int st = 0;
@@ -240,9 +240,14 @@ static char *xtreamApi(const IptvSource *src, const char *prefer, char *why, siz
     }
     printf("[iptv] xtream api: auth %d, status '%s', streams as .%s\n", auth, state, ext);
     free(acct);
-    if (auth == 0) { snprintf(why, n, "The server refused this login \xE2\x80\x94 check the username and password"); return NULL; }
-    if (!strcasecmp(state, "Expired")) { snprintf(why, n, "This IPTV subscription has expired"); return NULL; }
+    if (auth == 0) {
+      *kind = IPTV_FAIL_LOGIN;
+      snprintf(why, n, "The server refused this login \xE2\x80\x94 check the username and password");
+      return NULL;
+    }
+    if (!strcasecmp(state, "Expired")) { *kind = IPTV_FAIL_EXPIRED; snprintf(why, n, "This IPTV subscription has expired"); return NULL; }
     if (state[0] && strcasecmp(state, "Active")) {
+      *kind = IPTV_FAIL_ACCOUNT;
       snprintf(why, n, "The provider says this account is %s", state);
       return NULL;
     } }
@@ -268,7 +273,19 @@ static void updateLabel(void) {
 }
 
 // --- The loader ----------------------------------------------------------------------
-typedef struct { IptvSource src; unsigned gen; int hasList; } Job;
+typedef struct { IptvSource src; unsigned gen; int hasList, trial; } Job;
+
+// A TRIED SOURCE (iptv_try_source): loaded as a job of its own while the
+// current source and its list stay as they are. It replaces them only once its
+// playlist has come in — the loader raises trialCommit, the main thread swaps
+// the source in iptv_step — and a failure leaves the current one untouched,
+// with the reason kept for the screen that asked.
+static IptvSource trialSrc;
+static int trialWanted, trialBusyBefore;
+static atomic_int trialState, trialCommit, trialKind, trialStatus;
+static Uint32 trialDeadline;
+static char trialWhy[160];
+static _Atomic long long refreshedAt;
 
 // Hands `l` to the main thread, unless a newer load has started meanwhile.
 static void post(IptvList *l, unsigned gen) {
@@ -504,36 +521,55 @@ static char *autoGuide(const char *file, long long from, long long to) {
 }
 
 // What went wrong with a playlist download, in words that point at the fix.
+// `*kind` is the IptvFailure, for a screen that words it its own way.
 static void describeFailure(const IptvSource *src, const char *body, int status, int timedOut,
-                            char *dst, size_t n) {
-  if (timedOut) { snprintf(dst, n, "The playlist took too long to answer"); return; }
+                            char *dst, size_t n, int *kind) {
+  int x = src->kind == IPTV_SRC_XTREAM;
+  if (timedOut) { *kind = IPTV_FAIL_TIMEOUT; snprintf(dst, n, "The playlist took too long to answer"); return; }
   if (!body && !status) {
+    *kind = IPTV_FAIL_UNREACHABLE;
     snprintf(dst, n, "Couldn't reach the server \xE2\x80\x94 check the address and the TV's connection");
     return;
   }
-  if (status == 404) { snprintf(dst, n, "No playlist at that address (404) \xE2\x80\x94 check it in a browser"); return; }
+  if (status == 404) {
+    *kind = IPTV_FAIL_NOT_FOUND;
+    snprintf(dst, n, "No playlist at that address (404) \xE2\x80\x94 check it in a browser");
+    return;
+  }
   if (status == 401 || status == 403) {
-    snprintf(dst, n, src->kind == IPTV_SRC_XTREAM ? "The server refused this login (%d)"
-                                                  : "The server refused access (%d)", status);
+    *kind = x ? IPTV_FAIL_LOGIN : IPTV_FAIL_REFUSED;
+    snprintf(dst, n, x ? "The server refused this login (%d)" : "The server refused access (%d)", status);
     return;
   }
   // Xtream-style panels answer 884, 458 and the like when they turn an app
   // away: a blocked playlist download, a blocked device, too many connections.
   if (status >= 600) {
+    *kind = IPTV_FAIL_PROVIDER;
     snprintf(dst, n, "The provider refused the playlist download (%d)", status);
     return;
   }
-  if (status >= 500) { snprintf(dst, n, "The server had an error (%d) \xE2\x80\x94 try again later", status); return; }
-  if (status >= 400) { snprintf(dst, n, "The server answered %d", status); return; }
+  if (status >= 500) {
+    *kind = IPTV_FAIL_SERVER;
+    snprintf(dst, n, "The server had an error (%d) \xE2\x80\x94 try again later", status);
+    return;
+  }
+  if (status >= 400) { *kind = IPTV_FAIL_OTHER; snprintf(dst, n, "The server answered %d", status); return; }
   // It answered, with something that is not a playlist. A guide is the usual
   // mix-up: both come from the same provider page, one line apart.
   if (body && (((unsigned char)body[0] == 0x1f && (unsigned char)body[1] == 0x8b) ||
                strstr(body, "<tv") || !strncmp(body, "<?xml", 5))) {
+    *kind = IPTV_FAIL_GUIDE;
     snprintf(dst, n, "That's a TV guide, not a playlist \xE2\x80\x94 put it in the guide field");
     return;
   }
-  snprintf(dst, n, src->kind == IPTV_SRC_XTREAM ? "The server refused this login"
-                                                : "That address didn't return a playlist");
+  // A web page where a playlist should be: almost always the provider's login.
+  if (body && (strcasestr(body, "<html") || strcasestr(body, "<!doctype"))) {
+    *kind = IPTV_FAIL_NOT_PLAYLIST;
+    snprintf(dst, n, "That address returned a web page, not a playlist");
+    return;
+  }
+  *kind = x ? IPTV_FAIL_LOGIN : IPTV_FAIL_NOT_PLAYLIST;
+  snprintf(dst, n, x ? "The server refused this login" : "That address didn't return a playlist");
 }
 
 static void *loader(void *arg) {
@@ -550,8 +586,9 @@ static void *loader(void *arg) {
   if (xtreamFromUrl(&job.src, &job.src, prefer, sizeof prefer))
     printf("[iptv] the playlist address is an Xtream login; loading it as one\n");
 
-  // Stage 0: the cached playlist, so the screen has channels at once.
-  if (!job.hasList && (cached = data_read(IPTV_CACHE_FILE))) {
+  // Stage 0: the cached playlist, so the screen has channels at once. Not for
+  // a tried source: the cache is the current one's.
+  if (!job.trial && !job.hasList && (cached = data_read(IPTV_CACHE_FILE))) {
     if ((l = parsePlaylist(cached))) {
       printf("[iptv] %d channels from the cache\n", l->nCh);
       post(l, job.gen);
@@ -563,22 +600,41 @@ static void *loader(void *arg) {
   // Stage 1: the playlist. With its HTTP status, so a failure can say WHICH
   // failure it was: "couldn't reach" for a 404 sends people checking their
   // network when the address is what is wrong.
-  setStatus("Loading channels\xE2\x80\xA6");
-  { int status = 0;
+  if (!job.trial) setStatus("Loading channels\xE2\x80\xA6");
+  { int status = 0, kind = IPTV_FAIL_OTHER;
     char why[160] = "";
     text = NULL;
     // Xtream: the API first, get.php only when there is no API answer at all.
-    if (job.src.kind == IPTV_SRC_XTREAM) text = xtreamApi(&job.src, prefer, why, sizeof why);
+    if (job.src.kind == IPTV_SRC_XTREAM) text = xtreamApi(&job.src, prefer, why, sizeof why, &kind);
     if (!text && !why[0]) {
       playlistUrl(&job.src, url, sizeof url);
       text = net_download_st(url, IPTV_PLAYLIST_TIMEOUT_S, NULL, &status);
+      // The body is kept for describeFailure: a login page says what it is.
       if (text && status >= 400) { free(text); text = NULL; }
     }
     if (job.gen != atomic_load(&generation)) goto out;
     l = text ? parsePlaylist(text) : NULL;
+    if (!l && job.trial) {
+      // Nothing of the current source is touched; the screen gets the reason.
+      if (!why[0])
+        describeFailure(&job.src, text, status, !text && net_timed_out(), why, sizeof why, &kind);
+      printf("[iptv] tried source failed: HTTP %d, %s\n", status, why);
+      pthread_mutex_lock(&mu);
+      snprintf(trialWhy, sizeof trialWhy, "%s", why);
+      pthread_mutex_unlock(&mu);
+      atomic_store(&trialKind, kind);
+      atomic_store(&trialStatus, status);
+      atomic_store(&trialState, IPTV_FAILED);
+      goto out;
+    }
+    if (l && job.trial) {
+      // It works: it becomes the source (the main thread swaps it in).
+      atomic_store(&trialCommit, 1);
+      atomic_store(&guideState, IPTV_LOADING);
+    }
     if (!l) {
       if (!why[0])
-        describeFailure(&job.src, text, status, !text && net_timed_out(), why, sizeof why);
+        describeFailure(&job.src, text, status, !text && net_timed_out(), why, sizeof why, &kind);
       printf("[iptv] playlist failed: HTTP %d, %s\n", status, why);
       if (fromCache) {
         setStatus("Offline \xC2\xB7 showing the saved channel list");
@@ -593,6 +649,7 @@ static void *loader(void *arg) {
     } else {
       printf("[iptv] %d channels, %d groups\n", l->nCh, l->nGroups);
       data_write(IPTV_CACHE_FILE, text);
+      atomic_store(&refreshedAt, (long long)time(NULL));
       fetchArchives(&job.src, &archives);
       if (job.gen != atomic_load(&generation)) { iptv_list_free(l); free(l); goto out; }
       applyArchives(l, &archives);
@@ -728,18 +785,22 @@ out:
 static void startLoad(void) {
   pthread_t t;
   Job *job;
-  if (!iptv_configured()) return;
+  if (!iptv_configured() && !trialWanted) return;
   if (atomic_load(&busy)) { restartPending = 1; return; }
   job = malloc(sizeof *job);
   if (!job) return;
-  job->src = source;
+  job->trial = trialWanted;
+  job->src = job->trial ? trialSrc : source;
   job->gen = atomic_fetch_add(&generation, 1) + 1;
   job->hasList = live != NULL;
+  trialWanted = 0;
   restartPending = 0;
   loadedAt = SDL_GetTicks();
   if (!loadedAt) loadedAt = 1;
-  if (!live) atomic_store(&state, IPTV_LOADING);
-  atomic_store(&guideState, IPTV_LOADING);
+  if (!job->trial) {
+    if (!live) atomic_store(&state, IPTV_LOADING);
+    atomic_store(&guideState, IPTV_LOADING);
+  }
   atomic_store(&busy, 1);
   if (pthread_create(&t, NULL, loader, job) != 0) {
     atomic_store(&busy, 0);
@@ -821,6 +882,28 @@ void iptv_touch(void) {
 
 int iptv_step(void) {
   IptvList *l;
+  if (atomic_exchange(&trialCommit, 0)) {
+    source = trialSrc;
+    writeConfig();
+    updateLabel();
+    atomic_store(&state, IPTV_READY);
+    atomic_store(&trialState, IPTV_READY);
+  }
+  // Past the ceiling: the try is given up, with the current source as it was.
+  if (atomic_load(&trialState) == IPTV_LOADING && trialDeadline &&
+      (Sint32)(SDL_GetTicks() - trialDeadline) >= 0) {
+    atomic_fetch_add(&generation, 1);
+    trialWanted = 0;
+    atomic_store(&trialKind, IPTV_FAIL_TIMEOUT);
+    atomic_store(&trialStatus, 0);
+    atomic_store(&trialState, IPTV_FAILED);
+    printf("[iptv] tried source: no playlist within the ceiling\n");
+  }
+  // A failed try interrupted the current source's own load: finish that one.
+  if (atomic_load(&trialState) == IPTV_FAILED && trialBusyBefore) {
+    trialBusyBefore = 0;
+    if (iptv_configured()) { restartPending = 1; }
+  }
   pthread_mutex_lock(&mu);
   l = incoming; incoming = NULL;
   pthread_mutex_unlock(&mu);
@@ -867,6 +950,54 @@ static void reload(int keepList) {
 }
 
 void iptv_reload(void) { reload(1); }
+
+void iptv_try_source(const IptvSource *s, int ceilingS) {
+  IptvList *drop;
+  trialSrc = *s;
+  trialWanted = 1;
+  trialBusyBefore = atomic_load(&busy) || atomic_load(&guideState) == IPTV_LOADING || !live;
+  trialDeadline = SDL_GetTicks() + (Uint32)(ceilingS > 0 ? ceilingS : 15) * 1000u;
+  if (!trialDeadline) trialDeadline = 1;
+  atomic_store(&trialCommit, 0);
+  atomic_store(&trialKind, IPTV_FAIL_NONE);
+  atomic_store(&trialStatus, 0);
+  atomic_store(&trialState, IPTV_LOADING);
+  // Whatever the current source's loader is doing is set aside.
+  atomic_fetch_add(&generation, 1);
+  pthread_mutex_lock(&mu);
+  drop = incoming; incoming = NULL;
+  trialWhy[0] = 0;
+  pthread_mutex_unlock(&mu);
+  if (drop) { iptv_list_free(drop); free(drop); }
+  startLoad();
+}
+
+int iptv_try_state(void) { return atomic_load(&trialState); }
+
+int iptv_try_failure(int *status, char *why, size_t n) {
+  if (status) *status = atomic_load(&trialStatus);
+  if (why && n) {
+    pthread_mutex_lock(&mu);
+    snprintf(why, n, "%s", trialWhy);
+    pthread_mutex_unlock(&mu);
+  }
+  return atomic_load(&trialKind);
+}
+
+void iptv_try_cancel(void) {
+  if (atomic_load(&trialState) != IPTV_LOADING) return;
+  atomic_fetch_add(&generation, 1);
+  trialWanted = 0;
+  atomic_store(&trialState, IPTV_IDLE);
+  if (trialBusyBefore && iptv_configured()) restartPending = 1;
+  trialBusyBefore = 0;
+}
+
+void iptv_try_forget(void) {
+  if (atomic_load(&trialState) != IPTV_LOADING) atomic_store(&trialState, IPTV_IDLE);
+}
+
+long long iptv_refreshed_at(void) { return atomic_load(&refreshedAt); }
 
 void iptv_set_source(const IptvSource *s) {
   source = *s;

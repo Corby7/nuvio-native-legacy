@@ -40,6 +40,23 @@ typedef struct {
 
 typedef enum { IPTV_IDLE, IPTV_LOADING, IPTV_READY, IPTV_FAILED } IptvState;
 
+// Why a playlist did not load, for a screen that names the fix.
+typedef enum {
+  IPTV_FAIL_NONE,
+  IPTV_FAIL_UNREACHABLE,   // no answer: a typo in the host, or the TV offline
+  IPTV_FAIL_NOT_FOUND,     // 404: the path is wrong
+  IPTV_FAIL_REFUSED,       // 401/403 on a playlist address
+  IPTV_FAIL_NOT_PLAYLIST,  // 200, but a web page (a login page) or nothing usable
+  IPTV_FAIL_GUIDE,         // 200, but an XMLTV guide
+  IPTV_FAIL_LOGIN,         // Xtream: the panel turned the login down
+  IPTV_FAIL_EXPIRED,       // Xtream: the subscription has run out
+  IPTV_FAIL_ACCOUNT,       // Xtream: the account is disabled, banned…
+  IPTV_FAIL_TIMEOUT,       // nothing within the ceiling
+  IPTV_FAIL_PROVIDER,      // a panel's own code, 884 and the like
+  IPTV_FAIL_SERVER,        // 5xx
+  IPTV_FAIL_OTHER,
+} IptvFailure;
+
 // Reads the saved source, favourites and history. Cheap; loads nothing.
 void iptv_start(void);
 // Called when the Live TV screen opens: starts the first load, or a refresh
@@ -54,6 +71,23 @@ const IptvSource *iptv_source(void);
 int  iptv_configured(void);
 // Saves `s` and reloads everything from it.
 void iptv_set_source(const IptvSource *s);
+
+// TRY A SOURCE: load `s` while the current source and its channels stay, and
+// make it the source only once its playlist has arrived. iptv_try_state goes
+// LOADING -> READY (it is now the source; the guide follows as usual) or
+// FAILED, with the current source untouched — also when nothing has arrived
+// within `ceilingS` seconds. iptv_try_failure says why (an IptvFailure), with
+// the HTTP status and the loader's own words.
+void iptv_try_source(const IptvSource *s, int ceilingS);
+int  iptv_try_state(void);
+int  iptv_try_failure(int *status, char *why, size_t n);
+// Gives a try up while it loads: the current source carries on as it was.
+void iptv_try_cancel(void);
+// Back to IDLE once the screen has shown the outcome (not while loading).
+void iptv_try_forget(void);
+// When the current playlist last came from the network (unix seconds), 0 when
+// only the saved copy has been shown.
+long long iptv_refreshed_at(void);
 // Throws the list away and loads it again (the "Reload" button).
 void iptv_reload(void);
 

@@ -56,6 +56,22 @@ static void type(const char *s) {
   iptvui_event(&e);
 }
 
+// Longer than one SDL_TEXTINPUT holds: in pieces, as a keyboard would send it.
+static void typeLong(const char *s) {
+  char part[24];
+  for (size_t n = strlen(s), at = 0; at < n; at += sizeof part - 1) {
+    snprintf(part, sizeof part, "%s", s + at);
+    type(part);
+  }
+}
+
+static void clearField(void) {
+  SDL_Event e;
+  memset(&e, 0, sizeof e);
+  e.type = SDL_KEYDOWN; e.key.keysym.sym = SDLK_CLEAR;
+  iptvui_event(&e);
+}
+
 static void frames(int n, const char *capture) {
   for (int i = 0; i < n; i++) {
     SDL_PumpEvents();
@@ -513,12 +529,53 @@ int main(int argc, char **argv) {
   key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_DOWN);   // leave the header on Guide, as found
 
   // --- Setup ------------------------------------------------------------------------
-  // To the header, RIGHT past List to Source, OK; then Xtream Codes.
+  // To the header, RIGHT past List to Source, OK: the Source screen, the
+  // current source on its card, the focus on the playlist address.
+  setenv("NUVIO_FAKE_IME", "1", 1);
   for (int i = 0; i < 60; i++) key(SDLK_UP);
   key(SDLK_RIGHT); key(SDLK_RIGHT);
   key(SDLK_RETURN);
-  key(SDLK_RIGHT);
   snprintf(path, sizeof path, "%s/nuvio-live-setup.bmp", out); frames(30, path);
+  { char good[1024];
+    snprintf(good, sizeof good, "%s", iptv_source()->url);
+
+    // A wrong address: tried, refused, said on this screen; the current
+    // source and its channels carry on, and what was typed stays.
+    key(SDLK_RETURN);                        // the keyboard on the address
+    clearField();
+    typeLong("file:///nowhere/at/all/playlist.m3u");
+    key(SDLK_RETURN);                        // done: on to the extra guide
+    key(SDLK_DOWN);                          // the buttons, on Save and load
+    key(SDLK_RETURN);
+    WAIT_FOR(iptv_try_state() == IPTV_FAILED);
+    snprintf(path, sizeof path, "%s/nuvio-live-setup-failed.bmp", out); frames(10, path);
+    assert(!strcmp(iptv_source()->url, good));
+    assert(iptv_list() && iptv_list()->nCh == 49);
+    { int st; char why[160];
+      assert(iptv_try_failure(&st, why, sizeof why) == IPTV_FAIL_UNREACHABLE); }
+
+    // The right one again: it loads, the line says how much has a guide, and
+    // the primary button now goes to the channels.
+    key(SDLK_UP); key(SDLK_UP);              // the address
+    key(SDLK_RETURN);
+    clearField();
+    typeLong(good);
+    key(SDLK_RETURN);
+    key(SDLK_DOWN);
+    key(SDLK_RETURN);
+    WAIT_FOR(iptv_try_state() == IPTV_READY);
+    WAIT_FOR(iptv_guide_state() == IPTV_READY);
+    snprintf(path, sizeof path, "%s/nuvio-live-setup-ok.bmp", out); frames(10, path);
+    assert(!strcmp(iptv_source()->url, good) && iptv_list()->nCh == 49); }
+
+  // The Xtream tab: server and port, username and password, and "show".
+  for (int i = 0; i < 8; i++) key(SDLK_UP);
+  key(SDLK_DOWN);                            // the switch
+  key(SDLK_RIGHT);
+  key(SDLK_DOWN);
+  snprintf(path, sizeof path, "%s/nuvio-live-setup-xtream.bmp", out); frames(20, path);
+  key(SDLK_UP); key(SDLK_LEFT);              // back to M3U, unsaved
+  unsetenv("NUVIO_FAKE_IME");
   key(SDLK_AC_BACK);
   assert(!iptvui_wants_exit());
   frames(2, NULL);
@@ -526,9 +583,9 @@ int main(int argc, char **argv) {
 
   // --- The phone form ----------------------------------------------------------------
   // Source again: the listener opens with the form. A phone saves the same
-  // playlist as an M3U; the TV takes it as the Save button would.
+  // playlist as an M3U; the TV tries it as Save and load would, on this screen.
   for (int i = 0; i < 12; i++) key(SDLK_UP);
-  key(SDLK_RIGHT);
+  key(SDLK_RIGHT); key(SDLK_RIGHT);
   key(SDLK_RETURN);
   snprintf(path, sizeof path, "%s/nuvio-live-setup-phone.bmp", out); frames(10, path);
   if (phonelink_state() == PL_OFF) {
@@ -542,13 +599,16 @@ int main(int argc, char **argv) {
     snprintf(body, sizeof body, "kind=m3u&url=%s&epg=", enc);
     assert(phonePost(body) == 200);
     frames(3, NULL);
-    assert(phonelink_state() == PL_OFF);             // saved, so the form left
+    WAIT_FOR(iptv_try_state() == IPTV_READY);
     assert(iptv_source()->kind == IPTV_SRC_M3U);
     WAIT_FOR(iptv_list() && iptv_list()->nCh == 49);  // and the channels load again
+    key(SDLK_AC_BACK);
+    frames(2, NULL);
+    assert(phonelink_state() == PL_OFF);
   }
 
   iptvui_shutdown();
   puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), "
-       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, search, setup, phone form.");
+       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, search, source screen (a failed try keeps the source, a good one takes over), phone form.");
   return 0;
 }

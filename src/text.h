@@ -180,6 +180,25 @@ typedef enum {
   TXT_LIVE_NOTE,     // "Next · …", "Watching — …"           17 / 500
   TXT_LIVE_TIME,     // a programme block's times            16 / 500
   TXT_LIVE_TAG,      // LIVE, ON NOW, the now line's cap     13 / 700
+  // Live TV's Source screen (the Z1/Z2 mockups). The sizes it shares with
+  // styles above borrow them: the page title is TXT_TITLE3 (48/600), the
+  // kicker and Refresh TXT_SRC_CHIP (18/700), the host and the switch's resting
+  // segment TXT_SRC_TEXT (18/500), units TXT_LIVE_NOTE (17/500), field labels
+  // and step numbers TXT_CWC_KICKER (17/600), the result TXT_LIVE_META (19/500).
+  TXT_SRCP_NAME,     // the current source's name            25 / 600
+  TXT_SRCP_BADGE,    // M3U / XTREAM on the card, tracked    12 / 700
+  TXT_SRCP_NUM,      // "49" channels, "42" with guide       28 / 600
+  TXT_SRCP_SECTION,  // REPLACE IT, tracked                  16 / 600
+  TXT_SRCP_STEP,     // "Send it from your phone"            24 / 600
+  TXT_SRCP_ADDR,     // the phone page's address             22 / 600
+  TXT_SRCP_CODE,     // the four-digit code, tracked         30 / 600
+  TXT_SRCP_DESC,     // the phone card's explanation         17 / 400
+  TXT_SRCP_VALUE,    // a field's host, or its whole value   23 / 600
+  TXT_SRCP_PATH,     // a field's path, under the host       18 / 400
+  TXT_SRCP_CHIP,     // "OK to edit"                         15 / 600
+  TXT_SRCP_NOTE,     // "optional — only for channels …"     16 / 400
+  TXT_SRCP_PRIMARY,  // Save and load                        21 / 600
+  TXT_SRCP_GHOST,    // Cancel                               21 / 500
   TXT_NFONTS
 } TxtStyle;
 

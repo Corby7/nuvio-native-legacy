@@ -18,6 +18,9 @@
 #
 # The set_* set is the Settings screen's group-header glyphs (src/settings.c).
 #
+# The src_* set is Live TV's Source screen (src/iptvui.c): Refresh, the
+# field's keyboard, and the result line's tick, ! and cross.
+#
 # 128px is the raster size the rest of art/icons uses; the row draws it at 21.
 set -e
 cd "$(dirname "$0")/.."
@@ -30,7 +33,8 @@ SIZE="${NUVIO_ICON_PX:-128}"
 for name in instant reload reset close ep_watched stack detail_stack detail_stack_filled \
             ctx_info ctx_plus ctx_minus ctx_check ctx_x ctx_grid \
             ctx_play ctx_restart ctx_hide \
-            set_playback set_home set_appearance set_account; do
+            set_playback set_home set_appearance set_account \
+            src_refresh src_keyboard src_ok src_warn src_fail; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "assets/icons/$name.svg" -o "$OUT/$name.png"
   echo "    $name.png <- assets/icons/$name.svg"
 done

@@ -266,13 +266,20 @@ static GLuint dashTex;
 static int dashW, dashH;
 
 // --- Setup ---------------------------------------------------------------------
-enum { ROW_TYPE, ROW_URL, ROW_SERVER, ROW_USER, ROW_PASS, ROW_EPG, ROW_SAVE };
-enum { BTN_SAVE, BTN_RELOAD, BTN_CANCEL };
+// THE SOURCE SCREEN (the Z1 and Z2 mockups). Rows, top to bottom: the current
+// source card's Refresh (only with a source), the M3U | Xtream switch, the
+// fields (one address; or server and port, username, password and its "show"),
+// the extra guide, and the buttons. A row holds up to three stops across.
+enum { SR_REFRESH, SR_KIND, SR_URL, SR_SERVER, SR_LOGIN, SR_EPG, SR_BUTTONS };
+enum { F_URL, F_SERVER, F_PORT, F_USER, F_PASS, F_EPG, F_N };
 static IptvSource draft;
-static int setupRow, setupBtn;
+static char draftPort[8];       // Xtream's port, split off draft.server for its own field
+static int showPass;
+static int setupRow, setupCol;
 static int setupRows[8], nSetupRows;
-static int editing = -1;    // the ROW_* whose text the keyboard is filling
-static Uint32 phoneRetryAt; // no network yet: when to look for one again
+static int editing = -1;        // the F_* the keyboard is filling
+static Uint32 phoneRetryAt;     // no network yet: when to look for one again
+static GfxRect refreshRect;     // where the card drew Refresh, for the pointer
 
 // --- Small helpers ---------------------------------------------------------------
 static float X0(void) { return settings_content_x() - 8.0f; }
@@ -937,87 +944,278 @@ static void toggleFavourite(int ch) {
 }
 
 // --- Setup form ------------------------------------------------------------------------
+// Save and load TRIES the draft (iptv_try_source): the current source stays
+// until the new playlist has arrived, and the result — or which thing went
+// wrong — is said on this screen, under the fields, never by sending the
+// viewer to an empty guide. What they typed is never cleared.
+#define SRC_CEILING_S 15
+
+static int configured(void) { return iptv_configured(); }
+
+static int rowCols(int row) {
+  switch (row) {
+    case SR_SERVER:  return 2;
+    case SR_LOGIN:   return 3;
+    case SR_BUTTONS: return configured() ? 2 : 1;
+    default:         return 1;
+  }
+}
+
+static int fieldAt(int row, int col) {
+  switch (row) {
+    case SR_URL:    return F_URL;
+    case SR_SERVER: return col ? F_PORT : F_SERVER;
+    case SR_LOGIN:  return col == 0 ? F_USER : col == 1 ? F_PASS : -1;
+    case SR_EPG:    return F_EPG;
+    default:        return -1;
+  }
+}
+
+// The rows for the draft's kind, keeping the focus on the same row where it
+// still exists (the switch, the guide, the buttons).
 static void layoutSetup(void) {
+  int was = nSetupRows ? setupRows[setupRow] : SR_KIND;
   nSetupRows = 0;
-  setupRows[nSetupRows++] = ROW_TYPE;
+  if (configured()) setupRows[nSetupRows++] = SR_REFRESH;
+  setupRows[nSetupRows++] = SR_KIND;
   if (draft.kind == IPTV_SRC_XTREAM) {
-    setupRows[nSetupRows++] = ROW_SERVER;
-    setupRows[nSetupRows++] = ROW_USER;
-    setupRows[nSetupRows++] = ROW_PASS;
+    setupRows[nSetupRows++] = SR_SERVER;
+    setupRows[nSetupRows++] = SR_LOGIN;
   } else {
-    setupRows[nSetupRows++] = ROW_URL;
+    setupRows[nSetupRows++] = SR_URL;
   }
-  setupRows[nSetupRows++] = ROW_EPG;
-  setupRows[nSetupRows++] = ROW_SAVE;
-  if (setupRow >= nSetupRows) setupRow = nSetupRows - 1;
+  setupRows[nSetupRows++] = SR_EPG;
+  setupRows[nSetupRows++] = SR_BUTTONS;
+  setupRow = 0;
+  for (int i = 0; i < nSetupRows; i++) if (setupRows[i] == was) setupRow = i;
+  if (setupCol >= rowCols(setupRows[setupRow])) setupCol = rowCols(setupRows[setupRow]) - 1;
 }
 
-static void openSetup(void) {
-  draft = *iptv_source();
-  if (draft.kind == IPTV_SRC_NONE) draft.kind = IPTV_SRC_M3U;
-  mode = MODE_SETUP;
-  setupRow = 0; setupBtn = BTN_SAVE; editing = -1;
-  phoneRetryAt = 0;
-  layoutSetup();
-  stopStream();
-  full = 0;
+static int rowIndex(int row) {
+  for (int i = 0; i < nSetupRows; i++) if (setupRows[i] == row) return i;
+  return -1;
 }
 
-static char *fieldText(int row, int *max) {
-  switch (row) {
-    case ROW_URL:    *max = (int)sizeof draft.url;    return draft.url;
-    case ROW_SERVER: *max = (int)sizeof draft.server; return draft.server;
-    case ROW_USER:   *max = (int)sizeof draft.user;   return draft.user;
-    case ROW_PASS:   *max = (int)sizeof draft.pass;   return draft.pass;
-    case ROW_EPG:    *max = (int)sizeof draft.epg;    return draft.epg;
-    default: *max = 0; return NULL;
-  }
-}
-static const char *fieldLabel(int row) {
-  switch (row) {
-    case ROW_URL:    return "Playlist address (M3U)";
-    case ROW_SERVER: return "Server";
-    case ROW_USER:   return "Username";
-    case ROW_PASS:   return "Password";
-    case ROW_EPG:    return "Extra TV guides (XMLTV) \xC2\xB7 optional";
-    default: return "";
-  }
-}
-static const char *fieldHint(int row) {
-  switch (row) {
-    case ROW_URL:    return "http://provider.example/playlist.m3u";
-    case ROW_SERVER: return "http://provider.example:8080";
-    case ROW_USER:   return "username";
-    case ROW_PASS:   return "password";
-    case ROW_EPG:    return "Fills channels the source's guide misses \xC2\xB7 several with spaces";
-    default: return "";
-  }
+// "http://tv.example.net:8080" -> "tv.example.net" and "8080" for the two
+// fields; https keeps its scheme, which is not the default.
+static void splitServer(void) {
+  char *h = draft.server, *c, *end;
+  draftPort[0] = 0;
+  if (!strncasecmp(h, "http://", 7)) memmove(h, h + 7, strlen(h + 7) + 1);
+  { char *start = strstr(h, "://") ? strstr(h, "://") + 3 : h;
+    c = strchr(start, ':');
+    if (!c) return;
+    for (end = c + 1; isdigit((unsigned char)*end); end++) {}
+    if (end == c + 1 || end - c - 1 >= (long)sizeof draftPort || (*end && *end != '/')) return;
+    memcpy(draftPort, c + 1, (size_t)(end - c - 1));
+    draftPort[end - c - 1] = 0;
+    memmove(c, end, strlen(end) + 1); }
 }
 
-// The type chips, then the fields at 118 apiece, then the buttons. Xtream's
-// four fields are the tallest form, and it ends above 970.
-static float setupRowY(int i) {
-  float y = 300.0f;
-  for (int k = 0; k < i; k++) y += setupRows[k] == ROW_TYPE ? 100.0f : 118.0f;
-  return y;
+// The draft as the loader takes it: the server whole again, only the chosen
+// kind's fields.
+static void draftSource(IptvSource *out) {
+  *out = draft;
+  if (draft.kind == IPTV_SRC_XTREAM) {
+    const char *h = draft.server;
+    while (*h == ' ') h++;
+    snprintf(out->server, sizeof out->server, "%s%s%s%s", strstr(h, "://") ? "" : "http://", h,
+             draftPort[0] ? ":" : "", draftPort);
+    if (!h[0]) out->server[0] = 0;
+    out->url[0] = 0;
+  } else {
+    out->server[0] = out->user[0] = out->pass[0] = 0;
+  }
 }
-static GfxRect setupField(int i) {
-  return (GfxRect){ X0(), setupRowY(i) + 34.0f, 1040.0f, 70.0f };
-}
-static int setupButtons(void) { return iptv_configured() ? 3 : 1; }
 
 static int draftComplete(void) {
   if (draft.kind == IPTV_SRC_XTREAM) return draft.server[0] && draft.user[0] && draft.pass[0];
   return strstr(draft.url, "://") != NULL;
 }
 
+// Nothing changed since the source was saved.
+static int draftIsSource(void) {
+  IptvSource d;
+  const IptvSource *s = iptv_source();
+  draftSource(&d);
+  return d.kind == s->kind && !strcmp(d.epg, s->epg) &&
+         (d.kind == IPTV_SRC_XTREAM ? !strcmp(d.server, s->server) && !strcmp(d.user, s->user) &&
+                                          !strcmp(d.pass, s->pass)
+                                    : !strcmp(d.url, s->url));
+}
+
+static void openSetup(void) {
+  draft = *iptv_source();
+  if (draft.kind == IPTV_SRC_NONE) draft.kind = IPTV_SRC_M3U;
+  splitServer();
+  showPass = 0;
+  mode = MODE_SETUP;
+  editing = -1;
+  phoneRetryAt = 0;
+  iptv_try_forget();
+  nSetupRows = 0;
+  layoutSetup();
+  // Onto the first field: the address is what this screen is for.
+  setupRow = rowIndex(draft.kind == IPTV_SRC_XTREAM ? SR_SERVER : SR_URL);
+  setupCol = 0;
+  stopStream();
+  full = 0;
+}
+
+static char *fieldText(int f, int *max) {
+  switch (f) {
+    case F_URL:    *max = (int)sizeof draft.url;    return draft.url;
+    case F_SERVER: *max = (int)sizeof draft.server; return draft.server;
+    case F_PORT:   *max = (int)sizeof draftPort;    return draftPort;
+    case F_USER:   *max = (int)sizeof draft.user;   return draft.user;
+    case F_PASS:   *max = (int)sizeof draft.pass;   return draft.pass;
+    case F_EPG:    *max = (int)sizeof draft.epg;    return draft.epg;
+    default: *max = 0; return NULL;
+  }
+}
+
+static const char *fieldHint(int f) {
+  switch (f) {
+    case F_URL:    return "http://provider.example/playlist.m3u";
+    case F_SERVER: return "tv.example.net";
+    case F_PORT:   return "8080";
+    case F_USER:   return "username";
+    case F_PASS:   return "password";
+    case F_EPG:    return "https://\xE2\x80\xA6/guide.xml.gz";
+    default: return "";
+  }
+}
+
+// --- geometry: Z1's, 1920x1080. Without a source there is no card, and the
+// rest moves up into its place.
+#define SP_COL_X     700.0f        // the "type it" column
+#define SP_TOP       402.0f        // both columns' top
+#define SP_LIFT      174.0f        // the card and its gap, when there is no card
+static float spLift(void) { return configured() ? 0.0f : SP_LIFT; }
+static float spRX(void) { return X0() + (SP_COL_X - 96.0f); }
+static float spRW(void) { return L_RIGHT - spRX(); }
+static int   spX(void) { return draft.kind == IPTV_SRC_XTREAM; }
+// The label's top for each field row; the field sits 26 under it.
+static float labelY(int row) {
+  float t = SP_TOP - spLift();
+  if (!spX()) return row == SR_URL ? t + 136.0f : t + 274.0f;
+  return row == SR_SERVER ? t + 136.0f : row == SR_LOGIN ? t + 258.0f : t + 380.0f;
+}
+static float fieldH(void) { return spX() ? 76.0f : 92.0f; }
+static GfxRect fieldRect(int f) {
+  float x = spRX(), w = spRW(), h = fieldH();
+  switch (f) {
+    case F_URL:    return (GfxRect){ x, labelY(SR_URL) + 26.0f, w, h };
+    case F_SERVER: return (GfxRect){ x, labelY(SR_SERVER) + 26.0f, w - 150.0f - 14.0f, h };
+    case F_PORT:   return (GfxRect){ x + w - 150.0f, labelY(SR_SERVER) + 26.0f, 150.0f, h };
+    case F_USER:   return (GfxRect){ x, labelY(SR_LOGIN) + 26.0f, (w - 14.0f) * 0.5f, h };
+    case F_PASS:   return (GfxRect){ x + (w + 14.0f) * 0.5f, labelY(SR_LOGIN) + 26.0f, (w - 14.0f) * 0.5f, h };
+    default:       return (GfxRect){ x, labelY(SR_EPG) + 26.0f, w, h };
+  }
+}
+static float resultCY(void) { return labelY(SR_EPG) + 26.0f + fieldH() + 22.0f + 17.0f; }
+static float buttonsY(void) { return resultCY() + 17.0f + 26.0f; }
+static GfxRect kindRect(void) { return (GfxRect){ spRX(), SP_TOP - spLift() + 54.0f, 0.0f, 56.0f }; }
+
+// --- the outcome under the fields ----------------------------------------------------
+enum { RS_NONE, RS_BUSY, RS_OK, RS_WARN, RS_FAIL };
+static int guidedChannels(void) {
+  static const IptvList *countedFor;
+  static int countedPg = -1, with;
+  const IptvList *l = iptv_list();
+  if (!l) return 0;
+  if (l != countedFor || l->nPg != countedPg) {
+    countedFor = l; countedPg = l->nPg; with = 0;
+    for (int i = 0; i < l->nCh; i++) with += l->ch[i].nPg > 0;
+  }
+  return with;
+}
+
+// What the line says, how (RS_*), and which fields (1 << F_*) carry the red
+// hairline. Z2's wording: what is wrong, never a status code alone.
+static int setupResult(char *dst, size_t n, unsigned *bad) {
+  int t = iptv_try_state(), x = spX();
+  unsigned where = x ? (1u << F_SERVER) | (1u << F_PORT) : (1u << F_URL);
+  const IptvList *l = iptv_list();
+  *bad = 0;
+  dst[0] = 0;
+  if (t == IPTV_LOADING) {
+    snprintf(dst, n, x ? "Signing in\xE2\x80\xA6" : "Fetching the playlist\xE2\x80\xA6");
+    return RS_BUSY;
+  }
+  if (t == IPTV_FAILED) {
+    int status = 0, kind;
+    char why[160];
+    kind = iptv_try_failure(&status, why, sizeof why);
+    *bad = where;
+    switch (kind) {
+      case IPTV_FAIL_UNREACHABLE:
+        snprintf(dst, n, "Couldn't reach it \xE2\x80\x94 check the address, or the TV's network connection"); break;
+      case IPTV_FAIL_NOT_FOUND:
+        snprintf(dst, n, "Nothing there \xE2\x80\x94 the address returned 404"); break;
+      case IPTV_FAIL_REFUSED:
+        snprintf(dst, n, "Refused \xE2\x80\x94 the server answered %d; the subscription may have lapsed", status); break;
+      case IPTV_FAIL_NOT_PLAYLIST:
+        snprintf(dst, n, "Not a playlist \xE2\x80\x94 the address sent a web page, usually the provider's sign-in page"); break;
+      case IPTV_FAIL_GUIDE:
+        snprintf(dst, n, "That's a TV guide, not a playlist \xE2\x80\x94 it goes in the extra guide field"); break;
+      case IPTV_FAIL_LOGIN:
+        snprintf(dst, n, "Sign-in rejected \xE2\x80\x94 check the username, password and port");
+        *bad = (1u << F_USER) | (1u << F_PASS) | (1u << F_PORT); break;
+      case IPTV_FAIL_EXPIRED:
+        snprintf(dst, n, "This subscription has expired \xE2\x80\x94 renew it with your provider");
+        *bad = 1u << F_USER; break;
+      case IPTV_FAIL_ACCOUNT:
+        snprintf(dst, n, "%s", why); *bad = 1u << F_USER; break;
+      case IPTV_FAIL_TIMEOUT:
+        snprintf(dst, n, "Timed out \xE2\x80\x94 nothing came back within %d s", SRC_CEILING_S); break;
+      case IPTV_FAIL_PROVIDER:
+        snprintf(dst, n, "The provider turned the app away (%d) \xE2\x80\x94 it may limit devices or connections", status); break;
+      case IPTV_FAIL_SERVER:
+        snprintf(dst, n, "The server had an error (%d) \xE2\x80\x94 try again in a while", status); *bad = 0; break;
+      default:
+        snprintf(dst, n, "%s", why[0] ? why : "That didn't load"); break;
+    }
+    return RS_FAIL;
+  }
+  // No try on this screen yet, or one that worked: what the current source has.
+  if (!configured() || !l) {
+    if (configured() && iptv_state() == IPTV_FAILED) { snprintf(dst, n, "%s", iptv_status()); return RS_FAIL; }
+    if (configured() && iptv_state() == IPTV_LOADING) { snprintf(dst, n, "Loading channels\xE2\x80\xA6"); return RS_BUSY; }
+    return RS_NONE;
+  }
+  if (iptv_guide_state() == IPTV_LOADING) {
+    snprintf(dst, n, "%d channels \xC2\xB7 matching them to the TV guide\xE2\x80\xA6", l->nCh);
+    return RS_BUSY;
+  }
+  if (!guidedChannels()) {
+    snprintf(dst, n, "%d channels, no guide data \xE2\x80\x94 add an extra TV guide above", l->nCh);
+    *bad = 0;
+    return RS_WARN;
+  }
+  snprintf(dst, n, "Reachable \xC2\xB7 %d channels, %d matched to the guide", l->nCh, guidedChannels());
+  return RS_OK;
+}
+
 static void backToBrowse(void) {
+  if (iptv_try_state() == IPTV_LOADING) iptv_try_cancel();
+  iptv_try_forget();
   mode = MODE_BROWSE;
   viewMode = VIEW_LIST;
   zone = ZONE_BODY;
 }
 
+// A tried source that became the source: the list is somebody else's now.
+static void freshList(void) {
+  useAlt = 0;
+  group = GROUP_ALL;
+  focusName[0] = 0;
+  tuned = -1; tunedName[0] = 0;
+  nView = 0; fRow = 0;
+}
+
 static void saveSetup(void) {
+  IptvSource d;
   if (!draftComplete()) {
     say(draft.kind == IPTV_SRC_XTREAM ? "Fill in the server, username and password"
                                       : "Enter the playlist's full address, starting with http");
@@ -1025,19 +1223,30 @@ static void saveSetup(void) {
   }
   ime_close();
   editing = -1;
-  iptv_set_source(&draft);
-  useAlt = 0;
-  backToBrowse();
-  group = GROUP_ALL;
-  focusName[0] = 0;
-  tuned = -1; tunedName[0] = 0;
-  nView = 0; fRow = 0;
-  say("Loading your channels\xE2\x80\xA6");
+  draftSource(&d);
+  iptv_try_source(&d, SRC_CEILING_S);
+}
+
+// After a try that worked, the primary button takes the viewer to the channels.
+static int primaryIsDone(void) { return iptv_try_state() == IPTV_READY && draftIsSource(); }
+
+static void primary(void) {
+  if (primaryIsDone()) { backToBrowse(); rebuildView(); return; }
+  saveSetup();
+}
+
+static void editField(int f) {
+  if (!ime_usable()) {
+    say("This TV has no on-screen keyboard: put the address in iptv.txt in the app's data folder");
+    return;
+  }
+  editing = f;
+  ime_open(fieldRect(f));
 }
 
 static void setupEvent(const SDL_Event *e) {
   SDL_Keycode k;
-  int row = setupRows[setupRow];
+  int row = setupRows[setupRow], cols = rowCols(row);
   if (editing >= 0 && ime_is_open()) {
     int max, len;
     char *t = fieldText(editing, &max);
@@ -1051,56 +1260,66 @@ static void setupEvent(const SDL_Event *e) {
     { ime_close(); editing = -1; }
   if (isBack(k)) {
     if (ime_is_open()) { ime_close(); editing = -1; return; }
-    if (iptv_configured()) { backToBrowse(); return; }
+    if (iptv_try_state() == IPTV_LOADING) { iptv_try_cancel(); return; }
+    if (configured()) { backToBrowse(); return; }
     wantsExit = 1;
     return;
   }
   if (ime_is_open()) {
-    // OK with the keyboard up is "done with this field".
-    if (isOk(k)) { ime_close(); editing = -1;
-      if (setupRow + 1 < nSetupRows) setupRow++; }
+    // OK with the keyboard up is "done with this field": on to the next stop.
+    if (isOk(k)) {
+      ime_close(); editing = -1;
+      if (setupCol + 1 < cols && fieldAt(row, setupCol + 1) >= 0) setupCol++;
+      else if (setupRow + 1 < nSetupRows) { setupRow++; setupCol = 0; }
+    }
     return;
   }
   switch (k) {
-    case SDLK_UP:   if (setupRow > 0) setupRow--; break;
-    case SDLK_DOWN: if (setupRow + 1 < nSetupRows) setupRow++; break;
+    case SDLK_UP:
+    case SDLK_DOWN:
+      if (k == SDLK_UP ? setupRow > 0 : setupRow + 1 < nSetupRows) {
+        setupRow += k == SDLK_UP ? -1 : 1;
+        // Straight up or down: the stop under the one left, where there is one.
+        if (setupCol >= rowCols(setupRows[setupRow])) setupCol = rowCols(setupRows[setupRow]) - 1;
+      }
+      break;
     case SDLK_LEFT:
-      if (row == ROW_TYPE && draft.kind == IPTV_SRC_XTREAM) { draft.kind = IPTV_SRC_M3U; layoutSetup(); }
-      else if (row == ROW_SAVE && setupBtn > 0) setupBtn--;
+      if (row == SR_KIND && draft.kind == IPTV_SRC_XTREAM) { draft.kind = IPTV_SRC_M3U; layoutSetup(); }
+      else if (setupCol > 0) setupCol--;
       else requestMenu = 1;
       break;
     case SDLK_RIGHT:
-      if (row == ROW_TYPE && draft.kind != IPTV_SRC_XTREAM) { draft.kind = IPTV_SRC_XTREAM; layoutSetup(); }
-      else if (row == ROW_SAVE && setupBtn + 1 < setupButtons()) setupBtn++;
+      if (row == SR_KIND && draft.kind != IPTV_SRC_XTREAM) { draft.kind = IPTV_SRC_XTREAM; layoutSetup(); }
+      else if (setupCol + 1 < cols) setupCol++;
       break;
     default:
       if (!isOk(k)) break;
-      if (row == ROW_TYPE) {
+      if (row == SR_REFRESH) iptv_reload();
+      else if (row == SR_KIND) {
         draft.kind = draft.kind == IPTV_SRC_XTREAM ? IPTV_SRC_M3U : IPTV_SRC_XTREAM;
         layoutSetup();
-      } else if (row == ROW_SAVE) {
-        if (setupBtn == BTN_CANCEL) backToBrowse();
-        else if (setupBtn == BTN_RELOAD) {
-          iptv_reload();
-          backToBrowse();
-          say("Reloading channels and guide\xE2\x80\xA6");
-        } else saveSetup();
-      } else if (!ime_usable()) {
-        say("This TV has no on-screen keyboard: put the address in iptv.txt in the app's data folder");
-      } else {
-        editing = row;
-        ime_open(setupField(setupRow));
+      } else if (row == SR_BUTTONS) {
+        if (setupCol == 1) backToBrowse();
+        else primary();
+      } else if (row == SR_LOGIN && setupCol == 2) {
+        showPass = !showPass;
+      } else if (fieldAt(row, setupCol) >= 0) {
+        editField(fieldAt(row, setupCol));
       }
       break;
   }
 }
 
 // THE PHONE FORM (phonelink.h): open while the setup form is, closed the moment
-// it is not. A form saved on the phone lands in the draft and is saved exactly
-// as the Save button would, with the same check and the same message.
+// it is not. A form saved on the phone lands in the draft and is tried exactly
+// as Save and load would, its outcome on the same line.
+static int listFresh = 1;   // the browse state already belongs to the source
 static void phoneStep(Uint32 now) {
   IptvSource s;
   if (mode != MODE_SETUP) { phonelink_close(); return; }
+  // A tried source became the source: the list on the browse screen is its.
+  if (iptv_try_state() == IPTV_LOADING) listFresh = 0;
+  else if (iptv_try_state() == IPTV_READY && !listFresh) { freshList(); listFresh = 1; }
   // With no network address yet (the TV still joining the Wi-Fi), look again
   // every few seconds rather than every frame.
   if (phonelink_state() == PL_OFF && now >= phoneRetryAt) {
@@ -1111,7 +1330,10 @@ static void phoneStep(Uint32 now) {
   if (ime_is_open()) ime_close();
   editing = -1;
   draft = s;
+  splitServer();
   layoutSetup();
+  setupRow = rowIndex(SR_BUTTONS);
+  setupCol = 0;
   saveSetup();
 }
 
@@ -1133,7 +1355,18 @@ static void pointCell(int row, int t) {
     fTime = at < now ? now : at; }
 }
 static void pointAct(int a, int unused) { (void)unused; zone = ZONE_ACTIONS; actSel = a; }
-static void pointSetup(int i, int unused) { (void)unused; if (!ime_is_open()) setupRow = i; }
+static void pointSetup(int i, int col) {
+  if (ime_is_open() || i < 0) return;
+  setupRow = i;
+  setupCol = col < rowCols(setupRows[i]) ? col : 0;
+}
+static void pointKind(int k, int unused) {
+  (void)unused;
+  if (ime_is_open()) return;
+  if ((k == 1) != (draft.kind == IPTV_SRC_XTREAM)) { draft.kind = k ? IPTV_SRC_XTREAM : IPTV_SRC_M3U; layoutSetup(); }
+  setupRow = rowIndex(SR_KIND);
+  setupCol = 0;
+}
 static void pointQuick(int r, int unused) { (void)unused; if (!gmOpen) { quickRow = r; quickZone = Q_LIST; } }
 static void pointQuickPill(int a, int b) { (void)a; (void)b; if (!gmOpen) quickZone = Q_PILL; }
 static void pointGroupMenu(int g, int unused) { (void)unused; if (gmOpen && g >= 0) gmCursor = g; }
@@ -2848,141 +3081,400 @@ static void drawList(void) {
 }
 
 // --- Setup ---------------------------------------------------------------------------------------
-static GfxRect pillButton(float x, float y, const char *label, int focused, int on) {
-  TxtLine t = txt_line(on || focused ? TXT_LIVE_META_B : TXT_LIVE_META, label,
-                       HEXI(focused || on ? C_INK : 0xC1C7CD), 255);
-  GfxRect r = { x, y, t.w + 2 * L_CHIP_PAD, 56.0f };
-  if (focused) gfx_color((GfxRect){ r.x - 3.0f, r.y - 3.0f, r.w + 6.0f, r.h + 6.0f }, 0.5f, 1, 1, 1, 0.30f);
-  if (focused || on) gfx_color(r, 0.5f, HEXF(C_PAPER), 1.0f);
-  else gfx_color(r, 0.5f, 1, 1, 1, 0.07f);
-  txt_draw(t, r.x + L_CHIP_PAD, r.y + (r.h - t.h) * 0.5f);
-  return r;
+// --- The Source screen, drawn -------------------------------------------------------------
+// A ring hugging `r` from outside (Z1's `box-shadow: 0 0 0 3px`), or a hairline
+// on its edge (`thick` 1, inside).
+static void spRing(GfxRect r, float radius, float out, float thick, unsigned hex, float a) {
+  GfxRect o = { r.x - out, r.y - out, r.w + out * 2.0f, r.h + out * 2.0f };
+  gfx_rect(o, 0, GFX_RING_INSET, 0, thick / o.h, 0, (radius + out) / o.h, HEXF(hex), a);
 }
 
-// Right of the form: the QR for the phone form, and what state it is in. The
-// state line is also the check that the network lets a phone reach the TV:
-// "Phone connected" only appears once a request got through.
-#define P_QR 300.0f
-static void drawPhonePanel(void) {
-  float x = L_RIGHT - P_QR - 32.0f, y = 300.0f, w = P_QR + 32.0f;
+// Tracked capitals, top at `y`: the kicker, the section labels, field labels.
+static float spCaps(TxtStyle st, const char *s, unsigned hex, float x, float y, float tracking) {
+  return txt_tracking(st, s, HEXI(hex), x, y, 1.0f, tracking);
+}
+
+// Words wrapped to `maxW` and each line centred on `cx`.
+static void spCentred(TxtStyle st, const char *s, unsigned hex, float cx, float y, float maxW, float lh) {
+  char line[256] = "", next[256];
+  const char *p = s;
+  while (*p) {
+    const char *w = p;
+    size_t k;
+    while (*p && *p != ' ') p++;
+    k = (size_t)(p - w);
+    snprintf(next, sizeof next, "%s%s%.*s", line, line[0] ? " " : "", (int)k, w);
+    if (line[0] && txt_width(st, next) > maxW) {
+      TxtLine t = txt_line(st, line, HEXI(hex), 255);
+      txt_draw(t, cx - t.w * 0.5f, y);
+      y += lh;
+      snprintf(line, sizeof line, "%.*s", (int)k, w);
+    } else {
+      snprintf(line, sizeof line, "%s", next);
+    }
+    while (*p == ' ') p++;
+  }
+  if (line[0]) { TxtLine t = txt_line(st, line, HEXI(hex), 255); txt_draw(t, cx - t.w * 0.5f, y); }
+}
+
+// The busy mark: a faint ring and a bright arc going round.
+static void spSpinner(float cx, float cy, float d) {
+  float r = d * 0.5f - 1.5f, t = (float)(SDL_GetTicks() % 900u) / 900.0f * 6.2831853f;
+  spRing((GfxRect){ cx - d * 0.5f, cy - d * 0.5f, d, d }, d * 0.5f, 0.0f, 3.0f, 0xFFFFFF, 0.18f);
+  for (int i = 0; i < 7; i++) {
+    float a = t + (float)i * 0.26f;
+    gfx_color((GfxRect){ cx + cosf(a) * r - 1.5f, cy + sinf(a) * r - 1.5f, 3.0f, 3.0f }, 0.5f, HEXF(0xF0F2F4), 1.0f);
+  }
+}
+
+// The outcome's dot: its colour and its glyph, dark on it.
+static void spDot(float cx, float cy, float d, unsigned fill, const char *icon, unsigned ink) {
+  float g = d * 0.58f;
+  gfx_color((GfxRect){ cx - d * 0.5f, cy - d * 0.5f, d, d }, 0.5f, HEXF(fill), 1.0f);
+  gfx_icon((GfxRect){ cx - g * 0.5f, cy - g * 0.5f, g, g }, icon, HEXF(ink), 1.0f);
+}
+
+// "raw.githubusercontent.com" and "/iptv-org/…/us_pluto.m3u" from an address.
+static void splitUrl(const char *u, char *host, size_t nh, char *path, size_t np) {
+  const char *h = strstr(u, "://"), *slash;
+  h = h ? h + 3 : u;
+  slash = strchr(h, '/');
+  if (!slash) slash = h + strlen(h);
+  snprintf(host, nh, "%.*s", (int)(slash - h), h);
+  snprintf(path, np, "%s", slash);
+}
+
+// A field: its value (an address as host over path), or its hint; while the
+// keyboard is filling it, the text itself on one line with the caret.
+static void spField(int f, int focused, int bad) {
+  GfxRect r = fieldRect(f);
+  int max, isEditing = editing == f && ime_is_open();
+  const char *text = fieldText(f, &max);
+  float px = spX() ? 22.0f : 26.0f, chipW = 0.0f;
+  gfx_color(r, 12.0f / r.h, 1, 1, 1, focused ? 0.07f : 0.05f);
+  if (focused) spRing(r, 12.0f, 3.0f, 3.0f, 0xF0F2F4, 1.0f);
+  else if (bad) spRing(r, 12.0f, 0.0f, 1.5f, 0xE88A6E, 0.85f);
+  // "OK to edit" on the focused field, while it is not being edited.
+  if (focused && !isEditing && r.w > 400.0f) {
+    TxtLine t = txt_line(TXT_SRCP_CHIP, "OK to edit", HEXI(0xC1C7CD), 255);
+    GfxRect c;
+    chipW = 14.0f + 17.0f + 9.0f + t.w + 14.0f;
+    c = (GfxRect){ r.x + r.w - 22.0f - chipW, r.y + (r.h - 38.0f) * 0.5f, chipW, 38.0f };
+    gfx_color(c, 10.0f / 38.0f, 10 / 255.0f, 12 / 255.0f, 14 / 255.0f, 0.55f);
+    gfx_icon((GfxRect){ c.x + 14.0f, c.y + (c.h - 17.0f) * 0.5f, 17.0f, 17.0f }, "src_keyboard", HEXF(0xC1C7CD), 1.0f);
+    txt_draw(t, c.x + 14.0f + 17.0f + 9.0f, c.y + (c.h - t.h) * 0.5f);
+    chipW += 22.0f + 16.0f;
+  }
+  { float maxW = r.w - px * 2.0f - chipW;
+    char shown[1100];
+    if (f == F_PASS && !showPass && text[0]) {
+      size_t n = strlen(text), k = 0;
+      for (size_t j = 0; j < n && k + 4 < sizeof shown; j++)
+        if (((unsigned char)text[j] & 0xC0) != 0x80) { memcpy(shown + k, "\xE2\x80\xA2", 3); k += 3; }
+      shown[k] = 0;
+    } else {
+      snprintf(shown, sizeof shown, "%s", text);
+    }
+    if (isEditing) {
+      // The end is what is being typed: trim from the left.
+      const char *s = shown;
+      TxtLine t = txt_line(TXT_SRCP_VALUE, s, HEXI(0xF5F6F8), 255);
+      while (t.w > maxW - 8.0f && *s) {
+        s++;
+        while (((unsigned char)*s & 0xC0) == 0x80) s++;
+        t = txt_line(TXT_SRCP_VALUE, s, HEXI(0xF5F6F8), 255);
+      }
+      txt_draw(t, r.x + px, r.y + (r.h - t.h) * 0.5f);
+      if ((SDL_GetTicks() / 530u) % 2u == 0u)
+        gfx_color((GfxRect){ r.x + px + t.w + 2.0f, r.y + r.h * 0.5f - 15.0f, 3.0f, 30.0f }, 0.0f, 1, 1, 1, 1);
+    } else if (!shown[0]) {
+      TxtLine t = txt_line_trim(TXT_SRCP_PATH, fieldHint(f), HEXI(0x565C63), 255, maxW);
+      txt_draw(t, r.x + px, r.y + (r.h - t.h) * 0.5f);
+    } else if (f == F_URL || f == F_EPG) {
+      char host[256], path[1024], first[1024];
+      const char *sp = strchr(shown, ' ');
+      int more = 0;
+      snprintf(first, sizeof first, "%.*s", sp ? (int)(sp - shown) : (int)strlen(shown), shown);
+      for (const char *q = shown; (q = strchr(q, ' ')); q++) if (q[1] && q[1] != ' ') more++;
+      splitUrl(first, host, sizeof host, path, sizeof path);
+      if (more) { size_t k = strlen(path); snprintf(path + k, sizeof path - k, "  \xC2\xB7  +%d more", more); }
+      { TxtLine a = txt_line_trim(TXT_SRCP_VALUE, host[0] ? host : path, HEXI(focused ? 0xF5F6F8 : 0xE4E7EA), 255, maxW);
+        TxtLine b = txt_line_trim(TXT_SRCP_PATH, path, HEXI(0x8A9199), 255, maxW);
+        if (host[0] && path[0] && path[1]) {
+          float top = r.y + (r.h - (a.h + 3.0f + b.h)) * 0.5f;
+          txt_draw(a, r.x + px, top);
+          txt_draw(b, r.x + px, top + a.h + 3.0f);
+        } else {
+          txt_draw(a, r.x + px, r.y + (r.h - a.h) * 0.5f);
+        } }
+    } else {
+      TxtLine t = txt_line_trim(TXT_SRCP_VALUE, shown, HEXI(focused ? 0xF5F6F8 : 0xE4E7EA), 255, maxW);
+      txt_draw(t, r.x + px, r.y + (r.h - t.h) * 0.5f);
+    }
+  }
+  { int row = f == F_URL ? SR_URL : f == F_EPG ? SR_EPG : f <= F_PORT ? SR_SERVER : SR_LOGIN;
+    int col = f == F_PORT || f == F_PASS ? 1 : 0;
+    pointer_zone(r.x, r.y, r.w, r.h, pointSetup, rowIndex(row), col); }
+}
+
+// A field's label: tracked capitals, 26 above the field.
+static float spLabel(const char *s, float x, float y) {
+  return spCaps(TXT_CWC_KICKER, s, 0x7C838B, x, y, 1.36f);
+}
+
+// The card's name for the source: the playlist file's own name when it has a
+// telling one, else the server.
+static void sourceName(const IptvSource *s, char *name, size_t nn, char *sub, size_t ns) {
+  char host[256], path[1024];
+  splitUrl(s->kind == IPTV_SRC_XTREAM ? s->server : s->url, host, sizeof host, path, sizeof path);
+  if (s->kind == IPTV_SRC_XTREAM) {
+    snprintf(name, nn, "%s", host);
+    snprintf(sub, ns, "Signed in as %s", s->user);
+    return;
+  }
+  { const char *q = strchr(path, '?'), *e = q ? q : path + strlen(path), *b = e;
+    char stem[128];
+    while (b > path && b[-1] != '/') b--;
+    snprintf(stem, sizeof stem, "%.*s", (int)(e - b), b);
+    if (strrchr(stem, '.')) *strrchr(stem, '.') = 0;
+    for (char *c = stem; *c; c++) if (*c == '_' || *c == '-') *c = ' ';
+    // "get", "playlist", "index": the file says nothing, the server does.
+    if (!stem[0] || !strcasecmp(stem, "get") || !strcasecmp(stem, "playlist") ||
+        !strcasecmp(stem, "index") || !strcasecmp(stem, "tv") || !strcasecmp(stem, "iptv") ||
+        !strcasecmp(stem, "list") || !strcasecmp(stem, "channels"))
+      snprintf(name, nn, "%s", host[0] ? host : "IPTV playlist");
+    else snprintf(name, nn, "%s", stem);
+    snprintf(sub, ns, "%s", host[0] ? host : "A playlist on this TV");
+  }
+}
+
+// THE CURRENT SOURCE: what it is, what it holds, how fresh, and Refresh.
+static void drawSourceCard(void) {
+  const IptvSource *s = iptv_source();
+  const IptvList *l = iptv_list();
+  GfxRect c = { X0(), 184.0f, L_RIGHT - X0(), 128.0f };
+  float x = c.x + 30.0f, cy = c.y + c.h * 0.5f, right = c.x + c.w - 30.0f;
+  char name[256], sub[300], ago[64];
+  int focused = setupRows[setupRow] == SR_REFRESH;
+  gfx_color(c, 14.0f / c.h, 1, 1, 1, 0.05f);
+  gfx_color((GfxRect){ x, cy - 34.0f, 68.0f, 68.0f }, 13.0f / 68.0f, HEXF(0x1A1D21), 1.0f);
+  gfx_icon((GfxRect){ x + 20.0f, cy - 14.0f, 28.0f, 28.0f }, "live_source", HEXF(0xC1C7CD), 1.0f);
+  x += 68.0f + 26.0f;
+
+  // Refresh, from the right.
+  { TxtLine t = txt_line(TXT_SRC_CHIP, "Refresh", HEXI(focused ? C_INK : 0xE4E7EA), 255);
+    float w = 24.0f + 19.0f + 11.0f + t.w + 24.0f;
+    GfxRect b = { right - w, cy - 29.0f, w, 58.0f };
+    if (focused) gfx_color(b, 0.5f, HEXF(C_PAPER), 1.0f);
+    else gfx_color(b, 0.5f, 1, 1, 1, 0.09f);
+    gfx_icon((GfxRect){ b.x + 24.0f, cy - 9.5f, 19.0f, 19.0f }, "src_refresh", HEXF(focused ? C_INK : 0xE4E7EA), 1.0f);
+    txt_draw(t, b.x + 24.0f + 19.0f + 11.0f, cy - t.h * 0.5f);
+    refreshRect = b;
+    pointer_zone(b.x, b.y, b.w, b.h, pointSetup, rowIndex(SR_REFRESH), 0);
+    right = b.x - 12.0f - 26.0f; }
+  // How fresh, then the two numbers, each after a divider.
+  { long long at = iptv_refreshed_at(), age = at ? (long long)time(NULL) - at : -1;
+    if (iptv_state() == IPTV_LOADING || iptv_guide_state() == IPTV_LOADING) snprintf(ago, sizeof ago, "Refreshing\xE2\x80\xA6");
+    else if (age < 0) snprintf(ago, sizeof ago, "Saved copy");
+    else if (age < 60) snprintf(ago, sizeof ago, "Refreshed just now");
+    else if (age < 3600) snprintf(ago, sizeof ago, "Refreshed %lld min ago", age / 60);
+    else if (age < 86400) snprintf(ago, sizeof ago, "Refreshed %lld h ago", age / 3600);
+    else snprintf(ago, sizeof ago, "Refreshed %lld d ago", age / 86400);
+    { TxtLine t = txt_line(TXT_LIVE_NOTE, ago, HEXI(0x8A9199), 255);
+      right -= t.w;
+      txt_draw(t, right, cy - t.h * 0.5f); } }
+  if (l) {
+    char num[24];
+    const char *unit[2] = { "channels", "with guide" };
+    int val[2] = { l->nCh, guidedChannels() };
+    for (int k = 1; k >= 0; k--) {
+      TxtLine n, u;
+      right -= 26.0f;
+      gfx_color((GfxRect){ right - 1.0f, cy - 20.0f, 1.0f, 40.0f }, 0.0f, 1, 1, 1, 0.12f);
+      right -= 26.0f + 1.0f;
+      snprintf(num, sizeof num, "%d", val[k]);
+      n = txt_line(TXT_SRCP_NUM, num, HEXI(0xF5F6F8), 255);
+      u = txt_line(TXT_LIVE_NOTE, unit[k], HEXI(0x8A9199), 255);
+      right -= u.w;
+      // On a shared baseline: the unit's bottom sits with the number's.
+      txt_draw(u, right, cy + n.h * 0.5f - u.h - 3.0f);
+      right -= 10.0f + n.w;
+      txt_draw(n, right, cy - n.h * 0.5f);
+    }
+  }
+  // Name and kind, host under.
+  sourceName(s, name, sizeof name, sub, sizeof sub);
+  { float maxW = right - 40.0f - x - 90.0f;
+    TxtLine n = txt_line_trim(TXT_SRCP_NAME, name, HEXI(0xF5F6F8), 255, maxW);
+    TxtLine h = txt_line_trim(TXT_SRC_TEXT, sub, HEXI(0x7C838B), 255, maxW + 90.0f);
+    float top = cy - (n.h + 6.0f + h.h) * 0.5f;
+    txt_draw(n, x, top);
+    { const char *k = s->kind == IPTV_SRC_XTREAM ? "XTREAM" : "M3U";
+      float w = txt_tracking(TXT_SRCP_BADGE, k, 255, 255, 255, -1.0f, 0.0f, 0.0f, 1.2f) + 20.0f;
+      GfxRect b = { x + n.w + 12.0f, top + n.h * 0.5f - 14.0f, w, 28.0f };
+      TxtLine probe = txt_line(TXT_SRCP_BADGE, "M", 255, 255, 255, 255);
+      spRing(b, 7.0f, 0.0f, 1.0f, 0xFFFFFF, 0.28f);
+      txt_tracking(TXT_SRCP_BADGE, k, HEXI(0xC1C7CD), b.x + 10.0f, b.y + (b.h - probe.h) * 0.5f, 1.0f, 1.2f); }
+    txt_draw(h, x, top + n.h + 6.0f); }
+}
+
+// A step's heading: its number on a square, and what it is.
+static void spStep(const char *n, const char *title, float x, float y, int first) {
+  TxtLine d = txt_line(TXT_CWC_KICKER, n, HEXI(first ? C_INK : 0xC1C7CD), 255);
+  TxtLine t = txt_line(TXT_SRCP_STEP, title, HEXI(0xF5F6F8), 255);
+  if (first) gfx_color((GfxRect){ x, y, 32.0f, 32.0f }, 9.0f / 32.0f, HEXF(C_PAPER), 1.0f);
+  else gfx_color((GfxRect){ x, y, 32.0f, 32.0f }, 9.0f / 32.0f, 1, 1, 1, 0.12f);
+  txt_draw(d, x + (32.0f - d.w) * 0.5f, y + (32.0f - d.h) * 0.5f);
+  txt_draw(t, x + 32.0f + 13.0f, y + (32.0f - t.h) * 0.5f);
+}
+
+// 1 · THE PHONE. The QR, and for a camera that will not focus across the room
+// the address and four digits to type instead.
+#define P_QR 256.0f
+static void drawPhoneCard(void) {
+  GfxRect c = { X0(), SP_TOP - spLift(), 560.0f, 578.0f };
+  float cx = c.x + c.w * 0.5f, y = c.y + 30.0f;
   int st = phonelink_state();
   const char *url = phonelink_url();
   GLuint tex = st != PL_OFF && url[0] ? qr_texture(url) : 0;
-  if (x < X0() + 1040.0f + 64.0f) return;   // no room beside the form
-  ink(TXT_LIVE_NAME, "Or fill it in on your phone", 0xF5F6F8, x, y, 1.0f);
-  y += 44.0f;
-  if (tex) {
-    gfx_color((GfxRect){ x, y, w, w }, 16.0f / w, 1.0f, 1.0f, 1.0f, 1.0f);
-    gfx_tex_aspect_current = 0.0f;
-    gfx_rect((GfxRect){ x + 16.0f, y + 16.0f, P_QR, P_QR }, tex, GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
-    y += w + 24.0f;
-    txt_block(TXT_LIVE_META,
-              st == PL_OPENED ? "Phone connected. Fill in the form there and press Save."
-                              : "Scan with your phone's camera. The phone must be on the same Wi-Fi as the TV.",
-              HEXI(st == PL_OPENED ? 0xF5F6F8 : 0x9AA1A9), x, y, w, 27.0f, 1.0f, 3);
-  } else {
-    txt_block(TXT_LIVE_META, "Connect the TV to your home network to fill this in from a phone.",
-              HEXI(0x9AA1A9), x, y, w, 27.0f, 1.0f, 3);
+  char addr[64], digits[8];
+  phonelink_short(addr, sizeof addr, digits, sizeof digits);
+  gfx_color(c, 16.0f / c.h, 1, 1, 1, 0.055f);
+  spStep("1", "Send it from your phone", c.x + 30.0f, y, 1);
+  y += 32.0f + 20.0f;
+  { GfxRect q = { cx - 150.0f, y, 300.0f, 300.0f };
+    if (tex) {
+      gfx_color(q, 16.0f / q.h, 1, 1, 1, 1);
+      gfx_tex_aspect_current = 0.0f;
+      gfx_rect((GfxRect){ q.x + 22.0f, q.y + 22.0f, P_QR, P_QR }, tex, GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+    } else {
+      gfx_color(q, 16.0f / q.h, 1, 1, 1, 0.04f);
+      spCentred(TXT_SRCP_DESC, "Connect the TV to your home network to send it from a phone.", 0x8A9199,
+                cx, q.y + 120.0f, 240.0f, 24.0f);
+    } }
+  y += 300.0f + 20.0f;
+  if (tex && addr[0]) {
+    TxtLine a = txt_line(TXT_SRCP_ADDR, addr, HEXI(0xE4E7EA), 255);
+    TxtLine k = txt_line(TXT_LIVE_TIME, "code", HEXI(0x7C838B), 255);
+    float dw = txt_tracking(TXT_SRCP_CODE, digits, 255, 255, 255, -1.0f, 0.0f, 0.0f, 12.0f);
+    TxtLine probe = txt_line(TXT_SRCP_CODE, "0", 255, 255, 255, 255);
+    float rowW = k.w + 10.0f + dw, ry;
+    txt_draw(a, cx - a.w * 0.5f, y);
+    ry = y + a.h + 12.0f;
+    txt_draw(k, cx - rowW * 0.5f, ry + (probe.h - k.h) * 0.5f + 2.0f);
+    txt_tracking(TXT_SRCP_CODE, digits, HEXI(0xF5F6F8), cx - rowW * 0.5f + k.w + 10.0f, ry, 1.0f, 12.0f);
+    y = ry + probe.h + 20.0f;
   }
+  spCentred(TXT_SRCP_DESC,
+            st == PL_OPENED ? "A phone has the page open. Paste the URL there and press Save; it lands here."
+                            : "Scan it, or open that address on any device on the same network. "
+                              "Paste the URL there and it lands here.",
+            st == PL_OPENED ? 0xE4E7EA : 0x7C838B, cx, y, 400.0f, 24.0f);
 }
 
-// "Guide on 980 of 1,240 channels", "The TV guide is loading…", or "" with no
-// list yet. Counted again only when the list or its programmes change.
-static void guideCoverage(char *dst, size_t n) {
-  static const IptvList *countedFor;
-  static int countedPg = -1, withGuide;
-  const IptvList *l = iptv_list();
-  dst[0] = 0;
-  if (!l) return;
-  if (iptv_guide_state() == IPTV_LOADING) { snprintf(dst, n, "The TV guide is loading\xE2\x80\xA6"); return; }
-  if (l != countedFor || l->nPg != countedPg) {
-    countedFor = l; countedPg = l->nPg; withGuide = 0;
-    for (int i = 0; i < l->nCh; i++) withGuide += l->ch[i].nPg > 0;
+// 2 · THE TV'S OWN FORM.
+static void drawTypeIt(void) {
+  float x = spRX(), top = SP_TOP - spLift();
+  int row = setupRows[setupRow];
+  char line[300];
+  unsigned bad = 0;
+  int rs = setupResult(line, sizeof line, &bad);
+  spStep("2", "Or type it on the TV", x, top, 0);
+
+  // M3U playlist | Xtream Codes.
+  { static const char *KIND[2] = { "M3U playlist", "Xtream Codes" };
+    GfxRect k = kindRect();
+    float w0 = 24.0f * 2.0f + txt_width(TXT_SRC_CHIP, KIND[0]), w1 = 24.0f * 2.0f + txt_width(TXT_SRC_CHIP, KIND[1]);
+    int x1 = draft.kind == IPTV_SRC_XTREAM;
+    k.w = 5.0f + w0 + w1 + 5.0f;
+    gfx_color(k, 0.5f, 1, 1, 1, 0.06f);
+    for (int i = 0; i < 2; i++) {
+      GfxRect s = { k.x + 5.0f + (i ? w0 : 0.0f), k.y + 5.0f, i ? w1 : w0, 46.0f };
+      int on = i == x1;
+      TxtLine t = txt_line(on ? TXT_SRC_CHIP : TXT_SRC_TEXT, KIND[i], HEXI(on ? C_INK : 0x8A9199), 255);
+      if (on) gfx_color(s, 0.5f, HEXF(C_PAPER), 1.0f);
+      if (on && row == SR_KIND) spRing(s, 23.0f, 5.0f, 3.0f, 0xF0F2F4, 1.0f);
+      txt_draw(t, s.x + (s.w - t.w) * 0.5f, s.y + (s.h - t.h) * 0.5f);
+      pointer_zone(s.x, s.y, s.w, s.h, pointKind, i, 0);
+    } }
+
+  if (!spX()) {
+    spLabel("PLAYLIST ADDRESS", x, labelY(SR_URL));
+    spField(F_URL, row == SR_URL, (bad >> F_URL) & 1);
+  } else {
+    GfxRect port = fieldRect(F_PORT), pass = fieldRect(F_PASS);
+    spLabel("SERVER", x, labelY(SR_SERVER));
+    spLabel("PORT", port.x, labelY(SR_SERVER));
+    spField(F_SERVER, row == SR_SERVER && setupCol == 0, (bad >> F_SERVER) & 1);
+    spField(F_PORT, row == SR_SERVER && setupCol == 1, (bad >> F_PORT) & 1);
+    spLabel("USERNAME", x, labelY(SR_LOGIN));
+    spLabel("PASSWORD", pass.x, labelY(SR_LOGIN));
+    spField(F_USER, row == SR_LOGIN && setupCol == 0, (bad >> F_USER) & 1);
+    spField(F_PASS, row == SR_LOGIN && setupCol == 1, (bad >> F_PASS) & 1);
+    // "show": a stop of its own, right of the password's label — a d-pad
+    // keyboard makes typos, and dots hide them.
+    { int on = row == SR_LOGIN && setupCol == 2;
+      const char *w = showPass ? "hide" : "show";
+      TxtLine t = txt_line(on ? TXT_SRC_CHIP : TXT_LIVE_TIME, w, HEXI(on ? C_INK : 0x7C838B), 255);
+      GfxRect b = { pass.x + pass.w - t.w - 24.0f, labelY(SR_LOGIN) - 7.0f, t.w + 24.0f, 32.0f };
+      if (on) gfx_color(b, 0.5f, HEXF(C_PAPER), 1.0f);
+      txt_draw(t, b.x + 12.0f, b.y + (b.h - t.h) * 0.5f);
+      pointer_zone(b.x, b.y, b.w, b.h, pointSetup, rowIndex(SR_LOGIN), 2); }
   }
-  if (!l->nPg) snprintf(dst, n, "No TV guide for these channels yet");
-  else if (withGuide == l->nCh) snprintf(dst, n, "Guide on all %d channels", l->nCh);
-  else snprintf(dst, n, "Guide on %d of %d channels", withGuide, l->nCh);
+  { float lx = x + spLabel("EXTRA TV GUIDE", x, labelY(SR_EPG)) + 12.0f;
+    TxtLine n = txt_line(TXT_SRCP_NOTE, "optional \xE2\x80\x94 only for channels the playlist misses", HEXI(0x565C63), 255);
+    TxtLine probe = txt_line(TXT_CWC_KICKER, "E", 255, 255, 255, 255);
+    txt_draw(n, lx, labelY(SR_EPG) + (probe.h - n.h) * 0.5f); }
+  spField(F_EPG, row == SR_EPG, 0);
+
+  // The outcome.
+  if (rs != RS_NONE) {
+    float cy = resultCY(), tx = x + 24.0f + 12.0f;
+    TxtLine t = txt_line_trim(TXT_LIVE_META, line, HEXI(rs == RS_FAIL ? 0xF0C0AE : 0xA9B0B8), 255,
+                              spRW() - 24.0f - 12.0f - 36.0f);
+    if (rs == RS_FAIL) {
+      GfxRect band = { x - 16.0f, cy - 25.0f, 24.0f + 12.0f + t.w + 32.0f, 50.0f };
+      gfx_color(band, 12.0f / band.h, 232 / 255.0f, 138 / 255.0f, 110 / 255.0f, 0.08f);
+      spRing(band, 12.0f, 0.0f, 1.0f, 0xE88A6E, 0.24f);
+    }
+    if (rs == RS_BUSY) spSpinner(x + 12.0f, cy, 24.0f);
+    else if (rs == RS_OK) spDot(x + 12.0f, cy, 24.0f, 0x5FD29A, "src_ok", 0x0A2A1B);
+    else if (rs == RS_WARN) spDot(x + 12.0f, cy, 24.0f, 0xE8B65C, "src_warn", 0x3A2A0C);
+    else spDot(x + 12.0f, cy, 24.0f, 0xE88A6E, "src_fail", 0x3A150C);
+    txt_draw(t, tx, cy - t.h * 0.5f);
+  }
+
+  // Save and load (Go to channels once it has), and Cancel.
+  { float bx = x, by = buttonsY();
+    const char *label[2] = { primaryIsDone() ? "Go to channels" : "Save and load", "Cancel" };
+    for (int b = 0; b < rowCols(SR_BUTTONS); b++) {
+      int on = row == SR_BUTTONS && setupCol == b;
+      TxtLine t = txt_line(b ? TXT_SRCP_GHOST : TXT_SRCP_PRIMARY, label[b],
+                           HEXI(b ? (on ? 0xF5F6F8 : 0x8A9199) : C_INK), 255);
+      GfxRect r = { bx, by, t.w + (b ? 60.0f : 68.0f), 64.0f };
+      if (!b) gfx_color(r, 0.5f, HEXF(C_PAPER), 1.0f);
+      else if (on) gfx_color(r, 0.5f, 1, 1, 1, 0.09f);
+      if (on) spRing(r, 32.0f, 5.0f, 3.0f, 0xF0F2F4, 1.0f);
+      txt_draw(t, r.x + (r.w - t.w) * 0.5f, r.y + (r.h - t.h) * 0.5f);
+      pointer_zone(r.x, r.y, r.w, r.h, pointSetup, rowIndex(SR_BUTTONS), b);
+      bx += r.w + 14.0f;
+    } }
 }
 
 static void drawSetup(void) {
-  float x = X0();
-  { TxtLine t = txt_line(TXT_TITLE3, "Live TV", 245, 246, 248, 255);
-    txt_draw(t, x, L_BTN_Y + L_BTN_H * 0.5f - t.h * 0.5f); }
-  ink(TXT_LIVE_TITLE, iptv_configured() ? "Change your IPTV source" : "Connect your IPTV service",
-      0xF5F6F8, x, 132.0f, 1.0f);
-  txt_block(TXT_PG_END,
-            "Use the M3U playlist address your provider gave you, or sign in with an Xtream "
-            "Codes login. The source's own TV guide loads by itself; add more guides for the channels it misses.",
-            HEXI(0x9AA1A9), x, 196.0f, 1040.0f, 29.0f, 1.0f, 3);
-
-  for (int i = 0; i < nSetupRows; i++) {
-    int row = setupRows[i], focused = i == setupRow;
-    float y = setupRowY(i);
-    if (row == ROW_TYPE) {
-      static const char *KIND[2] = { "M3U playlist", "Xtream Codes" };
-      float bx = x;
-      for (int k = 0; k < 2; k++) {
-        int on = (k == 0) == (draft.kind != IPTV_SRC_XTREAM);
-        GfxRect r = pillButton(bx, y, KIND[k], focused && on, on);
-        pointer_zone(r.x, r.y, r.w, r.h, pointSetup, i, 0);
-        bx += r.w + L_CHIP_GAP;
-      }
-    } else if (row == ROW_SAVE) {
-      static const char *BTN[3] = { "Save and load", "Reload now", "Cancel" };
-      float bx = x;
-      for (int b = 0; b < setupButtons(); b++) {
-        GfxRect r = pillButton(bx, y + 8.0f, BTN[b], focused && setupBtn == b, 0);
-        pointer_zone(r.x, r.y, r.w, r.h, pointSetup, i, 0);
-        bx += r.w + L_CHIP_GAP;
-      }
-    } else {
-      int max;
-      const char *text = fieldText(row, &max);
-      GfxRect f = setupField(i);
-      int isEditing = editing == row && ime_is_open();
-      char shown[1100];
-      ink(TXT_LIVE_META, fieldLabel(row), 0x9AA1A9, x + 4.0f, y, 1.0f);
-      // Over the extra guides: how much of the list the guides read so far
-      // cover, the number that says whether one more is worth adding.
-      if (row == ROW_EPG) {
-        char cover[96];
-        guideCoverage(cover, sizeof cover);
-        if (cover[0]) {
-          TxtLine t = txt_line(TXT_LIVE_META, cover, HEXI(0x7C838B), 255);
-          txt_draw(t, f.x + f.w - 4.0f - t.w, y);
-        }
-      }
-      if (focused) gfx_color((GfxRect){ f.x - 3.0f, f.y - 3.0f, f.w + 6.0f, f.h + 6.0f },
-                             13.0f / (f.h + 6.0f), HEXF(C_PAPER), isEditing ? 1.0f : 0.85f);
-      gfx_color(f, 10.0f / f.h, HEXF(0x16191D), 1.0f);
-      if (row == ROW_PASS && text[0]) {
-        size_t n = strlen(text), k = 0;
-        for (size_t j = 0; j < n && k + 4 < sizeof shown; j++)
-          if (((unsigned char)text[j] & 0xC0) != 0x80) { memcpy(shown + k, "\xE2\x80\xA2", 3); k += 3; }
-        shown[k] = 0;
-      } else {
-        snprintf(shown, sizeof shown, "%s", text);
-      }
-      if (shown[0] || isEditing) {
-        // The end of a long address is the part being typed: trim from the left.
-        const char *s = shown;
-        TxtLine t = txt_line(TXT_DD_SEL, s, 245, 245, 250, 255);
-        while (t.w > f.w - 64.0f && *s) {
-          s++;
-          while (((unsigned char)*s & 0xC0) == 0x80) s++;
-          t = txt_line(TXT_DD_SEL, s, 245, 245, 250, 255);
-        }
-        txt_draw(t, f.x + 24.0f, f.y + (f.h - t.h) * 0.5f);
-        if (isEditing && (SDL_GetTicks() / 530u) % 2u == 0u)
-          gfx_color((GfxRect){ f.x + 26.0f + t.w, f.y + 18.0f, 3.0f, f.h - 36.0f }, 0.0f, 1, 1, 1, 1);
-      } else {
-        TxtLine t = txt_line_trim(TXT_DD_SEL, fieldHint(row), HEXI(0x636A71), 255, f.w - 48.0f);
-        txt_draw(t, f.x + 24.0f, f.y + (f.h - t.h) * 0.5f);
-      }
-      pointer_zone(f.x, f.y, f.w, f.h, pointSetup, i, 0);
-    }
+  float x = X0(), y = 52.0f;
+  { TxtLine probe = txt_line(TXT_SRC_CHIP, "L", 255, 255, 255, 255);
+    spCaps(TXT_SRC_CHIP, "LIVE TV", 0x7C838B, x, y, 2.9f);
+    y += probe.h + 10.0f; }
+  { TxtLine t = txt_line(TXT_TITLE3, configured() ? "Change your IPTV source" : "Connect your IPTV service",
+                         HEXI(0xF5F6F8), 255);
+    txt_draw(t, x, y); }
+  if (configured()) {
+    drawSourceCard();
+    spCaps(TXT_SRCP_SECTION, "REPLACE IT", 0x7C838B, x, 358.0f, 2.56f);
   }
-  drawPhonePanel();
+  drawPhoneCard();
+  drawTypeIt();
 }
 
 // --- Full screen ---------------------------------------------------------------------------------

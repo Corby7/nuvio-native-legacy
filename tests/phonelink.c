@@ -67,10 +67,33 @@ int main(void) {
   assert(phonelink_open(&now));                    // idempotent: same address
   assert(strstr(phonelink_url(), code + 3));
 
-  // No code, or the wrong one: refused, and the TV does not count it as opened.
-  assert(http("GET", "/", NULL, res, sizeof res) == 403);
+  // The wrong code in the link: refused, and the TV does not count it as opened.
   assert(http("GET", "/?k=00000000000000000000000000000000", NULL, res, sizeof res) == 403);
+  assert(http("POST", "/save", "kind=m3u&url=http%3A%2F%2Fx", res, sizeof res) == 403);
   assert(phonelink_state() == PL_WAITING);
+
+  // THE SHORT WAY: the bare address asks for the four digits on the TV; the
+  // right ones lead to the form's link, wrong ones five times over change the
+  // digits and lock the form for a while.
+  { char addr[64], digits[8], wrong[16], body[32];
+    phonelink_short(addr, sizeof addr, digits, sizeof digits);
+    printf("short: %s, code %s\n", addr, digits);
+    assert(strchr(addr, ':') && strlen(digits) == 4);
+    assert(http("GET", "/", NULL, res, sizeof res) == 200 && strstr(res, "name=\"c\""));
+    assert(phonelink_state() == PL_OPENED);
+    snprintf(wrong, sizeof wrong, "%04d", (atoi(digits) + 1) % 10000);
+    snprintf(body, sizeof body, "c=%s", wrong);
+    for (int i = 0; i < 4; i++) {
+      assert(http("POST", "/code", body, res, sizeof res) == 200);
+      assert(strstr(res, "the code on the TV."));
+    }
+    assert(http("POST", "/code", body, res, sizeof res) == 429);   // the fifth
+    { char again[8];
+      phonelink_short(addr, sizeof addr, again, sizeof again);
+      assert(strlen(again) == 4);
+      // Even the new right code waits out the lock.
+      snprintf(body, sizeof body, "c=%s", again);
+      assert(http("POST", "/code", body, res, sizeof res) == 429); } }
 
   // The page: prefilled with the saved login, never its password.
   snprintf(target, sizeof target, "/%s", code);
@@ -121,6 +144,13 @@ int main(void) {
   snprintf(old, sizeof old, "%s", code);
   snprintf(code, sizeof code, "%s", strstr(phonelink_url(), "?k="));
   assert(strcmp(code, old));
+  // A fresh open, a fresh start for the short code: the right digits lead to
+  // the form's own link.
+  { char addr[64], digits[8], body[32];
+    phonelink_short(addr, sizeof addr, digits, sizeof digits);
+    snprintf(body, sizeof body, "c=%s", digits);
+    assert(http("POST", "/code", body, res, sizeof res) == 303);
+    assert(strstr(res, "Location: /") && strstr(res, code)); }
   snprintf(target, sizeof target, "/save%s", code);
   assert(http("POST", target,
               "kind=m3u&url=+http%3A%2F%2Fp.example%2Fget.php%3Fa%3D1%26b%3D2+&epg=http%3A%2F%2Fp.example%2Fepg.xml%0D%0A%0D%0A+https%3A%2F%2Fg.example%2Fuk.xml.gz%2C"
@@ -132,6 +162,6 @@ int main(void) {
   assert(!got.server[0] && !got.user[0] && !got.pass[0]);
   phonelink_close();
 
-  puts("PASS phonelink: code required, prefill without the password, one save, closes.");
+  puts("PASS phonelink: code required, short code with lockout, prefill without the password, one save, closes.");
   return 0;
 }

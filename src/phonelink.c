@@ -42,8 +42,34 @@ static char url[96];
 static IptvSource current;       // the page's prefill; its password never leaves
 static IptvSource sent;
 static int pending;
+// THE SHORT WAY IN, for a phone whose camera will not focus across a room: the
+// bare address (no token) asks for the four digits shown beside the QR, and the
+// right ones hand over the token. Four digits are guessable, so they are
+// guarded: PL_CODE_TRIES wrong ones and the TV shows a new code and the form
+// refuses for PL_CODE_LOCK_S seconds, doubling each time — an hour of trying
+// gets a few dozen guesses at 1 in 10,000.
+#define PL_CODE_TRIES   5
+#define PL_CODE_LOCK_S  30
+static char code[5], address[32];
+static int misses, lockouts;
+static time_t lockedUntil;
 
 // --- small helpers -----------------------------------------------------------------
+static void newCode(char *dst) {
+  unsigned char raw[2];
+  FILE *f = fopen("/dev/urandom", "rb");
+  unsigned v;
+  if (!f || fread(raw, 1, sizeof raw, f) != sizeof raw) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    v = (unsigned)tv.tv_usec * 2654435761u ^ (unsigned)getpid();
+  } else {
+    v = (unsigned)raw[0] << 8 | raw[1];
+  }
+  if (f) fclose(f);
+  snprintf(dst, 5, "%04u", v % 10000u);
+}
+
 static void newToken(char *dst) {
   unsigned char raw[PL_TOKEN / 2];
   FILE *f = fopen("/dev/urandom", "rb");
@@ -238,6 +264,26 @@ static void pageForm(Buf *b, const IptvSource *s, const char *error) {
          "</main></body></html>");
 }
 
+// To the form, with the token: after the right code.
+static void redirect(int fd, const char *to) {
+  char head[512];
+  int k = snprintf(head, sizeof head,
+                   "HTTP/1.1 303 See Other\r\nLocation: %s\r\nContent-Length: 0\r\n"
+                   "Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n", to);
+  sendAll(fd, head, (size_t)k);
+}
+
+// The bare address: the four digits on the TV.
+static void pageCode(Buf *b, const char *error) {
+  put(b, PAGE_HEAD);
+  put(b, "<h1>Live TV source</h1><p>Type the code shown on the TV, beside the QR code.</p>");
+  if (error) { put(b, "<p class=\"err\">"); putEsc(b, error); put(b, "</p>"); }
+  put(b, "<form method=\"post\" action=\"code\"><label class=\"f\">Code"
+         "<input name=\"c\" inputmode=\"numeric\" pattern=\"[0-9]*\" maxlength=\"4\" "
+         "autocomplete=\"one-time-code\" autofocus></label><button>Continue</button></form>"
+         "</main></body></html>");
+}
+
 static void pageMessage(Buf *b, const char *title, const char *text) {
   put(b, PAGE_HEAD);
   put(b, "<h1>"); putEsc(b, title); put(b, "</h1><p class=\"ok\">");
@@ -247,7 +293,7 @@ static void pageMessage(Buf *b, const char *title, const char *text) {
 static void respond(int fd, int status, const Buf *b) {
   char head[256];
   const char *word = status == 200 ? "OK" : status == 403 ? "Forbidden" :
-                     status == 404 ? "Not Found" : "Bad Request";
+                     status == 404 ? "Not Found" : status == 429 ? "Too Many Requests" : "Bad Request";
   size_t n = b && b->p ? b->n : 0;
   int k = snprintf(head, sizeof head,
                    "HTTP/1.1 %d %s\r\nContent-Type: text/html; charset=utf-8\r\n"
@@ -258,7 +304,6 @@ static void respond(int fd, int status, const Buf *b) {
   if (n) sendAll(fd, b->p, n);
 }
 
-// What the phone typed, checked by the TV's own rules (iptvui's draftComplete).
 // The guide list as it is saved: addresses separated by one space, whatever the
 // phone sent between them (new lines, commas, runs of blanks).
 static void oneLine(char *s) {
@@ -273,6 +318,7 @@ static void oneLine(char *s) {
   s[w] = 0;
 }
 
+// What the phone typed, checked by the TV's own rules (iptvui's draftComplete).
 static const char *validate(const IptvSource *s) {
   if (s->kind == IPTV_SRC_XTREAM) {
     if (!s->server[0] || !s->user[0] || !s->pass[0])
@@ -318,6 +364,56 @@ static void serve(int fd, unsigned myGen, const char *peer) {
   pthread_mutex_lock(&lock);
   { int live = gen == myGen && token[0];
     int match = live && q && formValue(q, "k", k, sizeof k) && !strcmp(k, token);
+    if (!match && live && !q && !strcmp(target, "/")) {
+      opened = 1;
+      pageCode(&b, NULL);
+      pthread_mutex_unlock(&lock);
+      respond(fd, 200, &b);
+      printf("[phone] %s: code page\n", peer);
+      fflush(stdout);
+      free(b.p); free(req);
+      return;
+    }
+    if (!match && live && !strncmp(req, "POST", 4) && !strcmp(target, "/code")) {
+      char c[16] = "", to[96];
+      time_t now = time(NULL);
+      int status = 200;
+      formValue(body, "c", c, sizeof c);
+      if (now < lockedUntil) {
+        char w[120];
+        snprintf(w, sizeof w, "Too many wrong codes. Try again in %ld s, with the new code on the TV.",
+                 (long)(lockedUntil - now));
+        pageCode(&b, w);
+        status = 429;
+      } else if (c[0] && !strcmp(c, code)) {
+        snprintf(to, sizeof to, "/?k=%s", token);
+        misses = 0;
+        pthread_mutex_unlock(&lock);
+        redirect(fd, to);
+        printf("[phone] %s: code accepted\n", peer);
+        fflush(stdout);
+        free(req);
+        return;
+      } else if (++misses >= PL_CODE_TRIES) {
+        char w[120];
+        long wait = (long)PL_CODE_LOCK_S << (lockouts < 6 ? lockouts : 6);
+        misses = 0;
+        lockouts++;
+        lockedUntil = now + wait;
+        newCode(code);
+        snprintf(w, sizeof w, "Too many wrong codes. The TV shows a new one; try it in %ld s.", wait);
+        pageCode(&b, w);
+        status = 429;
+      } else {
+        pageCode(&b, "That isn't the code on the TV.");
+      }
+      pthread_mutex_unlock(&lock);
+      respond(fd, status, &b);
+      printf("[phone] %s: code %s\n", peer, status == 200 ? "wrong" : "locked");
+      fflush(stdout);
+      free(b.p); free(req);
+      return;
+    }
     if (!match) {
       pthread_mutex_unlock(&lock);
       if (!strcmp(target, "/favicon.ico")) respond(fd, 404, NULL);
@@ -448,8 +544,12 @@ int phonelink_open(const IptvSource *now) {
   gen++;
   l->fd = fd; l->gen = gen;
   newToken(token);
+  newCode(code);
+  misses = lockouts = 0;
+  lockedUntil = 0;
   port = ntohs(a.sin_port);
   snprintf(url, sizeof url, "http://%s:%d/?k=%s", host, port, token);
+  snprintf(address, sizeof address, "%s:%d", host, port);
   if (now) current = *now; else memset(&current, 0, sizeof current);
   opened = 0;
   pending = 0;
@@ -475,6 +575,7 @@ void phonelink_close(void) {
     gen++;
     listening = 0;
     token[0] = 0; url[0] = 0; port = 0; opened = 0;
+    code[0] = 0; address[0] = 0;
     memset(&current, 0, sizeof current);
     printf("[phone] closed\n");
     fflush(stdout);
@@ -491,6 +592,13 @@ int phonelink_state(void) {
 }
 
 const char *phonelink_url(void) { return url; }
+
+void phonelink_short(char *addr, size_t na, char *digits, size_t nd) {
+  pthread_mutex_lock(&lock);
+  snprintf(addr, na, "%s", listening ? address : "");
+  snprintf(digits, nd, "%s", listening ? code : "");
+  pthread_mutex_unlock(&lock);
+}
 
 int phonelink_port(void) {
   int p;

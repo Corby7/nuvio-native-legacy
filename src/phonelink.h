@@ -20,6 +20,7 @@
 #ifndef NV_PHONELINK_H
 #define NV_PHONELINK_H
 #include "iptv.h"
+#include <stddef.h>
 
 typedef enum {
   PL_OFF,       // not listening, or no network address to offer
@@ -35,6 +36,10 @@ void phonelink_close(void);
 int  phonelink_state(void);
 // "http://192.168.1.23:8787/?k=…", or "" when closed.
 const char *phonelink_url(void);
+// The short way in, for when the camera will not read the QR across a room:
+// the address to type ("192.168.1.23:8787") and the four digits it asks for.
+// Both "" when closed. The digits change after too many wrong tries.
+void phonelink_short(char *addr, size_t na, char *digits, size_t nd);
 // 1 once, on the frame after the phone saved: `out` is the source it sent.
 int  phonelink_take(IptvSource *out);
 
