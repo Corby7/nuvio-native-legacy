@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
 
   // The focus model: DOWN keeps the instant, RIGHT walks programmes, LEFT
   // walks back to what is on now, then onto the channel's own cell, then the
-  // side bar — two axes, no third rail (Y3).
+  // side bar, two axes, no third rail (Y3).
   key(SDLK_DOWN); key(SDLK_DOWN);
   key(SDLK_RIGHT); key(SDLK_RIGHT);
   snprintf(path, sizeof path, "%s/nuvio-live-guide-later.bmp", out); frames(40, path);
@@ -321,7 +321,7 @@ int main(int argc, char **argv) {
   key(SDLK_AC_BACK);
   frames(10, NULL);
   // The channels panel: LEFT with nothing showing slides it in, the episode
-  // panel's way — mid-slide, then settled, then walked and the group menu.
+  // panel's way, mid-slide, then settled, then walked and the group menu.
   key(SDLK_LEFT);
   snprintf(path, sizeof path, "%s/nuvio-live-channels-slide.bmp", out); frames(6, path);
   snprintf(path, sizeof path, "%s/nuvio-live-channels.bmp", out); frames(30, path);

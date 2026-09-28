@@ -46,7 +46,7 @@ static int pending;
 // bare address (no token) asks for the four digits shown beside the QR, and the
 // right ones hand over the token. Four digits are guessable, so they are
 // guarded: PL_CODE_TRIES wrong ones and the TV shows a new code and the form
-// refuses for PL_CODE_LOCK_S seconds, doubling each time — an hour of trying
+// refuses for PL_CODE_LOCK_S seconds, doubling each time, an hour of trying
 // gets a few dozen guesses at 1 in 10,000.
 #define PL_CODE_TRIES   5
 #define PL_CODE_LOCK_S  30

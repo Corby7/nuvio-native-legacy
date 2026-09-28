@@ -195,7 +195,6 @@ typedef enum {
   TXT_SRCP_DESC,     // the phone card's explanation         17 / 400
   TXT_SRCP_VALUE,    // a field's host, or its whole value   23 / 600
   TXT_SRCP_PATH,     // a field's path, under the host       18 / 400
-  TXT_SRCP_CHIP,     // "OK to edit"                         15 / 600
   TXT_SRCP_NOTE,     // "optional — only for channels …"     16 / 400
   TXT_SRCP_PRIMARY,  // Save and load                        21 / 600
   TXT_SRCP_GHOST,    // Cancel                               21 / 500

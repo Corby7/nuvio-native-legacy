@@ -121,7 +121,7 @@ int iptv_programme_at(const IptvList *l, int ch, long long t);
 int iptv_programme_after(const IptvList *l, int ch, long long t);
 
 // Gunzips `in` (a .gz file or a zlib stream) into a fresh NUL-terminated
-// buffer, through the device's own libz loaded on demand — the SDK ships none to
+// buffer, through the device's own libz loaded on demand, the SDK ships none to
 // link against, the TV has one. NULL when `in` is not compressed or there is no
 // libz; *outN gets the size.
 char *iptv_gunzip(const char *in, long n, long *outN);
@@ -155,8 +155,8 @@ int iptv_xtream_parts(const char *url, char *origin, size_t no, char *user, size
 // download) and answer only player_api.php, the API every IPTV app uses: the
 // live streams (`action=get_live_streams`, a root array of objects) and their
 // categories (`action=get_live_categories`). This writes the M3U text get.php
-// would have given, so everything after the download — the cache, the guide,
-// the channel indices — is the same code either way.
+// would have given, so everything after the download, the cache, the guide,
+// the channel indices, is the same code either way.
 //
 // Each stream becomes base/live/user/pass/<stream_id>.<ext>, with its name,
 // stream_icon, epg_channel_id (as tvg-id), category name (as group-title), num
@@ -168,8 +168,8 @@ char *iptv_xtream_m3u(const char *streams, const char *categories, const char *b
                       const char *user, const char *pass, const char *ext);
 
 // STYLISED LATIN AS PLAIN LETTERS, in place. Channel names are decorated with
-// Unicode lookalikes — "BBC One ᴴᴰ", "ʀᴀᴡ", "𝐒𝐤𝐲 𝐒𝐩𝐨𝐫𝐭𝐬", "Ⓢⓟⓞⓡⓣ",
-// "ＵＫ" — that no font on the TV draws: superscript and small-capital letters,
+// Unicode lookalikes, "BBC One ᴴᴰ", "ʀᴀᴡ", "𝐒𝐤𝐲 𝐒𝐩𝐨𝐫𝐭𝐬", "Ⓢⓟⓞⓡⓣ",
+// "ＵＫ", that no font on the TV draws: superscript and small-capital letters,
 // the mathematical alphabets, enclosed and fullwidth letters. Each becomes the
 // ASCII letter or digit it imitates. Real scripts (accents, Greek, Cyrillic,
 // Arabic, CJK) are left alone; text.c finds a font for those. The text never

@@ -4,7 +4,7 @@
 //   - an M3U PLAYLIST URL, with an optional XMLTV guide URL (when the playlist
 //     does not name its own with url-tvg);
 //   - an XTREAM CODES login (server, username, password), from which the
-//     playlist and the guide addresses are built — get.php and xmltv.php, the
+//     playlist and the guide addresses are built, get.php and xmltv.php, the
 //     two endpoints every Xtream panel serves.
 //
 // THE LOAD IS ON A THREAD OF ITS OWN and in two stages, because the two halves
@@ -63,7 +63,7 @@ void iptv_start(void);
 // when the guide is older than a few hours. Idempotent while one is running.
 void iptv_touch(void);
 // Installs what the loader thread finished. Returns 1 on the frame a new list
-// arrived — the screen rebuilds its filtered view then.
+// arrived, the screen rebuilds its filtered view then.
 int  iptv_step(void);
 void iptv_shutdown(void);
 
@@ -75,7 +75,7 @@ void iptv_set_source(const IptvSource *s);
 // TRY A SOURCE: load `s` while the current source and its channels stay, and
 // make it the source only once its playlist has arrived. iptv_try_state goes
 // LOADING -> READY (it is now the source; the guide follows as usual) or
-// FAILED, with the current source untouched — also when nothing has arrived
+// FAILED, with the current source untouched, also when nothing has arrived
 // within `ceilingS` seconds. iptv_try_failure says why (an IptvFailure), with
 // the HTTP status and the loader's own words.
 void iptv_try_source(const IptvSource *s, int ceilingS);
@@ -118,7 +118,7 @@ const char *iptv_play_url(int ch, char *dst, unsigned size);
 const char *iptv_play_url_alt(int ch, char *dst, unsigned size);
 
 // CATCH-UP. Whether channel `ch`'s archive reaches back to unix time `t` (and
-// `t` is in the past), and the URL that plays it from `start` to `stop` — the
+// `t` is in the past), and the URL that plays it from `start` to `stop`, the
 // programme's bounds, or any instant and an hour past it. NULL when the channel
 // has no archive or the URL does not fit.
 int iptv_has_archive(int ch, long long t);

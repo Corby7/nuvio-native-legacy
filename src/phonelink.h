@@ -28,8 +28,8 @@ typedef enum {
   PL_OPENED,    // a phone opened the page: the network lets it through
 } PhoneLinkState;
 
-// Starts listening (idempotent while open) and prefills the page with `current`
-// — never its password. Returns 1 when there is an address to show.
+// Starts listening (idempotent while open) and prefills the page with `current`,
+// never its password. Returns 1 when there is an address to show.
 int  phonelink_open(const IptvSource *current);
 // Stops listening; the code in the QR stops working.
 void phonelink_close(void);

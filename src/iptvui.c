@@ -7,7 +7,7 @@
 // THE SHAPE, AS OF 2026-09-27
 //
 //   header    "Live TV", the source line, [Guide|Channels] [Source]
-//   chips     All channels, Favourites, Recent, then the playlist's groups —
+//   chips     All channels, Favourites, Recent, then the playlist's groups,
 //             the same two-axis pattern as the Library's strip: categories live
 //             ABOVE the body, never beside it, so LEFT only ever means "earlier"
 //             or "the side bar" and never "the third column".
@@ -215,7 +215,7 @@ static float lastZoom = -1.0f;
 // A load plays from `srcBase` on at normal speed, so the instant on screen is
 // srcBase plus the time it has played: counted here by the clock from the
 // first ready frame, less the time paused. The pipeline's own position is no
-// help — a live TS reports the broadcaster's clock, not the load's.
+// help, a live TS reports the broadcaster's clock, not the load's.
 enum { SRC_LIVE, SRC_BUFFER, SRC_ARCHIVE };
 static int srcKind;
 static double srcBase;
@@ -238,7 +238,7 @@ static Uint32 restSince;
 static struct { char name[256]; char title[200]; int number; long long start; } reminders[REMIND_MAX];
 static int nReminders;
 // THE CHANNELS PANEL, over a playing channel: the film player's episode selector
-// (episodes.c) with channels for episodes — the same column at the right, veil,
+// (episodes.c) with channels for episodes, the same column at the right, veil,
 // slide, heading, pill, rows, opening row and list motion, all from its NV_EPL_*
 // measures, so the two players' panels are one design. The group pill sits where
 // the season pill does and is walked the same way: ◀▶ from anywhere, OK for its
@@ -539,7 +539,7 @@ static void guideRight(void) {
   keepWindowOnFocus();
 }
 
-// DOWN and UP keep the instant — unless it is a past the new channel has no
+// DOWN and UP keep the instant, unless it is a past the new channel has no
 // archive of; then it is now.
 static void guideSettle(void) {
   long long now = nowSec();
@@ -554,7 +554,7 @@ static void guideLeft(void) {
   int ch = focusedChannel();
   if (fChan) { requestMenu = 1; return; }
   cellAt(ch, fTime, &s, &e);
-  // What is on now is the first column; left of it is the channel itself —
+  // What is on now is the first column; left of it is the channel itself,
   // unless the channel keeps an archive: then the past is more columns.
   if (s <= now) {
     long long ps, pe;
@@ -752,7 +752,7 @@ static void goLive(void) {
 
 // Pause and play. Paused with a past to come back from (the buffer, the
 // archive) it resumes where it froze. Paused with neither, a short pause
-// resumes in place; a long one comes back to live, and says so — the stream
+// resumes in place; a long one comes back to live, and says so, the stream
 // went on without the picture, and pretending otherwise would stall it.
 static void togglePause(void) {
   Uint32 t = SDL_GetTicks(), held;
@@ -945,8 +945,8 @@ static void toggleFavourite(int ch) {
 
 // --- Setup form ------------------------------------------------------------------------
 // Save and load TRIES the draft (iptv_try_source): the current source stays
-// until the new playlist has arrived, and the result — or which thing went
-// wrong — is said on this screen, under the fields, never by sending the
+// until the new playlist has arrived, and the result, or which thing went
+// wrong, is said on this screen, under the fields, never by sending the
 // viewer to an empty guide. What they typed is never cleared.
 #define SRC_CEILING_S 15
 
@@ -1150,36 +1150,36 @@ static int setupResult(char *dst, size_t n, unsigned *bad) {
     *bad = where;
     switch (kind) {
       case IPTV_FAIL_UNREACHABLE:
-        snprintf(dst, n, "Couldn't reach it \xE2\x80\x94 check the address, or the TV's network connection"); break;
+        snprintf(dst, n, "Couldn't reach it. Check the address, or the TV's network connection"); break;
       case IPTV_FAIL_NOT_FOUND:
-        snprintf(dst, n, "Nothing there \xE2\x80\x94 the address returned 404"); break;
+        snprintf(dst, n, "Nothing there: the address returned 404"); break;
       case IPTV_FAIL_REFUSED:
-        snprintf(dst, n, "Refused \xE2\x80\x94 the server answered %d; the subscription may have lapsed", status); break;
+        snprintf(dst, n, "Refused: the server answered %d. The subscription may have lapsed", status); break;
       case IPTV_FAIL_NOT_PLAYLIST:
-        snprintf(dst, n, "Not a playlist \xE2\x80\x94 the address sent a web page, usually the provider's sign-in page"); break;
+        snprintf(dst, n, "Not a playlist: the address sent a web page, usually the provider's sign-in page"); break;
       case IPTV_FAIL_GUIDE:
-        snprintf(dst, n, "That's a TV guide, not a playlist \xE2\x80\x94 it goes in the extra guide field"); break;
+        snprintf(dst, n, "That's a TV guide, not a playlist. It goes in the extra guide field"); break;
       case IPTV_FAIL_LOGIN:
-        snprintf(dst, n, "Sign-in rejected \xE2\x80\x94 check the username, password and port");
+        snprintf(dst, n, "Sign-in rejected. Check the username, password and port");
         *bad = (1u << F_USER) | (1u << F_PASS) | (1u << F_PORT); break;
       case IPTV_FAIL_EXPIRED:
-        snprintf(dst, n, "This subscription has expired \xE2\x80\x94 renew it with your provider");
+        snprintf(dst, n, "This subscription has expired. Renew it with your provider");
         *bad = 1u << F_USER; break;
       case IPTV_FAIL_ACCOUNT:
         snprintf(dst, n, "%s", why); *bad = 1u << F_USER; break;
       case IPTV_FAIL_TIMEOUT:
-        snprintf(dst, n, "Timed out \xE2\x80\x94 nothing came back within %d s", SRC_CEILING_S); break;
+        snprintf(dst, n, "Timed out: nothing came back within %d s", SRC_CEILING_S); break;
       case IPTV_FAIL_PROVIDER:
-        snprintf(dst, n, "The provider turned the app away (%d) \xE2\x80\x94 it may limit devices or connections", status); break;
+        snprintf(dst, n, "The provider turned the app away (%d). It may limit devices or connections", status); break;
       case IPTV_FAIL_SERVER:
-        snprintf(dst, n, "The server had an error (%d) \xE2\x80\x94 try again in a while", status); *bad = 0; break;
+        snprintf(dst, n, "The server had an error (%d). Try again in a while", status); *bad = 0; break;
       default:
         snprintf(dst, n, "%s", why[0] ? why : "That didn't load"); break;
     }
     return RS_FAIL;
   }
-  // No try on this screen yet, or one that worked: what the current source has
-  // — only while the form still shows that source, not a half-typed other one.
+  // No try on this screen yet, or one that worked: what the current source has,
+  // only while the form still shows that source, not a half-typed other one.
   if (!draftIsSource()) return RS_NONE;
   if (!configured() || !l) {
     if (configured() && iptv_state() == IPTV_FAILED) { snprintf(dst, n, "%s", iptv_status()); return RS_FAIL; }
@@ -1191,7 +1191,7 @@ static int setupResult(char *dst, size_t n, unsigned *bad) {
     return RS_BUSY;
   }
   if (!guidedChannels()) {
-    snprintf(dst, n, "%d channels, no guide data \xE2\x80\x94 add an extra TV guide above", l->nCh);
+    snprintf(dst, n, "%d channels, no guide data. Add an extra TV guide above", l->nCh);
     *bad = 0;
     return RS_WARN;
   }
@@ -1557,7 +1557,7 @@ static void gmKeep(void) {
 }
 
 // Another group in the panel: its list from the top, unless the playing channel
-// is in it, where it lands on that one — episodes.c's courtesy for a season.
+// is in it, where it lands on that one, episodes.c's courtesy for a season.
 static void quickGroup(int g) {
   if (g < 0 || g >= nGroups() || g == group) return;
   chooseGroup(g);
@@ -1921,7 +1921,7 @@ static void quickUpdate(float dt) {
       quickOpened[i] = anim_spring(quickOpened[i], want, dt, NV_SPRING_GRID);
   }
   // The focused row held in the window's middle, whole rows at the top, the
-  // list stopping at both ends — episodes.c's offset, measured where the rows
+  // list stopping at both ends, episodes.c's offset, measured where the rows
   // are heading.
   { float fh = NV_EPL_ROW_H + quickOpenExtra(quickProgramme(quickRow));
     float total = nView * Q_PITCH - NV_EPL_ROW_GAP + (fh - NV_EPL_ROW_H);
@@ -1951,7 +1951,7 @@ void iptvui_update(float dt, Uint32 now) {
   hold_animate(&hold, dt, now);
   if (hold_fired(&hold, now) && zone == ZONE_BODY) toggleFavourite(focusedChannel());
 
-  // Time moves on under a screen left open — unless the focus is on a past
+  // Time moves on under a screen left open, unless the focus is on a past
   // programme, which catch-up made a place to be.
   if (fTime < t && fTime >= t - 90) fTime = t;
   if (fTime >= t - 90 && winStart < slotFloor(t)) winStart = slotFloor(t);
@@ -2177,8 +2177,8 @@ static void fadeBottom(float top, float h) {
 
 // --- Channel identity, Y3's three tiers -----------------------------------------------------
 // Two or three letters from the name: the first letter of its first two words,
-// and a number word's digits ("News 24" -> N24). Provider noise — "|UK|",
-// "[FHD]", "UK:", HD/FHD/4K tags — is not a word.
+// and a number word's digits ("News 24" -> N24). Provider noise, "|UK|",
+// "[FHD]", "UK:", HD/FHD/4K tags, is not a word.
 static void monogram(const char *name, char *out, size_t n) {
   size_t k = 0;
   int words = 0;
@@ -2209,7 +2209,7 @@ static void monogram(const char *name, char *out, size_t n) {
 
 // The tile is ALWAYS drawn and ALWAYS filled: a logo on the plate with 9px of
 // air, else the monogram, else the bare number. A logo that failed looks exactly
-// like a channel that never had one — never a broken-image glyph — and the tex
+// like a channel that never had one, never a broken-image glyph, and the tex
 // cache remembers the failure, so a dead URL is asked for once.
 static void identity(const IptvChannel *c, GfxRect r, float radius, unsigned plate, unsigned inkHex,
                      float a) {
@@ -2229,8 +2229,8 @@ static void identity(const IptvChannel *c, GfxRect r, float radius, unsigned pla
     GLuint tex = tex_get_width(c->logo, r.w - 18.0f);
     if (tex) {
       // THE MARK, NOT THE FILE. IPTV logos come with any amount of transparent
-      // margin — one provider's are padded to a square, the next one's are
-      // cropped to the letters — so the same box drew some marks at a third of
+      // margin, one provider's are padded to a square, the next one's are
+      // cropped to the letters, so the same box drew some marks at a third of
       // the size of others. The visible part (tex_content_box) is what gets
       // fitted, through the texture cell, with air in proportion to the tile.
       float air = r.h * 0.14f < 9.0f ? 9.0f : r.h * 0.14f;
@@ -2400,7 +2400,7 @@ static void drawSearchField(void) {
     if (typing && (SDL_GetTicks() / 530u) % 2u == 0u)
       gfx_color((GfxRect){ tx + 3.0f, f.y + 12.0f, 2.0f, f.h - 24.0f }, 0.0f, 1, 1, 1, 1); }
   if (queryLen) snprintf(count, sizeof count, nView == 1 ? "1 match" : "%d matches", nView);
-  else snprintf(count, sizeof count, "Type to search \xC2\xB7 Back to close");
+  else snprintf(count, sizeof count, "Type to search");
   inkMid(TXT_LIVE_META, count, 0x7C838B, f.x + f.w + 24.0f, f.y + f.h * 0.5f, L_RIGHT - f.x - f.w - 24.0f, 1.0f);
   pointer_zone(f.x, f.y, f.w, f.h, pointSearch, 0, 0);
 }
@@ -2532,15 +2532,16 @@ static void pictureShade(GfxRect r, float h, float a) {
 }
 
 // What stands in for a picture when nothing is tuned: the plate, the focused
-// channel's tile large, and how to start one.
+// channel's tile large.
 static void pictureIdle(GfxRect r, float radius, int ch, float tile) {
   const IptvChannel *c = chan(ch);
   gfx_color(r, radius / r.h, HEXF(0x14171B), 1.0f);
   if (c) identity(c, (GfxRect){ r.x + (r.w - tile) * 0.5f, r.y + r.h * 0.42f - tile * 0.5f, tile, tile },
                   tile * 0.2f, C_PLATE, 0xC1C7CD, 1.0f);
-  { TxtLine t = txt_line(TXT_LIVE_NOTE, playFailed ? "This channel isn't available right now"
-                                                   : "Press OK to watch", HEXI(0x8A9199), 255);
-    txt_draw(t, r.x + (r.w - t.w) * 0.5f, r.y + r.h * 0.42f + tile * 0.5f + 18.0f); }
+  if (playFailed) {
+    TxtLine t = txt_line(TXT_LIVE_NOTE, "This channel isn't available right now", HEXI(0x8A9199), 255);
+    txt_draw(t, r.x + (r.w - t.w) * 0.5f, r.y + r.h * 0.42f + tile * 0.5f + 18.0f);
+  }
 }
 
 // The line of time under a programme: "20:15 – 21:00 · 9 min in" and friends.
@@ -2570,7 +2571,7 @@ static int drawEmpty(float top) {
   if (!l && iptv_state() == IPTV_FAILED) { l1 = iptv_status(); l2 = "Check the address or login under Source, above."; }
   else if (!l) { l1 = "Loading channels\xE2\x80\xA6"; l2 = "Large playlists can take a few seconds."; }
   else if (searching) { l1 = "Nothing matches"; l2 = "Try part of a channel's name, its number, or a programme's title."; }
-  else if (group == GROUP_FAV) { l1 = "No favourites yet"; l2 = "Hold OK on a channel to add it here."; }
+  else if (group == GROUP_FAV) { l1 = "No favourites yet"; l2 = "Channels you favourite show up here."; }
   else if (group == GROUP_RECENT) { l1 = "Nothing watched yet"; l2 = "Channels you watch appear here."; }
   else { l1 = "No channels in this group"; l2 = ""; }
   { TxtLine a = txt_line(TXT_LIVE_TITLE, l1, HEXI(0xF5F6F8), 255);
@@ -2663,7 +2664,7 @@ static void guideDetail(void) {
     txt_draw(t, x, y);
     y += t.h + 8.0f;
     ink(TXT_PG_END, iptv_guide_state() == IPTV_LOADING ? "The TV guide is still loading."
-                    : c->nPg ? "No information for this time." : "No guide data for this channel \xE2\x80\x94 press OK to watch.",
+                    : c->nPg ? "No information for this time." : "No guide data for this channel.",
         0x9AA1A9, x, y, 1.0f);
   }
 }
@@ -2682,11 +2683,9 @@ static void guidePreview(void) {
       TxtLine m = txt_line(TXT_LIVE_NOTE, "Channel unavailable", 255, 255, 255, 255);
       txt_draw(m, r.x + (r.w - m.w) * 0.5f, r.y + (r.h - m.h) * 0.5f);
     }
-    // Under it: which channel this is, and what OK does.
+    // Under it: that this is the channel on.
     equaliser(r.x, r.y + r.h + 12.0f + 18.0f, 18.0f, 1.0f);
-    ink(TXT_LIVE_NOTE, tuned == focusedChannel() && !fChan ? "Watching \xE2\x80\x94 press OK to go full screen"
-                       : "Watching \xE2\x80\x94 OK on another channel switches",
-        0x8A9199, r.x + EQ_W + 10.0f, r.y + r.h + 10.0f, 1.0f);
+    ink(TXT_LIVE_NOTE, "Watching", 0x8A9199, r.x + EQ_W + 10.0f, r.y + r.h + 10.0f, 1.0f);
   } else {
     pictureIdle(r, G_PREV_R, focusedChannel(), 72.0f);
   }
@@ -2813,7 +2812,7 @@ static void drawGuide(void) {
     if (!c->nPg) {
       GfxRect b = { tx, y, tw, G_ROW_H };
       const char *msg = iptv_guide_state() == IPTV_LOADING ? "Loading guide\xE2\x80\xA6"
-                                                           : "No guide data \xE2\x80\x94 press OK to watch";
+                                                           : "No guide data";
       if (rowFocus) {
         gfx_color((GfxRect){ b.x - 3.0f, b.y - 3.0f, b.w + 6.0f, b.h + 6.0f }, (G_BLOCK_R + 3.0f) / (b.h + 6.0f),
                   1, 1, 1, 0.30f);
@@ -2879,8 +2878,8 @@ static float panelX(void) { return L_RIGHT - C_PANEL_W; }
 static void listRow(const IptvList *l, int r, float y, float listW) {
   int ch = view[r];
   const IptvChannel *c = &l->ch[ch];
-  // The row stays raised while its actions have the focus — it is still what
-  // they act on — but only one thing wears the white ring at a time.
+  // The row stays raised while its actions have the focus, it is still what
+  // they act on, but only one thing wears the white ring at a time.
   int focused = zone != ZONE_CHIPS && zone != ZONE_HEAD && r == fRow;
   int ringed = focused && zone == ZONE_BODY;
   int isTuned = ch == tuned && (ownsVideo() || zapPending);
@@ -2917,7 +2916,7 @@ static void listRow(const IptvList *l, int r, float y, float listW) {
     if (nextW > 280.0f) nextW = 280.0f;
     // The programme keeps at least 200px (its bar is 300 when there is room);
     // "Next" takes what is left, truncating, and gives way altogether when that
-    // is too little to read — the rail open narrows the list by 144.
+    // is too little to read, the rail open narrows the list by 144.
     if (nextW > rightEdge - 18.0f - progX - 200.0f) nextW = rightEdge - 18.0f - progX - 200.0f;
     if (nextW < 120.0f) nextW = 0.0f;
   }
@@ -3152,22 +3151,11 @@ static void spField(int f, int focused, int bad) {
   GfxRect r = fieldRect(f);
   int max, isEditing = editing == f && ime_is_open();
   const char *text = fieldText(f, &max);
-  float px = spX() ? 22.0f : 26.0f, chipW = 0.0f;
+  float px = spX() ? 22.0f : 26.0f;
   gfx_color(r, 12.0f / r.h, 1, 1, 1, focused ? 0.07f : 0.05f);
   if (focused) spRing(r, 12.0f, 3.0f, 3.0f, 0xF0F2F4, 1.0f);
   else if (bad) spRing(r, 12.0f, 0.0f, 1.5f, 0xE88A6E, 0.85f);
-  // "OK to edit" on the focused field, while it is not being edited.
-  if (focused && !isEditing && r.w > 400.0f) {
-    TxtLine t = txt_line(TXT_SRCP_CHIP, "OK to edit", HEXI(0xC1C7CD), 255);
-    GfxRect c;
-    chipW = 14.0f + 17.0f + 9.0f + t.w + 14.0f;
-    c = (GfxRect){ r.x + r.w - 22.0f - chipW, r.y + (r.h - 38.0f) * 0.5f, chipW, 38.0f };
-    gfx_color(c, 10.0f / 38.0f, 10 / 255.0f, 12 / 255.0f, 14 / 255.0f, 0.55f);
-    gfx_icon((GfxRect){ c.x + 14.0f, c.y + (c.h - 17.0f) * 0.5f, 17.0f, 17.0f }, "src_keyboard", HEXF(0xC1C7CD), 1.0f);
-    txt_draw(t, c.x + 14.0f + 17.0f + 9.0f, c.y + (c.h - t.h) * 0.5f);
-    chipW += 22.0f + 16.0f;
-  }
-  { float maxW = r.w - px * 2.0f - chipW;
+  { float maxW = r.w - px * 2.0f;
     char shown[1100];
     if (f == F_PASS && !showPass && text[0]) {
       size_t n = strlen(text), k = 0;
@@ -3413,7 +3401,7 @@ static void drawTypeIt(void) {
     spLabel("PASSWORD", pass.x, labelY(SR_LOGIN));
     spField(F_USER, row == SR_LOGIN && setupCol == 0, (bad >> F_USER) & 1);
     spField(F_PASS, row == SR_LOGIN && setupCol == 1, (bad >> F_PASS) & 1);
-    // "show": a stop of its own, right of the password's label — a d-pad
+    // "show": a stop of its own, right of the password's label, a d-pad
     // keyboard makes typos, and dots hide them.
     { int on = row == SR_LOGIN && setupCol == 2;
       const char *w = showPass ? "hide" : "show";
@@ -3424,7 +3412,7 @@ static void drawTypeIt(void) {
       pointer_zone(b.x, b.y, b.w, b.h, pointSetup, rowIndex(SR_LOGIN), 2); }
   }
   { float lx = x + spLabel("EXTRA TV GUIDE", x, labelY(SR_EPG)) + 12.0f;
-    TxtLine n = txt_line(TXT_SRCP_NOTE, "optional \xE2\x80\x94 only for channels the playlist misses", HEXI(0x565C63), 255);
+    TxtLine n = txt_line(TXT_SRCP_NOTE, "optional, only for channels the playlist misses", HEXI(0x565C63), 255);
     TxtLine probe = txt_line(TXT_CWC_KICKER, "E", 255, 255, 255, 255);
     txt_draw(n, lx, labelY(SR_EPG) + (probe.h - n.h) * 0.5f); }
   spField(F_EPG, row == SR_EPG, 0);
@@ -3544,8 +3532,8 @@ static void drawZapToast(float a) {
 }
 
 // THE ROW OF CONTROLS, the film player's own (player.c): 90px circles 14 apart,
-// 48px glyphs, no circle at rest — the white puck IS the focus, fading in on the
-// player's spring while the glyph crosses from white to black under it — and
+// 48px glyphs, no circle at rest, the white puck IS the focus, fading in on the
+// player's spring while the glyph crosses from white to black under it, and
 // the focused button's name 16px under its circle, faded and risen the same way.
 #define CTL_D     90.0f
 #define CTL_GAP   14.0f
@@ -3680,7 +3668,7 @@ static void drawBlock(float a) {
     { float w = tagWidth("NEXT");
       txt_tracking(TXT_LIVE_TAG, "NEXT", HEXI(0x7C838B), right - w, idBottom - 4.0f - t.h - 8.0f - 16.0f, a, 2.2f); }
   }
-  // The programme. At plain live there is no playhead dot and no band — the
+  // The programme. At plain live there is no playhead dot and no band, the
   // dot is the app's promise that a thing can be moved, and live cannot be.
   // With a past to move through (the pause buffer, catch-up) it can: then the
   // dot is the picture's instant, the lighter band what can be reached, and a
@@ -3822,7 +3810,7 @@ static void drawPeek(float a) {
               titleW, a * ca);
     }
   }
-  // Under it: still on 103, and what OK does.
+  // Under it: still on 103.
   if (tc) {
     char still[40];
     float r, g, b, w, by = NV_SCREEN_H - 55.0f - 38.0f;
@@ -3831,7 +3819,6 @@ static void drawPeek(float a) {
     w = tagWidth(still) + 30.0f;
     gfx_color((GfxRect){ 96.0f, by, w, 38.0f }, 10.0f / 38.0f, r, g, b, 0.20f * a);
     tagText(still, 0xA896FA, 96.0f + 15.0f, by + 19.0f, a);
-    inkMid(TXT_LIVE_NOTE, "OK to watch \xC2\xB7 Back to stay", 0x8A9199, 96.0f + w + 18.0f, by + 19.0f, 600.0f, a);
   }
   gfx_opacity_group = 1.0f;
 }

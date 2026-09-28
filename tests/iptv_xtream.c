@@ -58,7 +58,9 @@ int main(int argc, char **argv) {
   // The guide came from xmltv.php, the Xtream one, not from the playlist.
   assert(iptv_guide_state() == IPTV_READY && iptv_list()->ch[0].nPg == 1);
   // The three NL: channels it leaves out came from the Dutch public guide,
-  // found by their tags; "News" has no country and stays without.
+  // found by their tags; "News" has no country and stays without. They follow
+  // the provider's guide, which is shown first: wait for them.
+  for (int i = 0; i < 1000 && iptv_list()->ch[2].nPg == 0; i++) { iptv_step(); SDL_Delay(10); }
   { const IptvList *l = iptv_list();
     assert(l->ch[1].nPg == 0);
     for (int i = 2; i < 5; i++) assert(l->ch[i].nPg == 1);

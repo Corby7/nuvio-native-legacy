@@ -112,9 +112,9 @@ static void playlistUrl(const IptvSource *s, char *dst, size_t n) {
   }
 }
 
-// THE GUIDES TO READ, in order of priority. The viewer's own come first — typed
+// THE GUIDES TO READ, in order of priority. The viewer's own come first, typed
 // because the provider's is wrong or thin, so theirs wins where both know a
-// channel — then the provider's: its xmltv.php, or every address in the
+// channel, then the provider's: its xmltv.php, or every address in the
 // playlist's url-tvg. Each later guide only fills the channels the earlier ones
 // left empty (iptv_parse_xmltv_more). Separators are anything that is not part
 // of an address: spaces, new lines, commas.
@@ -254,7 +254,7 @@ static char *xtreamApi(const IptvSource *src, const char *prefer, char *why, siz
     free(acct);
     if (auth == 0) {
       *kind = IPTV_FAIL_LOGIN;
-      snprintf(why, n, "The server refused this login \xE2\x80\x94 check the username and password");
+      snprintf(why, n, "The server refused this login. Check the username and password");
       return NULL;
     }
     if (!strcasecmp(state, "Expired")) { *kind = IPTV_FAIL_EXPIRED; snprintf(why, n, "This IPTV subscription has expired"); return NULL; }
@@ -289,8 +289,8 @@ typedef struct { IptvSource src; unsigned gen; int hasList, trial; } Job;
 
 // A TRIED SOURCE (iptv_try_source): loaded as a job of its own while the
 // current source and its list stay as they are. It replaces them only once its
-// playlist has come in — the loader raises trialCommit, the main thread swaps
-// the source in iptv_step — and a failure leaves the current one untouched,
+// playlist has come in, the loader raises trialCommit, the main thread swaps
+// the source in iptv_step, and a failure leaves the current one untouched,
 // with the reason kept for the screen that asked.
 static IptvSource trialSrc;
 static int trialWanted, trialBusyBefore;
@@ -432,8 +432,8 @@ static char *fetchGuide(const char *url, long long from, long long to) {
 
 // --- guides found for the channels no other guide covers --------------------------
 //
-// Providers tag their channels with the country they come from — "UK: BBC One",
-// "|NL| NPO 1", "[DE] ZDF", or a group called "UK | SPORTS" — and a country's
+// Providers tag their channels with the country they come from, "UK: BBC One",
+// "|NL| NPO 1", "[DE] ZDF", or a group called "UK | SPORTS", and a country's
 // public XMLTV guide (epgshare01's per-country files) covers most of what a
 // provider's own guide leaves out. So when channels are still without a guide
 // after the viewer's and the provider's, the countries of THOSE channels are
@@ -540,12 +540,12 @@ static void describeFailure(const IptvSource *src, const char *body, int status,
   if (timedOut) { *kind = IPTV_FAIL_TIMEOUT; snprintf(dst, n, "The playlist took too long to answer"); return; }
   if (!body && !status) {
     *kind = IPTV_FAIL_UNREACHABLE;
-    snprintf(dst, n, "Couldn't reach the server \xE2\x80\x94 check the address and the TV's connection");
+    snprintf(dst, n, "Couldn't reach the server. Check the address and the TV's connection");
     return;
   }
   if (status == 404) {
     *kind = IPTV_FAIL_NOT_FOUND;
-    snprintf(dst, n, "No playlist at that address (404) \xE2\x80\x94 check it in a browser");
+    snprintf(dst, n, "No playlist at that address (404). Check it in a browser");
     return;
   }
   if (status == 401 || status == 403) {
@@ -562,7 +562,7 @@ static void describeFailure(const IptvSource *src, const char *body, int status,
   }
   if (status >= 500) {
     *kind = IPTV_FAIL_SERVER;
-    snprintf(dst, n, "The server had an error (%d) \xE2\x80\x94 try again later", status);
+    snprintf(dst, n, "The server had an error (%d). Try again later", status);
     return;
   }
   if (status >= 400) { *kind = IPTV_FAIL_OTHER; snprintf(dst, n, "The server answered %d", status); return; }
@@ -571,7 +571,7 @@ static void describeFailure(const IptvSource *src, const char *body, int status,
   if (body && (((unsigned char)body[0] == 0x1f && (unsigned char)body[1] == 0x8b) ||
                strstr(body, "<tv") || !strncmp(body, "<?xml", 5))) {
     *kind = IPTV_FAIL_GUIDE;
-    snprintf(dst, n, "That's a TV guide, not a playlist \xE2\x80\x94 put it in the guide field");
+    snprintf(dst, n, "That's a TV guide, not a playlist. Put it in the guide field");
     return;
   }
   // A web page where a playlist should be: almost always the provider's login.
@@ -635,7 +635,7 @@ static void *loader(void *arg) {
       // username, 200 for the right one), so the login comes first in the hint.
       if (!why[0] && apiStatus >= 500) {
         snprintf(why, sizeof why,
-                 "The provider refused the login (%d) \xE2\x80\x94 check the username and password",
+                 "The provider refused the login (%d). Check the username and password",
                  apiStatus);
         kind = IPTV_FAIL_LOGIN;
         status = apiStatus;
@@ -684,7 +684,7 @@ static void *loader(void *arg) {
       atomic_store(&state, IPTV_READY);
     } }
 
-  // Stage 2: the guide, onto a fresh parse of the same playlist text — the
+  // Stage 2: the guide, onto a fresh parse of the same playlist text, the
   // channel indices come out identical, which is what lets the screen keep its
   // focus across the swap.
   { IptvList *probe = parsePlaylist(text);
@@ -963,7 +963,7 @@ int iptv_configured(void) {
 }
 
 // The list on screen stays until the new one lands, unless the source itself
-// changed — then its channels are somebody else's and go at once.
+// changed, then its channels are somebody else's and go at once.
 static void reload(int keepList) {
   atomic_fetch_add(&generation, 1);
   pthread_mutex_lock(&mu);
@@ -1124,7 +1124,7 @@ const char *iptv_play_url(int ch, char *dst, unsigned size) {
   if (!live || ch < 0 || ch >= live->nCh) return NULL;
   c = &live->ch[ch];
   // The relay serves ONE resource. An HLS playlist's segments are resolved
-  // against the playlist's own address, which would be the relay's — so HLS
+  // against the playlist's own address, which would be the relay's, so HLS
   // goes direct, and loses the headers, rather than losing every segment.
   if (c->headers[0] && !strstr(c->url, ".m3u8")) return proxy_wrap(c->url, c->headers, dst, size);
   return c->url;

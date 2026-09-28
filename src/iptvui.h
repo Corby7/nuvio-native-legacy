@@ -7,7 +7,7 @@
 //
 //   GUIDE    the grid every IPTV app converges on. A header ("Live TV", the
 //            source, Source / Reload); an info band with the focused programme
-//            and, at its right, the PREVIEW — the channel last tuned keeps
+//            and, at its right, the PREVIEW, the channel last tuned keeps
 //            playing there; below, the groups (All, Favourites, Recent, then the
 //            playlist's own) beside the guide: channels down, time across, two
 //            hours on screen, a line at now.
@@ -21,7 +21,7 @@
 // It follows the screen contract of library.h (start/resume/event/update/draw,
 // wants_exit, requested_menu), plus two things no other screen has: it can
 // cover the side rail (LIVE is full screen), and it owns the video pipeline
-// while it is on screen — iptvui_leave hands it back.
+// while it is on screen, iptvui_leave hands it back.
 #ifndef NV_IPTVUI_H
 #define NV_IPTVUI_H
 #include <SDL2/SDL.h>
@@ -40,7 +40,7 @@ int  iptvui_fullscreen(void);
 void iptvui_leave(void);
 // Called every frame while ANOTHER screen is current: stops a stream this screen
 // left behind (a profile switch or sign-out changes screen without leaving it
-// through the router's swap). Touches nothing else — the keyboard may be
+// through the router's swap). Touches nothing else, the keyboard may be
 // another screen's by then.
 void iptvui_background(void);
 void iptvui_shutdown(void);

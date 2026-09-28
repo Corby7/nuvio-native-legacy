@@ -369,7 +369,6 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 17, WEIGHT_REGULAR },   // TXT_SRCP_DESC
   { 23, WEIGHT_BOLD    },   // TXT_SRCP_VALUE
   { 18, WEIGHT_REGULAR },   // TXT_SRCP_PATH
-  { 15, WEIGHT_BOLD    },   // TXT_SRCP_CHIP
   { 16, WEIGHT_REGULAR },   // TXT_SRCP_NOTE
   { 21, WEIGHT_BOLD    },   // TXT_SRCP_PRIMARY
   { 21, WEIGHT_MEDIUM  },   // TXT_SRCP_GHOST

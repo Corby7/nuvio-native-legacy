@@ -1,7 +1,7 @@
 // LIVE PAUSE AND REWIND for a channel whose provider keeps no archive.
 //
 // A live stream has no past to seek in: what the pipeline has not read is gone.
-// So while a channel plays, this module is the one that reads it — a thread
+// So while a channel plays, this module is the one that reads it, a thread
 // downloads the stream into a RING FILE in the data folder, and the pipeline
 // plays from a loopback server that reads the ring. Pausing the pipeline then
 // only stops the reading side; the recording carries on, and resuming picks up
@@ -25,7 +25,7 @@
 
 // Starts recording `url` (with "Name: Value\n" `headers`, may be NULL) into a
 // ring of `capBytes`. Stops any recording before it. 1 when started; the
-// recording may still fail on its first bytes — see timeshift_state.
+// recording may still fail on its first bytes, see timeshift_state.
 int  timeshift_begin(const char *url, const char *headers, long long capBytes);
 void timeshift_end(void);
 

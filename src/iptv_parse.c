@@ -100,7 +100,7 @@ void iptv_xml_unescape(char *s) {
 
 // --- M3U ----------------------------------------------------------------------
 // The value of attribute `key` in [p, end): key="value", key='value' or key=value.
-// Case-insensitive on the key, and it must start a word — "tvg-id" is not found
+// Case-insensitive on the key, and it must start a word, "tvg-id" is not found
 // inside "xtvg-id".
 static int attr(const char *p, const char *end, const char *key, const char **v, size_t *n) {
   size_t k = strlen(key);
@@ -170,7 +170,7 @@ static void addHeader(Pending *pd, const char *name, const char *v, size_t n) {
   pd->headers[pd->nHeaders] = 0;
 }
 
-// #EXTHTTP:{"User-Agent":"x","Referer":"y"} — flat string pairs only.
+// #EXTHTTP:{"User-Agent":"x","Referer":"y"}, flat string pairs only.
 static void extHttp(Pending *pd, const char *p, const char *end) {
   while (p < end) {
     const char *k, *ke, *v, *ve;
@@ -774,7 +774,7 @@ static int tagAttr(const char *a, const char *b, const char *key, char *dst, siz
   return 1;
 }
 
-// Whether [a, b) — the inside of a trailing "(…)" — is a quality tag rather than
+// Whether [a, b), the inside of a trailing "(…)", is a quality tag rather than
 // part of the name: a resolution ("720p", "1080i") or HD / SD / FHD / UHD / 4K.
 static int qualityTag(const char *a, const char *b) {
   static const char *words[] = { "hd", "sd", "fhd", "uhd", "4k" };
@@ -790,7 +790,7 @@ static int qualityTag(const char *a, const char *b) {
 // iptv-org names a third of its channels "00s Replay (720p) [Geo-blocked]", and
 // the guides that carry them say "00s Replay": matched as written, those
 // channels got no programmes. A square bracket is always a tag ("[Not 24/7]");
-// a parenthesis only when qualityTag says so — "(US)" and "(East)" are what tell
+// a parenthesis only when qualityTag says so, "(US)" and "(East)" are what tell
 // two channels apart. Returns 1 when something was cut and a name is left.
 static int bareName(const char *s, char *dst, size_t size) {
   size_t n = strlen(s);
@@ -812,7 +812,7 @@ static int bareName(const char *s, char *dst, size_t size) {
 
 // A LOOSE KEY for a channel name, the last resort after the name as written and
 // bareName: lower case, letters and digits only, with what IPTV playlists hang
-// on a name and guides do not — a country tag in front ("UK: ", "UK | ",
+// on a name and guides do not, a country tag in front ("UK: ", "UK | ",
 // "|UK| ", "UK - "), anything in square brackets, and quality words anywhere (HD, FHD,
 // UHD, 4K, HEVC, 1080p, 50fps…). "UK: SKY SPORTS F1 UHD" and the guide's "Sky
 // Sports F1" both become "skysportsf1". A "+1" keeps its 1, and "(East)" its
@@ -891,8 +891,8 @@ static void indexProgrammes(IptvList *l) {
 }
 
 // A CHANNEL WITH NO GUIDE BORROWS ITS SIBLING'S. Playlists carry one channel in
-// several copies — "Sky Sports F1 HD", "Sky Sports F1 4K", "UK: SKY SPORTS F1
-// UHD" — and a provider tags only one of them with the guide's id; a name match
+// several copies, "Sky Sports F1 HD", "Sky Sports F1 4K", "UK: SKY SPORTS F1
+// UHD", and a provider tags only one of them with the guide's id; a name match
 // reaches only the first channel of a name. Every copy left without programmes
 // takes those of a copy with the same looseName that has them: the same
 // programmes, the strings shared.
@@ -950,7 +950,7 @@ static int addProgramme(IptvList *l, int ch, long long start, long long stop,
 }
 
 // `fill`: keep what is attached and match only the channels still without a
-// programme — see iptv_parse_xmltv_more.
+// programme, see iptv_parse_xmltv_more.
 static int parseGuide(IptvList *l, const char *xml, long long from, long long to, int fill) {
   Map byId, byName, byXml, byLoose;
   int *link;
