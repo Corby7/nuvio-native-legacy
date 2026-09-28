@@ -58,4 +58,14 @@ int  ctx_requested_details(void);
 // a title with progress). `fromStart` says which. Consumed once; the modal is
 // already closed.
 int  ctx_requested_play(int *fromStart);
+
+// A MENU OF THE SCREEN'S OWN: the same panel, anchor, scrim and keys over
+// options the caller supplies, for what is not a catalogue title (a Live TV
+// channel or programme). Set the anchor first, as for ctx_open_row. The strings
+// are copied. `hint` may be NULL; it is drawn dimmer at the row's right edge.
+typedef struct { const char *label, *icon, *hint; int id; } CtxOption;
+void ctx_open_custom(const char *title, const char *meta, const CtxOption *opts, int n);
+// The `id` of the option chosen from a custom menu, or -1. Consumed once; the
+// menu is already closed.
+int  ctx_requested_custom(void);
 #endif

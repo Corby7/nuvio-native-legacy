@@ -34,6 +34,7 @@
 #include "iptvui.h"
 #include "iptv.h"
 #include "app.h"
+#include "ctxmenu.h"
 #include "data.h"
 #include "detail.h"
 #include "anim.h"
@@ -202,6 +203,17 @@ static long long fTime, winStart;
 static float scrollRows, scrollRowsV;
 static char focusName[256];
 static Hold hold;
+// HOLD OK ON A CHANNEL OR A PROGRAMME: the home's poster menu (ctxmenu.h),
+// beside the focused plate. `plate` is that plate's outer edge this frame (its
+// halo included), set by whichever draws the focus; the menu anchors on it and
+// its scrim's hole follows it. What the menu was opened on is kept by NAME and
+// start time, since the list can reload under an open menu.
+static GfxRect plate;
+static float plateR;
+static int plateSet;
+static char menuName[256];
+static long long menuStart;
+enum { M_WATCH, M_FROM_START, M_REMIND, M_GROUP, M_FAV };
 
 // What is tuned. `tunedName` re-finds it after a reload changes the indices.
 static int tuned = -1;
@@ -268,6 +280,16 @@ static float tagWidth(const char *s);
 static float sepBar(float x, float cy, float h, float gap, float a) {
   gfx_color((GfxRect){ x + gap, cy - h * 0.5f, NV_DETW2_BAR_W, h }, 0.0f, 0.502f, 0.502f, 0.502f, a);
   return gap * 2.0f + NV_DETW2_BAR_W;
+}
+// The focused plate in the list or the guide: the hold's white sweep round its
+// 3px halo while OK is held, and its edge kept for the menu. `r` is the plate's
+// own corner radius in px.
+static void focusPlate(GfxRect p, float r) {
+  plate = (GfxRect){ p.x - 3.0f, p.y - 3.0f, p.w + 6.0f, p.h + 6.0f };
+  plateR = r + 3.0f;
+  plateSet = 1;
+  if (hold.shown > 0.001f)
+    gfx_rect(plate, 0, GFX_RING_INSET_FILL, 0, hold.shown, 3.0f / plate.h, plateR / plate.h, 1, 1, 1, 1);
 }
 static int barCtl = -1;         // the focused control's id, or BAR_TRACK or BAR_TITLE
 #define BAR_TRACK (-1)          // the programme's track
@@ -562,6 +584,13 @@ static const char *splitLabel(const char *label, char *code, size_t n) {
   return *bar ? bar : label;
 }
 #define CHIP_CODE_GAP 10.0f
+// The pinned chips wear a glyph before the label (Phosphor, REGULAR); the
+// playlist's groups do not.
+#define CHIP_ICON     20.0f
+#define CHIP_ICON_GAP  9.0f
+static const char *chipIcon(int g) {
+  return g == GROUP_FAV ? "chip_fav" : g == GROUP_ALL ? "chip_all" : g == GROUP_RECENT ? "chip_recent" : NULL;
+}
 
 // The chips' widths, measured when the groups change and not per frame: a
 // provider can carry hundreds of groups, and only the handful on screen are drawn.
@@ -577,7 +606,8 @@ static void measureChips(void) {
     const char *name = splitLabel(groupLabel(g), code, sizeof code);
     // Bold is wider than medium: size every chip for the bold, so choosing one
     // does not shove its neighbours along.
-    float t = txt_width(TXT_LIVE_META_B, name) + (code[0] ? tagWidth(code) + CHIP_CODE_GAP : 0.0f);
+    float t = txt_width(TXT_LIVE_META_B, name) + (code[0] ? tagWidth(code) + CHIP_CODE_GAP : 0.0f)
+            + (chipIcon(g) ? CHIP_ICON + CHIP_ICON_GAP : 0.0f);
     chipFull[g] = t + 2 * L_CHIP_PAD;
     if (t > L_CHIP_MAX_W - 2 * L_CHIP_PAD) t = L_CHIP_MAX_W - 2 * L_CHIP_PAD;
     chipW[g] = t + 2 * L_CHIP_PAD;
@@ -1745,6 +1775,88 @@ static void toggleReminder(int ch, int pg) {
   }
 }
 
+// THE HOLD MENU (see `plate`): on a channel, Watch and Favourites; in the
+// guide on a programme, what that programme allows, Favourites last.
+static void openChannelMenu(void) {
+  const IptvList *l = iptv_list();
+  int ch = focusedChannel(), n = 0, fav;
+  const IptvChannel *c = chan(ch);
+  long long now = nowSec();
+  char title[256], meta[256], goTo[96], code[16];
+  CtxOption o[6];
+  if (!c || !l) return;
+  fav = iptv_is_favourite(ch);
+  snprintf(menuName, sizeof menuName, "%s", c->name);
+  menuStart = 0;
+  if (viewMode == VIEW_GUIDE && !fChan) {
+    long long s, e;
+    int p = cellAt(ch, fTime, &s, &e);
+    if (p >= 0) {
+      const IptvProgramme *pg = &l->pg[p];
+      char a[16], z[16];
+      clockText(pg->start, a, sizeof a); clockText(pg->stop, z, sizeof z);
+      snprintf(title, sizeof title, "%s", pg->title);
+      snprintf(meta, sizeof meta, "%d \xC2\xB7 %s \xC2\xB7 %s \xE2\x80\x93 %s", c->number, c->name, a, z);
+      menuStart = pg->start;
+      if (pg->stop <= now) {
+        if (iptv_has_archive(ch, pg->start))
+          o[n++] = (CtxOption){ "Watch from the start", "ctx_play", NULL, M_FROM_START };
+        o[n++] = (CtxOption){ "Watch live", "live_ctl_live", NULL, M_WATCH };
+      } else if (pg->start > now) {
+        int set = reminderIndex(c->name, pg->start) >= 0;
+        o[n++] = (CtxOption){ set ? "Remove reminder" : "Remind me", set ? "ctx_bell_off" : "ctx_bell", NULL, M_REMIND };
+        o[n++] = (CtxOption){ "Watch the channel now", "ctx_play", NULL, M_WATCH };
+      } else {
+        o[n++] = (CtxOption){ "Watch", "ctx_play", NULL, M_WATCH };
+        if (iptv_has_archive(ch, pg->start))
+          o[n++] = (CtxOption){ "Start over", "ctx_restart", NULL, M_FROM_START };
+      }
+    }
+  }
+  if (!n) {
+    const IptvProgramme *pg = programmeAt(ch, nowMinute());
+    snprintf(title, sizeof title, "%s", c->name);
+    if (pg) snprintf(meta, sizeof meta, "%d \xC2\xB7 On now \xC2\xB7 %s", c->number, pg->title);
+    else snprintf(meta, sizeof meta, "%d", c->number);
+    o[n++] = (CtxOption){ "Watch", "ctx_play", NULL, M_WATCH };
+  }
+  // Its group's chip, when this list is not already that group: "Go to Sport",
+  // the provider's short code ("UK") beside it as on the chip.
+  if (c->groupIndex >= 0 && (searching || group != GROUP_FIRST + c->groupIndex)) {
+    const char *name = splitLabel(groupLabel(GROUP_FIRST + c->groupIndex), code, sizeof code);
+    snprintf(goTo, sizeof goTo, "Go to %s", name);
+    o[n++] = (CtxOption){ goTo, "ctx_group", code[0] ? code : NULL, M_GROUP };
+  }
+  o[n++] = (CtxOption){ fav ? "Remove from Favourites" : "Add to Favourites", fav ? "ctx_minus" : "ctx_plus",
+                        NULL, M_FAV };
+  if (plateSet) ctx_set_anchor(plate, plateR);
+  ctx_open_custom(title, meta, o, n);
+}
+
+static void channelMenuChosen(int id) {
+  const IptvList *l = iptv_list();
+  int ch = findByName(menuName);
+  long long s, e;
+  if (ch < 0 || !l) return;
+  switch (id) {
+    case M_WATCH:      watch(ch); break;
+    case M_FROM_START: if (menuStart) watchFrom(ch, menuStart); break;
+    case M_REMIND:     if (menuStart) toggleReminder(ch, cellAt(ch, menuStart, &s, &e)); break;
+    case M_GROUP: {
+      // The group's chip, the focus on the same channel in it.
+      const IptvChannel *c = chan(ch);
+      if (!c || c->groupIndex < 0) break;
+      if (searching) closeSearch();
+      chooseGroup(GROUP_FIRST + c->groupIndex);
+      if (viewIndex(ch) >= 0) fRow = viewIndex(ch);
+      rememberFocus();
+      guideSettle();
+      break; }
+    case M_FAV:        toggleFavourite(ch); break;
+    default: break;
+  }
+}
+
 static void control(int ctl) {
   switch (ctl) {
     case CTL_GUIDE:
@@ -2129,7 +2241,7 @@ void iptvui_event(const SDL_Event *e) {
       chipsEvent(e->key.keysym.sym);
     return;
   }
-  // Hold OK on a channel: favourite; on a chip: move it. A tap is OK. The
+  // Hold OK on a channel or programme: its menu; on a chip: move it. A tap is OK. The
   // pinned chips (Favourites, All, Recent) arm too, so a hold on one is not
   // taken for a tap that drops the focus into the list: it says why instead.
   if (hold_event(&hold, e, (zone == ZONE_BODY && nView > 0) || (zone == ZONE_CHIPS && anyChipShown()), &tap)) {
@@ -2286,8 +2398,9 @@ void iptvui_update(float dt, Uint32 now) {
   if (mode != MODE_BROWSE) return;
 
   hold_animate(&hold, dt, now);
+  { int id = ctx_requested_custom(); if (id >= 0) channelMenuChosen(id); }
   if (hold_fired(&hold, now)) {
-    if (zone == ZONE_BODY) toggleFavourite(focusedChannel());
+    if (zone == ZONE_BODY) openChannelMenu();
     else if (zone == ZONE_CHIPS && group < GROUP_FIRST) {
       say("Favourites, All channels and Recent stay first");
     } else if (zone == ZONE_CHIPS) {
@@ -2887,6 +3000,9 @@ static float chipsRight(void) {
 #define CHIP_FADE 110.0f
 static void drawChips(void) {
   float y = L_CHIPS_Y, right = chipsRight(), x = X0() - chipScroll, total = 0.0f;
+  // In the list nothing stands to the chips' right: they run off the screen's
+  // edge there as on the left. In the guide they give way to the preview.
+  float edge = viewMode == VIEW_GUIDE ? right + 30.0f : NV_SCREEN_W;
   int n = nGroups(), fadeL, fadeR;
   // Searching shows the groups that match; with none, what the list holds.
   if (searching && !anyChipShown()) {
@@ -2898,17 +3014,17 @@ static void drawChips(void) {
   for (int p = 0; p < nOrder; p++)
     if (gOrder[p] < nChipW && chipShown(gOrder[p])) total += chipWidth(gOrder[p]) + L_CHIP_GAP;
   // The left is open, as the home's rows are: chips slide off the screen's
-  // edge. Only the right, where the row gives way to the preview, dissolves.
+  // edge. Only the guide's right, where the row gives way to the preview, dissolves.
   fadeL = 0;
-  fadeR = total - L_CHIP_GAP - chipScroll > right - X0() + 1.0f;
-  gfx_crop(0.0f, y - 20.0f, right + 30.0f, L_CHIP_H + 44.0f);
-  pointer_clip(0.0f, y - 8.0f, right + 8.0f, L_CHIP_H + 16.0f);
+  fadeR = viewMode == VIEW_GUIDE && total - L_CHIP_GAP - chipScroll > right - X0() + 1.0f;
+  gfx_crop(0.0f, y - 20.0f, edge, L_CHIP_H + 44.0f);
+  pointer_clip(0.0f, y - 8.0f, viewMode == VIEW_GUIDE ? right + 8.0f : NV_SCREEN_W, L_CHIP_H + 16.0f);
   for (int p = 0; p < nOrder; p++) {
     int g = gOrder[p], on = g == group && chipShown(g), focus = on && zone == ZONE_CHIPS;
     float w = chipWidth(g), cx = x + w * 0.5f, lift, sc, a = 1.0f, tw;
     GfxRect r;
     if (!chipShown(g)) continue;
-    if (x > right + 30.0f) break;
+    if (x > edge) break;
     if (x + w < 0.0f) { x += w + L_CHIP_GAP; continue; }
     lift = 1.0f - fabsf(cx - (X0() - chipScroll + selX)) / 900.0f;
     if (lift < 0.0f) lift = 0.0f;
@@ -2946,10 +3062,16 @@ static void drawChips(void) {
       float ta = on ? 1.0f : 0.62f + 0.38f * lift;
       char code[8];
       const char *name = splitLabel(groupLabel(g), code, sizeof code);
-      float cw = code[0] ? tagWidth(code) + CHIP_CODE_GAP : 0.0f, tx, ty = r.y + r.h * 0.5f;
+      const char *icon = chipIcon(g);
+      float cw = code[0] ? tagWidth(code) + CHIP_CODE_GAP : icon ? CHIP_ICON + CHIP_ICON_GAP : 0.0f;
+      float tx, ty = r.y + r.h * 0.5f;
       tw = cw + txt_width(st, name);
       if (tw > w - 2 * L_CHIP_PAD) tw = w - 2 * L_CHIP_PAD;
       tx = cx - tw * 0.5f;
+      if (icon) {
+        unsigned ink = on ? C_INK : 0xA9B0B8;
+        gfx_icon((GfxRect){ tx, ty - CHIP_ICON * 0.5f, CHIP_ICON, CHIP_ICON }, icon, HEXF(ink), ta);
+      }
       if (code[0]) tagText(code, on ? 0x6E757D : 0x7C838B, tx, ty, ta);
       inkMid(st, name, on ? C_INK : 0xA9B0B8, tx + cw, ty, tw - cw + 1.0f, ta); }
     gfx_opacity_group = 1.0f;
@@ -3276,6 +3398,7 @@ static void guideBlock(const IptvProgramme *pg, GfxRect b, int focused, long lon
     gfx_color((GfxRect){ b.x - 3.0f, b.y - 3.0f, b.w + 6.0f, b.h + 6.0f }, (G_BLOCK_R + 3.0f) / (b.h + 6.0f),
               1, 1, 1, 0.30f);
     gfx_color(b, G_BLOCK_R / b.h, HEXF(C_PAPER), 1.0f);
+    focusPlate(b, G_BLOCK_R);
   } else {
     gfx_color(b, G_BLOCK_R / b.h, 1, 1, 1, 0.05f);
   }
@@ -3348,6 +3471,7 @@ static void guideChannelCell(const IptvChannel *c, int ch, int r, float y) {
     gfx_color((GfxRect){ cr.x - 3.0f, cr.y - 3.0f, cr.w + 6.0f, cr.h + 6.0f }, (G_CH_R + 3.0f) / (cr.h + 6.0f),
               1, 1, 1, 0.30f);
     gfx_color(cr, G_CH_R / cr.h, HEXF(C_PAPER), 1.0f);
+    focusPlate(cr, G_CH_R);
   } else {
     gfx_color(cr, G_CH_R / cr.h, 1, 1, 1, isTuned ? 0.075f : 0.04f);
   }
@@ -3403,6 +3527,7 @@ static void drawGuide(void) {
         gfx_color((GfxRect){ b.x - 3.0f, b.y - 3.0f, b.w + 6.0f, b.h + 6.0f }, (G_BLOCK_R + 3.0f) / (b.h + 6.0f),
                   1, 1, 1, 0.30f);
         gfx_color(b, G_BLOCK_R / b.h, HEXF(C_PAPER), 1.0f);
+        focusPlate(b, G_BLOCK_R);
       } else {
         // Dashed, not filled: absence, not a very long programme.
         GLuint dash = dashOutline((int)b.w, (int)b.h);
@@ -3431,6 +3556,7 @@ static void drawGuide(void) {
           gfx_color((GfxRect){ b.x - 3.0f, b.y - 3.0f, b.w + 6.0f, b.h + 6.0f }, (G_BLOCK_R + 3.0f) / (b.h + 6.0f),
                     1, 1, 1, 0.30f);
           gfx_color(b, G_BLOCK_R / b.h, HEXF(C_PAPER), 1.0f);
+          focusPlate(b, G_BLOCK_R);
           if (b.w >= G_TIER_TEXT)
             inkMid(TXT_SRC_STATE, "No information", C_INK, b.x + 16.0f, y + G_ROW_H * 0.5f, b.w - 32.0f, 1.0f);
         }
@@ -3483,11 +3609,17 @@ static void listRow(const IptvList *l, int r, float y, float listW) {
   float nextW = 0.0f, rightEdge = x + listW - 20.0f;
 
   if (focused) {
+    // Held, the white ring steps back towards the page and the sweep refills
+    // it, the home's feedback (hold.h).
+    float k = ringed ? NV_HOLD_DIM * hold.dim : 0.0f;
+    float pr = ((C_PAPER >> 16) & 0xFF) / 255.0f, pg = ((C_PAPER >> 8) & 0xFF) / 255.0f, pb = (C_PAPER & 0xFF) / 255.0f;
     gfx_drop_shadow(row, C_ROW_R, 38.0f, 18.0f, 0.55f);
     gfx_color((GfxRect){ row.x - 3.0f, row.y - 3.0f, row.w + 6.0f, row.h + 6.0f },
-              (C_ROW_R + 3.0f) / (row.h + 6.0f), HEXF(C_PAPER), ringed ? 1.0f : 0.30f);
+              (C_ROW_R + 3.0f) / (row.h + 6.0f), pr + (NV_COLOR_BACKGROUND_R - pr) * k,
+              pg + (NV_COLOR_BACKGROUND_G - pg) * k, pb + (NV_COLOR_BACKGROUND_B - pb) * k, ringed ? 1.0f : 0.30f);
     gfx_color(row, C_ROW_R / row.h, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
     gfx_color(row, C_ROW_R / row.h, 1, 1, 1, 0.10f);
+    if (ringed) focusPlate(row, C_ROW_R);
   }
   snprintf(num, sizeof num, "%d", c->number);
   // Right-aligned against the tile, so four digits (and five) have the room
@@ -4845,7 +4977,9 @@ void iptvui_draw(Uint32 now) {
   if (iptvui_fullscreen()) { drawFull(); return; }
   drawHeader();
   drawChips();
+  plateSet = 0;
   if (viewMode == VIEW_GUIDE) drawGuide(); else drawList();
+  if (plateSet) hold_track(&hold, plate, plateR);
   drawDigits();
   drawToast();
 }

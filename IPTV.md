@@ -61,7 +61,7 @@ focus changes text, never the stream; only OK tunes.
 | Guide | → ← | next / previous programme, paging the timeline in 30-minute jumps; ← from what is on now lands on the channel's own cell, ← again opens the side bar. On a channel with **catch-up**, ← walks on into the past programmes its archive keeps first |
 | List, guide | OK | watch full screen (on the channel already playing: just full screen). On a past programme with catch-up: watch it from its start |
 | List, guide | rest ~1 s | with **Preview while browsing** on (Settings → Playback): the focused channel plays in the preview (not counted as watched until OK) |
-| List, guide | hold OK | add to / remove from Favourites |
+| List, guide | hold OK | the home's hold menu, beside the focused row or cell: Watch, Go to its group (when the list is not that group already) and Favourites on a channel; in the guide, on a programme, also Start over / Watch from the start (catch-up) or Remind me (later) |
 | List, guide | 0–9 | type a channel number |
 | List, guide | Back | guide → list; list: stop the preview, then the chips, then leave |
 | Full screen, nothing showing | ▲▼, CH+ / CH− | zap; a toast bottom-left names the channel (3 s). Presses in a run swap its contents without replaying it, and the stream retunes once, when the keys stop |

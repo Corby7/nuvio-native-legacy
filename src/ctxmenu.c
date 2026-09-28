@@ -113,6 +113,12 @@ static struct { const char *rot, *icon, *hint; int action; } ops[CTX_MAX];
 static int nOps;
 static float focusAnim[CTX_MAX];
 static int holdObserver;
+// A CUSTOM MENU (ctx_open_custom): no catalogue title behind it, only the
+// caller's header and options, and the chosen option's id handed back.
+static int custom, reqCustom = -1;
+static char customTitle[160], customMeta[160];
+static char customLabel[CTX_MAX][64], customHint[CTX_MAX][32];
+static int customId[CTX_MAX];
 enum { OP_DETAILS, OP_LIST, OP_WATCHED, OP_SEEALL, OP_RESUME, OP_START_OVER,
        OP_REMOVE_CW };
 
@@ -143,7 +149,9 @@ static int indexCurrent(void) {
 }
 
 static void build(void) {
-  int i = indexCurrent();
+  int i;
+  if (custom) return;   // its options were set when it opened
+  i = indexCurrent();
   const CatItem *ci = i >= 0 ? cat_item(i) : NULL;
   int going;
   nOps = 0;
@@ -265,6 +273,7 @@ void ctx_open_row(int index_, const CtxCatalog *from) {
   holdReady = 0;
   swallowOk = holdActive;
   idx = index_; focus = 0; is_open = 1; reqDetails = -1; reqPlay = -1;
+  custom = 0; reqCustom = -1;
   memset(&row, 0, sizeof row);
   if (from) row = *from;
   reqSeeAll = 0;
@@ -274,6 +283,42 @@ void ctx_open_row(int index_, const CtxCatalog *from) {
   memset(focusAnim, 0, sizeof focusAnim);
   build();
 }
+
+void ctx_open_custom(const char *title, const char *meta, const CtxOption *opts, int n) {
+  int anchored = hasAnchorNext;
+  hasAnchorNext = 0;
+  if (holdCancelled) { holdCancelled = 0; holdReady = 0; return; }
+  if (n <= 0) return;
+  hasAnchor = anchored;
+  if (anchored) {
+    anchor = anchorNext; anchorR = anchorRNext;
+    hole = anchor; holeR = anchorR; holeFeather = 0.0f;
+  }
+  holdReady = 0;
+  swallowOk = holdActive;
+  custom = 1; reqCustom = -1;
+  idx = -1; focus = 0; is_open = 1; reqDetails = -1; reqPlay = -1;
+  memset(&row, 0, sizeof row);
+  reqSeeAll = 0;
+  operation = CTX_OP_NONE; intent = 0; stateOperation = 0;
+  mirrorApplied = 0;
+  operationImdb[0] = 0;
+  memset(focusAnim, 0, sizeof focusAnim);
+  snprintf(customTitle, sizeof customTitle, "%s", title ? title : "");
+  snprintf(customMeta, sizeof customMeta, "%s", meta ? meta : "");
+  memset(ops, 0, sizeof ops);
+  nOps = n < CTX_MAX ? n : CTX_MAX;
+  for (int i = 0; i < nOps; i++) {
+    snprintf(customLabel[i], sizeof customLabel[i], "%s", opts[i].label ? opts[i].label : "");
+    snprintf(customHint[i], sizeof customHint[i], "%s", opts[i].hint ? opts[i].hint : "");
+    customId[i] = opts[i].id;
+    ops[i].rot = customLabel[i];
+    ops[i].icon = opts[i].icon;
+    ops[i].hint = customHint[i][0] ? customHint[i] : NULL;
+  }
+}
+
+int ctx_requested_custom(void) { int v = reqCustom; reqCustom = -1; return v; }
 
 int ctx_is_open(void) { return is_open; }
 int ctx_requested_details(void) { int v = reqDetails; reqDetails = -1; return v; }
@@ -291,9 +336,14 @@ int ctx_requested_seeall(CtxCatalog *out) {
 }
 
 static void apply(void) {
-  int current = indexCurrent();
-  const CatItem *ci = current >= 0 ? cat_item(current) : NULL;
-  int action;
+  int current, action;
+  const CatItem *ci;
+  if (custom) {
+    if (focus >= 0 && focus < nOps) { reqCustom = customId[focus]; is_open = 0; }
+    return;
+  }
+  current = indexCurrent();
+  ci = current >= 0 ? cat_item(current) : NULL;
   if (!ci || focus < 0 || focus >= nOps) return;
   action = ops[focus].action;
   // Only the WRITES wait on one another; playing, opening and browsing never do.
@@ -404,6 +454,7 @@ void ctx_update(float dt, Uint32 now) {
       : anim_spring(focusAnim[i], is_open && focus == i ? 1.0f : 0.0f,
                   dt, NV_SPRING_FOCUS);
 
+  if (custom) return;
   current = indexCurrent();
   if (is_open && current < 0) { is_open = 0; return; }
 
@@ -466,8 +517,8 @@ void ctx_draw(Uint32 now) {
   // the card's own rail, the two bars filling at different rates. The home's rail is
   // the only feedback left, and it is a bar with no words.
   if (a < 0.01f) return;
-  ci = indexCurrent() >= 0 ? cat_item(indexCurrent()) : NULL;
-  if (!ci) return;
+  ci = custom ? NULL : indexCurrent() >= 0 ? cat_item(indexCurrent()) : NULL;
+  if (!ci && !custom) return;
 
   // The labels already say "Adding to library..." while a write is in flight, so
   // the meta line only gives way to the outcome.
@@ -478,7 +529,7 @@ void ctx_draw(Uint32 now) {
   else if (stateOperation == CTX_FAILURE)
     message = "Could not update. Try again.";
 
-  { TxtLine title = txt_line_trim(TXT_PANEL_TITLE, ci->title, 245, 246, 249, 255,
+  { TxtLine title = txt_line_trim(TXT_PANEL_TITLE, custom ? customTitle : ci->title, 245, 246, 249, 255,
                                   CTX_W - CTX_PAD * 2.0f);
     TxtLine probe = txt_line(TXT_HERO_META, "Series", 150, 154, 163, 255);
     float headH = (float)title.h + CTX_META_GAP + (float)probe.h + CTX_HEAD_GAP;
@@ -496,8 +547,11 @@ void ctx_draw(Uint32 now) {
       // The anchor is taken mid-hold, with the card pressed in about its centre to
       // NV_HOLD_PRESS_SCALE; it springs back out as the menu opens. Align to the
       // bottom it comes to rest on, or the panel ends up ~6px below it.
+      // Too near the top for that, it hangs DOWN from the card instead, top
+      // flush with top.
       { float press = settings_animations_reduced() ? 1.0f : NV_HOLD_PRESS_SCALE;
-        y = anchor.y + anchor.h * (0.5f + 0.5f / press) - height; }
+        y = anchor.y + anchor.h * (0.5f + 0.5f / press) - height;
+        if (y < CTX_MARGIN) y = anchor.y + anchor.h * (0.5f - 0.5f / press); }
       if (y > NV_SCREEN_H - CTX_MARGIN - height) y = NV_SCREEN_H - CTX_MARGIN - height;
       if (y < CTX_MARGIN) y = CTX_MARGIN;
       // Slides out from the card as it appears.
@@ -530,6 +584,9 @@ void ctx_draw(Uint32 now) {
                                 fail ? 255 : 225, fail ? 138 : 228, fail ? 128 : 235, 255,
                                 CTX_W - CTX_PAD * 2.0f);
       txt_draw_alpha(t, x + CTX_PAD, cy, a);
+    } else if (custom) {
+      TxtLine t = txt_line_trim(TXT_HERO_META, customMeta, 150, 154, 162, 255, CTX_W - CTX_PAD * 2.0f);
+      if (customMeta[0]) txt_draw_alpha(t, x + CTX_PAD, cy, a);
     } else {
       char pieces[4][32];
       int bright, n = metaPieces(ci, pieces, &bright);
