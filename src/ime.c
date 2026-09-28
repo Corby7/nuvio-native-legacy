@@ -119,12 +119,31 @@ void ime_pump(void) {
 #endif
 }
 
+// THE SPACE BAR comes as a key AND, on most platforms, as text. The key used
+// to fall through to the screen, where Space is OK ("done typing"): typing a
+// space closed the keyboard. So the key is the space, whatever the platform,
+// and the text " " that follows it within a moment is the same press again.
+static Uint32 spaceKeyAt;
+
 int ime_edit(const SDL_Event *e, char *text, int *len, int max) {
   if (!text || !len) return 0;
+
+  if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_SPACE) {
+    spaceKeyAt = SDL_GetTicks() | 1u;
+    if (*len + 2 > max) return 1;
+    text[(*len)++] = ' ';
+    text[*len] = 0;
+    return 1;
+  }
 
   if (e->type == SDL_TEXTINPUT) {
     int add = (int)strlen(e->text.text);
     sawText = 1;
+    if (add == 1 && e->text.text[0] == ' ' && spaceKeyAt && SDL_GetTicks() - spaceKeyAt < 250u) {
+      spaceKeyAt = 0;
+      return 1;
+    }
+    spaceKeyAt = 0;
     if (add <= 0) return 1;
     // Refuse the WHOLE insertion rather than as much of it as fits: half a
     // UTF-8 sequence is not a shorter string, it is a broken one.

@@ -513,6 +513,12 @@ int main(int argc, char **argv) {
   snprintf(path, sizeof path, "%s/nuvio-live-header-search.bmp", out); frames(20, path);
   key(SDLK_RETURN);
   snprintf(path, sizeof path, "%s/nuvio-live-search-open.bmp", out); frames(20, path);
+  // Space on the keyboard is a space, not OK: the search stays open. The
+  // platform sends the key and then the text; the two are one press.
+  key(SDLK_SPACE); type(" ");
+  assert(!iptvui_fullscreen() && !iptvui_requested_menu());
+  { SDL_Event bs; memset(&bs, 0, sizeof bs); bs.type = SDL_KEYDOWN; bs.key.keysym.sym = SDLK_BACKSPACE;
+    iptvui_event(&bs); }
   type("s"); type("po");
   snprintf(path, sizeof path, "%s/nuvio-live-search-spo.bmp", out); frames(40, path);
   type("rt");
