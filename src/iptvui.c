@@ -133,11 +133,11 @@
 enum { MODE_BROWSE, MODE_SETUP };
 enum { VIEW_LIST, VIEW_GUIDE };
 enum { ZONE_HEAD, ZONE_CHIPS, ZONE_BODY, ZONE_ACTIONS };
-enum { HEAD_SEARCH, HEAD_TOGGLE, HEAD_SOURCE, HEAD_N };
+enum { HEAD_SEARCH, HEAD_GUIDE, HEAD_LIST, HEAD_SOURCE, HEAD_N };
 enum { ACT_WATCH, ACT_FAV, ACT_N };
 enum { GROUP_ALL, GROUP_FAV, GROUP_RECENT, GROUP_FIRST };
 
-static int mode, viewMode = VIEW_LIST, zone = ZONE_BODY, headSel = HEAD_TOGGLE, actSel;
+static int mode, viewMode = VIEW_LIST, zone = ZONE_BODY, headSel = HEAD_LIST, actSel;
 // SEARCH (the header's first button): a field where the chips were, the TV's
 // keyboard over it, and the list and the guide narrowed to what matches as it
 // is typed. While `searching`, ZONE_CHIPS is the field.
@@ -1523,7 +1523,9 @@ static void headEvent(SDL_Keycode k) {
     else if (headSel == HEAD_SEARCH) { if (searching) { zone = ZONE_CHIPS; raiseKeyboard(); } else openSearch(); }
     else {
       // The same header and chips either way: switching changes only the body.
-      viewMode = viewMode == VIEW_LIST ? VIEW_GUIDE : VIEW_LIST;
+      int want = headSel == HEAD_GUIDE ? VIEW_GUIDE : VIEW_LIST;
+      if (want == viewMode) return;
+      viewMode = want;
       fChan = 0;
       fTime = nowSec();
       winStart = slotFloor(fTime);
@@ -2024,52 +2026,124 @@ static void identity(const IptvChannel *c, GfxRect r, float radius, unsigned pla
       txt_draw_alpha(t, r.x + (r.w - t.w) * 0.5f, r.y + (r.h - t.h) * 0.5f, a); } }
 }
 
-// A header pill: an icon and a word.
-static GfxRect headButton(float right, const char *icon, const char *label, int focused, int idx) {
-  TxtLine t = txt_line(TXT_SRC_TEXT, label, HEXI(focused ? C_INK : 0xC1C7CD), 255);
-  float w = 22.0f + 18.0f + 11.0f + t.w + 22.0f;
-  GfxRect r = { right - w, L_BTN_Y, w, L_BTN_H };
-  if (focused) gfx_color(r, 0.5f, HEXF(C_PAPER), 1.0f);
-  else gfx_color(r, 0.5f, 1.0f, 1.0f, 1.0f, 0.07f);
-  gfx_icon((GfxRect){ r.x + 22.0f, r.y + (r.h - 18.0f) * 0.5f, 18.0f, 18.0f }, icon,
-           focused ? 10 / 255.0f : 0xC1 / 255.0f, focused ? 12 / 255.0f : 0xC7 / 255.0f,
-           focused ? 14 / 255.0f : 0xCD / 255.0f, 1.0f);
-  txt_draw(t, r.x + 22.0f + 18.0f + 11.0f, r.y + (r.h - t.h) * 0.5f);
-  pointer_zone(r.x, r.y, r.w, r.h, pointHead, idx, 0);
+// THE HEADER'S RIGHT: the search circle, the Guide | List switch, and the
+// source pill ("IPTV · 49 channels"), which opens the source screen. Focus is a
+// ring; the view on show is the switch's white segment whether focused or not.
+#define HD_RING   3.0f
+static void headRing(GfxRect r) {
+  gfx_rect((GfxRect){ r.x - HD_RING - 2.0f, r.y - HD_RING - 2.0f, r.w + (HD_RING + 2.0f) * 2.0f,
+                      r.h + (HD_RING + 2.0f) * 2.0f },
+           0, GFX_RING_INSET, 0, HD_RING / (r.h + (HD_RING + 2.0f) * 2.0f), 0, 0.5f, 1, 1, 1, 0.92f);
+}
+
+static GfxRect headSearch(float right, int focused) {
+  GfxRect r = { right - L_BTN_H, L_BTN_Y, L_BTN_H, L_BTN_H };
+  float d = 20.0f;
+  gfx_color(r, 0.5f, 1.0f, 1.0f, 1.0f, focused ? 0.16f : 0.07f);
+  if (focused) headRing(r);
+  gfx_icon((GfxRect){ r.x + (r.w - d) * 0.5f, r.y + (r.h - d) * 0.5f, d, d }, "search_glass",
+           HEXF(focused ? 0xF5F6F8 : 0xC1C7CD), 1.0f);
+  pointer_zone(r.x, r.y, r.w, r.h, pointHead, HEAD_SEARCH, 0);
   return r;
+}
+
+// One segment of the switch; `active` is the view on show.
+static float segWidth(const char *label, int active) {
+  return 18.0f + 18.0f + 10.0f + txt_width(active ? TXT_LIVE_META_B : TXT_SRC_TEXT, label) + 20.0f;
+}
+static void headSegment(GfxRect r, const char *icon, const char *label, int active, int focused, int idx) {
+  unsigned ink = active ? C_INK : focused ? 0xF5F6F8 : 0x9AA1A9;
+  TxtLine t = txt_line(active ? TXT_LIVE_META_B : TXT_SRC_TEXT, label, HEXI(ink), 255);
+  if (active) gfx_color(r, 0.5f, HEXF(C_PAPER), 1.0f);
+  else if (focused) gfx_color(r, 0.5f, 1.0f, 1.0f, 1.0f, 0.14f);
+  if (focused) headRing(r);
+  gfx_icon((GfxRect){ r.x + 18.0f, r.y + (r.h - 18.0f) * 0.5f, 18.0f, 18.0f }, icon, HEXF(ink), 1.0f);
+  txt_draw(t, r.x + 18.0f + 18.0f + 10.0f, r.y + (r.h - t.h) * 0.5f);
+  pointer_zone(r.x, r.y, r.w, r.h, pointHead, idx, 0);
+}
+
+static GfxRect headSwitch(float right) {
+  const float pad = 5.0f;
+  int guide = viewMode == VIEW_GUIDE;
+  float wg = segWidth("Guide", guide), wl = segWidth("List", !guide);
+  GfxRect box = { right - (pad + wg + wl + pad), L_BTN_Y, pad + wg + wl + pad, L_BTN_H };
+  gfx_color(box, 0.5f, 1.0f, 1.0f, 1.0f, 0.07f);
+  headSegment((GfxRect){ box.x + pad, box.y + pad, wg, box.h - pad * 2.0f }, "live_grid", "Guide", guide,
+              zone == ZONE_HEAD && headSel == HEAD_GUIDE, HEAD_GUIDE);
+  headSegment((GfxRect){ box.x + pad + wg, box.y + pad, wl, box.h - pad * 2.0f }, "live_list", "List", !guide,
+              zone == ZONE_HEAD && headSel == HEAD_LIST, HEAD_LIST);
+  return box;
+}
+
+// The source and what it holds; while it loads, what it is doing instead.
+static GfxRect headSource(float right, float maxW, int focused) {
+  const IptvList *l = iptv_list();
+  const char *st = iptv_status();
+  char more[200];
+  TxtLine name = txt_line(TXT_LIVE_META_B, iptv_source_label(), HEXI(0xF5F6F8), 255), dot, rest;
+  float w, restMax;
+  if (st[0]) snprintf(more, sizeof more, "%s", st);
+  else if (l) snprintf(more, sizeof more, "%d channels", l->nCh);
+  else more[0] = 0;
+  dot = txt_line(TXT_SRC_TEXT, "\xC2\xB7", HEXI(0x5C636B), 255);
+  restMax = maxW - (22.0f + 18.0f + 12.0f + name.w + 12.0f + dot.w + 12.0f + 24.0f);
+  if (restMax < 60.0f) restMax = 60.0f;
+  rest = txt_line_trim(TXT_SRC_TEXT, more, HEXI(0x9AA1A9), 255, restMax);
+  w = 22.0f + 18.0f + 12.0f + name.w + (more[0] ? 12.0f + dot.w + 12.0f + rest.w : 0.0f) + 24.0f;
+  { GfxRect r = { right - w, L_BTN_Y, w, L_BTN_H };
+    float x = r.x + 22.0f, cy = r.y + r.h * 0.5f;
+    gfx_color(r, 0.5f, 1.0f, 1.0f, 1.0f, focused ? 0.16f : 0.07f);
+    if (focused) headRing(r);
+    gfx_icon((GfxRect){ x, cy - 9.0f, 18.0f, 18.0f }, "live_source", HEXF(0xE4E7EA), 1.0f);
+    x += 18.0f + 12.0f;
+    txt_draw(name, x, cy - name.h * 0.5f);
+    x += name.w + 12.0f;
+    if (more[0]) {
+      txt_draw(dot, x, cy - dot.h * 0.5f);
+      x += dot.w + 12.0f;
+      txt_draw(rest, x, cy - rest.h * 0.5f);
+    }
+    pointer_zone(r.x, r.y, r.w, r.h, pointHead, HEAD_SOURCE, 0);
+    return r; }
+}
+
+// "Search" under the circle while it has the focus: an icon alone says less
+// than a word, and the word is only needed while the icon is the one chosen.
+// It fades in and out over ~140 ms, on a dark pill so the chips under it do
+// not show through.
+static void headTooltip(GfxRect btn, int shown) {
+  static float a;
+  static Uint32 last;
+  Uint32 t = SDL_GetTicks();
+  float step = last ? (float)(t - last) / 140.0f : 1.0f;
+  last = t;
+  a += shown ? step : -step;
+  if (a < 0.0f) a = 0.0f;
+  if (a > 1.0f) a = 1.0f;
+  if (a <= 0.01f) return;
+  { TxtLine l = txt_line(TXT_SRC_TEXT, "Search", HEXI(0xF5F6F8), 255);
+    float w = l.w + 28.0f, h = l.h + 16.0f;
+    GfxRect r = { btn.x + (btn.w - w) * 0.5f, btn.y + btn.h + 14.0f - (1.0f - a) * 4.0f, w, h };
+    gfx_color(r, 0.5f, 0x26 / 255.0f, 0x29 / 255.0f, 0x2E / 255.0f, 0.96f * a);
+    txt_draw_alpha(l, r.x + 14.0f, r.y + (h - l.h) * 0.5f, a); }
 }
 
 static void drawHeader(void) {
   float x = X0(), right = L_RIGHT;
-  const IptvList *l = iptv_list();
-  char line[256];
+  GfxRect search;
   { TxtLine t = txt_line(TXT_TITLE3, "Live TV", 245, 246, 248, 255);
-    txt_draw(t, x, L_BTN_Y + L_BTN_H * 0.5f - t.h * 0.5f); }
-  { GfxRect r = headButton(right, "live_source", "Source", zone == ZONE_HEAD && headSel == HEAD_SOURCE, HEAD_SOURCE);
-    right = r.x - 24.0f; }
-  { GfxRect r = headButton(right, viewMode == VIEW_LIST ? "live_guide" : "live_list",
-                           viewMode == VIEW_LIST ? "Guide" : "Channels",
-                           zone == ZONE_HEAD && headSel == HEAD_TOGGLE, HEAD_TOGGLE);
-    right = r.x - 24.0f; }
-  { GfxRect r = headButton(right, "search_glass", "Search", zone == ZONE_HEAD && headSel == HEAD_SEARCH, HEAD_SEARCH);
-    right = r.x - 28.0f; }
-  { const char *st = iptv_status();
-    // How much of the list the guide covers, once it is in and has gaps: the
-    // number that says whether an extra guide (Source) is worth adding.
-    static const IptvList *countedFor;
-    static int countedPg = -1, withGuide;
-    char cover[48] = "";
-    if (l && (l != countedFor || l->nPg != countedPg)) {
-      countedFor = l; countedPg = l->nPg; withGuide = 0;
-      for (int i = 0; i < l->nCh; i++) withGuide += l->ch[i].nPg > 0;
-    }
-    if (l && l->nPg && withGuide < l->nCh)
-      snprintf(cover, sizeof cover, "\xE2\x80\xAF\xC2\xB7\xE2\x80\xAF""guide on %d", withGuide);
-    if (l) snprintf(line, sizeof line, "%s%s%s\xE2\x80\xAF\xC2\xB7\xE2\x80\xAF%d channels%s",
-                    st[0] ? st : "", st[0] ? "  \xC2\xB7  " : "", iptv_source_label(), l->nCh, cover);
-    else snprintf(line, sizeof line, "%s%s%s", iptv_source_label(), st[0] ? "  \xC2\xB7  " : "", st);
-    { TxtLine t = txt_line_trim(TXT_LIVE_META, line, HEXI(0x7C838B), 255, right - x - 360.0f);
-      txt_draw(t, right - t.w, L_BTN_Y + (L_BTN_H - t.h) * 0.5f); } }
+    txt_draw(t, x, L_BTN_Y + L_BTN_H * 0.5f - t.h * 0.5f);
+    x += t.w + 60.0f; }
+  // Laid out right to left; the source pill gives up width to a long status.
+  { GfxRect sw;
+    float switchW = 5.0f * 2.0f + segWidth("Guide", viewMode == VIEW_GUIDE) + segWidth("List", viewMode != VIEW_GUIDE);
+    GfxRect r = headSource(right, right - x - switchW - 24.0f - L_BTN_H - 24.0f,
+                           zone == ZONE_HEAD && headSel == HEAD_SOURCE);
+    right = r.x - 24.0f;
+    sw = headSwitch(right);
+    right = sw.x - 24.0f; }
+  search = headSearch(right, zone == ZONE_HEAD && headSel == HEAD_SEARCH);
+  headTooltip(search, zone == ZONE_HEAD && headSel == HEAD_SEARCH && mode != MODE_SETUP);
 }
 
 // The search field, in the chips' place: the glass, what is typed (or what can

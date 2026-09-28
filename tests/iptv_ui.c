@@ -181,9 +181,12 @@ int main(int argc, char **argv) {
   snprintf(path, sizeof path, "%s/nuvio-live-list-actions.bmp", out); frames(30, path);
   key(SDLK_LEFT); key(SDLK_UP); key(SDLK_UP);
 
-  // UP from the first row is the chips, UP again the header, whose first
-  // button is the Guide toggle (Y1).
-  key(SDLK_UP); key(SDLK_UP); key(SDLK_RETURN);
+  // UP from the first row is the chips, UP again the header, on the Guide |
+  // List switch's List (the view on show); LEFT is Guide (Y1).
+  key(SDLK_UP); key(SDLK_UP);
+  snprintf(path, sizeof path, "%s/nuvio-live-header.bmp", out); frames(20, path);
+  key(SDLK_RETURN);                  // List is already on show: nothing moves
+  key(SDLK_LEFT); key(SDLK_RETURN);
   key(SDLK_DOWN); key(SDLK_DOWN);
   snprintf(path, sizeof path, "%s/nuvio-live-guide.bmp", out); frames(30, path);
 
@@ -477,7 +480,9 @@ int main(int argc, char **argv) {
   // list narrowed as it is typed. Names first; then programme titles.
   setenv("NUVIO_FAKE_IME", "1", 1);
   for (int i = 0; i < 12; i++) key(SDLK_UP);
-  key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_LEFT);
+  key(SDLK_LEFT);                          // Guide -> the search circle, its tooltip
+  assert(!iptvui_requested_menu());
+  snprintf(path, sizeof path, "%s/nuvio-live-header-search.bmp", out); frames(20, path);
   key(SDLK_RETURN);
   type("s"); type("po"); type("rt");
   snprintf(path, sizeof path, "%s/nuvio-live-search.bmp", out); frames(20, path);
@@ -508,9 +513,9 @@ int main(int argc, char **argv) {
   key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_DOWN);   // leave the header on Guide, as found
 
   // --- Setup ------------------------------------------------------------------------
-  // To the header, RIGHT to Source, OK; then Xtream Codes.
+  // To the header, RIGHT past List to Source, OK; then Xtream Codes.
   for (int i = 0; i < 60; i++) key(SDLK_UP);
-  key(SDLK_RIGHT);
+  key(SDLK_RIGHT); key(SDLK_RIGHT);
   key(SDLK_RETURN);
   key(SDLK_RIGHT);
   snprintf(path, sizeof path, "%s/nuvio-live-setup.bmp", out); frames(30, path);
