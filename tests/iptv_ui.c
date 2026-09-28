@@ -610,8 +610,23 @@ int main(int argc, char **argv) {
     assert(phonelink_state() == PL_OFF);
   }
 
+  // From Settings' IPTV source: the source screen, and Back returns to Settings
+  // (the app's router does the switch), not to the channel list.
+  iptvui_open_source();
+  frames(3, NULL);
+  key(SDLK_AC_BACK);
+  assert(iptvui_requested_settings() && !iptvui_wants_exit());
+  assert(!iptvui_requested_settings());      // once
+  // Opened the ordinary way, Back stays in Live TV.
+  for (int i = 0; i < 12; i++) key(SDLK_UP);
+  key(SDLK_RIGHT); key(SDLK_RIGHT);
+  key(SDLK_RETURN);
+  frames(3, NULL);
+  key(SDLK_AC_BACK);
+  assert(!iptvui_requested_settings() && !iptvui_wants_exit());
+
   iptvui_shutdown();
   puts("PASS iptv_ui: list and guide from file://, focus model, favourite, live bar levels (peek and walk never retune), "
-       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, search, source screen (a failed try keeps the source, a good one takes over), phone form.");
+       "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, search, source screen (a failed try keeps the source, a good one takes over; from Settings, Back returns there), phone form.");
   return 0;
 }

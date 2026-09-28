@@ -1207,6 +1207,24 @@ static void backToBrowse(void) {
   zone = ZONE_BODY;
 }
 
+// Opened from Settings' IPTV source: Back and Cancel return there, not to the
+// channel list. "Go to channels" still goes to the channels.
+static int fromSettings, wantsSettings;
+static void leaveSetup(void) {
+  if (fromSettings) {
+    if (iptv_try_state() == IPTV_LOADING) iptv_try_cancel();
+    iptv_try_forget();
+    if (ime_is_open()) ime_close();
+    editing = -1;
+    fromSettings = 0;
+    wantsSettings = 1;
+    if (configured()) { mode = MODE_BROWSE; viewMode = VIEW_LIST; zone = ZONE_BODY; }
+    return;
+  }
+  if (configured()) backToBrowse();
+  else wantsExit = 1;
+}
+
 // A tried source that became the source: the list is somebody else's now.
 static void freshList(void) {
   useAlt = 0;
@@ -1233,7 +1251,7 @@ static void saveSetup(void) {
 static int primaryIsDone(void) { return iptv_try_state() == IPTV_READY && draftIsSource(); }
 
 static void primary(void) {
-  if (primaryIsDone()) { backToBrowse(); rebuildView(); return; }
+  if (primaryIsDone()) { fromSettings = 0; backToBrowse(); rebuildView(); return; }
   saveSetup();
 }
 
@@ -1263,8 +1281,7 @@ static void setupEvent(const SDL_Event *e) {
   if (isBack(k)) {
     if (ime_is_open()) { ime_close(); editing = -1; return; }
     if (iptv_try_state() == IPTV_LOADING) { iptv_try_cancel(); return; }
-    if (configured()) { backToBrowse(); return; }
-    wantsExit = 1;
+    leaveSetup();
     return;
   }
   if (ime_is_open()) {
@@ -1301,7 +1318,7 @@ static void setupEvent(const SDL_Event *e) {
         draft.kind = draft.kind == IPTV_SRC_XTREAM ? IPTV_SRC_M3U : IPTV_SRC_XTREAM;
         layoutSetup();
       } else if (row == SR_BUTTONS) {
-        if (setupCol == 1) backToBrowse();
+        if (setupCol == 1) leaveSetup();
         else primary();
       } else if (row == SR_LOGIN && setupCol == 2) {
         showPass = !showPass;
@@ -1390,9 +1407,12 @@ int iptvui_start(void) {
 }
 
 void iptvui_open_source(void) {
-  wantsExit = requestMenu = 0;
+  wantsExit = requestMenu = wantsSettings = 0;
   if (mode != MODE_SETUP) openSetup();
+  fromSettings = 1;
 }
+
+int iptvui_requested_settings(void) { int v = wantsSettings; wantsSettings = 0; return v; }
 
 void iptvui_resume(void) {
   wantsExit = requestMenu = 0;
@@ -1403,6 +1423,7 @@ void iptvui_resume(void) {
 }
 
 void iptvui_leave(void) {
+  fromSettings = 0;
   phonelink_close();
   if (searching) closeSearch();
   stopStream();

@@ -48,5 +48,8 @@ void iptvui_shutdown(void);
 // Straight to the source screen (Settings' IPTV source): called after the
 // screen has started or resumed.
 void iptvui_open_source(void);
+// 1 once when that source screen was left with Back or Cancel: the app goes
+// back to Settings.
+int  iptvui_requested_settings(void);
 
 #endif

@@ -557,6 +557,11 @@ void app_update(float dt, Uint32 now) {
     wantsExit = 1;
   }
 
+  // ...and back to Settings when that screen is left.
+  if (screen == SCREEN_LIVE && iptvui_requested_settings()) {
+    swapScreen(SCREEN_SETTINGS);
+    menu_set_destination(MENU_SETTINGS);
+  }
   // Settings' IPTV source: Live TV, on its source screen.
   if (screen == SCREEN_SETTINGS && settings_requested_live_source()) {
     swapScreen(SCREEN_LIVE);
