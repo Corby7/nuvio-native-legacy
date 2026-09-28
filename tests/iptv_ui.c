@@ -535,6 +535,10 @@ int main(int argc, char **argv) {
   key(SDLK_RIGHT); key(SDLK_RETURN);
   // The clear button empties the field and raises the keyboard again.
   key(SDLK_LEFT); key(SDLK_LEFT); key(SDLK_RETURN);
+  // A long IPTV name still shows its hit; what follows it is what gets cut.
+  type("olym");
+  snprintf(path, sizeof path, "%s/nuvio-live-search-long.bmp", out); frames(40, path);
+  clearField();
   type("zzzz");
   snprintf(path, sizeof path, "%s/nuvio-live-search-none.bmp", out); frames(10, path);
   key(SDLK_AC_BACK);                       // the keyboard down

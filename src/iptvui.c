@@ -2853,23 +2853,24 @@ static void guideBlock(const IptvProgramme *pg, GfxRect b, int focused, long lon
 
 // A channel's name with the search's hit lit: the matched span in `on`, the rest
 // dropped to `off`, which reads better on a dark row than brightening the match.
-// 0, drawing nothing, when there is no hit to show or the name would not fit.
+// What follows the hit is trimmed to the room left, so a long IPTV name still
+// shows its hit. 0, drawing nothing, when there is no hit or it would not show.
 static int nameHit(TxtStyle st, const char *name, unsigned on, unsigned off, float x, float top, float maxW, float a) {
-  char part[3][256];
+  char pre[256], mid[128];
   int at;
-  size_t n = (size_t)queryLen, len = strlen(name);
+  size_t n = (size_t)queryLen;
+  float end = x + maxW;
   if (!searching || !queryLen || queryIsNumber() || (at = foldFind(name, query)) < 0) return 0;
-  if (len >= sizeof part[0] || txt_width(st, name) > maxW) return 0;
-  memcpy(part[0], name, (size_t)at); part[0][at] = 0;
-  memcpy(part[1], name + at, n); part[1][n] = 0;
-  snprintf(part[2], sizeof part[2], "%s", name + at + n);
-  for (int i = 0; i < 3; i++) {
-    TxtLine t;
-    if (!part[i][0]) continue;
-    t = txt_line(st, part[i], HEXI(i == 1 ? on : off), 255);
-    txt_draw_alpha(t, x, top, a);
-    x += t.w;
-  }
+  if ((size_t)at >= sizeof pre || n >= sizeof mid) return 0;
+  memcpy(pre, name, (size_t)at); pre[at] = 0;
+  memcpy(mid, name + at, n); mid[n] = 0;
+  // The hit, and an ellipsis after it if the rest is cut, must fit.
+  if (txt_width(st, pre) + txt_width(st, mid) + (name[at + n] ? txt_width(st, "\xE2\x80\xA6") : 0.0f) > maxW)
+    return 0;
+  if (pre[0]) { TxtLine t = txt_line(st, pre, HEXI(off), 255); txt_draw_alpha(t, x, top, a); x += t.w; }
+  // The hit keeps nearly full strength on a dimmed row: it is what the eye looks for.
+  { TxtLine t = txt_line(st, mid, HEXI(on), 255); txt_draw_alpha(t, x, top, a < 0.9f ? 0.9f : a); x += t.w; }
+  if (name[at + n]) { TxtLine t = txt_line_trim(st, name + at + n, HEXI(off), 255, end - x); txt_draw_alpha(t, x, top, a); }
   return 1;
 }
 

@@ -59,7 +59,7 @@ names = {
   "News": ["World News", "News 24 \u1d34\u1d30", "\U0001d401\U0001d42e\U0001d42c\U0001d422\U0001d427\U0001d41e\U0001d42c\U0001d42c Today", "Politics Live", "Weather Now", "Morning Desk",
            "Global Report", "City News", "Tech Brief", "Evening Post", "Headlines", "Parliament"],
   "Sport": ["Sport One", "Sport Two", "Football Plus", "Tennis TV", "Motor Racing", "Golf Channel",
-            "Cycling Live", "Olympic Stories", "Fight Night", "Basketball HD", "Cricket 1", "Rugby World"],
+            "Cycling Live", "UK | VIP Olympic Stories Replay FHD Backup", "Fight Night", "Basketball HD", "Cricket 1", "Rugby World"],
   "Movies": ["Cinema Classics", "Action Max", "Drama Box", "Comedy Central", "Thriller Zone", "Film Four",
              "Sci-Fi Station", "Horror Night", "Romance HD", "Documentary", "Indie Films", "Premiere"],
   "Kids": ["Cartoon Time", "Junior", "Toons HD", "Discovery Kids", "Nature Kids", "Tiny Pop",
