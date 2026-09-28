@@ -557,6 +557,13 @@ void app_update(float dt, Uint32 now) {
     wantsExit = 1;
   }
 
+  // Settings' IPTV source: Live TV, on its source screen.
+  if (screen == SCREEN_SETTINGS && settings_requested_live_source()) {
+    swapScreen(SCREEN_LIVE);
+    menu_set_destination(MENU_LIVE);
+    iptvui_open_source();
+  }
+
   // Switching user, asked for by the side bar's footer. It comes BEFORE the
   // destination: the two come out of the same menu, and whoever asked to switch
   // does not want to change tab.

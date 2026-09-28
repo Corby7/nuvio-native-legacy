@@ -26,6 +26,8 @@ void settings_update(float dt, Uint32 now);
 void settings_draw(Uint32 now);
 int  settings_wants_exit(void);   // 1 when Back on the list of sections closes the screen
 int  settings_requested_menu(void);   // LEFT on the list of sections: calls up the menu
+// OK on IPTV source: 1 once, and the app opens Live TV on its source screen.
+int  settings_requested_live_source(void);
 void settings_shutdown(void);
 
 // Read by the rest of the app. "Reduced animations" matters most: with it on,

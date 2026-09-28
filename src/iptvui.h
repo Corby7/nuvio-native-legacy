@@ -45,4 +45,8 @@ void iptvui_leave(void);
 void iptvui_background(void);
 void iptvui_shutdown(void);
 
+// Straight to the source screen (Settings' IPTV source): called after the
+// screen has started or resumed.
+void iptvui_open_source(void);
+
 #endif

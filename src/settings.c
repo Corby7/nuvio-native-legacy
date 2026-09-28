@@ -31,6 +31,7 @@
 #include "pointer.h"
 #include "app.h"
 #include "appid.h"
+#include "iptv.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -80,7 +81,8 @@ typedef enum {
   SETTING_NEXT_AUTOPLAY, SETTING_NEXT_COUNTDOWN, SETTING_NEXT_MODE, SETTING_NEXT_SECONDS,
   SETTING_NEXT_PERCENT,
   SETTING_SEEK_COLOR, SETTING_PAUSE_DELAY,
-  SETTING_LIVE_BUFFER, SETTING_LIVE_PREVIEW,
+  // IPTV
+  SETTING_LIVE_SOURCE, SETTING_LIVE_BUFFER, SETTING_LIVE_PREVIEW,
   // Hero
   SETTING_HERO, SETTING_HERO_CATALOGS,
   SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
@@ -227,6 +229,7 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_NEXT_PERCENT] = NUM("Up next at",                 90, 100, 1, "%"),
   // 0 is Off: textValue draws it as a word, not as "0 s".
   [SETTING_PAUSE_DELAY] = NUM("Pause overlay after",        0, 60, 5, " s"),
+  [SETTING_LIVE_SOURCE] = ACTION("IPTV source"),
   [SETTING_LIVE_BUFFER] = ESC("Pause buffer",               V_LIVE_BUFFER, 4),
   [SETTING_LIVE_PREVIEW] = ESC("Preview while browsing",    V_ON, 2),
 
@@ -332,7 +335,7 @@ static const char *KEY[] = {
   // row, seconds, with 0 for off.
   [SETTING_PAUSE_DELAY] = "pauseOverlayDelaySeconds",
   // Local to this port: Live TV has no web counterpart.
-  [SETTING_LIVE_BUFFER] = "liveTvPauseBufferIndex", [SETTING_LIVE_PREVIEW] = "liveTvPreviewWhileBrowsing",
+  [SETTING_LIVE_SOURCE] = "-livesource", [SETTING_LIVE_BUFFER] = "liveTvPauseBufferIndex", [SETTING_LIVE_PREVIEW] = "liveTvPreviewWhileBrowsing",
   [SETTING_LANDSCAPE] = "modernLandscapePostersEnabled", [SETTING_HERO_FULL] = "modernHeroFullScreenBackdropEnabled",
   [SETTING_HERO_AREA] = "heroBackdropArea", [SETTING_HERO_BAND] = "heroBackdropScale",
   [SETTING_RAIL] = "collapseSidebar", [SETTING_RAIL_MODERN] = "modernSidebar", [SETTING_RAIL_BLUR] = "modernSidebarBlur",
@@ -377,8 +380,10 @@ typedef char checked_one_key_per_option[
 // panel says about a section before it is opened. `group` starts a new group
 // header on the list of sections; NULL continues the one above.
 static const struct { const char *group, *title; int start, n; const char *blurb; } SECTIONS[] = {
-  { "Playback", "Playback",          SETTING_QUALITY,              16,
-    "Quality, Dolby formats, languages, subtitles, what happens at the end of an episode, the player's controls and Live TV's pause and preview." },
+  { "Playback", "Playback",          SETTING_QUALITY,              14,
+    "Quality, Dolby formats, languages, subtitles, what happens at the end of an episode and the player's controls." },
+  { "IPTV", "IPTV",                  SETTING_LIVE_SOURCE,          3,
+    "The IPTV source and its extra TV guides, and Live TV's pause buffer and preview while browsing." },
   { "Home", "Hero",                  SETTING_HERO,                 5,
     "The featured title at the top of Home: whether it shows, and how its backdrop is drawn." },
   // No options of its own: `start` is SETTING_N, the marker openSection reads to
@@ -516,6 +521,7 @@ static ScrollBar bar;
 static float stepLtX0, stepLtX1;
 static int wantsExit = 0;
 static int requestMenu = 0;   // LEFT on a row LEFT cannot change
+static int requestLiveSource; // OK on IPTV source: the app opens Live TV's source screen
 
 // How many catalogues the hero uses. 0 = all, which is what the web app writes as
 // "All" when heroCatalogKeys is empty — and it is the owner's profile's case.
@@ -834,11 +840,13 @@ void settings_resume(void) { wantsExit = 0; requestMenu = 0; }
 void settings_shutdown(void) { leaveRows(); }
 int settings_wants_exit(void) { return wantsExit; }
 int settings_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }
+int settings_requested_live_source(void) { int v = requestLiveSource; requestLiveSource = 0; return v; }
 
 // The value of the read-only rows. The disk space is NOT an invented number: it
 // comes from the texture cache, which is exactly what "images" consumes on the
 // device — a fixed number here would be a lie and would never change.
 static const char *textRead(int op) {
+  if (op == SETTING_LIVE_SOURCE) return iptv_configured() ? iptv_source_label() : "not set up";
   static char buf[64];
   if (op == SETTING_VERSION_I) return SETTING_VERSION;
   if (op == SETTING_PROFILE_ACTIVE) {
@@ -997,6 +1005,7 @@ static const char *helpOption(int op) {
     case SETTING_NEXT_SECONDS: return "How long before the end of an episode the Up next card appears.";
     case SETTING_NEXT_PERCENT: return "How much of an episode has to be watched before the Up next card appears.";
     case SETTING_PAUSE_DELAY: return "How long playback sits paused, with no key pressed, before the title's details come up over a blurred picture. Off never shows them.";
+    case SETTING_LIVE_SOURCE: return "Your M3U playlist or Xtream Codes login, and extra TV guides for the channels it leaves without one. Opens Live TV's source screen, where a phone can fill it in too.";
     case SETTING_LIVE_BUFFER: return "Keeps the last minutes of a live channel on the TV so you can pause and rewind it. Works on MPEG-TS channels, and writes to the TV's storage while you watch.";
     case SETTING_LIVE_PREVIEW: return "Rest on a channel in the Live TV list or guide and it plays in the preview. It counts as watched only when you press OK.";
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
@@ -1023,7 +1032,8 @@ static const char *groupOfOption(int op) {
     case SETTING_AUDIO_LANG:     return "Audio and subtitles";
     case SETTING_NEXT_AUTOPLAY:  return "Up next";
     case SETTING_SEEK_COLOR:     return "Player";
-    case SETTING_LIVE_BUFFER:    return "Live TV";
+    case SETTING_LIVE_SOURCE:    return "Source";
+    case SETTING_LIVE_BUFFER:    return "Watching";
     case SETTING_HERO:           return "Hero";
     case SETTING_HERO_FULL:      return "Backdrop";
     case SETTING_SUFFIX_KIND:    return "Row titles";
@@ -1201,6 +1211,7 @@ void settings_event(const SDL_Event *e) {
   else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
     if (OPTIONS[focusOp].kind != OP_ACTION) return;
     if (focusOp == SETTING_TRAKT) { traktauth_begin(); return; }
+    if (focusOp == SETTING_LIVE_SOURCE) { requestLiveSource = 1; return; }
     if (focusOp == SETTING_SIMKL) { simklauth_begin(); return; }
     if (focusOp == SETTING_EXIT) {
       // Signing out erases the session from disk. Deliberately without
@@ -1391,6 +1402,7 @@ static void drawRule(int i, int rows, int focusedRow, float y, float a) {
 static const char *iconOfSection(int s) {
   switch (SECTIONS[s].start) {
     case SETTING_QUALITY:              return "set_playback";
+    case SETTING_LIVE_SOURCE:          return "menu_live";
     case SETTING_HERO:                 return "set_home";
     case SETTING_RAIL:                 return "set_appearance";
     case SETTING_PROFILE_ACTIVE:       return "set_account";
@@ -1567,6 +1579,7 @@ enum { HL_NONE, HL_RAIL, HL_HERO, HL_BACKDROP, HL_ROWS, HL_CW, HL_CARD,
 static int sceneOf(int s) {
   switch (SECTIONS[s].start) {
     case SETTING_QUALITY:              return PV_PLAYER;
+    case SETTING_LIVE_SOURCE:          return PV_NONE;
     case SETTING_DET_TRAILER:          return PV_DETAIL;
     case SETTING_PROFILE_ACTIVE: case SETTING_VERSION_I: return PV_NONE;
     default:                           return PV_HOME;
@@ -1607,7 +1620,8 @@ static int highlightOf(void) {
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:
     case SETTING_HIDE_UNRELEASED: return HL_ROWS;
     case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM:
-    case SETTING_PAUSE_DELAY: case SETTING_LIVE_BUFFER: case SETTING_LIVE_PREVIEW: return HL_NONE;
+    case SETTING_PAUSE_DELAY: case SETTING_LIVE_SOURCE: case SETTING_LIVE_BUFFER:
+    case SETTING_LIVE_PREVIEW: return HL_NONE;
     default:
       if (focusOp >= SETTING_CW_ON && focusOp <= SETTING_CW_NOT_SHOWN) return HL_CW;
       return HL_CARD;

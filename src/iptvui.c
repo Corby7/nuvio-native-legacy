@@ -1389,6 +1389,11 @@ int iptvui_start(void) {
   return 1;
 }
 
+void iptvui_open_source(void) {
+  wantsExit = requestMenu = 0;
+  if (mode != MODE_SETUP) openSetup();
+}
+
 void iptvui_resume(void) {
   wantsExit = requestMenu = 0;
   full = 0; quickOpen = 0;
