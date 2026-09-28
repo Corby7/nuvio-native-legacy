@@ -123,12 +123,12 @@ int main(void) {
   assert(strcmp(code, old));
   snprintf(target, sizeof target, "/save%s", code);
   assert(http("POST", target,
-              "kind=m3u&url=+http%3A%2F%2Fp.example%2Fget.php%3Fa%3D1%26b%3D2+&epg=http%3A%2F%2Fp.example%2Fepg.xml"
+              "kind=m3u&url=+http%3A%2F%2Fp.example%2Fget.php%3Fa%3D1%26b%3D2+&epg=http%3A%2F%2Fp.example%2Fepg.xml%0D%0A%0D%0A+https%3A%2F%2Fg.example%2Fuk.xml.gz%2C"
               "&server=x&user=y&pass=z", res, sizeof res) == 200);
   assert(phonelink_take(&got));
   assert(got.kind == IPTV_SRC_M3U);
   assert(!strcmp(got.url, "http://p.example/get.php?a=1&b=2"));
-  assert(!strcmp(got.epg, "http://p.example/epg.xml"));
+  assert(!strcmp(got.epg, "http://p.example/epg.xml https://g.example/uk.xml.gz"));
   assert(!got.server[0] && !got.user[0] && !got.pass[0]);
   phonelink_close();
 

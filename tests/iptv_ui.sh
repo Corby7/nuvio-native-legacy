@@ -70,6 +70,24 @@ shows = ["Morning Briefing", "The Big Match", "Midday Movie: The Long Road Home"
          "Live: Championship Final", "Evening News", "Quiz Night", "Weather", "Late Show", "Cooking with Ana",
          "Film: Northern Lights", "Cartoon Marathon", "Highlights", "Talk Back", "Science Hour", "Market Watch"]
 logos = [f"{root}/deploy/app/art/brands/{b}" for b in ["tmdb.png", "trakt.png", "imdb.png", "letterboxd.png"]]
+# Logos shaped the way IPTV ones come, each built around a CIRCLE so that any
+# stretch shows as an ellipse in the captures: square with a wide transparent
+# margin, very wide, tall, and an opaque JPEG with its own background.
+try:
+  from PIL import Image, ImageDraw
+  def mark(w, h, bg, name, fmt="PNG"):
+    im = Image.new("RGBA" if fmt == "PNG" else "RGB", (w, h), bg)
+    d = ImageDraw.Draw(im)
+    r = min(w, h) * 0.3
+    d.ellipse((w / 2 - r, h / 2 - r, w / 2 + r, h / 2 + r), fill=(230, 60, 40, 255))
+    d.rectangle((w * 0.1, h / 2 - 4, w * 0.9, h / 2 + 4), fill=(255, 255, 255, 255))
+    path = f"{tmp}/{name}"
+    im.save(path, fmt)
+    return path
+  logos = [mark(512, 512, (0, 0, 0, 0), "sq.png"), mark(1200, 240, (0, 0, 0, 0), "wide.png"),
+           mark(200, 420, (0, 0, 0, 0), "tall.png"), mark(640, 360, (20, 60, 140), "opaque.jpg", "JPEG")]
+except ImportError:
+  pass
 m3u = ['#EXTM3U url-tvg="file://%s/guide.xml.gz"' % tmp]
 chans = []
 n = 1

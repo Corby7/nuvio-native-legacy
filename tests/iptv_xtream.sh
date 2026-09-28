@@ -25,6 +25,15 @@ class H(http.server.BaseHTTPRequestHandler):
     if u.path == "/xmltv.php":
       return self.send(200, '<tv><channel id="cocuk.tr"/><programme start="%s" stop="%s" channel="cocuk.tr">'
                        '<title>Cartoons</title></programme></tv>' % (fmt(now - 600), fmt(now + 600)), "text/xml")
+    if u.path == "/extra.xml.gz":
+      # The viewer's own guide: the channel the provider's leaves out.
+      import gzip
+      b = gzip.compress(('<tv><channel id="News.x"><display-name>News</display-name></channel>'
+                         '<programme start="%s" stop="%s" channel="News.x"><title>Headlines</title></programme></tv>'
+                         % (fmt(now - 600), fmt(now + 600))).encode())
+      self.send_response(200); self.send_header("Content-Type", "application/gzip")
+      self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+      return
     if u.path != "/player_api.php": return self.send(404, "")
     user, pw = q.get("username"), q.get("password")
     if pw != "fa10": return self.send(200, json.dumps({"user_info": {"auth": 0}}))

@@ -32,7 +32,7 @@ typedef enum { IPTV_SRC_NONE, IPTV_SRC_M3U, IPTV_SRC_XTREAM } IptvSourceKind;
 typedef struct {
   int  kind;            // IptvSourceKind
   char url[1024];       // M3U: the playlist
-  char epg[1024];       // either: the guide, overriding what the source names
+  char epg[1024];       // either: the viewer's own guides, space-separated, read before the source's
   char server[512];     // Xtream: "http://host:port"
   char user[128];
   char pass[128];

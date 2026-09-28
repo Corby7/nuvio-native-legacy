@@ -17,7 +17,8 @@
 // Attributes are matched case-insensitively and in any order; the display name
 // is whatever follows the LAST comma outside quotes (some providers put commas
 // inside tvg-name, never outside it). `x-tvg-url` and `tvg-url` are accepted for
-// the guide's address as well, and a comma-separated list keeps its first entry.
+// the guide's address as well; a comma-separated list is kept whole (the loader
+// reads each guide in turn).
 //
 // THE GUIDE is only kept for a window of time (`from`..`to`): a full XMLTV feed
 // is a week of every channel the provider carries, a hundred megabytes of which
@@ -99,6 +100,14 @@ int iptv_parse_m3u(IptvList *l, const char *text);
 // Replaces any guide already attached. A matched channel with no tvg-logo takes
 // the guide's <icon>. Returns how many programmes were kept.
 int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to);
+
+// A FURTHER GUIDE, for the channels the ones before it left empty: providers
+// cover their headline channels and skip the rest, and a second XMLTV (the
+// viewer's own, or the next one in a url-tvg list) fills the gaps. Channels that
+// already have programmes are not matched at all, so a guide never mixes two
+// schedules on one channel and the first guide read keeps priority. Returns how
+// many programmes it added.
+int iptv_parse_xmltv_more(IptvList *l, const char *xml, long long from, long long to);
 
 // XMLTV's timestamp, "20260927143000 +0200" (the offset is optional and means
 // UTC when absent), as unix seconds. 0 when it does not parse.

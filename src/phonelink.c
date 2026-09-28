@@ -1,6 +1,7 @@
 #define _GNU_SOURCE   // strcasestr
 #include "phonelink.h"
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <errno.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -176,8 +177,10 @@ static const char *PAGE_HEAD =
   ".kind input{position:absolute;opacity:0}"
   ".kind label:has(input:checked){background:#f0f2f4;color:#0a0c0e;font-weight:600}"
   "label.f{display:block;margin:0 0 16px;color:#9aa1a9;font-size:14px}"
-  "label.f input{display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:14px;"
-  "border-radius:12px;border:1px solid #2a2e33;background:#16191d;color:#f5f6f8;font-size:16px}"
+  "label.f input,label.f textarea{display:block;width:100%;box-sizing:border-box;margin-top:6px;padding:14px;"
+  "border-radius:12px;border:1px solid #2a2e33;background:#16191d;color:#f5f6f8;font-size:16px;"
+  "font-family:inherit}"
+  "label.f small{display:block;font-size:13px;color:#6f767e;margin-top:2px}"
   "button{width:100%;padding:15px;border:0;border-radius:12px;background:#f0f2f4;color:#0a0c0e;"
   "font-size:17px;font-weight:600;margin-top:8px}"
   ".err{background:#3a1d19;color:#f3b4a9;padding:12px 14px;border-radius:12px}"
@@ -216,11 +219,19 @@ static void pageForm(Buf *b, const IptvSource *s, const char *error) {
          "<input name=\"pass\" type=\"password\" autocomplete=\"off\" placeholder=\"");
   put(b, x && current.pass[0] ? "Leave empty to keep the saved one" : "");
   put(b, "\"></label></div>");
-  put(b, "<label class=\"f\">TV guide address (XMLTV) \xC2\xB7 optional"
-         "<input name=\"epg\" type=\"url\" inputmode=\"url\" autocapitalize=\"off\" autocorrect=\"off\" "
-         "placeholder=\"Leave empty to use the source's own\" value=\"");
-  putEsc(b, s->epg);
-  put(b, "\"></label><button>Save</button></form>"
+  // Several guides, one per line: they are kept space-separated (the saved
+  // file is one line per field) and shown back one per line.
+  put(b, "<label class=\"f\">Extra TV guides (XMLTV) \xC2\xB7 optional"
+         "<small>One address per line. They fill the channels the provider's own guide "
+         "misses, and win where both have one.</small>"
+         "<textarea name=\"epg\" rows=\"3\" autocapitalize=\"off\" autocorrect=\"off\" spellcheck=\"false\" "
+         "placeholder=\"https://\xE2\x80\xA6/guide.xml.gz\">");
+  { char lines[sizeof s->epg];
+    size_t k;
+    snprintf(lines, sizeof lines, "%s", s->epg);
+    for (k = 0; lines[k]; k++) if (lines[k] == ' ') lines[k] = '\n';
+    putEsc(b, lines); }
+  put(b, "</textarea></label><button>Save</button></form>"
          // Without script both halves show, which still works.
          "<script>function sw(){var x=document.querySelector('input[value=xtream]').checked;"
          "document.getElementById('m3u').hidden=x;document.getElementById('xtream').hidden=!x}sw()</script>"
@@ -248,6 +259,20 @@ static void respond(int fd, int status, const Buf *b) {
 }
 
 // What the phone typed, checked by the TV's own rules (iptvui's draftComplete).
+// The guide list as it is saved: addresses separated by one space, whatever the
+// phone sent between them (new lines, commas, runs of blanks).
+static void oneLine(char *s) {
+  size_t r = 0, w = 0;
+  int gap = 0;
+  for (; s[r]; r++) {
+    unsigned char c = (unsigned char)s[r];
+    if (isspace(c) || c == ',' || c == ';') { gap = w > 0; continue; }
+    if (gap) { s[w++] = ' '; gap = 0; }
+    s[w++] = (char)c;
+  }
+  s[w] = 0;
+}
+
 static const char *validate(const IptvSource *s) {
   if (s->kind == IPTV_SRC_XTREAM) {
     if (!s->server[0] || !s->user[0] || !s->pass[0])
@@ -319,7 +344,8 @@ static void serve(int fd, unsigned myGen, const char *peer) {
     formValue(body, "server", s.server, sizeof s.server);
     formValue(body, "user", s.user, sizeof s.user);
     formValue(body, "pass", s.pass, sizeof s.pass);
-    trim(s.url); trim(s.epg); trim(s.server); trim(s.user);
+    trim(s.url); trim(s.server); trim(s.user);
+    oneLine(s.epg);
     // The page never shows the saved password. Left empty on the same login, it
     // means "keep it".
     if (s.kind == IPTV_SRC_XTREAM && !s.pass[0] && current.kind == IPTV_SRC_XTREAM &&

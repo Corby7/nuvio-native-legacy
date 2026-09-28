@@ -88,7 +88,7 @@ static void testEntities(void) {
 static void testM3u(IptvList *l) {
   int n = iptv_parse_m3u(l, M3U);
   assert(n == 5 && l->nCh == 5);
-  assert(!strcmp(l->epgUrl, "http://epg.example/guide.xml.gz"));
+  assert(!strcmp(l->epgUrl, "http://epg.example/guide.xml.gz,http://backup/epg.xml"));
 
   assert(!strcmp(l->ch[0].name, "BBC One HD"));
   assert(!strcmp(l->ch[0].tvgId, "bbc1.uk"));
@@ -409,6 +409,44 @@ static void testLooseMatch(void) {
   iptv_list_free(&l);
 }
 
+// A second guide fills the channels the first left empty, and only those: a
+// channel the first guide covers keeps that schedule even when the second one
+// also knows it.
+static void testMoreGuides(void) {
+  IptvList l;
+  long long st = iptv_xmltv_time("20260927180000 +0000");
+  const char *m3u =
+    "#EXTM3U\n"
+    "#EXTINF:-1 tvg-id=\"a.uk\",Alpha\n"         "http://x/1\n"
+    "#EXTINF:-1 tvg-id=\"b.uk\",UK - Beta HD\n"  "http://x/2\n"
+    "#EXTINF:-1,Beta 4K\n"                       "http://x/3\n"
+    "#EXTINF:-1,Gamma\n"                         "http://x/4\n";
+  const char *first =
+    "<tv><programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"a.uk\">"
+    "<title>From the provider</title></programme></tv>";
+  const char *second =
+    "<tv><channel id=\"Alpha.x\"><display-name>Alpha</display-name></channel>"
+    "<channel id=\"Beta.x\"><display-name>Beta</display-name></channel>"
+    "<programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"Alpha.x\"><title>Other</title></programme>"
+    "<programme start=\"20260927183000 +0000\" stop=\"20260927193000 +0000\" channel=\"Alpha.x\"><title>Other 2</title></programme>"
+    "<programme start=\"20260927180000 +0000\" stop=\"20260927190000 +0000\" channel=\"Beta.x\"><title>Beta show</title></programme>"
+    "</tv>";
+  iptv_list_init(&l);
+  assert(iptv_parse_m3u(&l, m3u) == 4);
+  assert(iptv_parse_xmltv(&l, first, st - 3600, st + 86400) == 1);
+  assert(l.ch[1].nPg == 0);
+  assert(iptv_parse_xmltv_more(&l, second, st - 3600, st + 86400) == 2);
+  assert(l.ch[0].nPg == 1 && !strcmp(l.pg[l.ch[0].firstPg].title, "From the provider"));
+  assert(l.ch[1].nPg == 1 && !strcmp(l.pg[l.ch[1].firstPg].title, "Beta show"));
+  assert(l.ch[2].nPg == 1 && !strcmp(l.pg[l.ch[2].firstPg].title, "Beta show"));   // sibling
+  assert(l.ch[3].nPg == 0);
+  assert(iptv_parse_xmltv_more(&l, second, st - 3600, st + 86400) == 0);        // nothing left it knows
+  for (int i = 1; i < l.nPg; i++)
+    assert(l.pg[i - 1].channel < l.pg[i].channel ||
+           (l.pg[i - 1].channel == l.pg[i].channel && l.pg[i - 1].start < l.pg[i].start));
+  iptv_list_free(&l);
+}
+
 static void testCatchup(void) {
   IptvList l;
   char u[1024];
@@ -495,7 +533,8 @@ int main(int argc, char **argv) {
   testPlain();
   testCatchup();
   testLooseMatch();
+  testMoreGuides();
   if (argc > 1) testGunzip(argv[1]);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; loose guide matching; gzip.");
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; loose guide matching; further guides; gzip.");
   return 0;
 }

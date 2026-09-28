@@ -375,8 +375,7 @@ int iptv_parse_m3u(IptvList *l, const char *text) {
       const char *v; size_t n;
       if (attr(p, e, "url-tvg", &v, &n) || attr(p, e, "x-tvg-url", &v, &n) ||
           attr(p, e, "tvg-url", &v, &n)) {
-        size_t k = 0;
-        while (k < n && v[k] != ',') k++;
+        size_t k = n;
         if (k >= sizeof l->epgUrl) k = sizeof l->epgUrl - 1;
         memcpy(l->epgUrl, v, k); l->epgUrl[k] = 0;
       }
@@ -814,7 +813,7 @@ static int bareName(const char *s, char *dst, size_t size) {
 // A LOOSE KEY for a channel name, the last resort after the name as written and
 // bareName: lower case, letters and digits only, with what IPTV playlists hang
 // on a name and guides do not — a country tag in front ("UK: ", "UK | ",
-// "|UK| "), anything in square brackets, and quality words anywhere (HD, FHD,
+// "|UK| ", "UK - "), anything in square brackets, and quality words anywhere (HD, FHD,
 // UHD, 4K, HEVC, 1080p, 50fps…). "UK: SKY SPORTS F1 UHD" and the guide's "Sky
 // Sports F1" both become "skysportsf1". A "+1" keeps its 1, and "(East)" its
 // east: those really are other schedules. Bytes past ASCII are kept as they
@@ -842,7 +841,7 @@ static int looseName(const char *s, char *dst, size_t size) {
     if (a >= 2) {
       const char *q = p + a;
       while (*q == ' ') q++;
-      if (*q == ':' || *q == '|' || *q == ']') { p = q + 1; }
+      if (*q == ':' || *q == '|' || *q == ']' || (*q == '-' && q[1] == ' ')) { p = q + 1; }
     } }
   while (*p) {
     const char *w;
@@ -942,16 +941,21 @@ static int addProgramme(IptvList *l, int ch, long long start, long long stop,
   return 1;
 }
 
-int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to) {
+// `fill`: keep what is attached and match only the channels still without a
+// programme — see iptv_parse_xmltv_more.
+static int parseGuide(IptvList *l, const char *xml, long long from, long long to, int fill) {
   Map byId, byName, byXml, byLoose;
   int *link;
   const char *p, *xmlEnd;
   // The XMLTV channel ids seen in <channel> blocks, with the channel they map to.
   struct XmlId { const char *id; int ch; } *xmlIds = NULL;
-  int nXml = 0, capXml = 0;
+  int nXml = 0, capXml = 0, n0;
 
-  l->nPg = 0;
-  for (int i = 0; i < l->nCh; i++) l->ch[i].firstPg = l->ch[i].nPg = 0;
+  if (!fill) {
+    l->nPg = 0;
+    for (int i = 0; i < l->nCh; i++) l->ch[i].firstPg = l->ch[i].nPg = 0;
+  }
+  n0 = l->nPg;
   if (!xml || !l->nCh) return 0;
   // Every scan below is bounded by this end rather than by the terminator: a
   // guide is tens of megabytes, and nothing should walk to its end per element.
@@ -968,6 +972,7 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
   for (int i = 0; i < l->nCh; i++) {
     int first;
     link[i] = -1;
+    if (fill && l->ch[i].nPg) continue;   // this guide is not asked about it
     if (l->ch[i].tvgId[0] && (first = mapPut(&byId, l->ch[i].tvgId, i)) >= 0) {
       int k = first;
       while (link[k] >= 0) k = link[k];
@@ -980,6 +985,7 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
   // really called "News (HD)" keeps that key over another's "News HD (HD)".
   for (int i = 0; i < l->nCh; i++) {
     char bare[256];
+    if (fill && l->ch[i].nPg) continue;
     if (bareName(l->ch[i].tvgName, bare, sizeof bare))
       mapPut(&byName, arenaDup(l, bare, strlen(bare)), i);
     if (bareName(l->ch[i].name, bare, sizeof bare))
@@ -989,6 +995,7 @@ int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to)
   // nothing above.
   for (int i = 0; i < l->nCh; i++) {
     char loose[256];
+    if (fill && l->ch[i].nPg) continue;
     if (looseName(l->ch[i].name, loose, sizeof loose))
       mapPut(&byLoose, arenaDup(l, loose, strlen(loose)), i);
     if (looseName(l->ch[i].tvgName, loose, sizeof loose))
@@ -1083,7 +1090,7 @@ done:
   mapFree(&byId); mapFree(&byName); mapFree(&byXml); mapFree(&byLoose);
   free(xmlIds);
 
-  if (!l->nPg) return 0;
+  if (l->nPg == n0) return 0;
   qsort(l->pg, (size_t)l->nPg, sizeof *l->pg, byChannelStart);
   // Duplicates (two feeds merged by the provider) and missing stops: a
   // programme with no stop ends where the next one starts, or after half an hour.
@@ -1101,7 +1108,15 @@ done:
   }
   indexProgrammes(l);
   shareSiblings(l);
-  return l->nPg;
+  return l->nPg - n0 > 0 ? l->nPg - n0 : 0;
+}
+
+int iptv_parse_xmltv(IptvList *l, const char *xml, long long from, long long to) {
+  return parseGuide(l, xml, from, to, 0);
+}
+
+int iptv_parse_xmltv_more(IptvList *l, const char *xml, long long from, long long to) {
+  return parseGuide(l, xml, from, to, 1);
 }
 
 int iptv_programme_at(const IptvList *l, int ch, long long t) {

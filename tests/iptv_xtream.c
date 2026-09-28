@@ -18,10 +18,13 @@ static void settle(void) {
   assert(!"the load never settled");
 }
 
+static char epg[1024];   // the viewer's extra guides for the next load
+
 static void load(int kind, const char *url, const char *server, const char *user, const char *pass) {
   IptvSource s;
   memset(&s, 0, sizeof s);
   s.kind = kind;
+  snprintf(s.epg, sizeof s.epg, "%s", epg);
   snprintf(s.url, sizeof s.url, "%s", url);
   snprintf(s.server, sizeof s.server, "%s", server);
   snprintf(s.user, sizeof s.user, "%s", user);
@@ -61,6 +64,17 @@ int main(int argc, char **argv) {
     assert(strstr(iptv_play_url(0, relay, sizeof relay), "/live/d5fe/fa10/101.m3u8"));
     assert(strstr(iptv_play_url_alt(0, relay, sizeof relay), "/live/d5fe/fa10/101.ts")); }
 
+  // Extra guides: a dead address is passed over, the viewer's guide fills the
+  // channel the provider's leaves out, and the provider's still covers its own.
+  assert(iptv_list()->ch[1].nPg == 0);
+  snprintf(epg, sizeof epg, "%s/nothing.xml %s/extra.xml.gz", base, base);
+  load(IPTV_SRC_XTREAM, "", base, "d5fe", "fa10");
+  assert(iptv_guide_state() == IPTV_READY);
+  { const IptvList *l = iptv_list();
+    assert(l->ch[0].nPg == 1 && !strcmp(l->pg[l->ch[0].firstPg].title, "Cartoons"));
+    assert(l->ch[1].nPg == 1 && !strcmp(l->pg[l->ch[1].firstPg].title, "Headlines")); }
+  epg[0] = 0;
+
   // A wrong password: said as such, not as an 884.
   load(IPTV_SRC_XTREAM, "", base, "d5fe", "wrong");
   printf("status: '%s'\n", iptv_status());
@@ -72,6 +86,6 @@ int main(int argc, char **argv) {
   assert(strstr(iptv_status(), "expired"));
 
   iptv_shutdown();
-  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link and its output=ts; login and expiry said.");
+  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link and its output=ts; extra guides fill the gaps; login and expiry said.");
   return 0;
 }

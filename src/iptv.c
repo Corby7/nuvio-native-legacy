@@ -112,17 +112,47 @@ static void playlistUrl(const IptvSource *s, char *dst, size_t n) {
   }
 }
 
-static void guideUrl(const IptvSource *s, const IptvList *l, char *dst, size_t n) {
-  if (s->epg[0]) { snprintf(dst, n, "%s", s->epg); return; }
+// THE GUIDES TO READ, in order of priority. The viewer's own come first — typed
+// because the provider's is wrong or thin, so theirs wins where both know a
+// channel — then the provider's: its xmltv.php, or every address in the
+// playlist's url-tvg. Each later guide only fills the channels the earlier ones
+// left empty (iptv_parse_xmltv_more). Separators are anything that is not part
+// of an address: spaces, new lines, commas.
+#define IPTV_GUIDES_MAX 8
+typedef struct { char url[IPTV_GUIDES_MAX][1400]; int n; } GuideUrls;
+
+static void guideAdd(GuideUrls *g, const char *s, size_t k) {
+  if (g->n >= IPTV_GUIDES_MAX || !k || k >= sizeof g->url[0]) return;
+  for (int i = 0; i < g->n; i++)
+    if (strlen(g->url[i]) == k && !strncmp(g->url[i], s, k)) return;
+  memcpy(g->url[g->n], s, k); g->url[g->n][k] = 0;
+  g->n++;
+}
+
+static void guideSplit(GuideUrls *g, const char *list) {
+  const char *p = list;
+  while (*p) {
+    const char *e;
+    while (*p && (isspace((unsigned char)*p) || *p == ',' || *p == ';')) p++;
+    for (e = p; *e && !isspace((unsigned char)*e) && *e != ',' && *e != ';'; e++) {}
+    guideAdd(g, p, (size_t)(e - p));
+    p = e;
+  }
+}
+
+static void guideUrls(const IptvSource *s, const IptvList *l, GuideUrls *g) {
+  g->n = 0;
+  guideSplit(g, s->epg);
   if (s->kind == IPTV_SRC_XTREAM) {
-    char base[600], u[400], p[400];
+    char base[600], u[400], p[400], x[1400];
     serverBase(s->server, base, sizeof base);
     urlEncode(s->user, u, sizeof u);
     urlEncode(s->pass, p, sizeof p);
-    snprintf(dst, n, "%s/xmltv.php?username=%s&password=%s", base, u, p);
-    return;
+    snprintf(x, sizeof x, "%s/xmltv.php?username=%s&password=%s", base, u, p);
+    guideAdd(g, x, strlen(x));
+  } else if (l) {
+    guideSplit(g, l->epgUrl);
   }
-  snprintf(dst, n, "%s", l && l->epgUrl[0] ? l->epgUrl : "");
 }
 
 // A query parameter of `url`, percent-decoded. 0 when absent or empty.
@@ -404,7 +434,8 @@ static void describeFailure(const IptvSource *src, const char *body, int status,
 
 static void *loader(void *arg) {
   Job job = *(Job *)arg;
-  char url[1400], gurl[1400];
+  char url[1400];
+  GuideUrls guides;
   char *text = NULL, *cached = NULL;
   IptvList *l;
   int fromCache = 0;
@@ -475,8 +506,8 @@ static void *loader(void *arg) {
     // has, up to a day (two would double the guide's memory for little use).
     if (probe) for (int i = 0; i < probe->nCh; i++)
       if (probe->ch[i].catchup) { behind = IPTV_GUIDE_ARCHIVE_S; break; }
-    guideUrl(&job.src, probe, gurl, sizeof gurl);
-    if (!gurl[0]) {
+    guideUrls(&job.src, probe, &guides);
+    if (!guides.n || !probe) {
       setStatus("");
       atomic_store(&guideState, IPTV_FAILED);
       printf("[iptv] no guide: the playlist names none\n");
@@ -484,30 +515,51 @@ static void *loader(void *arg) {
       goto out;
     }
     atomic_store(&guideState, IPTV_LOADING);
-    setStatus("Loading the TV guide\xE2\x80\xA6");
-    { char *xml = fetchGuide(gurl);
-      long long now = (long long)time(NULL);
-      int n;
-      if (job.gen != atomic_load(&generation)) {
+    { long long now = (long long)time(NULL);
+      int total = 0, with = 0;
+      for (int gi = 0; gi < guides.n; gi++) {
+        char *xml;
+        int n, got;
+        if (guides.n > 1) {
+          char st[96];
+          snprintf(st, sizeof st, "Loading the TV guide (%d of %d)\xE2\x80\xA6", gi + 1, guides.n);
+          setStatus(st);
+        } else {
+          setStatus("Loading the TV guide\xE2\x80\xA6");
+        }
+        xml = fetchGuide(guides.url[gi]);
+        got = xml != NULL;
+        if (job.gen != atomic_load(&generation)) {
+          free(xml);
+          iptv_list_free(probe); free(probe);
+          goto out;
+        }
+        n = !xml ? 0 : total ? iptv_parse_xmltv_more(probe, xml, now - behind, now + IPTV_GUIDE_AHEAD_S)
+                             : iptv_parse_xmltv(probe, xml, now - behind, now + IPTV_GUIDE_AHEAD_S);
         free(xml);
-        if (probe) { iptv_list_free(probe); free(probe); }
-        goto out;
-      }
-      n = (xml && probe) ? iptv_parse_xmltv(probe, xml, now - behind,
-                                            now + IPTV_GUIDE_AHEAD_S) : 0;
-      free(xml);
-      if (n > 0) {
-        int with = 0;
+        // Only the host in the log: xmltv.php carries the login in its query.
+        { char host[256]; const char *h = strstr(guides.url[gi], "://");
+          size_t k = 0;
+          h = h ? h + 3 : guides.url[gi];
+          while (h[k] && h[k] != '/' && h[k] != '?' && k + 1 < sizeof host) { host[k] = h[k]; k++; }
+          host[k] = 0;
+          printf("[iptv] guide %d/%d (%s): %s, %d programmes added\n", gi + 1, guides.n, host,
+                 got ? "read" : "download failed", n); }
+        total += n;
+        with = 0;
         for (int i = 0; i < probe->nCh; i++) with += probe->ch[i].nPg > 0;
-        printf("[iptv] guide: %d programmes on %d of %d channels\n", n, with, probe->nCh);
+        if (with == probe->nCh) break;           // nothing left to fill
+      }
+      if (total > 0) {
+        printf("[iptv] guide: %d programmes on %d of %d channels\n", probe->nPg, with, probe->nCh);
         setStatus("");
         post(probe, job.gen);
         atomic_store(&guideState, IPTV_READY);
       } else {
-        printf("[iptv] guide unavailable (%s)\n", xml ? "nothing matched" : "download failed");
+        printf("[iptv] guide unavailable\n");
         setStatus("TV guide unavailable");
         atomic_store(&guideState, IPTV_FAILED);
-        if (probe) { iptv_list_free(probe); free(probe); }
+        iptv_list_free(probe); free(probe);
       }
     }
   }

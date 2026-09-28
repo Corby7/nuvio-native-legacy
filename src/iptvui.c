@@ -956,7 +956,7 @@ static const char *fieldLabel(int row) {
     case ROW_SERVER: return "Server";
     case ROW_USER:   return "Username";
     case ROW_PASS:   return "Password";
-    case ROW_EPG:    return "TV guide address (XMLTV) \xC2\xB7 optional";
+    case ROW_EPG:    return "Extra TV guides (XMLTV) \xC2\xB7 optional";
     default: return "";
   }
 }
@@ -966,8 +966,7 @@ static const char *fieldHint(int row) {
     case ROW_SERVER: return "http://provider.example:8080";
     case ROW_USER:   return "username";
     case ROW_PASS:   return "password";
-    case ROW_EPG:    return draft.kind == IPTV_SRC_XTREAM ? "Leave empty to use the provider's guide"
-                                                           : "Leave empty to use the playlist's own";
+    case ROW_EPG:    return "Fills channels the source's guide misses \xC2\xB7 several with spaces";
     default: return "";
   }
 }
@@ -1958,16 +1957,28 @@ static void identity(const IptvChannel *c, GfxRect r, float radius, unsigned pla
   if (c->logo[0] && !tex_failed(c->logo)) {
     GLuint tex = tex_get_width(c->logo, r.w - 18.0f);
     if (tex) {
-      GfxRect box = { r.x + 9.0f, r.y + 9.0f, r.w - 18.0f, r.h - 18.0f };
-      float asp = tex_aspect(c->logo), w, h;
+      // THE MARK, NOT THE FILE. IPTV logos come with any amount of transparent
+      // margin — one provider's are padded to a square, the next one's are
+      // cropped to the letters — so the same box drew some marks at a third of
+      // the size of others. The visible part (tex_content_box) is what gets
+      // fitted, through the texture cell, with air in proportion to the tile.
+      float air = r.h * 0.14f < 9.0f ? 9.0f : r.h * 0.14f;
+      GfxRect box = { r.x + air, r.y + air, r.w - air * 2.0f, r.h - air * 2.0f };
+      float asp = tex_aspect(c->logo), w, h, vis[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
       if (asp <= 0.0f) asp = 1.0f;
+      if (!tex_content_box(c->logo, vis) || vis[2] - vis[0] < 0.02f || vis[3] - vis[1] < 0.02f) {
+        vis[0] = vis[1] = 0.0f; vis[2] = vis[3] = 1.0f;
+      }
+      asp *= (vis[2] - vis[0]) / (vis[3] - vis[1]);
       if (asp > box.w / box.h) { w = box.w; h = box.w / asp; } else { h = box.h; w = box.h * asp; }
       gfx_opacity_group = a;
-      // The rectangle already has the logo's shape. The shader's own crop reads
+      // The rectangle already has the mark's shape. The shader's own crop reads
       // a global the last art drawn left behind (the menu's avatar, a poster),
       // and a logo cropped to THAT shape is the squashed look: say "as is".
       gfx_tex_aspect_current = 0.0f;
+      gfx_tex_cell_current = (GfxRect){ vis[0], vis[1], vis[2] - vis[0], vis[3] - vis[1] };
       gfx_texture((GfxRect){ box.x + (box.w - w) * 0.5f, box.y + (box.h - h) * 0.5f, w, h }, tex);
+      gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
       gfx_opacity_group = 1.0f;
       return;
     }
@@ -2009,8 +2020,19 @@ static void drawHeader(void) {
   { GfxRect r = headButton(right, "search_glass", "Search", zone == ZONE_HEAD && headSel == HEAD_SEARCH, HEAD_SEARCH);
     right = r.x - 28.0f; }
   { const char *st = iptv_status();
-    if (l) snprintf(line, sizeof line, "%s%s%s\xE2\x80\xAF\xC2\xB7\xE2\x80\xAF%d channels",
-                    st[0] ? st : "", st[0] ? "  \xC2\xB7  " : "", iptv_source_label(), l->nCh);
+    // How much of the list the guide covers, once it is in and has gaps: the
+    // number that says whether an extra guide (Source) is worth adding.
+    static const IptvList *countedFor;
+    static int countedPg = -1, withGuide;
+    char cover[48] = "";
+    if (l && (l != countedFor || l->nPg != countedPg)) {
+      countedFor = l; countedPg = l->nPg; withGuide = 0;
+      for (int i = 0; i < l->nCh; i++) withGuide += l->ch[i].nPg > 0;
+    }
+    if (l && l->nPg && withGuide < l->nCh)
+      snprintf(cover, sizeof cover, "\xE2\x80\xAF\xC2\xB7\xE2\x80\xAF""guide on %d", withGuide);
+    if (l) snprintf(line, sizeof line, "%s%s%s\xE2\x80\xAF\xC2\xB7\xE2\x80\xAF%d channels%s",
+                    st[0] ? st : "", st[0] ? "  \xC2\xB7  " : "", iptv_source_label(), l->nCh, cover);
     else snprintf(line, sizeof line, "%s%s%s", iptv_source_label(), st[0] ? "  \xC2\xB7  " : "", st);
     { TxtLine t = txt_line_trim(TXT_LIVE_META, line, HEXI(0x7C838B), 255, right - x - 360.0f);
       txt_draw(t, right - t.w, L_BTN_Y + (L_BTN_H - t.h) * 0.5f); } }
@@ -2772,7 +2794,7 @@ static void drawSetup(void) {
       0xF5F6F8, x, 132.0f, 1.0f);
   txt_block(TXT_PG_END,
             "Use the M3U playlist address your provider gave you, or sign in with an Xtream "
-            "Codes login. The TV guide is found automatically when the source names one.",
+            "Codes login. The source's own TV guide loads by itself; add more guides for the channels it misses.",
             HEXI(0x9AA1A9), x, 196.0f, 1040.0f, 29.0f, 1.0f, 3);
 
   for (int i = 0; i < nSetupRows; i++) {
