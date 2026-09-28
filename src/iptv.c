@@ -390,13 +390,117 @@ static IptvList *parsePlaylist(const char *text) {
   return l;
 }
 
-static char *fetchGuide(const char *url) {
+// A guide, inflated and cut to [from, to) as it inflates (iptv_guide_window):
+// a week of a provider's or a country's guide never sits in memory whole.
+static char *fetchGuide(const char *url, long long from, long long to) {
   long n = 0, m = 0;
   char *raw = net_download_bin(url, IPTV_GUIDE_TIMEOUT_S, &n), *xml;
   if (!raw) return NULL;
-  xml = iptv_gunzip(raw, n, &m);
-  if (xml) { free(raw); return xml; }
-  return raw;   // plain XML; net_download_bin terminates it
+  xml = iptv_guide_window(raw, n, from, to, &m);
+  free(raw);
+  return xml;
+}
+
+// --- guides found for the channels no other guide covers --------------------------
+//
+// Providers tag their channels with the country they come from — "UK: BBC One",
+// "|NL| NPO 1", "[DE] ZDF", or a group called "UK | SPORTS" — and a country's
+// public XMLTV guide (epgshare01's per-country files) covers most of what a
+// provider's own guide leaves out. So when channels are still without a guide
+// after the viewer's and the provider's, the countries of THOSE channels are
+// counted and the guides of the most common ones (IPTV_AUTO_MAX) are read, as
+// further guides: they only fill gaps. Each is kept on disk, already cut to the
+// window, for IPTV_AUTO_KEEP_S, so the next start does not download it again.
+#define IPTV_AUTO_MAX     3
+#define IPTV_AUTO_MIN     3              // uncovered channels a country needs
+#define IPTV_AUTO_KEEP_S  (8 * 3600)
+#define IPTV_AUTO_BASE    "https://epgshare01.online/epgshare01/epg_ripper_"
+
+// The provider's country tags and the guide file for each. "AR" is left out on
+// purpose: on IPTV lists it means Arabic, not Argentina.
+static const struct { const char *tag, *file; } COUNTRIES[] = {
+  { "UK", "UK1" }, { "GB", "UK1" }, { "US", "US1" }, { "USA", "US1" }, { "CA", "CA1" },
+  { "NL", "NL1" }, { "BE", "BE2" }, { "DE", "DE1" }, { "AT", "AT1" }, { "CH", "CH1" },
+  { "FR", "FR1" }, { "IT", "IT1" }, { "ES", "ES1" }, { "PT", "PT1" }, { "IE", "IE1" },
+  { "SE", "SE1" }, { "NO", "NO1" }, { "DK", "DK1" }, { "FI", "FI1" }, { "PL", "PL1" },
+  { "TR", "TR1" }, { "GR", "GR1" }, { "AU", "AU1" }, { "NZ", "NZ1" }, { "IN", "IN1" },
+  { "BR", "BR1" }, { "MX", "MX1" },
+};
+#define NCOUNTRIES ((int)(sizeof COUNTRIES / sizeof *COUNTRIES))
+
+// The country tag leading `s`: two or three capitals, alone or in | or [ ],
+// followed by ':', '|', ']' or '-'. -1 when none.
+static int countryTag(const char *s) {
+  char tag[4];
+  size_t k = 0;
+  if (!s) return -1;
+  while (*s == ' ') s++;
+  if (*s == '|' || *s == '[') s++;
+  while (k < 3 && s[k] >= 'A' && s[k] <= 'Z') { tag[k] = s[k]; k++; }
+  if (k < 2 || (s[k] >= 'A' && s[k] <= 'Z') || (s[k] >= 'a' && s[k] <= 'z')) return -1;
+  { const char *q = s + k;
+    while (*q == ' ') q++;
+    if (!(*q == ':' || *q == '|' || *q == ']' || *q == '-')) return -1; }
+  tag[k] = 0;
+  for (int i = 0; i < NCOUNTRIES; i++) if (!strcmp(COUNTRIES[i].tag, tag)) return i;
+  return -1;
+}
+
+typedef struct { char file[IPTV_AUTO_MAX][8]; int n; } AutoGuides;
+
+static void autoGuides(const IptvList *l, AutoGuides *out) {
+  int count[NCOUNTRIES];
+  memset(count, 0, sizeof count);
+  out->n = 0;
+  for (int i = 0; i < l->nCh; i++) {
+    int c;
+    if (l->ch[i].nPg) continue;
+    c = countryTag(l->ch[i].name);
+    if (c < 0) c = countryTag(l->ch[i].group);
+    if (c >= 0) count[c]++;
+  }
+  // Tags naming the same file ("UK", "GB") pool their counts.
+  for (int i = 0; i < NCOUNTRIES; i++)
+    for (int j = 0; j < i; j++)
+      if (count[i] && !strcmp(COUNTRIES[i].file, COUNTRIES[j].file)) { count[j] += count[i]; count[i] = 0; }
+  while (out->n < IPTV_AUTO_MAX) {
+    int best = -1;
+    for (int i = 0; i < NCOUNTRIES; i++)
+      if (count[i] >= IPTV_AUTO_MIN && (best < 0 || count[i] > count[best])) best = i;
+    if (best < 0) break;
+    snprintf(out->file[out->n++], sizeof out->file[0], "%s", COUNTRIES[best].file);
+    count[best] = 0;
+  }
+}
+
+// A country's guide, cut to the window: from disk while fresh, else downloaded
+// and kept. The first line of the kept file is the time it was fetched.
+static char *autoGuide(const char *file, long long from, long long to) {
+  char name[64], url[512], *xml, *kept;
+  const char *base = getenv("NUVIO_AUTO_EPG_BASE");
+  long long now = (long long)time(NULL);
+  snprintf(name, sizeof name, "iptv-guide-%s.xml", file);
+  if ((kept = data_read(name))) {
+    long long at = strtoll(kept, NULL, 10);
+    char *nl = strchr(kept, '\n');
+    if (nl && at > 0 && now - at >= 0 && now - at < IPTV_AUTO_KEEP_S) {
+      memmove(kept, nl + 1, strlen(nl + 1) + 1);
+      return kept;
+    }
+    free(kept);
+  }
+  snprintf(url, sizeof url, "%s%s.xml.gz", base && *base ? base : IPTV_AUTO_BASE, file);
+  // Kept for the whole of IPTV_AUTO_KEEP_S: the window reaches that much further.
+  if (!(xml = fetchGuide(url, from, to + IPTV_AUTO_KEEP_S))) return NULL;
+  { size_t n = strlen(xml);
+    char *withStamp = malloc(n + 32);
+    if (withStamp) {
+      int k = snprintf(withStamp, 32, "%lld\n", now);
+      memcpy(withStamp + k, xml, n + 1);
+      data_write(name, withStamp);
+      free(withStamp);
+    } }
+  return xml;
 }
 
 // What went wrong with a playlist download, in words that point at the fix.
@@ -507,16 +611,18 @@ static void *loader(void *arg) {
     if (probe) for (int i = 0; i < probe->nCh; i++)
       if (probe->ch[i].catchup) { behind = IPTV_GUIDE_ARCHIVE_S; break; }
     guideUrls(&job.src, probe, &guides);
-    if (!guides.n || !probe) {
+    if (!probe) {
       setStatus("");
       atomic_store(&guideState, IPTV_FAILED);
-      printf("[iptv] no guide: the playlist names none\n");
-      if (probe) { iptv_list_free(probe); free(probe); }
       goto out;
     }
     atomic_store(&guideState, IPTV_LOADING);
-    { long long now = (long long)time(NULL);
-      int total = 0, with = 0;
+    { long long now = (long long)time(NULL), from = now - behind, to = now + IPTV_GUIDE_AHEAD_S;
+      int total = 0, with = 0, nKept = 0;
+      AutoGuides extra;
+      // The guides read, kept cut to the window: the list with the countries'
+      // guides added is built again from them, after the first one is shown.
+      char *kept[IPTV_GUIDES_MAX];
       for (int gi = 0; gi < guides.n; gi++) {
         char *xml;
         int n, got;
@@ -527,16 +633,17 @@ static void *loader(void *arg) {
         } else {
           setStatus("Loading the TV guide\xE2\x80\xA6");
         }
-        xml = fetchGuide(guides.url[gi]);
+        xml = fetchGuide(guides.url[gi], from, to);
         got = xml != NULL;
         if (job.gen != atomic_load(&generation)) {
           free(xml);
+          for (int k = 0; k < nKept; k++) free(kept[k]);
           iptv_list_free(probe); free(probe);
           goto out;
         }
-        n = !xml ? 0 : total ? iptv_parse_xmltv_more(probe, xml, now - behind, now + IPTV_GUIDE_AHEAD_S)
-                             : iptv_parse_xmltv(probe, xml, now - behind, now + IPTV_GUIDE_AHEAD_S);
-        free(xml);
+        n = !xml ? 0 : total ? iptv_parse_xmltv_more(probe, xml, from, to)
+                             : iptv_parse_xmltv(probe, xml, from, to);
+        if (n > 0) kept[nKept++] = xml; else free(xml);
         // Only the host in the log: xmltv.php carries the login in its query.
         { char host[256]; const char *h = strstr(guides.url[gi], "://");
           size_t k = 0;
@@ -550,16 +657,64 @@ static void *loader(void *arg) {
         for (int i = 0; i < probe->nCh; i++) with += probe->ch[i].nPg > 0;
         if (with == probe->nCh) break;           // nothing left to fill
       }
+      autoGuides(probe, &extra);
       if (total > 0) {
         printf("[iptv] guide: %d programmes on %d of %d channels\n", probe->nPg, with, probe->nCh);
         setStatus("");
         post(probe, job.gen);
         atomic_store(&guideState, IPTV_READY);
-      } else {
+        probe = NULL;
+      }
+      if (extra.n) {
+        // Again from the playlist, with the guides above, then the countries'.
+        int added = 0;
+        char st[96];
+        if (!probe) {
+          probe = parsePlaylist(text);
+          applyArchives(probe, &archives);
+          for (int k = 0; probe && k < nKept; k++) {
+            if (k) iptv_parse_xmltv_more(probe, kept[k], from, to);
+            else iptv_parse_xmltv(probe, kept[k], from, to);
+          }
+        }
+        for (int k = 0; k < nKept; k++) free(kept[k]);
+        nKept = 0;
+        snprintf(st, sizeof st, "Finding guides for %d more channels\xE2\x80\xA6", probe ? probe->nCh - with : 0);
+        setStatus(st);
+        for (int k = 0; probe && k < extra.n; k++) {
+          char *xml = autoGuide(extra.file[k], from, to);
+          int n;
+          if (job.gen != atomic_load(&generation)) {
+            free(xml);
+            iptv_list_free(probe); free(probe);
+            goto out;
+          }
+          n = !xml ? 0 : (total + added) ? iptv_parse_xmltv_more(probe, xml, from, to)
+                                         : iptv_parse_xmltv(probe, xml, from, to);
+          printf("[iptv] country guide %s: %s, %d programmes added\n", extra.file[k],
+                 xml ? "read" : "download failed", n);
+          free(xml);
+          added += n;
+        }
+        if (probe && added > 0) {
+          with = 0;
+          for (int i = 0; i < probe->nCh; i++) with += probe->ch[i].nPg > 0;
+          printf("[iptv] guide with countries': %d programmes on %d of %d channels\n", probe->nPg, with, probe->nCh);
+          setStatus("");
+          post(probe, job.gen);
+          atomic_store(&guideState, IPTV_READY);
+          probe = NULL;
+          total += added;
+        } else if (total > 0) {
+          setStatus("");
+        }
+      }
+      for (int k = 0; k < nKept; k++) free(kept[k]);
+      if (probe) { iptv_list_free(probe); free(probe); }
+      if (total <= 0) {
         printf("[iptv] guide unavailable\n");
-        setStatus("TV guide unavailable");
+        setStatus(guides.n || extra.n ? "TV guide unavailable" : "");
         atomic_store(&guideState, IPTV_FAILED);
-        iptv_list_free(probe); free(probe);
       }
     }
   }

@@ -343,6 +343,29 @@ static const IptvProgramme *programmeAt(int ch, long long t) {
   int p = iptv_programme_at(l, ch, t);
   return p >= 0 ? &l->pg[p] : NULL;
 }
+// THE BAR IS ALWAYS THERE. A channel the guide knows nothing about at `t` still
+// gets a track: the clock hour around `t`, titled with the channel's name, so
+// the bar keeps its shape, its times and the pause buffer's reach. `*guessed`
+// says the programme is this stand-in, for the words around it.
+static const IptvProgramme *programmeOrHour(int ch, long long t, int *guessed) {
+  static IptvProgramme hour[2];
+  static int turn;
+  const IptvProgramme *pg = programmeAt(ch, t);
+  const IptvChannel *c = chan(ch);
+  if (guessed) *guessed = 0;
+  if (pg || !c) return pg;
+  // Two slots, alternated: the peek draws a row with one while the bar still
+  // holds a pointer to the other within the same frame.
+  turn ^= 1;
+  hour[turn].channel = ch;
+  hour[turn].start = t - ((t % 3600) + 3600) % 3600;
+  hour[turn].stop = hour[turn].start + 3600;
+  hour[turn].title = c->name;
+  hour[turn].desc = "";
+  hour[turn].category = "";
+  if (guessed) *guessed = 1;
+  return &hour[turn];
+}
 static const IptvProgramme *programmeAfter(int ch, long long t, int skip) {
   const IptvList *l = iptv_list();
   const IptvChannel *c = chan(ch);
@@ -1953,6 +1976,17 @@ static void monogram(const char *name, char *out, size_t n) {
 // cache remembers the failure, so a dead URL is asked for once.
 static void identity(const IptvChannel *c, GfxRect r, float radius, unsigned plate, unsigned inkHex,
                      float a) {
+  // A DARK MARK ON A LIGHT PLATE. Many providers' logos are black lettering on
+  // a transparent ground, made for a white page; on the dark plate they all but
+  // vanish. Those (tex_brand_dark: dark and colourless where solid, with a
+  // transparent margin, so not an opaque picture) sit on a light plate instead,
+  // their own colours untouched.
+  if (c->logo[0] && tex_brand_dark(c->logo)) {
+    float vis[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
+    if (tex_content_box(c->logo, vis) &&
+        (vis[0] > 0.01f || vis[1] > 0.01f || vis[2] < 0.99f || vis[3] < 0.99f))
+      plate = 0xE4E7EA;
+  }
   gfx_color(r, radius / r.h, HEXF(plate), a);
   if (c->logo[0] && !tex_failed(c->logo)) {
     GLuint tex = tex_get_width(c->logo, r.w - 18.0f);
@@ -2991,7 +3025,8 @@ static void drawBlock(float a) {
   int walking = ov == OV_WALK && walkPg >= 0 && l && walkPg < l->nPg && l->pg[walkPg].channel == tuned;
   // Rewound, the bar is about what is on screen, not what is on now.
   double at = shownAt();
-  const IptvProgramme *pg = walking ? &l->pg[walkPg] : programmeAt(tuned, (long long)at);
+  int guessed = 0;
+  const IptvProgramme *pg = walking ? &l->pg[walkPg] : programmeOrHour(tuned, (long long)at, &guessed);
   const IptvProgramme *next = walking ? NULL : programmeAfter(tuned, (long long)at, 0);
   float x = 96.0f, right = NV_SCREEN_W - 96.0f;
   float ctlY = NV_SCREEN_H - 64.0f - CTL_D * 0.5f; // the controls' centre: the film player's row
@@ -3031,7 +3066,7 @@ static void drawBlock(float a) {
       char num[16];
       snprintf(num, sizeof num, "%d", c->number);
       kx += inkMid(TXT_DETWEB_EP_BADGE, num, 0xC1C7CD, kx, kickY, 120.0f, a) + 14.0f;
-      if (pg) {
+      if (pg && !guessed) {
         kx += inkMid(TXT_LIVE_NAME, "\xC2\xB7", 0x4D535A, kx, kickY, 30.0f, a) + 14.0f;
         kx += inkMid(TXT_LIVE_NAME, c->name, 0x9AA1A9, kx, kickY, 520.0f, a) + 14.0f;
       }
@@ -3100,6 +3135,8 @@ static void drawBlock(float a) {
         else if (back >= 60.0) snprintf(in, sizeof in, "%s \xC2\xB7 %ld min behind live", c1, (long)(back / 60.0));
         else if (back >= LIVE_EDGE_S) snprintf(in, sizeof in, "%s \xC2\xB7 %ld s behind live", c1, (long)back);
         else snprintf(in, sizeof in, "%s \xC2\xB7 live", c1);
+      } else if (guessed) {
+        snprintf(in, sizeof in, "Live \xC2\xB7 no guide for this channel");
       } else {
         snprintf(in, sizeof in, "%lld min in", (now - pg->start) / 60);
       }
@@ -3162,7 +3199,7 @@ static void drawPeek(float a) {
     // Above, up to the clock; below, one row, clear of the STILL ON line.
     if (y < 190.0f || y > cy + PK_STEP * 1.5f) continue;
     c = &l->ch[view[idx]];
-    pg = programmeAt(view[idx], now);
+    pg = mid ? programmeOrHour(view[idx], now, NULL) : programmeAt(view[idx], now);
     identity(c, (GfxRect){ x, y - tile * 0.5f, tile, tile }, 10.0f + 4.0f * f, mid ? C_PLATE_F : C_PLATE,
              mid ? 0xF5F6F8 : 0xC1C7CD, a * ca);
     snprintf(kick, sizeof kick, "%d \xC2\xB7 %s", c->number, c->name);

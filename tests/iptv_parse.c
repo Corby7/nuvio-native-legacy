@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // 2026-09-27 12:00:00 UTC.
 #define NOON 1790510400LL
@@ -267,6 +268,15 @@ static void testGunzip(const char *path) {
   assert(iptv_parse_xmltv(&l, xml, NOON - 6 * 3600, NOON + 24 * 3600) == 10);
   iptv_list_free(&l);
   free(xml);
+  // Cut while inflating: the whole window keeps all ten; a narrow one keeps
+  // exactly what a parse over that window would.
+  { char *w = iptv_guide_window(raw, n, NOON - 6 * 3600, NOON + 24 * 3600, &m);
+    assert(w && m == (long)strlen(w) && strstr(w, "<channel"));
+    iptv_list_init(&l);
+    assert(iptv_parse_m3u(&l, M3U) == 5);
+    assert(iptv_parse_xmltv(&l, w, NOON - 6 * 3600, NOON + 24 * 3600) == 10);
+    iptv_list_free(&l);
+    free(w); }
   // Not compressed: NULL, and the caller keeps the plain text.
   assert(iptv_gunzip("<tv></tv>", 9, &m) == NULL && m == 0);
   // A corrupt stream after a valid magic.
@@ -447,6 +457,71 @@ static void testMoreGuides(void) {
   iptv_list_free(&l);
 }
 
+// A guide large enough to cross the trim's chunks many times, with long
+// descriptions straddling them: the window cut keeps exactly the programmes a
+// parse of the whole text keeps, plain and gzipped (the script gzips it).
+static char *bigGuide(void) {
+  size_t cap = 12u << 20, k = 0;
+  char *x = malloc(cap), desc[3001];
+  long long t0 = iptv_xmltv_time("20260920000000 +0000");
+  assert(x);
+  memset(desc, 'd', 3000); desc[3000] = 0;
+  k += (size_t)snprintf(x + k, cap - k, "<?xml version=\"1.0\"?>\n<tv>\n");
+  for (int c = 0; c < 20; c++)
+    k += (size_t)snprintf(x + k, cap - k, "<channel id=\"c%d\"><display-name>Chan %d</display-name></channel>\n", c, c);
+  for (int c = 0; c < 20; c++)
+    for (long long t = t0; t < t0 + 7 * 86400; t += 3600) {
+      struct tm tm; time_t a = (time_t)t, b = (time_t)(t + 3600);
+      char s1[32], s2[32];
+      gmtime_r(&a, &tm); strftime(s1, sizeof s1, "%Y%m%d%H%M%S +0000", &tm);
+      gmtime_r(&b, &tm); strftime(s2, sizeof s2, "%Y%m%d%H%M%S +0000", &tm);
+      k += (size_t)snprintf(x + k, cap - k, "<programme start=\"%s\" stop=\"%s\" channel=\"c%d\">"
+                            "<title>T%lld</title><desc>%s</desc></programme>\n",
+                            s1, s2, c, t, (t / 3600) % 5 ? "short" : desc);
+      assert(k < cap - 8192);
+    }
+  snprintf(x + k, cap - k, "</tv>\n");
+  return x;
+}
+
+static void testWindow(const char *gzPath) {
+  char *x = bigGuide(), *w;
+  long m = 0, n;
+  long long t0 = iptv_xmltv_time("20260923120000 +0000"), from = t0 - 3 * 3600, to = t0 + 30 * 3600;
+  IptvList a, b;
+  char m3u[4096];
+  size_t k = (size_t)snprintf(m3u, sizeof m3u, "#EXTM3U\n");
+  for (int c = 0; c < 20; c++)
+    k += (size_t)snprintf(m3u + k, sizeof m3u - k, "#EXTINF:-1 tvg-id=\"c%d\",Chan %d\nhttp://x/%d\n", c, c, c);
+  iptv_list_init(&a); iptv_list_init(&b);
+  assert(iptv_parse_m3u(&a, m3u) == 20 && iptv_parse_m3u(&b, m3u) == 20);
+  n = iptv_parse_xmltv(&a, x, from, to);
+  assert(n == 20 * 33);                       // 33 hours, on the hour
+  w = iptv_guide_window(x, (long)strlen(x), from, to, &m);
+  assert(w && m < (long)strlen(x) / 4);
+  assert(iptv_parse_xmltv(&b, w, from, to) == n);
+  for (int i = 0; i < n; i++) assert(a.pg[i].start == b.pg[i].start && !strcmp(a.pg[i].desc, b.pg[i].desc));
+  free(w);
+  if (gzPath) {
+    FILE *f = fopen(gzPath, "rb");
+    char *raw;
+    long rn;
+    assert(f);
+    fseek(f, 0, SEEK_END); rn = ftell(f); fseek(f, 0, SEEK_SET);
+    raw = malloc((size_t)rn);
+    assert(raw && fread(raw, 1, (size_t)rn, f) == (size_t)rn);
+    fclose(f);
+    w = iptv_guide_window(raw, rn, from, to, &m);
+    assert(w);
+    iptv_list_free(&b); iptv_list_init(&b);
+    assert(iptv_parse_m3u(&b, m3u) == 20);
+    assert(iptv_parse_xmltv(&b, w, from, to) == n);
+    free(w); free(raw);
+  }
+  iptv_list_free(&a); iptv_list_free(&b);
+  free(x);
+}
+
 static void testCatchup(void) {
   IptvList l;
   char u[1024];
@@ -512,6 +587,14 @@ static void testCatchup(void) {
 
 int main(int argc, char **argv) {
   IptvList l;
+  if (argc > 2 && !strcmp(argv[1], "--dump-big")) {
+    char *x = bigGuide();
+    FILE *f = fopen(argv[2], "wb");
+    assert(f);
+    fwrite(x, 1, strlen(x), f);
+    fclose(f); free(x);
+    return 0;
+  }
   if (argc > 3 && !strcmp(argv[1], "--dump-xml")) {
     // The script asks for the guide text to gzip it, in two halves.
     size_t half = strlen(XML) / 2;
@@ -535,6 +618,7 @@ int main(int argc, char **argv) {
   testLooseMatch();
   testMoreGuides();
   if (argc > 1) testGunzip(argv[1]);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; loose guide matching; further guides; gzip.");
+  testWindow(argc > 2 ? argv[2] : NULL);
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; loose guide matching; further guides; gzip; guides cut to the window while inflating.");
   return 0;
 }

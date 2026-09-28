@@ -1162,30 +1162,38 @@ typedef int (*ZInflate)(ZStream *, int);
 typedef int (*ZEnd)(ZStream *);
 typedef int (*ZReset)(ZStream *);
 
-char *iptv_gunzip(const char *in, long n, long *outN) {
+static ZInit zInit; static ZInflate zInflate; static ZEnd zEnd; static ZReset zReset;
+
+static int zlibLoad(void) {
   static void *lib;
-  static ZInit zInit; static ZInflate zInflate; static ZEnd zEnd; static ZReset zReset;
-  ZStream z;
-  char *out = NULL;
-  long cap, len = 0;
-  int rc;
-  if (outN) *outN = 0;
-  if (!in || n < 2) return NULL;
-  // gzip's magic, or a zlib header (CMF 0x78).
-  if (!((unsigned char)in[0] == 0x1f && (unsigned char)in[1] == 0x8b) &&
-      (unsigned char)in[0] != 0x78) return NULL;
   if (!lib) {
     lib = dlopen("libz.so.1", RTLD_NOW);
     if (!lib) lib = dlopen("libz.so", RTLD_NOW);
     if (!lib) lib = dlopen("libz.1.dylib", RTLD_NOW);   // Mac
     if (!lib) lib = dlopen("libz.dylib", RTLD_NOW);
-    if (!lib) { fprintf(stderr, "[iptv] no libz on this device: gzipped guides unavailable\n"); return NULL; }
+    if (!lib) { fprintf(stderr, "[iptv] no libz on this device: gzipped guides unavailable\n"); return 0; }
     zInit = (ZInit)dlsym(lib, "inflateInit2_");
     zInflate = (ZInflate)dlsym(lib, "inflate");
     zEnd = (ZEnd)dlsym(lib, "inflateEnd");
     zReset = (ZReset)dlsym(lib, "inflateReset");
   }
-  if (!zInit || !zInflate || !zEnd || !zReset) return NULL;
+  return zInit && zInflate && zEnd && zReset;
+}
+
+static int isCompressed(const char *in, long n) {
+  // gzip's magic, or a zlib header (CMF 0x78).
+  return n >= 2 && (((unsigned char)in[0] == 0x1f && (unsigned char)in[1] == 0x8b) ||
+                    (unsigned char)in[0] == 0x78);
+}
+
+char *iptv_gunzip(const char *in, long n, long *outN) {
+  ZStream z;
+  char *out = NULL;
+  long cap, len = 0;
+  int rc;
+  if (outN) *outN = 0;
+  if (!in || !isCompressed(in, n)) return NULL;
+  if (!zlibLoad()) return NULL;
   memset(&z, 0, sizeof z);
   // 15 + 32: detect gzip or zlib from the header.
   if (zInit(&z, 15 + 32, "1.2.11", (int)sizeof z) != 0) return NULL;
@@ -1221,6 +1229,136 @@ char *iptv_gunzip(const char *in, long n, long *outN) {
   out[len] = 0;
   if (outN) *outN = len;
   return out;
+}
+
+// --- a guide, cut to the window as it inflates ---------------------------------------
+//
+// A country's public guide is a week of thousands of channels: 20 MB gzipped
+// and a few hundred inflated, more than the TV should hold and more than
+// IPTV_GUNZIP_MAX lets through. Only [from, to) is ever kept, so the cut is
+// made while inflating: everything outside <programme> passes (the header, the
+// <channel> blocks), a <programme> only when it overlaps the window. What is
+// held at any time is the output plus one chunk.
+typedef struct {
+  char *out; long len, cap;          // what is kept
+  char *buf; long have, bufCap;      // inflated, not yet looked at
+  long long from, to;
+  int failed;
+} Trim;
+
+static void trimPut(Trim *t, const char *s, long n) {
+  if (t->failed || n <= 0) return;
+  if (t->len + n + 1 > t->cap) {
+    long cap = t->cap ? t->cap : 1L << 20;
+    char *g;
+    while (t->len + n + 1 > cap) cap *= 2;
+    if (cap > IPTV_GUNZIP_MAX || !(g = realloc(t->out, (size_t)cap))) { t->failed = 1; return; }
+    t->out = g; t->cap = cap;
+  }
+  memcpy(t->out + t->len, s, (size_t)n);
+  t->len += n;
+}
+
+static const char *memFind(const char *a, const char *e, const char *needle, size_t k) {
+  for (; a + k <= e; a++) {
+    a = memchr(a, needle[0], (size_t)(e - a));
+    if (!a || a + k > e) return NULL;
+    if (!memcmp(a, needle, k)) return a;
+  }
+  return NULL;
+}
+
+// Everything complete in the buffer; the unfinished tail moves to its front.
+// `last`: no more is coming, so the tail goes out as it is.
+static void trimScan(Trim *t, int last) {
+  const char *p = t->buf, *e = t->buf + t->have;
+  for (;;) {
+    const char *open = memFind(p, e, "<programme", 10), *close, *tagEnd;
+    if (!open) {
+      // Keep the last few bytes: they may be the start of "<programme".
+      const char *keep = last || e - p < 10 ? (last ? e : p) : e - 10;
+      trimPut(t, p, keep - p);
+      p = keep;
+      break;
+    }
+    trimPut(t, p, open - p);
+    p = open;
+    if (!(close = memFind(open, e, "</programme>", 12))) break;   // needs more
+    close += 12;
+    tagEnd = memchr(open, '>', (size_t)(close - open));
+    { char a[48], b[48];
+      long long st, sp;
+      a[0] = b[0] = 0;
+      tagAttr(open, tagEnd ? tagEnd : close, "start", a, sizeof a);
+      tagAttr(open, tagEnd ? tagEnd : close, "stop", b, sizeof b);
+      st = iptv_xmltv_time(a); sp = b[0] ? iptv_xmltv_time(b) : 0;
+      if (st && st < t->to && (!sp || sp > t->from)) trimPut(t, open, close - open); }
+    p = close;
+  }
+  t->have = e - p;
+  memmove(t->buf, p, (size_t)t->have);
+}
+
+// Room for `need` more bytes in the work buffer; an element longer than the
+// buffer (a long <desc>) grows it.
+static int trimRoom(Trim *t, long need) {
+  if (t->have + need <= t->bufCap) return 1;
+  { long cap = t->bufCap * 2;
+    char *g;
+    while (t->have + need > cap) cap *= 2;
+    if (cap > (64L << 20) || !(g = realloc(t->buf, (size_t)cap))) return 0;
+    t->buf = g; t->bufCap = cap; }
+  return 1;
+}
+
+char *iptv_guide_window(const char *in, long n, long long from, long long to, long *outN) {
+  Trim t;
+  const long CHUNK = 1L << 20;
+  if (outN) *outN = 0;
+  if (!in || n <= 0) return NULL;
+  memset(&t, 0, sizeof t);
+  t.from = from; t.to = to;
+  t.bufCap = CHUNK * 2;
+  if (!(t.buf = malloc((size_t)t.bufCap))) return NULL;
+  if (!isCompressed(in, n)) {
+    for (long at = 0; at < n && !t.failed; ) {
+      long k = n - at < CHUNK ? n - at : CHUNK;
+      if (!trimRoom(&t, k)) { t.failed = 1; break; }
+      memcpy(t.buf + t.have, in + at, (size_t)k);
+      t.have += k; at += k;
+      trimScan(&t, at >= n);
+    }
+  } else {
+    ZStream z;
+    int rc = 0;
+    if (!zlibLoad()) { free(t.buf); return NULL; }
+    memset(&z, 0, sizeof z);
+    if (zInit(&z, 15 + 32, "1.2.11", (int)sizeof z) != 0) { free(t.buf); return NULL; }
+    z.next_in = (const unsigned char *)in;
+    z.avail_in = (unsigned)n;
+    while (!t.failed) {
+      if (!trimRoom(&t, CHUNK)) { t.failed = 1; break; }
+      z.next_out = (unsigned char *)t.buf + t.have;
+      z.avail_out = (unsigned)CHUNK;
+      rc = zInflate(&z, 0);
+      t.have += CHUNK - (long)z.avail_out;
+      if (rc == 1) {                       // Z_STREAM_END; a next gzip member?
+        if (z.avail_in > 0 && zReset(&z) == 0) { trimScan(&t, 0); continue; }
+        break;
+      }
+      if (rc != 0 && rc != -5) break;      // neither Z_OK nor Z_BUF_ERROR
+      if (rc == -5 && z.avail_in == 0) break;   // truncated: keep what came
+      trimScan(&t, 0);
+    }
+    zEnd(&z);
+    if (rc != 0 && rc != 1 && rc != -5 && !t.len) t.failed = 1;
+    if (!t.failed) trimScan(&t, 1);
+  }
+  free(t.buf);
+  if (t.failed || !t.len) { free(t.out); return NULL; }
+  t.out[t.len] = 0;
+  if (outN) *outN = t.len;
+  return t.out;
 }
 
 // --- Xtream Codes' JSON API ----------------------------------------------------------

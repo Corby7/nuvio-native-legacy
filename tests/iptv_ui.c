@@ -461,6 +461,12 @@ int main(int argc, char **argv) {
   key(SDLK_1); key(SDLK_0); key(SDLK_7);
   snprintf(path, sizeof path, "%s/nuvio-live-failed.bmp", out); frames(10, path);
   unsetenv("NUVIO_STUB_FAIL");
+  // A channel with no guide still has its bar: the clock hour, said as such.
+  key(SDLK_1); key(SDLK_0); key(SDLK_5);
+  frames(3, NULL);
+  key(SDLK_RETURN);
+  snprintf(path, sizeof path, "%s/nuvio-live-bar-noguide.bmp", out); frames(20, path);
+  key(SDLK_AC_BACK); frames(10, NULL);
   key(SDLK_1); key(SDLK_0); key(SDLK_8);
   frames(3, NULL);
   key(SDLK_AC_BACK); key(SDLK_AC_BACK);

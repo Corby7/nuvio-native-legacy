@@ -125,6 +125,12 @@ int iptv_programme_after(const IptvList *l, int ch, long long t);
 // libz; *outN gets the size.
 char *iptv_gunzip(const char *in, long n, long *outN);
 
+// A guide as the loader keeps it: inflated when gzipped, and cut to the
+// programmes overlapping [from, to) WHILE inflating, so a week-long country
+// guide never sits in memory whole. The header and <channel> blocks pass as
+// they are. NULL when nothing came through.
+char *iptv_guide_window(const char *in, long n, long long from, long long to, long *outN);
+
 // The archive URL for channel `c` from `start` (unix seconds) until `stop`, with
 // `now` for the templates that want it and `serverOffset` for Xtream's local
 // time. 1 when written; 0 when the channel has no catch-up or it does not fit.

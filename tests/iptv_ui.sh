@@ -84,8 +84,18 @@ try:
     path = f"{tmp}/{name}"
     im.save(path, fmt)
     return path
+  def black(w, h, name):
+    # Black lettering on transparency, the kind made for a white page.
+    im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rectangle((w * 0.15, h * 0.3, w * 0.85, h * 0.7), fill=(12, 12, 12, 255))
+    d.ellipse((w * 0.4, h * 0.38, w * 0.6, h * 0.62), fill=(0, 0, 0, 0))
+    path = f"{tmp}/{name}"
+    im.save(path, "PNG")
+    return path
   logos = [mark(512, 512, (0, 0, 0, 0), "sq.png"), mark(1200, 240, (0, 0, 0, 0), "wide.png"),
-           mark(200, 420, (0, 0, 0, 0), "tall.png"), mark(640, 360, (20, 60, 140), "opaque.jpg", "JPEG")]
+           mark(200, 420, (0, 0, 0, 0), "tall.png"), mark(640, 360, (20, 60, 140), "opaque.jpg", "JPEG"),
+           black(400, 300, "black.png")]
 except ImportError:
   pass
 m3u = ['#EXTM3U url-tvg="file://%s/guide.xml.gz"' % tmp]
@@ -94,7 +104,7 @@ n = 1
 for g in groups:
   for nm in names[g]:
     cid = "".join(ch for ch in nm.lower() if ch.isascii() and ch.isalnum()) + ".tv"
-    logo = logos[n % 4] if n % 3 else ""
+    logo = logos[n % len(logos)] if n % 3 else ""
     # Sport keeps a day of catch-up, the Kodi "shift" way.
     extra = ' catchup="shift" catchup-days="1"' if g == "Sport" else ""
     m3u.append('#EXTINF:-1 tvg-id="%s" tvg-name="%s" tvg-logo="%s" group-title="%s" tvg-chno="%d"%s,%s'

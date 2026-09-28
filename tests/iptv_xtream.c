@@ -2,6 +2,8 @@
 // panel that answers 884 to get.php and serves player_api.php, the case that
 // had Live TV fail on a real provider.
 #include "iptv.h"
+#include "net.h"
+#include "data.h"
 #include <SDL2/SDL.h>
 #include <assert.h>
 #include <stdio.h>
@@ -37,6 +39,7 @@ int main(int argc, char **argv) {
   char base[128], url[256];
   assert(argc > 1);
   SDL_Init(SDL_INIT_TIMER);
+  data_start(NULL);   // NUVIO_DATA, the script's own folder: where the country guide is kept
   snprintf(base, sizeof base, "http://127.0.0.1:%s", argv[1]);
   iptv_start();
 
@@ -45,7 +48,7 @@ int main(int argc, char **argv) {
   load(IPTV_SRC_M3U, url, "", "", "");
   printf("status: '%s'\n", iptv_status());
   assert(iptv_state() == IPTV_READY && iptv_list());
-  assert(iptv_list()->nCh == 2);
+  assert(iptv_list()->nCh == 5);
   assert(!strcmp(iptv_list()->ch[0].name, "\xC3\x87ocuk TV"));
   { char relay[4200];
     const char *u = iptv_play_url(0, relay, sizeof relay);
@@ -54,10 +57,16 @@ int main(int argc, char **argv) {
     assert(strstr(u, "/live/d5fe/fa10/101.ts")); }
   // The guide came from xmltv.php, the Xtream one, not from the playlist.
   assert(iptv_guide_state() == IPTV_READY && iptv_list()->ch[0].nPg == 1);
+  // The three NL: channels it leaves out came from the Dutch public guide,
+  // found by their tags; "News" has no country and stays without.
+  { const IptvList *l = iptv_list();
+    assert(l->ch[1].nPg == 0);
+    for (int i = 2; i < 5; i++) assert(l->ch[i].nPg == 1);
+    assert(!strcmp(l->pg[l->ch[2].firstPg].title, "RTL4 now")); }
 
   // The same as an Xtream login: the same channels.
   load(IPTV_SRC_XTREAM, "", base, "d5fe", "fa10");
-  assert(iptv_state() == IPTV_READY && iptv_list()->nCh == 2);
+  assert(iptv_state() == IPTV_READY && iptv_list()->nCh == 5);
   // No link to ask for a container: HLS, which the account allows; the other
   // one is there for a stream that will not play.
   { char relay[4200];
@@ -74,6 +83,13 @@ int main(int argc, char **argv) {
     assert(l->ch[0].nPg == 1 && !strcmp(l->pg[l->ch[0].firstPg].title, "Cartoons"));
     assert(l->ch[1].nPg == 1 && !strcmp(l->pg[l->ch[1].firstPg].title, "Headlines")); }
   epg[0] = 0;
+  // The country guide was kept on disk: the reloads did not fetch it again.
+  { char hits[64];
+    char *h;
+    snprintf(hits, sizeof hits, "%s/auto-hits", base);
+    h = net_download(hits, 5);
+    assert(h && atoi(h) == 1);
+    free(h); }
 
   // A wrong password: said as such, not as an 884.
   load(IPTV_SRC_XTREAM, "", base, "d5fe", "wrong");
@@ -86,6 +102,6 @@ int main(int argc, char **argv) {
   assert(strstr(iptv_status(), "expired"));
 
   iptv_shutdown();
-  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link and its output=ts; extra guides fill the gaps; login and expiry said.");
+  puts("PASS iptv_xtream: get.php refused (884), channels through player_api.php; pasted get.php link and its output=ts; extra guides fill the gaps; country guides found by tag and kept; login and expiry said.");
   return 0;
 }

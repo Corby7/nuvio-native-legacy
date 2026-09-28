@@ -10,4 +10,6 @@ cc -std=c99 -D_DEFAULT_SOURCE -fsanitize=address,undefined -fno-omit-frame-point
   tests/iptv_parse.c src/iptv_parse.c -Isrc -Wall -Wextra -ldl -o "$TMP/t"
 "$TMP/t" --dump-xml "$TMP/a.xml" "$TMP/b.xml"
 { gzip -c "$TMP/a.xml"; gzip -c "$TMP/b.xml"; } > "$TMP/guide.xml.gz"
-"$TMP/t" "$TMP/guide.xml.gz"
+"$TMP/t" --dump-big "$TMP/big.xml"
+gzip -c "$TMP/big.xml" > "$TMP/big.xml.gz"
+"$TMP/t" "$TMP/guide.xml.gz" "$TMP/big.xml.gz"
