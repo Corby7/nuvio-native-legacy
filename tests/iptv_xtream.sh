@@ -14,6 +14,7 @@ import http.server, json, sys, time, urllib.parse
 now = int(time.time())
 fmt = lambda t: time.strftime("%Y%m%d%H%M%S +0000", time.gmtime(t))
 autoHits = 0
+flakyHits = 0
 class H(http.server.BaseHTTPRequestHandler):
   def log_message(self, *a): pass
   def send(self, code, body, kind="application/json"):
@@ -53,6 +54,9 @@ class H(http.server.BaseHTTPRequestHandler):
     user, pw = q.get("username"), q.get("password")
     if pw != "fa10": return self.send(200, json.dumps({"user_info": {"auth": 0}}))
     if "action" not in q:
+      # The one-off server error a real panel threw (513): "flaky" once, "down" always.
+      global flakyHits; flakyHits += user == "flaky"
+      if user == "down" or (user == "flaky" and flakyHits == 1): return self.send(513, "", "text/html")
       return self.send(200, json.dumps({"user_info": {"auth": 1, "status": "Expired" if user == "old" else "Active",
         "allowed_output_formats": ["m3u8", "ts"]}, "server_info": {"url": "127.0.0.1"}}))
     if q["action"] == "get_live_categories":
@@ -76,8 +80,13 @@ PANEL=$!
 trap 'kill $PANEL 2>/dev/null; rm -rf "$TMP"' EXIT
 until [ -s "$TMP/port" ]; do sleep 0.1; done
 
-cc -std=gnu99 -g -O1 tests/iptv_xtream.c src/iptv.c src/iptv_parse.c src/net.c src/neturl.c src/proxy.c src/js.c src/data.c \
-  -Isrc -I/usr/include/SDL2 -w -lSDL2 -ldl -lpthread -lm -o "$TMP/t"
+sources=(tests/iptv_xtream.c src/iptv.c src/iptv_parse.c src/net.c src/neturl.c src/proxy.c src/js.c src/data.c)
+if [ "$(uname)" = Darwin ]; then
+  cc -std=gnu99 -g -O1 "${sources[@]}" -Isrc -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
+    -L/opt/homebrew/lib -w -lSDL2 -o "$TMP/t"
+else
+  cc -std=gnu99 -g -O1 "${sources[@]}" -Isrc -I/usr/include/SDL2 -w -lSDL2 -ldl -lpthread -lm -o "$TMP/t"
+fi
 # The fake panel is on loopback: no proxy in between.
 NUVIO_AUTO_EPG_BASE="http://127.0.0.1:$(cat "$TMP/port")/auto/epg_ripper_" \
 NO_PROXY=127.0.0.1 no_proxy=127.0.0.1 "$TMP/t" "$(cat "$TMP/port")"

@@ -289,7 +289,10 @@ int main(int argc, char **argv) {
     after = data_read("iptv_recent.txt");
     assert(!strcmp(before, after));
     free(after);
-    snprintf(path, sizeof path, "%s/nuvio-live-toast.bmp", out); frames(30, path);
+    // Past LIVE_ZAP_MS by the clock, not by a frame count: a fast GPU draws 30
+    // frames well inside it.
+    waitMs(450);
+    snprintf(path, sizeof path, "%s/nuvio-live-toast.bmp", out); frames(1, path);
     after = data_read("iptv_recent.txt");
     assert(strcmp(before, after));   // the zap retuned, once the keys stopped
     free(after);

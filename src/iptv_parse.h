@@ -65,6 +65,7 @@ typedef enum {
 
 typedef struct {
   int channel;                 // index into IptvList.ch
+  int seq;                     // position before sorting: ties keep feed order
   long long start, stop;       // unix seconds, UTC
   const char *title;
   const char *desc;            // "" when none
