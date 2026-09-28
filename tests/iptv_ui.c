@@ -268,6 +268,21 @@ int main(int argc, char **argv) {
     snprintf(path, sizeof path, "%s/nuvio-live-bar-controls.bmp", out); frames(20, path);
     key(SDLK_UP);
     snprintf(path, sizeof path, "%s/nuvio-live-bar-track.bmp", out); frames(20, path);
+    // ▲ again is the title, carets beside it; OK rolls it into the carousel,
+    // ▲▼ browse the channels there, and the stream stays.
+    key(SDLK_UP);
+    snprintf(path, sizeof path, "%s/nuvio-live-bar-title.bmp", out); frames(20, path);
+    key(SDLK_RETURN); key(SDLK_DOWN); key(SDLK_DOWN);
+    snprintf(path, sizeof path, "%s/nuvio-live-peek.bmp", out); frames(40, path);
+    after = data_read("iptv_recent.txt");
+    assert(before && after && !strcmp(before, after));
+    free(after);
+    key(SDLK_AC_BACK);                       // BACK: the title again, same channel
+    frames(10, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(!strcmp(before, after));
+    free(after);
+    key(SDLK_DOWN);                          // the track
     key(SDLK_RIGHT);
     snprintf(path, sizeof path, "%s/nuvio-live-walk.bmp", out); frames(30, path);
     key(SDLK_RIGHT);
@@ -320,17 +335,30 @@ int main(int argc, char **argv) {
     after = data_read("iptv_recent.txt");
     assert(strcmp(before, after) && !strncmp(after, "Family", 6));
     free(after);
-    // OK with nothing up pauses, and again resumes.
+    // The carousel's OK is the other thing that retunes: the controls, the
+    // track, the title, OK, ▲, OK.
+    free(before);
+    before = data_read("iptv_recent.txt");
+    key(SDLK_UP); key(SDLK_UP); key(SDLK_UP); key(SDLK_RETURN); key(SDLK_UP); key(SDLK_RETURN);
+    frames(10, NULL);
+    after = data_read("iptv_recent.txt");
+    assert(strcmp(before, after));
+    free(after);
+    key(SDLK_UP);                            // from the title: all away
+    frames(10, NULL);
+    // OK with nothing up pauses and puts the focus on Pause, so the next OK
+    // resumes.
     key(SDLK_RETURN);
     assert(video_stub_paused());
+    snprintf(path, sizeof path, "%s/nuvio-live-paused-focus.bmp", out); frames(20, path);
     key(SDLK_RETURN);
     assert(!video_stub_paused());
     free(before); }
   frames(10, NULL);
   // The channels panel, from the bar's Channels button (Pause, Guide,
-  // Channels): it slides in the episode panel's way, mid-slide, then settled,
-  // then walked and the group menu.
-  key(SDLK_UP); key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
+  // Channels), the focus still on Pause: it slides in the episode panel's
+  // way, mid-slide, then settled, then walked and the group menu.
+  key(SDLK_RIGHT); key(SDLK_RIGHT); key(SDLK_RETURN);
   snprintf(path, sizeof path, "%s/nuvio-live-channels-slide.bmp", out); frames(6, path);
   snprintf(path, sizeof path, "%s/nuvio-live-channels.bmp", out); frames(30, path);
   { char *before = data_read("iptv_recent.txt"), *after;
@@ -378,7 +406,8 @@ int main(int argc, char **argv) {
     key(SDLK_RETURN);          // play, past the short-pause window: a new live load
     assert(video_stub_plays() == plays + 1 && !video_stub_paused()); }
   frames(10, NULL);
-  key(SDLK_AC_BACK);           // the bar was only informing: out
+  key(SDLK_AC_BACK);           // the controls away (the pause left the focus on Pause)
+  key(SDLK_AC_BACK);           // and out
   assert(!iptvui_fullscreen());
 
   // 2 · Catch-up (Sport keeps a day, "shift"): ◀ on the bar rewinds into the
@@ -656,7 +685,7 @@ int main(int argc, char **argv) {
   assert(!iptvui_requested_settings() && !iptvui_wants_exit());
 
   iptvui_shutdown();
-  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, the film player's keys (◀▶ change channel, OK pauses, ▲ the controls; the walk never retunes), "
+  puts("PASS iptv_ui: list and guide from file://, focus model, favourite, the film player's keys (◀▶ change channel, OK pauses onto Pause, ▲ the controls, the track, the title and its carousel; the carousel and the walk never retune until OK), "
        "pause (live, buffer), catch-up (scrub, go live, start over, guide), preview on focus, search, source screen (a failed try keeps the source, a good one takes over; from Settings, Back returns there), phone form.");
   return 0;
 }
