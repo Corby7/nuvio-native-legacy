@@ -228,33 +228,12 @@ Things worth knowing before changing them:
 ```sh
 bash tests/iptv_parse.sh   # parser: attributes, headers, groups, times, entities, catch-up URLs, gzip, 120k programmes
 bash tests/timeshift.sh    # the pause buffer against a local endless MPEG-TS
-bash tests/iptv_ui.sh      # the screen off the TV, over file://; writes /tmp/nuvio-live-*.bmp
 ```
 
 `timeshift.sh` serves numbered TS packets and asserts that HLS is refused, that
 a paused reader resumes on the very next packet, rewinding, the ring wrapping,
 reconnecting after a dropped upstream, failing after a dead one, and that the
 ring file is removed.
-
-`iptv_ui.sh` generates a 49-channel playlist (Sport with a day of `shift`
-catch-up, and one local MPEG-TS channel for the pause buffer) and a gzipped guide
-around the current time, drives the screen with key events, and asserts the focus model
-(the guide's time-keeping ↓, → and ←, ← onto the channel cell and then the side
-bar), the favourite and the history round-trips. It captures the list, the list's
-actions, the guide (now, later, on a channel cell), an empty category, a
-category, full screen, the channels panel (sliding in, settled, walked, its group
-menu, from the bar) and the setup form. It also walks the full-screen overlay
-(bar, peek, walk, controls, zap toast, the bar stepping aside for the subtitles
-sheet) and
-asserts from the watch history that peeking and walking never retune while a
-zap and the peek's OK do. From the addresses handed to the video stub it checks
-the timeline: a plain-live pause that comes back live, catch-up (rewind, the
-archive URL's `utc=`, Go live, Start over at the programme's start, a past
-programme from the guide), the pause buffer (the loopback URL, a pause that
-resumes the same load, rewinding to an earlier byte, Go live) and preview on
-focus (it tunes, and only OK adds to the history). It runs on the Mac, and on Linux under `xvfb-run` with
-a GLES context, with `tests/video_stub.c` standing in for the pipeline: it plays
-everything and hands the drawing a generated picture.
 
 ## Performance
 
