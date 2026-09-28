@@ -7,6 +7,8 @@
 #include "js.h"
 #include "data.h"
 #include "failures.h"
+#include "embsub.h"
+#include "lang.h"
 #include <sys/stat.h>
 #include <stdio.h>
 #include <string.h>
@@ -313,6 +315,14 @@ static int       dvInLoad, dvInset, sawVideo;
 // and reprocessing the JSON while drawing would be wasteful.
 static VideoTrack trackAudio[NV_TRACK_MAX], trackSub[NV_TRACK_MAX];
 static int nAudio, nSub, audioCurrent, subCurrent = -1;
+// The subtitle list exactly as sourceInfo gave it. trackSub is the list the sheet
+// shows: this one, until the MKV header replaces it with the file's own (see
+// buildSubtitles).
+static VideoTrack pipeSub[NV_TRACK_MAX];
+static int nPipe;
+// Set by the header probe's thread; the list is rebuilt on the drawing thread.
+static volatile int headFresh;
+static void buildSubtitles(void);
 
 // The chosen source's DV claim. Set by video_set_dv BEFORE playing, because
 // video_play zeroes vidDV when starting a new session.
@@ -452,15 +462,17 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     // that carries a dozen PGS tracks came back as ONE subtitle tagged "ms".
     tracksLog("sourceInfo", p);
 
+    nPipe = 0;
     q = strstr(p, "\"subtitleTrackInfo\"");
     if (q) {
       const char *endVet = strchr(q, ']');
       const char *o = strchr(q, '{');
-      while (o && nSub < NV_TRACK_MAX && (!endVet || o < endVet)) {
+      while (o && nPipe < NV_TRACK_MAX && (!endVet || o < endVet)) {
         const char *fo = strchr(o, '}');
-        VideoTrack *f = &trackSub[nSub];
+        VideoTrack *f = &pipeSub[nPipe];
         memset(f, 0, sizeof *f);
         f->number = (int)numberOf(o, "\"trackNum\":");
+        f->pipe = f->number;
         { const char *l = strstr(o, "\"language\":\"");
           if (l && (!fo || l < fo)) {
             size_t k = 0; l += 12;
@@ -474,10 +486,11 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
           snprintf(f->label, sizeof f->label, "%s", languageReadable(f->language));
         else
           snprintf(f->label, sizeof f->label, "Subtitle %d", f->number + 1);
-        nSub++;
+        nPipe++;
         o = fo ? strchr(fo, '{') : NULL;
       }
     }
+    buildSubtitles();
     printf("[video] tracks: audio=%d subtitle=%d atmos=%d\n", nAudio, nSub, vidAtmos);
     fflush(stdout);
 
@@ -501,8 +514,12 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     // and the forced flag.
     { // IT ONLY NOTES IT DOWN. What fires it is video_pump, once playback shows
       // bandwidth to spare.
-      if (nSub > 0 && !sourceMp4) { mkvPending = 1; mkvArmedMs = SDL_GetTicks(); }
-      else if (nSub > 0) mark("mkv: source is MP4, probe skipped"); }
+      // AND ON AN MKV THE PIPELINE SAYS HAS NONE: it does not list VobSub, so a DVD
+      // rip whose only subtitles are pictures reported zero, and only the header
+      // can say otherwise.
+      int mkv = strstr(p, "\"container\":\"mkv\"") != NULL;
+      if ((nPipe > 0 || mkv) && !sourceMp4) { mkvPending = 1; mkvArmedMs = SDL_GetTicks(); }
+      else if (nPipe > 0) mark("mkv: source is MP4, probe skipped"); }
   }
 
   if (strstr(p, "videoInfo")) {
@@ -947,11 +964,128 @@ int video_mkv_head(MkvHead *copy, char *url, unsigned urlSize) {
   return ok;
 }
 
+// Whether the app draws a row itself rather than the pipeline: always when the
+// pipeline does not offer it, and for ASS/SSA even when it does — the pipeline
+// drops the lines of a script that overlaps them (see embsub.h). SRT stays with
+// the pipeline, which draws it well and costs no requests.
+static int drawnByApp(const VideoTrack *f) {
+  if (!f || !f->own) return 0;
+  return f->pipe < 0 || strstr(f->codec, "ASS") || strstr(f->codec, "SSA");
+}
+
+// THE SUBTITLE LIST, from the pipeline's and — once it is in — the file's.
+//
+// With the header, the rows are the FILE's subtitle tracks in its own order:
+// every one the pipeline offers, and every one embsub.c can draw that the
+// pipeline does not (VobSub). Each is tied to its pipeline entry when there is
+// one, which is the hard part: sourceInfo's trackNum is the Matroska
+// TrackNumber on some files (a UHD remux's started 42, 40, 41, 32...) and a
+// plain 0-based index on others (Trigun S1E8: trackNum 0 for Matroska track 8).
+// So by number when every entry matches one, else by order among the text
+// tracks (all the pipeline lists of an MKV), else by order among all of them.
+// A pipeline entry left unmatched keeps a row of its own — nothing the
+// pipeline offered disappears.
+static void buildSubtitles(void) {
+  MkvHead h;
+  char u[1024], line[1400];
+  VideoTrack rows[NV_TRACK_MAX], old;
+  int subs[MKV_MAX_TRACKS], pipeOf[MKV_MAX_TRACKS], used[NV_TRACK_MAX];
+  int n = 0, nh = 0, i, k, had = subCurrent >= 0 && subCurrent < nSub, cur = -1, active;
+  const char *how = "none";
+  size_t w = 0;
+  if (had) old = trackSub[subCurrent];
+  if (!video_mkv_head(&h, u, sizeof u) || strcmp(u, urlCurrent)) {
+    memcpy(trackSub, pipeSub, (size_t)nPipe * sizeof *pipeSub);
+    nSub = nPipe;
+    if (subCurrent >= nSub) subCurrent = -1;
+    return;
+  }
+  for (i = 0; i < h.nTracks; i++) if (h.tracks[i].kind == 17) { pipeOf[nh] = -1; subs[nh++] = i; }
+  memset(used, 0, sizeof used);
+  { int ok = nPipe > 0;
+    for (i = 0; i < nPipe && ok; i++) {
+      for (k = 0; k < nh && h.tracks[subs[k]].number != pipeSub[i].number; k++) {}
+      if (k == nh) ok = 0;
+    }
+    if (ok) {
+      how = "number";
+      for (i = 0; i < nPipe; i++)
+        for (k = 0; k < nh; k++)
+          if (h.tracks[subs[k]].number == pipeSub[i].number) { pipeOf[k] = i; used[i] = 1; }
+    } else if (nPipe > 0) {
+      int text[MKV_MAX_TRACKS], nText = 0;
+      for (k = 0; k < nh; k++) if (!strncmp(h.tracks[subs[k]].codec, "S_TEXT", 6)) text[nText++] = k;
+      if (nText == nPipe) {
+        how = "order among text tracks";
+        for (i = 0; i < nPipe; i++) { pipeOf[text[i]] = i; used[i] = 1; }
+      } else if (nh == nPipe) {
+        how = "order";
+        for (i = 0; i < nPipe; i++) { pipeOf[i] = i; used[i] = 1; }
+      }
+    } }
+  for (k = 0; k < nh && n < NV_TRACK_MAX; k++) {
+    const MkvTrack *t = &h.tracks[subs[k]];
+    const VideoTrack *pp = pipeOf[k] >= 0 ? &pipeSub[pipeOf[k]] : NULL;
+    VideoTrack *r = &rows[n];
+    memset(r, 0, sizeof *r);
+    r->number = t->number;
+    r->pipe = pp ? pp->pipe : -1;
+    // An encrypted track, or one compressed with bzlib or lzo, is left to the
+    // pipeline: the app cannot undo any of those.
+    r->own = embsub_renders(t->codec) && (t->comp == -1 || t->comp == 0 || t->comp == 3);
+    if (r->pipe < 0 && !r->own) continue;
+    if (t->language[0] && strcmp(t->language, "und"))
+      snprintf(r->language, sizeof r->language, "%s", t->language);
+    else if (pp)
+      snprintf(r->language, sizeof r->language, "%s", pp->language);
+    // THE TITLE BEATS THE TAG when it names a language of its own. Trigun's DVD
+    // rips tag their English VobSub "ja" and title it "English Subtitles
+    // [VobSub]"; a muxer copies the tag from wherever, a person wrote the title.
+    { int named = lang_in_text(t->name);
+      if (named >= 0 && lang_of(r->language) != named)
+        snprintf(r->language, sizeof r->language, "%s", lang_code(named)); }
+    snprintf(r->codec, sizeof r->codec, "%s", t->codec);
+    r->forced = t->forced;
+    // The track's NAME ("Forced", "SDH", "Signs and Songs") is what separates
+    // two subtitles in the same language.
+    if (t->name[0])
+      snprintf(r->label, sizeof r->label, "%s%s%s",
+               r->language[0] ? languageReadable(r->language) : "",
+               r->language[0] ? "  \xc2\xb7  " : "", t->name);
+    else if (r->language[0])
+      snprintf(r->label, sizeof r->label, "%s", languageReadable(r->language));
+    else
+      snprintf(r->label, sizeof r->label, "Subtitle %d", n + 1);
+    n++;
+  }
+  for (i = 0; i < nPipe && n < NV_TRACK_MAX; i++) if (!used[i]) rows[n++] = pipeSub[i];
+  if (!n) return;
+  // The row playing now keeps playing: found again by what draws it.
+  active = embsub_track();
+  if (had)
+    for (k = 0; k < n && cur < 0; k++)
+      if (active ? rows[k].number == active : (old.pipe >= 0 && rows[k].pipe == old.pipe)) cur = k;
+  memcpy(trackSub, rows, (size_t)n * sizeof *rows);
+  nSub = n;
+  subCurrent = had ? cur : -1;
+  w = (size_t)snprintf(line, sizeof line, "%d rows, pipeline matched by %s:", n, how);
+  for (k = 0; k < n && w + 80 < sizeof line; k++)
+    w += (size_t)snprintf(line + w, sizeof line - w, " [#%d %s %s pipe %d%s]", rows[k].number,
+                          rows[k].codec[0] ? rows[k].codec : "-",
+                          rows[k].language[0] ? rows[k].language : "-", rows[k].pipe,
+                          drawnByApp(&rows[k]) ? " app" : "");
+  tracksLog("subtitle list", line);
+  // A row the pipeline was drawing that the app draws better moves over now:
+  // the automatic choice picked it before the header could say what it was.
+  if (subCurrent >= 0 && drawnByApp(&trackSub[subCurrent]) && active != trackSub[subCurrent].number)
+    video_choose_subtitle(subCurrent);
+}
+
 static void *readMkv(void *arg) {
   static MkvHead head;
   MkvTrack *fx = head.tracks;
   char url[1024];
-  int n, i, j, matched = 0;
+  int n, j;
   (void)arg;
 
   snprintf(url, sizeof url, "%s", urlCurrent);
@@ -967,16 +1101,6 @@ static void *readMkv(void *arg) {
     threadMkvAlive = 0; return NULL;
   }
 
-  // NO MUTEX, and deliberately: this file has none. trackSub is already written by
-  // luna's response thread and read by the drawing with no lock at all, and
-  // introducing a lock only here would give false safety — it would protect the
-  // write and not the read. The possible damage is a half-read label in ONE frame;
-  // that is why each field is filled in one go, with a single snprintf, and the
-  // label (which is what shows) is written LAST, after the language.
-  // The trackNum in LG's sourceInfo is Matroska's TrackNumber: match by it, and not
-  // by order. The two lists do not arrive in the same order (this TV's sourceInfo
-  // started at 42, 40, 41, 32...), and matching by position would swap the
-  // languages around — worse than having no language at all.
   // The header's view, whole, beside the pipeline's sourceInfo in tracks.log: the
   // two lists side by side are what tells "the pipeline lists only some tracks"
   // from "the pipeline lists them under the wrong language or number".
@@ -991,57 +1115,11 @@ static void *readMkv(void *arg) {
                             fx[j].name[0] ? " name=" : "", fx[j].name);
     tracksLog("mkv header", line); }
 
-  for (i = 0; i < nSub; i++) {
-    // NO `continue` on a track that already has a language: the CodecID is wanted
-    // for EVERY subtitle, and the pipeline's language is no longer trusted over
-    // the file's (see the probe's trigger in onEvent).
-    int haveLang = trackSub[i].language[0] != 0;
-    for (j = 0; j < n; j++) {
-      if (fx[j].number != trackSub[i].number) continue;
-      // The CodecID, carried over on the same pass and by the same trackNum match.
-      // It is free here — the header has already been downloaded and walked for the
-      // languages — and it is the only place it can come from, the pipeline having
-      // no field for it.
-      if (fx[j].codec[0])
-        snprintf(trackSub[i].codec, sizeof trackSub[i].codec, "%s", fx[j].codec);
-      trackSub[i].forced = fx[j].forced;
-      // THE FILE'S LANGUAGE WINS over the pipeline's when the file names one: it
-      // is what the muxer wrote, and the pipeline has been caught reporting a
-      // different one. "und" names nothing, and then the pipeline's stays.
-      if (fx[j].language[0] && strcmp(fx[j].language, "und") &&
-          (!haveLang || strcasecmp(trackSub[i].language, fx[j].language))) {
-        if (haveLang) {
-          char m[96];
-          snprintf(m, sizeof m, "mkv: track %d is %s, the pipeline said %s",
-                   trackSub[i].number, fx[j].language, trackSub[i].language);
-          mark(m);
-        }
-        snprintf(trackSub[i].language, sizeof trackSub[i].language, "%s", fx[j].language);
-        matched++;
-      }
-      // The track's NAME ("Forced", "SDH", "Full") is what separates two subtitles
-      // in the SAME language. Without it the owner sees "Portuguese" three times
-      // and chooses in the dark — and that is precisely the list they complained about.
-      if (fx[j].name[0])
-        snprintf(trackSub[i].label, sizeof trackSub[i].label, "%s%s%s",
-                 trackSub[i].language[0] ? languageReadable(trackSub[i].language) : "",
-                 trackSub[i].language[0] ? "  \xc2\xb7  " : "", fx[j].name);
-      else if (trackSub[i].language[0])
-        snprintf(trackSub[i].label, sizeof trackSub[i].label, "%s",
-                 languageReadable(trackSub[i].language));
-      break;
-    }
-  }
-  { char m[64];
-    snprintf(m, sizeof m, "mkv: %d tracks read, %d subtitles with a language", n, matched);
-    mark(m); }
-  { char m[96];
-    snprintf(m, sizeof m, "%d pipeline subtitles, %d header tracks, %d languages set from the header",
-             nSub, n, matched);
-    tracksLog("mkv result", m); }
-  printf("[mkv] %d subtitles gained a language\n", matched);
-  fflush(stdout);
+  // The subtitle list is rebuilt from this header on the drawing thread
+  // (buildSubtitles, from video_pump): it replaces rows and moves the current
+  // index, which the sheet and the automatic choice read every frame there.
   headPublish(url, &head);
+  headFresh = 1;
   threadMkvAlive = 0;
   return NULL;
 }
@@ -1090,6 +1168,17 @@ void video_pump(void) {
   // addon subtitle playing out of sync is worse than the risk: MEASURED on the
   // owner's TV, the header and a 3.6 MB Cues index read with a 4K remux playing
   // (+3 s of buffer) and no buffering followed.
+  if (headFresh) { headFresh = 0; buildSubtitles(); }
+  // The app could not read the track after all (no frame positions in the
+  // index, a server refusing the Range): back to the pipeline's drawing when it
+  // offers the track, off when it does not.
+  if (subCurrent >= 0 && subCurrent < nSub && embsub_failed()) {
+    int i = subCurrent;
+    embsub_stop();
+    mark("embedded subtitle unreadable by the app, back to the pipeline");
+    if (trackSub[i].pipe >= 0) { trackSub[i].own = 0; video_choose_subtitle(i); }
+    else video_choose_subtitle(-1);
+  }
   if (mkvPending && !threadMkvAlive && urlCurrent[0]) {
     Uint32 now = SDL_GetTicks();
     int lead = bufferSeg - posSeg >= 20.0;
@@ -1152,7 +1241,7 @@ static int playInternal(const char *url, int comDV) {
   // again.)
   fontX = -1; dstX = dstY = dstW = dstH = -1;
   posSeg = durationSeg = bufferSeg = 0; playing = ready = 0; media[0] = 0;
-  nAudio = nSub = 0; audioCurrent = 0; subCurrent = -1; vidAtmos = 0;
+  nAudio = nSub = nPipe = 0; audioCurrent = 0; subCurrent = -1; vidAtmos = 0;
   subUrlCurrent[0] = 0; mkvPending = 0; mkvHurry = 0;
   snprintf(vidHdr, sizeof vidHdr, "none");
   seiX0 = seiX1 = seiX2 = seiY0 = seiY1 = seiY2 = 0;
@@ -1267,6 +1356,7 @@ void video_stop(void) {
   audioOnLoad = subOnLoad = -1;
   subUrlOnLoad[0] = 0;
   pauseRequested = 0; seekIn = 0; mkvPending = 0; mkvHurry = 0; seekHold = -1.0;
+  embsub_stop();
   if (on && media[0]) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", media);
     call("unload", b, soLog);
@@ -1440,17 +1530,31 @@ void video_choose_subtitle(int i) {
   char b[192];
   if (!on || !media[0]) return;
   if (i < 0) {
+    embsub_stop();
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"enable\":false}", media);
     call("setSubtitleEnable", b, soLog);
     subCurrent = -1;
     return;
   }
-  { const VideoTrack *f = video_subtitle(i);
+  { MkvHead h;
+    char u[1024];
+    const VideoTrack *f = video_subtitle(i);
     if (!f) return;
+    if (drawnByApp(f) && video_mkv_head(&h, u, sizeof u)) {
+      // The pipeline's own drawing goes off, or an ASS line would show twice.
+      snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"enable\":false}", media);
+      call("setSubtitleEnable", b, soLog);
+      embsub_start(u, &h, f->number);
+      subCurrent = i;
+      subUrlCurrent[0] = 0;
+      return;
+    }
+    if (f->pipe < 0) return;
+    embsub_stop();
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"enable\":true}", media);
     call("setSubtitleEnable", b, soLog);
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\",\"type\":\"text\",\"index\":%d}",
-             media, f->number);
+             media, f->pipe);
     call("selectTrack", b, soLog);
     subCurrent = i;
     subUrlCurrent[0] = 0;   // back to a track from the file

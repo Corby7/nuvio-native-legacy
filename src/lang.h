@@ -23,5 +23,10 @@ int         lang_n(void);
 const char *lang_name(int index);        // "Spanish"; "" outside the table
 // The table index for a track's language code, or -1 when it is not one of them.
 int         lang_of(const char *code);
+// A code that names language `index` ("eng", "por"); "" outside the table.
+const char *lang_code(int index);
+// The one language a piece of text names as a word — a track's title, say
+// "English Subtitles [VobSub]" — or -1 when it names none or more than one.
+int         lang_in_text(const char *text);
 
 #endif

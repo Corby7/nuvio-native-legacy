@@ -123,6 +123,13 @@ typedef struct {
   // signs and foreign dialogue. 0 on anything that is not an MKV — tracks.c also
   // reads the word "Forced" in the label, which is how most releases say it.
   int  forced;
+  // SUBTITLES ONLY. `pipe` is the index the pipeline's selectTrack takes, -1 when
+  // the pipeline does not offer this track at all (it lists only the text ones
+  // of an MKV — a VobSub never appears in sourceInfo). `own` is 1 when embsub.c
+  // can draw it instead. Once the MKV header is in, the list is the FILE's
+  // subtitle tracks and `number` is the Matroska TrackNumber; before, it is the
+  // pipeline's list and `number` its trackNum.
+  int  pipe, own;
 } VideoTrack;
 
 int  video_n_audio(void);

@@ -23,6 +23,15 @@ int main(void) {
   assert(lang_n() == LANG_COUNT);
   // Every name answers to itself through one of its own codes.
   for (int i = 0; i < lang_n(); i++) assert(lang_name(i)[0]);
-  puts("PASS lang: codes, regions, both 639-2 spellings, unknowns.");
+  for (int i = 0; i < lang_n(); i++) assert(lang_of(lang_code(i)) == i);
+  assert(!strcmp(lang_code(LANG_PORTUGUESE), "por"));
+  // A track title that names its language.
+  assert(lang_in_text("English Subtitles [VobSub]") == LANG_ENGLISH);
+  assert(lang_in_text("english (SDH)") == LANG_ENGLISH);
+  assert(lang_in_text("Signs and Songs [VobSub]") == -1);
+  assert(lang_in_text("Englishman") == -1);
+  assert(lang_in_text("English to Japanese") == -1);
+  assert(lang_in_text("") == -1 && lang_in_text(NULL) == -1);
+  puts("PASS lang: codes, regions, both 639-2 spellings, unknowns, titles.");
   return 0;
 }

@@ -2,10 +2,12 @@
 #include <string.h>
 #include <strings.h>
 
+// The FIRST code of each is the one lang_code hands out, so it names the whole
+// language: "por", not Brazil's "pob".
 // Portuguese keeps Brazil inside it, as the old group did: a viewer who wants
 // Portuguese takes either, and the sheet still names the two apart.
 static const struct { const char *name; const char *codes[8]; } LANGS[] = {
-  { "Portuguese", { "pob", "pt-br", "pt_br", "ptb", "br", "por", "pt", NULL } },
+  { "Portuguese", { "por", "pob", "pt-br", "pt_br", "ptb", "br", "pt", NULL } },
   { "English",    { "eng", "en", "en-us", "en_us", "en-gb", "en_gb", NULL } },
   { "Spanish",    { "spa", "es", "esp", "es-419", "es-es", "es-mx", NULL } },
   { "French",     { "fre", "fra", "fr", "fr-fr", "fr-ca", NULL } },
@@ -61,4 +63,31 @@ int lang_of(const char *code) {
   memcpy(base, code, n);
   base[n] = 0;
   return exact(base);
+}
+
+const char *lang_code(int i) { return i >= 0 && i < N_LANGS ? LANGS[i].codes[0] : ""; }
+
+// A name as a whole word, case-blind: "English Subtitles [VobSub]" names
+// English, "Englishman" does not.
+static int wordAt(const char *s, const char *w) {
+  size_t n = strlen(w);
+  const char *p;
+  for (p = s; *p; p++) {
+    if (strncasecmp(p, w, n)) continue;
+    if (p > s && ((p[-1] | 32) >= 'a' && (p[-1] | 32) <= 'z')) continue;
+    if ((p[n] | 32) >= 'a' && (p[n] | 32) <= 'z') continue;
+    return 1;
+  }
+  return 0;
+}
+
+int lang_in_text(const char *s) {
+  int i, found = -1;
+  if (!s || !*s) return -1;
+  for (i = 0; i < N_LANGS; i++) {
+    if (!wordAt(s, LANGS[i].name)) continue;
+    if (found >= 0) return -1;         // "English to Japanese": no single answer
+    found = i;
+  }
+  return found;
 }

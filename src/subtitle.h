@@ -22,6 +22,17 @@ int  subtitle_text(double posSeg, int delayMs, char *dst, size_t size);
    one only once. Returns how many went into `out`. */
 int  subtitle_shown(double posSeg, int delayMs, SubtitleCue *out, int max);
 
+/* An EMBEDDED track, drawn by the same overlay as an addon's: embsub.c opens a
+   generation with begin and feeds it cues as it fetches them from the file.
+   add returns how many were new, 0 once `g` is no longer the one on (a later
+   load, an off). subtitle_ready answers 0 for it: AutoSync has nothing to do
+   with a track timed to the file it came out of. */
+unsigned subtitle_embedded_begin(void);
+int  subtitle_embedded_add(unsigned g, const SubtitleCue *cues, int n);
+/* Clears the overlay only while `g` is still the one on: an addon subtitle
+   loaded since is left alone. */
+void subtitle_embedded_end(unsigned g);
+
 /* For AutoSync (autosync.c). A subtitle is identified by its GENERATION, which
    changes on every load and every off: a result worked out for one subtitle can
    then never land on the next.

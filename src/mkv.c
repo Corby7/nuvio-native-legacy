@@ -137,9 +137,59 @@ static unsigned long child(const unsigned char *p, long long n, long long o,
 #define ID_CUETRACKPOS 0xB7UL
 #define ID_CUETRACK    0xF7UL
 #define ID_CUEDURATION 0xB2UL
+#define ID_CUECLUSTER  0xF1UL
+#define ID_CUERELPOS   0xF0UL
+#define ID_CODECPRIV   0x63A2UL
+#define ID_ENCODINGS   0x6D80UL
+#define ID_ENCODING    0x6240UL
+#define ID_ENCSCOPE    0x5032UL
+#define ID_ENCTYPE     0x5033UL
+#define ID_COMPRESSION 0x5034UL
+#define ID_COMPALGO    0x4254UL
+#define ID_COMPSETTING 0x4255UL
 
-// Reads the TrackEntry elements inside an already-located Tracks.
-static int readTracks(const unsigned char *p, long long n, MkvTrack *output, int max) {
+// ContentEncodings: only the compression of the first encoding is kept. An
+// encrypted track is marked with an algorithm nothing decodes, so it is skipped
+// rather than shown as rubbish.
+static void readEncodings(const unsigned char *p, long long n, MkvTrack *f) {
+  long long o = 0, at, size;
+  unsigned long id;
+  while (o < n && (id = child(p, n, o, &at, &size))) {
+    if (id == ID_ENCODING && f->comp < 0) {
+      long long q = 0, eat, esize;
+      unsigned long eid;
+      int type = 0, scope = 1, algo = -1, nStrip = 0;
+      unsigned char strip[16];
+      while (q < size && (eid = child(p + at, size, q, &eat, &esize))) {
+        const unsigned char *v = p + at + eat;
+        if (eid == ID_ENCSCOPE) scope = (int)readUint(v, esize);
+        else if (eid == ID_ENCTYPE) type = (int)readUint(v, esize);
+        else if (eid == ID_COMPRESSION) {
+          long long k = 0, cat, csize;
+          unsigned long cid;
+          algo = 0;                 // ContentCompAlgo's default is zlib
+          while (k < esize && (cid = child(v, esize, k, &cat, &csize))) {
+            if (cid == ID_COMPALGO) algo = (int)readUint(v + cat, csize);
+            else if (cid == ID_COMPSETTING && csize <= (long long)sizeof strip) {
+              memcpy(strip, v + cat, (size_t)csize); nStrip = (int)csize;
+            }
+            k = cat + csize;
+          }
+        }
+        q = eat + esize;
+      }
+      f->comp = type == 1 ? 99 : algo;
+      f->compScope = scope;
+      if (algo == 3) { memcpy(f->strip, strip, (size_t)nStrip); f->nStrip = nStrip; }
+    }
+    o = at + size;
+  }
+}
+
+// Reads the TrackEntry elements inside an already-located Tracks, whose payload
+// starts at `fileAt` in the file.
+static int readTracks(const unsigned char *p, long long n, long long fileAt,
+                      MkvTrack *output, int max) {
   long long o = 0, at, size;
   unsigned long id;
   int found = 0;
@@ -149,6 +199,7 @@ static int readTracks(const unsigned char *p, long long n, MkvTrack *output, int
       long long q = 0, fat, fsize;
       unsigned long fid;
       memset(&f, 0, sizeof f);
+      f.privAt = -1; f.comp = -1;
       while (q < size && (fid = child(p + at, size, q, &fat, &fsize))) {
         const unsigned char *v = p + at + fat;
         if (fid == ID_TRACKNUMBER) f.number = (int)readUint(v, fsize);
@@ -162,6 +213,10 @@ static int readTracks(const unsigned char *p, long long n, MkvTrack *output, int
         else if (fid == ID_NAME)    readText(v, fsize, f.name,  sizeof f.name);
         else if (fid == ID_CODECID) readText(v, fsize, f.codec, sizeof f.codec);
         else if (fid == ID_FLAGFORCED) f.forced = readUint(v, fsize) != 0;
+        else if (fid == ID_CODECPRIV && fsize > 0 && fsize < (1 << 20)) {
+          f.privAt = fileAt + at + fat; f.privSize = (int)fsize;
+        }
+        else if (fid == ID_ENCODINGS) readEncodings(v, fsize, &f);
         q = fat + fsize;
       }
       if (f.number > 0) output[found++] = f;
@@ -199,6 +254,7 @@ int mkv_head_parse(const unsigned char *p, long n, MkvHead *h) {
   long long o = 0, segment = -1, cuesRel = -1;
   memset(h, 0, sizeof *h);
   h->cuesAt = -1;
+  h->segmentAt = -1;
   h->scale = 1000000;             // the Matroska default: milliseconds
   // The EBML signature. Without it this is not Matroska (it could be MP4, or an
   // error HTML the server returned with a 200), and going on would read rubbish.
@@ -213,14 +269,14 @@ int mkv_head_parse(const unsigned char *p, long n, MkvHead *h) {
     at = o + ui + ut;
     // Segment: descend into it. Its size is the film's; there is nothing to
     // check it against.
-    if (id == ID_SEGMENT) { segment = at; o = at; continue; }
+    if (id == ID_SEGMENT) { segment = h->segmentAt = at; o = at; continue; }
     // Media data from here on: the header is over.
     if (id == ID_CLUSTER || size == -2) break;
     if (id == ID_TRACKS) {
       long long avail = n - at;
       // A header larger than the downloaded chunk still yields the tracks that
       // fit, which is what this read did before it learnt about the Cues.
-      h->nTracks = readTracks(p + at, size < avail ? size : avail, h->tracks, MKV_MAX_TRACKS);
+      h->nTracks = readTracks(p + at, size < avail ? size : avail, at, h->tracks, MKV_MAX_TRACKS);
     }
     if (at + size > n) break;        // the element runs past what we downloaded
     if (id == ID_SEEKHEAD && cuesRel < 0) cuesRel = readSeekHead(p + at, size);
@@ -274,12 +330,14 @@ int mkv_cues_parse(const unsigned char *p, long n, const MkvHead *h, MkvCue **ou
       k = 0;
       while (ticks >= 0 && k < size && (fid = child(q, size, k, &fat, &fsize))) {
         if (fid == ID_CUETRACKPOS) {
-          long long j = 0, gat, gsize, dur = 0;
+          long long j = 0, gat, gsize, dur = 0, cluster = -1, rel = -1;
           unsigned long gid;
           int track = 0;
           while (j < fsize && (gid = child(q + fat, fsize, j, &gat, &gsize))) {
             if (gid == ID_CUETRACK) track = (int)readUint(q + fat + gat, gsize);
             else if (gid == ID_CUEDURATION) dur = (long long)readUint(q + fat + gat, gsize);
+            else if (gid == ID_CUECLUSTER) cluster = (long long)readUint(q + fat + gat, gsize);
+            else if (gid == ID_CUERELPOS) rel = (long long)readUint(q + fat + gat, gsize);
             j = gat + gsize;
           }
           if (track > 0 && isSubtitle(h, track)) {
@@ -293,6 +351,8 @@ int mkv_cues_parse(const unsigned char *p, long n, const MkvHead *h, MkvCue **ou
             list[found].track = track;
             list[found].start = (double)ticks * tick;
             list[found].end = (double)(ticks + dur) * tick;
+            list[found].cluster = cluster;
+            list[found].rel = rel;
             found++;
           }
         }
@@ -305,12 +365,84 @@ int mkv_cues_parse(const unsigned char *p, long n, const MkvHead *h, MkvCue **ou
   return found;
 }
 
+// A Block's own header: the track as a vint, a 16-bit relative time, the flags.
+// Lacing is refused — no muxer laces subtitles, and a laced frame read as one
+// would be shown as garbage.
+static int blockHeader(const unsigned char *p, long long n, int track, long long *used) {
+  int w;
+  unsigned long long t = 0;
+  int i;
+  if (n < 4) return 0;
+  w = widthOf(p[0]);
+  if (w < 1 || w > 8 || n < w + 3) return 0;
+  t = p[0] & (0xFF >> w);
+  for (i = 1; i < w; i++) t = (t << 8) | p[i];
+  if ((int)t != track || (p[w + 2] & 0x06)) return 0;
+  *used = w + 3;
+  return 1;
+}
+
+#define ID_BLOCKGROUP  0xA0UL
+#define ID_BLOCK       0xA1UL
+#define ID_SIMPLEBLOCK 0xA3UL
+#define ID_BLOCKDUR    0x9BUL
+
+int mkv_block_find(const unsigned char *p, long n, int track, long *at, long *len,
+                   long long *duration, long *need) {
+  int s;
+  *need = 0; *duration = -1;
+  for (s = 0; s <= MKV_BLOCK_SLACK && s < n; s++) {
+    int ui = 0, ut = 0;
+    unsigned long id = readId(p + s, n - s, &ui);
+    long long size, body, used;
+    if (id != ID_BLOCKGROUP && id != ID_SIMPLEBLOCK) continue;
+    size = readSize(p + s + ui, n - s - ui, &ut);
+    if (size < 4 || size > MKV_BLOCK_MAX) continue;
+    body = s + ui + ut;
+    // Too short to hold the whole element: the track number is still checked on
+    // what did arrive, so a stray byte pattern does not cost a second request.
+    if (id == ID_SIMPLEBLOCK) {
+      if (!blockHeader(p + body, (n - body) < size ? n - body : size, track, &used)) continue;
+      if (body + size > n) { *need = (long)(body + size); return 2; }
+      *at = (long)(body + used); *len = (long)(size - used);
+      return 1;
+    }
+    { long long o = 0, cat, csize, avail = n - body < size ? n - body : size;
+      unsigned long cid;
+      long blockAt = -1, blockLen = 0;
+      int bad = 0;
+      // A BlockGroup's children: the Block, and its duration. Walked on the bytes
+      // that arrived; one that runs past them means asking for the rest.
+      while (o < avail) {
+        int ci = 0, ct = 0;
+        cid = readId(p + body + o, (long)(avail - o), &ci);
+        if (!cid) { bad = 1; break; }
+        csize = readSize(p + body + o + ci, (long)(avail - o - ci), &ct);
+        if (csize < 0) { bad = 1; break; }
+        cat = o + ci + ct;
+        if (cid == ID_BLOCK) {
+          if (!blockHeader(p + body + cat, (avail - cat) < csize ? avail - cat : csize, track, &used)) { bad = 1; break; }
+          blockAt = (long)(body + cat + used); blockLen = (long)(csize - used);
+        } else if (cid == ID_BLOCKDUR && cat + csize <= avail) {
+          *duration = (long long)readUint(p + body + cat, csize);
+        }
+        o = cat + csize;
+      }
+      if (bad || (blockAt < 0 && body + size <= n)) continue;
+      if (body + size > n) { *need = (long)(body + size); return 2; }
+      *at = blockAt; *len = blockLen;
+      return 1; }
+  }
+  return 0;
+}
+
 int mkv_head(const char *url, MkvHead *h) {
   char *buf;
   long n = 0;
   int found;
   memset(h, 0, sizeof *h);
   h->cuesAt = -1;
+  h->segmentAt = -1;
   if (!url || !url[0]) return 0;
   buf = net_download_chunk(url, 20, 0, MKV_CHUNK - 1, &n);
   if (!buf) return 0;

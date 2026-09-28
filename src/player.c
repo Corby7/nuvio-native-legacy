@@ -50,6 +50,7 @@
 #include "settings.h"
 #include "failures.h"
 #include "pointer.h"
+#include "embsub.h"
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
@@ -2184,10 +2185,29 @@ static void drawCues(const SubtitleCue *shown,int n,float alpha){
 // ones take over once every line is in. The hold gives up after a few frames, so
 // a line that never rasterises cannot freeze the old cue on screen.
 #define SUB_HOLD_FRAMES 6
+// VOBSUB PICTURES from the file (embsub.c), placed on the video frame as the
+// DVD placed them: a picture is its own layout, so none of the text style
+// applies but the opacity.
+static void drawSubtitlePictures(float alpha){
+  EmbsubPicture p[8];
+  PlrRect f=aspectRect(aspect);
+  float was=gfx_tex_aspect_current;
+  int n=embsub_pictures(posSeg-(double)subStyle.delayMs/1000.0,p,8);
+  if(!n||alpha<=0.f)return;
+  if(f.w<1.f||f.h<1.f)f=(PlrRect){0,0,NV_SCREEN_W,NV_SCREEN_H};
+  gfx_tex_aspect_current=0.f;
+  for(int i=0;i<n;i++){
+    GfxRect r={f.x+p[i].x*f.w,f.y+p[i].y*f.h,p[i].w*f.w,p[i].h*f.h};
+    gfx_rect(r,p[i].tex,GFX_CARD,0,0,0,0.f,1,1,1,alpha);
+  }
+  gfx_tex_aspect_current=was;
+}
+
 static void drawSubtitleExternal(void){
   static SubtitleCue last[8];static int nLast,held;
   SubtitleCue shown[8];int n,missBefore=txt_misses;
   float alpha=(subStyle.opacity==3?.25f:subStyle.opacity==2?.5f:subStyle.opacity==1?.75f:1.f)*entry;
+  drawSubtitlePictures(alpha);
   n=subtitle_shown(posSeg,subStyle.delayMs,shown,8);
   drawCues(shown,n,0.f);
   if(txt_misses!=missBefore&&held<SUB_HOLD_FRAMES){held++;drawCues(last,nLast,alpha);return;}

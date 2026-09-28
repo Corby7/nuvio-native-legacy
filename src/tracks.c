@@ -17,6 +17,7 @@ static int embeddedOnly;
 #include "detail.h"
 #include "data.h"
 #include "lang.h"
+#include "embsub.h"
 #include <sys/stat.h>
 #include <time.h>
 #include <stdio.h>
@@ -275,9 +276,11 @@ static int subScore(const Subtitle *l);
 static int subActive(void);
 
 // A track that carries only signs and foreign dialogue: the file's FlagForced,
-// or the word in its name, which is how most releases say it.
+// or its name saying so — "Forced", or "Signs and Songs" as fansub DVD rips put
+// it. Never the one to pick for the dialogue.
 static int trackForced(const VideoTrack *t) {
-  return t && (t->forced || hasWord(t->label, "forced"));
+  return t && (t->forced || hasWord(t->label, "forced") ||
+               hasWord(t->label, "signs") || hasWord(t->label, "songs"));
 }
 
 // THE FORCED FALLBACK. With "Forced subtitles" on, a film whose subtitles end up
@@ -302,7 +305,7 @@ static void forcedTick(Uint32 now) {
     const VideoTrack *t = video_subtitle(i);
     if (!trackForced(t)) continue;
     if (audio >= 0 && lang_of(t->language) != audio) continue;
-    video_choose_subtitle(i); subtitle_off(); subExternal = -1;
+    subtitle_off(); video_choose_subtitle(i); subExternal = -1;
     { char o[96]; snprintf(o, sizeof o, "forced fallback: embedded %d", i); autoLog(o); }
     forcedDone = 1; return;
   }
@@ -386,7 +389,7 @@ static int chooseEmbedded(const char *remembered, int group) {
       if (!t || !wanted(t->language, remembered, group) || embeddedBitmap(t)) continue;
       subLanguage(i, lang, sizeof lang);
       if (pass == 0 ? strcasecmp(labelRest(t->label, lang), pickName) : trackForced(t)) continue;
-      video_choose_subtitle(i); subtitle_off(); subExternal = -1;
+      subtitle_off(); video_choose_subtitle(i); subExternal = -1;
       { char o[128]; snprintf(o, sizeof o, "chose embedded %d%s%s", i,
                               pass == 0 ? " (the pick remembered for this show)" : "",
                               pass && remembered[0] ? " (remembered for this show)" : ""); autoLog(o); }
@@ -631,7 +634,12 @@ static int langOptions(int li, int *out) {
       }
       if (dup) continue;
       score[k] = l ? subScore(l) : -1000;
-    } else score[k] = 1000;   // the file's own tracks lead, in the file's order
+    } else {
+      // The file's own tracks lead, in the file's order — except that a full
+      // text track comes before a full picture one, and signs-only goes last.
+      const VideoTrack *t = video_subtitle(i);
+      score[k] = 1000 - (embeddedBitmap(t) ? 1 : 0) - (trackForced(t) ? 2 : 0);
+    }
     out[k++] = i;
   }
   // Stable insertion sort, descending: equal scores keep the addon's order.
@@ -683,6 +691,43 @@ static const char *labelRest(const char *label, const char *lang) {
   if (!label[n]) return "";
   if (!strncmp(label + n, SEP, sizeof SEP - 1)) return label + n + sizeof SEP - 1;
   return label;
+}
+
+// A track's name as the row shows it. A bracket that only repeats the format
+// ("[VobSub]", "(ASS)") goes — the detail line says it. A name that only says
+// "<language> Subtitles" is the ordinary full track, and says so.
+static void trackName(const char *name, char *dst, size_t size) {
+  static const char *const FORMAT[] = { "vobsub", "ass", "ssa", "srt", "pgs", "sup",
+                                        "utf-8", "utf8", "text", "image", NULL };
+  size_t w = 0;
+  const char *p = name;
+  while (*p && w + 1 < size) {
+    if (*p == '[' || *p == '(') {
+      const char *close = strchr(p, *p == '[' ? ']' : ')');
+      int k;
+      if (close) {
+        char in[24]; size_t n = (size_t)(close - p - 1);
+        if (n < sizeof in) {
+          memcpy(in, p + 1, n); in[n] = 0;
+          for (k = 0; FORMAT[k] && strcasecmp(in, FORMAT[k]); k++) {}
+          if (FORMAT[k]) { p = close + 1; continue; }
+        }
+      }
+    }
+    dst[w++] = *p++;
+  }
+  dst[w] = 0;
+  { char *a = dst, *z = dst + strlen(dst);
+    while (*a == ' ') a++;
+    while (z > a && z[-1] == ' ') z--;
+    *z = 0; memmove(dst, a, (size_t)(z - a) + 1); }
+  { const char *q = dst;
+    int named = lang_in_text(dst);
+    if (named >= 0) { q += strspn(q, " "); if (!strncasecmp(q, lang_name(named), strlen(lang_name(named)))) q += strlen(lang_name(named)); }
+    q += strspn(q, " ");
+    if (!strcasecmp(q, "subtitles") || !strcasecmp(q, "subs") || !strcasecmp(q, "full") ||
+        (!*q && q != dst))
+      snprintf(dst, size, "Full subtitles"); }
 }
 
 // Case-blind substring test. strcasestr is a GNU extension the device's glibc
@@ -807,19 +852,17 @@ static void optionText(int i, int ordinal, char *main, size_t mSize,
   subLanguage(i, lang, sizeof lang);
   if (i < embedded) {
     const VideoTrack *t = video_subtitle(i);
-    const char *rest = t ? labelRest(t->label, lang) : "";
+    char rest[48];
     int bitmap;
     const char *fmt = codecShort(t ? t->codec : NULL, &bitmap);
-    // The names that are a KIND of subtitle are worth a word of explanation; the
-    // rest ("Full", "Commentary", a translator's name) say what they say.
-    if (!strcasecmp(rest, "sdh") || hasWord(rest, "sdh"))
-      snprintf(main, mSize, "SDH  \xc2\xb7  with sound descriptions");
-    else if (!strcasecmp(rest, "forced") || hasWord(rest, "forced"))
-      snprintf(main, mSize, "Forced  \xc2\xb7  foreign dialogue only");
-    else if (rest[0]) snprintf(main, mSize, "%s", rest);
-    else snprintf(main, mSize, "Track %d", ordinal + 1);
-    snprintf(sub, sSize, "Embedded%s%s%s", fmt ? "  \xc2\xb7  " : "", fmt ? fmt : "",
-             bitmap ? "  \xc2\xb7  image, can't be restyled" : "");
+    trackName(t ? labelRest(t->label, lang) : "", rest, sizeof rest);
+    // The names that are a KIND of subtitle get a plain word; the rest
+    // ("Commentary", a translator's name) say what they say.
+    if (hasWord(rest, "sdh"))       snprintf(main, mSize, "SDH");
+    else if (trackForced(t))        snprintf(main, mSize, "Signs & songs only");
+    else if (rest[0])               snprintf(main, mSize, "%s", rest);
+    else                            snprintf(main, mSize, "Track %d", ordinal + 1);
+    snprintf(sub, sSize, "Embedded%s%s", fmt ? "  \xc2\xb7  " : "", fmt ? fmt : "");
   } else {
     const Subtitle *l = addons_subtitle(i - embedded);
     if (l && l->release[0]) snprintf(main, mSize, "%s", l->release);
@@ -871,6 +914,26 @@ static const char *const ST_STEP_LABEL[FX_N_TILE][2] = {
   [ST_DELAY]    = { "Earlier", "Later"  },
 };
 #define ST_DEFAULT ((VideoSubtitleStyle){ 120, 0, 0, 3, 1, 0, 0, TXT_FAMILY_INTER })
+
+// Whether a Style tile reaches the subtitle playing. A picture (VobSub, PGS) has
+// its look baked in: what is left is WHEN it shows, and — for a VobSub the app
+// draws itself — how opaque it is. The other tiles go dim and the cursor steps
+// over them.
+static int tileApplies(int t) {
+  int a = subActive();
+  const VideoTrack *v;
+  if (a < 0 || a >= video_n_subtitle()) return 1;
+  v = video_subtitle(a);
+  if (!embeddedBitmap(v) || t == ST_DELAY) return 1;
+  return t == ST_OPACITY && v && embsub_track() == v->number;
+}
+
+// The next tile that applies from `t` in direction `d`, or `t` when none does.
+static int tileStep(int t, int d) {
+  int k;
+  for (k = t + d; k >= 0 && k < FX_N_TILE; k += d) if (tileApplies(k)) return k;
+  return t;
+}
 
 static int tileStepper(int t) { return t == ST_SIZE || t == ST_POSITION || t == ST_DELAY; }
 
@@ -1045,7 +1108,9 @@ static void applySubtitle(int i) {
       if (v[0]) memWrite(PICK_FILE, v);
     } }
   if (i < 0)             { video_choose_subtitle(-1); subtitle_off(); subExternal = -1; }
-  else if (i < embedded) { video_choose_subtitle(i);  subtitle_off(); subExternal = -1; }
+  // The overlay first: an embedded track the app draws itself (embsub.c) opens
+  // its own generation there, which an off afterwards would close again.
+  else if (i < embedded) { subtitle_off(); video_choose_subtitle(i); subExternal = -1; }
   else {
     const Subtitle *l = addons_subtitle(i - embedded);
     // Only mark as active if there was something to apply: without the URL the
@@ -1127,7 +1192,11 @@ static void eventTracks(SDL_Keycode k) {
 }
 
 static void eventStyle(SDL_Keycode k) {
-  int nChips = tileChoices(tileFocus) + 1;    // + Reset to defaults
+  int nChips;
+  // The track changed under a tile that no longer applies: back to Delay, which
+  // always does.
+  if (!tileApplies(tileFocus)) { tileFocus = ST_DELAY; if (zone == Z_CHIP) zone = Z_TILE; }
+  nChips = tileChoices(tileFocus) + 1;    // + Reset to defaults
   if (zone == Z_TABS) {
     if (isBack(k)) { is_open = 0; return; }
     if (k == SDLK_LEFT) tab = TAB_TRACKS;
@@ -1137,9 +1206,9 @@ static void eventStyle(SDL_Keycode k) {
   if (zone == Z_TILE) {
     if (isBack(k)) { is_open = 0; return; }
     if (k == SDLK_UP) zone = Z_TABS;
-    else if (k == SDLK_LEFT  && tileFocus > 0)             tileFocus--;
-    else if (k == SDLK_RIGHT && tileFocus < FX_N_TILE - 1) tileFocus++;
-    else if (k == SDLK_DOWN || isOk(k)) enterChips();
+    else if (k == SDLK_LEFT)  tileFocus = tileStep(tileFocus, -1);
+    else if (k == SDLK_RIGHT) tileFocus = tileStep(tileFocus, 1);
+    else if ((k == SDLK_DOWN || isOk(k)) && tileApplies(tileFocus)) enterChips();
     return;
   }
   // Z_CHIP
@@ -1172,7 +1241,7 @@ static void clickTab(int t, int unused) {
 }
 static void pointTile(int i, int unused) {
   (void)unused;
-  if (!is_open || tab != TAB_STYLE) return;
+  if (!is_open || tab != TAB_STYLE || !tileApplies(i)) return;
   zone = Z_TILE; tileFocus = i;
 }
 static void pointChip(int i, int unused) {
@@ -1516,8 +1585,8 @@ static void lightBox(GfxRect r, float a) {
   gfx_color(r, rad, NV_TRK_LIGHT, NV_TRK_LIGHT, NV_TRK_LIGHT, a);
 }
 
-static void drawBar(float a) {
-  float drop = (1.0f - barStyle()) * 40.0f, x = NV_TRK_BAR_X;
+static void drawBar(float a0) {
+  float a = a0, drop = (1.0f - barStyle()) * 40.0f, x = NV_TRK_BAR_X;
   float w = NV_SCREEN_W - NV_TRK_BAR_X * 2;
   float tw = (w - NV_TRK_TILE_GAP * (FX_N_TILE - 1)) / FX_N_TILE;
   float chipY = NV_SCREEN_H - NV_TRK_BAR_BOTTOM - NV_TRK_CHIP_H + drop;
@@ -1536,10 +1605,14 @@ static void drawBar(float a) {
 
   // The tiles: a spaced-capitals label over the value. The focused one turns
   // light, with the ‹ › that say it has a set of values under it.
+  if (!tileApplies(tileFocus)) tileFocus = ST_DELAY;
   for (i = 0; i < FX_N_TILE; i++) {
     GfxRect r = { x + i * (tw + NV_TRK_TILE_GAP), tileY, tw, NV_TRK_TILE_H };
     int focused = zone == Z_TILE && i == tileFocus;
     int owner = zone == Z_CHIP && i == tileFocus;
+    // A tile that does not reach this subtitle is dimmed, with no text to
+    // explain it (see tileApplies).
+    float a = tileApplies(i) ? a0 : a0 * 0.35f;
     int ink = focused ? NV_TRK_FOCUS_INK : 255, lab = focused ? 92 : 128;
     float vx = r.x + NV_TRK_TILE_PADX, room = tw - NV_TRK_TILE_PADX * 2;
     char v[32];

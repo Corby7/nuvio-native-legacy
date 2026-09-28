@@ -16,6 +16,10 @@ static SubtitleCue *cues;
 // to stop looking back.
 static double *reach;
 static int nCues, on;
+// 1 while the cues are an EMBEDDED track that embsub.c feeds a few at a time.
+// AutoSync is kept off it: the track is timed to this very file, and a partial
+// list would give it nothing to match anyway.
+static int embedded;
 static unsigned generation, retimed;
 
 static double parseTime(const char *s) {
@@ -524,19 +528,58 @@ void subtitle_load(const char *url,const char *language) {
   Request *p; pthread_t thread;
   if(!url||!*url)return;
   p=calloc(1,sizeof *p);if(!p)return;
-  pthread_mutex_lock(&lock);on=1;p->g=++generation;dropCues();pthread_mutex_unlock(&lock);
+  pthread_mutex_lock(&lock);on=1;embedded=0;p->g=++generation;dropCues();pthread_mutex_unlock(&lock);
   snprintf(p->url,sizeof p->url,"%s",url);
   snprintf(p->language,sizeof p->language,"%s",language?language:"");
   if(pthread_create(&thread,NULL,download,p)==0)pthread_detach(thread);else free(p);
 }
 
 void subtitle_off(void) {
-  pthread_mutex_lock(&lock);on=0;generation++;dropCues();pthread_mutex_unlock(&lock);
+  pthread_mutex_lock(&lock);on=0;embedded=0;generation++;dropCues();pthread_mutex_unlock(&lock);
+}
+
+unsigned subtitle_embedded_begin(void) {
+  unsigned g;
+  pthread_mutex_lock(&lock);on=1;embedded=1;g=++generation;dropCues();pthread_mutex_unlock(&lock);
+  return g;
+}
+
+void subtitle_embedded_end(unsigned g) {
+  pthread_mutex_lock(&lock);
+  if (g == generation && embedded) { on = 0; embedded = 0; generation++; dropCues(); }
+  pthread_mutex_unlock(&lock);
+}
+
+// A few cues at a time, in whatever order they were fetched: merged, re-sorted
+// and reach[] rebuilt. A cue already held (same start, same text) is not taken
+// twice — a seek back fetches the same stretch again.
+int subtitle_embedded_add(unsigned g, const SubtitleCue *add, int n) {
+  int i, j, k = 0;
+  SubtitleCue *v; double *r;
+  if (!add || n <= 0) return 0;
+  pthread_mutex_lock(&lock);
+  if (g != generation || !on || !embedded) { pthread_mutex_unlock(&lock); return 0; }
+  v = realloc(cues, (size_t)(nCues + n) * sizeof *v);
+  if (!v) { pthread_mutex_unlock(&lock); return 0; }
+  cues = v;
+  for (i = 0; i < n; i++) {
+    for (j = 0; j < nCues; j++)
+      if (cues[j].start == add[i].start && !strcmp(cues[j].text, add[i].text)) break;
+    if (j == nCues) cues[nCues++] = add[i], k++;
+  }
+  if (nCues > 1) qsort(cues, (size_t)nCues, sizeof *cues, byStart);
+  r = realloc(reach, (size_t)(nCues ? nCues : 1) * sizeof *r);
+  if (r) {
+    reach = r;
+    for (i = 0; i < nCues; i++) reach[i] = i && reach[i - 1] > cues[i].end ? reach[i - 1] : cues[i].end;
+  } else { free(cues); free(reach); cues = NULL; reach = NULL; nCues = 0; }
+  pthread_mutex_unlock(&lock);
+  return k;
 }
 
 unsigned subtitle_ready(void) {
   unsigned g;
-  pthread_mutex_lock(&lock);g=on&&nCues>0?generation:0;pthread_mutex_unlock(&lock);
+  pthread_mutex_lock(&lock);g=on&&!embedded&&nCues>0?generation:0;pthread_mutex_unlock(&lock);
   return g;
 }
 

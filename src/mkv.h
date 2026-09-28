@@ -37,12 +37,24 @@ typedef struct {
   char name[48];      // Name, when present ("Forced", "SDH", "Full")
   char codec[24];     // CodecID ("S_TEXT/UTF8", "S_HDMV/PGS")
   int  forced;        // FlagForced: signs and foreign dialogue only
+  // Where CodecPrivate sits in the FILE and how long it is — the ASS script
+  // header, the VobSub .idx — for embsub.c to fetch by Range. -1/0 when absent.
+  // Kept as a position and not a copy: an ASS header runs to tens of KB, and
+  // this struct is copied by value sixty-four times over.
+  long long privAt;
+  int  privSize;
+  // ContentCompression: -1 none, 0 zlib, 3 header stripping (the bytes in
+  // `strip`). `compScope` is ContentEncodingScope: 1 the frames, 2 CodecPrivate.
+  // mkvmerge zlib-compresses VobSub by default, so this is not an edge case.
+  int  comp, compScope, nStrip;
+  unsigned char strip[16];
 } MkvTrack;
 
 typedef struct {
   MkvTrack tracks[MKV_MAX_TRACKS];
   int nTracks;
   long long cuesAt;              // file offset of the Cues element; -1 unknown
+  long long segmentAt;           // file offset of the Segment's payload; -1 unknown
   unsigned long long scale;      // TimestampScale: nanoseconds per tick
 } MkvHead;
 
@@ -51,6 +63,10 @@ typedef struct {
 typedef struct {
   int track;          // TrackNumber
   double start, end;  // seconds
+  // Where the frame is: its Cluster, relative to the Segment's payload, and the
+  // frame inside that Cluster (CueRelativePosition). `rel` is -1 when the muxer
+  // wrote none — then only the Cluster is known.
+  long long cluster, rel;
 } MkvCue;
 
 // Downloads `url`'s header and fills `h`. Returns how many tracks it found, 0
@@ -64,6 +80,19 @@ int mkv_head(const char *url, MkvHead *h);
 // `why` (optional) says what failed, for the log. BLOCKS.
 int mkv_cues(const char *url, const MkvHead *h, MkvCue **out, long *bytes,
              char *why, unsigned whySize);
+
+// THE FRAME AT A CUE'S POSITION. `p` is the file from segmentAt + cluster + rel
+// on. Whether `rel` counts from the Cluster's ID or from its payload is not
+// something muxers agree on, so the frame is looked for at each of the first
+// MKV_BLOCK_SLACK + 1 bytes — a Cluster header is 5 to 12 bytes — and taken where
+// a BlockGroup or SimpleBlock of `track` starts. 1 with the frame's payload at
+// p + *at, *len bytes long, and its BlockDuration in ticks (-1 when none); 2 when
+// the frame runs past `n` and the buffer has to hold *need bytes; 0 when there is
+// none there.
+#define MKV_BLOCK_SLACK 12
+#define MKV_BLOCK_MAX   (4L * 1024 * 1024)
+int mkv_block_find(const unsigned char *p, long n, int track, long *at, long *len,
+                   long long *duration, long *need);
 
 // The pure halves of the two calls above, also used by the regression test.
 // `p` is the file from offset 0 for the head, and starts AT the Cues element

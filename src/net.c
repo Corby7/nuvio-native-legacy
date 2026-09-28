@@ -636,6 +636,12 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   // as it fills. In that case what has arrived is exactly what was wanted —
   // treating it as a failure would throw away the whole header we just downloaded.
   if (r == 23 && b.cap > 0 && b.n > 0) r = 0;
+  // 18 = CURLE_PARTIAL_FILE, on a Range that runs past the end of the file.
+  // MEASURED on Real-Debrid: asked for 128 KB from 26 KB before the end, it
+  // answers 206 with a Content-Length of the whole range and sends the 26 KB
+  // that exist. Those bytes are the file's, and exactly the tail a Matroska
+  // index lives in — throwing them away made every read of that index fail.
+  if (r == 18 && b.cap > 0 && b.n > 0) r = 0;
   if (r != 0) { char safe[120]; free(b.p);
     printf("[net] failure %d on %s\n", r, net_url_public(url, safe, sizeof safe));
     return NULL; }
