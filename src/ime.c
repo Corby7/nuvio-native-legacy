@@ -93,6 +93,10 @@ int ime_shown(void) {
 void ime_pump(void) {
 #ifndef __APPLE__
   if (!open_ || refused) return;
+  // The review harnesses' keyboard is never "shown": they type when they are
+  // ready, and a slow capture between opening and typing is not a keyboard
+  // that failed to come up.
+  if (getenv("NUVIO_FAKE_IME")) return;
   // Seen up and now down: the platform lowered it without asking. Follow it, so
   // the field stops acting as though it were still taking text (the blinking
   // caret, OK meaning submit instead of raising the keyboard again).
