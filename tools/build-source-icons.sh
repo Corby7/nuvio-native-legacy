@@ -19,7 +19,7 @@
 # The set_* set is the Settings screen's group-header glyphs (src/settings.c).
 #
 # The src_* set is Live TV's Source screen (src/iptvui.c): Refresh, and the
-# result line's tick, ! and cross. live_caret_{up,down} are Phosphor's carets,
+# result line's tick, ! and cross. live_caret_{up,down} are Phosphor's carets (Bold),
 # the full-screen channel carousel's chevrons.
 #
 # 128px is the raster size the rest of art/icons uses; the row draws it at 21.

@@ -3750,9 +3750,9 @@ static void drawStreamFacts(float right, float cy, float a) {
 
 // Phosphor's carets, one above the other, centred on `cy`: the title rolls.
 static void titleCarets(float x, float cy, float a) {
-  const float d = 22.0f;
-  gfx_icon((GfxRect){ x, cy - d - 1.0f, d, d }, "live_caret_up", HEXF(0xE4E7EA), 0.9f * a);
-  gfx_icon((GfxRect){ x, cy + 1.0f, d, d }, "live_caret_down", HEXF(0xE4E7EA), 0.9f * a);
+  const float d = 28.0f;
+  gfx_icon((GfxRect){ x, cy - d + 2.0f, d, d }, "live_caret_up", HEXF(0xF5F6F8), a);
+  gfx_icon((GfxRect){ x, cy - 2.0f, d, d }, "live_caret_down", HEXF(0xF5F6F8), a);
 }
 
 // 2 · THE BAR, and 4 · the walk, which is the same block on a later programme.
@@ -3925,6 +3925,8 @@ static void drawPeek(float a) {
              : 0.14f * (4.0f - ad);
     // Below the middle there is room for one row: the next fades out sooner.
     if (d > 1.0f) ca *= 1.0f - (d - 1.0f) * 2.0f;
+    // The neighbours step back further, so the middle one reads as chosen.
+    if (ad >= 0.5f) ca *= 0.7f;
     float tile = 58.0f + 26.0f * f, tx = x + tile + 26.0f, titleW = right - tx - 520.0f;
     int idx = ((r % nView) + nView) % nView, mid = ad < 0.5f;
     const IptvChannel *c;
@@ -3941,7 +3943,10 @@ static void drawPeek(float a) {
     snprintf(kick, sizeof kick, "%d \xC2\xB7 %s", c->number, c->name);
     if (mid) {
       TxtLine t = txt_line_trim(TXT_LIVE_TITLE, pg ? pg->title : c->name, HEXI(0xF5F6F8), 255, titleW);
-      inkTrim(TXT_LIVE_NAME, kick, 0x9AA1A9, tx, y - t.h * 0.5f - 30.0f, titleW, a * ca);
+      // The chosen one sits on a plate, its channel in bold and bright.
+      { GfxRect pl = { x - 20.0f, y - t.h * 0.5f - 58.0f, right - x + 40.0f, t.h + 58.0f + 46.0f };
+        gfx_color(pl, 16.0f / pl.h, 1, 1, 1, 0.09f * a * ca); }
+      inkTrim(TXT_DETWEB_EP_BADGE, kick, 0xF5F6F8, tx, y - t.h * 0.5f - 32.0f, titleW, a * ca);
       txt_draw_alpha(t, tx, y - t.h * 0.5f, a * ca);
       titleCarets(tx + t.w + 22.0f, y, a * ca);
       if (pg) {
