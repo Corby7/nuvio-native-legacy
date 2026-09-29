@@ -24,7 +24,7 @@
 #include <pthread.h>
 #include <time.h>
 
-#define SY_ADD_MAX   16
+#define SY_ADD_MAX   32
 #define SY_PROGRESS_MAX 240
 #define FILE_PROGRESS "progress.txt"
 
@@ -193,7 +193,7 @@ static int parseAddons(const char *r, AddonRemote *out, int max) {
 }
 
 static void pushAddons(void) {
-  AddonRemote current[SY_ADD_MAX];
+  static AddonRemote current[SY_ADD_MAX];   // 32 x 668 bytes: too much for a stack
   Jsw w;
   char *r;
   int st = 0, n, i;

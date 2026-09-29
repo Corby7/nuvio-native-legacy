@@ -499,6 +499,13 @@ int main(int argc, char **argv) {
   // showed nothing: the key was never delivered, and the code it uses was not the
   // one I was looking for either.
   SDL_SetHint("SDL_WEBOS_ACCESS_POLICY_KEYS_BACK", "true");
+  // THE POINTER'S IDLE TIMEOUT, in ms. The compositor draws the Magic Remote's
+  // cursor and decides when it goes away. The C3 hides it on its own; a tester
+  // on an older TV reported it staying on screen for good. LG's SDL backend
+  // reads this at window creation, like the hint above; a firmware that already
+  // hides the cursor is not expected to change. 5000 is what other native webOS
+  // apps (Moonlight) use.
+  SDL_SetHint("SDL_WEBOS_CURSOR_SLEEP_TIME", "5000");
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) { printf("SDL_Init: %s\n", SDL_GetError()); return 1; }
   mark("SDL_Init");

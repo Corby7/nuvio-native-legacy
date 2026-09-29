@@ -1004,7 +1004,7 @@ static const char *helpOption(int op) {
     case SETTING_NEXT_COUNTDOWN: return "How long the Up next card waits before it plays the next episode.";
     case SETTING_AUDIO_LANG: return "The audio track to switch to when the file has one in this language. File default keeps the file's own choice.";
     case SETTING_AUDIO_ANIME: return "The same, for anime only: Japanese animation, or a title from an anime catalogue. Same as Audio language follows the row above.";
-    case SETTING_SUBS: return "The subtitle turned on when a title starts: the file's own track first, then an addon's.";
+    case SETTING_SUBS: return "The subtitle turned on when a title starts: the file's own track first, then an addon's. Addon subtitles are only listed in English and this language, so pick yours here.";
     case SETTING_SUBS_FORCED: return "When no subtitle is turned on, shows a forced track in the audio's language: signs and foreign dialogue only.";
     case SETTING_NEXT_AUTOPLAY: return "Plays the next episode when the Up next countdown ends. Off, the card waits for you.";
     case SETTING_NEXT_MODE: return "When the Up next card appears. The credits, when they are known, bring it up earlier.";

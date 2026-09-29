@@ -13,7 +13,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-#define ADD_MAX 12
+#define ADD_MAX 32
 
 // `source` marks who actually delivers streams. Discovered from the manifest:
 // Xperience declares the catalog/meta/subtitles resources and NO stream, so it
