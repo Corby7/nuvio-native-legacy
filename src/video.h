@@ -53,6 +53,9 @@ int  video_launch_youtube(const char *videoId);
 // field makes the load accept, return a mediaId and never fetch the file — a
 // silent failure.
 int  video_play(const char *url);
+// Reload the same link and resume when the network drops mid-playback, up to
+// three times. Call right after video_play; every video_play turns it off again.
+void video_reconnect(int on);
 
 // Call ONCE PER FRAME. Today it serves the Dolby Vision fallback deadline (see
 // the comment in video.c): without this tick, a file the TV refuses with

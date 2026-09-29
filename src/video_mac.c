@@ -158,6 +158,8 @@ int video_play(const char *url) {
   printf("[mpv] load %.100s\n", url); fflush(stdout);
   return 1;
 }
+// The Mac preview does not reload on a network drop; the TV build does (video.c).
+void video_reconnect(int on) { (void)on; }
 
 void video_stop(void) {
   session++;

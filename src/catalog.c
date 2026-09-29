@@ -934,6 +934,15 @@ static void applyProgress(int from, int to) {
       size_t L = strlen(id);
       if (!strncmp(items[i].imdb, id, L) &&
           (items[i].imdb[L] == 0 || items[i].imdb[L] == ':')) {
+        // A CARD THAT NAMES ITS EPISODE ("tt…:1:2", a next-up card) takes only
+        // that episode's line. The prefix match handed it the line of the one
+        // just FINISHED: next up S1E2 came out as S1E1 at 100%, and OK on it
+        // restarted S1E1 from the top, since a finished episode plays from 0.
+        int s2, e2;
+        if (items[i].imdb[L] == ':' && season > 0 && episode > 0 &&
+            sscanf(items[i].imdb + L, ":%d:%d", &s2, &e2) == 2 &&
+            (s2 != season || e2 != episode))
+          continue;
         items[i].progress = cat_pct(pos, duration);
         items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
         items[i].resumedMs = ms;

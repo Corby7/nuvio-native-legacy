@@ -51,6 +51,7 @@
 #include "failures.h"
 #include "pointer.h"
 #include "embsub.h"
+#include "mark.h"
 #include <time.h>
 #include <stdio.h>
 #include <string.h>
@@ -372,7 +373,31 @@ static int  trailerMode;
 static char trailerName[96];
 static char lineEp[220];          // "T1, E1 · <sinopse curta>", montada na abertura
 
-static const CatItem *item(void) { return cat_item(idx); }
+// THE TITLE, NOT THE SLOT. `idx` is a position in the catalogue, and the
+// catalogue is rebuilt under the screen — a finished episode reorders Continue
+// watching, and discovery republishes while a film plays. Held across that, the
+// position names whatever title moved into it: Back from South Park opened
+// Spartacus, and the progress went there too. The id is what stays put.
+static char idxImdb[sizeof ((CatItem *)0)->imdb];
+static void followTitle(void) {
+  const CatItem *c;
+  int j;
+  if (!idxImdb[0]) return;
+  c = cat_item(idx);
+  if (c && !strcmp(c->imdb, idxImdb)) return;
+  j = cat_index_by_imdb(idxImdb);
+  if (j >= 0) idx = j;
+}
+static void holdTitle(void) {
+  const CatItem *c = cat_item(idx);
+  snprintf(idxImdb, sizeof idxImdb, "%s", c ? c->imdb : "");
+}
+static const CatItem *item(void) { followTitle(); return cat_item(idx); }
+// Tries at fetching the episode list again after a rebuild (keepEpisodes).
+#define PLR_EP_RETRY_MAX 3
+#define PLR_EP_RETRY_MS  3000u
+static int    epRefetches;
+static Uint32 epRefetchAt;
 static int epT, epE, reqSources, errorSource, reqNextT, reqNextE;
 static int reqDetails;   // the Details button: leave, and land on the title page
 // THE CARD CAN BE SENT AWAY. It is offered for the last two minutes of an episode,
@@ -523,12 +548,14 @@ static void failWatchReset(void) {
   // A notice about the previous title or source is stale the moment a new one loads.
   failNoticeAt = 0;
 }
-int player_index(void) { return idx; }
+int player_index(void) { followTitle(); return idx; }
 const char *player_line_episode(void) { return lineEp; }
 void player_episode_current(int *t, int *e) { *t = epT; *e = epE; }
 int player_requested_sources(void) { int p = reqSources; reqSources = 0; return p; }
 int player_requested_details(void) {
-  int p = reqDetails ? idx : -1; reqDetails = 0; return p;
+  int p;
+  followTitle();
+  p = reqDetails ? idx : -1; reqDetails = 0; return p;
 }
 int player_requested_next(int *t,int *e) {
   if(!reqNextT||!reqNextE)return 0;
@@ -907,6 +934,8 @@ void player_toast(const char *text, int good) {
 static void openSession(int indexCatalog, const char *url) {
   int n = cat_n(); if (n < 1) n = 1;
   idx = ((indexCatalog % n) + n) % n;
+  holdTitle();
+  epRefetches = 0; epRefetchAt = SDL_GetTicks();
   is_open = 1; exiting = 0; requestedExit = 0; barFocus = 0;
   // The title's parental guide: requested HERE and not while drawing, so the answer
   // has already arrived when the controls appear for the first time.
@@ -935,6 +964,7 @@ static void openSession(int indexCatalog, const char *url) {
   prefsRead();
   toastAte = 0;
   hasVideo = (url && *url && video_play(url));
+  if (hasVideo) video_reconnect(1);
   // The saved style has to REACH THE PIPELINE, not just this file's copy of it.
   // It only ever went over when a setting was changed, so every title opened with
   // the file's own subtitles in the TV's defaults — and anything that adjusts the
@@ -1015,6 +1045,7 @@ void player_set_source(const char *url) {
   errorSource = 0;
   failWatchReset();
   hasVideo = video_play(url);
+  if (hasVideo) video_reconnect(1);
   if (!hasVideo) {
     player_report_failure("load", "the pipeline refused the URL");
     player_error_source();
@@ -1055,7 +1086,9 @@ void player_shutdown(void) {
   if (hasVideo && video_ready() && durationSeg > 1.0f && !trailerMode) {
     int done = watchedToEnd(posSeg, durationSeg);
     float pos = done ? durationSeg : posSeg;
-    const CatItem *ci = cat_item(idx);
+    const CatItem *ci;
+    followTitle();
+    ci = cat_item(idx);
     home_record_return(idx, pos, durationSeg);
     cat_save_progress_ep(idx, pos, durationSeg,epT,epE);
     // And to Trakt too, which is where "continue watching" comes from: recording only
@@ -1700,7 +1733,9 @@ static Uint32 heldSince, checkpointAt;
 static void reportReset(void) { reported = heldState = -1; heldSince = checkpointAt = 0; }
 
 static int traktId(char *id, size_t size) {
-  const CatItem *ci = cat_item(idx);
+  const CatItem *ci;
+  followTitle();
+  ci = cat_item(idx);
   if (!ci || !ci->imdb[0]) return 0;
   if (epT > 0 && epE > 0)
     snprintf(id, size, "%.*s:%d:%d", (int)strcspn(ci->imdb, ":"), ci->imdb, epT, epE);
@@ -1711,6 +1746,7 @@ static int traktId(char *id, size_t size) {
 static void checkpoint(Uint32 now, const char *why) {
   checkpointAt = now;
   if (posSeg < 5.0f) return;   // nothing worth resuming yet
+  followTitle();
   cat_save_progress_ep(idx, posSeg, durationSeg, epT, epE);
   sync_dirty_progress();
   printf("[player] checkpoint (%s) at %.0f/%.0f s\n", why, posSeg, durationSeg);
@@ -1735,7 +1771,28 @@ static void reportPlayback(Uint32 now) {
   if (state && now - checkpointAt >= PLR_CHECKPOINT_MS) checkpoint(now, "periodic");
 }
 
+// THE EPISODE LIST, KEPT. A catalogue rebuild drops every title's episodes
+// (cat_set_all), and rebuilds happen while a series plays — the account and
+// Trakt syncs ask for them. The title screen fetches its list again; a player
+// opened from Continue watching has no title screen under it, and with the list
+// gone the Up next card, the Next button and autoplay all went quietly missing.
+// The same three spaced tries as detail.c, refilled once the list is back.
+static void keepEpisodes(Uint32 now) {
+  const CatItem *c = cat_item(idx);
+  if (trailerMode || !c || strcmp(c->kind, "series")) return;
+  disc_episodes_pending();
+  if (cat_n_episodes(idx) > 0) { epRefetches = 0; return; }
+  if (disc_episodes_loading(idx) || epRefetches >= PLR_EP_RETRY_MAX ||
+      now - epRefetchAt <= PLR_EP_RETRY_MS) return;
+  epRefetches++;
+  epRefetchAt = now;
+  mark("player: episode list gone, fetching again");
+  disc_episodes(idx, 0);
+}
+
 void player_update(float dt, Uint32 now) {
+  followTitle();
+  if (is_open) keepEpisodes(now);
   skipTick(dt);
   nextTick(dt);
   // THE RUNG CAN DISAPPEAR UNDER THE FOCUS: the skip offer times out on its own,

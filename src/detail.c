@@ -86,6 +86,25 @@
 static HomeItem item;
 static int  is_open = 0, exiting = 0;
 static int  idx = 0;                 // the current title within the collection
+// THE TITLE, NOT THE SLOT. `idx` is a position in the catalogue, and the
+// catalogue is rebuilt under the screen — a finished episode reorders Continue
+// watching, and discovery republishes while a film plays. Held across that, the
+// position names whatever title moved into it: Back from the player on
+// South Park landed on Spartacus. The id is what stays put.
+static char idxImdb[sizeof ((CatItem *)0)->imdb];
+static void followTitle(void) {
+  const CatItem *c;
+  int j;
+  if (!idxImdb[0]) return;
+  c = cat_item(idx);
+  if (c && !strcmp(c->imdb, idxImdb)) return;
+  j = cat_index_by_imdb(idxImdb);
+  if (j >= 0) idx = j;
+}
+static void holdTitle(void) {
+  const CatItem *c = cat_item(idx);
+  snprintf(idxImdb, sizeof idxImdb, "%s", c ? c->imdb : "");
+}
 static float t = 0.0f;               // 0 = the card on the home, 1 = full screen
 // The flight's VELOCITY. The spring that drives `t` is second-order (see
 // NV_SPRING2_SCREEN in layout.h), so the position alone does not describe its
@@ -860,6 +879,7 @@ static void openState(const HomeItem *it, int shared) {
   epRetries = 0;
   epRetryAt = SDL_GetTicks();
   idx = it->index_;
+  holdTitle();
   // The Trakt score, comments and related titles. Requested on OPENING and not while
   // drawing: the tabs only appear once the data arrives, and requesting while drawing
   // would make the tab bar appear with the title already on screen.
@@ -1842,6 +1862,7 @@ static void syncColumns(void) {
 
 void detail_update(float dt, Uint32 now) {
   if (!is_open) return;
+  followTitle();
   // Read before the ramp advances, so the frame that finishes the fade still snaps.
   int snap = settings_animations_reduced() || popFade < 1.0f;
   popFade = anim_ramp(popFade, 1.0f, dt, NV_DET_POP_FADE_MS);
@@ -1853,6 +1874,9 @@ void detail_update(float dt, Uint32 now) {
   // See EP_RETRY_MAX. The kind, as app.c asks: a kindless item is only a series
   // BY its episodes, and those are what is missing.
   { const CatItem *ci = cat_item(idx);
+    // Refilled once the list is there: a rebuild empties it again later, and a
+    // long visit would otherwise spend the tries on the first few rebuilds.
+    if (cat_n_episodes(idx) > 0) epRetries = 0;
     if (ci && !strcmp(ci->kind, "series") && cat_n_episodes(idx) == 0 &&
         !disc_episodes_loading(idx) && epRetries < EP_RETRY_MAX &&
         now - epRetryAt > EP_RETRY_MS) {
@@ -4869,7 +4893,7 @@ void detail_draw(Uint32 now) {
   if (seasonMenuOpen) drawSeasonMenu(seasonMenuAt, pa);
 }
 
-int detail_index(void) { return idx; }
+int detail_index(void) { followTitle(); return idx; }
 int detail_requested_play(void) { int v = reqPlay; reqPlay = 0; return v; }
 int detail_requested_trailer(void) { int v = reqTrailer; reqTrailer = -1; return v; }
 int detail_requested_open(void) { int v = reqOpen; reqOpen = -1; return v; }

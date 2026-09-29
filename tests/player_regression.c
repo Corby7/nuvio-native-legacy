@@ -130,6 +130,15 @@ static void testar(void) {
   cat_set(&c,1);
   assert(cat_item(0)->season==2 && cat_item(0)->episode==4 && cat_item(0)->progress==50);
   assert(!cat_item(0)->nameEpisode[0]);
+  /* A next-up card names its episode: the line of the episode before it must
+     not turn it back into that one (S2E5 shown as S2E4 at 50%). */
+  { CatItem pair[2];pair[0]=c;pair[1]=c;
+    strcpy(pair[0].imdb,"tt0000001:2:5");pair[0].season=2;pair[0].episode=5;
+    pair[0].progress=0;strcpy(pair[0].thumbEp,"s2e5.jpg");
+    cat_set(pair,2);
+    assert(cat_item(0)->season==2&&cat_item(0)->episode==5&&cat_item(0)->progress==0);
+    assert(cat_item(0)->thumbEp[0]);
+    assert(cat_item(1)->season==2&&cat_item(1)->episode==4&&cat_item(1)->progress==50); }
   unlink(file);snprintf(file,sizeof file,"%s/progress.txt",folder);unlink(file);rmdir(folder);
   puts("PASS: 40 sources, DV in filename, DVD negative, no fictional sources, 40 episodes, focus/selection and episode title.");
 }

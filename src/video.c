@@ -81,6 +81,18 @@ static char  urlCurrent[1024];   // the current playback's URL
 // event handler re-enters the very path that has just failed.
 static int    recovering;
 static double resumeIn;
+// RECONNECTING AFTER A NETWORK DROP. A debrid link that stalls mid-film ends in
+// "server error:40004" then "Network Error" and the pipeline is dead; measured
+// on Clarkson's Farm, the same links answered again within a minute. The reload
+// goes through the ORIGINAL link, so the addon hands out a fresh debrid address.
+// Only for a caller that asks (video_reconnect): Live TV and the focus preview
+// have their own answer to an error. Retries wait so a short outage can pass,
+// and the count starts over once playback has run a while since the last one.
+#define NV_NET_RETRIES 3
+static const Uint32 netWaitMs[NV_NET_RETRIES] = { 3000, 10000, 25000 };
+static int    netReconnect, netRetries;
+static double netRecoveredAt;
+static Uint32 recoverAt;
 // The position to apply as soon as the load finishes. A seek before loadCompleted
 // is sent to a pipeline that does not exist yet and disappears with no error.
 static double posOnLoad;
@@ -194,6 +206,7 @@ int  video_launch_youtube(const char *id) {
   return 0;
 }
 int  video_play(const char *u) { (void)u; return 0; }
+void video_reconnect(int on) { (void)on; }
 void video_pump(void) {}
 void video_stop(void) {}
 void video_pause(int p) { (void)p; }
@@ -703,16 +716,27 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     // the CAUSE (the pipeline dies from something between the seek and the debrid
     // source, which this side cannot see), but for not leaving the owner on a
     // frozen screen.
-    if (strstr(p, "is not running") && urlCurrent[0] && !recovering) {
-      recovering = 1;
-      resumeIn = posSeg;
-      // IT KEEPS THE CHOICES. The position alone is not enough: the new pipeline is
-      // born on track 0 with the subtitle off.
-      audioOnLoad = audioCurrent;
-      subOnLoad   = subCurrent;
-      snprintf(subUrlOnLoad, sizeof subUrlOnLoad, "%s", subUrlCurrent);
-      mark("pipeline died: reloading");
-    }
+    // A network drop counts once playback was under way, or while a reconnect
+    // is still loading — a link that is still down fails the reload the same way.
+    { int died = strstr(p, "is not running") != NULL;
+      int dropped = netReconnect && strstr(q, "Network Error") &&
+                    (posSeg > 1.0 || netRetries > 0) && netRetries < NV_NET_RETRIES;
+      if ((died || dropped) && urlCurrent[0] && !recovering) {
+        // A retry during the reload finds posSeg at 0 and no tracks yet: the
+        // first drop's position and choices are still the ones to go back to.
+        if (posSeg > 1.0) {
+          resumeIn = posSeg;
+          // IT KEEPS THE CHOICES. The position alone is not enough: the new
+          // pipeline is born on track 0 with the subtitle off.
+          audioOnLoad = audioCurrent;
+          subOnLoad   = subCurrent;
+          snprintf(subUrlOnLoad, sizeof subUrlOnLoad, "%s", subUrlCurrent);
+        }
+        recoverAt = SDL_GetTicks() + (dropped ? netWaitMs[netRetries] : 0);
+        if (dropped) netRetries++;
+        recovering = 1;
+        mark(dropped ? "network dropped: reconnecting" : "pipeline died: reloading");
+      } } 
   }
   { double v = numberOf(p, "\"currentTime\":");
     if (v >= 0 && seekHold >= 0.0) {
@@ -722,6 +746,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     }
     if (v >= 0) {
       posSeg = v / 1000.0;
+      if (netRetries && posSeg > netRecoveredAt + 120.0) netRetries = 0;
       // The first frame after a seek: the real start-up number.
       if (cronRequested && !cronFrame && posSeg > 0.0) {
         cronFrame = 1;
@@ -1137,6 +1162,7 @@ static void pushWindow(void);
 
 int video_play(const char *url) {
   dvInset = 0;
+  netReconnect = netRetries = 0;
   headWithdraw();
   snprintf(urlCurrent, sizeof urlCurrent, "%s", url ? url : "");
   return playInternal(url, 1);
@@ -1202,15 +1228,23 @@ void video_pump(void) {
     seekNow(seekTarget);
   }
   // RECUPERACAO DO PIPELINE, no fio principal. Ver a nota em `recuperando`.
-  if (recovering) {
+  if (recovering && (Sint32)(SDL_GetTicks() - recoverAt) >= 0) {
     double target = resumeIn;
+    int a = audioOnLoad, l = subOnLoad;
+    char su[sizeof subUrlOnLoad];
+    snprintf(su, sizeof su, "%s", subUrlOnLoad);
     recovering = 0;
     mark("reloading the source");
-    if (playInternal(urlCurrent, 1) && target > 1.0) {
+    // playInternal passes through video_stop, which clears everything the reload
+    // is meant to restore: it is carried across and put back afterwards.
+    if (playInternal(urlCurrent, 1)) {
       // The seek only counts after the load; storing the target and letting
       // loadCompleted apply it avoids sending a position to a pipeline that does
       // not exist yet.
-      posOnLoad = target;
+      if (target > 1.0) posOnLoad = target;
+      resumeIn = netRecoveredAt = target;
+      audioOnLoad = a; subOnLoad = l;
+      snprintf(subUrlOnLoad, sizeof subUrlOnLoad, "%s", su);
     }
   }
   // The deadline fallback was REMOVED because it did not work: the trigger was "the
@@ -1344,6 +1378,8 @@ static int playInternal(const char *url, int comDV) {
   callCtx("load", load, onLoad, (void *)(uintptr_t)mySession);
   return 1;
 }
+
+void video_reconnect(int on) { netReconnect = on; }
 
 void video_stop(void) {
   char b[128];
