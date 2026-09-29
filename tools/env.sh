@@ -51,6 +51,12 @@ SMA=$(value SIMKL_APP_NAME)
 # addon's own rating, which Cinemeta reports as "0" for most series.
 IMR=$(value IMDB_RATINGS_API_BASE_URL)
 
+# The app version shown in Settings. appinfo.json is the ONE place it is bumped
+# on release; the binary cannot read the manifest at runtime, so it is copied in
+# here rather than kept in a second, hand-maintained copy in src/appid.h.
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+VER=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$ROOT/deploy/app/appinfo.json" | head -1)
+
 if [ -z "$URL" ] || [ -z "$KEY" ]; then
   # Failing silently would produce an .ipk that opens, shows the login screen
   # and never leaves it. The warning goes to stderr so it does not pollute the
@@ -75,10 +81,11 @@ if [ "$1" = "--env-file" ]; then
     printf 'NV_SIMKL_CLIENT_ID=%s\n' "$SMK"
     printf 'NV_SIMKL_APP=%s\n' "$SMA"
     printf 'NV_IMDB_RATINGS=%s\n' "$IMR"
+    printf 'NV_APP_VERSION=%s\n' "$VER"
   } > "$2"
   chmod 600 "$2"
   exit 0
 fi
 
-printf -- '-DNV_SUPABASE_URL=\\"%s\\" -DNV_SUPABASE_ANON_KEY=\\"%s\\" -DNV_TV_LOGIN_BASE=\\"%s\\" -DNV_TRAKT_CLIENT_ID=\\"%s\\" -DNV_TRAKT_CLIENT_SECRET=\\"%s\\" -DNV_SIMKL_CLIENT_ID=\\"%s\\" -DNV_SIMKL_APP=\\"%s\\" -DNV_IMDB_RATINGS=\\"%s\\"' \
-  "$URL" "$KEY" "$TVB" "$TRK" "$TRS" "$SMK" "$SMA" "$IMR"
+printf -- '-DNV_SUPABASE_URL=\\"%s\\" -DNV_SUPABASE_ANON_KEY=\\"%s\\" -DNV_TV_LOGIN_BASE=\\"%s\\" -DNV_TRAKT_CLIENT_ID=\\"%s\\" -DNV_TRAKT_CLIENT_SECRET=\\"%s\\" -DNV_SIMKL_CLIENT_ID=\\"%s\\" -DNV_SIMKL_APP=\\"%s\\" -DNV_IMDB_RATINGS=\\"%s\\" -DNV_APP_VERSION=\\"%s\\"' \
+  "$URL" "$KEY" "$TVB" "$TRK" "$TRS" "$SMK" "$SMA" "$IMR" "$VER"

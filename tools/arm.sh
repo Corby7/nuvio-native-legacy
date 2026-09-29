@@ -91,6 +91,7 @@ docker run --rm --platform linux/arm64 --env-file "$ENVF" \
     -DNV_SIMKL_APP="\"$NV_SIMKL_APP\"" \
     -DNV_IMDB_RATINGS="\"$NV_IMDB_RATINGS\"" \
     -DNV_BUILD="\"$NV_BUILD\"" \
+    -DNV_APP_VERSION="\"$NV_APP_VERSION\"" \
     -I$SR/usr/include -I$SR/usr/include/SDL2 \
     -lSDL2 -lSDL2_image -lSDL2_ttf -lGLESv2 -lEGL -ldl -lpthread -lm'
 
