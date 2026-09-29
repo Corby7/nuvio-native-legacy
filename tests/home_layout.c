@@ -16,6 +16,16 @@ const char *disc_prefs_title(const char *key) { (void)key; return NULL; }
 // The opt-in Trakt rows (homerows.c) are off, as on a first run.
 int         homerows_trakt_watchlist(void) { return 0; }
 int         homerows_trakt_recs(void) { return 0; }
+// The row styles' file (data.c) is one string in memory, for one profile.
+static char styleFile[4096];
+int   profiles_active(void) { return 1; }
+char *data_read(const char *name) {
+  (void)name;
+  return styleFile[0] ? strdup(styleFile) : NULL;
+}
+int   data_write(const char *name, const char *content) {
+  (void)name; snprintf(styleFile, sizeof styleFile, "%s", content); return 1;
+}
 
 int main(void) {
   assert(MAX_FILTER <= FOCUS_MAX_ROWS);
@@ -47,6 +57,27 @@ int main(void) {
   assert(nRows == 16);
   assert(focus.nRows == 16);
   assert(rows[1].kind == ROW_HIGHLIGHT);
+  // THE OWNER'S ROW STYLE beats the guess, survives a reload and goes back to it
+  // on "Automatic". Continue watching cannot take one.
+  { char k1[192], kN[192];
+    int netflix = -1;
+    for (int r = 0; r < nRows; r++)
+      if (!strcmp(rows[r].key, filters[14].key)) netflix = r;
+    assert(netflix >= 0 && rows[netflix].kind == ROW_SERVICE);
+    snprintf(k1, sizeof k1, "%s", rows[1].key);
+    snprintf(kN, sizeof kN, "%s", rows[netflix].key);
+    styleSet(k1, STYLE_POSTER);
+    styleSet(kN, STYLE_LARGE);
+    syncRows();
+    assert(rows[1].kind == ROW_NORMAL);
+    assert(rows[netflix].kind == ROW_HIGHLIGHT);
+    styledProfile = -1; syncRows();        // read back from the file
+    assert(nStyled == 2 && rows[1].kind == ROW_NORMAL);
+    styleSet(k1, STYLE_AUTO);
+    styleSet(kN, STYLE_AUTO);
+    syncRows();
+    assert(rows[1].kind == ROW_HIGHLIGHT && rows[netflix].kind == ROW_SERVICE);
+    assert(!styleable(rows[0].kind, rows[0].key)); }
   for (int i = 0; i < 16; i++) {
     int found = 0;
     for (int r = 0; r < nRows; r++)

@@ -62,7 +62,7 @@ static float   anchorR, anchorRNext;
 static GfxRect hole;
 static float   holeR, holeFeather;
 static int     hasAnchor, hasAnchorNext;
-static int   reqSeeAll;
+static int   reqSeeAll, reqRowStyle;
 static float anim;
 static int   operation, intent, stateOperation;
 static int   mirrorApplied;
@@ -104,10 +104,10 @@ static int observeHold(void *u, SDL_Event *e) {
   return 0;
 }
 
-// Up to seven: resume and start over on a title with progress, details, library,
+// Up to eight: resume and start over on a title with progress, details, library,
 // — only on films/series — watched, the row itself when it came from a catalogue,
-// and leaving Continue watching.
-#define CTX_MAX 7
+// the row's style, and leaving Continue watching.
+#define CTX_MAX 8
 // `hint` is drawn at the row's right edge, dimmer: the episode Resume will play.
 static struct { const char *rot, *icon, *hint; int action; } ops[CTX_MAX];
 static int nOps;
@@ -120,7 +120,7 @@ static char customTitle[160], customMeta[160];
 static char customLabel[CTX_MAX][64], customHint[CTX_MAX][32];
 static int customId[CTX_MAX];
 enum { OP_DETAILS, OP_LIST, OP_WATCHED, OP_SEEALL, OP_RESUME, OP_START_OVER,
-       OP_REMOVE_CW };
+       OP_REMOVE_CW, OP_ROW_STYLE };
 
 // IN PROGRESS by the player's own measure: player_set_episode resumes only between
 // 1% and 90%, so outside that window "Resume" would be a lie.
@@ -230,6 +230,9 @@ static void build(void) {
     ops[nOps].rot = label; ops[nOps].action = OP_SEEALL;
     ops[nOps].icon = "ctx_grid"; nOps++;
   }
+  // The row's shape, beside the other option about the row rather than the title.
+  if (row.styleable && row.key[0])
+    addOp("Row style", "ctx_layout", OP_ROW_STYLE);
   // LAST, and set apart by being the one that takes something away. It clears
   // the resume points here, on the account and on Trakt — see cwremove.h.
   //
@@ -276,7 +279,7 @@ void ctx_open_row(int index_, const CtxCatalog *from) {
   custom = 0; reqCustom = -1;
   memset(&row, 0, sizeof row);
   if (from) row = *from;
-  reqSeeAll = 0;
+  reqSeeAll = 0; reqRowStyle = 0;
   operation = CTX_OP_NONE; intent = 0; stateOperation = 0;
   mirrorApplied = 0;
   operationImdb[0] = 0;
@@ -299,7 +302,7 @@ void ctx_open_custom(const char *title, const char *meta, const CtxOption *opts,
   custom = 1; reqCustom = -1;
   idx = -1; focus = 0; is_open = 1; reqDetails = -1; reqPlay = -1;
   memset(&row, 0, sizeof row);
-  reqSeeAll = 0;
+  reqSeeAll = 0; reqRowStyle = 0;
   operation = CTX_OP_NONE; intent = 0; stateOperation = 0;
   mirrorApplied = 0;
   operationImdb[0] = 0;
@@ -328,6 +331,12 @@ int ctx_requested_play(int *fromStart) {
   if (fromStart) *fromStart = reqFromStart;
   return v;
 }
+int ctx_requested_row_style(CtxCatalog *out) {
+  int v = reqRowStyle;
+  reqRowStyle = 0;
+  if (v && out) *out = row;
+  return v;
+}
 int ctx_requested_seeall(CtxCatalog *out) {
   int v = reqSeeAll;
   reqSeeAll = 0;
@@ -352,6 +361,7 @@ static void apply(void) {
   switch (action) {
     case OP_DETAILS: reqDetails = idx; break;
     case OP_SEEALL:  reqSeeAll = 1;    break;
+    case OP_ROW_STYLE: reqRowStyle = 1; break;
     case OP_RESUME:      reqPlay = idx; reqFromStart = 0; break;
     case OP_START_OVER:  reqPlay = idx; reqFromStart = 1; break;
     // The menu closes at once and hands the wait to the card: its ring circles
@@ -383,7 +393,8 @@ static void apply(void) {
       break;
   }
   if (action == OP_DETAILS || action == OP_SEEALL || action == OP_RESUME ||
-      action == OP_START_OVER || action == OP_REMOVE_CW) is_open = 0;
+      action == OP_START_OVER || action == OP_REMOVE_CW ||
+      action == OP_ROW_STYLE) is_open = 0;
   // The details bring a transition of their own — the zoom out of the card on the
   // home, a fade elsewhere — and the menu easing out over it would be two
   // animations at once. It goes in the same frame instead, scrim and all.

@@ -23,6 +23,8 @@
 #include "trailers.h"
 #include "director.h"
 #include "cwremove.h"
+#include "data.h"
+#include "profiles.h"
 #include <strings.h>
 // Declared by hand rather than including detail.h: that header includes THIS one
 // (because of HomeItem), and the cycle only fails to explode thanks to the guards.
@@ -130,6 +132,93 @@ static KindRow profileCatalog(const char *name) {
 }
 static int editorial(KindRow t) {
   return t == ROW_HIGHLIGHT || t == ROW_COLLECTION || t == ROW_SERVICE;
+}
+
+// --- the owner's row styles -----------------------------------------------------
+//
+// A catalogue row's shape is decided above by its NAME (profileCatalog) and by being
+// the first catalogue (the highlight). That guess is wrong as often as not, so the
+// hold menu's "Row style" lets the owner set it per row, by the row's key.
+//
+// LOCAL, per profile: "<style> <key>" per line in row-styles-p<profile>.txt. The
+// account's home blob has no field for it, and inventing one would be overwritten
+// by the web app on its next save.
+enum { STYLE_AUTO, STYLE_POSTER, STYLE_SMALL, STYLE_MEDIUM, STYLE_LARGE, STYLE_N };
+static const struct { const char *label; KindRow kind; } STYLES[STYLE_N] = {
+  { "Automatic",          ROW_NORMAL     },   // kind unused: the guess stands
+  { "Poster",             ROW_NORMAL     },
+  { "Landscape - small",  ROW_SERVICE    },
+  { "Landscape - medium", ROW_COLLECTION },
+  { "Landscape - large",  ROW_HIGHLIGHT  },
+};
+#define MAX_STYLED 64
+static struct { char key[192]; int style; } styled[MAX_STYLED];
+static int nStyled, styledProfile = -1;
+// Bumped on every change, and folded into syncRows' revision so the home rebuilds.
+static unsigned styleRev;
+// The row whose styles are open in the custom menu, or "" when none is.
+static char styleMenuKey[192];
+
+static void stylesLoad(void) {
+  char name[64], *body, *line, *save = NULL;
+  if (styledProfile == profiles_active()) return;
+  styledProfile = profiles_active();
+  nStyled = 0;
+  styleRev++;
+  snprintf(name, sizeof name, "row-styles-p%d.txt", styledProfile);
+  body = data_read(name);
+  if (!body) return;
+  for (line = strtok_r(body, "\n", &save); line && nStyled < MAX_STYLED;
+       line = strtok_r(NULL, "\n", &save)) {
+    int style, at = 0;
+    if (sscanf(line, "%d %n", &style, &at) != 1 || !line[at]) continue;
+    if (style <= STYLE_AUTO || style >= STYLE_N) continue;
+    snprintf(styled[nStyled].key, sizeof styled[nStyled].key, "%s", line + at);
+    styled[nStyled].style = style;
+    nStyled++;
+  }
+  free(body);
+}
+
+static int styleOf(const char *key) {
+  stylesLoad();
+  for (int i = 0; i < nStyled; i++)
+    if (!strcmp(styled[i].key, key)) return styled[i].style;
+  return STYLE_AUTO;
+}
+
+static void styleSet(const char *key, int style) {
+  char name[64], body[MAX_STYLED * 200];
+  size_t used = 0;
+  int i;
+  stylesLoad();
+  for (i = 0; i < nStyled && strcmp(styled[i].key, key); i++) {}
+  if (style == STYLE_AUTO) {
+    if (i == nStyled) return;
+    styled[i] = styled[--nStyled];
+  } else if (i < nStyled) {
+    styled[i].style = style;
+  } else if (nStyled < MAX_STYLED) {
+    snprintf(styled[nStyled].key, sizeof styled[nStyled].key, "%s", key);
+    styled[nStyled++].style = style;
+  } else {
+    return;
+  }
+  styleRev++;
+  body[0] = 0;
+  for (i = 0; i < nStyled && used < sizeof body; i++)
+    used += (size_t)snprintf(body + used, sizeof body - used, "%d %s\n",
+                             styled[i].style, styled[i].key);
+  snprintf(name, sizeof name, "row-styles-p%d.txt", styledProfile);
+  data_write(name, body);
+}
+
+// Only the rows whose shape is one of the four styles can take another. Continue
+// watching has its own setting, a Top 10 is a stack and a collection row holds
+// folders, not titles.
+static int styleable(KindRow kind, const char *key) {
+  return key[0] && strcmp(key, "continue_watching") &&
+         (kind == ROW_NORMAL || editorial(kind));
 }
 
 
@@ -891,6 +980,8 @@ static void rowCatalog(int r, CtxCatalog *out) {
   snprintf(out->kind,  sizeof out->kind,  "%s", rows[r].catKind);
   snprintf(out->catId, sizeof out->catId, "%s", rows[r].catId);
   out->continueRow = !strcmp(rows[r].key, "continue_watching");
+  snprintf(out->key, sizeof out->key, "%s", rows[r].key);
+  out->styleable = styleable(rows[r].kind, rows[r].key);
 }
 
 void home_event(const SDL_Event *e) {
@@ -1101,6 +1192,10 @@ static void syncRows(void) {
   // account after the catalogue does not change the revision, the early return
   // just below skips the rebuild, and its row never comes to exist.
   revision = (revision ^ col_revision()) * 16777619u;
+  // And the owner's row styles, or a style chosen in the menu waits for the next
+  // publication to show.
+  stylesLoad();
+  revision = (revision ^ styleRev) * 16777619u;
   // Stored BEFORE the loop below, which overwrites rows[]: after it there is no
   // longer any way to know which row the focus was on.
   char keyFocus[192];
@@ -1332,6 +1427,11 @@ static void syncRows(void) {
       }
     }
   }
+  // THE OWNER'S STYLE WINS over every guess above, and only on a row that can take it.
+  for(int i=0;i<destination;i++) {
+    int style=styleable(rows[i].kind,rows[i].key)?styleOf(rows[i].key):STYLE_AUTO;
+    if(style!=STYLE_AUTO)rows[i].kind=STYLES[style].kind;
+  }
   for(int i=0;i<destination;i++) {
     Row *s=&rows[i];s->stackN=0;
     if(s->kind==ROW_TOP10 && s->base[0] && s->catId[0]) {
@@ -1549,6 +1649,23 @@ void home_update(float dt, Uint32 now) {
   // BEFORE syncRows, which is what notices the row got longer: collecting after it
   // would leave the new posters waiting a frame for the next rebuild.
   disc_row_collect();
+  // "ROW STYLE" FROM THE HOLD MENU: the styles open as a second menu beside the
+  // same card, the current one marked. The choice lands before syncRows so the
+  // row takes its new shape this very frame.
+  { CtxCatalog c;
+    if (ctx_requested_row_style(&c) && c.key[0]) {
+      int current = styleOf(c.key);
+      CtxOption o[STYLE_N];
+      for (int i = 0; i < STYLE_N; i++)
+        o[i] = (CtxOption){ STYLES[i].label, i == current ? "ctx_check" : NULL, NULL, i };
+      snprintf(styleMenuKey, sizeof styleMenuKey, "%s", c.key);
+      if (hasItemFocus) ctx_set_anchor(ringFocus, ringFocusR);
+      ctx_open_custom("Row style", c.title, o, STYLE_N);
+    } else if (styleMenuKey[0]) {
+      int id = ctx_requested_custom();
+      if (id >= 0) styleSet(styleMenuKey, id);
+      if (id >= 0 || !ctx_is_open()) styleMenuKey[0] = 0;
+    } }
   syncRows();
   growRow();
 

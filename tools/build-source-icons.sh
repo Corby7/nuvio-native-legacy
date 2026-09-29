@@ -33,7 +33,7 @@ SIZE="${NUVIO_ICON_PX:-128}"
 
 for name in instant reload reset close ep_watched stack detail_stack detail_stack_filled \
             ctx_info ctx_plus ctx_minus ctx_check ctx_x ctx_grid \
-            ctx_play ctx_restart ctx_hide ctx_bell ctx_bell_off ctx_group \
+            ctx_play ctx_restart ctx_hide ctx_bell ctx_bell_off ctx_group ctx_layout \
             chip_fav chip_all chip_recent \
             set_playback set_home set_appearance set_account set_live \
             src_refresh src_ok src_warn src_fail live_caret_up live_caret_down; do

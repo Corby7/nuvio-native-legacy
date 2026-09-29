@@ -19,7 +19,10 @@
 // `continueRow` is set when the card sits in "Continue watching": a next-up card
 // there has no progress of its own, and without the flag the menu could not tell
 // it apart from a plain catalogue card and offered no way to remove it.
-typedef struct { char title[96], base[600], kind[8], catId[96]; int continueRow; } CtxCatalog;
+// `key` and `styleable` are the row's own: set, the menu offers "Row style", and
+// the home is handed the key back to open the styles for (ctx_requested_row_style).
+typedef struct { char title[96], base[600], kind[8], catId[96], key[192];
+                 int continueRow, styleable; } CtxCatalog;
 
 // `index` is the position in the global catalogue.
 // The long-press integration lives in home.c: it measures NV_HOLD_MS on KEYUP
@@ -35,6 +38,9 @@ void ctx_open_row(int index_, const CtxCatalog *row);
 // The row the owner asked to see in full, or 0. Consumed once: the router reads
 // it, opens the grid and the modal is already closed.
 int  ctx_requested_seeall(CtxCatalog *out);
+// "Row style" was chosen: 1 and the row in `out`, or 0. Consumed once; the menu is
+// already closed and the home opens the styles as a custom menu of its own.
+int  ctx_requested_row_style(CtxCatalog *out);
 // THE CARD THE MENU OPENS BESIDE, in screen pixels: its outer edge, focus ring
 // included, and that edge's corner radius in pixels. Set it just before
 // ctx_open_row: the next open takes it and the panel draws next to that card

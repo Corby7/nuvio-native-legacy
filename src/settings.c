@@ -153,7 +153,7 @@ typedef char anime_audio_names_match_lang[(N_AUDIO_ANIME == LANG_COUNT + 2) ? 1 
 // When the Up next card appears: a fixed lead before the end, or a share of the
 // episode — the web app's nextEpisodeThresholdMode, same two modes, same default.
 // The credits marker brings the card up earlier in either mode.
-static const char *V_NEXT_MODE[] = { "Before the end", "Share watched" };
+static const char *V_NEXT_MODE[] = { "Before the end", "Percentage watched" };
 // The player's seek bar: the fill and the playhead. Violet is the brand mark's
 // own colour and the default; White is what the bar was before. The RGB lives in
 // SEEK_RGB below, in the same order.
@@ -982,7 +982,7 @@ static const char *helpOption(int op) {
     if (op == SETTING_EXPAND_DELAY) return "Turn on Expand poster on focus to adjust the delay.";
     if (op == SETTING_NEXT_COUNTDOWN) return "Turn on Autoplay next episode to set the countdown.";
     if (op == SETTING_NEXT_SECONDS) return "Set Up next appears to Before the end to use this.";
-    if (op == SETTING_NEXT_PERCENT) return "Set Up next appears to Share watched to use this.";
+    if (op == SETTING_NEXT_PERCENT) return "Set Up next appears to Percentage watched to use this.";
     return "Turn on Depth effect to customise this detail.";
   }
   switch (op) {
@@ -1342,7 +1342,7 @@ static const char *needsOf(int op) {
     case SETTING_EXPAND_DELAY:   return "Expand poster";
     case SETTING_NEXT_COUNTDOWN: return "Autoplay";
     case SETTING_NEXT_SECONDS:   return "Before the end";
-    case SETTING_NEXT_PERCENT:   return "Share watched";
+    case SETTING_NEXT_PERCENT:   return "Percentage watched";
     default:
       if (op > SETTING_CW_ON && op <= SETTING_CW_NOT_SHOWN) return "Continue watching";
       return "Depth effect";

@@ -1585,19 +1585,52 @@ static int candNewestFirst(const void *a, const void *b) {
   return x->ord - y->ord;
 }
 
+// A TRAKT RESUME POINT OLDER THAN WHAT THE LOCAL RECORD KNOWS ABOUT THE SAME WORK.
+//
+// THE RACE. Finish an episode you had paused along the way, and Trakt's
+// /sync/playback can still hold the resume point that /scrobble/pause left
+// there, mid-episode, while the local record already says 100% — so
+// resumeLocal rightly leaves it out. Two ways that happens: the
+// player asks for the rebuild in the same breath it QUEUES the /scrobble/stop,
+// so the rebuild's GET can reach Trakt before the stop that clears the entry;
+// and a stop that failed leaves it there for good. Either way the stale entry
+// entered the row, and being in `busy` it also barred the series from next up —
+// so the finished episode sat there in place of the one that follows.
+//
+// A finished local line never enters `joined`, so the newest-wins dedupe below
+// cannot see it to prefer it. It is asked here instead: when this device's line
+// for the same work is at least as recent as Trakt's paused_at, the local side
+// already says everything true about that work — in progress (resumeLocal has
+// it), or finished (next up takes it from there) — and the Trakt entry is the
+// past. A Trakt entry NEWER than the local line is another device's viewing and
+// stays.
+static int supersededLocally(const CatItem *t) {
+  static CatProgress regs[CAT_PROGRESS_MAX];
+  int k, i;
+  if (t->resumedMs <= 0) return 0;
+  k = cat_progress_read(regs, CAT_PROGRESS_MAX);
+  for (i = 0; i < k; i++)
+    // origin 0 carries a stamp an older build invented at sync time, not a
+    // moment of watching: it cannot vouch for being newer than anything.
+    if (sameWork(regs[i].imdb, t->imdb))
+      return regs[i].origin != 0 && regs[i].lastWatchedMs >= t->resumedMs;
+  return 0;
+}
+
 static int buildResume(CatItem *output, int max) {
   // static: two batches of 8 CatItem are over 50 KB, and this runs once, on one
   // thread — the same reason the Decl array below is static.
   static CatItem fromTrakt[CONT_MAX], fromAccount[CONT_MAX], fromNext[NEXTUP_MAX];
   static CatItem busy[CONT_MAX * 2];
   static Cand joined[CONT_MAX * 3];
-  int nT, nL, nN, nBusy = 0, nJ = 0, i, j, n = 0, dropped = 0;
+  int nT, nL, nN, nBusy = 0, nJ = 0, i, j, n = 0, dropped = 0, stale = 0;
 
   nT = trakt_active() ? trakt_resume(fromTrakt, CONT_MAX) : 0;
   nL = resumeLocal(fromAccount, CONT_MAX);
 
   for (i = 0; i < nT && nJ < CONT_MAX * 3; i++) {
     if (!inProgress(fromTrakt[i].progress)) { dropped++; continue; }
+    if (supersededLocally(&fromTrakt[i])) { stale++; continue; }
     joined[nJ].item = &fromTrakt[i];
     joined[nJ].ms = fromTrakt[i].resumedMs;
     joined[nJ].ord = nJ;
@@ -1646,7 +1679,8 @@ static int buildResume(CatItem *output, int max) {
     output[n++] = *joined[i].item;
   }
   printf("[disc] continue watching: %d trakt + %d account + %d next up -> %d shown"
-         " (%d trakt outside 1-90%%)\n", nT, nL, nN, n, dropped);
+         " (%d trakt outside 1-90%%, %d older than playback here)\n",
+         nT, nL, nN, n, dropped, stale);
   { int q;
     for (q = 0; q < n; q++)
       printf("[disc]  cw %d %-16s %3d%% S%dE%d  %lld\n", q, output[q].imdb,
