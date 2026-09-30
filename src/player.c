@@ -1942,13 +1942,13 @@ void player_update(float dt, Uint32 now) {
     tracks_auto(now);
   reportPlayback(now);
 
-  // THE FILE'S OWN SUBTITLE IS LIFTED CLEAR of whatever takes the bottom of the
-  // screen: the transport while the controls are up, the subtitle Style bar while
-  // that is. The pipeline draws those cues, out of the overlay's reach, so the
+  // THE FILE'S OWN SUBTITLE IS LIFTED CLEAR of the transport while the controls
+  // are up. The pipeline draws those cues, out of the overlay's reach, so the
   // raise goes to it — the viewer's Height is left alone, and it comes off the
-  // moment the controls or the bar go. `chrome` is last frame's: under a sheet
-  // the controls are faded out even while `visible` holds.
-  { int up = tracks_style_shown() > 0.5f || (visible && chrome > 0.5f);
+  // moment the controls go. Not for the Style bar: that is at the top, and Height
+  // has to be seen where it plays. `chrome` is last frame's: under a sheet the
+  // controls are faded out even while `visible` holds.
+  { int up = visible && chrome > 0.5f;
     video_subtitle_lift(up ? NV_TRK_EMBED_LIFT : 0); }
 
   // THE POINTER WAKES THE CONTROLS as a key would, and the drag along the bar
@@ -2227,9 +2227,8 @@ static void drawCues(const SubtitleCue *shown,int n,float alpha){
   if(episodes_shown()>gone)gone=episodes_shown();
   float base=visible?700.f+300.f*gone:1000.f;
   base-=(subStyle.position-3)*48.f;
-  // Kept clear of the Style bar's tiles while it is up, on the bar's own curve.
-  { float bar=tracks_style_shown();
-    if(bar>0.f&&base>NV_TRK_PREVIEW_FLOOR)base+=(NV_TRK_PREVIEW_FLOOR-base)*bar; }
+  // Nothing to clear under the Style bar: it is at the top, so the preview is
+  // the line as it plays (the sheet has already faded the transport out).
   subBlockDraw(&band,(NV_SCREEN_W-band.w)*.5f,base-band.h,1,alpha);
 }
 

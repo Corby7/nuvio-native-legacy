@@ -1338,8 +1338,15 @@ static float onMark(float right, float cy, int focused, int word, float a) {
 static void drawHeader(float x, int count, float right, float a) {
   const char *name = mode == MODE_SUBTITLE ? "Subtitles" : "Audio";
   TxtLine title = txt_line(TXT_PANEL_TITLE, name, 240, 241, 243, 255);
-  float edge = NV_SCREEN_W - NV_TRK_PAD, ty = NV_TRK_TITLE_Y;
-  float tx = x + (edge - title.w - x) * right;
+  float edge = NV_SCREEN_W - NV_TRK_PAD;
+  // On the Style tab (`right` 1) the header is one line at the top edge, the
+  // title just left of the tabs, so the bar can start under it. Audio has no
+  // tabs and no Style tab, so `right` stays 0 there.
+  float tabsW = tab_width("Tracks") + tab_width("Style") - NV_TAB_GAP;
+  float tabsY = NV_TRK_TABS_Y + (NV_TRK_STYLE_HEAD_Y - NV_TRK_TABS_Y) * right;
+  float headTy = NV_TRK_STYLE_HEAD_Y + (NV_TAB_H - (float)title.h) * 0.5f;
+  float ty = NV_TRK_TITLE_Y + (headTy - NV_TRK_TITLE_Y) * right;
+  float tx = x + (edge - tabsW - 32.0f - title.w - x) * right;
   txt_draw_alpha(title, tx, ty, a);
   if (count >= 0 && right < 0.99f) {
     char n[48];
@@ -1356,13 +1363,12 @@ static void drawHeader(float x, int count, float right, float a) {
   }
   if (mode != MODE_SUBTITLE) return;
 
-  { float tabsW = tab_width("Tracks") + tab_width("Style") - NV_TAB_GAP;
-    float px = x + (edge - tabsW - x) * right;
-    float w1 = tab_draw(px, NV_TRK_TABS_Y, "Tracks", tab == TAB_TRACKS, tabsLit, a);
-    pointer_zone_click(px, NV_TRK_TABS_Y, w1 - NV_TAB_GAP, NV_TAB_H, clickTab, TAB_TRACKS, 0);
+  { float px = x + (edge - tabsW - x) * right;
+    float w1 = tab_draw(px, tabsY, "Tracks", tab == TAB_TRACKS, tabsLit, a);
+    pointer_zone_click(px, tabsY, w1 - NV_TAB_GAP, NV_TAB_H, clickTab, TAB_TRACKS, 0);
     px += w1;
-    tab_draw(px, NV_TRK_TABS_Y, "Style", tab == TAB_STYLE, tabsLit, a);
-    pointer_zone_click(px, NV_TRK_TABS_Y, tab_width("Style") - NV_TAB_GAP, NV_TAB_H,
+    tab_draw(px, tabsY, "Style", tab == TAB_STYLE, tabsLit, a);
+    pointer_zone_click(px, tabsY, tab_width("Style") - NV_TAB_GAP, NV_TAB_H,
                        clickTab, TAB_STYLE, 0); }
 }
 
@@ -1586,22 +1592,22 @@ static void lightBox(GfxRect r, float a) {
 }
 
 static void drawBar(float a0) {
+  // It comes in from above now, as it came up from below when it sat at the base.
   float a = a0, drop = (1.0f - barStyle()) * 40.0f, x = NV_TRK_BAR_X;
   float w = NV_SCREEN_W - NV_TRK_BAR_X * 2;
   float tw = (w - NV_TRK_TILE_GAP * (FX_N_TILE - 1)) / FX_N_TILE;
-  float chipY = NV_SCREEN_H - NV_TRK_BAR_BOTTOM - NV_TRK_CHIP_H + drop;
-  float tileY = chipY - NV_TRK_ROWS_GAP - NV_TRK_TILE_H;
+  float tileY = NV_TRK_BAR_TOP - drop;
+  float chipY = tileY + NV_TRK_TILE_H + NV_TRK_ROWS_GAP;
   int i;
   if (a < 0.01f) return;
-  // THE TRANSPORT'S OWN SCRIM, not the episode rail's. The rail's ramp climbs to
-  // 0.72 in its first fifth, which over a short run is a dark band with a visible
-  // start; this one is shallow segments from a true zero to 0.88, so there is no
-  // line to find, and it is the shading the player already puts under its bar.
-  // No flat dim over the rest: the picture is what the preview is judged against.
-  gfx_rect((GfxRect){ 0, NV_TRK_SCRIM_Y, NV_SCREEN_W, NV_SCREEN_H - NV_TRK_SCRIM_Y }, 0,
-           GFX_VEIL_PLAYER, 0, 0, 0, 0.0f, 0, 0, 0, a);
+  // A top-down scrim behind the header and the bar, fading out well above the
+  // subtitle. No flat dim over the rest: the picture is what the preview is
+  // judged against.
+  gfx_rect((GfxRect){ 0, 0, NV_SCREEN_W, NV_TRK_SCRIM_H }, 0,
+           GFX_VEIL_TOP, 0, 0, 0, 0.0f, 0, 0, 0, 0.85f * a);
   if (is_open && tab == TAB_STYLE)
-    pointer_zone_hover(0, tileY, NV_SCREEN_W, NV_SCREEN_H - tileY, pointInert, 0, 0);
+    pointer_zone_hover(0, tileY, NV_SCREEN_W, chipY + NV_TRK_CHIP_H - tileY,
+                       pointInert, 0, 0);
 
   // The tiles: a spaced-capitals label over the value. The focused one turns
   // light, with the ‹ › that say it has a set of values under it.
@@ -1676,6 +1682,11 @@ void tracks_draw(Uint32 now) {
   if (is_open) pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, pointOff, 0, 0);
   drawPanel(anim * (1.0f - styleAnim), styleAnim);
   if (mode != MODE_SUBTITLE) return;
+  // The header's pool goes UNDER the bar: the bar is at the top now, and drawn
+  // after it the pool dimmed the right-hand tiles, a focused one included.
+  if (styleAnim > 0.01f)
+    gfx_rect((GfxRect){ NV_SCREEN_W - NV_TRK_POOL_W, 0, NV_TRK_POOL_W, NV_TRK_POOL_H },
+             0, GFX_VEIL_POOL, 0, 0, 0, 0.0f, 0, 0, 0, anim * styleAnim);
   drawBar(anim * barStyle());
   // THE HEADER STAYS PUT across the two tabs. The panel under it leaves for the
   // Style bar, but the heading and the tabs are how you get back — moving them to
@@ -1683,8 +1694,5 @@ void tracks_draw(Uint32 now) {
   // With the veil gone, the player's own top-right pool keeps them readable.
   { float slide = (1.0f - anim) * NV_TRK_VEIL_W * NV_TRK_SLIDE;
     float cx = NV_SCREEN_W - NV_TRK_PAD - NV_TRK_CONTENT_W + slide;
-    if (styleAnim > 0.01f)
-      gfx_rect((GfxRect){ NV_SCREEN_W - NV_TRK_POOL_W, 0, NV_TRK_POOL_W, NV_TRK_POOL_H },
-               0, GFX_VEIL_POOL, 0, 0, 0, 0.0f, 0, 0, 0, anim * styleAnim);
     drawHeader(cx, nSubtitles(), styleAnim, anim); }
 }

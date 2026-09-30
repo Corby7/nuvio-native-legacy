@@ -2053,19 +2053,21 @@
 // The Style tab is NOT the side panel. A style is judged by where the subtitle
 // actually lands, at its real width, and a panel over the right half would squeeze
 // the preview into the left half and misstate both. So the tab hands the screen
-// back to the picture and keeps its controls along the bottom: a row of tiles, one
-// per setting, and under it the choices for the focused tile.
+// back to the picture and keeps its controls along the TOP, under the header: a
+// row of tiles, one per setting, and under it the choices for the focused tile.
+// THE TOP, NOT THE BOTTOM: the bottom is where the subtitle plays. A bar there
+// had the preview lifted clear of it, so Height showed a stand-in position — and
+// a clamp on that lift drew all eight Heights on one line — while the TV's own
+// embedded cue had to be raised too. Up here the cue sits exactly where it will.
 // Measured off the design at 1920: a 48px margin each side — the header's own
-// right margin. The chips sit 28px off the bottom edge, lower than the design's
-// 56: the TV cannot raise its own embedded subtitle any further, so the bar
-// goes down to clear it instead.
+// right margin. The header folds into ONE line at the top edge on this tab — the
+// title beside the tabs — and the tiles start right under it.
 #define NV_TRK_BAR_X        48.0f
-#define NV_TRK_BAR_BOTTOM   28.0f
+#define NV_TRK_STYLE_HEAD_Y 36.0f   // the tabs' top, and the title centred on them
+#define NV_TRK_BAR_TOP     110.0f
 #define NV_TRK_ROWS_GAP     20.0f   // tiles -> chips
-// The transport scrim's run. It starts well above the tiles because its first
-// stretch is nearly clear — it only reaches 0.18 a third of the way down — and a
-// shorter run would make the ramp steep enough to see its steps.
-#define NV_TRK_SCRIM_Y     540.0f
+// The scrim behind the header and the bar, from the top edge down past the chips.
+#define NV_TRK_SCRIM_H     420.0f
 // The top-right pool behind the header once the panel's veil has gone.
 #define NV_TRK_POOL_W      900.0f
 #define NV_TRK_POOL_H      420.0f
@@ -2087,16 +2089,10 @@
 #define NV_TRK_CHIP_FILL    NV_SRC_CARD_FILL
 #define NV_TRK_CHIP_LINE    0.10f
 #define NV_TRK_RESET_ICON   20.0f
-// The preview's lowest line may not sink below this while the bar is up: the
-// Height setting can put the subtitle 144px lower than the default, which is
-// straight through the tiles.
-// It sits a clear 130px over the tiles, so the style is judged
-// against the picture and not against the bar's own shading.
-#define NV_TRK_PREVIEW_FLOOR 720.0f
 // The raise for the EMBEDDED subtitle, in the uMS's own position steps (-3..4),
-// since the pipeline and not the overlay draws it. The player applies it both
-// under the Style bar and while its own controls are up; 4 from the default is
-// as high as the uMS goes.
+// since the pipeline and not the overlay draws it. The player applies it while
+// its own controls are up (not under the Style bar, which is at the top); 4 from
+// the default is as high as the uMS goes.
 #define NV_TRK_EMBED_LIFT      4
 
 // --- THE PLAYER'S TWO "JUMP AHEAD" PROMPTS -----------------------------------
