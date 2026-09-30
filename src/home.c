@@ -736,7 +736,8 @@ static const char *art_of_card(KindRow kind, int index_, int landscape) {
 static int focus_can_press_long(void) {
   if (focus.row < 0 || focus.row >= nRows) return 0;
   const Row *s = &rows[focus.row];
-  if (s->kind == ROW_CATALOGS || s->kind == ROW_TOP10) return 0;
+  // A collection card holds too, for its row's shape (openShapeMenu).
+  if (s->kind == ROW_TOP10) return 0;
   return focus.column >= 0 && focus.column < s->n;
 }
 
@@ -909,6 +910,40 @@ static float scaleOf(KindRow t) {
 }
 static float stepOf(KindRow t) {
   return widthOf(t) + gapOf(t);
+}
+
+// --- a collection row's card shape ----------------------------------------------
+//
+// The account sets it per FOLDER (`tileShape`, see collections.h) and NuvioTV
+// draws it; a row takes the shape of its first folder, so one collection never
+// mixes widths. The hold menu can override it per row, stored with the row styles
+// under the row's key ("collection_<group>"): 0 is "as the account says", and
+// 1 + COL_SHAPE_* is the owner's pick. The number means something else on a
+// catalogue row, which is fine — the two kinds of key never meet.
+//
+// THE HEIGHT STAYS 216 whatever the shape, so the rows below never move when a
+// shape changes; only the width follows the aspect.
+static int rowShape(int r) {
+  int o = styleOf(rows[r].key);
+  const ColFolder *first;
+  if (o > 0 && o <= COL_SHAPE_N) return o - 1;
+  first = rows[r].n ? col_folder(rows[r].folders[0]) : NULL;
+  return first ? first->shape : COL_SHAPE_LANDSCAPE;
+}
+static float shapeWidth(int shape) {
+  float h = heightOf(ROW_CATALOGS);
+  switch (shape) {
+    case COL_SHAPE_SQUARE: return h;
+    case COL_SHAPE_POSTER: return h * 2.0f / 3.0f;
+    default:               return widthOf(ROW_CATALOGS);
+  }
+}
+// The width of row r's cards, for every row: the Top 10's open stack, a
+// collection's shape, or the kind's own.
+static float rowWidth(int r) {
+  if (rows[r].stackN) return 680.0f;
+  if (rows[r].kind == ROW_CATALOGS) return shapeWidth(rowShape(r));
+  return widthOf(rows[r].kind);
 }
 
 int home_start(const char *dirArt) {
@@ -1648,6 +1683,27 @@ static void growRow(void) {
   disc_row_more(s->key, s->base, s->catKind, s->catId, s->n);
 }
 
+// A COLLECTION CARD'S HOLD MENU: its row's shape, and nothing else — the card is
+// a folder, not a title, so none of the poster menu's options apply. The choice
+// comes back through the same custom-menu path as "Row style" (styleMenuKey) and
+// is stored the same way; see rowShape for what the number means.
+static void openShapeMenu(int r) {
+  static const char *LABELS[COL_SHAPE_N] = { "Landscape", "Square", "Poster" };
+  CtxOption o[1 + COL_SHAPE_N];
+  const ColFolder *first = rows[r].n ? col_folder(rows[r].folders[0]) : NULL;
+  int current = styleOf(rows[r].key);
+  if (current < 0 || current > COL_SHAPE_N) current = 0;
+  // "Automatic" names what it resolves to: the shape the account gave the folder.
+  o[0] = (CtxOption){ "Automatic", current == 0 ? "ctx_check" : NULL,
+                      LABELS[first ? first->shape : COL_SHAPE_LANDSCAPE], 0 };
+  for (int i = 0; i < COL_SHAPE_N; i++)
+    o[1 + i] = (CtxOption){ LABELS[i], current == 1 + i ? "ctx_check" : NULL,
+                            NULL, 1 + i };
+  snprintf(styleMenuKey, sizeof styleMenuKey, "%s", rows[r].key);
+  if (hasItemFocus) ctx_set_anchor(ringFocus, ringFocusR);
+  ctx_open_custom("Tile shape", rows[r].title, o, 1 + COL_SHAPE_N);
+}
+
 void home_update(float dt, Uint32 now) {
   // BEFORE syncRows, which is what notices the row got longer: collecting after it
   // would leave the new posters waiting a frame for the next rebuild.
@@ -1727,7 +1783,8 @@ void home_update(float dt, Uint32 now) {
     okSince = 0;
     // The context menu is still the owner of the actions and the UI. The home only
     // fires once at the threshold and consumes the following KEYUP.
-    { CtxCatalog c;
+    if (rows[focus.row].kind == ROW_CATALOGS) openShapeMenu(focus.row);
+    else { CtxCatalog c;
       rowCatalog(focus.row, &c);
       // The card as it was last drawn, ring included, so the menu opens beside it.
       if (hasItemFocus) ctx_set_anchor(ringFocus, ringFocusR);
@@ -1963,7 +2020,7 @@ void home_update(float dt, Uint32 now) {
       // area. Shifting in proportion to the column, as it used to, threw the first
       // card off screen as soon as the focus moved to the second — content disappears
       // on the left without the user having gone over there.
-      float lw = rows[r].stackN ? 680.0f : widthOf(rows[r].kind);
+      float lw = rowWidth(r);
       float step = lw + gapOf(rows[r].kind);
       float left = (float)focus.column * step;
       float dir = left + lw;
@@ -3104,7 +3161,7 @@ static void drawBackground(void) {
 static void pageRow(int r, int dir) {
   if (r < 0 || r >= nRows || r >= focus.nRows || focus.nColumns[r] <= 0) return;
   KindRow kind = rows[r].kind;
-  float lw = rows[r].stackN ? 680.0f : widthOf(kind), step = lw + gapOf(kind);
+  float lw = rowWidth(r), step = lw + gapOf(kind);
   float util = NV_SCREEN_W - settings_content_x() - NV_HOME_SAFE_RIGHT;
   float slack = lw * scaleOf(kind) * 0.5f;
   int per = (int)((util + gapOf(kind)) / step);
@@ -3309,7 +3366,9 @@ void home_focus_video_end_frame(void) {
 }
 
 static void drawShortcuts(int r, float y) {
-  float lw = widthOf(ROW_CATALOGS), lh = heightOf(ROW_CATALOGS);
+  int shape = rowShape(r);
+  float lw = shapeWidth(shape), lh = heightOf(ROW_CATALOGS);
+  float step = lw + gapOf(ROW_CATALOGS);
   static int last=-1;static Uint32 since;
   for (int c = 0; c < rows[r].n; c++) {
     float f = animFocus[r][c];
@@ -3317,8 +3376,16 @@ static void drawShortcuts(int r, float y) {
     // the top, so the card only ever gets taller downward.
     float scale = 1.0f + scaleOf(ROW_CATALOGS) * f;
     float w = lw * scale, h = lh * scale;
-    float x = settings_content_x() + c * stepOf(ROW_CATALOGS) - scrollX[r]
+    float x = settings_content_x() + c * step - scrollX[r]
             - (w - lw) * 0.5f;
+    float cy = y;
+    int held = focus.row == r && focus.column == c;
+    // PRESSED IN while OK is held, about the card's centre, as the poster rows do.
+    if (held && holdScale != 1.0f) {
+      float nw = w * holdScale, nh = h * holdScale;
+      x += (w - nw) * 0.5f; cy += (h - nh) * 0.5f;
+      w = nw; h = nh;
+    }
     // A CARD OF MARGIN EACH SIDE, which the poster rows already had and this did not.
     // The cull is not only about pixels: tex_get_width is what QUEUES the decode, so a
     // card the loop skips has not even been asked for. Testing the exact bounds meant a
@@ -3329,18 +3396,36 @@ static void drawShortcuts(int r, float y) {
     // edge.
     if (x + w < -lw || x > NV_SCREEN_W + lw) continue;
     float radius = radiusOf(w, h);
-    GfxRect card = {x, y, w, h};
-    pointer_zone(x, y, w, h, pointAt, r, c);
+    GfxRect card = {x, cy, w, h};
+    pointer_zone(x, cy, w, h, pointAt, r, c);
     // WHAT THE GRID GROWS OUT OF. The scaled rect, not the resting one: the card is
     // focused at the moment OK is pressed, so the rect the viewer is looking at is
     // the one with the focus growth already in it.
-    if (focus.row == r && focus.column == c) { collCardRect = card; collCardValid = 1; }
-    if (f > .01f) {
-      float smaller = w < h ? w : h;
-      gfx_color((GfxRect){x - NV_RING_FOCUS, y - NV_RING_FOCUS,
-        w + 2*NV_RING_FOCUS, h + 2*NV_RING_FOCUS},
-        (radius * smaller + NV_RING_FOCUS) / (smaller + 2*NV_RING_FOCUS), .96f, .97f, .98f, f);
-    }
+    if (held) { collCardRect = card; collCardValid = 1; }
+    { GfxRect ring = {x - NV_RING_FOCUS, cy - NV_RING_FOCUS,
+                      w + 2*NV_RING_FOCUS, h + 2*NV_RING_FOCUS};
+      // The corner is a fraction of the HEIGHT, re-normalised for the bigger box
+      // exactly as the poster rows' unframed ring is (see the note there).
+      float ringPx = radius * h + NV_RING_FOCUS;
+      float ringR = ringPx / ring.h;
+      // THE HOLD, as on a poster: the ring is where the hold menu anchors, the
+      // glow confirms it, and the sweep refills the dimmed ring in white.
+      if (held) {
+        float glowPx = 10.0f + 28.0f * (1.0f - holdPulse);
+        ringFocus = ring; ringFocusR = ringPx; hasItemFocus = 1;
+        if (holdPulse > 0.0f)
+          gfx_glow(ring, ringFocusR, glowPx, 1.0f, 1.0f, 1.0f,
+                   0.55f * holdPulse * holdPulse);
+        if (ctx_is_open())
+          ctx_track_card(ring, ringFocusR, holdPulse > 0.0f ? glowPx * holdPulse : 0.0f);
+      }
+      if (f > .01f) {
+        float ringA = held ? 1.0f - NV_HOLD_DIM * holdDim : 1.0f;
+        gfx_color(ring, ringR, .96f, .97f, .98f, f * ringA);
+        if (held && holdShown > 0.0f)
+          gfx_rect(ring, 0, GFX_RING_FILL, 0.0f, holdShown, 0, ringR,
+                   1.0f, 1.0f, 1.0f, f);
+      } }
     // The SAME surface the poster rows sit on, and for the same reason: in the web
     // a collection card is `home-content-card home-poster-card home-collection-card`
     // (homeScreen.js:2547), so `.home-poster-card .content-poster` applies to it and
@@ -3391,6 +3476,13 @@ static void drawShortcuts(int r, float y) {
       // the lettering. The ceiling is the card at full focus: a 1:1 blit while the
       // viewer is looking at it, a 5% reduction at rest.
       float coverW = lw * (1.0f + scaleOf(ROW_CATALOGS));
+      // A SQUARE OR POSTER card may CROP a wider cover (see `crop` below), and then
+      // the art does reach the screen at lh * aspect. The aspect is 0 until the
+      // first decode, so this moves once and then holds.
+      if (shape != COL_SHAPE_LANDSCAPE && art && art[0]) {
+        float wide = lh * tex_aspect(art) * (1.0f + scaleOf(ROW_CATALOGS));
+        if (wide > coverW) coverW = wide;
+      }
       // AND EXACT, whenever the collection has a hero of its own.
       //
       // MEASURED on this row and this is the whole of it: a 360-wide card asked by
@@ -3422,13 +3514,15 @@ static void drawShortcuts(int r, float y) {
       int animating = focus.row==r && focus.column==c &&
                       !settings_animations_reduced();
       float reveal = 0.0f;
-      if(animating && folder->focusVideo[0]) {
+      // The focus video is a 16:9 ident and the video plane can only STRETCH it,
+      // so a square or poster card keeps its still cover instead.
+      if(animating && folder->focusVideo[0] && shape == COL_SHAPE_LANDSCAPE) {
         int id=rows[r].folders[c];Uint32 now=SDL_GetTicks();
         if(last!=id){last=id;since=now;}
         // Where this card comes to rest: fully grown, and at the row's scroll
         // GOAL rather than wherever the glide is this frame.
         float restW = lw * (1.0f + scaleOf(ROW_CATALOGS));
-        GfxRect rest = {settings_content_x() + c * stepOf(ROW_CATALOGS) - goalX[r]
+        GfxRect rest = {settings_content_x() + c * step - goalX[r]
                           - (restW - lw) * 0.5f,
                         y, restW, lh * (1.0f + scaleOf(ROW_CATALOGS))};
         reveal = focusVideoStep(folder->focusVideo, card, rest, since, now);
@@ -3464,10 +3558,16 @@ static void drawShortcuts(int r, float y) {
         //
         // With the focus video showing, the card is a rounded hole onto the plane
         // and the cover fades out over it (see focusVideoStep).
-        (void)texAspect;
+        //
+        // EXCEPT WHERE THE SHAPES DISAGREE on a square or poster row: a 16:9 cover
+        // in a square card (the owner picked the shape here, or the account's art
+        // was never redrawn for it) would be squeezed to half its width. There
+        // the cover is CROPPED instead. A landscape row keeps the stretch always.
+        int crop = shape != COL_SHAPE_LANDSCAPE && texAspect > 0.0f &&
+                   fabsf(texAspect / (lw / lh) - 1.0f) > 0.1f;
         if (reveal > 0.0f) focusVideoReveal(card, radius, reveal);
         if (reveal < 1.0f) {
-          gfx_tex_aspect_current = 0;
+          gfx_tex_aspect_current = crop ? texAspect : 0;
           gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1.0f - reveal);
           gfx_tex_aspect_current = 0;
         }
@@ -3568,7 +3668,7 @@ void home_draw(Uint32 now) {
     // art on the way past. The viewport's own top-edge mask is the other factor
     // here and was always there.
     gfx_opacity_group=fade*fade*(3-2*fade)*(1.0f-shelfOut);
-    float lw = rows[r].stackN ? 680.0f : widthOf(kind);
+    float lw = rowWidth(r);
     float lh = heightOf(kind), step = lw + gapOf(kind);
     float artH = lh;
     // `y` is the top of the row's header; the cards start after the title.
@@ -3606,7 +3706,7 @@ void home_draw(Uint32 now) {
       }
       if (kind == ROW_CATALOGS) {
         drawShortcuts(r, cardY);
-        drawPaddles(r, cardY, heightOf(kind), widthOf(kind), stepOf(kind));
+        drawPaddles(r, cardY, heightOf(kind), lw, step);
         y += NV_LEGACY_ROW_HEAD_H + heightTotalOf(kind) + rowGap();
         continue;
       }

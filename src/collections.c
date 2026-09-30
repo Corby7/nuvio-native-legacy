@@ -38,6 +38,16 @@ const char *col_source_base(const ColSource *s) {
   return s->base;
 }
 
+// A folder's `tileShape`. Anything this app does not know, "WIDE" included,
+// stays landscape: that is the shape every collection card had before.
+static int shapeOf(const char *p, const char *end) {
+  char v[24] = "";
+  js_text(p, end, "tileShape", v, sizeof v);
+  if (!strcasecmp(v, "SQUARE")) return COL_SHAPE_SQUARE;
+  if (!strcasecmp(v, "POSTER")) return COL_SHAPE_POSTER;
+  return COL_SHAPE_LANDSCAPE;
+}
+
 const char *col_group_by_id(const char *id) {
   int i;
   if (!id || !*id) return NULL;
@@ -130,6 +140,7 @@ int col_load_account(const char *body) {
       js_text(c, fe, "heroBackdropUrl", v->hero,  sizeof v->hero);
       js_text(c, fe, "titleLogoUrl",    v->logo,  sizeof v->logo);
       v->hideTitle = js_flag(c, fe, "hideTitle", 0);
+      v->shape = shapeOf(c, fe);
       v->frames = 0;          // no frame folder for an account collection
       v->frameDir[0] = 0;
       // THE FOCUS ANIMATION. `frames`/`frameDir` above stay empty because those are
@@ -252,7 +263,7 @@ int col_load(const char *dir) {
       js_text(p,pe,"id",v->id,sizeof v->id);js_text(p,pe,"title",v->title,sizeof v->title);
       js_text(p,pe,"cover",v->cover,sizeof v->cover);js_text(p,pe,"hero",v->hero,sizeof v->hero);js_text(p,pe,"logo",v->logo,sizeof v->logo);
       locates(v->cover,sizeof v->cover,dir);locates(v->hero,sizeof v->hero,dir);locates(v->logo,sizeof v->logo,dir);
-      v->hideTitle=js_num(p,pe,"hideTitle",0);v->frames=js_num(p,pe,"frames",0);
+      v->hideTitle=js_num(p,pe,"hideTitle",0);v->shape=shapeOf(p,pe);v->frames=js_num(p,pe,"frames",0);
       if(v->frames<0||v->frames>90)v->frames=0;
       snprintf(v->frameDir,sizeof v->frameDir,"%s/collections/%s",dir,v->id);
       /* Local paired artwork survives catalog imports. Activate only a complete pair. */

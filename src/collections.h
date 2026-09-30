@@ -9,6 +9,10 @@
 // it). A collection from the package fills base and leaves addonId empty. Read
 // either one through col_source_base(), never directly.
 typedef struct { char title[128], base[600], addonId[96], type[8], catId[96], genre[96]; } ColSource;
+// THE CARD'S SHAPE, the folder's `tileShape` on the account ("LANDSCAPE",
+// "SQUARE", "POSTER"). The owner picks it per folder in the web app's collection
+// editor and NuvioTV draws it; LANDSCAPE is what a folder without one gets.
+enum { COL_SHAPE_LANDSCAPE, COL_SHAPE_SQUARE, COL_SHAPE_POSTER, COL_SHAPE_N };
 typedef struct {
   // `group` is the collection's TITLE, which is what the row shows. `groupId` is
   // the collection's id, which is how the ACCOUNT refers to it in the home order
@@ -30,6 +34,7 @@ typedef struct {
   char detailHero[512];
   int editorial;
   int frames, hideTitle, nSources;
+  int shape;              // COL_SHAPE_*
   ColSource sources[COL_SOURCE_MAX];
 } ColFolder;
 // Where to fetch this source from. Prefers the INSTALLED addon that owns

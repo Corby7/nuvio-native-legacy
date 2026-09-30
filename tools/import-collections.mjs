@@ -86,7 +86,7 @@ for (const c of collections) {
         if(result.status===0) frames=fs.readdirSync(dir).filter(x=>/^\d{3}\.jpg$/.test(x)).length;
       } catch { console.log('Static fallback:',f.title); }
     }
-    folders.push({id,title:f.title,cover,hero,logo,hideTitle:f.hideTitle?1:0,frames,sources});
+    folders.push({id,title:f.title,cover,hero,logo,hideTitle:f.hideTitle?1:0,tileShape:f.tileShape||"LANDSCAPE",frames,sources});
   }
   if(folders.length) groups.push({id:c.id,title:c.title,folders});
 }
