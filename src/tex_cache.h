@@ -141,6 +141,12 @@ int  tex_content_box(const char *path, float box[4]);
 // decode thread has finished. Returns how many it uploaded.
 int tex_pump(int max_per_frame);
 
+// The entrance of freshly uploaded art, 0..1: 0 the frame it reached the GPU,
+// 1 once NV_TEX_APPEAR_MS have passed — and 1 for anything already resident,
+// for a promotion to a bigger decode, and with reduced motion. A draw site that
+// has a skeleton lays it down first and multiplies the art's alpha by this.
+float tex_appear(GLuint t);
+
 // The cache's per-frame telemetry: how many lookups by path and what they cost.
 // findIndex was LINEAR over 192 slots and every card in the list calls it 2-3
 // times per frame; these numbers say whether that actually weighs or not.

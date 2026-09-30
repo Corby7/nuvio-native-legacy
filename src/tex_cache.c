@@ -3,6 +3,8 @@
 #include "net.h"
 #include "webp.h"
 #include "gfx.h"
+#include "anim.h"
+#include "settings.h"
 #include <sys/stat.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -1577,6 +1579,43 @@ int tex_brand_dark(const char *path) {
   return r;
 }
 
+// THE ART'S ARRIVAL. A card went from its skeleton to its poster in one frame, and
+// a row whose posters land a few frames apart read as a flicker rather than as a
+// row filling in. Newly born textures are remembered here, with the moment they
+// reached the GPU, and tex_appear answers how far into their entrance they are.
+//
+// Keyed by the GL name rather than the path because that is what the draw sites
+// hold, and a small ring rather than a field on the item because an entrance
+// lasts NV_TEX_APPEAR_MS: anything older than that answers 1, which is also the
+// answer for every texture the ring never saw. Art that was already resident
+// when the viewer scrolls back to it is therefore simply there.
+#define APPEAR_RING 64
+static struct { GLuint tex; Uint32 at; } appearing[APPEAR_RING];
+static int appearNext;
+
+static void appearNote(GLuint t, int firstArrival) {
+  // GL recycles names: a promotion may be handed the name of art that was born a
+  // moment ago and evicted since. Forget it before deciding.
+  for (int i = 0; i < APPEAR_RING; i++)
+    if (appearing[i].tex == t) appearing[i].tex = 0;
+  if (!firstArrival) return;
+  appearing[appearNext].tex = t;
+  appearing[appearNext].at = SDL_GetTicks();
+  appearNext = (appearNext + 1) % APPEAR_RING;
+}
+
+float tex_appear(GLuint t) {
+  if (!t) return 0.0f;
+  if (settings_animations_reduced()) return 1.0f;
+  for (int i = 0; i < APPEAR_RING; i++) {
+    if (appearing[i].tex != t) continue;
+    float p = (float)(SDL_GetTicks() - appearing[i].at) / NV_TEX_APPEAR_MS;
+    if (p >= 1.0f) { appearing[i].tex = 0; return 1.0f; }
+    return anim_smooth(p);
+  }
+  return 1.0f;
+}
+
 int tex_pump(int max_per_frame) {
   int rose = 0;
   Uint64 start = SDL_GetPerformanceCounter();
@@ -1651,6 +1690,9 @@ int tex_pump(int max_per_frame) {
     bytesUsed -= bytesTexture(items[target].w, items[target].h);
       if (bytesUsed < 0) bytesUsed = 0;
     }
+    // THE FIRST ARRIVAL fades in (tex_appear); a promotion is the same art at a
+    // better size and must not blink. Taken before `tex` is overwritten below.
+    appearNote(t, items[target].tex == 0);
     items[target].tex = t; items[target].w = sup->w; items[target].h = sup->h;
     // The ceiling this texture answers for, from now until a promotion replaces it.
     items[target].serves = items[target].limit;

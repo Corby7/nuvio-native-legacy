@@ -565,6 +565,9 @@ static int focusedIndex(void) {
   return idx;
 }
 
+// THE WALL: the focused card leaning towards a press that had nowhere to go (anim.h).
+static AnimBump nudge[2];
+
 void seeall_event(const SDL_Event *e) {
   int n = nItems(), k;
   if (!is_open) return;
@@ -618,11 +621,14 @@ void seeall_event(const SDL_Event *e) {
   if(k==SDLK_UP&&focus<SEEALL_COLS&&(nPicks||HAS_GRID_BTN)){pickFocus=1;syncPickers();return;}
   if((k==SDLK_RETURN||k==SDLK_KP_ENTER)&&disc_seeall_error()){disc_seeall_more();return;}
   if (n < 1) return;
-  if (k == SDLK_RIGHT && focus + 1 < n) focus++;
-  else if (k == SDLK_LEFT && focus > 0) focus--;
-  else if (k == SDLK_DOWN) { if (focus + SEEALL_COLS < n) focus += SEEALL_COLS;
-                             else focus = n - 1; }
-  else if (k == SDLK_UP) { if (focus >= SEEALL_COLS) focus -= SEEALL_COLS; }
+  { int was = focus;
+    if (k == SDLK_RIGHT && focus + 1 < n) focus++;
+    else if (k == SDLK_LEFT && focus > 0) focus--;
+    else if (k == SDLK_DOWN) { if (focus + SEEALL_COLS < n) focus += SEEALL_COLS;
+                               else focus = n - 1; }
+    else if (k == SDLK_UP) { if (focus >= SEEALL_COLS) focus -= SEEALL_COLS; }
+    if (k == SDLK_RIGHT || k == SDLK_DOWN)
+      anim_nudge(nudge, k == SDLK_RIGHT, k == SDLK_DOWN, focus != was, e->key.repeat, settings_animations_reduced(), NV_EDGE_BUMP_PX, NV_EDGE_BUMP_W); }
   // OK on a card is handled above, by the hold.
   // Nearing the end, ask for the next page. Before the owner sees the empty
   // space, not once they are already staring at it.
@@ -635,6 +641,7 @@ void seeall_update(float dt, Uint32 now) {
   float target, maxY;
   int n = nItems(), lines;
   hold_animate(&hold, dt, now);
+  anim_nudge_step(nudge, dt, NV_EDGE_BUMP_W);
   if (hold_fired(&hold, now) && is_open && !pickFocus) {
     int idx = focusedIndex();
     if (idx >= 0) {
@@ -1075,7 +1082,10 @@ void seeall_draw(Uint32 now) {
     // downwards, so only x is re-centred.
     GfxRect r = { cx - (cw - SEEALL_CARD_W) * 0.5f, cy, cw, chh };
     // Held: pressed in about its centre (hold.h). The glow goes behind it below.
-    if (sel && !timeline) r = hold_card(&hold, r);
+    if (sel && !timeline) {
+      r = hold_card(&hold, r);
+      r.x += nudge[0].x; r.y += nudge[1].x;
+    }
     // The SAME radius as the home's posters: `posterCardCornerRadiusDp` (12dp x
     // 2 = 24px), a fraction of the SMALLER side because the shader's SDF is
     // normalised. The fixed NV_RADIUS_CARD that used to be here gave a corner
@@ -1116,8 +1126,11 @@ void seeall_draw(Uint32 now) {
       t = it.poster[0] ? tex_get_width(it.poster, SEEALL_CARD_W)
         : (it.backdrop[0] ? tex_get_width(it.backdrop, SEEALL_CARD_W) : 0);
       if (t) {
+        // Fresh art comes in over its skeleton rather than replacing it (tex_appear).
+        float in = tex_appear(t);
+        if (in < 1.0f) gfx_skeleton(r, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G, NV_COLOR_SKELETON_B, a);
         gfx_tex_aspect_current = tex_aspect(it.poster[0] ? it.poster : it.backdrop);
-        gfx_rect(r, t, GFX_CARD, f, 0, 0, radius, 0, 0, 0, a);
+        gfx_rect(r, t, GFX_CARD, f, 0, 0, radius, 0, 0, 0, a * in);
         gfx_tex_aspect_current = 0.0f;
       } else {
         // A skeleton while the art has not arrived — the same colour as the rest of

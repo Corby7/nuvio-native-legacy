@@ -1499,10 +1499,13 @@ static void drawResults(Uint32 now) {
         // focus spring is a poster that is missing for the length of it.
         GLuint tex = art ? tex_get_width(art, NV_SEARCH_CARD_W) : 0;
         if (tex) {
+          // Fresh art comes in over its skeleton rather than replacing it (tex_appear).
+          float in = tex_appear(tex);
+          if (in < 1.0f) gfx_skeleton(poster, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G, NV_COLOR_SKELETON_B, 1.0f);
           // Without the aspect ratio the 2:3 art stretches; and the poster is
           // exactly where that jumps out, because they all sit side by side.
           gfx_tex_aspect_current = tex_aspect(art);
-          gfx_rect(poster, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, 1);
+          gfx_rect(poster, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, in);
           gfx_tex_aspect_current = 0.0f;
         } else {
           // A VISIBLE skeleton, the same as the home's: #2C2C2C. See the note

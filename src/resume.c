@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <SDL2/SDL.h>
 
 // HALF-LEADING: the gap CSS leaves above a line inside its own line box, which is
 // what the port has to add once it stacks boxes rather than glyphs. Without it
@@ -25,6 +26,43 @@ static float halfLead(TxtStyle style, float box) {
   if (probe.h <= 0) return 0.0f;
   float half = (box - (float)probe.h) * 0.5f;
   return half > 0.0f ? half : 0.0f;
+}
+
+// THE BAR MOVES WHEN THE PROGRESS DOES. A progress figure changes while its bar
+// is off screen — the player writes it, or a sync brings it in — and coming back
+// to the card the fill was simply longer, with nothing to say that anything had
+// happened. Each bar remembers what it last drew and springs to the new figure,
+// so the viewer arriving back at the home SEES the twenty minutes they watched.
+//
+// Keyed by title and episode, in a small table with no dt of its own: the draw
+// has none, so each entry keeps the tick it was last drawn at. A bar not drawn for
+// a while comes back with its step clamped to one frame, which is the point — it
+// starts from where it was and runs, rather than arriving already there. The first
+// sighting of a bar is not a change and draws the figure as it is.
+#define FILL_SLOTS 64
+static struct { unsigned long key; float shown; Uint32 at; } fills[FILL_SLOTS];
+static int fillNext;
+
+float resume_fill(const char *id, int season, int episode, float target) {
+  unsigned long h = 2166136261u;
+  Uint32 now = SDL_GetTicks();
+  for (const char *p = id ? id : ""; *p; p++) h = (h ^ (unsigned char)*p) * 16777619u;
+  h = (h ^ (unsigned long)season) * 16777619u;
+  h = (h ^ (unsigned long)episode) * 16777619u;
+  if (!h) h = 1;
+  for (int i = 0; i < FILL_SLOTS; i++) {
+    if (fills[i].key != h) continue;
+    float dt = (float)(now - fills[i].at) / 1000.0f;
+    if (dt > 0.05f) dt = 0.05f;
+    fills[i].shown = settings_animations_reduced()
+                   ? target : anim_spring(fills[i].shown, target, dt, NV_SPRING_PROGRESS);
+    if (fabsf(fills[i].shown - target) < 0.0005f) fills[i].shown = target;
+    fills[i].at = now;
+    return fills[i].shown;
+  }
+  fills[fillNext].key = h; fills[fillNext].shown = target; fills[fillNext].at = now;
+  fillNext = (fillNext + 1) % FILL_SLOTS;
+  return target;
 }
 
 void resume_draw(const CatItem *ci, GfxRect r) {
@@ -215,7 +253,8 @@ void resume_draw(const CatItem *ci, GfxRect r) {
   // note in gfx.h for why a plain rectangle cannot.
   if (ci->progress > NV_CW_BAR_MIN_PCT) {
     float band = NV_CW_BAR_H * scale / r.h;
-    float fill = anim_clamp(ci->progress / 100.f, 0, 1);
+    float fill = resume_fill(ci->imdb[0] ? ci->imdb : ci->title, ci->season, ci->episode,
+                             anim_clamp(ci->progress / 100.f, 0, 1));
     float min  = NV_CW_BAR_MINW * scale / r.w;
     if (fill < min) fill = min;
     gfx_rect(r, 0, GFX_CW_BAR, 0, band, fill, radius, 1, 1, 1, 1.0f);

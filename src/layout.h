@@ -1159,6 +1159,31 @@
 #define NV_SPRING_FOCUS     25.0f    // coming into focus  (95% in 120ms)
 #define NV_SPRING_BLUR  25.0f    // leaving it         (the same time: see above)
 #define NV_SPRING_SCROLL    8.0f
+// THE ART'S ENTRANCE over its skeleton (tex_appear). Long enough that a row of
+// posters landing a few frames apart reads as the row filling in, not flickering;
+// short enough to be over before the eye has settled on the card. It is on its
+// own clock, not a spring, because there is no target that moves.
+#define NV_TEX_APPEAR_MS  180.0f
+// THE WALL. A D-pad press that has nowhere to go — RIGHT on a row's last card, UP
+// on a list's first line — used to do nothing at all, and from across the room
+// nothing is indistinguishable from a missed keypress. The list leans this far
+// towards the press and a spring brings it back. Small on purpose: it has to say
+// "that is the end", not "something moved".
+#define NV_EDGE_BUMP_PX    14.0f
+// The spring that returns it. Brisk: the lean is over in ~250 ms, before a held
+// key's next repeat would lean it again.
+#define NV_EDGE_BUMP_W     18.0f
+// THE PROGRESS BARS filling in (Continue Watching, the detail's episodes) when a
+// playback or a sync moves them. First-order at the focus stiffness: the change is
+// a fact being reported, and should be read as one, quickly.
+#define NV_SPRING_PROGRESS 10.0f
+// THE STAGGERED ENTRANCE of a screen's first fill: each item's fade and rise
+// starts this much after the one before it, capped so a long grid is not still
+// arriving when the viewer starts navigating it.
+#define NV_STAGGER_MS       24.0f
+#define NV_STAGGER_MAX      10
+#define NV_STAGGER_RISE     18.0f
+#define NV_STAGGER_DUR_MS  220.0f
 // THE POSTER GRIDS' PAGE SCROLL — the Library, Discover and the collection grid.
 //
 // FIRST-ORDER AND NOT anim_spring2, which is the opposite of what the rest of

@@ -298,6 +298,9 @@ static void pointCard(int i, int unused) {
   zone = ZONE_GRID; focus = i; follow = 0;
 }
 
+// THE WALL: the focused card leaning towards a press that had nowhere to go (anim.h).
+static AnimBump nudge[2];
+
 void library_event(const SDL_Event *e) {
   // OK over a card is a tap or a hold, and only the release can tell which.
   { int tap;
@@ -379,19 +382,23 @@ void library_event(const SDL_Event *e) {
       if (focus % grid_cols()) focus--;
       else requestMenu = 1;
       break;
-    case SDLK_RIGHT:
+    case SDLK_RIGHT: {
+      int was = focus;
       if (focus + 1 < nFilter && (focus + 1) % grid_cols()) focus++;
-      break;
+      anim_nudge(nudge, 1, 0, focus != was, e->key.repeat, settings_animations_reduced(), NV_EDGE_BUMP_PX, NV_EDGE_BUMP_W);
+      break; }
     case SDLK_UP:
       if (row == 0) zone = ZONE_PICKERS;
       else focus -= grid_cols();
       break;
-    case SDLK_DOWN:
+    case SDLK_DOWN: {
+      int was = focus;
       if (row < lastRow) {
         focus += grid_cols();
         if (focus >= nFilter) focus = nFilter - 1;
       }
-      break;
+      anim_nudge(nudge, 0, 1, focus != was, e->key.repeat, settings_animations_reduced(), NV_EDGE_BUMP_PX, NV_EDGE_BUMP_W);
+      break; }
     // OK on a card is handled above, by the hold.
     default: break;
   }
@@ -399,6 +406,7 @@ void library_event(const SDL_Event *e) {
 
 void library_update(float dt, Uint32 now) {
   hold_animate(&hold, dt, now);
+  anim_nudge_step(nudge, dt, NV_EDGE_BUMP_W);
   if (hold_fired(&hold, now) && zone == ZONE_GRID && focus >= 0 && focus < nFilter) {
     if (hasItemFocus) ctx_set_anchor(itemFocus.rect, NV_DSC_POSTER_R);
     ctx_open(filter[focus]);
@@ -471,10 +479,28 @@ static void drawEmpty(void) {
   txt_draw_alpha(t2, cx - (float)t2.w * 0.5f, y + (float)t1.h + 18.0f, 0.85f);
 }
 
+// THE GRID'S ENTRANCE when it fills with something new — a mode switched to, or a list that was empty — and never when
+// the same list merely redraws. The cards arrive in a diagonal wave from the top
+// left of what is on screen (anim_stagger), each fading in and rising the last
+// NV_STAGGER_RISE into place. 0 is "no entrance running".
+static Uint32 fillAt;
+static float entranceOf(int i, Uint32 now) {
+  if (!fillAt || settings_animations_reduced()) return 1.0f;
+  int firstRow = (int)(scrollY / grid_line_step());
+  int order = (i / grid_cols() - firstRow) + i % grid_cols();
+  float p = anim_stagger((float)(now - fillAt), order, NV_STAGGER_MS,
+                         NV_STAGGER_MAX, NV_STAGGER_DUR_MS);
+  if (now - fillAt > NV_STAGGER_MS * NV_STAGGER_MAX + NV_STAGGER_DUR_MS) fillAt = 0;
+  return p;
+}
+
 // Discover's grid, card for card — see drawGrid in discoverui.c for why each
 // piece is the way it is. Only the data source differs.
 static void drawGrid(Uint32 now) {
   hasItemFocus = 0;
+  { static int drawnMode = -1, drawnN;
+    if (nFilter && (mode != drawnMode || !drawnN)) fillAt = now ? now : 1;
+    drawnMode = mode; drawnN = nFilter; }
   if (!nFilter) { drawEmpty(); return; }
 
   gfx_crop(0.0f, NV_LIB_CLIP_TOP, NV_SCREEN_W, NV_DSC_GRID_BOTTOM - NV_LIB_CLIP_TOP);
@@ -497,7 +523,11 @@ static void drawGrid(Uint32 now) {
       }
       if (edge <= 0.004f && !isFocus) continue;
       if (!(ci = cat_item(filter[i]))) continue;
-      gfx_opacity_group = edge;
+      // The entrance moves the card but not its mask: `edge` above is already
+      // read from the resting top, which is what anim_edge wants.
+      { float in = entranceOf(i, now);
+        gfx_opacity_group = edge * in;
+        top += (1.0f - in) * NV_STAGGER_RISE; }
 
       { float scale = anim_blend(1.0f, 1.0f + NV_DSC_FOCUS_SCALE, f);
         float w = grid_card_w() * scale, h = grid_poster_h() * scale;
@@ -507,6 +537,7 @@ static void drawGrid(Uint32 now) {
         // Held: pressed in about its centre, the glow behind it (hold.h).
         if (isFocus) {
           card = hold_card(&hold, card);
+          card.x += nudge[0].x; card.y += nudge[1].x;
           hold_glow(&hold, card, NV_DSC_POSTER_R);
         }
         float radius = NV_DSC_POSTER_R / card.h;
@@ -515,8 +546,11 @@ static void drawGrid(Uint32 now) {
         // The RESTING width, so the focus spring does not re-decode the poster.
         GLuint tex = art ? tex_get_width(art, grid_card_w()) : 0;
         if (tex) {
+          // Fresh art comes in over its skeleton rather than replacing it (tex_appear).
+          float in = tex_appear(tex);
+          if (in < 1.0f) gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G, NV_COLOR_SKELETON_B, 1.0f);
           gfx_tex_aspect_current = tex_aspect(art);
-          gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, 1);
+          gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, in);
           gfx_tex_aspect_current = 0.0f;
         } else {
           gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,

@@ -239,6 +239,15 @@ static int toTop;
 // The speeds of the glide's second-order springs. They sit next to the position
 // because anim_spring2() needs both. See anim.h.
 static float velX[MAX_FILTER];
+// THE WALL (anim_bump_hit): the focused row leaning past its last card, and the
+// whole shelf leaning past its first or last row. Offsets in the scroll's own
+// sense — positive is further along — added where the rows are drawn, never to
+// scrollX/scrollY, whose springs must keep chasing the real goal.
+static AnimBump bumpH, bumpV;
+static int bumpRow = -1;
+static float rowScrollDrawn(int r) {
+  return scrollX[r] + (r == bumpRow ? bumpH.x : 0.0f);
+}
 // Where each row's scroll is HEADED. While the Magic Remote's pointer drives, the
 // focus no longer pulls the row along (see home_update): the row holds this goal,
 // and only the paging arrows move it (pageRow).
@@ -1125,7 +1134,13 @@ void home_event(const SDL_Event *e) {
     // The `&&` here was a short-circuit with a side effect: written as
     // `if (row == 0 && !focus_move(...))`, focus_move was only called ON THE HERO —
     // on any other row the right arrow moved nothing. Move first, decide afterwards.
-    (void)focus_move(&focus, 1, 0);
+    if (focus_move(&focus, 1, 0)) anim_bump_clear(&bumpH);
+    else {
+      // THE END OF THE ROW: it leans towards the press and comes back (anim.h).
+      bumpRow = focus.row;
+      anim_bump_hit(&bumpH, 1.0f, e->key.repeat, NV_EDGE_BUMP_PX, NV_EDGE_BUMP_W,
+                    settings_animations_reduced());
+    }
   } else if (k == SDLK_LEFT) {
   // Left in the first column calls up the side menu, on ANY row — the hero included.
     // Before, the hero was an exception and used left to go back a title in the
@@ -1138,9 +1153,15 @@ void home_event(const SDL_Event *e) {
     // row-scrolling setting — this is the focus, not the scroll.
     if (focus.column == 0) { if (!e->key.repeat) requestMenu = 1; return; }
     focus_move(&focus, -1, 0);
+    anim_bump_clear(&bumpH);
   }
-  else if (k == SDLK_DOWN)  focus_move(&focus, 0, 1);
-  else if (k == SDLK_UP)    focus_move(&focus, 0, -1);
+  else if (k == SDLK_DOWN || k == SDLK_UP) {
+    float dy = k == SDLK_DOWN ? 1.0f : -1.0f;
+    // The first and last rows are walls too: the whole shelf leans.
+    if (focus_move(&focus, 0, (int)dy)) anim_bump_clear(&bumpV);
+    else anim_bump_hit(&bumpV, dy, e->key.repeat, NV_EDGE_BUMP_PX, NV_EDGE_BUMP_W,
+                       settings_animations_reduced());
+  }
 }
 
 // Rebuilds the list from the catalogue. Called every frame because discovery runs on
@@ -2072,6 +2093,8 @@ void home_update(float dt, Uint32 now) {
   }
   scrollY = anim_spring2_reduced(&velY, scrollY, targetY, dt,
                                 NV_SPRING2_SCROLL, motionReduced);
+  anim_bump_step(&bumpH, dt, NV_EDGE_BUMP_W);
+  anim_bump_step(&bumpV, dt, NV_EDGE_BUMP_W);
 }
 
 // The media occupies the right of the top 650px; the text sits in the left block and
@@ -3650,7 +3673,7 @@ static void drawShortcuts(int r, float y) {
     // the top, so the card only ever gets taller downward.
     float scale = 1.0f + scaleOf(ROW_CATALOGS) * f;
     float w = lw * scale, h = lh * scale;
-    float x = settings_content_x() + c * step - scrollX[r]
+    float x = settings_content_x() + c * step - rowScrollDrawn(r)
             - (w - lw) * 0.5f;
     float cy = y;
     int held = focus.row == r && focus.column == c;
@@ -3785,6 +3808,10 @@ static void drawShortcuts(int r, float y) {
       // packaged flipbook replaces the cover below, the aspect has to become the
       // frame's or the shader would crop the animation to the cover's shape.
       float texAspect = art && art[0] ? tex_aspect(art) : 0.0f;
+      // The cover's own entrance (tex_appear). Remembered before a flipbook frame
+      // can replace `tex`: every frame of that is a fresh upload, and fading each one
+      // in would make the animation strobe.
+      const GLuint cover = tex;
       int animating = focus.row==r && focus.column==c &&
                       !settings_animations_reduced();
       float reveal = 0.0f;
@@ -3841,8 +3868,10 @@ static void drawShortcuts(int r, float y) {
                    fabsf(texAspect / (lw / lh) - 1.0f) > 0.1f;
         if (reveal > 0.0f) focusVideoReveal(card, radius, reveal);
         if (reveal < 1.0f) {
+          float in = tex == cover ? tex_appear(tex) : 1.0f;
+          if (in < 1.0f) drawArtSkeleton(card, radius, 1.0f - reveal);
           gfx_tex_aspect_current = crop ? texAspect : 0;
-          gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, 1.0f - reveal);
+          gfx_rect(card, tex, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, (1.0f - reveal) * in);
           gfx_tex_aspect_current = 0;
         }
       } else if (reveal > 0.0f) {
@@ -3917,7 +3946,7 @@ void home_draw(Uint32 now) {
   // NV_SHELF_PAD_TOP is the web's `padding-top` on the scroll column, not a nudge:
   // the rows come to rest 46px below the viewport's top edge, clear of the mask
   // that fades it. See the note on the constant.
-  float y = NV_SHELF_TOP + NV_SHELF_PAD_TOP - scrollY + slideDown;
+  float y = NV_SHELF_TOP + NV_SHELF_PAD_TOP - scrollY - bumpV.x + slideDown;
   for (int r = 0; r < nRows; r++) {
     KindRow kind = rows[r].kind;
     // THE TOP-EDGE MASK IS READ WHERE THE ROW RESTS, not where the slide has taken
@@ -3934,7 +3963,7 @@ void home_draw(Uint32 now) {
     // edge stays at zero for the whole flight, in both directions — the return is
     // the same expression read backwards, so nothing fades in from above on the
     // way back either.
-    float yRest = y - slideDown;
+    float yRest = y - slideDown + bumpV.x;
     float fade=anim_clamp((yRest-(NV_SHELF_TOP-80))/80,0,1);
     // THEY GO DOWN AND THEY FADE, together and on the same clock. The movement is
     // what removes them — they clear the clip either way — and the fade is what
@@ -4013,7 +4042,7 @@ void home_draw(Uint32 now) {
           if (r == expRow && expOpen > 0.0f && c > expColumn)
             pushes = (artH * NV_EXP_ASPECT - lw) * expOpen;
           if (openAmt > 0.0f) w = lw * scale + (widthIs_open - lw * scale) * openAmt;
-          float cx = settings_content_x() + c * step - scrollX[r] + lw * 0.5f
+          float cx = settings_content_x() + c * step - rowScrollDrawn(r) + lw * 0.5f
                    + pushes + (w - lw * scale) * 0.5f;
           if (cx < -lw * 1.5f || cx > NV_SCREEN_W + lw) continue;
           // `transform-origin: top` is `50% 0%`: centred across, PINNED along the top.
@@ -4289,9 +4318,13 @@ void home_draw(Uint32 now) {
             // Besides not existing there, it was the worst kind of animation for this
             // GPU: it forced the whole row to be redrawn on every frame forever, and
             // the dominant cost here is fill rate.
+            // Fresh art comes in over its skeleton rather than replacing it
+            // (tex_appear); anything already resident answers 1 and is simply there.
+            float in = tex_appear(t);
+            if (in < 1.0f) drawArtSkeleton(art, radiusA, 1.0f);
             gfx_tex_aspect_current = tex_aspect(path);
             gfx_rect(art, t, GFX_CARD, f, 0.0f, 0.0f,
-                     radiusA, 0, 0, 0, 1);
+                     radiusA, 0, 0, 0, in);
             gfx_tex_aspect_current = 0.0f;
           } else {
             // A CARD WITH NO ART: a SOLID, visible surface, not emptiness.
@@ -4534,6 +4567,7 @@ void home_to_top(void) {
   focus.column = 0;
   for (r = 0; r < FOCUS_MAX_ROWS; r++) focus.columnRemembered[r] = 0;
   scrollY = velY = 0.0f;
+  bumpH = bumpV = (AnimBump){ 0 }; bumpRow = -1;
   memset(scrollX, 0, sizeof scrollX);
   memset(goalX, 0, sizeof goalX);
   memset(velX, 0, sizeof velX);

@@ -263,6 +263,9 @@ static void pointCard(int i, int unused) {
   zone = ZONE_GRID; focus = i; follow = 0;
 }
 
+// THE WALL: the focused card leaning towards a press that had nowhere to go (anim.h).
+static AnimBump nudge[2];
+
 void dui_event(const SDL_Event *e) {
   int n, row, lastRow;
   if (e->type == SDL_QUIT) { wantsExit = 1; return; }
@@ -344,19 +347,23 @@ void dui_event(const SDL_Event *e) {
       if (focus % grid_cols()) focus--;
       else requestMenu = 1;
       break;
-    case SDLK_RIGHT:
+    case SDLK_RIGHT: {
+      int was = focus;
       if (focus + 1 < n && (focus + 1) % grid_cols()) focus++;
-      break;
+      anim_nudge(nudge, 1, 0, focus != was, e->key.repeat, settings_animations_reduced(), NV_EDGE_BUMP_PX, NV_EDGE_BUMP_W);
+      break; }
     case SDLK_UP:
       if (row == 0) zone = ZONE_PICKERS;
       else focus -= grid_cols();
       break;
-    case SDLK_DOWN:
+    case SDLK_DOWN: {
+      int was = focus;
       if (row < lastRow) {
         focus += grid_cols();
         if (focus >= n) focus = n - 1;
       }
-      break;
+      anim_nudge(nudge, 0, 1, focus != was, e->key.repeat, settings_animations_reduced(), NV_EDGE_BUMP_PX, NV_EDGE_BUMP_W);
+      break; }
     // OK on a card is handled above, by the hold.
     default: break;
   }
@@ -373,6 +380,7 @@ void dui_event(const SDL_Event *e) {
 void dui_update(float dt, Uint32 now) {
   int i, n = gridN();
   hold_animate(&hold, dt, now);
+  anim_nudge_step(nudge, dt, NV_EDGE_BUMP_W);
   if (hold_fired(&hold, now) && zone == ZONE_GRID) {
     int idx = focusedIndex();
     if (idx >= 0) {
@@ -474,9 +482,27 @@ static void drawMenu(void) {
 // The grid. 252-wide posters, six across, the focused one scaled 1.05 from its
 // TOP edge with the 4px border on the INSIDE — "Android TV uses the inside
 // focus border, not an outer halo", says the stylesheet's own comment.
+// THE GRID'S ENTRANCE when it fills with something new — a catalogue, type or genre picked, whose page arrives into an empty grid — and never when
+// the same list merely redraws. The cards arrive in a diagonal wave from the top
+// left of what is on screen (anim_stagger), each fading in and rising the last
+// NV_STAGGER_RISE into place. 0 is "no entrance running".
+static Uint32 fillAt;
+static float entranceOf(int i, Uint32 now) {
+  if (!fillAt || settings_animations_reduced()) return 1.0f;
+  int firstRow = (int)(scrollY / grid_line_step());
+  int order = (i / grid_cols() - firstRow) + i % grid_cols();
+  float p = anim_stagger((float)(now - fillAt), order, NV_STAGGER_MS,
+                         NV_STAGGER_MAX, NV_STAGGER_DUR_MS);
+  if (now - fillAt > NV_STAGGER_MS * NV_STAGGER_MAX + NV_STAGGER_DUR_MS) fillAt = 0;
+  return p;
+}
+
 static void drawGrid(Uint32 now) {
   int n = gridN(), i;
   hasItemFocus = 0;
+  { static int drawnN;
+    if (n && !drawnN) fillAt = now ? now : 1;
+    drawnN = n; }
 
   if (!n) {
     const char *l1 = disc_seeall_loading() ? "Fetching titles…"
@@ -531,7 +557,11 @@ static void drawGrid(Uint32 now) {
       // Drawn at zero it costs nothing and the bookkeeping below still runs.
       if (edge <= 0.004f && !isFocus) continue;
       if (!disc_seeall_item(i, &it)) continue;
-      gfx_opacity_group = edge;
+      // The entrance moves the card but not its mask: `edge` above is already
+      // read from the resting top, which is what anim_edge wants.
+      { float in = entranceOf(i, now);
+        gfx_opacity_group = edge * in;
+        top += (1.0f - in) * NV_STAGGER_RISE; }
 
       { float scale = anim_blend(1.0f, 1.0f + NV_DSC_FOCUS_SCALE, f);
         float w = grid_card_w() * scale, h = grid_poster_h() * scale;
@@ -542,6 +572,7 @@ static void drawGrid(Uint32 now) {
         // Held: pressed in about its centre, the glow behind it (hold.h).
         if (isFocus) {
           card = hold_card(&hold, card);
+          card.x += nudge[0].x; card.y += nudge[1].x;
           hold_glow(&hold, card, NV_DSC_POSTER_R);
         }
         float radius = NV_DSC_POSTER_R / card.h;
@@ -552,8 +583,11 @@ static void drawGrid(Uint32 now) {
         // spring is a poster that is missing for the length of it.
         GLuint tex = art ? tex_get_width(art, grid_card_w()) : 0;
         if (tex) {
+          // Fresh art comes in over its skeleton rather than replacing it (tex_appear).
+          float in = tex_appear(tex);
+          if (in < 1.0f) gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G, NV_COLOR_SKELETON_B, 1.0f);
           gfx_tex_aspect_current = tex_aspect(art);
-          gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, 1);
+          gfx_rect(card, tex, GFX_CARD, f, 0.0f, 0.0f, radius, 0, 0, 0, in);
           gfx_tex_aspect_current = 0.0f;
         } else {
           gfx_skeleton(card, radius, NV_COLOR_SKELETON_R, NV_COLOR_SKELETON_G,

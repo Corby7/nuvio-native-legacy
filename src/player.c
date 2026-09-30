@@ -296,6 +296,17 @@ static float  seekPreview = 0.0f;
 static Uint32 seekAt = 0, seekEndAt = 0;
 static Uint32 settleAt = 0;
 static float  settleTarget = 0.0f;
+// WHERE THE BAR DRAWS THE PREVIEW, which is not quite where it aims. Each press
+// moves seekPreview by a whole step — ten seconds, then the ramp's minutes — and
+// drawn as it is the playhead hopped from notch to notch. This chases it on a
+// critically damped spring, so a held arrow reads as the head RUNNING along the
+// bar. Only the head and the fill: the time readout stays on seekPreview, because
+// a number is read, and a number that slides is a number that lies.
+//
+// While no burst is in flight it IS posSeg; a drag of the pointer bypasses it,
+// since the head must stay under the finger.
+static float  seekShown = 0.0f, seekShownV = 0.0f;
+#define PLR_SEEK_GLIDE_W  22.0f
 // THE QUICK SEEK: LEFT/RIGHT with the controls DOWN. Each press is a flat
 // PLR_QUICK_STEP_S — one press ten seconds, two twenty — with no ramp, because
 // here you count presses rather than hold. It rides the same preview and the same
@@ -1437,6 +1448,7 @@ static void seekBegin(void) {
   if (seekActive) return;
   seekActive = 1;
   seekPreview = posSeg;
+  seekShown = posSeg; seekShownV = 0.0f;
   seekRepeats = 0;
   seekDir = 0;
   quickDelta = 0.0f;
@@ -1792,6 +1804,9 @@ static void keepEpisodes(Uint32 now) {
 
 void player_update(float dt, Uint32 now) {
   followTitle();
+  if (seekActive && !barDrag && !settings_animations_reduced())
+    seekShown = anim_spring2(&seekShownV, seekShown, seekPreview, dt, PLR_SEEK_GLIDE_W);
+  else { seekShown = seekActive ? seekPreview : posSeg; seekShownV = 0.0f; }
   if (is_open) keepEpisodes(now);
   skipTick(dt);
   nextTick(dt);
@@ -3308,7 +3323,7 @@ static void drawPlayer(Uint32 now) {
   // carries on underneath and gets its own tick below (.player-seek-origin). It is
   // the web app's split exactly: `effectiveProgressSeconds` for the fill,
   // `current` for the origin.
-  float shown = seekActive ? seekPreview : posSeg;
+  float shown = seekActive ? seekShown : posSeg;
   float frac = durationSeg > 0.0f ? anim_clamp(shown / durationSeg, 0.0f, 1.0f) : 0.0f;
   // Focus is a spring now, not a switch: the track eases between 8 and 12 and the
   // ground between 0.18 and 0.26, which is the sheet's

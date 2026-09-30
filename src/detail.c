@@ -34,6 +34,7 @@
 #include "tex_cache.h"
 #include "focus.h"
 #include "anim.h"
+#include "resume.h"
 #include "layout.h"
 #include "catalog.h"
 #include "trakt.h"   // trakt_active(), for the library tooltip's wording
@@ -3557,7 +3558,11 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
   // The Continue Watching card's bar, along the thumbnail's base and cut by its corner
   // (GFX_CW_BAR — see gfx.h).
   if (episodeStarted(ep)) {
+    const CatItem *ci = cat_item(idx);
     float fill = anim_clamp(episodeProgress(ep) / 100.0f, 0.0f, 1.0f);
+    // Moves when the progress does (resume_fill), keyed to the same title and
+    // episode as the home's card — so both screens remember one bar.
+    if (ci) fill = resume_fill(ci->imdb[0] ? ci->imdb : ci->title, ep->season, ep->episode, fill);
     float min  = NV_CW_BAR_MINW / th.w;
     if (fill < min) fill = min;
     gfx_rect(th, 0, GFX_CW_BAR, 0, NV_CW_BAR_H / th.h, fill, radiusTh, 1, 1, 1, rowA);
