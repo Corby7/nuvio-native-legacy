@@ -1,4 +1,5 @@
 #include "simklauth.h"
+#include "profiles.h"
 #include "cloud.h"
 #include "data.h"
 #include "appid.h"
@@ -10,7 +11,7 @@
 #include <string.h>
 #include <pthread.h>
 
-#define SMK_FILE  "simkl.txt"
+#define SMK_FILE  "simkl"
 #define SMK_BASE "https://api.simkl.com"
 // Simkl does not return `interval`; 5s is the step the web app uses.
 #define SMK_POLL_MS 5000u
@@ -24,6 +25,18 @@ static unsigned nextPoll, beganMs, limitMs = 900000u;
 
 static pthread_t thread;
 static int threadAlive, threadReady, tokenNew;
+
+// Per profile, like Trakt's (see traktauth.c): simkl.txt for profile 1,
+// simkl-p<N>.txt for the others.
+static int fileProfile = 1, pendingProfile;
+// Set by the first simklauth_load; before it a switch only picks the file.
+static int loaded;
+
+static const char *fileName(char *dst, size_t size, int profile) {
+  if (profile <= 1) snprintf(dst, size, "%s.txt", SMK_FILE);
+  else snprintf(dst, size, "%s-p%d.txt", SMK_FILE, profile);
+  return dst;
+}
 
 // Every request carries client_id, app-name and app-version in the QUERY — not
 // in a header. Without them Simkl answers with an error that does not say what
@@ -44,13 +57,16 @@ static char *take(const char *path, int *status) {
 // ---------------------------------------------------------------- disk
 
 static void save(void) {
-  char buf[400];
+  char buf[400], name[64];
   snprintf(buf, sizeof buf, "%s\n", token);
-  data_write(SMK_FILE, buf);
+  data_write(fileName(name, sizeof name, fileProfile), buf);
 }
 
 int simklauth_load(void) {
-  char *b = data_read(SMK_FILE);
+  char name[64];
+  char *b;
+  loaded = 1;
+  b = data_read(fileName(name, sizeof name, fileProfile));
   if (!b) return 0;
   { char *end = b + strlen(b);
     while (end > b && (end[-1] == '\n' || end[-1] == '\r')) *--end = 0; }
@@ -59,10 +75,33 @@ int simklauth_load(void) {
   return token[0] != 0;
 }
 
-void simklauth_forget(void) {
+static void clearMemory(void) {
   token[0] = userCode[0] = url[0] = error[0] = 0;
+  tokenNew = 0;
   state = SMK_STOPPED;
-  data_erase(SMK_FILE);
+}
+
+void simklauth_forget(void) {
+  char name[64];
+  int p;
+  clearMemory();
+  pendingProfile = 0;
+  for (p = 1; p <= ACCOUNT_PROFILE_MAX; p++) data_erase(fileName(name, sizeof name, p));
+}
+
+static void swapProfile(int profile) {
+  pendingProfile = 0;
+  if (profile == fileProfile) return;
+  if (!loaded) { fileProfile = profile; return; }
+  clearMemory();
+  fileProfile = profile;
+  simklauth_load();
+}
+
+void simklauth_set_profile(int profile) {
+  if (profile <= 0) profile = 1;
+  if (threadAlive) { pendingProfile = profile; return; }
+  swapProfile(profile);
 }
 
 // ---------------------------------------------------------------- fluxo
@@ -152,6 +191,13 @@ void simklauth_begin(void) {
 void simklauth_step(unsigned nowMs) {
   if (threadAlive && threadReady) { threadAlive = 0; threadReady = 0; }
   if (threadAlive) return;
+
+  // A switch made while the thread was out: a token it brought is the profile
+  // being left's, kept in its file and not sent under the new one's id.
+  if (pendingProfile) {
+    if (tokenNew) { tokenNew = 0; save(); }
+    swapProfile(pendingProfile);
+  }
 
   if (tokenNew) {
     tokenNew = 0;

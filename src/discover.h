@@ -72,6 +72,9 @@ int disc_decls_copy(DiscDecl *out, int max);
 // Call it when the addon list changes — the account's list arrives from the sync
 // long after the first build, which ran with no addons at all.
 void disc_rebuild(void);
+// 1 when no build is running and none is waiting: the home's rows are final
+// for now. The profile picker holds its spinner until this and the sync agree.
+int  disc_idle(void);
 
 // Call ONCE PER FRAME. Starts a requested rebuild as soon as no build is in
 // flight. Without it a rebuild asked for during the first build is simply lost,

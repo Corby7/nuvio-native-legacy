@@ -41,6 +41,8 @@ const char *simklauth_error(void);
 
 void simklauth_cancel(void);
 int  simklauth_load(void);    // reads the stored token; 1 when there was one
-void simklauth_forget(void);
+void simklauth_forget(void);   // every profile's (signing out)
+// The active profile changed: its own link is loaded. profiles.c calls it.
+void simklauth_set_profile(int profile);
 
 #endif

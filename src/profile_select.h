@@ -15,7 +15,12 @@ void profilesel_start(void);
 void profilesel_event(const SDL_Event *e);
 void profilesel_update(float dt, Uint32 now);
 void profilesel_draw(Uint32 now);
+// 1 once a profile has been chosen. The picker stays on screen from then on,
+// the chosen card under a spinner and deaf to keys, until app.c swaps to the
+// home it has built offscreen.
 int  profilesel_done(void);
+// SDL_GetTicks of that choice.
+Uint32 profilesel_activated_at(void);
 int  profilesel_wants_exit(void);
 int  profilesel_requested_retry(void);
 

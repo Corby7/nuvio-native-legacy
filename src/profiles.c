@@ -1,4 +1,8 @@
 #include "profiles.h"
+#include "catalog.h"
+#include "traktauth.h"
+#include "simklauth.h"
+#include "settings.h"
 #include "session.h"
 #include "cloud.h"
 #include "data.h"
@@ -181,11 +185,25 @@ const AccountProfile *profiles_item_active(void) {
 const char   *profiles_owner(void)      { return owner; }
 int           profiles_active(void)     { return active > 0 ? active : 1; }
 
+int profiles_addon_profile(void) {
+  const AccountProfile *p = profiles_item_active();
+  return p && !p->primary && settings_use_primary_addons() ? 1 : profiles_active();
+}
+
+// Everything kept per profile on this TV follows the active one.
+static void setProfile(int index_) {
+  cat_set_profile(index_);
+  traktauth_set_profile(index_);
+  simklauth_set_profile(index_);
+  settings_set_profile(index_);
+}
+
 void profiles_load_active(void) {
   char *b = data_read(FILE_ACTIVE);
   if (!b) return;
   { int v = atoi(b);
     if (v > 0) { active = v; chosen = 1; } }
+  setProfile(active);
   free(b);
 }
 
@@ -194,6 +212,7 @@ void profiles_set_active(int index_) {
   if (index_ <= 0) return;
   active = index_;
   chosen = 1;
+  setProfile(index_);
   snprintf(line, sizeof line, "%d\n", index_);
   data_write(FILE_ACTIVE, line);
   printf("[profiles] active profile: %d\n", index_);
@@ -229,6 +248,7 @@ void profiles_forget(void) {
   owner[0] = 0;
   active = 1;
   chosen = 0;
+  setProfile(1);
   data_erase(FILE_ACTIVE);
   printf("[profiles] profiles forgotten (signed out)\n");
 }

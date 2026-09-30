@@ -233,6 +233,9 @@ static float   ringFocusR;   // its corner, in pixels
 static float animFocus[MAX_FILTER][MAX_CARDS];
 static float scrollX[MAX_FILTER];
 static float scrollY = 0.0f;
+// Set by home_to_top: the next syncRows puts the focus on the first row instead
+// of finding the old one again by key.
+static int toTop;
 // The speeds of the glide's second-order springs. They sit next to the position
 // because anim_spring2() needs both. See anim.h.
 static float velX[MAX_FILTER];
@@ -1199,9 +1202,9 @@ static void syncRows(void) {
   // Stored BEFORE the loop below, which overwrites rows[]: after it there is no
   // longer any way to know which row the focus was on.
   char keyFocus[192];
-  int colFocus = focus.column;
+  int colFocus = toTop ? 0 : focus.column;
   keyFocus[0] = 0;
-  if (focus.row >= 0 && focus.row < nRows)
+  if (!toTop && focus.row >= 0 && focus.row < nRows)
     snprintf(keyFocus, sizeof keyFocus, "%s", rows[focus.row].key);
   // `nCat < 1` alone hid the COLLECTIONS: with no catalogue rows the function
   // returned right here, so a home that had only collections came out empty.
@@ -1667,6 +1670,9 @@ void home_update(float dt, Uint32 now) {
       if (id >= 0 || !ctx_is_open()) styleMenuKey[0] = 0;
     } }
   syncRows();
+  // One pass is enough: the rows are the new profile's from here on, and any
+  // later publication keeps the focus where the viewer has put it.
+  toTop = 0;
   growRow();
 
   const int motionReduced = settings_animations_reduced();
@@ -4146,6 +4152,18 @@ void home_record_return(int index_, double posSeg, double durationSeg) {
   snprintf(resumeId, sizeof resumeId, "%s", c ? c->imdb : "");
 }
 int home_wants_exit(void) { return wantsExit; }
+
+void home_to_top(void) {
+  int r;
+  toTop = 1;
+  focus.row = 0;
+  focus.column = 0;
+  for (r = 0; r < FOCUS_MAX_ROWS; r++) focus.columnRemembered[r] = 0;
+  scrollY = velY = 0.0f;
+  memset(scrollX, 0, sizeof scrollX);
+  memset(goalX, 0, sizeof goalX);
+  memset(velX, 0, sizeof velX);
+}
 
 int home_item_focused(HomeItem *out) {
   if (!hasItemFocus) return 0;

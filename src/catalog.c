@@ -514,6 +514,37 @@ void cat_dir_writing(const char *dir) {
   if (dir && *dir) snprintf(dirWriting, sizeof dirWriting, "%s", dir);
 }
 
+// ONE PROGRESS FILE PER PROFILE. There used to be one for the whole TV, so a
+// profile switch left the previous person's lines in "Continue watching" — and
+// the next push sent their unsynced playback up to the new profile's account.
+// Profile 1 keeps the old name, so an existing install carries on with its file.
+static int profileIdx = 1;
+
+static void profileName(char *dst, size_t size, const char *stem, const char *ext, int profile) {
+  if (profile <= 1) snprintf(dst, size, "%s.%s", stem, ext);
+  else snprintf(dst, size, "%s-p%d.%s", stem, profile, ext);
+}
+
+static void profilePath(char *dst, size_t size, const char *stem, const char *ext) {
+  char name[64];
+  profileName(name, sizeof name, stem, ext, profileIdx);
+  snprintf(dst, size, "%s/%s", dirWriting, name);
+}
+
+const char *cat_progress_file(int profile, char *dst, unsigned long size) {
+  profileName(dst, size, "progress", "txt", profile);
+  return dst;
+}
+
+static void cwRemovedReset(void);
+
+void cat_set_profile(int profile) {
+  if (profile <= 0) profile = 1;
+  if (profile == profileIdx) return;
+  profileIdx = profile;
+  cwRemovedReset();
+}
+
 // See the note on the declaration in catalog.h.
 int cat_pct(double posSeg, double durationSeg) {
   int pct;
@@ -576,8 +607,8 @@ int cat_save_progress_id(const char *imdb, double posSeg, double durationSeg,
   // Rewrites the whole file, swapping this title's line. It is a file of a few
   // dozen lines: reading it all and writing it back costs nothing and avoids the
   // duplicate a plain append would accumulate.
-  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
-  snprintf(tmp, sizeof tmp, "%s/progress.tmp", dirWriting);
+  profilePath(path, sizeof path, "progress", "txt");
+  profilePath(tmp, sizeof tmp, "progress", "tmp");
   s = fopen(tmp, "w");
   if (!s) return 0;
   e = fopen(path, "r");
@@ -922,7 +953,7 @@ static void applyProgress(int from, int to) {
   char path[600], line[256];
   FILE *fp;
   if (!dirWriting[0] || !items || from < 0 || to > n || from >= to) return;
-  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
+  profilePath(path, sizeof path, "progress", "txt");
   fp = fopen(path, "r");
   if (!fp) return;
   while (fgets(line, sizeof line, fp)) {
@@ -1112,7 +1143,7 @@ int cat_progress_read(CatProgress *out, int max) {
   FILE *fp;
   int n = 0;
   if (!out || max <= 0 || !dirWriting[0]) return 0;
-  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
+  profilePath(path, sizeof path, "progress", "txt");
   fp = fopen(path, "r");
   if (!fp) return 0;
   while (fgets(line, sizeof line, fp) && n < max) {
@@ -1161,8 +1192,8 @@ void cat_progress_mark_synced(const char *imdb, long long ms) {
   char path[600], tmp[600], line[256];
   FILE *e, *s;
   if (!imdb || !imdb[0] || ms <= 0 || !dirWriting[0]) return;
-  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
-  snprintf(tmp, sizeof tmp, "%s/progress.tmp", dirWriting);
+  profilePath(path, sizeof path, "progress", "txt");
+  profilePath(tmp, sizeof tmp, "progress", "tmp");
   e = fopen(path, "r");
   if (!e) return;
   s = fopen(tmp, "w");
@@ -1193,8 +1224,8 @@ void cat_progress_remove(const char *imdb) {
   FILE *e, *s;
   int i, n;
   if (!imdb || !imdb[0] || !dirWriting[0]) return;
-  snprintf(path, sizeof path, "%s/progress.txt", dirWriting);
-  snprintf(tmp, sizeof tmp, "%s/progress.tmp", dirWriting);
+  profilePath(path, sizeof path, "progress", "txt");
+  profilePath(tmp, sizeof tmp, "progress", "tmp");
   e = fopen(path, "r");
   if (e) {
     s = fopen(tmp, "w");
@@ -1228,7 +1259,7 @@ static void cwRemovedLoad(void) {
   FILE *fp;
   if (cwRemovedLoaded || !dirWriting[0]) return;
   cwRemovedLoaded = 1;
-  snprintf(path, sizeof path, "%s/cw-removed.txt", dirWriting);
+  profilePath(path, sizeof path, "cw-removed", "txt");
   fp = fopen(path, "r");
   if (!fp) return;
   while (fgets(line, sizeof line, fp) && nCwRemoved < CW_REMOVED_MAX) {
@@ -1239,6 +1270,15 @@ static void cwRemovedLoad(void) {
     }
   }
   fclose(fp);
+}
+
+// The list belongs to the profile: a switch drops it, and the next reader
+// loads the new profile's file.
+static void cwRemovedReset(void) {
+  pthread_mutex_lock(&lockCwRemoved);
+  nCwRemoved = 0;
+  cwRemovedLoaded = 0;
+  pthread_mutex_unlock(&lockCwRemoved);
 }
 
 void cat_cw_dismiss(const char *imdb) {
@@ -1264,8 +1304,8 @@ void cat_cw_dismiss(const char *imdb) {
   }
   cwRemoved[found].ms = now;
   if (dirWriting[0]) {
-    snprintf(path, sizeof path, "%s/cw-removed.txt", dirWriting);
-    snprintf(tmp, sizeof tmp, "%s/cw-removed.tmp", dirWriting);
+    profilePath(path, sizeof path, "cw-removed", "txt");
+    profilePath(tmp, sizeof tmp, "cw-removed", "tmp");
     fp = fopen(tmp, "w");
     if (fp) {
       for (i = 0; i < nCwRemoved; i++)

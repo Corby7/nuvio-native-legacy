@@ -62,6 +62,12 @@ int col_load(const char *dir);
 // Returns how many folders were added.
 int col_load_account(const char *body);
 
+// Back to the package's collections alone, as at startup — a profile switch,
+// before the next profile's own are applied. An account with none sends an
+// empty list, which col_load_account (rightly) will not let wipe the screen, so
+// without this the previous profile's collections stayed on the next one's home.
+void col_reset(void);
+
 // Changes whenever the folder list changes. The home's row builder keys its
 // "do I need to rebuild" check on the CATALOGUE, so without this a collection
 // arriving from the account would sit in memory and never reach the screen.

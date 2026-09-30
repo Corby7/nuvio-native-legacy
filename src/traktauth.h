@@ -49,7 +49,12 @@ void traktauth_cancel(void);
 // startup, after data_start. 1 when there was a token.
 int  traktauth_load(void);
 
-// Forgets the link (called on signing out of the account).
+// Forgets the link on every profile (called on signing out of the account).
 void traktauth_forget(void);
+
+// The active profile changed: its own link is loaded (trakt.txt for profile 1,
+// trakt-p<N>.txt for the others) and the previous one's leaves trakt.c.
+// profiles.c calls it.
+void traktauth_set_profile(int profile);
 
 #endif

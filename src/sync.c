@@ -26,7 +26,6 @@
 
 #define SY_ADD_MAX   32
 #define SY_PROGRESS_MAX 240
-#define FILE_PROGRESS "progress.txt"
 
 static pthread_t thread;
 static int threadAlive, threadReady;
@@ -40,6 +39,17 @@ static SyncState state = SYNC_STOPPED;
 static char summary[220] = "not synced";
 static unsigned lastOk;
 static int dirtyProgress, dirtyAddons;
+// THE PROFILE A CYCLE WAS STARTED FOR. A switch made while one is running
+// changes profiles_active() under it: its pulls are a mix of the two profiles,
+// and its pushes would send the one being left's addons up to the new one's
+// account. sync_step throws such a cycle away and starts another.
+static int cycleProfile;
+// Set by a profile switch: once the new profile's progress lands, the home is
+// rebuilt if the file changed, so "Continue watching" is theirs and not the
+// cache's.
+static int switchRebuild;
+// A cycle asked for while one ran (sync_resync): started when that one ends.
+static int againWanted;
 
 // The thread does NOT touch the app: it only fills these boxes, and sync_step
 // applies them on the main loop. Without that separation, a network response
@@ -128,7 +138,7 @@ static void pullAddons(void) {
   // the `addons` table, which is exactly the web app's happy path.
   snprintf(query, sizeof query,
            "user_id=eq.%s&profile_id=eq.%d&select=*&order=sort_order.asc",
-           owner, profiles_active());
+           owner, profiles_addon_profile());
   // With the anonymous key the RLS answers 401 "permission denied for table
   // addons": reading someone's rows requires the token of whoever is asking.
   r = session_table("addons", query, &st);
@@ -198,6 +208,10 @@ static void pushAddons(void) {
   char *r;
   int st = 0, n, i;
 
+  // A profile on the primary's addons has no list of its own to write, and
+  // writing to the primary's from here is not its call. The Android TV app skips
+  // the push the same way.
+  if (profiles_addon_profile() != profiles_active()) { dirtyAddons = 0; return; }
   n = addons_export(current, SY_ADD_MAX);
   // An empty local list does NOT become a push. An empty push wipes the
   // person's addons on every device of theirs, and "I have not loaded anything
@@ -428,7 +442,8 @@ int sync_progress_keys(const char *work, char (*out)[40], int max) {
 static int readProgressLocal(ProgressItem *output, int max) {
   char *buf, *line, *ctx;
   int k = 0;
-  buf = data_read(FILE_PROGRESS);
+  { char name[64];
+    buf = data_read(cat_progress_file(profiles_active(), name, sizeof name)); }
   if (!buf) return 0;
   for (line = strtok_r(buf, "\n", &ctx); line && k < max;
        line = strtok_r(NULL, "\n", &ctx)) {
@@ -901,8 +916,12 @@ static void *run(void *u) {
   pullSoRead();
   // Push AFTER pulling, like the web app's startupSyncService: pulling after
   // pushing would make the device overwrite with what it sent itself.
-  if (dirtyAddons)    pushAddons();
-  if (dirtyProgress) pushProgress();
+  // Not for a profile that has been left since the cycle began (see cycleProfile):
+  // the flags stay up, and the cycle sync_step starts in its place pushes them.
+  if (profiles_active() == cycleProfile) {
+    if (dirtyAddons)    pushAddons();
+    if (dirtyProgress) pushProgress();
+  }
 
   { char lists[64] = "";
     // Unknown (-1) when Trakt is the source: see pullSoRead.
@@ -948,6 +967,7 @@ static void begin(int isLight, const char *why) {
   if (threadAlive || !session_loggedin()) return;
   if (cloud_brake_active()) return;
   light = isLight;
+  cycleProfile = profiles_active();
   // A full cycle carries the library and watched list too, so it answers any
   // pending gesture as well.
   soon = 0;
@@ -1148,8 +1168,61 @@ static void applyEarly(void) {
   }
 }
 
+// Empties the boxes a cycle filled, without applying any of it.
+static void discardCycle(void) {
+  nAddonsRemote = 0; hasAddonsRemote = 0;
+  free(addonsBlob); addonsBlob = NULL;
+  free(homeBlob); homeBlob = NULL; hasHomeBlob = 0;
+  free(collectionsBlob); collectionsBlob = NULL; hasCollectionsBlob = 0;
+  free(settingsBlob); settingsBlob = NULL; hasSettingsBlob = 0;
+  traktToken[0] = 0; hasTraktRemote = 0;
+  nProgressRemote = 0; progressComplete = 0;
+  nPushedMark = 0;
+}
+
+void sync_resync(void) {
+  if (threadAlive) againWanted = 1;
+  else begin(0, "addon source changed");
+}
+
+int sync_profile_settled(void) {
+  return !threadAlive && cycleProfile == profiles_active();
+}
+
+void sync_profile_switched(void) {
+  switchRebuild = 1;
+  // THE HOME IS BUILT ONCE, FROM THE NEXT PROFILE'S OWN STATE — as a launch on
+  // that profile builds it. The rebuild used to go out with the previous
+  // profile's addons, row order and collections still in memory, and the cycle
+  // then delivered each of the new one's with a rebuild apiece: three builds in
+  // a second and a half, the first showing the wrong home. What was last applied
+  // for this profile comes off disk here, so the cycle finds it unchanged and
+  // rebuilds only for what is really new.
+  //
+  // Reset first: a profile whose account holds no row order or collections has
+  // an empty list, which applies nothing — the previous profile's stayed.
+  disc_prefs_begin();
+  disc_prefs_end();
+  col_reset();
+  stateForget();
+  sync_restore();
+  mark("rebuild: profile switched");
+  disc_rebuild();
+  // Refused while a cycle is running; sync_step starts it when that one ends.
+  begin(0, "profile switched");
+}
+
 void sync_step(unsigned nowMs) {
   if (!threadAlive) return;
+  if (cycleProfile != profiles_active()) {
+    if (!threadReady) return;
+    threadAlive = 0;
+    threadReady = 0;
+    discardCycle();
+    data_log("sync.log", "cycle dropped: profile %d left for %d", cycleProfile, profiles_active());
+    begin(0, "profile switched");
+    return;
+  }
   if (!earlyApplied && __atomic_load_n(&earlyReady, __ATOMIC_ACQUIRE)) {
     earlyApplied = 1;
     applyEarly();
@@ -1168,6 +1241,11 @@ void sync_step(unsigned nowMs) {
     int wasOn = trakt_active();
     if (trakt_set(traktToken, cloud_trakt_client()) && !wasOn) { mark("rebuild: trakt on"); disc_rebuild(); }
     hasTraktRemote = 0;
+  }
+  char *progressBefore = NULL;
+  if (switchRebuild && !light) {
+    char name[64];
+    progressBefore = data_read(cat_progress_file(profiles_active(), name, sizeof name));
   }
   if (nProgressRemote) {
     static CatProgress mine[CAT_PROGRESS_MAX];
@@ -1263,6 +1341,17 @@ void sync_step(unsigned nowMs) {
     nProgressRemote = 0;
   }
   progressComplete = 0;
+  if (switchRebuild && !light) {
+    char name[64];
+    char *after = data_read(cat_progress_file(profiles_active(), name, sizeof name));
+    if (strcmp(progressBefore ? progressBefore : "", after ? after : "")) {
+      mark("rebuild: switched profile's progress");
+      disc_rebuild();
+    }
+    free(after);
+    switchRebuild = 0;
+  }
+  free(progressBefore);
   // The lines the push just put on the account are the account's now (origin 1
   // -> 2), so a delete made elsewhere later is followed here and never undone
   // by a second push. AFTER the apply above: the pull ran before the push, and
@@ -1280,6 +1369,7 @@ void sync_step(unsigned nowMs) {
     lastOk = nowMs;
     data_log("sync.log", "cycle done: %s", light ? "library and watched" : summary);
   }
+  if (againWanted) { againWanted = 0; begin(0, "addon source changed"); }
 }
 
 SyncState  sync_state(void)      { return state; }
@@ -1348,7 +1438,10 @@ void sync_forget_user(void) {
   debrid_forget();
   // Which source someone picks, with which audio, is as personal as their list.
   sourcepref_forget();
-  data_erase(FILE_PROGRESS);
+  // Every profile's file: profiles_forget above has already reset the active one.
+  { char name[64]; int p;
+    for (p = 1; p <= ACCOUNT_PROFILE_MAX; p++)
+      data_erase(cat_progress_file(p, name, sizeof name)); }
 
   // The boxes the thread fills too: a cycle that finished just before the
   // sign-out would apply the previous account's addons on the next sync_step.

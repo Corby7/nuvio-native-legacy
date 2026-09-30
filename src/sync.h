@@ -126,6 +126,21 @@ void sync_forget_user(void);
 // change holds for the rest of the session.
 void sync_reapply_settings(void);
 
+// A profile was chosen on the picker. Rebuilds the home from that profile's own
+// progress file at once and starts a cycle for it — or, when one is already
+// running for the profile being left, has sync_step drop that one's results and
+// start the new cycle as soon as it ends. sync_start alone was refused while a
+// cycle ran, so the new profile's "Continue watching" and addons waited for the
+// next periodic cycle, five minutes on, or for a restart.
+void sync_profile_switched(void);
+// 1 once no cycle is running and the last one was the active profile's — its
+// addons, row order and progress have landed (or the cycle failed; either way
+// nothing more is coming from it).
+int  sync_profile_settled(void);
+// A full cycle now, or as soon as the running one ends — that one may have read
+// what just changed (the "Use primary profile's addons" setting) the old way.
+void sync_resync(void);
+
 // Sends a TRACKER's token to the ACCOUNT, so the person's other devices inherit
 // the link. BLOCKS — call from a thread, or accept the cost of one round trip.
 //

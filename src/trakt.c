@@ -88,7 +88,7 @@ void trakt_forget(void) {
   token[0] = 0;
   client[0] = 0;
   on = 0;
-  printf("[trakt] credential forgotten (signed out)\n");
+  printf("[trakt] credential forgotten\n");
 }
 
 int trakt_set(const char *tk, const char *cli) {

@@ -21,6 +21,13 @@ void settings_resume(void);
 
 // Folder the settings are read from and written to. Call once, at startup.
 void settings_dir(const char *dir);
+// The active profile changed: its own file is loaded (settings.txt for profile
+// 1, settings-p<N>.txt for the others). A profile with no file yet starts from
+// profile 1's settings. profiles.c calls it.
+void settings_set_profile(int profile);
+// 1 when the active profile had no settings file on this TV when it was loaded:
+// its first time here, the one moment its account blob is applied on a switch.
+int  settings_profile_fresh(void);
 void settings_event(const SDL_Event *e);
 void settings_update(float dt, Uint32 now);
 void settings_draw(Uint32 now);
@@ -40,6 +47,9 @@ int settings_dolby_atmos(void);
 // Which subtitle the player turns on by itself: 0 off, 1 automatic (English),
 // 2 Portuguese, 3 English — the file's own track first, a download after. Read by
 // tracks.c, which owns the selection.
+// "Use primary profile's addons" (Account), this profile's own: 1 when a
+// non-primary profile reads the primary's addon list. On by default.
+int settings_use_primary_addons(void);
 int settings_subtitle_pref(void);
 // The same row as a lang.h index: -1 for Off, English for Automatic.
 int settings_subtitle_language(void);

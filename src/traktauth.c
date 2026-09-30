@@ -1,4 +1,5 @@
 #include "traktauth.h"
+#include "profiles.h"
 #include "cloud.h"
 #include "data.h"
 #include "net.h"
@@ -13,8 +14,8 @@
 #include <pthread.h>
 #include <time.h>
 
-#define TRA_FILE  "trakt.txt"
-#define TRA_STREAM "trakt-flow.txt"
+#define TRA_FILE  "trakt"
+#define TRA_STREAM "trakt-flow"
 #define TRA_BASE "https://api.trakt.tv"
 // When Trakt does not send `interval`, 5s is what its documentation suggests.
 #define TRA_POLL_DEFAULT 5000u
@@ -49,6 +50,27 @@ static int threadAlive, threadReady;
 // UI is reading from it.
 static int tokenNew;
 
+// THE LINK BELONGS TO A PROFILE, as it does on the account (upsert_tracker_tokens
+// takes p_profile_id) and in the Android TV app (TraktAuthDataStore, per
+// profile). One trakt.txt for the whole TV used to hand the first person's Trakt
+// to everyone: their resume points in the next profile's "Continue watching",
+// and the next profile's playback in their history. Profile 1 keeps the old
+// names, so a link made before this stays where it was.
+static int fileProfile = 1;
+// A switch that arrived while a thread was out; traktauth_step makes it once
+// the thread is done, since the thread writes the very fields a switch clears.
+static int pendingProfile;
+// Set by the first traktauth_load. Before it — profiles_load_active runs first at
+// startup — a switch only picks the file that load will read.
+static int loaded;
+
+static const char *fileName(char *dst, size_t size, const char *stem, int profile) {
+  if (profile <= 1) snprintf(dst, size, "%s.txt", stem);
+  else snprintf(dst, size, "%s-p%d.txt", stem, profile);
+  return dst;
+}
+#define FILE_OF(stem) fileName(name, sizeof name, stem, fileProfile)
+
 static char *post(const char *path, const char *body, int *status) {
   char complete[300];
   const char *header[2];
@@ -68,19 +90,20 @@ static char *post(const char *path, const char *body, int *status) {
 // because the instance that had asked for the code no longer existed. The web
 // app stores the same state (TraktAuthStore.saveDeviceFlow).
 static void writeStream(void) {
-  char buf[600];
+  char buf[600], name[64];
   snprintf(buf, sizeof buf, "%s\t%s\t%s\t%ld\n", deviceCode, userCode, url, expiresIn);
-  data_write(TRA_STREAM, buf);
+  data_write(FILE_OF(TRA_STREAM), buf);
 }
 
 static void forgetStream(void) {
+  char name[64];
   deviceCode[0] = userCode[0] = 0;
   expiresIn = 0;
-  data_erase(TRA_STREAM);
+  data_erase(FILE_OF(TRA_STREAM));
 }
 
 static void save(void) {
-  char buf[800];
+  char buf[800], name[64];
   // Starts with the old art/trakt.txt shape ("token<TAB>clientId"), so the file
   // stays readable to anyone who knew that one; the difference is the PLACE,
   // this being the installation folder rather than the package.
@@ -93,11 +116,14 @@ static void save(void) {
   // what let the load tell a live token from a dead one without asking.
   snprintf(buf, sizeof buf, "%s\t%s\t%s\t%ld\t%ld\n", token,
            cloud_trakt_client(), refresh, createdAt, tokenLifetime);
-  data_write(TRA_FILE, buf);
+  data_write(FILE_OF(TRA_FILE), buf);
 }
 
 int traktauth_load(void) {
-  char *b = data_read(TRA_FILE);
+  char name[64];
+  char *b;
+  loaded = 1;
+  b = data_read(FILE_OF(TRA_FILE));
   if (!b) return 0;
   // Up to five tab-separated columns: token, clientId, refresh, createdAt,
   // expiresIn. A TWO-COLUMN FILE STILL LOADS — that is what every install
@@ -136,7 +162,7 @@ int traktauth_load(void) {
   if (token[0]) return 1;
 
   // No token, but there may be a request in flight from before the restart.
-  { char *f = data_read(TRA_STREAM);
+  { char *f = data_read(FILE_OF(TRA_STREAM));
     if (f) {
       char *c[4] = { f, NULL, NULL, NULL };
       int i;
@@ -157,7 +183,7 @@ int traktauth_load(void) {
           state = TRA_WAITING;
           printf("[trakt] resuming the pending request (%lds left)\n", ate - now);
         } else {
-          data_erase(TRA_STREAM);
+          data_erase(FILE_OF(TRA_STREAM));
         }
       }
       free(f);
@@ -165,14 +191,47 @@ int traktauth_load(void) {
   return 0;
 }
 
-void traktauth_forget(void) {
+static void clearMemory(void) {
   renewPending = 0;
   createdAt = 0;
   token[0] = refresh[0] = url[0] = error[0] = 0;
+  deviceCode[0] = userCode[0] = 0;
+  expiresIn = 0;
   tokenLifetime = 0;
+  tokenNew = 0;
   state = TRA_STOPPED;
-  data_erase(TRA_FILE);
-  forgetStream();
+}
+
+void traktauth_forget(void) {
+  char name[64];
+  int p;
+  clearMemory();
+  pendingProfile = 0;
+  // Every profile's: this is signing out, and the next account must not find
+  // any of them.
+  for (p = 1; p <= ACCOUNT_PROFILE_MAX; p++) {
+    data_erase(fileName(name, sizeof name, TRA_FILE, p));
+    data_erase(fileName(name, sizeof name, TRA_STREAM, p));
+  }
+}
+
+static void swapProfile(int profile) {
+  pendingProfile = 0;
+  if (profile == fileProfile) return;
+  if (!loaded) { fileProfile = profile; return; }
+  clearMemory();
+  // The credential in use goes too, whichever way it came in: the next profile
+  // gets its own from its file here, or from the account on the sync cycle the
+  // switch starts — or none.
+  trakt_forget();
+  fileProfile = profile;
+  traktauth_load();
+}
+
+void traktauth_set_profile(int profile) {
+  if (profile <= 0) profile = 1;
+  if (threadAlive) { pendingProfile = profile; return; }
+  swapProfile(profile);
 }
 
 // ---------------------------------------------------------------- fluxo
@@ -368,6 +427,14 @@ void traktauth_begin(void) {
 void traktauth_step(unsigned nowMs) {
   if (threadAlive && threadReady) { threadAlive = 0; threadReady = 0; }
   if (threadAlive) return;
+
+  if (pendingProfile) {
+    // A token the thread brought back is the profile being left's: it is kept
+    // in that profile's file. Not sent to the account — that would file it under
+    // the profile now active.
+    if (tokenNew) { tokenNew = 0; save(); }
+    swapProfile(pendingProfile);
+  }
 
   // A 401 IN THIS SESSION, or a token already dead when it was loaded. With a
   // refresh stored, renew — one attempt a minute, because a transport failure

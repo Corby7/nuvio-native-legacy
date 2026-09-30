@@ -50,6 +50,13 @@ const char   *profiles_owner(void);        // uuid from get_sync_owner; "" if it
 // The active AccountProfile. Persisted to disk: choosing again on every start
 // would be a question the app already knows the answer to.
 int  profiles_active(void);                // profile_index; 1 when nothing has been chosen
+// Whose rows in `addons` the active profile uses: 1 when it runs the primary's
+// addons, its own index otherwise — the rule of the web app and the Android TV
+// app (AddonSyncService.getRemoteAddonUrls), switched by the TV's own setting
+// ("Use primary profile's addons", on by default) rather than the account's
+// `uses_primary_addons`. A second profile's own rows are whatever was copied
+// when it was made, and go stale.
+int  profiles_addon_profile(void);
 void profiles_set_active(int index_);
 void profiles_load_active(void);       // reads from disk; call at startup
 

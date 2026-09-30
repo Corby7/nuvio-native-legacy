@@ -1932,6 +1932,16 @@
 #define NV_PSEL_AVATAR        192.0f
 #define NV_PSEL_AVATAR_F      204.0f
 #define NV_PSEL_SCALE_F        0.05f
+// Opening a profile (`.profile-card.is-activating`, the web fork's
+// components.css): the avatar, name and badge at opacity 0.35, and over the
+// avatar a 56px spinner with a 4px border, rgba(158,158,158,0.22) all round and
+// the focus colour on top, one turn every 820ms (homeLoadingSpin).
+#define NV_PSEL_ACTIVATING_DIM 0.35f
+#define NV_PSEL_SPIN_D        56.0f
+#define NV_PSEL_SPIN_W         4.0f
+#define NV_PSEL_SPIN_TRACK    (158.0f / 255.0f)
+#define NV_PSEL_SPIN_TRACK_A   0.22f
+#define NV_PSEL_SPIN_MS       820u
 // The initial inside the disc is 77 and goes to 82 on focus — a font-size change
 // ON TOP of the transform, so the ink really grows by 82/77 * 1.05.
 #define NV_PSEL_INITIAL_F     (82.0f / 77.0f)

@@ -133,6 +133,13 @@ static void *checkAhead(void *u) {
 #include "layout.h"
 #include <stdio.h>
 
+// Opening a profile from the picker (see the SCREEN_CHOICE_PROFILE branch): the
+// spinner shows for at least MIN, so a switch that is ready at once does not
+// flash it, and never more than MAX, so a sync or a catalogue that never
+// answers still ends on the home.
+#define APP_SWITCH_MIN_MS 400u
+#define APP_SWITCH_MAX_MS 12000u
+
 static Screen screen = SCREEN_HOME;
 static int wantsExit = 0;
 
@@ -494,12 +501,33 @@ void app_update(float dt, Uint32 now) {
       return;
     }
     if (profilesel_done()) {
-      // The profile has changed the sync's destination: running again brings THIS
-      // profile's addons and progress, and not profile 1's, which the first cycle
-      // picked up for want of a choice.
-      sync_reapply_settings();
-      sync_start();
-      screen = SCREEN_HOME;
+      static int switching;
+      Uint32 since = now - profilesel_activated_at();
+      if (!switching) {
+        switching = 1;
+        // The profile has changed the sync's destination: running again brings
+        // THIS profile's addons and progress, and not profile 1's, which the
+        // first cycle picked up for want of a choice.
+        // The account's settings only on a profile's FIRST time on this TV (and
+        // on signing in, above). Every switch used to reapply them, and since
+        // the TV does not write its changes back, switching away and back undid
+        // them.
+        if (settings_profile_fresh()) sync_reapply_settings();
+        sync_profile_switched();
+      }
+      // THE HOME IS BUILT OFFSCREEN. The picker keeps its spinner while the
+      // cycle brings the profile's addons, order and progress and the rows are
+      // rebuilt from them — disc_step runs below this branch otherwise, so it is
+      // called here — and the home is entered once, finished, at its top. It
+      // used to be entered at once and rebuilt two or three times in front of
+      // the viewer. APP_SWITCH_MAX_MS stops a dead network holding the picker.
+      disc_step();
+      if ((sync_profile_settled() && disc_idle() && since >= APP_SWITCH_MIN_MS) ||
+          since >= APP_SWITCH_MAX_MS) {
+        switching = 0;
+        home_to_top();
+        screen = SCREEN_HOME;
+      }
     }
     return;
   }

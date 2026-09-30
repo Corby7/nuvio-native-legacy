@@ -107,7 +107,7 @@ typedef enum {
   // Detail page
   SETTING_DET_TRAILER, SETTING_DET_META_EXT, SETTING_DET_BLUR_NOT_WATCHED, SETTING_DET_DATE_FULL,
   // Account
-  SETTING_PROFILE_ACTIVE, SETTING_SYNC, SETTING_TRAKT, SETTING_SIMKL, SETTING_EXIT,
+  SETTING_PROFILE_ACTIVE, SETTING_PRIMARY_ADDONS, SETTING_SYNC, SETTING_TRAKT, SETTING_SIMKL, SETTING_EXIT,
   // About
   SETTING_VERSION_I, SETTING_SPACE,
   SETTING_N
@@ -292,6 +292,7 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_ANIM] = ESC("Animations",                  V_ANIM, 2),
 
   [SETTING_PROFILE_ACTIVE] = READ("Profile"),
+  [SETTING_PRIMARY_ADDONS] = ESC("Use primary profile's addons", V_ON, 2),   // local, per profile
   [SETTING_SYNC] = READ("Sync"),
   [SETTING_TRAKT] = ACTION("Trakt"),
   [SETTING_SIMKL] = ACTION("Simkl"),
@@ -362,7 +363,13 @@ static const char *KEY[] = {
   [SETTING_WIDTH_DP] = "posterCardWidthDp", [SETTING_RADIUS_DP] = "posterCardCornerRadiusDp",
   [SETTING_ANIM] = "reducedAnimations",
   // Account: these are local rows; they neither come from nor go to the cloud profile.
-  [SETTING_PROFILE_ACTIVE] = "-profile", [SETTING_SYNC] = "-sync", [SETTING_TRAKT] = "-trakt", [SETTING_SIMKL] = "-simkl", [SETTING_EXIT] = "-exit",
+  [SETTING_PROFILE_ACTIVE] = "-profile",
+  // THE TV'S OWN, not the account's `uses_primary_addons`: it is kept in this
+  // profile's settings file and never read from the blob, whose keys this does
+  // not match. On by default, which is how a second profile gets the addons the
+  // household has set up rather than the few it was created with.
+  [SETTING_PRIMARY_ADDONS] = "tvUsePrimaryAddons",
+  [SETTING_SYNC] = "-sync", [SETTING_TRAKT] = "-trakt", [SETTING_SIMKL] = "-simkl", [SETTING_EXIT] = "-exit",
   [SETTING_VERSION_I] = "-version", [SETTING_SPACE] = "-space",
 };
 
@@ -403,8 +410,8 @@ static const struct { const char *group, *title; int start, n; const char *blurb
     "The lit edge and sheen on cards, and which cards get it." },
   { NULL, "Detail page",             SETTING_DET_TRAILER,          4,
     "The trailer button, metadata, spoilers and release dates on a title's page." },
-  { "Account", "Account",            SETTING_PROFILE_ACTIVE,       5,
-    "Profile, sync, Trakt, Simkl and signing out." },
+  { "Account", "Account",            SETTING_PROFILE_ACTIVE,       6,
+    "Profile, addons, sync, Trakt, Simkl and signing out." },
   { NULL, "About",                   SETTING_VERSION_I,            2,
     "Version and image memory." },
 };
@@ -416,6 +423,7 @@ static const struct { const char *group, *title; int start, n; const char *blurb
 // factory settings on are born as they left them, because that is what they see
 // today. All of them are changeable here, which was the point.
 static int value[SETTING_N] = {
+  [SETTING_PRIMARY_ADDONS] = 0,         /* use the primary profile's addons: on */
   [SETTING_QUALITY] = 0, [SETTING_DV] = 0, [SETTING_ATMOS] = 0,          /* quality, DV, Atmos */
   [SETTING_AUDIO_LANG] = 0,                /* audio language: the file's default */
   [SETTING_AUDIO_ANIME] = 0,                /* anime audio language: same as the row above */
@@ -599,6 +607,7 @@ int settings_gradient_focus_classic(void) { return on(SETTING_GRADIENT_CLASSIC);
 int settings_labels_poster(void)      { return on(SETTING_LABELS); }
 int settings_name_addon(void)          { return on(SETTING_NAME_ADDON); }
 int settings_suffix_kind(void)         { return on(SETTING_SUFFIX_KIND); }
+int settings_use_primary_addons(void)  { return on(SETTING_PRIMARY_ADDONS); }
 int settings_hide_unreleased(void){ return on(SETTING_HIDE_UNRELEASED); }
 int settings_date_full(void)       { return on(SETTING_DET_DATE_FULL); }
 int settings_scores_home(void)          { return value[SETTING_SCORES_HOME] == 0; }
@@ -651,6 +660,24 @@ const char *settings_quality(void)   { return V_QUALITY[value[SETTING_QUALITY]];
 // changing an option held only while the app was open, and coming back afterwards
 // showed everything at its default — which makes the whole screen look decorative.
 static char dirSettings[512];
+
+// ONE FILE PER PROFILE: settings.txt for profile 1, settings-p<N>.txt for the
+// others. There used to be one for the whole TV, so a profile took over whatever
+// the last person had set, and an option changed here was undone by the
+// profile's account blob on the way back. The Android TV app keeps them per
+// profile too.
+static int settingsProfile = 1;
+// The built-in values, taken before the first file is read: a switch starts
+// from these, not from the profile being left.
+static int defaults[SETTING_N];
+static int defaultsTaken;
+// 1 when the last profile loaded had no file of its own yet.
+static int profileFresh;
+
+static void settingsPath(char *dst, size_t size, int profile, const char *ext) {
+  if (profile <= 1) snprintf(dst, size, "%s/settings.%s", dirSettings, ext);
+  else snprintf(dst, size, "%s/settings-p%d.%s", dirSettings, profile, ext);
+}
 
 
 // The LITERAL values the web app writes for the options that are not boolean. The
@@ -707,14 +734,13 @@ static int limits(int op, int v) {
   return value[op];
 }
 
-void settings_dir(const char *dir) {
+
+// Reads one settings file over the values in force; 0 when there is none.
+static int readFile(const char *path) {
   FILE *f;
-  char path[600], line[96];
-  if (!dir || !*dir) return;
-  snprintf(dirSettings, sizeof dirSettings, "%s", dir);
-  snprintf(path, sizeof path, "%s/settings.txt", dirSettings);
+  char line[96];
   f = fopen(path, "r");
-  if (!f) return;
+  if (!f) return 0;
   while (fgets(line, sizeof line, f)) {
     char key[64]; int v, i;
     if (sscanf(line, "%63s %d", key, &v) != 2) continue;
@@ -728,15 +754,49 @@ void settings_dir(const char *dir) {
     }
   }
   fclose(f);
+  return 1;
 }
+
+static void loadProfile(void) {
+  char path[600];
+  memcpy(value, defaults, sizeof value);
+  settingsPath(path, sizeof path, settingsProfile, "txt");
+  profileFresh = !readFile(path);
+  if (!profileFresh || settingsProfile <= 1) return;
+  // A PROFILE'S FIRST TIME ON THIS TV starts from profile 1's settings — the
+  // owner's choice: the TV already set up the way the household uses it, not
+  // the built-in defaults. The profile's account blob still goes on top on the
+  // cycle the switch starts, and from then on the file is its own.
+  settingsPath(path, sizeof path, 1, "txt");
+  readFile(path);
+  save();
+}
+
+void settings_dir(const char *dir) {
+  if (!dir || !*dir) return;
+  snprintf(dirSettings, sizeof dirSettings, "%s", dir);
+  if (!defaultsTaken) { memcpy(defaults, value, sizeof defaults); defaultsTaken = 1; }
+  loadProfile();
+}
+
+void settings_set_profile(int profile) {
+  if (profile <= 0) profile = 1;
+  if (profile == settingsProfile) return;
+  settingsProfile = profile;
+  // Before settings_dir (profiles_load_active runs first at startup) this only
+  // picks the file settings_dir will read.
+  if (dirSettings[0]) loadProfile();
+}
+
+int settings_profile_fresh(void) { return profileFresh; }
 
 static void save(void) {
   char path[600], tmp[600];
   FILE *f;
   int i;
   if (!dirSettings[0]) return;
-  snprintf(path, sizeof path, "%s/settings.txt", dirSettings);
-  snprintf(tmp, sizeof tmp, "%s/settings.tmp", dirSettings);
+  settingsPath(path, sizeof path, settingsProfile, "txt");
+  settingsPath(tmp, sizeof tmp, settingsProfile, "tmp");
   f = fopen(tmp, "w");
   if (!f) return;
   for (i = 0; i < SETTING_N; i++) {
@@ -1018,6 +1078,7 @@ static const char *helpOption(int op) {
     case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
     case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";
+    case SETTING_PRIMARY_ADDONS: return "This profile uses the primary profile's addons instead of its own list. It has no effect on the primary profile.";
     case SETTING_CW_PLAY: return "Pressing OK on a resume card plays it straight away, skipping the title's page. Hold OK for the other options.";
     case SETTING_CW_LOGO: return "Shows the title's logo in place of its name on the resume cards. A title with no logo keeps its name.";
     case SETTING_CW_FURTHEST: return "Picks the next episode from the furthest one marked as watched.";
@@ -1258,6 +1319,9 @@ void settings_event(const SDL_Event *e) {
       value[focusOp] = (value[focusOp] + (dir > 0 ? 1 : o->n - 1)) % o->n;
     }
     save();   // saves on every change: there is no "save" button on this screen
+    // A different addon list: the next cycle reads it, and its arrival rebuilds
+    // the home.
+    if (focusOp == SETTING_PRIMARY_ADDONS) sync_resync();
   }
 }
 

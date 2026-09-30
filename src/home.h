@@ -69,6 +69,9 @@ void home_shutdown(void);
 // only exists while the progress makes sense (neither the start nor the end).
 void home_record_return(int index_, double posSeg, double durationSeg);
 int  home_wants_exit(void);
+// Back to the first row, first card, scrolled to the top, with no animation —
+// entering a freshly switched profile's home, which starts where a launch does.
+void home_to_top(void);
 int  home_requested_open(void);   // OK pressed: consumes the request
 // OK on a Continue watching card with "Play on select" on: the catalogue index
 // to play, or -1. Consumed once, like the open.

@@ -234,8 +234,11 @@ const ColFolder *col_by_catalog(const char *base,const char *type,const char *id
     if(b&&*b&&!strcmp(b,base)&&!strcmp(v->type,type)&&!strcmp(v->catId,id)) return &folders[i];
   }return NULL;
 }
+// The package folder col_load read, so col_reset can read it again.
+static char dirPackage[600];
+
 int col_load(const char *dir) {
-  char path[700];snprintf(path,sizeof path,"%s/collections.json",dir);
+  char path[700];snprintf(dirPackage,sizeof dirPackage,"%s",dir);snprintf(path,sizeof path,"%s/collections.json",dir);
   FILE *f=fopen(path,"rb");if(!f)return 0;
   fseek(f,0,SEEK_END);long size=ftell(f);rewind(f);
   if(size<2||size>4000000){fclose(f);return 0;}
@@ -269,6 +272,13 @@ int col_load(const char *dir) {
     }
   }free(body);revisionCol++;return count;
 }
+void col_reset(void) {
+  count = 0;
+  nPinned = 0;
+  revisionCol++;
+  if (dirPackage[0]) col_load(dirPackage);
+}
+
 // The folder's own group name, upper-cased. See the note in collections.h for why
 // the two screens share one wording instead of each inventing its own.
 void col_group_label(const ColFolder *f, char *out, int n) {

@@ -2146,6 +2146,7 @@ void disc_start(void) {
 static volatile int rebuildWanted;
 
 void disc_rebuild(void) { rebuildWanted = 1; }
+int  disc_idle(void) { return !rebuildWanted && !searching; }
 
 void disc_step(void) {
   if (!rebuildWanted || searching) return;

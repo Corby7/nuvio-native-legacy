@@ -21,6 +21,15 @@
 
 static int focus;
 static int done, wantsExit, retry;
+// THE CARD BEING OPENED, -1 otherwise. Choosing a profile no longer drops
+// straight into a home still wearing the previous profile's rows: the picker
+// stays, the chosen card dims under a spinner (the web fork's `is-activating`),
+// and app.c enters the home once it has been built offscreen.
+static int activating = -1;
+static Uint32 activatingAt;
+// The alpha drawCard gives the avatar, the name and the badges: 1, or
+// NV_PSEL_ACTIVATING_DIM on the card being opened.
+static float cardAlpha = 1.0f;
 static float animFocus[ACCOUNT_PROFILE_MAX];
 
 // THE BACKGROUND IS THE FOCUSED PROFILE'S COLOUR. updateBackground() in
@@ -108,6 +117,7 @@ void profilesel_start(void) {
   int i;
   focus = 0;
   done = wantsExit = retry = 0;
+  activating = -1;
   pinOf = -1;
   pin[0] = 0;
   pinFocus = 0;
@@ -143,6 +153,8 @@ static void choose(int i) {
   if (!p) return;
   if (p->hasPin) { pinOf = i; pin[0] = 0; pinFocus = 0; pinWrong = pinNet = 0; return; }
   profiles_set_active(p->index_);
+  activating = i;
+  activatingAt = SDL_GetTicks();
   done = 1;
 }
 
@@ -203,6 +215,8 @@ void profilesel_event(const SDL_Event *e) {
   SDL_Keycode k;
   int n = profiles_n();
   if (e->type != SDL_KEYDOWN) return;
+  // Opening a profile: nothing to choose until the home is there.
+  if (activating >= 0) return;
   k = e->key.keysym.sym;
   if (pinOf >= 0) { eventPin(k); return; }
 
@@ -261,6 +275,8 @@ void profilesel_update(float dt, Uint32 now) {
     if (result == 1) {
       const AccountProfile *p = profiles_item(pinOf);
       if (p) profiles_set_active(p->index_);
+      activating = pinOf;
+      activatingAt = SDL_GetTicks();
       pinOf = -1;
       done = 1;
     } else if (result == -2) {
@@ -430,6 +446,26 @@ static void drawLogo(void) {
 // actually wins is `[class*="-card"].focusable.focused` and it computes to
 // `center top`. Growing downwards only is why the row of names does not jump
 // when the cursor moves along it.
+// THE SPINNER over the avatar of the profile being opened, the web fork's
+// `.is-activating .profile-avatar-ring::after`: a 56px circle with a 4px
+// rgba(158,158,158,0.22) track and a focus-colour quarter (border-top-color)
+// going round every 820ms. gfx has no arc mode, so the quarter is a run of
+// overlapping round dots, as on the player's loading button.
+static void drawSpinner(float cx, float cy, float k) {
+  const float d = NV_PSEL_SPIN_D * k, w = NV_PSEL_SPIN_W * k;
+  const float r = (d - w) * 0.5f;
+  float head = (float)((SDL_GetTicks() - activatingAt) % NV_PSEL_SPIN_MS) *
+               (6.2831853f / NV_PSEL_SPIN_MS) - 1.5707963f;
+  int j, n = (int)(1.5707963f * r / 1.4f);
+  strokeCircle(cx, cy, d, w, NV_PSEL_SPIN_TRACK, NV_PSEL_SPIN_TRACK,
+               NV_PSEL_SPIN_TRACK, NV_PSEL_SPIN_TRACK_A);
+  for (j = 0; j <= n; j++) {
+    float a = head - 1.5707963f * j / n;
+    gfx_color((GfxRect){ cx + cosf(a) * r - w * 0.5f, cy + sinf(a) * r - w * 0.5f, w, w },
+              0.5f, 1, 1, 1, 1.0f);
+  }
+}
+
 static void drawCard(int i, const PsLayout *L, float x, float y) {
   const AccountProfile *p = profiles_item(i);
   const float k = L->k;
@@ -469,7 +505,7 @@ static void drawCard(int i, const PsLayout *L, float x, float y) {
     // profile's colour is exactly what shows through them. Drawing the photo
     // alone leaves the subject floating on the page's wash.
     accentOf(i, &cr, &cg, &cb);
-    gfx_rect((GfxRect){ ax, ay, as, as }, 0, GFX_DISK, 0, 0, 0, 0.5f, cr, cg, cb, 1.0f);
+    gfx_rect((GfxRect){ ax, ay, as, as }, 0, GFX_DISK, 0, 0, 0, 0.5f, cr, cg, cb, cardAlpha);
 
     // The decode cap is asked for at the FOCUSED size and does not move with the
     // animation: tex_get_width sizes the decode when the slot is created, and a
@@ -481,7 +517,7 @@ static void drawCard(int i, const PsLayout *L, float x, float y) {
       // what `.profile-avatar-image { object-fit: cover }` does. The aspect has
       // to be handed over or the art stretches to the square.
       gfx_tex_aspect_current = tex_aspect(url);
-      gfx_rect((GfxRect){ ax, ay, as, as }, tex, GFX_AVATAR, 0, 0, 0, 0.0f, 1, 1, 1, 1.0f);
+      gfx_rect((GfxRect){ ax, ay, as, as }, tex, GFX_AVATAR, 0, 0, 0, 0.0f, 1, 1, 1, cardAlpha);
       gfx_tex_aspect_current = 0.0f;
     } else if (!has || tex_failed(url)) {
       // The initial. The web app shows it only when there is no picture at all,
@@ -498,7 +534,7 @@ static void drawCard(int i, const PsLayout *L, float x, float y) {
       if ((unsigned char)start[0] >= 0xC0 && p->name[1]) { start[1] = p->name[1]; start[2] = 0; }
       l = txt_line(TXT_PSEL_INITIAL, start, 255, 255, 255, 255);
       drawScaled(l, PSX(cx - l.w * k * isc * 0.5f),
-                 PSY(ringY + ring * 0.5f - l.h * k * isc * 0.5f), ts * isc, 1.0f);
+                 PSY(ringY + ring * 0.5f - l.h * k * isc * 0.5f), ts * isc, cardAlpha);
     }
   }
 
@@ -507,6 +543,8 @@ static void drawCard(int i, const PsLayout *L, float x, float y) {
   { float t = anim_blend(NV_PSEL_RING_RGB, 1.0f, f);
     strokeCircle(PSX(cx), PSY(ringY + ring * 0.5f), ring * s, border * s,
                  t, t, t, anim_blend(NV_PSEL_RING_A, 1.0f, f)); }
+
+  if (i == activating) drawSpinner(PSX(cx), PSY(ringY + ring * 0.5f), ts);
 
   // The primary marker, a gold disc with a star, offset against the ring's
   // PADDING box — inside the border, which is why it shifts as the border grows.
@@ -520,12 +558,12 @@ static void drawCard(int i, const PsLayout *L, float x, float y) {
     // larger disc in the background colour rather than as a stroke.
     gfx_rect((GfxRect){ sx - bd, sy - bd, sd + bd * 2.0f, sd + bd * 2.0f },
              0, GFX_DISK, 0, 0, 0, 0.5f,
-             NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
+             NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, cardAlpha);
     gfx_rect((GfxRect){ sx, sy, sd, sd }, 0, GFX_DISK, 0, 0, 0, 0.5f,
-             NV_PSEL_GOLD_R, NV_PSEL_GOLD_G, NV_PSEL_GOLD_B, 1.0f);
+             NV_PSEL_GOLD_R, NV_PSEL_GOLD_G, NV_PSEL_GOLD_B, cardAlpha);
     { TxtLine l = txt_line(TXT_PSEL_STAR, "\xE2\x98\x85", 255, 255, 255, 255);
       drawScaled(l, PSX(dx + (d - l.w * k) * 0.5f),
-                 PSY(dy + (d - l.h * k) * 0.5f), ts, 1.0f); }
+                 PSY(dy + (d - l.h * k) * 0.5f), ts, cardAlpha); }
   }
 
   // The name. --text-secondary at rest, --text-color focused, and the weight
@@ -540,7 +578,7 @@ static void drawCard(int i, const PsLayout *L, float x, float y) {
                               p->name, c, c, c, 255,
                               (L->cardW - 40.0f * k) / k);
     drawScaled(l, PSX(cx - l.w * k * 0.5f),
-               PSY(nameY + (NV_PSEL_NAME_H - l.h) * k * 0.5f), ts, 1.0f); }
+               PSY(nameY + (NV_PSEL_NAME_H - l.h) * k * 0.5f), ts, cardAlpha); }
 
   // "PRIMARY", tracked out 1.6px. The non-primary cards keep the slot empty
   // (`.profile-badge-slot`), which is what keeps every name on one line.
@@ -560,7 +598,7 @@ static void drawCard(int i, const PsLayout *L, float x, float y) {
                            (int)(NV_PSEL_GOLD_R * 255.0f), (int)(NV_PSEL_GOLD_G * 255.0f),
                            (int)(NV_PSEL_GOLD_B * 255.0f), 255);
       drawScaled(l, PSX(bx + adv),
-                 PSY(badgeY + (NV_PSEL_BADGE_LINE - l.h) * k * 0.5f), ts, 1.0f);
+                 PSY(badgeY + (NV_PSEL_BADGE_LINE - l.h) * k * 0.5f), ts, cardAlpha);
       adv += l.w * k + track;
     }
   }
@@ -667,8 +705,10 @@ void profilesel_draw(Uint32 now) {
     if (inRow > NV_PSEL_COLS) inRow = NV_PSEL_COLS;
     rowW = inRow * L.cardW + (inRow - 1) * L.gap;
     x = (NV_SCREEN_W - rowW) * 0.5f + col * L.pitch;
+    cardAlpha = i == activating ? NV_PSEL_ACTIVATING_DIM : 1.0f;
     drawCard(i, &L, x, L.gridY + row * (L.cardH + L.gap));
-    if (pinOf < 0)
+    cardAlpha = 1.0f;
+    if (pinOf < 0 && activating < 0)
       pointer_zone(x, L.gridY + row * (L.cardH + L.gap), L.cardW, L.cardH, pointProfile, i, 0);
   }
 
@@ -686,3 +726,4 @@ void profilesel_draw(Uint32 now) {
 }
 
 int profilesel_done(void) { return done; }
+Uint32 profilesel_activated_at(void) { return activatingAt; }

@@ -273,6 +273,13 @@ const CatItem *cat_item(int i);
 // everyone using the device. Call it after cat_load.
 void cat_dir_writing(const char *dir);
 
+// Which profile's progress and "removed from Continue watching" files are read
+// and written: progress.txt for profile 1, progress-p<N>.txt for the others.
+// profiles.c calls it whenever the active profile is set.
+void cat_set_profile(int profile);
+// That file's name (no folder) for `profile`, into `dst`; returns dst.
+const char *cat_progress_file(int profile, char *dst, unsigned long size);
+
 int cat_index_by_imdb(const char *imdb);
 
 // Appends a title at the END and returns the index, or -1. For a title that came

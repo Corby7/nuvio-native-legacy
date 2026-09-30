@@ -20,6 +20,12 @@
 // Stamped on the keys this module pushes, so that the wheel's arrows coming back
 // through pointer_event are not mistaken for the remote's and end pointer mode.
 #define NV_POINTER_SYNTHETIC 0x9017E4u
+// How far the pointer must travel, in design pixels, before it takes the focus
+// back from an arrow. On a firmware whose compositor leaves the cursor up after
+// a D-pad press, the hand's tremor on the Magic Remote kept sending motion, and
+// every twitch re-entered pointer mode: the player's controls woke, and whatever
+// sat under the cursor took the focus. A deliberate move clears this in a frame.
+#define NV_POINTER_WAKE_DIST 72.0f
 
 // kind: ZONE_FOCUS (hover focuses, click is OK), ZONE_HOVER (hover only),
 // ZONE_CLICK (click calls `focus` as an action, hover does nothing) or ZONE_ACT
@@ -51,6 +57,10 @@ static int hoveredA, hoveredB;
 static int okDown;
 static int held;
 static Uint32 movedAt;
+// Set by an arrow: motion is ignored until the pointer has left the spot it was
+// resting on by NV_POINTER_WAKE_DIST (see there).
+static int dormant;
+static float anchorX, anchorY;
 
 void pointer_set_box(int bx, int by, int bw, int bh, float pixelsPerPoint) {
   boxX = bx; boxY = by;
@@ -153,6 +163,9 @@ int pointer_event(const SDL_Event *e) {
       if (sc == NV_SCANCODE_POINTER_SHOWN || sc == NV_SCANCODE_POINTER_HIDDEN) {
         if (e->type == SDL_KEYDOWN) {
           active = sc == NV_SCANCODE_POINTER_SHOWN;
+          // Shown is the compositor saying the remote was picked up and moved:
+          // no tremor to filter.
+          if (active) dormant = 0;
           forgetHover();
         }
         return 1;
@@ -164,12 +177,22 @@ int pointer_event(const SDL_Event *e) {
         if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) {
           active = 0;
           forgetHover();
+          dormant = 1; anchorX = px; anchorY = py;
         }
       }
       return 0;
     }
 
     case SDL_MOUSEMOTION: {
+      if (dormant) {
+        toDesign(e->motion.x, e->motion.y);
+        float dx = px - anchorX, dy = py - anchorY;
+        if (dx * dx + dy * dy < NV_POINTER_WAKE_DIST * NV_POINTER_WAKE_DIST) {
+          px = anchorX; py = anchorY;
+          return 1;
+        }
+        dormant = 0;
+      }
       active = 1;
       movedAt = SDL_GetTicks();
       if (!movedAt) movedAt = 1;
@@ -190,6 +213,7 @@ int pointer_event(const SDL_Event *e) {
     case SDL_MOUSEBUTTONDOWN: {
       if (e->button.button != SDL_BUTTON_LEFT) return 1;
       active = 1;
+      dormant = 0;
       held = 1;
       toDesign(e->button.x, e->button.y);
       // A CLICK ON NOTHING IS NOT AN OK. Without this, a click on the empty hero
