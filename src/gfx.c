@@ -1163,6 +1163,52 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  a *= clamp(o / (0.08 * per) + smoothstep(0.6, 1.0, uPar.x), 0.0, 1.0);\n"
   "  if (a * m <= 0.002) discard;\n"
   "  gl_FragColor = vec4(uColor.rgb, uColor.a * a * m);\n"
+  "}\n",
+
+  // GFX_HERO_VEIL — the three hero ramps without the art (see gfx.h). The stops
+  // are GFX_HERO's, GFX_HERO_FULL's and GFX_HERO_FIT's, copied, so the video and
+  // the still meet the page at the same place; change one set and change it here.
+  "void main(){\n"
+  "  float y = vUv.y;\n"
+  "  float avB = clamp((y-0.820)/0.072,0.0,1.0)*0.25\n"
+  "            + clamp((y-0.892)/0.063,0.0,1.0)*0.40\n"
+  "            + clamp((y-0.955)/0.045,0.0,1.0)*0.35;\n"
+  "  float avF = clamp((y-0.640)/0.108,0.0,1.0)*0.35\n"
+  "            + clamp((y-0.748)/0.108,0.0,1.0)*0.40\n"
+  "            + clamp((y-0.856)/0.144,0.0,1.0)*0.25;\n"
+  "  float s = clamp(uPar.y, 0.05, 0.98), d = 1.0 - s;\n"
+  "  float avT = clamp((y-s)/(d*0.34),0.0,1.0)*0.30\n"
+  "            + clamp((y-(s+d*0.34))/(d*0.30),0.0,1.0)*0.40\n"
+  "            + clamp((y-(s+d*0.64))/(d*0.36),0.0,1.0)*0.30;\n"
+  "  float cx = max(uPar.x, 0.02);\n"
+  "  float tB = vUv.x/0.45, tF = vUv.x/0.65, tT = vUv.x/cx;\n"
+  "  float ahB = 1.0 - clamp(tB/0.22,0.0,1.0)*0.14\n"
+  "                  - clamp((tB-0.22)/0.24,0.0,1.0)*0.30\n"
+  "                  - clamp((tB-0.46)/0.30,0.0,1.0)*0.40\n"
+  "                  - clamp((tB-0.76)/0.24,0.0,1.0)*0.16;\n"
+  "  float ahF = 1.0 - clamp(tF/0.22,0.0,1.0)*0.10\n"
+  "                  - clamp((tF-0.22)/0.24,0.0,1.0)*0.10\n"
+  "                  - clamp((tF-0.46)/0.30,0.0,1.0)*0.38\n"
+  "                  - clamp((tF-0.76)/0.24,0.0,1.0)*0.42;\n"
+  "  float ahT = 1.0 - clamp(tT/0.22,0.0,1.0)*0.12\n"
+  "                  - clamp((tT-0.22)/0.24,0.0,1.0)*0.12\n"
+  "                  - clamp((tT-0.46)/0.30,0.0,1.0)*0.38\n"
+  "                  - clamp((tT-0.76)/0.24,0.0,1.0)*0.38;\n"
+  "  ahB *= step(vUv.x, 0.45); ahF *= step(vUv.x, 0.65); ahT *= step(vUv.x, cx);\n"
+  // focus 3: the top band's ramps with a SMOOTH horizontal one, for a trailer
+  // narrower than the art. The four linear pieces end on their steepest stretch,
+  // and over a white frame that end reads as a vertical line; 1 - smoothstep has
+  // no slope at either end, so it leaves nothing to see where it clears.
+  // ANGLED, not upright: the ramp's width grows with the height, from about half
+  // at the top edge to a little past its full width at the base, so the top-left
+  // corner keeps most of the picture and the ground deepens down towards the copy.
+  "  float tS = vUv.x / (cx * mix(0.5, 1.15, clamp(vUv.y, 0.0, 1.0)));\n"
+  "  float ahS = 1.0 - smoothstep(0.0, 1.0, tS);\n"
+  "  float full = step(0.5, uFocus), fit = step(1.5, uFocus), soft = step(2.5, uFocus);\n"
+  "  float av = mix(mix(avB, avF, full), avT, fit);\n"
+  "  float ah = mix(mix(mix(ahB, ahF, full), ahT, fit), ahS, soft);\n"
+  "  float a = clamp(ah + av - ah*av, 0.0, 1.0);\n"
+  "  gl_FragColor = vec4(0.051,0.051,0.051, a * uColor.a);\n"
   "}\n"
 
 };
@@ -1203,7 +1249,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,0},   /* GFX_SCRIM_HOLE   — its own pixel-space SDF, not the quad's */
   {1,0},   /* GFX_RING_FILL    — the rect's SDF, masked by perimeter progress */
   {1,0},   /* GFX_CARD_DEPTH   — the card's SDF, and again 2px lower for the line */
-  {1,0}    /* GFX_RING_INSET_FILL — the inset band, masked by perimeter progress */
+  {1,0},   /* GFX_RING_INSET_FILL — the inset band, masked by perimeter progress */
+  {0,0}    /* GFX_HERO_VEIL    — the hero's ramps alone: no SDF, no texture */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {

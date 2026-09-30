@@ -481,7 +481,16 @@ typedef enum {
   //   uPar.x = how much of the perimeter is filled, 0..1
   //   uPar.y = the band's thickness, normalised to the height like the radius
   GFX_RING_INSET_FILL = 44,
-  GFX_NMODES = 45
+  // GFX_HERO_VEIL — the hero's ramps with NO art: the background colour at the
+  // ramps' own alpha, and nothing where they clear. It goes over a hole onto the
+  // video plane, so a trailer playing behind the hero dissolves into the page
+  // along exactly the edges the still backdrop did.
+  //
+  //   focus  = which hero's stops: 0 GFX_HERO, 1 GFX_HERO_FULL, 2 GFX_HERO_FIT,
+  //            3 GFX_HERO_FIT with a smooth horizontal ramp (a small trailer)
+  //   uPar   = GFX_HERO_FIT's two ramp positions (heroFitPar), for focus 2
+  GFX_HERO_VEIL = 45,
+  GFX_NMODES = 46
 } GfxMode;
 
 typedef struct {

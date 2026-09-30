@@ -2632,6 +2632,264 @@ static GfxRect heroRectFor(const char *art) {
     return (GfxRect){ NV_SCREEN_W - w, 0, w, h }; }
 }
 
+// --- THE HERO'S TRAILER ----------------------------------------------------------
+//
+// Resting on a title plays its trailer behind the hero, the way the streaming apps'
+// home screens do: the "Trailer delay" setting after the hero came to rest, the still
+// backdrop dissolves into the video, and moving on puts the still straight back.
+// The trailer is IMDb's plain MP4 (trailers.h) — prefetchDetail has already asked
+// for the list by the time the wait is over, so nothing new goes over the network
+// until the video itself.
+//
+// IT IS THE FOCUS VIDEO'S CONTRACT, one screen over (see the note at `fv`): the one
+// plane is shared with the player, the load remembers its video_session and lets go
+// without stopping anything once someone else has loaded over it, and it is claimed
+// per frame — a frame the poster hero did not draw releases it
+// (home_focus_video_end_frame). The two never want the plane at once: the tile's
+// video lives on collection rows, this one only on the poster rows.
+//
+// ON THE TV the video is behind the GL surface, so the hero cuts a hole the size of
+// the art, lays GFX_HERO_VEIL over it — the same ramps the still is drawn with — and
+// draws the still on top at 1 - reveal. On the Mac the decoded frame is simply drawn
+// through the hero's own shader.
+//
+// It plays ONCE. At the end the still fades back in and the title does not start
+// again until the focus has left it.
+//
+// IN THE TOP BAND (GFX_HERO_FIT) the band takes the ART's aspect, and the trailer is
+// cover-cropped into it like everywhere else.
+#define NV_HERO_TRAILER_FADE_MS  600.0f
+static struct {
+  char     imdb[32];     // the title this state belongs to
+  unsigned session;
+  int      started, shown, done, errors, eos, claimed;
+  float    reveal;
+  Uint32   tick;
+  // When the hero last came to rest, 0 while it is not. The wait counts from here
+  // and not from the title's swap, so coming back to the home (from the title
+  // screen, the player, a grid) waits again instead of starting on the first frame.
+  Uint32   restAt;
+  int      win[4];       // the plane's rect as last sent
+  int      cropped;      // the source crop went out with it
+  int      cropW, cropH; // the frame size the crop went out for, 0 = no crop yet
+} ht;
+
+// THE LETTERBOX. IMDb serves a scope trailer as a 16:9 frame with the black bars
+// baked in, and nothing says which ones: the plane cannot be read, and the video's
+// thumbnail is key art, not a frame (checked: 4751x2672 art for a 1080p trailer).
+// So EVERY 16:9 frame is taken to be 2.39:1 inside and the bars are cropped away
+// before the cover crop. Measured on the C3 with films-only: a lot of the series'
+// trailers came up with a hard black band across the top of the hero. A full-frame
+// trailer is zoomed about 1.34x for it, which a background can afford. A 4:3 frame
+// (IMDb's old 640x480 files) is left to the plain cover crop.
+#define NV_HERO_TRAILER_SCOPE 2.39f
+
+static int heroTrailerOurs(void) {
+  return ht.started && video_session() == ht.session;
+}
+
+static void heroTrailerRelease(void) {
+  if (heroTrailerOurs()) video_stop();
+  ht.started = ht.shown = 0;
+  ht.reveal = 0.0f;
+  ht.win[2] = 0;
+  ht.cropW = ht.cropH = 0;
+}
+
+// The plane in the art's rect, COVER-cropped: a hardware plane only stretches, and a
+// 16:9 trailer stretched into the band's 2.12 would be a fifth too wide. The crop
+// needs the frame's size, which arrives with videoInfo, so until then the plain rect
+// goes out and the crop follows once.
+static void heroTrailerWindow(GfxRect r) {
+  int w[4] = { (int)(r.x + 0.5f), (int)(r.y + 0.5f), (int)(r.w + 0.5f), (int)(r.h + 0.5f) };
+  float qw = (float)video_width(), qh = (float)video_height();
+  // THE FRAME SIZE IS ONLY THIS VIDEO'S ONCE IT HAS LOADED. Until its videoInfo
+  // arrives, video_width/height still answer the PREVIOUS video's — measured on the
+  // C3: a 640x480 trailer after a 1080p one was sent a 1920x1080 source region, drew
+  // in the top-left third of it, and left a black band down the right of the hero.
+  // So no crop before video_ready, and a new one whenever the size changes after.
+  int crop = heroTrailerOurs() && video_ready() && qw > 2.0f && qh > 2.0f;
+  int cw = crop ? (int)qw : 0, ch0 = crop ? (int)qh : 0;
+  if (!memcmp(w, ht.win, sizeof w) && cw == ht.cropW && ch0 == ht.cropH) return;
+  memcpy(ht.win, w, sizeof w);
+  ht.cropW = cw; ht.cropH = ch0;
+  ht.cropped = crop;
+  if (crop) {
+    float da = r.w / r.h;
+    // The picture inside the frame: the whole of it, or the scope band of a 16:9.
+    float sa = qw / qh, ch = qh;
+    float sw, sh;
+    if (sa > 1.6f && sa < NV_HERO_TRAILER_SCOPE) { sa = NV_HERO_TRAILER_SCOPE; ch = qw / sa; }
+    sw = qw; sh = ch;
+    if (sa > da) sw = ch * da; else sh = qw / da;
+    video_window_source(((int)((qw - sw) * 0.5f)) & ~1, ((int)((qh - sh) * 0.5f)) & ~1,
+                        ((int)sw) & ~1, ((int)sh) & ~1, w[0], w[1], w[2], w[3]);
+  } else {
+    video_window(w[0], w[1], w[2], w[3]);
+  }
+}
+
+// Does `imdb` (maybe with an episode suffix) name the title trailers.c holds?
+static int heroTrailerListFor(const char *imdb) {
+  const char *have = trailers_title();
+  size_t n = strlen(have);
+  return n && !strncmp(imdb, have, n) && (imdb[n] == 0 || imdb[n] == ':');
+}
+
+// THE TRAILER'S OWN RECT. In Top band it can have a size of its own ("Trailer
+// size"), larger or smaller than the art's, hung from the same top-right corner at
+// 16:9. "Same as backdrop" (scale 0) and the other two modes keep the art's rect.
+static GfxRect heroTrailerRect(GfxRect art, GfxMode mode) {
+  float s = settings_hero_trailer_scale(), w, h;
+  if (mode != GFX_HERO_FIT || s <= 0.0f) return art;
+  w = NV_SCREEN_W * s;
+  h = w * 9.0f / 16.0f;
+  if (h > NV_SCREEN_H) { h = NV_SCREEN_H; w = h * 16.0f / 9.0f; }
+  return (GfxRect){ NV_SCREEN_W - w, 0.0f, w, h };
+}
+
+// THE LEFT RAMP OF A TRAILER SMALLER THAN THE ART. The band's own ramp clears at
+// NV_HERO_FIT_CLEAR_X, the full-screen hero's line, far past the copy's right
+// edge: on a trailer narrower than the still that darkened 40% or more of the
+// picture. Clearing just past the synopsis (NV_HERO_TRAILER_CLEAR_X) showed the
+// picture but squeezed the ramp until it banded. Tried both on the C3; the owner's
+// pick is between them — NV_HERO_TRAILER_RAMP_MIX of the way from the band's ramp
+// to the short one, never below the band's own minimum width. The same size or
+// larger keeps the band's ramps exactly, so the still and the video meet there.
+#define NV_HERO_TRAILER_CLEAR_X   980.0f
+#define NV_HERO_TRAILER_RAMP_MIX    0.5f
+static void heroTrailerPar(GfxRect tr, GfxRect art, float *px, float *py) {
+  heroFitPar(tr, px, py);
+  if (tr.w >= art.w - 0.5f) return;
+  { float c = (NV_HERO_TRAILER_CLEAR_X - tr.x) / tr.w;
+    c = *px + (c - *px) * NV_HERO_TRAILER_RAMP_MIX;
+    if (c < NV_HERO_FIT_EDGE_MIN) c = NV_HERO_FIT_EDGE_MIN;
+    if (c > NV_HERO_FIT_EDGE_MAX) c = NV_HERO_FIT_EDGE_MAX;
+    *px = c; }
+}
+
+// Runs every frame the poster hero is drawn, after the art. `r` is the art's rect,
+// `settled` whether the hero is at rest on the focused title with nothing else
+// moving over it. Draws the video (or the hole) over the art when there is one.
+static void heroTrailerStep(const CatItem *ci, GfxRect r, GfxMode mode,
+                            int settled, const char *art, GLuint still) {
+  Uint32 now = SDL_GetTicks();
+  float dt = ht.tick ? (float)(now - ht.tick) : 0.0f;
+  GfxRect tr = heroTrailerRect(r, mode);
+  int want;
+  ht.tick = now;
+  ht.claimed = 1;
+  if (!settled) ht.restAt = 0;
+  else if (!ht.restAt) ht.restAt = now;
+  if (!ci || !ci->imdb[0] || strcmp(ht.imdb, ci->imdb)) {
+    heroTrailerRelease();
+    snprintf(ht.imdb, sizeof ht.imdb, "%s", ci ? ci->imdb : "");
+    ht.done = 0;
+  }
+  if (ht.started && !heroTrailerOurs()) {
+    // The player (or anything else) loaded over it. Nothing of ours to stop.
+    ht.started = ht.shown = 0;
+    ht.reveal = 0.0f;
+  }
+  want = settled && !ht.done && settings_hero_trailer() &&
+         !player_is_open() && !detail_is_open() && !seeall_is_open();
+  if (!want) {
+    // Leaving mid-trailer puts the still back AT ONCE: the viewer has moved on, and
+    // a picture still playing for half a second after that reads as lag.
+    heroTrailerRelease();
+    return;
+  }
+  if (!ht.started) {
+    if (now - ht.restAt < (Uint32)settings_hero_trailer_delay_ms()) return;
+    if (!heroTrailerListFor(ci->imdb) || trailers_n() <= 0 || !trailers_url(0)[0]) return;
+    // Someone else's video on the plane (a Live TV preview left running, say):
+    // not ours to take.
+    if (video_active()) return;
+    ht.win[2] = 0; ht.cropped = 0; ht.cropW = ht.cropH = 0;
+    heroTrailerWindow(tr);
+    video_set_dv(0);
+    video_set_mp4(1);
+    if (!video_play(trailers_url(0))) { ht.done = 1; return; }
+    printf("[hero] trailer %s: %s\n", ci->imdb, trailers_name(0));
+    ht.session = video_session();
+    ht.started = 1;
+    ht.shown = 0;
+    ht.errors = video_error_count();
+    ht.eos = video_eos_count();
+  }
+  // An error, or the end: the still comes back and this title does not play again
+  // until the focus has been somewhere else. The plane holds its last frame after
+  // endOfStream, so the end fades out over it; an error goes at once, since what
+  // the plane holds then is not a picture.
+  if (video_error_count() != ht.errors) {
+    heroTrailerRelease();
+    ht.done = 1;
+    return;
+  }
+  if (!ht.shown && video_playing()) ht.shown = 1;
+  if (video_eos_count() != ht.eos) {
+    ht.reveal -= dt / NV_HERO_TRAILER_FADE_MS;
+    if (ht.reveal <= 0.0f) { heroTrailerRelease(); ht.done = 1; return; }
+  } else if (ht.shown) {
+    ht.reveal += dt / NV_HERO_TRAILER_FADE_MS;
+    if (ht.reveal > 1.0f) ht.reveal = 1.0f;
+  }
+  heroTrailerWindow(tr);
+  if (ht.reveal <= 0.0f) return;
+  { float rv = anim_smooth(ht.reveal);
+    GLuint frame = video_frame_texture();
+    // Where the art reaches past the trailer, the still fades out to the ground: at
+    // rest the hero is the trailer's band alone. Inside the trailer's rect this is
+    // drawn over again just below.
+    if (r.x < tr.x || r.y + r.h > tr.y + tr.h)
+      gfx_color(r, 0.0f, 0.051f, 0.051f, 0.051f, rv);
+    if (frame) {
+      // mpv applies the source crop itself and renders to the rect's size, so once
+      // the crop is out the frame already has the rect's shape.
+      float vw = (float)video_width(), vh = (float)video_height();
+      gfx_tex_aspect_current = ht.cropped ? 0.0f
+                             : (vw > 2.0f && vh > 2.0f) ? vw / vh : 16.0f / 9.0f;
+      if (mode == GFX_HERO_FIT) {
+        float px, py;
+        heroTrailerPar(tr, r, &px, &py);
+        gfx_rect(tr, frame, mode, 0, px, py, 0, 0, 0, 0, rv);
+      } else {
+        heroArtDraw(tr, frame, mode, rv);
+      }
+      gfx_tex_aspect_current = 0.0f;
+      return;
+    }
+    // THE PLANE, DISSOLVING IN. The hole and the ramps give the video as it will
+    // stand at rest; over it goes what was there before at 1 - reveal — the ground
+    // where the trailer's rect reaches past the art (an L along the left and the
+    // base, both rects sharing the top-right corner), and the still, clipped to the
+    // trailer's rect, since outside it the still was already faded above.
+    gfx_hole(tr);
+    { float px = 0.0f, py = 0.0f;
+      if (mode == GFX_HERO_FIT) heroTrailerPar(tr, r, &px, &py);
+      gfx_rect(tr, 0, GFX_HERO_VEIL,
+               mode == GFX_HERO_FIT ? (tr.w < r.w - 0.5f ? 3.0f : 2.0f)
+                                    : mode == GFX_HERO_FULL ? 1.0f : 0.0f,
+               px, py, 0, 0, 0, 0, 1.0f); }
+    if (rv < 0.999f) {
+      float bgA = 1.0f - rv;
+      if (r.x > tr.x)
+        gfx_color((GfxRect){ tr.x, tr.y, r.x - tr.x, tr.h }, 0.0f, 0.051f, 0.051f, 0.051f, bgA);
+      if (tr.y + tr.h > r.y + r.h)
+        gfx_color((GfxRect){ r.x, r.y + r.h, r.w, tr.y + tr.h - (r.y + r.h) }, 0.0f,
+                  0.051f, 0.051f, 0.051f, bgA);
+      gfx_crop(tr.x, tr.y, tr.w, tr.h);
+      if (still) {
+        gfx_tex_aspect_current = tex_aspect(art);
+        heroArtDraw(r, still, mode, bgA);
+        gfx_tex_aspect_current = 0.0f;
+      } else {
+        gfx_color(r, 0.0f, 0.051f, 0.051f, 0.051f, bgA);
+      }
+      gfx_no_crop();
+    } }
+}
+
 static void drawHero(Uint32 now, float output) {
   (void)now;
   const int motionReduced = settings_animations_reduced();
@@ -3055,6 +3313,12 @@ static void drawHero(Uint32 now, float output) {
     drawPlaceholderHero(r, ci,
                            aArt * (heroEnters > 0.0f ? 1.0f : heroEnters));
   }
+  // AT REST ON THE FOCUSED TITLE: adopted, not crossfading, no other family fading
+  // in or out, and the title screen not growing out of it.
+  heroTrailerStep(ci, r, modeHero,
+                  heroWanted < 0 && heroPending == heroCurrent && heroExits <= 0.0f &&
+                  heroEnters >= 1.0f && famFade <= 0.0f && !famHold && output <= 0.0f,
+                  artA, tCurrent);
   // THE FAMILY'S FADE WAITS FOR THE ART OF THE TITLE THAT IS ACTUALLY FOCUSED, not for
   // whatever this hero happened to be showing when it was last on screen. heroPending is
   // that title (home_update back-dates its clock on the change of row kind, so there is
@@ -3363,6 +3627,16 @@ void home_focus_video_end_frame(void) {
     fv.tick = 0;
   }
   fv.claimed = 0;
+  // The hero's trailer, on the same terms: a frame without the poster hero lets go.
+  // The title is forgotten too, so coming back to the same one plays it again.
+  if (!ht.claimed && (ht.started || ht.imdb[0])) {
+    heroTrailerRelease();
+    ht.imdb[0] = 0;
+    ht.done = 0;
+    ht.tick = 0;
+    ht.restAt = 0;
+  }
+  ht.claimed = 0;
 }
 
 static void drawShortcuts(int r, float y) {

@@ -90,6 +90,8 @@ int   settings_rail_collapsed(void);     // collapseSidebar
 int   settings_rail_modern(void);       // modernSidebar
 int   settings_rail_modern_blur(void);  // modernSidebarBlur
 int   settings_hero_on(void);        // heroSectionEnabled
+int   settings_hero_trailer(void);   // local: the hero plays the focused title's trailer
+int   settings_hero_trailer_delay_ms(void); // local: the rest before it starts
 int   settings_hero_full(void);         // modernHeroFullScreenBackdropEnabled
 // heroBackdropArea: with the full-screen backdrop on, whether it covers the whole
 // screen (0) or is drawn whole, at its own aspect, in a band at the top-right (1).
@@ -99,6 +101,7 @@ int   settings_hero_top_band(void);     // heroBackdropArea == "Top band"
 // heroBackdropScale / 100: the band's width as a fraction of the screen's. The
 // height comes from the art's own aspect, so this is the whole of its size.
 float settings_hero_band_scale(void);   // heroBackdropScale
+float settings_hero_trailer_scale(void); // local: the trailer's band in Top band; 0 = same as the backdrop
 int   settings_posters_landscape(void);  // modernLandscapePostersEnabled
 int   settings_gradient_focus_classic(void); // classicFocusGradientEnabled
 // The x where the content starts. Not a constant: the inset is always 104 and

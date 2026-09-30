@@ -84,8 +84,8 @@ typedef enum {
   // IPTV
   SETTING_LIVE_ON, SETTING_LIVE_SOURCE, SETTING_LIVE_BUFFER, SETTING_LIVE_PREVIEW,
   // Hero
-  SETTING_HERO, SETTING_HERO_CATALOGS,
-  SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND,
+  SETTING_HERO, SETTING_HERO_CATALOGS, SETTING_HERO_TRAILER, SETTING_HERO_TRAILER_DELAY,
+  SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND, SETTING_HERO_TRAILER_SIZE,
   // Catalogue rows
   SETTING_SUFFIX_KIND, SETTING_NAME_ADDON, SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME,
   // Continue watching. SETTING_CW_ON leads and SETTING_CW_NOT_SHOWN closes: the
@@ -113,6 +113,7 @@ typedef enum {
   SETTING_N
 } OptionId;
 
+#define TRAILER_SAME 45   /* Trailer size's "Same as backdrop" stop */
 static const char *V_QUALITY[] = { "Automatic", "4K", "1080p", "720p" };
 // Which subtitle the player turns on BY ITSELF when a title starts: the file's
 // own track in that language first, an addon's download after. "Automatic" is
@@ -242,12 +243,23 @@ static const Option OPTIONS[SETTING_N] = {
   // tried in the source costs an ARM build and a deploy. Steps of 5 — 1% of 1920
   // is 19px and nobody is choosing between 1536 and 1555.
   [SETTING_HERO_BAND] = NUM("Backdrop size",               50, 100, 5, "%"),  // heroBackdropScale
+  // Local. The trailer's own band in Top band, larger or smaller than the art's:
+  // the video is cover-cropped, and the size that suits a still can show too much
+  // or too little of a moving picture. The lowest stop, TRAILER_SAME, is "Same as
+  // backdrop" — the default, so the trailer follows the Backdrop size row until
+  // it is set on its own.
+  [SETTING_HERO_TRAILER_SIZE] = NUM("Trailer size",  TRAILER_SAME, 100, 5, "%"),  // heroTrailerScale
 
   [SETTING_RAIL] = ESC("Sidebar",              V_RAIL, 2),   // collapseSidebar
   [SETTING_RAIL_MODERN] = ESC("Modern sidebar",      V_ON, 2),   // modernSidebar
   [SETTING_RAIL_BLUR] = ESC("Modern sidebar blur",  V_ON, 2),   // modernSidebarBlur
   [SETTING_HERO] = ESC("Show hero",           V_ON, 2),   // heroSectionEnabled
   [SETTING_HERO_CATALOGS] = READ("Hero catalogues"),                   // heroCatalogKeys (a count)
+  [SETTING_HERO_TRAILER] = ESC("Trailer previews",    V_ON, 2),   // local: the hero plays the trailer
+  // Local. How long the hero rests on a title before its trailer starts, in TENTHS
+  // of a second (shown as "2.2 s"): whole seconds were too coarse around the
+  // default, which was tuned by eye at 2.2.
+  [SETTING_HERO_TRAILER_DELAY] = NUM("Trailer delay",  2, 100, 2, " s"),  // heroTrailerDelay
   [SETTING_DISCOVER] = ESC("Discover location",         V_DISCOVER, 3), // discoverLocation
   [SETTING_LABELS] = ESC("Poster labels",       V_ON, 2),   // posterLabelsEnabled
   [SETTING_NAME_ADDON] = ESC("Addon name in the catalogue",  V_ON, 2),   // catalogAddonNameEnabled
@@ -340,8 +352,11 @@ static const char *KEY[] = {
   [SETTING_LIVE_ON] = "liveTvEnabled", [SETTING_LIVE_SOURCE] = "-livesource", [SETTING_LIVE_BUFFER] = "liveTvPauseBufferIndex", [SETTING_LIVE_PREVIEW] = "liveTvPreviewWhileBrowsing",
   [SETTING_LANDSCAPE] = "modernLandscapePostersEnabled", [SETTING_HERO_FULL] = "modernHeroFullScreenBackdropEnabled",
   [SETTING_HERO_AREA] = "heroBackdropArea", [SETTING_HERO_BAND] = "heroBackdropScale",
+  [SETTING_HERO_TRAILER_SIZE] = "heroTrailerScale",
   [SETTING_RAIL] = "collapseSidebar", [SETTING_RAIL_MODERN] = "modernSidebar", [SETTING_RAIL_BLUR] = "modernSidebarBlur",
   [SETTING_HERO] = "heroSectionEnabled", [SETTING_HERO_CATALOGS] = "-heroCatalogKeys",
+  // Local to this port: the web app has no such key, so the blob never touches it.
+  [SETTING_HERO_TRAILER] = "heroTrailerPreviews", [SETTING_HERO_TRAILER_DELAY] = "heroTrailerDelay",
   [SETTING_DISCOVER] = "discoverLocation", [SETTING_LABELS] = "posterLabelsEnabled", [SETTING_NAME_ADDON] = "catalogAddonNameEnabled",
   [SETTING_SUFFIX_KIND] = "catalogTypeSuffixEnabled", [SETTING_HIDE_UNRELEASED] = "hideUnreleasedContent",
   [SETTING_SCORES_HOME] = "homeImdbRatingsVisibility", [SETTING_GRADIENT_CLASSIC] = "classicFocusGradientEnabled",
@@ -392,8 +407,8 @@ static const struct { const char *group, *title; int start, n; const char *blurb
     "Quality, Dolby formats, languages, subtitles, what happens at the end of an episode and the player's controls." },
   { "IPTV", "IPTV",                  SETTING_LIVE_ON,              4,
     "Live TV on or off, the IPTV source and its extra TV guides, and Live TV's pause buffer and preview while browsing." },
-  { "Home", "Hero",                  SETTING_HERO,                 5,
-    "The featured title at the top of Home: whether it shows, and how its backdrop is drawn." },
+  { "Home", "Hero",                  SETTING_HERO,                 8,
+    "The featured title at the top of Home: whether it shows, whether it plays the trailer and how its backdrop is drawn." },
   // No options of its own: `start` is SETTING_N, the marker openSection reads to
   // open the Home rows list (level 2) instead of a list of options.
   { NULL, "Home rows",               SETTING_N,                    0,
@@ -452,12 +467,17 @@ static int value[SETTING_N] = {
   [SETTING_HERO_FULL] = 0,                /* full-screen backdrop: ON (profile; factory: off) */
   [SETTING_HERO_AREA] = 0,                /* backdrop area: the whole screen, which is what it did before */
   [SETTING_HERO_BAND] = NV_HERO_FIT_PCT_DEFAULT, /* backdrop size, % of the screen's width */
+  [SETTING_HERO_TRAILER_SIZE] = TRAILER_SAME, /* trailer size: same as the backdrop */
 
   [SETTING_RAIL] = 0,                /* sidebar: collapsed (profile; factory: fixed) */
   [SETTING_RAIL_MODERN] = 1,                /* modern sidebar: off */
   [SETTING_RAIL_BLUR] = 0,                /* modern bar blur: on (profile) */
   [SETTING_HERO] = 0,                /* show hero: on */
   [SETTING_HERO_CATALOGS] = 0,                /* hero catalogues: read-only */
+  // OFF by default: a video with sound starting on the home is not something to
+  // spring on anyone. Turned on in Settings, it stays on.
+  [SETTING_HERO_TRAILER] = 1,                /* trailer previews: off */
+  [SETTING_HERO_TRAILER_DELAY] = 22,         /* trailer delay: 2.2 s */
   [SETTING_DISCOVER] = 0,                /* discover location: in search */
   // OFF by default: the poster already carries the title printed on the art, and
   // repeating the name just below is the same information twice taking up row
@@ -589,6 +609,8 @@ int settings_rail_modern(void)        { return on(SETTING_RAIL_MODERN); }
 int settings_rail_collapsed(void)      { return settings_rail_modern() ? 0 : on(SETTING_RAIL); }
 int settings_rail_modern_blur(void)   { return on(SETTING_RAIL_BLUR); }
 int settings_hero_on(void)         { return on(SETTING_HERO); }
+int settings_hero_trailer(void)    { return on(SETTING_HERO) && on(SETTING_HERO_TRAILER); }
+int settings_hero_trailer_delay_ms(void) { return value[SETTING_HERO_TRAILER_DELAY] * 100; }
 int settings_hero_full(void)          { return on(SETTING_HERO_FULL); }
 // Only ever true WITH the full-screen backdrop on: it is that backdrop's shape,
 // not a third layout. With the banded hero the row has nothing to say, and
@@ -600,6 +622,10 @@ int settings_hero_top_band(void) {
 // aspect, so this one number is the whole size.
 float settings_hero_band_scale(void) {
   return (float)value[SETTING_HERO_BAND] / 100.0f;
+}
+float settings_hero_trailer_scale(void) {
+  if (value[SETTING_HERO_TRAILER_SIZE] <= TRAILER_SAME) return 0.0f;
+  return (float)value[SETTING_HERO_TRAILER_SIZE] / 100.0f;
 }
 int settings_posters_landscape(void)   { return on(SETTING_LANDSCAPE); }
 int settings_gradient_focus_classic(void) { return on(SETTING_GRADIENT_CLASSIC); }
@@ -975,7 +1001,9 @@ static int inactive(int op) {
   switch (op) {
     case SETTING_RAIL:         return settings_rail_modern();
     case SETTING_RAIL_BLUR:    return !settings_rail_modern();
-    case SETTING_HERO_CATALOGS: return !settings_hero_on();
+    case SETTING_HERO_CATALOGS: case SETTING_HERO_TRAILER: return !settings_hero_on();
+    case SETTING_HERO_TRAILER_SIZE: return !settings_hero_trailer() || !settings_hero_top_band();
+    case SETTING_HERO_TRAILER_DELAY: return !settings_hero_trailer();
     case SETTING_CW_STYLE: case SETTING_CW_PLAY: case SETTING_CW_THUMB: case SETTING_CW_FURTHEST:
     case SETTING_CW_NOT_SHOWN: case SETTING_CW_ORDER:
       return !settings_cw_on();
@@ -1033,6 +1061,13 @@ static const char *helpOption(int op) {
     if (op == SETTING_RAIL) return "Turn off the modern sidebar to choose between collapsed and fixed.";
     if (op == SETTING_RAIL_BLUR) return "Turn on the modern sidebar to use the blur.";
     if (op == SETTING_HERO_CATALOGS) return "Turn on Show hero to display catalogues at the top of Home.";
+    if (op == SETTING_HERO_TRAILER)
+      return "Turn on Show hero to play trailers at the top of Home.";
+    if (op == SETTING_HERO_TRAILER_DELAY)
+      return "Turn on Trailer previews to choose how long it waits.";
+    if (op == SETTING_HERO_TRAILER_SIZE)
+      return settings_hero_trailer() ? "Set Backdrop area to Top band to size the trailer on its own."
+                                     : "Turn on Trailer previews to size the trailer.";
     if (op > SETTING_CW_ON && op <= SETTING_CW_NOT_SHOWN)
       return op == SETTING_CW_BLUR_NEXT && settings_cw_on()
         ? "Turn on Episode thumbnail to blur the next episode image."
@@ -1053,8 +1088,11 @@ static const char *helpOption(int op) {
     case SETTING_SUFFIX_KIND: return "Adds the content type to a row's name, such as Popular - Movie.";
     case SETTING_LANDSCAPE: return "Wide 16:9 cards in place of upright posters, on every catalogue row.";
     case SETTING_HERO_FULL: return "The hero's art fills the whole screen behind the rows. Off, it sits in a band at the top right.";
+    case SETTING_HERO_TRAILER: return "Resting on a title for a moment plays its trailer behind the hero, with sound, until you move on. Off, the hero keeps the still backdrop.";
     case SETTING_HERO_AREA: return "Top band draws the whole image at its own shape in the top right, so nothing is cropped.";
     case SETTING_HERO_BAND: return "The top band's width, as a share of the screen.";
+    case SETTING_HERO_TRAILER_DELAY: return "How long the hero rests on a title before its trailer starts.";
+    case SETTING_HERO_TRAILER_SIZE: return "The trailer's width in the top band, as a share of the screen. Same as backdrop follows Backdrop size.";
     case SETTING_CW_ON: return "The row of titles you have started, at the top of Home.";
     case SETTING_CW_STYLE: return "Card and Wide both draw 16:9 resume cards on this TV; Poster uses upright posters.";
     case SETTING_EXPAND: return "A focused poster opens out into its 16:9 art after the delay.";
@@ -1388,6 +1426,11 @@ static const char *textValue(int op) {
   if (o->kind == OP_READ || o->kind == OP_ACTION) return textRead(op);
   if (o->kind == OP_NUMBER) {
     if (op == SETTING_PAUSE_DELAY && value[op] == 0) return "Off";
+    if (op == SETTING_HERO_TRAILER_SIZE && value[op] <= TRAILER_SAME) return "Same as backdrop";
+    if (op == SETTING_HERO_TRAILER_DELAY) {
+      snprintf(buf, sizeof buf, "%d.%d s", value[op] / 10, value[op] % 10);
+      return buf;
+    }
     snprintf(buf, sizeof buf, "%d%s", value[op], o->suffix ? o->suffix : "");
     return buf;
   }
@@ -1400,7 +1443,9 @@ static const char *needsOf(int op) {
   switch (op) {
     case SETTING_RAIL:           return "Modern sidebar off";
     case SETTING_RAIL_BLUR:      return "Modern sidebar";
-    case SETTING_HERO_CATALOGS:  return "Show hero";
+    case SETTING_HERO_CATALOGS:  case SETTING_HERO_TRAILER: return "Show hero";
+    case SETTING_HERO_TRAILER_SIZE: return settings_hero_trailer() ? "Top band" : "Trailer previews";
+    case SETTING_HERO_TRAILER_DELAY: return "Trailer previews";
     case SETTING_CW_BLUR_NEXT:   return settings_cw_on() ? "Episode thumbnail" : "Continue watching";
     case SETTING_CW_LOGO:        return settings_cw_on() ? "Card or Wide style" : "Continue watching";
     case SETTING_EXPAND_DELAY:   return "Expand poster";
@@ -1648,7 +1693,7 @@ static void drawSection(int s, float y, float f) {
 // focused option touches is outlined in the brand violet.
 
 enum { PV_NONE, PV_HOME, PV_PLAYER, PV_DETAIL, PV_EPISODES };
-enum { HL_NONE, HL_RAIL, HL_HERO, HL_BACKDROP, HL_ROWS, HL_CW, HL_CARD,
+enum { HL_NONE, HL_RAIL, HL_HERO, HL_BACKDROP, HL_TRAILER, HL_ROWS, HL_CW, HL_CARD,
        HL_BADGES, HL_SUBS, HL_SEEK, HL_NEXT, HL_BUTTONS, HL_EPISODES, HL_META };
 
 static int sceneOf(int s) {
@@ -1688,8 +1733,10 @@ static int highlightOf(void) {
     case SETTING_NEXT_AUTOPLAY: case SETTING_NEXT_COUNTDOWN: case SETTING_NEXT_MODE:
     case SETTING_NEXT_SECONDS: case SETTING_NEXT_PERCENT: return HL_NEXT;
     case SETTING_HERO_FULL: case SETTING_HERO_AREA: case SETTING_HERO_BAND: return HL_BACKDROP;
+    case SETTING_HERO_TRAILER_SIZE: return HL_TRAILER;
     case SETTING_RAIL: case SETTING_RAIL_MODERN: return HL_RAIL;
     case SETTING_HERO: case SETTING_HERO_CATALOGS: return HL_HERO;
+    case SETTING_HERO_TRAILER: case SETTING_HERO_TRAILER_DELAY: return HL_TRAILER;
     case SETTING_DET_TRAILER: return HL_BUTTONS;
     case SETTING_DET_DATE_FULL: return HL_META;
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:
@@ -1781,6 +1828,14 @@ static void drawHomeScene(Pv v, int hl) {
       float w = NV_SCREEN_W * settings_hero_band_scale(), h = w / NV_HERO_FIT_ASP;
       if (h > NV_SCREEN_H) { h = NV_SCREEN_H; w = h * NV_HERO_FIT_ASP; }
       artR = (GfxRect){ NV_SCREEN_W - w, 0, w, h };
+      // TRAILER SIZE shows the trailer's band in the art's place, as home.c's
+      // heroTrailerRect builds it: 16:9 from the same top-right corner, or the
+      // art's own band while it is "Same as backdrop".
+      if (hl == HL_TRAILER && settings_hero_trailer_scale() > 0.0f) {
+        w = NV_SCREEN_W * settings_hero_trailer_scale(); h = w * 9.0f / 16.0f;
+        if (h > NV_SCREEN_H) { h = NV_SCREEN_H; w = h * 16.0f / 9.0f; }
+        artR = (GfxRect){ NV_SCREEN_W - w, 0, w, h };
+      }
     }
     pvPlate(v, artR.x, artR.y, artR.w, artR.h, 0.0f, 0.19f, 1.0f);
     pvGlow(v, artR.x + artR.w * 0.62f, artR.y + artR.h * 0.36f, artR.h * 0.55f, 0.16f);
@@ -1904,7 +1959,8 @@ static void drawHomeScene(Pv v, int hl) {
         txt_tracking(TXT_MINI, t, 160, 140, 255, l.x + 6.0f, l.y + 2.0f, 1.0f, 1.5f); }
       break;
     case HL_HERO:     pvMark(v, hero ? heroR : (GfxRect){ cx0, 150.0f, 720.0f, 300.0f }); break;
-    case HL_BACKDROP: if (hero) pvMark(v, (GfxRect){ artR.x + 8, artR.y + 8, artR.w - 16, artR.h - 16 }); break;
+    case HL_BACKDROP: case HL_TRAILER:
+      if (hero) pvMark(v, (GfxRect){ artR.x + 8, artR.y + 8, artR.w - 16, artR.h - 16 }); break;
     case HL_ROWS:     pvMark(v, rowsR); break;
     case HL_CW:       pvMark(v, settings_cw_on() && cwR.w > 0 ? cwR : rowsR); break;
     case HL_CARD:     if (cardR.w > 0) pvMark(v, cardR); break;
@@ -2258,7 +2314,12 @@ static void drawRange(int op, float x, float y, float w) {
   gfx_color((GfxRect){ x + w * t - d * 0.5f, y + 9.0f - d * 0.5f, d, d }, 0.5f, 0.97f, 0.97f, 0.98f, 1.0f);
   snprintf(lo, sizeof lo, "%d%s", o->min, o->suffix ? o->suffix : "");
   if (op == SETTING_PAUSE_DELAY) snprintf(lo, sizeof lo, "Off");
+  if (op == SETTING_HERO_TRAILER_SIZE) snprintf(lo, sizeof lo, "Backdrop");
   snprintf(hi, sizeof hi, "%d%s", o->max, o->suffix ? o->suffix : "");
+  if (op == SETTING_HERO_TRAILER_DELAY) {
+    snprintf(lo, sizeof lo, "%d.%d s", o->min / 10, o->min % 10);
+    snprintf(hi, sizeof hi, "%d s", o->max / 10);
+  }
   TxtLine l = txt_line(TXT_CAPTION2, lo, 140, 142, 148, 255);
   TxtLine h = txt_line(TXT_CAPTION2, hi, 140, 142, 148, 255);
   txt_draw(l, x, y + 26.0f);
