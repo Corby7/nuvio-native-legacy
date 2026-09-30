@@ -92,6 +92,7 @@ int   settings_rail_modern_blur(void);  // modernSidebarBlur
 int   settings_hero_on(void);        // heroSectionEnabled
 int   settings_hero_trailer(void);   // local: the hero plays the focused title's trailer
 int   settings_hero_trailer_delay_ms(void); // local: the rest before it starts
+int   settings_hero_trailer_cw(void);   // local: trailers for Continue watching titles too
 int   settings_hero_full(void);         // modernHeroFullScreenBackdropEnabled
 // heroBackdropArea: with the full-screen backdrop on, whether it covers the whole
 // screen (0) or is drawn whole, at its own aspect, in a band at the top-right (1).

@@ -85,6 +85,7 @@ typedef enum {
   SETTING_LIVE_ON, SETTING_LIVE_SOURCE, SETTING_LIVE_BUFFER, SETTING_LIVE_PREVIEW,
   // Hero
   SETTING_HERO, SETTING_HERO_CATALOGS, SETTING_HERO_TRAILER, SETTING_HERO_TRAILER_DELAY,
+  SETTING_HERO_TRAILER_CW,
   SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND, SETTING_HERO_TRAILER_SIZE,
   // Catalogue rows
   SETTING_SUFFIX_KIND, SETTING_NAME_ADDON, SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME,
@@ -260,6 +261,7 @@ static const Option OPTIONS[SETTING_N] = {
   // of a second (shown as "2.2 s"): whole seconds were too coarse around the
   // default, which was tuned by eye at 2.2.
   [SETTING_HERO_TRAILER_DELAY] = NUM("Trailer delay",  2, 100, 2, " s"),  // heroTrailerDelay
+  [SETTING_HERO_TRAILER_CW] = ESC("Trailers on Continue watching", V_ON, 2), // local
   [SETTING_DISCOVER] = ESC("Discover location",         V_DISCOVER, 3), // discoverLocation
   [SETTING_LABELS] = ESC("Poster labels",       V_ON, 2),   // posterLabelsEnabled
   [SETTING_NAME_ADDON] = ESC("Addon name in the catalogue",  V_ON, 2),   // catalogAddonNameEnabled
@@ -357,6 +359,7 @@ static const char *KEY[] = {
   [SETTING_HERO] = "heroSectionEnabled", [SETTING_HERO_CATALOGS] = "-heroCatalogKeys",
   // Local to this port: the web app has no such key, so the blob never touches it.
   [SETTING_HERO_TRAILER] = "heroTrailerPreviews", [SETTING_HERO_TRAILER_DELAY] = "heroTrailerDelay",
+  [SETTING_HERO_TRAILER_CW] = "heroTrailerContinueWatching",
   [SETTING_DISCOVER] = "discoverLocation", [SETTING_LABELS] = "posterLabelsEnabled", [SETTING_NAME_ADDON] = "catalogAddonNameEnabled",
   [SETTING_SUFFIX_KIND] = "catalogTypeSuffixEnabled", [SETTING_HIDE_UNRELEASED] = "hideUnreleasedContent",
   [SETTING_SCORES_HOME] = "homeImdbRatingsVisibility", [SETTING_GRADIENT_CLASSIC] = "classicFocusGradientEnabled",
@@ -407,7 +410,7 @@ static const struct { const char *group, *title; int start, n; const char *blurb
     "Quality, Dolby formats, languages, subtitles, what happens at the end of an episode and the player's controls." },
   { "IPTV", "IPTV",                  SETTING_LIVE_ON,              4,
     "Live TV on or off, the IPTV source and its extra TV guides, and Live TV's pause buffer and preview while browsing." },
-  { "Home", "Hero",                  SETTING_HERO,                 8,
+  { "Home", "Hero",                  SETTING_HERO,                 9,
     "The featured title at the top of Home: whether it shows, whether it plays the trailer and how its backdrop is drawn." },
   // No options of its own: `start` is SETTING_N, the marker openSection reads to
   // open the Home rows list (level 2) instead of a list of options.
@@ -478,6 +481,7 @@ static int value[SETTING_N] = {
   // spring on anyone. Turned on in Settings, it stays on.
   [SETTING_HERO_TRAILER] = 1,                /* trailer previews: off */
   [SETTING_HERO_TRAILER_DELAY] = 22,         /* trailer delay: 2.2 s */
+  [SETTING_HERO_TRAILER_CW] = 0,             /* trailers on continue watching: on */
   [SETTING_DISCOVER] = 0,                /* discover location: in search */
   // OFF by default: the poster already carries the title printed on the art, and
   // repeating the name just below is the same information twice taking up row
@@ -611,6 +615,7 @@ int settings_rail_modern_blur(void)   { return on(SETTING_RAIL_BLUR); }
 int settings_hero_on(void)         { return on(SETTING_HERO); }
 int settings_hero_trailer(void)    { return on(SETTING_HERO) && on(SETTING_HERO_TRAILER); }
 int settings_hero_trailer_delay_ms(void) { return value[SETTING_HERO_TRAILER_DELAY] * 100; }
+int settings_hero_trailer_cw(void) { return on(SETTING_HERO_TRAILER_CW); }
 int settings_hero_full(void)          { return on(SETTING_HERO_FULL); }
 // Only ever true WITH the full-screen backdrop on: it is that backdrop's shape,
 // not a third layout. With the banded hero the row has nothing to say, and
@@ -1003,7 +1008,7 @@ static int inactive(int op) {
     case SETTING_RAIL_BLUR:    return !settings_rail_modern();
     case SETTING_HERO_CATALOGS: case SETTING_HERO_TRAILER: return !settings_hero_on();
     case SETTING_HERO_TRAILER_SIZE: return !settings_hero_trailer() || !settings_hero_top_band();
-    case SETTING_HERO_TRAILER_DELAY: return !settings_hero_trailer();
+    case SETTING_HERO_TRAILER_DELAY: case SETTING_HERO_TRAILER_CW: return !settings_hero_trailer();
     case SETTING_CW_STYLE: case SETTING_CW_PLAY: case SETTING_CW_THUMB: case SETTING_CW_FURTHEST:
     case SETTING_CW_NOT_SHOWN: case SETTING_CW_ORDER:
       return !settings_cw_on();
@@ -1065,6 +1070,8 @@ static const char *helpOption(int op) {
       return "Turn on Show hero to play trailers at the top of Home.";
     if (op == SETTING_HERO_TRAILER_DELAY)
       return "Turn on Trailer previews to choose how long it waits.";
+    if (op == SETTING_HERO_TRAILER_CW)
+      return "Turn on Trailer previews to choose where they play.";
     if (op == SETTING_HERO_TRAILER_SIZE)
       return settings_hero_trailer() ? "Set Backdrop area to Top band to size the trailer on its own."
                                      : "Turn on Trailer previews to size the trailer.";
@@ -1092,6 +1099,7 @@ static const char *helpOption(int op) {
     case SETTING_HERO_AREA: return "Top band draws the whole image at its own shape in the top right, so nothing is cropped.";
     case SETTING_HERO_BAND: return "The top band's width, as a share of the screen.";
     case SETTING_HERO_TRAILER_DELAY: return "How long the hero rests on a title before its trailer starts.";
+    case SETTING_HERO_TRAILER_CW: return "Off, titles in Continue watching keep the still backdrop; every other row still plays trailers.";
     case SETTING_HERO_TRAILER_SIZE: return "The trailer's width in the top band, as a share of the screen. Same as backdrop follows Backdrop size.";
     case SETTING_CW_ON: return "The row of titles you have started, at the top of Home.";
     case SETTING_CW_STYLE: return "Card and Wide both draw 16:9 resume cards on this TV; Poster uses upright posters.";
@@ -1445,7 +1453,7 @@ static const char *needsOf(int op) {
     case SETTING_RAIL_BLUR:      return "Modern sidebar";
     case SETTING_HERO_CATALOGS:  case SETTING_HERO_TRAILER: return "Show hero";
     case SETTING_HERO_TRAILER_SIZE: return settings_hero_trailer() ? "Top band" : "Trailer previews";
-    case SETTING_HERO_TRAILER_DELAY: return "Trailer previews";
+    case SETTING_HERO_TRAILER_DELAY: case SETTING_HERO_TRAILER_CW: return "Trailer previews";
     case SETTING_CW_BLUR_NEXT:   return settings_cw_on() ? "Episode thumbnail" : "Continue watching";
     case SETTING_CW_LOGO:        return settings_cw_on() ? "Card or Wide style" : "Continue watching";
     case SETTING_EXPAND_DELAY:   return "Expand poster";
@@ -1736,7 +1744,8 @@ static int highlightOf(void) {
     case SETTING_HERO_TRAILER_SIZE: return HL_TRAILER;
     case SETTING_RAIL: case SETTING_RAIL_MODERN: return HL_RAIL;
     case SETTING_HERO: case SETTING_HERO_CATALOGS: return HL_HERO;
-    case SETTING_HERO_TRAILER: case SETTING_HERO_TRAILER_DELAY: return HL_TRAILER;
+    case SETTING_HERO_TRAILER: case SETTING_HERO_TRAILER_DELAY:
+    case SETTING_HERO_TRAILER_CW: return HL_TRAILER;
     case SETTING_DET_TRAILER: return HL_BUTTONS;
     case SETTING_DET_DATE_FULL: return HL_META;
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:

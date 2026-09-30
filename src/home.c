@@ -3338,10 +3338,15 @@ static void drawHero(Uint32 now, float output) {
   }
   // AT REST ON THE FOCUSED TITLE: adopted, not crossfading, no other family fading
   // in or out, and the title screen not growing out of it.
-  heroTrailerStep(ci, r, modeHero,
-                  heroWanted < 0 && heroPending == heroCurrent && heroExits <= 0.0f &&
-                  heroEnters >= 1.0f && famFade <= 0.0f && !famHold && output <= 0.0f,
-                  artA, tCurrent);
+  // And not on Continue watching when "Trailers on Continue watching" is off: a
+  // title already being watched has nothing left to sell.
+  { int cwRow = focus.row >= 0 && focus.row < nRows &&
+                !strcmp(rows[focus.row].key, "continue_watching");
+    heroTrailerStep(ci, r, modeHero,
+                    heroWanted < 0 && heroPending == heroCurrent && heroExits <= 0.0f &&
+                    heroEnters >= 1.0f && famFade <= 0.0f && !famHold && output <= 0.0f &&
+                    !(cwRow && !settings_hero_trailer_cw()),
+                    artA, tCurrent); }
   // THE FAMILY'S FADE WAITS FOR THE ART OF THE TITLE THAT IS ACTUALLY FOCUSED, not for
   // whatever this hero happened to be showing when it was last on screen. heroPending is
   // that title (home_update back-dates its clock on the change of row kind, so there is
