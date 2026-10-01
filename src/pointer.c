@@ -61,6 +61,8 @@ static Uint32 movedAt;
 // resting on by NV_POINTER_WAKE_DIST (see there).
 static int dormant;
 static float anchorX, anchorY;
+// Whether this app has hidden the cursor (see showCursor).
+static int cursorHidden;
 
 void pointer_set_box(int bx, int by, int bw, int bh, float pixelsPerPoint) {
   boxX = bx; boxY = by;
@@ -146,6 +148,19 @@ static void focusZone(int i) {
 
 static void forgetHover(void) { hovered = -1; hoveredFocus = NULL; }
 
+// THE APP HIDES THE CURSOR ITSELF ON AN ARROW. The compositor draws it and
+// normally decides when it goes, but not every firmware does it on a key: the
+// C3 on webOS 24 left it up after a D-pad press, for good, over the player.
+// SDL_ShowCursor reaches the compositor through LG's Wayland backend (the
+// original SDL_DISABLE at startup hid the cursor on the TV too). It comes back
+// on the same things that wake pointer mode: the shown key, a deliberate move,
+// a click.
+static void showCursor(int yes) {
+  if (cursorHidden == !yes) return;
+  cursorHidden = !yes;
+  SDL_ShowCursor(yes ? SDL_ENABLE : SDL_DISABLE);
+}
+
 static void sendKey(Uint32 type, SDL_Keycode k) {
   SDL_Event ev; SDL_zero(ev);
   ev.type = type;
@@ -165,7 +180,7 @@ int pointer_event(const SDL_Event *e) {
           active = sc == NV_SCANCODE_POINTER_SHOWN;
           // Shown is the compositor saying the remote was picked up and moved:
           // no tremor to filter.
-          if (active) dormant = 0;
+          if (active) { dormant = 0; showCursor(1); }
           forgetHover();
         }
         return 1;
@@ -178,6 +193,7 @@ int pointer_event(const SDL_Event *e) {
           active = 0;
           forgetHover();
           dormant = 1; anchorX = px; anchorY = py;
+          showCursor(0);
         }
       }
       return 0;
@@ -193,6 +209,7 @@ int pointer_event(const SDL_Event *e) {
         }
         dormant = 0;
       }
+      showCursor(1);
       active = 1;
       movedAt = SDL_GetTicks();
       if (!movedAt) movedAt = 1;
@@ -214,6 +231,7 @@ int pointer_event(const SDL_Event *e) {
       if (e->button.button != SDL_BUTTON_LEFT) return 1;
       active = 1;
       dormant = 0;
+      showCursor(1);
       held = 1;
       toDesign(e->button.x, e->button.y);
       // A CLICK ON NOTHING IS NOT AN OK. Without this, a click on the empty hero
