@@ -32,6 +32,7 @@
 #include "app.h"
 #include "appid.h"
 #include "iptv.h"
+#include "update.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -110,7 +111,7 @@ typedef enum {
   // Account
   SETTING_PROFILE_ACTIVE, SETTING_PRIMARY_ADDONS, SETTING_SYNC, SETTING_TRAKT, SETTING_SIMKL, SETTING_EXIT,
   // About
-  SETTING_VERSION_I, SETTING_SPACE,
+  SETTING_VERSION_I, SETTING_UPDATES, SETTING_SPACE,
   SETTING_N
 } OptionId;
 
@@ -312,6 +313,7 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_SIMKL] = ACTION("Simkl"),
   [SETTING_EXIT] = ACTION("Sign out"),
   [SETTING_VERSION_I] = READ("Version"),
+  [SETTING_UPDATES] = ACTION("Updates"),
   [SETTING_SPACE] = READ("Memory used by images"),
 };
 
@@ -388,7 +390,7 @@ static const char *KEY[] = {
   // household has set up rather than the few it was created with.
   [SETTING_PRIMARY_ADDONS] = "tvUsePrimaryAddons",
   [SETTING_SYNC] = "-sync", [SETTING_TRAKT] = "-trakt", [SETTING_SIMKL] = "-simkl", [SETTING_EXIT] = "-exit",
-  [SETTING_VERSION_I] = "-version", [SETTING_SPACE] = "-space",
+  [SETTING_VERSION_I] = "-version", [SETTING_UPDATES] = "-updates", [SETTING_SPACE] = "-space",
 };
 
 // The compiler CHECKS that there is one key per option. Without this, adding an
@@ -430,8 +432,8 @@ static const struct { const char *group, *title; int start, n; const char *blurb
     "The trailer button, metadata, spoilers and release dates on a title's page." },
   { "Account", "Account",            SETTING_PROFILE_ACTIVE,       6,
     "Profile, addons, sync, Trakt, Simkl and signing out." },
-  { NULL, "About",                   SETTING_VERSION_I,            2,
-    "Version and image memory." },
+  { NULL, "About",                   SETTING_VERSION_I,            3,
+    "Version, updates and image memory." },
 };
 #define SETTING_N_SECTIONS (int)(sizeof SECTIONS / sizeof *SECTIONS)
 
@@ -536,6 +538,14 @@ static int rowFocus, rowHolding;   // level 2: the focused row; 1 while it is pi
 static float rowScroll;
 static float rowAnim[512];
 static void leaveRows(void);
+// Level 3 is the Updates list: the releases on GitHub, newest first (update.h).
+// RIGHT moves into the notes on the panel (`reading`), OK asks before installing
+// (`confirming`).
+#define LEVEL_UPDATES 3
+static int relFocus, relGeneration = -1;
+static float relScroll, relAnim[32];
+static int reading, confirming;
+static float notesScroll, notesGoal, notesMax;
 static int focusSec = 0;
 static int focusOp = 0;
 // A ONE-column list does not need focus.h: the column memory it exists to solve
@@ -946,6 +956,20 @@ static const char *textRead(int op) {
     return !on(SETTING_LIVE_ON) ? "Live TV is off" : iptv_configured() ? iptv_source_label() : "not set up";
   static char buf[64];
   if (op == SETTING_VERSION_I) return SETTING_VERSION;
+  if (op == SETTING_UPDATES) {
+    int l = update_latest();
+    switch (update_list_state()) {
+      case UPD_LOADING: return "checking\xe2\x80\xa6";
+      case UPD_FAILED:  return "check failed";
+      case UPD_READY:
+        if (l >= 0 && update_item(l)->cmp > 0) {
+          snprintf(buf, sizeof buf, "%s available", update_item(l)->tag);
+          return buf;
+        }
+        return "up to date";
+      default: return "check";
+    }
+  }
   if (op == SETTING_PROFILE_ACTIVE) {
     static char bufp[80];
     int i;
@@ -1060,6 +1084,23 @@ static void openSection(int s) {
   scrollY = 0.0f;
 }
 
+// The focus lands on the version installed, so the list opens on "where am I".
+static void focusInstalled(void) {
+  int i;
+  relFocus = 0;
+  for (i = 0; i < update_n(); i++) if (update_item(i)->cmp == 0) { relFocus = i; break; }
+}
+
+static void openUpdates(void) {
+  level = LEVEL_UPDATES;
+  reading = confirming = 0;
+  notesScroll = notesGoal = 0.0f;
+  relScroll = 0.0f;
+  focusInstalled();
+  relGeneration = update_generation();
+  update_fetch();
+}
+
 // NULL when the row has nothing to add beyond its label and value.
 static const char *helpOption(int op) {
   if (inactive(op)) {
@@ -1132,6 +1173,7 @@ static const char *helpOption(int op) {
     case SETTING_ANIM: return "Use Reduced for subtler motion when moving through the interface.";
     case SETTING_SPACE: return "Current memory used by the image cache, not space taken on the TV storage.";
     case SETTING_VERSION_I: return "Application version. This information cannot be changed.";
+    case SETTING_UPDATES: return "Every published version with what changed in it. Install a newer one, or go back to an older one.";
     case SETTING_WIDTH_DP: return "Sets the poster width on rows that use the customisable size.";
     case SETTING_RADIUS_DP: return "Controls how rounded the poster corners are.";
     default: return NULL;
@@ -1178,6 +1220,7 @@ static const char *groupOfOption(int op) {
 // The group header over row `i` of the list on screen.
 static const char *groupOfRow(int i) {
   if (level == 2) return i == 0 ? "Order and visibility" : NULL;
+  if (level == LEVEL_UPDATES) return i == 0 ? "Releases" : NULL;
   if (level == 1) return groupOfOption(SECTIONS[focusSec].start + i);
   return SECTIONS[i].group;
 }
@@ -1188,7 +1231,7 @@ static const char *groupOfRow(int i) {
 static float yOfRow(int i) {
   float y = 0.0f;
   int j;
-  if (level == 2) return SETTING_GROUP_H + (float)i * SETTING_LINE_H;
+  if (level == 2 || level == LEVEL_UPDATES) return SETTING_GROUP_H + (float)i * SETTING_LINE_H;
   for (j = 0; j <= i; j++) {
     if (groupOfRow(j)) y += SETTING_GROUP_H;
     if (j < i) y += SETTING_LINE_H;
@@ -1254,6 +1297,57 @@ static void clickHomeRow(int i, int unused) {
   else sendKey(SDLK_RETURN);
 }
 
+static void pointRelease(int i, int unused) {
+  (void)unused;
+  if (level == LEVEL_UPDATES && !confirming && i != relFocus) {
+    relFocus = i; reading = 0; notesGoal = 0.0f; follow = 0;
+  }
+}
+static void clickRelease(int i, int unused) {
+  (void)unused;
+  if (level != LEVEL_UPDATES || confirming) return;
+  relFocus = i;
+  sendKey(SDLK_RETURN);
+}
+// A click on the notes moves into them, as RIGHT does; the wheel then scrolls.
+static void clickNotes(int unused, int unused2) {
+  (void)unused; (void)unused2;
+  if (level == LEVEL_UPDATES && !confirming && notesMax > 0.0f) reading = 1;
+}
+
+static int installBusy(void) {
+  UpdateInstallState st = update_install_state();
+  return st == UPI_DOWNLOADING || st == UPI_VERIFYING || st == UPI_INSTALLING;
+}
+
+// Level 3. While an install runs nothing answers: the app is about to close.
+static void eventUpdates(SDL_Keycode k, int back) {
+  int n = update_n(), ok = k == SDLK_RETURN || k == SDLK_KP_ENTER;
+  if (installBusy()) return;
+  if (update_install_state() == UPI_FAILED) {
+    if (ok || back) update_install_dismiss();
+    return;
+  }
+  if (confirming) {
+    if (ok) { confirming = 0; update_install(relFocus); }
+    else if (back) confirming = 0;
+    return;
+  }
+  if (reading) {
+    if (k == SDLK_DOWN) notesGoal = anim_clamp(notesGoal + 160.0f, 0.0f, notesMax);
+    else if (k == SDLK_UP) notesGoal = anim_clamp(notesGoal - 160.0f, 0.0f, notesMax);
+    else if (k == SDLK_LEFT || back) reading = 0;
+    else if (ok) { reading = 0; if (update_item(relFocus) && update_item(relFocus)->url[0]) confirming = 1; }
+    return;
+  }
+  if (back || k == SDLK_LEFT) { level = 1; return; }
+  if (!n) { if (ok && update_list_state() == UPD_FAILED) update_fetch(); return; }
+  if (k == SDLK_DOWN && relFocus < n - 1) { relFocus++; notesGoal = 0.0f; }
+  else if (k == SDLK_UP && relFocus > 0) { relFocus--; notesGoal = 0.0f; }
+  else if (k == SDLK_RIGHT && notesMax > 0.0f) reading = 1;
+  else if (ok && update_item(relFocus)->url[0]) confirming = 1;
+}
+
 void settings_event(const SDL_Event *e) {
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
@@ -1291,6 +1385,8 @@ void settings_event(const SDL_Event *e) {
     return;
   }
 
+  if (level == LEVEL_UPDATES) { eventUpdates(k, back); return; }
+
   // Level 2: the Home rows. OK picks a row up and puts it down; up and down move
   // the focus, or the row while it is held; left and right show or hide it.
   if (level == 2) {
@@ -1326,6 +1422,7 @@ void settings_event(const SDL_Event *e) {
   else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
     if (OPTIONS[focusOp].kind != OP_ACTION) return;
     if (focusOp == SETTING_TRAKT) { traktauth_begin(); return; }
+    if (focusOp == SETTING_UPDATES) { openUpdates(); return; }
     // Off, there is no Live TV to open the source screen in.
     if (focusOp == SETTING_LIVE_SOURCE) { if (on(SETTING_LIVE_ON)) requestLiveSource = 1; return; }
     if (focusOp == SETTING_SIMKL) { simklauth_begin(); return; }
@@ -1374,6 +1471,14 @@ void settings_event(const SDL_Event *e) {
 void settings_update(float dt, Uint32 now) {
   (void)now;
   int reduced = settings_animations_reduced();
+  update_poll();
+  // A fresh list: the focus goes back to the installed version, unless the
+  // person has already moved in the list being replaced.
+  if (relGeneration != update_generation()) {
+    relGeneration = update_generation();
+    if (level != LEVEL_UPDATES || (relFocus == 0 && !reading)) focusInstalled();
+    if (relFocus >= update_n()) relFocus = update_n() ? update_n() - 1 : 0;
+  }
   // A NEW LEVEL starts from its own scroll, whatever the pointer did on the last:
   // the goal is shared, and a click that opened a section left it holding the
   // section list's.
@@ -1381,13 +1486,15 @@ void settings_update(float dt, Uint32 now) {
     if (level != seenLevel) {
       seenLevel = level;
       follow = 1;
-      goalScroll = level == 2 ? rowScroll : level ? scrollY : scrollSec;
+      goalScroll = level == LEVEL_UPDATES ? relScroll : level == 2 ? rowScroll
+                 : level ? scrollY : scrollSec;
     } }
   // THE POINTER RESTING ON THE LIST'S EDGE scrolls it; the focus stays put.
   { float d = app_screen_in_front() && traktauth_state() != TRA_WAITING
             ? pointer_edge_scroll(SETTING_LIST_X, SETTING_LIST_X + SETTING_LIST_W,
                                   SETTING_TOP, SETTING_BASE, dt) : 0.0f;
-    int rows = level == 2 ? homerows_n() : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
+    int rows = level == LEVEL_UPDATES ? update_n() : level == 2 ? homerows_n()
+             : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
     if (d != 0.0f && rows > 0) {
       float max = yOfRow(rows - 1) + SETTING_LINE_H - (SETTING_BASE - SETTING_TOP);
       if (max < 0.0f) max = 0.0f;
@@ -1410,7 +1517,17 @@ void settings_update(float dt, Uint32 now) {
       rowAnim[i] = reduced ? target : anim_spring(rowAnim[i], target, dt,
                               target > rowAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     } }
-  if (level == 0) {
+  for (int i = 0; i < 32; i++) {
+    float target = (level == LEVEL_UPDATES && i == relFocus) ? 1.0f : 0.0f;
+    relAnim[i] = reduced ? target : anim_spring(relAnim[i], target, dt,
+                          target > relAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
+  notesScroll = reduced ? notesGoal : anim_spring(notesScroll, notesGoal, dt, NV_SPRING_SCROLL);
+  if (level == LEVEL_UPDATES) {
+    float target = follow ? scrollFor(relScroll, relFocus) : goalScroll;
+    goalScroll = target;
+    relScroll = reduced ? target : anim_spring(relScroll, target, dt, NV_SPRING_SCROLL);
+  } else if (level == 0) {
     float target = follow ? scrollFor(scrollSec, focusSec) : goalScroll;
     goalScroll = target;
     scrollSec = reduced ? target : anim_spring(scrollSec, target, dt, NV_SPRING_SCROLL);
@@ -1674,6 +1791,34 @@ static void drawHomeRow(int i, int rows, float y, float f) {
     TxtLine val = txt_line(TXT_BODY, v, c, c, c + 2, 255);
     txt_draw_alpha(val, xr - val.w, y + (SETTING_LINE_H - val.h) * 0.5f, a);
   }
+}
+
+// A release on level 3: its version on the left; on the right where it stands
+// against the one installed, or its date.
+static void drawRelease(int i, int rows, float y, float f) {
+  const UpdateRelease *r = update_item(i);
+  float a = rowAlpha(y, f), xr = SETTING_LIST_X + SETTING_LIST_W - SETTING_PAD;
+  const char *v;
+  int c;
+  if (!r || a <= 0.005f) return;
+  drawPlate(y, f, i == relFocus, 0.0f, a);
+  drawRule(i, rows, relFocus, y, a);
+  drawLabel(r->tag, y, 236, a);
+  v = r->cmp == 0 ? "Installed" : r->prerelease ? "Pre-release"
+    : i == update_latest() && r->cmp > 0 ? "New" : r->date;
+  c = r->cmp == 0 || (i == update_latest() && r->cmp > 0) ? 240 : 150;
+  c = (int)(c + (244 - c) * f);
+  { TxtLine chev = txt_line(TXT_CALLOUT, "\xe2\x80\xba", 150, 152, 158, 255);
+    TxtLine val = txt_line_trim(TXT_BODY, v, c, c, c + 2, 255, 360.0f);
+    float vx = xr - val.w;
+    if (f > 0.02f) {
+      txt_draw_alpha(chev, xr - chev.w, y + (SETTING_LINE_H - chev.h) * 0.5f, a * f);
+      vx -= chev.w + 24.0f * f;
+    }
+    if (r->cmp == 0 || (i == update_latest() && r->cmp > 0))
+      gfx_color((GfxRect){ vx - 22.0f, y + SETTING_LINE_H * 0.5f - 5.0f, 10.0f, 10.0f }, 0.5f,
+                SETTING_ACCENT_R, SETTING_ACCENT_G, SETTING_ACCENT_B, a);
+    txt_draw_alpha(val, vx, y + (SETTING_LINE_H - val.h) * 0.5f, a); }
 }
 
 // A section's row on level 0: the title on the left and a chevron that says the
@@ -2337,10 +2482,83 @@ static void drawRange(int op, float x, float y, float w) {
 
 // The right-hand panel: what the focus is on, a picture of what it changes, and
 // its current values or its choices.
+// The release notes, one paragraph per line (update.h), from `y` down to the
+// screen's margin, scrolled by notesScroll. Returns how far they run past the
+// window, which is how far they can scroll.
+static float drawNotes(const char *notes, float x, float y, float w) {
+  float bottom = NV_SCREEN_H - NV_MARGIN_Y, cy = y - notesScroll, total = 0.0f;
+  const char *p = notes;
+  char para[1200];
+  if (!notes || !*notes) {
+    txt_block(TXT_CAPTION, "No notes for this version.", 150, 152, 158, x, y, w, 32, 1, 2);
+    return 0.0f;
+  }
+  gfx_crop(x - 4.0f, y, w + 8.0f, bottom - y);
+  while (*p) {
+    const char *e = strchr(p, '\n');
+    size_t n = e ? (size_t)(e - p) : strlen(p);
+    int heading = *p == NV_UPDATE_HEADING;
+    TxtStyle st = heading ? TXT_CALLOUT : TXT_CAPTION;
+    float lead = heading ? 40.0f : 32.0f, h;
+    if (heading) { p++; n--; }
+    if (n >= sizeof para) n = sizeof para - 1;
+    memcpy(para, p, n); para[n] = 0;
+    if (heading && total > 0.0f) { cy += 14.0f; total += 14.0f; }
+    h = (float)txt_block_lines(st, para, w) * lead;
+    // Only what is in the window is drawn: a paragraph is a texture per line.
+    if (cy + h > y && cy < bottom)
+      txt_block(st, para, heading ? 240 : 182, heading ? 240 : 184, heading ? 244 : 190,
+                x, cy, w, lead, 1, 0);
+    cy += h + 6.0f; total += h + 6.0f;
+    p += n;
+    if (*p == '\n') p++;
+  }
+  gfx_no_crop();
+  return total > bottom - y ? total - (bottom - y) : 0.0f;
+}
+
+static void drawUpdatesPanel(float hx, float hw) {
+  const UpdateRelease *r = update_item(relFocus);
+  float y = SETTING_TOP + 22.0f;
+  char line[160];
+  y += drawKicker("Release", hx, y, 0.0f, 1.0f) + 14.0f;
+  if (!r) {
+    int failed = update_list_state() == UPD_FAILED;
+    notesMax = 0.0f;
+    y += txt_block(TXT_PANEL_TITLE, failed ? "Couldn't reach GitHub" : "Checking for updates\xe2\x80\xa6",
+                   246, 246, 248, hx, y, hw, 48, 1, 2) + 10.0f;
+    if (failed)
+      txt_block(TXT_CAPTION, "Check the TV's internet connection. OK tries again.",
+                170, 172, 178, hx, y, hw, 32, 1, 3);
+    return;
+  }
+  y += txt_block(TXT_PANEL_TITLE, r->name, 246, 246, 248, hx, y, hw, 48, 1, 2) + 6.0f;
+  snprintf(line, sizeof line, "%s \xc2\xb7 %s", r->date,
+           r->cmp == 0 ? "the version on this TV" : r->cmp > 0 ? "newer than yours" : "older than yours");
+  y += txt_block(TXT_CAPTION, line, 150, 152, 158, hx, y, hw, 32, 1, 1) + 12.0f;
+  { const char *act = !r->url[0] ? "This release has no package for the TV."
+                    : r->cmp > 0 ? "OK installs this update."
+                    : r->cmp == 0 ? "OK installs it again."
+                    : "OK goes back to this version.";
+    y += txt_block(TXT_CAPTION, act, SETTING_ACCENT_R * 255 + 40, SETTING_ACCENT_G * 255 + 60, 255,
+                   hx, y, hw, 32, 1, 2); }
+  if (r->cmp < 0 && update_version_cmp(r->version, NV_UPDATE_SINCE) < 0)
+    y += 4.0f + txt_block(TXT_CAPTION, "This version can't update itself. To come back, install again with Developer Mode or the Homebrew Channel.",
+                          236, 150, 120, hx, y, hw, 32, 1, 3);
+  y += 28.0f;
+  y += drawKicker(reading ? "What changed \xc2\xb7 up and down scroll" : notesMax > 0.0f
+                  ? "What changed \xc2\xb7 right reads it all" : "What changed", hx, y, 0.0f, 1.0f) + 14.0f;
+  pointer_zone_click(hx, y, hw, NV_SCREEN_H - NV_MARGIN_Y - y, clickNotes, 0, 0);
+  notesMax = drawNotes(r->notes, hx, y, hw);
+  if (notesGoal > notesMax) notesGoal = notesMax;
+}
+
 static void drawPanel(float hx, float hw) {
   const char *head, *help;
   int scene, chipSize;
   float y = SETTING_TOP + 22.0f;
+
+  if (level == LEVEL_UPDATES) { drawUpdatesPanel(hx, hw); return; }
 
   if (level == 0) {
     head = SECTIONS[focusSec].title;
@@ -2551,6 +2769,56 @@ static void drawLink(const char *service, const char *code,
   }
 }
 
+// The question before an install, and the install itself: from the moment the
+// download starts the app is on its way out, so the box stays until it closes.
+// The pointer on the box: a click on the card is OK, anywhere else Back.
+static void clickBox(int ok, int unused) {
+  (void)unused;
+  sendKey(ok ? SDLK_RETURN : SDLK_ESCAPE);
+}
+
+static void drawUpdateBox(void) {
+  UpdateInstallState st = update_install_state();
+  const UpdateRelease *r = update_item(relFocus);
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+  GfxRect card = { (NV_SCREEN_W - 1000.0f) * 0.5f, 300.0f, 1000.0f, 440.0f };
+  const char *title, *body, *warn = NULL, *keys;
+  char t[96];
+  float x = card.x + 72.0f, w = card.w - 144.0f, y = card.y + 64.0f;
+  if (!confirming && st == UPI_IDLE) return;
+  if (!r) return;
+  // The link overlay's veil and card (drawLink): the list must not read through.
+  gfx_color(screen, 0.0f, 0.0f, 0.0f, 0.0f, 0.92f);
+  gfx_color(card, 0.045f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
+  pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, clickBox, 0, 0);
+  pointer_zone_click(card.x, card.y, card.w, card.h, clickBox, 1, 0);
+  switch (st) {
+    case UPI_DOWNLOADING:
+      snprintf(t, sizeof t, "Downloading %s\xe2\x80\xa6", r->tag);
+      title = t; body = "This takes a few seconds."; keys = NULL; break;
+    case UPI_VERIFYING:
+      title = "Checking the download\xe2\x80\xa6"; body = "Making sure the package is the one published."; keys = NULL; break;
+    case UPI_INSTALLING:
+      title = "Installing\xe2\x80\xa6"; body = "Nuvio closes now and opens again on the new version."; keys = NULL; break;
+    case UPI_FAILED:
+      title = "The update didn't install"; body = update_install_error(); keys = "OK  Close"; break;
+    default:
+      snprintf(t, sizeof t, r->cmp < 0 ? "Go back to %s?" : r->cmp == 0 ? "Install %s again?" : "Install %s?", r->tag);
+      title = t;
+      body = "Nuvio downloads it, closes, and opens again on that version. Your settings, profiles and progress stay.";
+      if (r->cmp < 0 && update_version_cmp(r->version, NV_UPDATE_SINCE) < 0)
+        warn = "This version can't update itself. To come back, install again with Developer Mode or the Homebrew Channel.";
+      keys = r->cmp < 0 ? "OK  Go back        Back  Cancel" : "OK  Install        Back  Cancel";
+  }
+  y += txt_block(TXT_TITLE3, title, 255, 255, 255, x, y, w, 64, 1, 1) + 24.0f;
+  y += txt_block(TXT_BODY, body, 196, 198, 206, x, y, w, 44, 1, 3) + 16.0f;
+  if (warn) txt_block(TXT_CAPTION, warn, 236, 150, 120, x, y, w, 32, 1, 3);
+  if (keys) {
+    TxtLine l = txt_line(TXT_CALLOUT, keys, 150, 152, 158, 255);
+    txt_draw(l, x, card.y + card.h - 56.0f - l.h);
+  }
+}
+
 // The title line. On the list of sections it is the page title; inside a
 // section it is the path back — "‹ Settings / Playback" — with the section's
 // size at the far right, over the panel's edge.
@@ -2572,10 +2840,18 @@ static void drawHeader(float right) {
   x += root.w + 20.0f;
   txt_draw(slash, x, ys);
   x += slash.w + 20.0f;
-  txt_tracking(TXT_TITLE3, SECTIONS[focusSec].title, 255, 255, 255, x, NV_DSC_Y, 1.0f,
-               NV_DSC_TITLE_LS);
+  txt_tracking(TXT_TITLE3, level == LEVEL_UPDATES ? "Updates" : SECTIONS[focusSec].title,
+               255, 255, 255, x, NV_DSC_Y, 1.0f, NV_DSC_TITLE_LS);
 
   char count[32];
+  if (level == LEVEL_UPDATES) {
+    int n = update_n();
+    if (!n) return;
+    snprintf(count, sizeof count, n == 1 ? "%d release" : "%d releases", n);
+    TxtLine c = txt_line(TXT_CAPTION, count, 150, 152, 158, 255);
+    txt_draw(c, right - c.w, base - txt_baseline(TXT_CAPTION));
+    return;
+  }
   int n = level == 2 ? homerows_n() : SECTIONS[focusSec].n;
   snprintf(count, sizeof count, level == 2 ? (n == 1 ? "%d row" : "%d rows")
                                            : (n == 1 ? "%d setting" : "%d settings"), n);
@@ -2600,8 +2876,10 @@ void settings_draw(Uint32 now) {
   if (hw > SETTING_PANEL_MAX_W) hw = SETTING_PANEL_MAX_W;
   drawHeader(hw > 240.0f ? hx + hw : NV_SCREEN_W - NV_MARGIN_X);
 
-  int rows = level == 2 ? homerows_n() : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
-  float scroll = level == 2 ? rowScroll : level ? scrollY : scrollSec;
+  int rows = level == LEVEL_UPDATES ? update_n() : level == 2 ? homerows_n()
+           : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
+  float scroll = level == LEVEL_UPDATES ? relScroll : level == 2 ? rowScroll
+               : level ? scrollY : scrollSec;
   gfx_crop(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
                SETTING_LIST_W + NV_RING_FOCUS * 2, NV_SCREEN_H - SETTING_TOP);
   pointer_clip(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
@@ -2610,7 +2888,10 @@ void settings_draw(Uint32 now) {
   for (int i = 0; i < rows; i++) {
     float y = SETTING_TOP - scroll + yOfRow(i);
     drawGroup(i, y);
-    if (level == 2)
+    if (level == LEVEL_UPDATES)
+      pointer_zone_act(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H,
+                       pointRelease, clickRelease, i, 0);
+    else if (level == 2)
       pointer_zone_act(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H,
                        pointHomeRow, clickHomeRow, i, 0);
     else if (level)
@@ -2618,7 +2899,9 @@ void settings_draw(Uint32 now) {
                        pointOption, clickOption, SECTIONS[focusSec].start + i, 0);
     else
       pointer_zone(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H, pointSection, i, 0);
-    if (level == 2) {
+    if (level == LEVEL_UPDATES) {
+      drawRelease(i, rows, y, i < 32 ? relAnim[i] : 0.0f);
+    } else if (level == 2) {
       drawHomeRow(i, rows, y, i < 512 ? rowAnim[i] : 0.0f);
     } else if (level) {
       int op = SECTIONS[focusSec].start + i;
@@ -2645,6 +2928,7 @@ void settings_draw(Uint32 now) {
   }
 
   if (hw > 240.0f) drawPanel(hx, hw);
+  if (level == LEVEL_UPDATES) drawUpdateBox();
 
   // Above everything: while a link is in progress, it is the screen's question.
   { TraState ta = traktauth_state();
