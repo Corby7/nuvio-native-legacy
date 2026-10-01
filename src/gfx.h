@@ -490,7 +490,22 @@ typedef enum {
   //            3 GFX_HERO_FIT with a smooth horizontal ramp (a small trailer)
   //   uPar   = GFX_HERO_FIT's two ramp positions (heroFitPar), for focus 2
   GFX_HERO_VEIL = 45,
-  GFX_NMODES = 46
+  // GFX_CW_CARD — the Continue Watching card's artwork WITH its copy scrim
+  // (GFX_CW_SCRIM's stops) and its progress bar (GFX_CW_BAR's) mixed in, in one
+  // pass and under ONE antialiased edge.
+  //
+  // Drawn as three layers, each cut by the same smoothstep, the card's edge
+  // pixels came out wrong both ways: the art showed through the scrim's own
+  // partial coverage (a lit hairline round the bottom corners under a light
+  // still), and the scrim and bar, landing on the focus ring's fill under the
+  // art's edge, darkened the ring's inner pixel — a dark seam between the bar
+  // and the ring round each bottom corner. With one coverage the edge is just
+  // the finished card over whatever is behind it.
+  //
+  //   uPar.x = the bar's height as a fraction of the card's, 0 for no bar
+  //   uPar.y = the bar's fill, 0..1
+  GFX_CW_CARD = 46,
+  GFX_NMODES = 47
 } GfxMode;
 
 typedef struct {
@@ -739,6 +754,9 @@ void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
 // fraction; offsetPx is the glow's y offset (18 on posters, the coverage size on
 // episode, cast and trailer cards).
 void gfx_card_depth(GfxRect card, float radius, float edge, float sheen, float offsetPx);
+// The same over a GFX_CW_CARD: the glow is held back by that card's scrim, as it
+// was when it was drawn UNDER the scrim rather than over the finished card.
+void gfx_card_depth_cw(GfxRect card, float radius, float edge, float sheen, float offsetPx);
 // Dims the whole screen to black at `alpha`, except inside `hole` with corners of
 // `radiusPx` — in PIXELS, unlike gfx_color's radius. The hole's edge is
 // antialiased over one layout pixel, or ramps out over `featherPx` when larger:

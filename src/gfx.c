@@ -1131,6 +1131,13 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float hx = smoothstep(-30.8, 30.8, px.x) - smoothstep(-30.8, 30.8, px.x - W);\n"
   "  float hy = smoothstep(-30.8, 30.8, px.y - uPar.y) - smoothstep(-30.8, 30.8, px.y - H - uPar.y);\n"
   "  float glow = uColor.g * (1.0 - hx * hy);\n"
+  // uFocus = 1 over a GFX_CW_CARD: that card's scrim, which used to be drawn on
+  // top of this glow, holds it back by the same amount (see gfx_card_depth_cw).
+  "  float u = clamp(1.0 - vUv.y, 0.0, 1.0);\n"
+  "  glow *= 1.0 - uFocus * (0.96 - clamp(u / 0.12, 0.0, 1.0) * 0.06\n"
+  "        - clamp((u - 0.12) / 0.16, 0.0, 1.0) * 0.16 - clamp((u - 0.28) / 0.18, 0.0, 1.0) * 0.26\n"
+  "        - clamp((u - 0.46) / 0.18, 0.0, 1.0) * 0.26 - clamp((u - 0.64) / 0.18, 0.0, 1.0) * 0.16\n"
+  "        - clamp((u - 0.82) / 0.18, 0.0, 1.0) * 0.06);\n"
   "  float a = (line + glow * (1.0 - line)) * m * uColor.a;\n"
   "  if (a <= 0.002) discard;\n"
   "  gl_FragColor = vec4(1.0, 1.0, 1.0, a);\n"
@@ -1209,6 +1216,30 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float ah = mix(mix(mix(ahB, ahF, full), ahT, fit), ahS, soft);\n"
   "  float a = clamp(ah + av - ah*av, 0.0, 1.0);\n"
   "  gl_FragColor = vec4(0.051,0.051,0.051, a * uColor.a);\n"
+  "}\n",
+
+  // GFX_CW_CARD — see gfx.h. GFX_CARD's sampling (no parallax: uPar carries the
+  // bar), then GFX_CW_SCRIM's seven stops and GFX_CW_BAR's track and fill mixed
+  // into the colour, so the one smoothstep at the end is the card's only edge.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  vec2 uv = uCell.xy + clamp(cover(vUv), 0.0, 1.0) * uCell.zw;\n"
+  "  vec4 t = texture2D(uTex, uv);\n"
+  "  float u = clamp(1.0 - vUv.y, 0.0, 1.0);\n"
+  "  float s = 0.96\n"
+  "          - clamp( u        / 0.12, 0.0, 1.0) * 0.06\n"
+  "          - clamp((u - 0.12)/ 0.16, 0.0, 1.0) * 0.16\n"
+  "          - clamp((u - 0.28)/ 0.18, 0.0, 1.0) * 0.26\n"
+  "          - clamp((u - 0.46)/ 0.18, 0.0, 1.0) * 0.26\n"
+  "          - clamp((u - 0.64)/ 0.18, 0.0, 1.0) * 0.16\n"
+  "          - clamp((u - 0.82)/ 0.18, 0.0, 1.0) * 0.06;\n"
+  "  vec3 c = mix(t.rgb, vec3(0.0314, 0.0314, 0.0392), s);\n"
+  "  if (uPar.x > 0.0 && vUv.y >= 1.0 - uPar.x) {\n"
+  "    float fill = step(vUv.x, uPar.y);\n"
+  "    c = mix(c, vec3(mix(1.0, 0.9608, fill)), mix(0.16, 1.0, fill));\n"
+  "  }\n"
+  "  gl_FragColor = vec4(c, t.a * m * uColor.a);\n"
   "}\n"
 
 };
@@ -1250,7 +1281,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,0},   /* GFX_RING_FILL    — the rect's SDF, masked by perimeter progress */
   {1,0},   /* GFX_CARD_DEPTH   — the card's SDF, and again 2px lower for the line */
   {1,0},   /* GFX_RING_INSET_FILL — the inset band, masked by perimeter progress */
-  {0,0}    /* GFX_HERO_VEIL    — the hero's ramps alone: no SDF, no texture */
+  {0,0},   /* GFX_HERO_VEIL    — the hero's ramps alone: no SDF, no texture */
+  {1,1}    /* GFX_CW_CARD      — GFX_CARD's art, with the scrim and bar mixed in */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -1669,6 +1701,11 @@ void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) 
 void gfx_card_depth(GfxRect card, float radius, float edge, float sheen, float offsetPx) {
   if (card.h <= 0.0f || (edge <= 0.001f && sheen <= 0.001f)) return;
   gfx_rect(card, 0, GFX_CARD_DEPTH, 0, card.h, offsetPx, radius, edge, sheen, 0, 1.0f);
+}
+
+void gfx_card_depth_cw(GfxRect card, float radius, float edge, float sheen, float offsetPx) {
+  if (card.h <= 0.0f || (edge <= 0.001f && sheen <= 0.001f)) return;
+  gfx_rect(card, 0, GFX_CARD_DEPTH, 1.0f, card.h, offsetPx, radius, edge, sheen, 0, 1.0f);
 }
 
 void gfx_hole(GfxRect r) {

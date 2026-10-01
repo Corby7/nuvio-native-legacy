@@ -3688,6 +3688,11 @@ static void drawShortcuts(int r, float y) {
       x += (w - nw) * 0.5f; cy += (h - nh) * 0.5f;
       w = nw; h = nh;
     }
+    // On whole pixels, as the poster rows' cards are (see the note there): the
+    // ring and the cover otherwise round a fractional edge differently.
+    { float x1 = roundf(x + w), y1 = roundf(cy + h);
+      x = roundf(x); cy = roundf(cy);
+      w = x1 - x; h = y1 - cy; }
     // A CARD OF MARGIN EACH SIDE, which the poster rows already had and this did not.
     // The cull is not only about pixels: tex_get_width is what QUEUES the decode, so a
     // card the loop skips has not even been asked for. Testing the exact bounds meant a
@@ -4063,6 +4068,17 @@ void home_draw(Uint32 now) {
             px += (w - nw) * 0.5f; py += (h - nh) * 0.5f;
             w = nw; h = nh;
           }
+          // ON WHOLE PIXELS. Scroll and focus growth leave the card at a fraction
+          // of a pixel, and the ring's straight edges and the art's antialiased
+          // edge round that fraction differently: MEASURED on the C3, a focused
+          // Continue watching card had 3 white columns plus one half-white on the
+          // left — that half pixel mixing in the art's brightness, so the inner
+          // edge wavered down its length — and a clean 4 on the right. Snapping
+          // the box (and the frame's inset, below) puts ring and art on the same
+          // grid on every side.
+          { float x1 = roundf(px + w), y1 = roundf(py + h);
+            px = roundf(px); py = roundf(py);
+            w = x1 - px; h = y1 - py; }
           pointer_zone(px, py, w, h, pointAt, r, c);
 
           if (passe == 0) {
@@ -4211,15 +4227,18 @@ void home_draw(Uint32 now) {
           // too: its `.home-continue-media` has `border: 0`, so the art does run
           // to the edge, and its ring is a real 4px outset shadow on the card.
           int framed = posterFrame(kind);
-          float pad = framed ? NV_CARD_PAD * scale : 0.0f;
+          float pad = framed ? roundf(NV_CARD_PAD * scale) : 0.0f;
           GfxRect art = frameOf(card, pad);
           float radiusA = framed ? radiusArt(art.w, art.h) : radius;
+          // A Continue watching / return card, and whether its art pass already
+          // drew the scrim and the bar resume_draw would otherwise add.
+          int resumeCard = kind == ROW_CONTINUE || kind == ROW_RETURN, baked = 0;
           if (focus_index(&focus, r, c)) {
             // The same two boxes the ring below is drawn in, and their corners.
             if (framed) {
               float in = NV_CARD_PAD - NV_FRAME_RING;
               if (in < 0.0f) in = 0.0f;
-              in *= scale;
+              in = roundf(in * scale);
               ringFocus = frameOf(card, in);
               ringFocusR = radiusFocus(ringFocus.h, in) * ringFocus.h;
             } else {
@@ -4270,7 +4289,7 @@ void home_draw(Uint32 now) {
               // At NV_FRAME_RING == NV_CARD_PAD the two coincide.
               float in = NV_CARD_PAD - NV_FRAME_RING;
               if (in < 0.0f) in = 0.0f;
-              in *= scale;
+              in = roundf(in * scale);
               GfxRect frame = frameOf(card, in);
               gfx_color(frame, radiusFocus(frame.h, in),
                         NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
@@ -4328,8 +4347,18 @@ void home_draw(Uint32 now) {
             float in = tex_appear(t);
             if (in < 1.0f) drawArtSkeleton(art, radiusA, 1.0f);
             gfx_tex_aspect_current = tex_aspect(path);
-            gfx_rect(art, t, GFX_CARD, f, 0.0f, 0.0f,
-                     radiusA, 0, 0, 0, in);
+            // A resume card's scrim and bar go INTO the art's pass (GFX_CW_CARD in
+            // gfx.h): drawn over it as layers, the shared edge leaked the art and
+            // darkened the focus ring round the bottom corners. Its art is the card.
+            if (resumeCard && cItem) {
+              float band, fill;
+              resume_bar(cItem, (GfxRect){ px, py, w, h }, &band, &fill);
+              gfx_rect(art, t, GFX_CW_CARD, 0.0f, band, fill, radiusA, 1, 1, 1, in);
+              baked = 1;
+            } else {
+              gfx_rect(art, t, GFX_CARD, f, 0.0f, 0.0f,
+                       radiusA, 0, 0, 0, in);
+            }
             gfx_tex_aspect_current = 0.0f;
           } else {
             // A CARD WITH NO ART: a SOLID, visible surface, not emptiness.
@@ -4372,9 +4401,15 @@ void home_draw(Uint32 now) {
 
           // `cardDepthEnabled` plus the per-section switch: `cardDepthPosters` on the
           // catalogue rows, `cardDepthContinueWatching` on the first one.
-          drawDepth(art, radiusA,
-                              kind == ROW_CONTINUE ? settings_depth_cw()
-                                                       : settings_depth_posters());
+          if (baked) {
+            if (settings_depth() && settings_depth_cw())
+              gfx_card_depth_cw(art, radiusA, settings_depth_border(),
+                                settings_depth_brightness(), 18.0f);
+          } else {
+            drawDepth(art, radiusA,
+                                kind == ROW_CONTINUE ? settings_depth_cw()
+                                                         : settings_depth_posters());
+          }
 
           // --- posterLabelsEnabled ---------------------------------------
           // A LANDSCAPE card only: the caption goes INSIDE the frame, over a gradient
@@ -4415,10 +4450,8 @@ void home_draw(Uint32 now) {
             txt_draw(ink,nx,ny);
           }
 
-          if (kind == ROW_CONTINUE)
-            resume_draw(cItem, (GfxRect){px, py, w, h});
-          if (kind == ROW_RETURN)
-            resume_draw(cItem, (GfxRect){px, py, w, h});
+          if (resumeCard)
+            resume_draw(cItem, (GfxRect){px, py, w, h}, baked);
 
           // 4. HIGHLIGHT: title and metadata INSIDE the art, over a dark veil at the
           // base — as the Apple TV does. The title plays the part of the logo embedded

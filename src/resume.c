@@ -65,7 +65,20 @@ float resume_fill(const char *id, int season, int episode, float target) {
   return target;
 }
 
-void resume_draw(const CatItem *ci, GfxRect r) {
+int resume_bar(const CatItem *ci, GfxRect r, float *band, float *fill) {
+  float scale = r.w / NV_HIGHLIGHT_W, min;
+  *band = 0.0f; *fill = 0.0f;
+  // See the note on the bar at the end of resume_draw for the 2% line.
+  if (!ci || ci->progress <= NV_CW_BAR_MIN_PCT || r.h <= 0.0f || r.w <= 0.0f) return 0;
+  *band = NV_CW_BAR_H * scale / r.h;
+  *fill = resume_fill(ci->imdb[0] ? ci->imdb : ci->title, ci->season, ci->episode,
+                      anim_clamp(ci->progress / 100.f, 0, 1));
+  min = NV_CW_BAR_MINW * scale / r.w;
+  if (*fill < min) *fill = min;
+  return 1;
+}
+
+void resume_draw(const CatItem *ci, GfxRect r, int baked) {
   if (!ci) return;
   float scale = r.w / NV_HIGHLIGHT_W;
   // The card's OWN radius, not the NV_RADIUS_CARD constant. The corner comes
@@ -82,7 +95,8 @@ void resume_draw(const CatItem *ci, GfxRect r) {
   // GFX_VEIL at 0.85 over the WHOLE card, so the artwork was dimmed uniformly and
   // the card read as a grey plate with a picture faintly behind it. See the note
   // on GFX_CW_SCRIM in gfx.h for the stops.
-  gfx_rect(r, 0, GFX_CW_SCRIM, 0, 0, 0, radius, 0, 0, 0, 1.0f);
+  // Over art drawn as GFX_CW_CARD it is already in the art's colour.
+  if (!baked) gfx_rect(r, 0, GFX_CW_SCRIM, 0, 0, 0, radius, 0, 0, 0, 1.0f);
 
   // THE REMAINING TIME: A SCRIM AND THE TYPE, WITH NOTHING AROUND IT.
   //
@@ -251,12 +265,7 @@ void resume_draw(const CatItem *ci, GfxRect r) {
   //
   // GFX_CW_BAR takes the CARD's rect so the ends round with the corner; see the
   // note in gfx.h for why a plain rectangle cannot.
-  if (ci->progress > NV_CW_BAR_MIN_PCT) {
-    float band = NV_CW_BAR_H * scale / r.h;
-    float fill = resume_fill(ci->imdb[0] ? ci->imdb : ci->title, ci->season, ci->episode,
-                             anim_clamp(ci->progress / 100.f, 0, 1));
-    float min  = NV_CW_BAR_MINW * scale / r.w;
-    if (fill < min) fill = min;
-    gfx_rect(r, 0, GFX_CW_BAR, 0, band, fill, radius, 1, 1, 1, 1.0f);
-  }
+  { float band, fill;
+    if (!baked && resume_bar(ci, r, &band, &fill))
+      gfx_rect(r, 0, GFX_CW_BAR, 0, band, fill, radius, 1, 1, 1, 1.0f); }
 }
