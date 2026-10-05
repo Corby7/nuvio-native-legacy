@@ -34,6 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static mpv_handle         *mpv;
 static mpv_render_context *render;
@@ -72,7 +73,18 @@ static void renderLoopStart(void);
 static VideoSubtitleStyle style = { 120, 0, 0, 3, 1, 0, 0, 0 };
 static int lift;
 
-enum { OBS_TIME = 1, OBS_DURATION, OBS_CACHE, OBS_PAUSE, OBS_TRACKS, OBS_AID, OBS_SID };
+enum { OBS_TIME = 1, OBS_DURATION, OBS_CACHE, OBS_PAUSE, OBS_TRACKS, OBS_AID, OBS_SID, OBS_STARVED };
+
+// STALLS (video.h): mpv's paused-for-cache once the load has settled and away
+// from a seek. Before `calmFrom` the cache is filling up for its own reasons.
+#define NV_CALM_MS 5000
+static int    stallCount, stalled;
+static double calmFrom;
+static double nowMs(void) {
+  struct timespec t;
+  clock_gettime(CLOCK_MONOTONIC, &t);
+  return t.tv_sec * 1000.0 + t.tv_nsec / 1e6;
+}
 
 static void setString(const char *name, const char *value) {
   int r = mpv_set_property_string(mpv, name, value);
@@ -120,6 +132,7 @@ int video_start(void) {
   mpv_observe_property(mpv, OBS_TRACKS,   "track-list",         MPV_FORMAT_NONE);
   mpv_observe_property(mpv, OBS_AID,      "aid",                MPV_FORMAT_NONE);
   mpv_observe_property(mpv, OBS_SID,      "sid",                MPV_FORMAT_NONE);
+  mpv_observe_property(mpv, OBS_STARVED,  "paused-for-cache",   MPV_FORMAT_FLAG);
   { char *v = mpv_get_property_string(mpv, "mpv-version");
     printf("[mpv] ready (%s)\n", v ? v : "?"); fflush(stdout); mpv_free(v); }
   video_subtitle_style(&style);
@@ -133,6 +146,7 @@ int video_launch_youtube(const char *id) {
 
 static void resetSession(void) {
   ready = paused = seeking = 0;
+  stalled = 0;
   posSeg = durationSeg = bufferSeg = 0;
   vidW = vidH = rateMilli = 0;
   nAudio = nSub = 0; audioCurrent = 0; subCurrent = -1;
@@ -150,6 +164,7 @@ int video_play(const char *url) {
   video_stop();
   session++;
   resetSession();
+  stallCount = 0;
   setString("video-crop", "");
   setString("pause", "no");
   cmd[0] = "loadfile"; cmd[1] = url; cmd[2] = "replace"; cmd[3] = NULL;
@@ -187,6 +202,8 @@ void video_fetch(double seconds) {
   // otherwise the time-pos updates still in flight snap it back for a frame.
   posSeg = seconds;
   seeking = 1;
+  calmFrom = nowMs() + NV_CALM_MS;
+  stalled = 0;
   mpv_command_async(mpv, 0, cmd);
 }
 
@@ -401,6 +418,7 @@ void video_pump(void) {
     switch (ev->event_id) {
     case MPV_EVENT_FILE_LOADED:
       ready = 1;
+      calmFrom = nowMs() + NV_CALM_MS;
       readTracks();
       printf("[mpv] loaded: audio=%d subtitle=%d\n", nAudio, nSub); fflush(stdout);
       break;
@@ -441,6 +459,12 @@ void video_pump(void) {
         durationSeg = *(double *)pr->data;
       } else if (ev->reply_userdata == OBS_CACHE && pr->format == MPV_FORMAT_DOUBLE) {
         bufferSeg = *(double *)pr->data;
+      } else if (ev->reply_userdata == OBS_STARVED && pr->format == MPV_FORMAT_FLAG) {
+        int on = *(int *)pr->data;
+        if (on && !stalled && ready && nowMs() >= calmFrom) {
+          stallCount++; stalled = 1;
+          printf("[mpv] stall: waiting for data (%d this load)\n", stallCount); fflush(stdout);
+        } else if (!on) stalled = 0;
       } else if (ev->reply_userdata == OBS_PAUSE && pr->format == MPV_FORMAT_FLAG) {
         paused = *(int *)pr->data;
       } else if ((ev->reply_userdata == OBS_TRACKS || ev->reply_userdata == OBS_AID ||
@@ -567,6 +591,9 @@ unsigned video_frame_texture(void) {
 double video_pos(void)        { return posSeg; }
 double video_duration(void)   { return durationSeg; }
 double video_buffer_end(void) { return bufferSeg; }
+int  video_stall_count(void)  { return stallCount; }
+int  video_stalled(void)      { return stalled; }
+int  video_net_retrying(void) { return 0; }   // no reconnect here (video_reconnect)
 unsigned video_session(void)  { return session; }
 int  video_playing(void)      { return active && ready && !paused; }
 int  video_ready(void)        { return active && ready; }

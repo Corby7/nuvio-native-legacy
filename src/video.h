@@ -82,6 +82,13 @@ void video_window_source(int sx, int sy, int sw, int sh,
 double video_pos(void);      // seconds elapsed
 double video_duration(void);  // 0 while unknown
 double video_buffer_end(void); // how far the buffer reaches (s); 0 if unknown
+// THE CONNECTION NOT KEEPING UP. A stall is playback stopping to wait for data
+// once it was under way: a load's or a seek's own wait (the first few seconds
+// after either) is not one. Counted per video_play.
+int    video_stall_count(void);
+int    video_stalled(void);     // 1 while a counted stall lasts
+// 1 while a dropped connection is being retried (see video_reconnect).
+int    video_net_retrying(void);
 // The chosen SOURCE's Dolby Vision claim (the addon describes the file). Call it
 // BEFORE video_play/video_set_source: it is what decides the hdrType the ACB
 // describes to tv.display.

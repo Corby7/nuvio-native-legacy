@@ -487,6 +487,17 @@ static Uint32 loadStartAt, stallAt;
 static float  stallPos;
 static int    failLoadLogged, failSearchLogged, failStallLogged;
 
+// THE SLOW-CONNECTION HINT. Playback that keeps stopping to wait for data
+// (video_stall_count) says the connection cannot carry this source: two stalls
+// inside PLR_SLOW_WINDOW_MS, or one lasting PLR_SLOW_LONG_MS, and the player
+// says so, once per PLR_SLOW_QUIET_MS, with what would help on a 4K source.
+// A dropped connection being retried is said as that, not as a failure.
+#define PLR_SLOW_WINDOW_MS 120000u
+#define PLR_SLOW_LONG_MS     4000u
+#define PLR_SLOW_QUIET_MS  180000u
+static int    slowSeen, netSaid;
+static Uint32 slowLastAt, slowStallAt, slowHintAt;
+
 // Milliseconds from `then` to `now`, and 0 when `then` is LATER. The frame's `now`
 // is read before app_update, and an open or source change inside app_update stamps
 // loadStartAt with a fresh SDL_GetTicks — a millisecond past `now`. The plain
@@ -556,6 +567,8 @@ static void failWatchReset(void) {
   loadStartAt = SDL_GetTicks();
   stallAt = 0; stallPos = -1.0f;
   failLoadLogged = failSearchLogged = failStallLogged = 0;
+  slowSeen = video_stall_count();
+  slowLastAt = slowStallAt = slowHintAt = 0; netSaid = 0;
   // A notice about the previous title or source is stale the moment a new one loads.
   failNoticeAt = 0;
 }
@@ -767,7 +780,8 @@ static void prefsRead(void) {
     else if (!strcmp(key, "sub_background")   && v >= 0 && v <= 4)  subStyle.background = v;
     else if (!strcmp(key, "sub_position")     && v >= 0 && v <= 7)  subStyle.position = v;
     else if (!strcmp(key, "sub_border")   && v >= 0 && v <= 2)  subStyle.border = v;
-    else if (!strcmp(key, "sub_delay")  && v > -10000 && v < 10000) subStyle.delayMs = v;
+    // sub_delay is skipped on purpose: an offset belongs to one file, and files
+    // from before it stopped being saved would carry it into every title.
     else if (!strcmp(key, "sub_opacity") && v >= 0 && v <= 3) subStyle.opacity = v;
     else if (!strcmp(key, "sub_family") && v >= 0 && v < TXT_FAMILY_N) subStyle.family = v;
   }
@@ -783,7 +797,6 @@ static void prefsWrite(void) {
   fprintf(f, "sub_background %d\n",   subStyle.background);
   fprintf(f, "sub_position %d\n",     subStyle.position);
   fprintf(f, "sub_border %d\n",   subStyle.border);
-  fprintf(f, "sub_delay %d\n",  subStyle.delayMs);
   fprintf(f, "sub_opacity %d\n", subStyle.opacity);
   fprintf(f, "sub_family %d\n", subStyle.family);
   fclose(f);
@@ -942,6 +955,14 @@ void player_toast(const char *text, int good) {
   toastAte = SDL_GetTicks() + 2 * PLR_TOAST_MS;
 }
 
+// A hint to read rather than a confirmation to glance at: the toast's place, held
+// long enough to read from the sofa.
+#define PLR_HINT_MS 6000u
+static void hint(const char *text) {
+  player_toast(text, 0);
+  toastAte = SDL_GetTicks() + PLR_HINT_MS;
+}
+
 static void openSession(int indexCatalog, const char *url) {
   int n = cat_n(); if (n < 1) n = 1;
   idx = ((indexCatalog % n) + n) % n;
@@ -973,6 +994,9 @@ static void openSession(int indexCatalog, const char *url) {
   // The aspect mode belongs to the DEVICE, not to the session: rereading here is
   // what makes "Cinema zoom" still apply on the next film, as in the web app.
   prefsRead();
+  // The subtitle DELAY is the one part of the style that is not the device's: it
+  // fixes the sync of one file, and carried over it puts the next title out.
+  subStyle.delayMs = 0;
   toastAte = 0;
   hasVideo = (url && *url && video_play(url));
   if (hasVideo) video_reconnect(1);
@@ -1055,8 +1079,10 @@ void player_set_source(const char *url) {
   waitingSource = 0;
   errorSource = 0;
   failWatchReset();
+  subStyle.delayMs = 0;   // another source is another file, with its own sync
   hasVideo = video_play(url);
   if (hasVideo) video_reconnect(1);
+  video_subtitle_style(&subStyle);
   if (!hasVideo) {
     player_report_failure("load", "the pipeline refused the URL");
     player_error_source();
@@ -1858,7 +1884,37 @@ void player_update(float dt, Uint32 now) {
       failErrSeen = ec;
       video_last_error(e, sizeof e);
       snprintf(r, sizeof r, "pipeline error: %s", e);
-      player_report_failure(startImage ? "playback" : "load", r);
+      // Being retried: logged, and said as what it is. The retries running out
+      // come back here as an error with no retry, and that one is the failure.
+      if (video_net_retrying()) {
+        snprintf(r, sizeof r, "connection dropped, reconnecting (pipeline error: %s)", e);
+        reportFailure(startImage ? "playback" : "load", r, 0);
+        if (!netSaid) { netSaid = 1; hint("Connection dropped \xC2\xB7 reconnecting"); }
+      } else player_report_failure(startImage ? "playback" : "load", r);
+    }
+    { int sc = video_stall_count();
+      int was = slowSeen;
+      if (!video_net_retrying()) netSaid = 0;
+      if (sc != slowSeen) slowSeen = sc;
+      if (hasVideo && startImage) {
+        int twice = sc > was && slowLastAt && msSince(now, slowLastAt) < PLR_SLOW_WINDOW_MS;
+        int lasting;
+        if (sc > was) slowLastAt = now;
+        if (video_stalled()) { if (!slowStallAt) slowStallAt = now; }
+        else slowStallAt = 0;
+        lasting = slowStallAt && msSince(now, slowStallAt) >= PLR_SLOW_LONG_MS;
+        if ((twice || lasting) && (!slowHintAt || msSince(now, slowHintAt) >= PLR_SLOW_QUIET_MS) &&
+            !(failNoticeAt && now - failNoticeAt < PLR_FAIL_NOTICE_MS)) {
+          const Stream *st = (stream_n() > 0 && !trailerMode) ? stream_item(stream_current()) : NULL;
+          int uhd = st && (strstr(st->res, "4K") || strstr(st->res, "2160"));
+          slowHintAt = now;
+          hint(uhd ? "Your connection can't keep up \xC2\xB7 a 1080p source plays smoother"
+                   : "Your connection can't keep up with this source");
+          printf("[player] slow-connection hint (%s, %d stall%s)\n", lasting ? "a long stall" : "stalls close together",
+                 sc, sc == 1 ? "" : "s");
+          fflush(stdout);
+        }
+      }
     }
     if (hasVideo && !video_ready() && !failLoadLogged && msSince(now, loadStartAt) > PLR_FAIL_LOAD_MS) {
       failLoadLogged = 1;

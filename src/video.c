@@ -114,6 +114,11 @@ static int    mkvPending;
 // probe's second trigger (see video_pump). SDL ticks; a Uint32 written from the
 // LS2 thread and read on the drawing one, a torn read costing one frame's check.
 static Uint32 mkvArmedMs, lastBufferingMs;
+// STALLS (video_stall_count): a bufferingStart once the load has settled and away
+// from a seek. Before `calmFrom` the pipeline is filling up for its own reasons.
+#define NV_CALM_MS 5000u
+static volatile int stallCount, stalled, netRetrying;
+static volatile Uint32 calmFrom;
 // Set by video_mkv_hurry: an addon subtitle is waiting for the header to sync.
 static int mkvHurry;
 // 1 when the source was announced as MP4. See video_set_mp4.
@@ -225,6 +230,9 @@ double video_pos(void) { return 0; }
 const char *video_engine(void) { return "none (Mac preview)"; }
 double video_duration(void) { return 0; }
 double video_buffer_end(void) { return 0; }
+int  video_stall_count(void) { return 0; }
+int  video_stalled(void) { return 0; }
+int  video_net_retrying(void) { return 0; }
 void video_set_dv(int dv) { (void)dv; }
 unsigned video_session(void) { return 0; }
 int  video_playing(void) { return 0; }
@@ -596,6 +604,8 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   }
   if (strstr(p, "loadCompleted")) {
     mark("video loadCompleted");
+    calmFrom = SDL_GetTicks() + NV_CALM_MS;
+    stalled = 0; netRetrying = 0;
     // ORDER: tracks first, position after. Switching track restarts the decode in
     // the pipeline; doing that AFTER the seek would throw the position away.
     if (audioOnLoad >= 0) {
@@ -649,13 +659,15 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   if (strstr(p, "bufferingStart")) {
     char m[64];
     lastBufferingMs = SDL_GetTicks();
-    snprintf(m, sizeof m, "buffering START (buffer %+.1fs ahead)",
-             bufferSeg - posSeg);
+    if (ready && (Sint32)(lastBufferingMs - calmFrom) >= 0) { stallCount++; stalled = 1; }
+    snprintf(m, sizeof m, "buffering START (buffer %+.1fs ahead)%s",
+             bufferSeg - posSeg, stalled ? ", a stall" : "");
     mark(m);
   }
   if (strstr(p, "bufferingEnd")) {
     char m[64];
     lastBufferingMs = SDL_GetTicks();
+    stalled = 0;
     snprintf(m, sizeof m, "buffering END (buffer %+.1fs ahead)",
              bufferSeg - posSeg);
     mark(m);
@@ -733,10 +745,12 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
           snprintf(subUrlOnLoad, sizeof subUrlOnLoad, "%s", subUrlCurrent);
         }
         recoverAt = SDL_GetTicks() + (dropped ? netWaitMs[netRetries] : 0);
-        if (dropped) netRetries++;
+        if (dropped) { netRetries++; netRetrying = 1; }
         recovering = 1;
         mark(dropped ? "network dropped: reconnecting" : "pipeline died: reloading");
-      } } 
+      } else if (netReconnect && strstr(q, "Network Error") && netRetries >= NV_NET_RETRIES) {
+        netRetrying = 0;   // out of retries: it is a failure now, said as one
+      } }
   }
   { double v = numberOf(p, "\"currentTime\":");
     if (v >= 0 && seekHold >= 0.0) {
@@ -1163,6 +1177,7 @@ static void pushWindow(void);
 int video_play(const char *url) {
   dvInset = 0;
   netReconnect = netRetries = 0;
+  stallCount = stalled = netRetrying = 0;
   headWithdraw();
   snprintf(urlCurrent, sizeof urlCurrent, "%s", url ? url : "");
   return playInternal(url, 1);
@@ -1427,6 +1442,8 @@ void video_fetch(double seconds) {
   seekIn = SDL_GetTicks() + SEEK_IDLE_MS;
   seekHoldUntil = seekIn + SEEK_HOLD_MS;
   seekHold = seconds;
+  calmFrom = seekIn + NV_CALM_MS;
+  stalled = 0;
 }
 
 // Actually sends it. Called by video_pump when the rest period expires.
@@ -1508,6 +1525,9 @@ void video_window_source(int sx, int sy, int sw, int sh,
 double video_pos(void)      { return posSeg; }
 double video_duration(void)  { return durationSeg; }
 double video_buffer_end(void) { return bufferSeg; }
+int    video_stall_count(void) { return stallCount; }
+int    video_stalled(void)     { return stalled; }
+int    video_net_retrying(void) { return netRetrying; }
 unsigned video_session(void) { return session; }
 int    video_playing(void)  { return playing; }
 int    video_ready(void)   { return ready; }
