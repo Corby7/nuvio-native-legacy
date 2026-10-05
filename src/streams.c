@@ -130,8 +130,18 @@ const Stream *stream_item(int i) {
 // Adding weights rather than comparing field by field keeps the rule in one
 // place and readable: changing the preference means touching a number, not
 // rewriting a chain of ifs where the order of comparisons becomes a hidden rule.
+//
+// Settings -> Playback bends it, and never past the point of leaving nothing to
+// play: a source over "Maximum quality" and a Dolby Vision one with Dolby
+// Vision off sink below every other, but stay on the list as the last resort,
+// so a title whose only source is 4K still plays. Atmos off just stops
+// rewarding it.
 static long points(const Stream *s) {
   long p = 0;
+  int cap = settings_quality_max_height();
+  int dv = settings_dolby_vision();
+  if (cap > 0 && s->height > cap) p -= 1000000;
+  if (!dv && s->dolbyVision)      p -=  500000;
   // DOLBY VISION ONLY SCORES ON MP4 — and this is measurement, not theory.
   //
   // Recorded on the owner's set (LG C9, webOS 4.10) playing an MKV the addon
@@ -150,10 +160,10 @@ static long points(const Stream *s) {
   // discarding the enhancement layer and rewriting the RPU, which requires
   // demuxing and feeding the pipeline by buffer — another project, already
   // recorded in video.c. What IS in reach is to stop rewarding a useless source.
-  if (s->mp4 && s->height >= 2160 && s->dolbyVision) p += 100000;
-  if (s->height >= 2160)                             p +=  20000;
-  if (s->mp4 && s->dolbyVision)                      p +=  10000;
-  if (s->dolbyAtmos)                                 p +=   2000;
+  if (dv && s->mp4 && s->height >= 2160 && s->dolbyVision) p += 100000;
+  if (s->height >= 2160)                                   p +=  20000;
+  if (dv && s->mp4 && s->dolbyVision)                      p +=  10000;
+  if (settings_dolby_atmos() && s->dolbyAtmos)             p +=   2000;
   p += s->height;
   return p;
 }

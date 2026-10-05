@@ -190,9 +190,14 @@ static GfxRect rectDiscover(void) {
   return v;
 }
 
+// The compass is here only while Settings -> Discover location says "Show in
+// Search"; in the sidebar or off, the field takes its room.
+static int hasDiscover(void) { return settings_discover_na_search(); }
+
 static GfxRect rectField(void) {
   GfxRect f = { NV_SEARCH_X, NV_SEARCH_HEAD_Y,
-                NV_SEARCH_RIGHT - NV_SEARCH_X - NV_SEARCH_BTN - NV_SEARCH_BTN_GAP,
+                NV_SEARCH_RIGHT - NV_SEARCH_X
+                - (hasDiscover() ? NV_SEARCH_BTN + NV_SEARCH_BTN_GAP : 0.0f),
                 NV_SEARCH_HEAD_H };
   return f;
 }
@@ -791,7 +796,8 @@ void search_event(const SDL_Event *e) {
       // On screen the order is field, cross, Discover — the cross only while
       // there is something to clear.
       case SDLK_RIGHT:
-        if (!ime_is_open()) headCol = (headCol == 0 && nQuery) ? HEAD_CLEAR : 1;
+        if (!ime_is_open())
+          headCol = (headCol == 0 && nQuery) ? HEAD_CLEAR : hasDiscover() ? 1 : headCol;
         break;
       case SDLK_LEFT:
         // From the field itself LEFT is the edge of the screen: the side menu.
@@ -939,6 +945,7 @@ void search_update(float dt, Uint32 now) {
   // The cross can vanish under the focus — the keyboard's own delete emptied the
   // query — and the focus must not stay on something that is not drawn.
   if (headCol == HEAD_CLEAR && !nQuery) headCol = 0;
+  if (headCol == 1 && !hasDiscover()) headCol = 0;
 
   { float wantField = (panel == PANEL_FIELD && headCol == 0) ? 1.0f : 0.0f;
     float wantVoice  = (panel == PANEL_FIELD && headCol == 1) ? 1.0f : 0.0f;
@@ -1123,7 +1130,9 @@ static void drawField(Uint32 now) {
     TxtLine l = txt_line_trim(TXT_CALLOUT, query, 179, 179, 179, 255,
                               textW - NV_SEARCH_CLEAR - 12.0f);
     txt_draw(l, tx, textCenterY(TXT_CALLOUT, field.y, field.h));
-    tx += (float)l.w + 6.0f;
+    // The caret hugs the last letter: the line's width already ends past the
+    // glyph's own edge, so a pixel is all the air it needs.
+    tx += (float)l.w + 1.0f;
     // .search-clear-btn, shown by `.search-input-field.has-value`. Unlike the
     // web (`tabindex="-1"`) it IS focusable: RIGHT from the field lands on it,
     // and the pointer can click it. It sits beside the field, not below it, so
@@ -1194,6 +1203,7 @@ static void drawField(Uint32 now) {
 // microphone button would have added nothing to that and implied a great deal.
 static void drawDiscover(void) {
   GfxRect v = rectDiscover();
+  if (!hasDiscover()) return;
   pointer_zone(v.x, v.y, v.w, v.h, pointHead, 1, 0);
   float f = animDiscover;
   float ink = anim_blend(1.0f, 0.055f, f);

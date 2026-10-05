@@ -43,6 +43,13 @@ enum { CTX_PENDING = 1, CTX_CONFIRMED = 2, CTX_FAILURE = 3 };
 #define CTX_MARGIN    48.0f     // nearest the panel comes to a screen edge
 #define CTX_SLIDE     24.0f     // travel away from the card while it appears
 #define CTX_SCRIM      0.80f
+// THE GLASS, the side menu's own: the same blur, saturation and tint, so the two
+// panels read as one material. The region grabbed is the panel's widest reach —
+// its own width plus the slide on either side — by the tallest it gets with
+// CTX_MAX rows, so the open animation never runs off the edge of the picture.
+#define CTX_GLASS_W   (CTX_W + CTX_SLIDE * 2.0f)
+#define CTX_GLASS_H   720.0f
+#define CTX_SHEEN_H   18.0f     // NV_MENU_SHEEN_H: the rail's top glaze
 
 static float pxRadius(GfxRect r, float px) {
   float m = r.w < r.h ? r.w : r.h;
@@ -323,6 +330,8 @@ void ctx_open_custom(const char *title, const char *meta, const CtxOption *opts,
 
 int ctx_requested_custom(void) { int v = reqCustom; reqCustom = -1; return v; }
 
+void ctx_glass_start(void) { gfx_glass_start(CTX_GLASS_W, CTX_GLASS_H); }
+
 int ctx_is_open(void) { return is_open; }
 int ctx_requested_details(void) { int v = reqDetails; reqDetails = -1; return v; }
 int ctx_requested_play(int *fromStart) {
@@ -519,8 +528,7 @@ void ctx_draw(Uint32 now) {
   const CatItem *ci;
   const char *message = NULL;
   float a = anim, height, x, y, cy;
-  int i;
-  (void)now;
+  int i, glass;
   // THE HINT USED TO BE DRAWN HERE TOO, centred at the bottom of the screen. ctx_draw
   // runs on EVERY screen, and this observer sees OK on every screen, so "Hold OK for
   // options" appeared over the detail and the episode list — where holding OK picks a
@@ -540,6 +548,7 @@ void ctx_draw(Uint32 now) {
   else if (stateOperation == CTX_FAILURE)
     message = "Could not update. Try again.";
 
+  glass = settings_hold_menu_blur();
   { TxtLine title = txt_line_trim(TXT_PANEL_TITLE, custom ? customTitle : ci->title, 245, 246, 249, 255,
                                   CTX_W - CTX_PAD * 2.0f);
     TxtLine probe = txt_line(TXT_HERO_META, "Series", 150, 154, 163, 255);
@@ -571,10 +580,21 @@ void ctx_draw(Uint32 now) {
       // The scrim goes round the card, not over it: the held card stays lit and
       // everything else steps back. One quad with a rounded hole cut exactly at
       // the ring's outer edge (home.c hands over that edge and its corner).
+      // The glass is grabbed FIRST, while the frame still holds the home
+      // undimmed: grabbed after the scrim, the pane would blur a picture already
+      // at 20% and come out as flat as the fill it replaces. The region sits at
+      // the panel's RESTING place, slide included, so it holds still while the
+      // panel moves through it.
+      if (glass)
+        gfx_glass_grab((GfxRect){ x - (left ? 1.0f : -1.0f) * (1.0f - a) * CTX_SLIDE - CTX_SLIDE,
+                                y, CTX_GLASS_W, CTX_GLASS_H }, (unsigned)now);
       gfx_scrim_hole(hole, holeR, holeFeather, CTX_SCRIM * a);
     } else {
       x = (NV_SCREEN_W - CTX_W) * 0.5f;
       y = (NV_SCREEN_H - height) * 0.5f + (1.0f - a) * CTX_SLIDE;
+      if (glass)
+        gfx_glass_grab((GfxRect){ x - CTX_SLIDE, (NV_SCREEN_H - height) * 0.5f,
+                                CTX_GLASS_W, CTX_GLASS_H }, (unsigned)now);
       gfx_color((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, 0.0f, 0, 0, 0, CTX_SCRIM * a);
     }
 
@@ -583,7 +603,10 @@ void ctx_draw(Uint32 now) {
       GfxRect edge = { x - 1.0f, y - 1.0f, CTX_W + 2.0f, height + 2.0f };
       gfx_drop_shadow(panel, CTX_RADIUS, 40.0f, 12.0f, 0.5f * a);
       gfx_color(edge, pxRadius(edge, CTX_RADIUS + 1.0f), 0.14f, 0.15f, 0.17f, a);
-      gfx_color(panel, pxRadius(panel, CTX_RADIUS), 0.055f, 0.059f, 0.071f, a); }
+      // The flat fill stays underneath: it is what shows if the glass could not
+      // be created, and where it does draw, the glass is opaque over it.
+      gfx_color(panel, pxRadius(panel, CTX_RADIUS), 0.055f, 0.059f, 0.071f, a);
+      if (glass) gfx_glass(panel, pxRadius(panel, CTX_RADIUS), a, CTX_SHEEN_H / height); }
 
     cy = y + CTX_PAD;
     txt_draw_alpha(title, x + CTX_PAD, cy, a);

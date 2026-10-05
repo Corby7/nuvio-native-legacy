@@ -734,12 +734,24 @@ static const char *art_by_identity(int index_, int landscape) {
 // The hero deliberately does NOT go through here: a still is a 1280-wide frame
 // at best and would be stretched to 1920 across the whole screen, and the
 // backdrop is the image chosen to carry text over it.
+//
+// useEpisodeThumbnailsInCw (Settings -> Continue watching -> Episode thumbnail):
+// off, the card keeps the series' own art.
 static const char *art_of_card(KindRow kind, int index_, int landscape) {
-  if (kind == ROW_CONTINUE || kind == ROW_RETURN) {
+  if ((kind == ROW_CONTINUE || kind == ROW_RETURN) && settings_cw_thumb_episode()) {
     const CatItem *item = cat_item_exact(index_);
     if (item && item->thumbEp[0]) return item->thumbEp;
   }
   return art_by_identity(index_, landscape);
+}
+
+// blurContinueWatchingNextUp: a next-up card's still shows an episode nobody has
+// started, so it is a spoiler the way an unwatched one on the detail page is. A
+// next-up card is the one with no progress of its own (buildNextUp in discover.c).
+static int card_blurred(KindRow kind, const CatItem *item, const char *path) {
+  if (kind != ROW_CONTINUE && kind != ROW_RETURN) return 0;
+  if (!settings_cw_blur_next() || !item || !path || path != item->thumbEp) return 0;
+  return item->progress <= 2;
 }
 
 static int focus_can_press_long(void) {
@@ -880,6 +892,12 @@ static GfxRect frameOf(GfxRect card, float pad) {
   if (f.h < 1.0f) { f.y = card.y; f.h = card.h; }
   return f;
 }
+
+// The focused card's glow in its poster's colour (passe 0 in the row loop),
+// when Settings -> Posters -> Focus glow is on: how far it spreads and how much
+// its colour is pushed. Its strength is the setting's Glow strength.
+#define NV_ROW_GLOW_BLUR 40.0f
+#define NV_ROW_GLOW_SAT  1.10f
 
 // --- Card depth (`cardDepth*`) -----------------------------------------------
 // The web app's two inset shadows (components.css in NuvioWeb 810d022): a 2px line
@@ -2306,7 +2324,9 @@ static int drawHeroCopy(const CatItem *ci, float alpha, float slideDownCopy,
                          ci->remainingMin);
   char score[8];
   score[0] = 0;
-  if (ci && ci->score > 0) snprintf(score, sizeof score, "%.1f", ci->score / 10.0f);
+  // homeImdbRatingsVisibility: Settings -> Catalogue rows -> Overall ratings.
+  if (ci && ci->score > 0 && settings_scores_home())
+    snprintf(score, sizeof score, "%.1f", ci->score / 10.0f);
   // The empty line COLLAPSES, it is not drawn blank: `.is-empty { display: none }` on
   // the flex column, which is what lifts the copy back up on a title with no highlight.
   int hasSec = (highlight[0] != 0);
@@ -4035,7 +4055,9 @@ void home_draw(Uint32 now) {
       // more press between the owner and a poster. The grid screen itself stays:
       // the collections still open into it.
 
-      for (int passe = 1; passe < 2; passe++) {
+      // Pass 0 lays the focused card's glow, pass 1 the cards: drawn any later, the
+      // glow would fall across the card to its left.
+      for (int passe = settings_focus_glow() ? 0 : 1; passe < 2; passe++) {
         for (int c = 0; c < rows[r].n; c++) {
           float f = animFocus[r][c];
           if (passe == 0 && f < 0.01f) continue;
@@ -4079,13 +4101,34 @@ void home_draw(Uint32 now) {
           { float x1 = roundf(px + w), y1 = roundf(py + h);
             px = roundf(px); py = roundf(py);
             w = x1 - px; h = y1 - py; }
-          pointer_zone(px, py, w, h, pointAt, r, c);
+          if (passe == 1) pointer_zone(px, py, w, h, pointAt, r, c);
 
           if (passe == 0) {
             // No shadow. It existed to separate the card from the background, but over
             // colourful art it becomes a dark halo around the focused item — and the
             // device does not have that: there the focus is marked by scale and glow.
-            (void)f;
+            //
+            // THE GLOW IS THE POSTER'S OWN COLOUR. Light, unlike a shadow, shows on
+            // the #0D0D0D page, and taking it from the art gives every card a light
+            // of its own. It rides `f`, so it comes up as the card grows.
+            const char *art = art_of_card(kind, rows[r].start + c, openAmt > 0.5f ||
+                                          kind == ROW_CONTINUE || kind == ROW_RETURN || landscape);
+            float tint[3];
+            if (art && tex_tint(art, tint)) {
+              // Lifted to a fixed brightness and saturated a step, so a dark poster
+              // still gives off light and a grey one stays a soft white.
+              float mx = tint[0] > tint[1] ? tint[0] : tint[1];
+              if (tint[2] > mx) mx = tint[2];
+              float lum = (tint[0] + tint[1] + tint[2]) / 3.0f;
+              for (int k = 0; k < 3; k++) {
+                tint[k] = lum + (tint[k] - lum) * NV_ROW_GLOW_SAT;
+                tint[k] = mx > 0.02f ? tint[k] / mx : 1.0f;
+                if (tint[k] < 0.0f) tint[k] = 0.0f;
+                if (tint[k] > 1.0f) tint[k] = 1.0f;
+              }
+              gfx_glow((GfxRect){ px, py, w, h }, settings_radius_poster_px(), NV_ROW_GLOW_BLUR,
+                       tint[0], tint[1], tint[2], settings_focus_glow_strength() * f);
+            }
             continue;
           }
 
@@ -4219,8 +4262,11 @@ void home_draw(Uint32 now) {
           // is provably never asked for at 1920. Smaller non-exact callers cannot
           // start the fight: they promote upward or not at all. The landscape/open art IS the backdrop, so it keeps tex_get_width.
           int sharp = cItem && path == cItem->poster && cItem->backdrop[0];
-          GLuint t = path ? (sharp ? tex_get_exact(path, wAsk)
-                                   : tex_get_width(path, wAsk)) : 0;
+          float blurAspect = 0.0f;
+          GLuint t = !path ? 0
+                   : card_blurred(kind, cItem, path) ? tex_get_blurred(path, &blurAspect)
+                   : sharp ? tex_get_exact(path, wAsk)
+                   : tex_get_width(path, wAsk);
           float radius = radiusOf(w, h);
           GfxRect card = { px, py, w, h };
           // Continue watching keeps the old geometry, and that is the reference
@@ -4346,7 +4392,7 @@ void home_draw(Uint32 now) {
             // (tex_appear); anything already resident answers 1 and is simply there.
             float in = tex_appear(t);
             if (in < 1.0f) drawArtSkeleton(art, radiusA, 1.0f);
-            gfx_tex_aspect_current = tex_aspect(path);
+            gfx_tex_aspect_current = blurAspect > 0.0f ? blurAspect : tex_aspect(path);
             // A resume card's scrim and bar go INTO the art's pass (GFX_CW_CARD in
             // gfx.h): drawn over it as layers, the shared edge leaked the art and
             // darkened the focus ring round the bottom corners. Its art is the card.

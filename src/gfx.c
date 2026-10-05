@@ -439,13 +439,20 @@ static const char *FS_BODY[GFX_NMODES] = {
   // The percentage stops are the SAME as the banded hero's; what changes is the
   // coverage (65% of the width instead of 45%) and the depth. That makes sense:
   // with the art filling the whole screen, the text needs more dark ground under it.
+  //
+  // EXCEPT THE LAST PIECE, which EASES OUT instead of running straight. Here the art
+  // reaches down behind the first row of cards, and a linear ramp arriving at solid
+  // on a slope leaves a line where it lands: the picture visibly stopped at the
+  // cards' feet. 1-(1-u)^2 starts at nearly the slope of the piece before it (3.5
+  // against 3.7) and arrives with none, so the art settles into the page.
   "void main(){\n"
   "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"
   "  float y = vUv.y;\n"
+  "  float uz = 1.0 - clamp((y-0.856)/0.144,0.0,1.0);\n"
   "  float av = clamp((y-0.640)/0.108,0.0,1.0)*0.35\n"
   "           + clamp((y-0.748)/0.108,0.0,1.0)*0.40\n"
-  "           + clamp((y-0.856)/0.144,0.0,1.0)*0.25;\n"
+  "           + (1.0 - uz*uz)*0.25;\n"
   "  float t = vUv.x/0.65;\n"
   "  float ah = 1.0 - clamp(t/0.22,0.0,1.0)*0.10\n"
   "                 - clamp((t-0.22)/0.24,0.0,1.0)*0.10\n"
@@ -652,7 +659,10 @@ static const char *FS_BODY[GFX_NMODES] = {
   // The sheen is ADDED, not mixed: it is a white glaze at 6%, and mixing towards
   // white at that strength washes the colour the saturation has just restored.
   "  c += 0.06 * (1.0 - smoothstep(0.0, max(uPar.x, 0.0001), vUv.y));\n"
-  "  gl_FragColor = vec4(c, uColor.a);\n"
+  // The rail is square and passes radius 0, which skips the mask: an SDF edge
+  // would feather the strip's own border. The hold menu's pane is rounded.
+  "  float m = uRadius > 0.0 ? smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect)) : 1.0;\n"
+  "  gl_FragColor = vec4(c, uColor.a * m);\n"
   "}\n",
 
   // GFX_PROFILE_BG — the profile picker's page. See the note in gfx.h: two CSS
@@ -1180,9 +1190,10 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float avB = clamp((y-0.820)/0.072,0.0,1.0)*0.25\n"
   "            + clamp((y-0.892)/0.063,0.0,1.0)*0.40\n"
   "            + clamp((y-0.955)/0.045,0.0,1.0)*0.35;\n"
+  "  float uzF = 1.0 - clamp((y-0.856)/0.144,0.0,1.0);\n"
   "  float avF = clamp((y-0.640)/0.108,0.0,1.0)*0.35\n"
   "            + clamp((y-0.748)/0.108,0.0,1.0)*0.40\n"
-  "            + clamp((y-0.856)/0.144,0.0,1.0)*0.25;\n"
+  "            + (1.0 - uzF*uzF)*0.25;\n"
   "  float s = clamp(uPar.y, 0.05, 0.98), d = 1.0 - s;\n"
   "  float avT = clamp((y-s)/(d*0.34),0.0,1.0)*0.30\n"
   "            + clamp((y-(s+d*0.34))/(d*0.30),0.0,1.0)*0.40\n"
@@ -1258,7 +1269,7 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {0,1},   /* GFX_AVATAR */
   {0,0},   /* GFX_PORTRAIT */
   {0,0},   /* GFX_DISK */
-  {0,0},   /* GFX_BACKDROP — the strip is a flat quad: no SDF, no cover */
+  {1,0},   /* GFX_BACKDROP — the SDF only for a rounded pane; the rail skips it */
   {0,0},   /* GFX_PROFILE_BG — a full-screen wash: no SDF, no texture */
   {0,0},   /* GFX_RING_CSS — its own radial distance, not the rect SDF */
   {1,0},   /* GFX_CW_SCRIM — a vertical ramp, clipped by the card's corner */
@@ -1699,8 +1710,13 @@ void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) 
 // the alpha here is the window's composition channel, so this only has any effect
 // with SDL_GL_ALPHA_SIZE 8 requested before the window is created.
 void gfx_card_depth(GfxRect card, float radius, float edge, float sheen, float offsetPx) {
-  if (card.h <= 0.0f || (edge <= 0.001f && sheen <= 0.001f)) return;
-  gfx_rect(card, 0, GFX_CARD_DEPTH, 0, card.h, offsetPx, radius, edge, sheen, 0, 1.0f);
+  gfx_card_depth_a(card, radius, edge, sheen, offsetPx, 1.0f);
+}
+
+void gfx_card_depth_a(GfxRect card, float radius, float edge, float sheen, float offsetPx,
+                      float a) {
+  if (card.h <= 0.0f || a <= 0.002f || (edge <= 0.001f && sheen <= 0.001f)) return;
+  gfx_rect(card, 0, GFX_CARD_DEPTH, 0, card.h, offsetPx, radius, edge, sheen, 0, a);
 }
 
 void gfx_card_depth_cw(GfxRect card, float radius, float edge, float sheen, float offsetPx) {
@@ -1960,58 +1976,76 @@ void gfx_blur_shutdown(void) {
 //
 // So the strip walks down a chain, each level half the last, where four taps
 // really do cover the footprint. The last two levels are the same size: they are
-// the separable gaussian's ping-pong pair. Levels 0..BD_FINAL are the descent,
-// BD_FINAL is where the blur lands and where gfx_backdrop reads from.
+// the separable gaussian's ping-pong pair. Levels 0..GL_FINAL are the descent,
+// GL_FINAL is where the blur lands and where the draw reads from.
 // The top level is 3x the last, not 4x, and that is sized off THE DEVICE: the TV
 // grabs 392x1080, so 192x528 is a clean 2.04x first step — the most four taps can
 // average — while costing 44% less fill than the 256x704 it started at. The Mac
 // preview grabs at retina and takes a 2.9x first step instead, which is the one
 // place the two differ and the softer of the two errors to make.
-static const struct { int w, h; } BD_LEVEL[] = {
-  { NV_BACKDROP_W * 3, NV_BACKDROP_H * 3 },
-  { NV_BACKDROP_W + NV_BACKDROP_W / 2, NV_BACKDROP_H + NV_BACKDROP_H / 2 },
-  { NV_BACKDROP_W,     NV_BACKDROP_H     },
-  { NV_BACKDROP_W,     NV_BACKDROP_H     }
-};
-#define BD_LEVELS  ((int)(sizeof BD_LEVEL / sizeof BD_LEVEL[0]))
-#define BD_FINAL   (BD_LEVELS - 2)
-static GLuint bdGrab = 0;
-static GLuint bdFbo[BD_LEVELS] = {0}, bdTex[BD_LEVELS] = {0};
-static int   bdW = 0, bdH = 0;     // the strip, in layout units
-static int   bdGw = 0, bdGh = 0;   // the grab, in buffer pixels
-static unsigned bdWhen = 0;
-static int   bdHas = 0;
+//
+// TWO PANES OF IT. The rail's strip, pinned to the screen's left edge, and the
+// hold menu's, which sits wherever the held card puts it. They are the same
+// pipeline over different regions, so each is one Glass: its own targets, its
+// own clock, and the region of the screen its last grab came from.
+#define GL_LEVELS  4
+#define GL_FINAL   (GL_LEVELS - 2)
+typedef struct {
+  int lw[GL_LEVELS], lh[GL_LEVELS];   // the chain's sizes, from the final one
+  GLuint grab, fbo[GL_LEVELS], tex[GL_LEVELS];
+  float w, h;                          // the largest region it is grabbed at
+  GfxRect src;                         // where the last grab came from
+  int gw, gh;                          // the grab, in buffer pixels
+  unsigned when;
+  int has;
+} Glass;
+static Glass glassRail, glassPanel;
 
-int gfx_backdrop_start(float w, float h) {
+static void glassShutdown(Glass *g) {
+  for (int i = 0; i < GL_LEVELS; i++) {
+    if (g->fbo[i]) { glDeleteFramebuffers(1, &g->fbo[i]); g->fbo[i] = 0; }
+    if (g->tex[i]) { glDeleteTextures(1, &g->tex[i]); g->tex[i] = 0; }
+  }
+  if (g->grab) { glDeleteTextures(1, &g->grab); g->grab = 0; }
+  g->gw = g->gh = 0; g->has = 0;
+}
+
+// `fw`/`fh` is the size the blur lands at; the descent above it is 1.5x and 3x.
+static int glassStart(Glass *g, float w, float h, int fw, int fh) {
   int i;
-  bdW = (int)w; bdH = (int)h;
-  bdGw = bdGh = 0; bdHas = 0; bdWhen = 0;
-  for (i = 0; i < BD_LEVELS; i++) {
-    if (createsTargetIn(&bdTex[i], &bdFbo[i], BD_LEVEL[i].w, BD_LEVEL[i].h)) continue;
-    gfx_backdrop_shutdown();
+  g->w = w; g->h = h;
+  g->gw = g->gh = 0; g->has = 0; g->when = 0;
+  g->lw[0] = fw * 3;      g->lh[0] = fh * 3;
+  g->lw[1] = fw + fw / 2; g->lh[1] = fh + fh / 2;
+  g->lw[2] = g->lw[3] = fw;
+  g->lh[2] = g->lh[3] = fh;
+  for (i = 0; i < GL_LEVELS; i++) {
+    if (createsTargetIn(&g->tex[i], &g->fbo[i], g->lw[i], g->lh[i])) continue;
+    glassShutdown(g);
     printf("backdrop unavailable: carrying on without the glass\n");
     return 0;
   }
-  glGenTextures(1, &bdGrab);
+  glGenTextures(1, &g->grab);
   return 1;
 }
 
-// Grabs the strip and runs the gaussian over it. It is the whole cost of the
-// glass, and the reason gfx_backdrop rations it by the clock.
-static void backdropGenerates(void) {
+// Grabs the region and runs the gaussian over it. It is the whole cost of the
+// glass, and the reason glassGrab rations it by the clock.
+static void glassGenerates(Glass *g, GfxRect src) {
   float ex = (float)screenW / NV_SCREEN_W, ey = (float)screenH / NV_SCREEN_H;
-  int gw = (int)(bdW * ex), gh = (int)(bdH * ey);
+  int gw = (int)(src.w * ex), gh = (int)(src.h * ey);
   // glCopyTexImage2D reads from the BOTTOM-left corner, and the letterbox moves
   // the origin — the same two conversions gfx_crop documents.
-  int gx = screenX, gy = (int)((NV_SCREEN_H - bdH) * ey) + screenY;
+  int gx = (int)(src.x * ex) + screenX;
+  int gy = (int)((NV_SCREEN_H - (src.y + src.h)) * ey) + screenY;
   GfxRect full = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
   float px, py;
   int i;
   if (gw < 1 || gh < 1) return;
 
   GFX_OUTRO_START();
-  glBindTexture(GL_TEXTURE_2D, bdGrab);
-  if (gw != bdGw || gh != bdGh) {
+  glBindTexture(GL_TEXTURE_2D, g->grab);
+  if (gw != g->gw || gh != g->gh) {
     // The first grab, and any window resize: glCopyTexImage2D ALLOCATES as well
     // as copying, so the filter has to be set again with it.
     glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, gx, gy, gw, gh, 0);
@@ -2019,11 +2053,12 @@ static void backdropGenerates(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    bdGw = gw; bdGh = gh;
+    g->gw = gw; g->gh = gh;
   } else {
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, gx, gy, gw, gh);
   }
   gfx_tex_forget(0);  // the bind above went around gfx_rect
+  g->src = src;
 
   glDisable(GL_BLEND);
   gfx_tex_aspect_current = 0.0f;
@@ -2033,27 +2068,27 @@ static void backdropGenerates(void) {
   // right way up. Every step after it reads an FBO and writes an FBO, so the two
   // already agree and flipping again would stand the picture back on its head.
   // The number of steps therefore does not reach the final draw at all.
-  glViewport(0, 0, BD_LEVEL[0].w, BD_LEVEL[0].h);
-  glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[0]);
-  gfx_rect(full, bdGrab, GFX_SNAP, 0, 0.0f, 1.0f, 0.0f, 0, 0, 0, 1.0f);
-  for (i = 1; i <= BD_FINAL; i++) {
-    glViewport(0, 0, BD_LEVEL[i].w, BD_LEVEL[i].h);
-    glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[i]);
-    gfx_rect(full, bdTex[i - 1], GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+  glViewport(0, 0, g->lw[0], g->lh[0]);
+  glBindFramebuffer(GL_FRAMEBUFFER, g->fbo[0]);
+  gfx_rect(full, g->grab, GFX_SNAP, 0, 0.0f, 1.0f, 0.0f, 0, 0, 0, 1.0f);
+  for (i = 1; i <= GL_FINAL; i++) {
+    glViewport(0, 0, g->lw[i], g->lh[i]);
+    glBindFramebuffer(GL_FRAMEBUFFER, g->fbo[i]);
+    gfx_rect(full, g->tex[i - 1], GFX_SNAP, 0, 0.0f, 0.0f, 0.0f, 0, 0, 0, 1.0f);
   }
 
   // THE GAUSSIAN, over a picture the descent has already box-filtered. Both halves
   // live at the same size, so the viewport is already right from the last step
   // down. Each iteration is one horizontal pass out to the partner and one
-  // vertical pass back, which leaves the result in BD_FINAL whatever the count.
+  // vertical pass back, which leaves the result in GL_FINAL whatever the count.
   // See NV_BACKDROP_PASSES for why the count is three and not one wider pass.
-  px = NV_BLUR_STEP / (float)BD_LEVEL[BD_FINAL].w;
-  py = NV_BLUR_STEP / (float)BD_LEVEL[BD_FINAL].h;
+  px = NV_BLUR_STEP / (float)g->lw[GL_FINAL];
+  py = NV_BLUR_STEP / (float)g->lh[GL_FINAL];
   for (i = 0; i < NV_BACKDROP_PASSES; i++) {
-    glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[BD_FINAL + 1]);
-    gfx_rect(full, bdTex[BD_FINAL], GFX_BLUR, 0, px, 0.0f, 0.0f, 0, 0, 0, 1.0f);
-    glBindFramebuffer(GL_FRAMEBUFFER, bdFbo[BD_FINAL]);
-    gfx_rect(full, bdTex[BD_FINAL + 1], GFX_BLUR, 0, 0.0f, py, 0.0f, 0, 0, 0, 1.0f);
+    glBindFramebuffer(GL_FRAMEBUFFER, g->fbo[GL_FINAL + 1]);
+    gfx_rect(full, g->tex[GL_FINAL], GFX_BLUR, 0, px, 0.0f, 0.0f, 0, 0, 0, 1.0f);
+    glBindFramebuffer(GL_FRAMEBUFFER, g->fbo[GL_FINAL]);
+    gfx_rect(full, g->tex[GL_FINAL + 1], GFX_BLUR, 0, 0.0f, py, 0.0f, 0, 0, 0, 1.0f);
   }
 
   glEnable(GL_BLEND);
@@ -2064,33 +2099,73 @@ static void backdropGenerates(void) {
 
 // THE CLOCK, not the frame: the rail is on screen every frame of the app's life,
 // and a grab plus three passes at 60Hz is a bill it does not need to pay. A 52px
-// blur simply has no detail left that 20 updates a second cannot carry.
-void gfx_backdrop_grab(unsigned now) {
-  if (!bdFbo[0] || bdW <= 0) return;
-  if (bdHas && now - bdWhen < (unsigned)NV_BACKDROP_MS) return;
-  backdropGenerates();
-  bdWhen = now; bdHas = 1;
+// blur simply has no detail left that 12.5 updates a second cannot carry.
+// A region that MOVED is grabbed at once, clock or not: the old picture belongs
+// somewhere else on the screen.
+static void glassGrab(Glass *g, GfxRect src, unsigned now) {
+  int moved;
+  if (!g->fbo[0] || g->w <= 0) return;
+  // Whole pixels: a caller that derives the region from an animated position
+  // must not see float noise as movement and re-grab on every frame.
+  src.x = floorf(src.x + 0.5f); src.y = floorf(src.y + 0.5f);
+  src.w = floorf(src.w + 0.5f); src.h = floorf(src.h + 0.5f);
+  if (src.x < 0) src.x = 0;
+  if (src.y < 0) src.y = 0;
+  if (src.w > g->w) src.w = g->w;
+  if (src.h > g->h) src.h = g->h;
+  if (src.x + src.w > NV_SCREEN_W) src.x = NV_SCREEN_W - src.w;
+  if (src.y + src.h > NV_SCREEN_H) src.y = NV_SCREEN_H - src.h;
+  moved = !g->has || src.x != g->src.x || src.y != g->src.y ||
+          src.w != g->src.w || src.h != g->src.h;
+  if (!moved && now - g->when < (unsigned)NV_BACKDROP_MS) return;
+  glassGenerates(g, src);
+  g->when = now; g->has = 1;
 }
 
-void gfx_backdrop(GfxRect r, float alpha, float sheen) {
-  float cw;
-  if (!bdFbo[0] || !bdHas || bdW <= 0 ||
+// `radius` is gfx_color's: a fraction of the rect's shorter side; 0 is square.
+static void glassDraw(Glass *g, GfxRect r, float radius, float alpha, float sheen) {
+  GfxRect s = g->src;
+  float u0, u1, v0, v1;
+  if (!g->fbo[0] || !g->has || s.w <= 1.0f || s.h <= 1.0f ||
       r.w <= 1.0f || r.h <= 1.0f || alpha <= 0.004f) return;
-  // The strip was grabbed at its widest; the panel takes the left slice of it.
-  // Sampling the whole strip into a narrower rect would SQUEEZE the picture, and
-  // the glass would stop lining up with the content beside it.
-  cw = r.w / (float)bdW; if (cw > 1.0f) cw = 1.0f;
-  gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, cw, 1.0f };
+  // The panel takes the slice of the grab it actually covers. Sampling the whole
+  // region into a different rect would SQUEEZE the picture, and the glass would
+  // stop lining up with the content beside it. Rows run bottom-up in the FBO,
+  // which GFX_BACKDROP's flip accounts for.
+  u0 = (r.x - s.x) / s.w;            u1 = (r.x + r.w - s.x) / s.w;
+  v0 = 1.0f - (r.y + r.h - s.y) / s.h; v1 = 1.0f - (r.y - s.y) / s.h;
+  if (u0 < 0.0f) u0 = 0.0f;
+  if (u1 > 1.0f) u1 = 1.0f;
+  if (v0 < 0.0f) v0 = 0.0f;
+  if (v1 > 1.0f) v1 = 1.0f;
+  gfx_tex_cell_current = (GfxRect){ u0, v0, u1 - u0, v1 - v0 };
   gfx_tex_aspect_current = 0.0f;
-  gfx_rect(r, bdTex[BD_FINAL], GFX_BACKDROP, 0, sheen, 0.0f, 0.0f, 0, 0, 0, alpha);
+  gfx_rect(r, g->tex[GL_FINAL], GFX_BACKDROP, 0, sheen, 0.0f, radius, 0, 0, 0, alpha);
   gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
 }
 
-void gfx_backdrop_shutdown(void) {
-  for (int i = 0; i < BD_LEVELS; i++) {
-    if (bdFbo[i]) { glDeleteFramebuffers(1, &bdFbo[i]); bdFbo[i] = 0; }
-    if (bdTex[i]) { glDeleteTextures(1, &bdTex[i]); bdTex[i] = 0; }
-  }
-  if (bdGrab) { glDeleteTextures(1, &bdGrab); bdGrab = 0; }
-  bdGw = bdGh = 0; bdHas = 0;
+// The rail's strip: always anchored at the screen's top-left corner, at the
+// widest the menu ever gets, so it never has to be reallocated mid-animation.
+int gfx_backdrop_start(float w, float h) {
+  return glassStart(&glassRail, w, h, NV_BACKDROP_W, NV_BACKDROP_H);
 }
+void gfx_backdrop_grab(unsigned now) {
+  glassGrab(&glassRail, (GfxRect){ 0, 0, glassRail.w, glassRail.h }, now);
+}
+void gfx_backdrop(GfxRect r, float alpha, float sheen) {
+  glassDraw(&glassRail, r, 0.0f, alpha, sheen);
+}
+void gfx_backdrop_shutdown(void) { glassShutdown(&glassRail); }
+
+// The floating pane: the same glass over a region the caller places each frame.
+// Sized at the same ~6.1 screen pixels per texel as the rail, in both
+// directions, so the blur matches the rail's and stays round.
+int gfx_glass_start(float w, float h) {
+  int fw = (int)(w / 6.125f + 0.5f), fh = (int)(h / 6.125f + 0.5f);
+  return glassStart(&glassPanel, w, h, fw < 8 ? 8 : fw, fh < 8 ? 8 : fh);
+}
+void gfx_glass_grab(GfxRect region, unsigned now) { glassGrab(&glassPanel, region, now); }
+void gfx_glass(GfxRect r, float radius, float alpha, float sheen) {
+  glassDraw(&glassPanel, r, radius, alpha, sheen);
+}
+void gfx_glass_shutdown(void) { glassShutdown(&glassPanel); }

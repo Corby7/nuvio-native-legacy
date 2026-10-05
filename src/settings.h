@@ -42,6 +42,14 @@ void settings_shutdown(void);
 // anim_spring — it is an accessibility setting, not a taste, and a screen that
 // ignores it is no use to the person who turned it on.
 int settings_animations_reduced(void);
+// "Hold menu blur" (Posters): 1 when the hold-OK panel draws the frosted glass,
+// 0 for the solid panel it had before. On by default.
+int settings_hold_menu_blur(void);
+// "Focus glow" (Posters): 1 when the focused home card gives off a faint light
+// in its poster's colour. Off by default.
+int settings_focus_glow(void);
+// "Glow strength": the glow's opacity at full focus, 0.02..0.60 (0.14 default).
+float settings_focus_glow_strength(void);
 int settings_dolby_vision(void);
 int settings_dolby_atmos(void);
 // Which subtitle the player turns on by itself: 0 off, 1 automatic (English),
@@ -84,6 +92,9 @@ void settings_set_live(int bufferMinutes, int preview);
 // "Automatic", "4K", "1080p" or "720p" — the displayed label, so whatever picks
 // the video source shows exactly what the user chose.
 const char *settings_quality(void);
+// The same row as a height: the tallest picture the automatic pick should
+// choose, 0 for no limit (Automatic).
+int settings_quality_max_height(void);
 
 // --- LAYOUT: home structure -------------------------------------------------
 int   settings_rail_collapsed(void);     // collapseSidebar

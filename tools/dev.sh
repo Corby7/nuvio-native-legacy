@@ -47,7 +47,9 @@ case "$1" in
       exit 1
     fi
     grep -E "warning" "$OUT/build.log" | grep -v "macro redefined" | head -10 >&2 || true
-    NUVIO_DATA="${NUVIO_DATA:-$HOME/.nuvio}" nohup "$BIN" "$ROOT/deploy/app/art" \
+    # No startup animation: a capture taken right after "ready" would catch it
+    # mid-flight (src/splash.h). tools/mac.sh still shows it.
+    NUVIO_INTRO=0 NUVIO_DATA="${NUVIO_DATA:-$HOME/.nuvio}" nohup "$BIN" "$ROOT/deploy/app/art" \
       > "$LOG" 2>&1 &
     # WAIT FOR READY, do not sleep a guess. Measured: the first [nav] lands about
     # a second after launch, and the 12s sleep this replaces cost three times the

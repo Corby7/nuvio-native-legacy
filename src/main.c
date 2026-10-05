@@ -24,6 +24,7 @@
 #include "traktauth.h"
 #include "simklauth.h"
 #include "app.h"
+#include "splash.h"
 #include "video.h"
 #include "plane.h"
 #include "addons.h"
@@ -39,6 +40,7 @@
 #include "layout.h"
 #include "pointer.h"
 #include "tvlogos.h"
+#include "ctxmenu.h"
 
 // Screenshots on demand. The TV's framebuffer cannot be read even as root
 // ("Operation not permitted") and LG's capture service answers with an error, so
@@ -154,6 +156,13 @@ static long sizeOf(const char *path) {
 // A deferred KEYUP for a held key.
 static Uint32 releaseIn = 0;
 static SDL_Keycode releaseKey = 0;
+
+// A script driving the app cannot wait out the startup animation, nor see it:
+// its first key ends it on the spot and still arrives.
+static void deliverInjected(const SDL_Event *e) {
+  splash_finish();
+  app_event(e);
+}
 
 static void keysInjected(void (*deliver)(const SDL_Event *)) {
   if (releaseIn && SDL_GetTicks() >= releaseIn) {
@@ -738,6 +747,8 @@ int main(int argc, char **argv) {
     tex_cache_dir(c); }
   // Os icones da interface saem de art/icones (SVG do app web rasterizados).
   gfx_icons_dir(dirArt);
+  // The logo the system splash is showing, picked up where it is (see splash.h).
+  splash_start(dirArt);
   // Live TV's better channel logos: art/tv-logos.txt, read on first use.
   tvlogos_dir(dirArt);
   // The network catalogue. The package's is already loaded and stays on screen
@@ -759,6 +770,7 @@ int main(int argc, char **argv) {
   // The side menu's glass: the strip is grabbed at the menu's WIDEST, so the
   // texture never has to be reallocated while the bar opens.
   gfx_backdrop_start(NV_MENU_W_IS_OPEN, NV_SCREEN_H);
+  ctx_glass_start();
 
   Uint32 lastReport = SDL_GetTicks();
   double txtMsFrame = 0, worstTxtMs = 0;
@@ -803,6 +815,9 @@ int main(int argc, char **argv) {
     // While the detail screen exists it keeps the whole keyboard: the home is
     // still drawn underneath, but must not react to the D-pad.
     while (SDL_PollEvent(&e)) {
+      // The startup animation before anything: a press there skips it and goes
+      // nowhere else, the Magic Remote's clicks included.
+      if (splash_event(&e)) continue;
       // The Magic Remote first: its motion, clicks, wheel and its show/hide keys
       // (which would otherwise reach the screens as KEYDOWNs with sym 0).
       if (pointer_event(&e)) continue;
@@ -848,7 +863,7 @@ int main(int argc, char **argv) {
       }
       app_event(&e);
     }
-    keysInjected(app_event);
+    keysInjected(deliverInjected);
     fEv = NV_DT(tEv);
 
     Uint32 now = SDL_GetTicks();
@@ -923,6 +938,7 @@ int main(int argc, char **argv) {
     t0 = NV_T0();
     txt_new_frame();
     app_draw(now);
+    splash_draw(now, app_ready_to_show());
     fDraw = NV_DT(t0);
     fGfxMs = gfx_ms_rect; fTexMs = tex_ms_search;
     fNRect = gfx_n_rect; fNProgress = gfx_n_progress; fNBind = gfx_n_bind; fNSearch = tex_n_search;
@@ -1031,6 +1047,7 @@ int main(int argc, char **argv) {
   }
 
   gfx_backdrop_shutdown();
+  gfx_glass_shutdown();
   gfx_blur_shutdown();
   gfx_snap_shutdown();
   app_shutdown();

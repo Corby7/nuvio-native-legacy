@@ -82,6 +82,14 @@ GLuint tex_get_width(const char *path, float widthLayout);
 // so asking with a size that animates would decode on every frame.
 GLuint tex_get_exact(const char *path, float widthLayout);
 
+// A HEAVILY BLURRED copy of the art, for a still that would spoil something (an
+// unwatched episode's thumbnail). Its own entry, beside the sharp one: decoded
+// down to NV_TEX_BLUR_W, softened on the decode thread and stretched back up by
+// the GPU's linear filter — so it costs a few KB, not another full texture. The
+// file on disk is shared with the sharp copy. `aspect`, when not NULL, gets the
+// art's aspect as tex_aspect would give it (0 while unknown).
+GLuint tex_get_blurred(const char *path, float *aspect);
+
 // The aspect (w/h) of the already-loaded texture; 0 if it is not ready yet.
 // Needed for the shader's "cover" — without it the art stretches.
 //
@@ -129,6 +137,12 @@ int  tex_failed(const char *path);
 // It answers 0 while the texture has not loaded: not tinting is the safe
 // default.
 int  tex_brand_dark(const char *path);
+
+// The art's colour, 0..1: the average of its opaque pixels weighted towards the
+// most saturated, so a vivid accent wins over a grey background. Measured once,
+// on the decode thread, with the luminance above. Answers 0 (rgb untouched)
+// until the texture has decoded.
+int  tex_tint(const char *path, float rgb[3]);
 
 // Where the VISIBLE pixels sit, as fractions of the image: box = {x0, y0, x1, y1}.
 // Logos come with arbitrary transparent margins, so two marks drawn in the same

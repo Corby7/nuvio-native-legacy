@@ -3522,6 +3522,22 @@ static void drawEpisodeMeta(const CatEp *ep, float x, float base, float xEnd,
 // lines below it appear.
 // `g` is how far the row has opened (epGrow): the synopsis and the copy's travel
 // follow it, everything else follows the focus `f`.
+// `cardDepthEnabled` with the per-family switch (episodes, cast, trailers), as
+// home.c's drawDepth does for the rows there, at the card's own opacity: the lists
+// here dissolve at their top edge and a depth drawn at full strength would not.
+static void drawDepth(GfxRect card, float radius, int onHere, float a) {
+  if (!settings_depth() || !onHere) return;
+  gfx_card_depth_a(card, radius, settings_depth_border(), settings_depth_brightness(),
+                   18.0f, a);
+}
+
+// `blurUnwatchedEpisodes`: an episode's still is a spoiler until it has been seen.
+// Watched is what NuvioTV counts — marked watched, or played to the end.
+static int episodeBlurred(const CatEp *ep) {
+  if (!settings_blur_unwatched() || !ep || !ep->thumb[0]) return 0;
+  return !extras_ep_watched(ep->season, ep->episode) && episodeProgress(ep) < 98;
+}
+
 static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
   const CatEp *ep = epOfSeason(seasonNow(), c);
   int focused = level >= 1 && focus.row == SEC_EPISODES && focus.column == c;
@@ -3548,12 +3564,19 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
   { const CatItem *series = cat_item(idx);
     const char *art = (ep && ep->thumb[0]) ? ep->thumb
                        : (series && series->backdrop[0] ? series->backdrop : NULL);
-    GLuint t2 = art ? tex_get_width(art, NV_DETEP_THUMB_W * NV_DETEP_THUMB_GROW) : 0;
+    // The series' backdrop, the fallback, is no spoiler: only the episode's own
+    // still is blurred.
+    float aspect = 0.0f;
+    GLuint t2 = !art ? 0
+              : episodeBlurred(ep) ? tex_get_blurred(art, &aspect)
+              : tex_get_width(art, NV_DETEP_THUMB_W * NV_DETEP_THUMB_GROW);
+    if (t2 && aspect <= 0.0f) aspect = tex_aspect(art);
     if (t2) {
-      gfx_tex_aspect_current = tex_aspect(art);
+      gfx_tex_aspect_current = aspect;
       gfx_rect(th, t2, GFX_CARD, 0, 0, 0, radiusTh, 0, 0, 0, rowA);
       gfx_tex_aspect_current = 0.0f;
     } else gfx_color(th, radiusTh, 0.133f, 0.133f, 0.133f, rowA); }
+  drawDepth(th, radiusTh, settings_depth_episodes(), rowA);
 
   // The Continue Watching card's bar, along the thumbnail's base and cut by its corner
   // (GFX_CW_BAR — see gfx.h).
@@ -3712,6 +3735,7 @@ static void drawTrailer(float x, float y, int c, float a) {
   } else {
     gfx_color(v, radius, 0.13f, 0.13f, 0.13f, a);
   }
+  drawDepth(v, radius, settings_depth_trailers(), a);
 
   // The play badge: a dark disc with the triangle over it, centred on the thumbnail.
   { float d = NV_DETF_TR_PLAY_D;
@@ -3863,6 +3887,7 @@ static void drawCastRow(float y, int c, float f, float a) {
       gfx_rect(th, t2, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, rowA);
       gfx_tex_aspect_current = 0.0f;
     } else drawInitial(th, radius, name, TXT_HEADLINE, lit, rowA); }
+  drawDepth(th, radius, settings_depth_cast(), rowA);
 
   { float tx = th.x + th.w + NV_DETCP_TEXT_GAP;
     float w = NV_DETCP_LIST_W - tx - 24.0f;

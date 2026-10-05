@@ -106,8 +106,12 @@ void iptv_set_source_name(const char *name);
 
 // Favourites and history are keyed by the channel's NAME: a provider rotates
 // stream URLs (they carry the credentials) far more often than it renames.
+// They keep the viewer's order: a new one goes to the end, and
+// iptv_move_favourite puts `ch` where `to` is, the ones between closing up.
 int  iptv_is_favourite(int ch);
+int  iptv_favourite_rank(int ch);   // its place in that order, -1 when not one
 void iptv_toggle_favourite(int ch);
+void iptv_move_favourite(int ch, int to);
 // Most recent first. `i` from 0; -1 past the end or when the channel is gone.
 int  iptv_recent(int i);
 void iptv_note_watched(int ch);

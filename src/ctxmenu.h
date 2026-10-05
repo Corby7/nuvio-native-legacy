@@ -54,6 +54,9 @@ void ctx_set_anchor(GfxRect card, float radiusPx);
 // `glowPx` is how far the card's confirm glow reaches this frame (0 once it has
 // faded); the hole is feathered that far so the glow shows through.
 void ctx_track_card(GfxRect card, float radiusPx, float glowPx);
+// Allocates the pane's frosted glass (gfx_glass_start) at the largest the panel
+// can get. Without it the panel falls back to its flat fill.
+void ctx_glass_start(void);
 int  ctx_is_open(void);
 void ctx_event(const SDL_Event *e);
 void ctx_update(float dt, Uint32 now);

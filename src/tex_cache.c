@@ -79,6 +79,9 @@ typedef struct {
   // separates a BLACK logo (achromatic, the wrong TMDB variant) from a dark but
   // colourful BRAND logo (red, wine), which must pass through untouched.
   int chroma;
+  // The art's colour for tex_tint: the opaque pixels' average, weighted towards
+  // the vivid ones. Known when luma is.
+  unsigned char tint[3];
   // The box the VISIBLE pixels occupy, as fractions of the image (x0, y0, x1, y1).
   // Logos arrive with any amount of transparent margin — metahub and TMDB crop
   // nothing — so sizing one by its file draws the padding, not the mark. Only
@@ -340,6 +343,11 @@ static void prune(void) {
 // through promotion.
 #define NV_TEX_WIDTH_MAX 640
 #define NV_TEX_HERO_WIDTH_MAX 1920
+// tex_get_blurred: the tag that keys the blurred entry apart from the sharp one,
+// and the width it is decoded to. 32 across a 352px thumbnail is one texel per
+// 11px, which with the softening below leaves colour and shape and no detail.
+#define NV_TEX_BLUR_TAG "#blur"
+#define NV_TEX_BLUR_W   32
 
 // A PER-USE CEILING — the 640 above is the default, and it is FAR TOO LARGE for
 // most art. It was sized by the LARGEST card art (the episode thumbnail, 640), but
@@ -587,10 +595,52 @@ static void slowAdd(const char *url);
 // Downloads the URL into the cache, if it is not already there. Returns 1 if there
 // is a usable file at the end. It runs on the decode thread, so blocking here costs
 // no frames. `seconds` is the ceiling for the download; see the slow lane.
-static int ensureLocalWithin(const char *url, char *dst, size_t size, int seconds) {
+// The art's own path, without tex_get_blurred's tag: the blurred entry reads the
+// same file as the sharp one, so it must download and cache under the same name.
+static const char *untagged(const char *path, char *buf, size_t size) {
+  size_t n = strlen(path), t = sizeof NV_TEX_BLUR_TAG - 1;
+  if (n <= t || n - t >= size || strcmp(path + n - t, NV_TEX_BLUR_TAG)) return path;
+  memcpy(buf, path, n - t);
+  buf[n - t] = 0;
+  return buf;
+}
+
+// Three passes of a 3-tap box filter, across and then down: close enough to a
+// gaussian, and on a 32-wide surface it is a few thousand pixels of work.
+static void soften(SDL_Surface *s) {
+  int pass, x, y, c, w = s->w, h = s->h;
+  unsigned char *tmp = malloc((size_t)(w > h ? w : h) * 4);
+  if (!tmp) return;
+  for (pass = 0; pass < 3; pass++) {
+    for (y = 0; y < h; y++) {
+      unsigned char *ln = (unsigned char *)s->pixels + (size_t)y * s->pitch;
+      memcpy(tmp, ln, (size_t)w * 4);
+      for (x = 0; x < w; x++) {
+        int l = x > 0 ? x - 1 : 0, r = x < w - 1 ? x + 1 : w - 1;
+        for (c = 0; c < 4; c++)
+          ln[x * 4 + c] = (unsigned char)((tmp[l * 4 + c] + tmp[x * 4 + c] + tmp[r * 4 + c]) / 3);
+      }
+    }
+    for (x = 0; x < w; x++) {
+      for (y = 0; y < h; y++)
+        memcpy(tmp + y * 4, (unsigned char *)s->pixels + (size_t)y * s->pitch + x * 4, 4);
+      for (y = 0; y < h; y++) {
+        int u = y > 0 ? y - 1 : 0, d = y < h - 1 ? y + 1 : h - 1;
+        unsigned char *p = (unsigned char *)s->pixels + (size_t)y * s->pitch + x * 4;
+        for (c = 0; c < 4; c++)
+          p[c] = (unsigned char)((tmp[u * 4 + c] + tmp[y * 4 + c] + tmp[d * 4 + c]) / 3);
+      }
+    }
+  }
+  free(tmp);
+}
+
+static int ensureLocalWithin(const char *urlTagged, char *dst, size_t size, int seconds) {
   FILE *f;
   char *body;
   long n = 0;
+  char bare[512];
+  const char *url = untagged(urlTagged, bare, sizeof bare);
   if (strncmp(url, "http://", 7) && strncmp(url, "https://", 8)) {
     snprintf(dst, size, "%s", url);
     return 1;
@@ -1063,14 +1113,24 @@ static int threadDecode(void *arg) {
       }
     }
 
+    if (conv && conv->format->BytesPerPixel == 4) {
+      char bare[512];
+      if (untagged(origin, bare, sizeof bare) != origin) soften(conv);
+    }
+
     // A LUMINANCE MEASUREMENT, here and not while drawing: this thread already has
     // the pixels in hand and runs at low priority. It samples every 4th pixel on
     // both axes — 1/16 of the pixels is enough to say whether a piece of art is
     // dark, and doing the whole sum on a 700x271 logo would be work with no return.
     int lumaMedia = -1, chromaMedia = 0;
+    unsigned char tintMedia[3] = { 0, 0, 0 };
     if (conv && conv->format->BytesPerPixel == 4) {
       const unsigned char *px = (const unsigned char *)conv->pixels;
       long sum = 0, sumC = 0, n = 0;
+      // The tint WEIGHS EACH PIXEL BY ITS CHROMA, squared. A plain average of a
+      // poster is mud: a red suit on a grey city comes out brown. Weighted, the
+      // suit wins, and a poster with no colour at all still averages to its grey.
+      double tw = 0.0, tr = 0.0, tg = 0.0, tb = 0.0;
       int yy, xx;
       for (yy = 0; yy < conv->h; yy += 4) {
         const unsigned char *ln = px + (size_t)yy * conv->pitch;
@@ -1080,11 +1140,18 @@ static int threadDecode(void *arg) {
           sum += (q[0] * 299 + q[1] * 587 + q[2] * 114) / 1000;
           { int mx = q[0] > q[1] ? q[0] : q[1]; if (q[2] > mx) mx = q[2];
             int mn = q[0] < q[1] ? q[0] : q[1]; if (q[2] < mn) mn = q[2];
-            sumC += mx - mn; }
+            sumC += mx - mn;
+            { double wgt = 1.0 + (double)(mx - mn) * (mx - mn) / 64.0;
+              tr += q[0] * wgt; tg += q[1] * wgt; tb += q[2] * wgt; tw += wgt; } }
           n++;
         }
       }
       if (n > 0) { lumaMedia = (int)(sum / n); chromaMedia = (int)(sumC / n); }
+      if (tw > 0.0) {
+        tintMedia[0] = (unsigned char)(tr / tw);
+        tintMedia[1] = (unsigned char)(tg / tw);
+        tintMedia[2] = (unsigned char)(tb / tw);
+      }
     }
 
     // THE VISIBLE BOX, for tex_content_box. Each edge is found by walking in from
@@ -1130,6 +1197,7 @@ static int threadDecode(void *arg) {
     } else if (items[idx].state == PENDING) {
       items[idx].luma = lumaMedia;
       items[idx].chroma = chromaMedia;
+      memcpy(items[idx].tint, tintMedia, sizeof tintMedia);
       memcpy(items[idx].box, boxArt, sizeof boxArt);
       items[idx].boxKnown = boxOk;
       items[idx].sup = conv;
@@ -1476,6 +1544,17 @@ GLuint tex_get_width(const char *path, float widthLayout) {
   return tex_get_limit(path, cap);
 }
 
+GLuint tex_get_blurred(const char *path, float *aspect) {
+  char key[512];
+  GLuint t;
+  if (aspect) *aspect = 0.0f;
+  if (!path || !*path) return 0;
+  if (snprintf(key, sizeof key, "%s" NV_TEX_BLUR_TAG, path) >= (int)sizeof key) return 0;
+  t = tex_get_limit(key, NV_TEX_BLUR_W);
+  if (aspect) *aspect = tex_aspect(key);
+  return t;
+}
+
 GLuint tex_get_hero(const char *path) {
   return tex_get_limit(path, NV_TEX_HERO_WIDTH_MAX);
 }
@@ -1575,6 +1654,21 @@ int tex_brand_dark(const char *path) {
   // Same as tex_aspect: luma belongs to the resident texture, not to the state.
   if (i >= 0 && items[i].luma >= 0)
     r = (items[i].luma < NV_LOGO_LUMA_MIN && items[i].chroma < NV_LOGO_CHROMA_MAX);
+  SDL_UnlockMutex(mtx);
+  return r;
+}
+
+int tex_tint(const char *path, float rgb[3]) {
+  int r = 0;
+  unsigned long h;
+  int i;
+  if (!path || !*path) return 0;
+  h = hashPath(path);
+  SEARCH_MEASURE(i, path, h);
+  if (i >= 0 && items[i].luma >= 0) {
+    for (int k = 0; k < 3; k++) rgb[k] = items[i].tint[k] / 255.0f;
+    r = 1;
+  }
   SDL_UnlockMutex(mtx);
   return r;
 }

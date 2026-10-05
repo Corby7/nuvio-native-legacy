@@ -15,8 +15,8 @@
 //   LIVE     the tuned channel full screen, with the channel banner (number,
 //            logo, now and next with the programme's progress), zapping, number
 //            entry and a quick channel list on LEFT. Back returns to the guide
-//            and the picture shrinks into the preview; Back again from the guide
-//            stops it.
+//            and the picture shrinks into the preview; Back again puts the
+//            focus on the chips, and once more opens the side bar.
 //
 // It follows the screen contract of library.h (start/resume/event/update/draw,
 // wants_exit, requested_menu), plus two things no other screen has: it can
@@ -31,8 +31,8 @@ void iptvui_resume(void);
 void iptvui_event(const SDL_Event *e);
 void iptvui_update(float dt, Uint32 now);
 void iptvui_draw(Uint32 now);
-int  iptvui_wants_exit(void);       // Back from the guide's first column
-int  iptvui_requested_menu(void);   // LEFT at the left edge
+int  iptvui_wants_exit(void);       // Back from the source screen with no source
+int  iptvui_requested_menu(void);   // LEFT at the left edge, or Back from the chips
 // 1 while the tuned channel fills the screen: the router hides the rail and
 // sends every key here, the side menu included.
 int  iptvui_fullscreen(void);

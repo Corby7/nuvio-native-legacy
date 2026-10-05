@@ -1420,6 +1420,7 @@ typedef struct {
   int  season, episode;    // the episode that FINISHED — the anchor
   long long ms;            // when it finished; the next-up card inherits it
   int  found, nextS, nextE;
+  long long airs;          // the found episode's release, 0 once it is out
 } NextUp;
 
 
@@ -1446,22 +1447,28 @@ static void todayUtc(char *out, size_t size) {
 // rollover only inside a seven-day window — CW_NEXT_UP_NEW_SEASON_UNAIRED_
 // WINDOW_DAYS in homeConstants.js.
 #define NEXTUP_NEW_SEASON_WINDOW_DAYS 7
+// Cinemeta's `released` as a time_t, from its date alone; -1 when it does not read.
+static time_t releaseTime(const char *released) {
+  struct tm t;
+  memset(&t, 0, sizeof t);
+  if (sscanf(released, "%d-%d-%d", &t.tm_year, &t.tm_mon, &t.tm_mday) != 3) return (time_t)-1;
+  t.tm_year -= 1900; t.tm_mon -= 1;
+  return timegm(&t);
+}
+
 static int nextUpAllowed(const char *released, int anchorSeason, int season) {
   int rollover = anchorSeason > 0 && season > 0 && season != anchorSeason;
   char today[12];
   if (!released || !released[0]) return !rollover;
   todayUtc(today, sizeof today);
   if (strncmp(released, today, 10) <= 0) return 1;   // already out
+  // showUnairedNextUp off: only what is already out.
+  if (!settings_cw_show_unaired()) return 0;
   if (!rollover) return 1;
   // Out in the future AND a new season: only if it is nearly here. The
   // comparison is in days, and text will not do it — this is the one place that
   // needs the two dates as numbers.
-  { struct tm t;
-    time_t when, now = time(NULL);
-    memset(&t, 0, sizeof t);
-    if (sscanf(released, "%d-%d-%d", &t.tm_year, &t.tm_mon, &t.tm_mday) != 3) return 0;
-    t.tm_year -= 1900; t.tm_mon -= 1;
-    when = timegm(&t);
+  { time_t when = releaseTime(released), now = time(NULL);
     if (when == (time_t)-1) return 0;
     return (long)(when - now) <= (long)NEXTUP_NEW_SEASON_WINDOW_DAYS * 86400L; }
 }
@@ -1471,6 +1478,7 @@ static void *threadNextUp(void *u) {
   char url[600], *body;
   const char *v;
   int bestS = 0, bestE = 0;
+  char bestReleased[28] = "";
 
   snprintf(url, sizeof url, "%s/meta/series/%s.json", CINEMETA, t->imdb);
   // 8 s, the same ceiling trakt.c's decorate uses, and for the same reason:
@@ -1497,22 +1505,37 @@ static void *threadNextUp(void *u) {
     js_text(v, f, "released", released, sizeof released);
     if (!nextUpAllowed(released, t->season, s)) continue;
     bestS = s; bestE = e;
+    snprintf(bestReleased, sizeof bestReleased, "%s", released);
   }
   free(body);
-  if (bestS) { t->found = 1; t->nextS = bestS; t->nextE = bestE; }
+  if (bestS) {
+    char today[12];
+    t->found = 1; t->nextS = bestS; t->nextE = bestE;
+    // Still to come: the Streaming style sort puts it last (see candStreaming).
+    todayUtc(today, sizeof today);
+    if (bestReleased[0] && strncmp(bestReleased, today, 10) > 0) {
+      time_t when = releaseTime(bestReleased);
+      t->airs = when == (time_t)-1 ? 0 : (long long)when;
+    }
+  }
   return NULL;
 }
 
 // The seeds: the most recent FINISHED episode of each series, skipping any work
-// already present in `busy` (the in-progress half). A series being resumed does
+// already present in `busy` (the in-progress half). With nextUpFromFurthestEpisode
+// on, the FURTHEST finished episode instead — selectNextUpProgressCandidates in the
+// web's homeScreen.js: someone who rewatched S1E3 after finishing S2E5 is offered
+// S2E6, not S1E4. A series being resumed does
 // not also get a next-up card — the web excludes the same set
 // (inProgressSeriesIds), and without it a person halfway through E15 would see
 // both E15 and E16.
 static int nextUpSeeds(const CatItem *busy, int nBusy, NextUp *out, int max) {
   static CatProgress regs[CAT_PROGRESS_MAX];
-  int k, i, j, n = 0;
+  int k, i, j, n = 0, furthest = settings_cw_do_episode_more_alto();
   k = cat_progress_read(regs, CAT_PROGRESS_MAX);
-  for (i = 0; i < k && n < max; i++) {
+  // With `furthest`, the scan goes on past `max`: an older record further into a
+  // series already seeded can still move that seed forward.
+  for (i = 0; i < k && (n < max || furthest); i++) {
     const CatProgress *r = &regs[i];
     int repeated = 0;
     if (r->durationSeg < 60.0) continue;
@@ -1521,8 +1544,18 @@ static int nextUpSeeds(const CatItem *busy, int nBusy, NextUp *out, int max) {
     for (j = 0; j < nBusy; j++)
       if (sameWork(busy[j].imdb, r->imdb)) { repeated = 1; break; }
     for (j = 0; j < n && !repeated; j++)
-      if (sameWork(out[j].imdb, r->imdb)) repeated = 1;
-    if (repeated) continue;
+      if (sameWork(out[j].imdb, r->imdb)) {
+        repeated = 1;
+        // Most recent first, so the seed already there is newer: it gives way
+        // only to an episode further on.
+        if (furthest && (r->season > out[j].season ||
+                         (r->season == out[j].season && r->episode > out[j].episode))) {
+          out[j].season = r->season;
+          out[j].episode = r->episode;
+          out[j].ms = r->lastWatchedMs;
+        }
+      }
+    if (repeated || n >= max) continue;
     memset(&out[n], 0, sizeof out[n]);
     snprintf(out[n].imdb, sizeof out[n].imdb, "%s", r->imdb);
     out[n].season = r->season;
@@ -1535,8 +1568,10 @@ static int nextUpSeeds(const CatItem *busy, int nBusy, NextUp *out, int max) {
 
 // Resolves every seed at once and writes the ones that answered into `output` as
 // bare items, in the shape resumeLocal produces — art and the episode's name
-// come from the same decorator.
-static int buildNextUp(const CatItem *busy, int nBusy, CatItem *output, int max) {
+// come from the same decorator. `airs[i]` is output[i]'s release when it has not
+// aired yet, 0 otherwise.
+static int buildNextUp(const CatItem *busy, int nBusy, CatItem *output, long long *airs,
+                       int max) {
   NextUp seeds[NEXTUP_MAX];
   pthread_t threads[NEXTUP_MAX];
   int created[NEXTUP_MAX];
@@ -1569,6 +1604,15 @@ static int buildNextUp(const CatItem *busy, int nBusy, CatItem *output, int max)
     k++;
   }
   k = trakt_decorate_batch(output, k);
+  // The decorator drops what it cannot describe but keeps the order; the seed is
+  // found again by its work.
+  for (i = 0; i < k; i++) {
+    int s2;
+    airs[i] = 0;
+    for (s2 = 0; s2 < n; s2++)
+      if (seeds[s2].found && sameWork(seeds[s2].imdb, output[i].imdb)) {
+        airs[i] = seeds[s2].airs; break; }
+  }
   if (k) printf("[disc] next up: %d of %d series finished an episode\n", k, n);
   return k;
 }
@@ -1576,13 +1620,26 @@ static int buildNextUp(const CatItem *busy, int nBusy, CatItem *output, int max)
 // One candidate for the row, with what is known about WHEN it happened. `ord`
 // keeps the position its own source gave it, so items with no instant keep that
 // relative order instead of being shuffled by an unstable sort.
-typedef struct { CatItem *item; long long ms; int ord; } Cand;
+// `airs` is a next-up episode's release while it is still to come, 0 otherwise.
+typedef struct { CatItem *item; long long ms; int ord; long long airs; } Cand;
 
 static int candNewestFirst(const void *a, const void *b) {
   const Cand *x = a, *y = b;
   if (x->ms > y->ms) return -1;
   if (x->ms < y->ms) return 1;
   return x->ord - y->ord;
+}
+
+// continueWatchingSortMode "streaming_style" (sortContinueWatchingItemsForDisplay in
+// the web's homeScreen.js): everything already out, newest first, and after it the
+// next-up episodes still to come, the soonest first. The web's other modes are
+// both the plain newest-first order.
+static int candStreaming(const void *a, const void *b) {
+  const Cand *x = a, *y = b;
+  if (!x->airs != !y->airs) return x->airs ? 1 : -1;
+  if (x->airs && x->airs != y->airs) return x->airs < y->airs ? -1 : 1;
+  if (x->airs) return x->ord - y->ord;
+  return candNewestFirst(a, b);
 }
 
 // A TRAKT RESUME POINT OLDER THAN WHAT THE LOCAL RECORD KNOWS ABOUT THE SAME WORK.
@@ -1623,6 +1680,7 @@ static int buildResume(CatItem *output, int max) {
   static CatItem fromTrakt[CONT_MAX], fromAccount[CONT_MAX], fromNext[NEXTUP_MAX];
   static CatItem busy[CONT_MAX * 2];
   static Cand joined[CONT_MAX * 3];
+  static long long nextAirs[NEXTUP_MAX];
   int nT, nL, nN, nBusy = 0, nJ = 0, i, j, n = 0, dropped = 0, stale = 0;
 
   nT = trakt_active() ? trakt_resume(fromTrakt, CONT_MAX) : 0;
@@ -1634,6 +1692,7 @@ static int buildResume(CatItem *output, int max) {
     joined[nJ].item = &fromTrakt[i];
     joined[nJ].ms = fromTrakt[i].resumedMs;
     joined[nJ].ord = nJ;
+    joined[nJ].airs = 0;
     nJ++;
     busy[nBusy++] = fromTrakt[i];
   }
@@ -1641,17 +1700,19 @@ static int buildResume(CatItem *output, int max) {
     joined[nJ].item = &fromAccount[i];
     joined[nJ].ms = fromAccount[i].resumedMs;
     joined[nJ].ord = nJ;
+    joined[nJ].airs = 0;
     nJ++;
     busy[nBusy++] = fromAccount[i];
   }
 
   // AFTER the in-progress half, because it needs to know what is in it: a series
   // being resumed gets no next-up card of its own.
-  nN = buildNextUp(busy, nBusy, fromNext, NEXTUP_MAX);
+  nN = buildNextUp(busy, nBusy, fromNext, nextAirs, NEXTUP_MAX);
   for (i = 0; i < nN && nJ < CONT_MAX * 3; i++) {
     joined[nJ].item = &fromNext[i];
     joined[nJ].ms = fromNext[i].resumedMs;
     joined[nJ].ord = nJ;
+    joined[nJ].airs = nextAirs[i];
     nJ++;
   }
 
@@ -1666,7 +1727,8 @@ static int buildResume(CatItem *output, int max) {
     nJ = w;
     if (hidden) printf("[disc] continue watching: %d removed by the owner\n", hidden); }
 
-  if (nJ > 1) qsort(joined, (size_t)nJ, sizeof *joined, candNewestFirst);
+  if (nJ > 1) qsort(joined, (size_t)nJ, sizeof *joined,
+                    settings_cw_order() == 1 ? candStreaming : candNewestFirst);
 
   // Deduplicate AFTER ordering, so the copy that survives is the most recent
   // one — which is also the one whose season and episode are right for a series

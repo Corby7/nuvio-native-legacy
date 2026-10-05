@@ -33,6 +33,7 @@
 // ------------------------------------------------------------------------
 #include "iptvui.h"
 #include "iptv.h"
+#include "iptv_also.h"
 #include "app.h"
 #include "ctxmenu.h"
 #include "data.h"
@@ -181,14 +182,20 @@ static int nChipW;
 // (0 capped, 1 whole), its neighbours making way. Back to capped as it leaves.
 static float chipGrow, chipGrowV;
 static int chipGrowFor = -1;
-// THE GROUPS' ORDER, the viewer's: chip position -> group. Favourites, All
-// channels and Recent stay first; the playlist's own groups follow in the
-// order kept in iptv_group_order.txt (by name, so a reloaded playlist keeps it),
-// then any the file does not know, in the playlist's order.
+// THE GROUPS' ORDER, the viewer's: chip position -> group, every chip in it,
+// the pinned three (Favourites, All channels, Recent) too. Kept in
+// iptv_group_order.txt by name (so a reloaded playlist keeps it), the pinned
+// ones by a key of their own (PIN_KEY) that no playlist group is called. A
+// pinned chip the file does not name goes first, as before they could move;
+// a playlist group it does not know goes last, in the playlist's order.
 static int *gOrder, nOrder;
 // Moving a chip: hold OK on it. ◀ ▶ step it, ▲ sends it to the front, ▼ to
 // the end, OK or Back puts it down. No dragging: a provider can carry hundreds.
 static int movingGroup;
+// MOVING A FAVOURITE: "Move" in a favourite's hold menu, in Favourites. ▲ ▼
+// step it past its neighbour, ◀ sends it to the top, ▶ to the bottom, OK or
+// Back puts it down. The order is iptv.c's, saved with the favourites.
+static int movingChannel;
 // HOLD ◀ ON THE CHIPS to go home: the repeats walk left as ever, and once the
 // key has been down CHIP_HOME_MS the next one lands on the first chip. Repeats
 // never open the side bar; only a fresh press does.
@@ -213,7 +220,7 @@ static float plateR;
 static int plateSet;
 static char menuName[256];
 static long long menuStart;
-enum { M_WATCH, M_FROM_START, M_REMIND, M_GROUP, M_FAV };
+enum { M_WATCH, M_FROM_START, M_REMIND, M_GROUP, M_FAV, M_MOVE };
 
 // What is tuned. `tunedName` re-finds it after a reload changes the indices.
 static int tuned = -1;
@@ -254,7 +261,7 @@ static Uint32 streamAt;
 enum { OV_NONE, OV_TOAST, OV_BAR, OV_PEEK, OV_WALK };
 // The controls, by id. Not all are shown at once (shownControls): Start over
 // needs a past to start from, Go live a present to go back to.
-enum { CTL_PLAY, CTL_RESTART, CTL_LIVE, CTL_GUIDE, CTL_CHANNELS, CTL_SUBS, CTL_AUDIO,
+enum { CTL_PLAY, CTL_RESTART, CTL_LIVE, CTL_GUIDE, CTL_CHANNELS, CTL_ALSO, CTL_SUBS, CTL_AUDIO,
        CTL_ASPECT, CTL_FAV, CTL_N };
 static int ov;
 static Uint32 ovUntil;
@@ -281,6 +288,7 @@ static float sepBar(float x, float cy, float h, float gap, float a) {
   gfx_color((GfxRect){ x + gap, cy - h * 0.5f, NV_DETW2_BAR_W, h }, 0.0f, 0.502f, 0.502f, 0.502f, a);
   return gap * 2.0f + NV_DETW2_BAR_W;
 }
+static void accent(float *r, float *g, float *b);
 // The focused plate in the list or the guide: the hold's white sweep round its
 // 3px halo while OK is held, and its edge kept for the menu. `r` is the plate's
 // own corner radius in px.
@@ -288,6 +296,16 @@ static void focusPlate(GfxRect p, float r) {
   plate = (GfxRect){ p.x - 3.0f, p.y - 3.0f, p.w + 6.0f, p.h + 6.0f };
   plateR = r + 3.0f;
   plateSet = 1;
+  if (movingChannel) {
+    // Being moved: the chips' accent ring, and carets for the way it goes.
+    float ar, ag, ab, cy = p.y + p.h * 0.5f;
+    GfxRect o = { p.x - 5.0f, p.y - 5.0f, p.w + 10.0f, p.h + 10.0f };
+    accent(&ar, &ag, &ab);
+    gfx_rect(o, 0, GFX_RING_INSET, 0, 3.0f / o.h, 0, (r + 5.0f) / o.h, ar, ag, ab, 1.0f);
+    gfx_icon((GfxRect){ o.x - 30.0f, cy - 22.0f, 20.0f, 20.0f }, "live_caret_up", ar, ag, ab, 1.0f);
+    gfx_icon((GfxRect){ o.x - 30.0f, cy + 2.0f, 20.0f, 20.0f }, "live_caret_down", ar, ag, ab, 1.0f);
+    return;
+  }
   if (hold.shown > 0.001f)
     gfx_rect(plate, 0, GFX_RING_INSET_FILL, 0, hold.shown, 3.0f / plate.h, plateR / plate.h, 1, 1, 1, 1);
 }
@@ -351,6 +369,26 @@ static float *quickOpened;         // each row's opening, 0..1, as episodes.c's 
 static int quickOpenedCap;
 static int quickSnap;
 enum { Q_PILL, Q_LIST };
+// THE SAME BROADCAST ELSEWHERE (iptv_also.h), the panel's other list: with
+// `alsoMode` its rows are alsoCh[], every channel airing what the tuned one
+// airs, the best picture first, instead of the group's view[]. Built for
+// channel `alsoFor` at minute `alsoAt`, and again when either moves (not while
+// the list is open on it: its rows would shift under the focus).
+static int alsoMode;
+static int alsoCh[IPTV_ALSO_MAX], nAlso;
+static int alsoFor = -1;
+static long long alsoAt;
+#define QN() (alsoMode ? nAlso : nView)
+#define QCH(r) (alsoMode ? alsoCh[r] : view[r])
+// THE SHARPER-COPY NOTICE: once per channel and programme, a few seconds into
+// the picture, when a copy ranks a tier above what is decoding. While it
+// shows, ▲ opens the list on that copy.
+#define LIVE_NOTICE_MS 8000u
+#define LIVE_SETTLE_MS 3000u   // a picture this old describes its own channel
+static char alsoNoticeKey[300];
+static int alsoNoticeCh = -1, alsoNoticeFor = -1;
+static Uint32 alsoNoticeUntil;
+static Uint32 qualityNotedFor;  // the tunedAt whose picture was measured
 static int sheetWasUp;             // a tracks sheet or this panel was up last frame
 static char digits[6];
 static Uint32 digitsAt;
@@ -447,6 +485,10 @@ static const char *groupLabel(int g) {
   return (l && g - GROUP_FIRST < l->nGroups) ? l->groups[g - GROUP_FIRST] : "";
 }
 
+// A chip's line in iptv_group_order.txt.
+static const char *const PIN_KEY[GROUP_FIRST] = { "\x01" "favourites", "\x01" "all", "\x01" "recent" };
+static const char *orderKey(int g) { return g < GROUP_FIRST ? PIN_KEY[g] : groupLabel(g); }
+
 static void ensureOrder(void) {
   int n = nGroups(), k = 0;
   char *saved, *line;
@@ -457,13 +499,16 @@ static void ensureOrder(void) {
   if (!gOrder) return;
   { unsigned char *used = calloc((size_t)(n > 0 ? n : 1), 1);
     if (!used) { free(gOrder); gOrder = NULL; return; }
-    for (int g = 0; g < GROUP_FIRST && g < n; g++) { gOrder[k++] = g; used[g] = 1; }
-    if ((saved = data_read("iptv_group_order.txt"))) {
+    saved = data_read("iptv_group_order.txt");
+    for (int g = 0; g < GROUP_FIRST && g < n; g++)
+      if (!saved || !strstr(saved, PIN_KEY[g])) { gOrder[k++] = g; used[g] = 1; }
+    if (saved) {
       for (line = strtok(saved, "\n"); line; line = strtok(NULL, "\n"))
-        for (int g = GROUP_FIRST; g < n; g++)
-          if (!used[g] && !strcmp(groupLabel(g), line)) { gOrder[k++] = g; used[g] = 1; break; }
+        for (int g = 0; g < n; g++)
+          if (!used[g] && !strcmp(orderKey(g), line)) { gOrder[k++] = g; used[g] = 1; break; }
       free(saved);
     }
+    for (int g = 0; g < GROUP_FIRST && g < n; g++) if (!used[g]) gOrder[k++] = g;
     for (int g = GROUP_FIRST; g < n; g++) if (!used[g]) gOrder[k++] = g;
     free(used); }
   nOrder = k;
@@ -476,12 +521,12 @@ static int posOf(int g) {
 static void saveOrder(void) {
   size_t cap = 1, len = 0;
   char *out;
-  for (int p = GROUP_FIRST; p < nOrder; p++) cap += strlen(groupLabel(gOrder[p])) + 1;
+  for (int p = 0; p < nOrder; p++) cap += strlen(orderKey(gOrder[p])) + 1;
   if (!(out = malloc(cap))) return;
   out[0] = 0;
-  for (int p = GROUP_FIRST; p < nOrder; p++) {
-    size_t n = strlen(groupLabel(gOrder[p]));
-    memcpy(out + len, groupLabel(gOrder[p]), n); len += n;
+  for (int p = 0; p < nOrder; p++) {
+    size_t n = strlen(orderKey(gOrder[p]));
+    memcpy(out + len, orderKey(gOrder[p]), n); len += n;
     out[len++] = '\n'; out[len] = 0;
   }
   data_write("iptv_group_order.txt", out);
@@ -490,9 +535,9 @@ static void saveOrder(void) {
 // The moving chip from position `from` to `to`, the rest closing up behind it.
 static void moveChip(int from, int to) {
   int g;
-  if (to < GROUP_FIRST) to = GROUP_FIRST;
+  if (to < 0) to = 0;
   if (to >= nOrder) to = nOrder - 1;
-  if (from == to || from < GROUP_FIRST) return;
+  if (from == to || from < 0) return;
   g = gOrder[from];
   if (to > from) memmove(gOrder + from, gOrder + from + 1, (size_t)(to - from) * sizeof *gOrder);
   else memmove(gOrder + to + 1, gOrder + to, (size_t)(from - to) * sizeof *gOrder);
@@ -672,6 +717,26 @@ static void searchView(const IptvList *l) {
   free(tier);
 }
 
+// Favourites in the viewer's order (iptv_favourite_rank); channels sharing a
+// name share a place, in playlist order.
+typedef struct { int rank, ch; } FavRow;
+static int favCmp(const void *a, const void *b) {
+  const FavRow *x = a, *y = b;
+  return x->rank != y->rank ? x->rank - y->rank : x->ch - y->ch;
+}
+static void favView(const IptvList *l) {
+  FavRow *rows = malloc((size_t)(l->nCh > 0 ? l->nCh : 1) * sizeof *rows);
+  int n = 0;
+  if (!rows) return;
+  for (int c = 0; c < l->nCh; c++) {
+    int rank = iptv_favourite_rank(c);
+    if (rank >= 0) rows[n++] = (FavRow){ rank, c };
+  }
+  qsort(rows, (size_t)n, sizeof *rows, favCmp);
+  for (int i = 0; i < n; i++) pushView(rows[i].ch);
+  free(rows);
+}
+
 static void rebuildView(void) {
   const IptvList *l = iptv_list();
   int keep = -1;
@@ -687,9 +752,10 @@ static void rebuildView(void) {
       int c = iptv_recent(i);
       if (c >= 0) pushView(c);
     }
+  } else if (group == GROUP_FAV) {
+    favView(l);
   } else {
     for (int c = 0; c < l->nCh; c++) {
-      if (group == GROUP_FAV && !iptv_is_favourite(c)) continue;
       if (group >= GROUP_FIRST && l->ch[c].groupIndex != group - GROUP_FIRST) continue;
       pushView(c);
     }
@@ -714,7 +780,7 @@ static int chipShown(int g) {
 static int anyChipShown(void) {
   if (!searching) return 1;
   ensureOrder();
-  for (int p = GROUP_FIRST; p < nOrder; p++) if (chipShown(gOrder[p])) return 1;
+  for (int p = 0; p < nOrder; p++) if (chipShown(gOrder[p])) return 1;
   return 0;
 }
 // The next shown chip's position from `p` in direction `dir`; -1 when none.
@@ -1044,13 +1110,22 @@ static const IptvProgramme *restartable(void) {
   return pg;
 }
 
+static void refreshAlso(void) {
+  long long m = nowMinute();
+  if (tuned < 0) { nAlso = 0; alsoFor = -1; return; }
+  if (alsoFor == tuned && (alsoAt == m || (alsoMode && quickOpen))) return;
+  alsoFor = tuned; alsoAt = m;
+  nAlso = iptv_also(tuned, m, alsoCh, IPTV_ALSO_MAX);
+}
+
 // The controls on show, in order; the count.
 static int shownControls(int *out) {
   int n = 0;
   out[n++] = CTL_PLAY;
   if (restartable()) out[n++] = CTL_RESTART;
   if (!atLive() && srcKind != SRC_LIVE) out[n++] = CTL_LIVE;
-  for (int i = CTL_GUIDE; i < CTL_N; i++) out[n++] = i;
+  for (int i = CTL_GUIDE; i < CTL_N; i++)
+    if (i != CTL_ALSO || (refreshAlso(), nAlso > 1)) out[n++] = i;
   return n;
 }
 static int shownIndex(int id) {
@@ -1783,7 +1858,7 @@ static void openChannelMenu(void) {
   const IptvChannel *c = chan(ch);
   long long now = nowSec();
   char title[256], meta[256], goTo[96], code[16];
-  CtxOption o[6];
+  CtxOption o[7];
   if (!c || !l) return;
   fav = iptv_is_favourite(ch);
   snprintf(menuName, sizeof menuName, "%s", c->name);
@@ -1827,6 +1902,9 @@ static void openChannelMenu(void) {
     snprintf(goTo, sizeof goTo, "Go to %s", name);
     o[n++] = (CtxOption){ goTo, "ctx_group", code[0] ? code : NULL, M_GROUP };
   }
+  // In Favourites, a favourite can change places.
+  if (fav && group == GROUP_FAV && !searching && nView > 1)
+    o[n++] = (CtxOption){ "Move", "ctx_move", NULL, M_MOVE };
   o[n++] = (CtxOption){ fav ? "Remove from Favourites" : "Add to Favourites", fav ? "ctx_minus" : "ctx_plus",
                         NULL, M_FAV };
   if (plateSet) ctx_set_anchor(plate, plateR);
@@ -1853,8 +1931,30 @@ static void channelMenuChosen(int id) {
       guideSettle();
       break; }
     case M_FAV:        toggleFavourite(ch); break;
+    case M_MOVE:
+      if (group != GROUP_FAV || searching || viewIndex(ch) < 0) break;
+      fRow = viewIndex(ch);
+      rememberFocus();
+      zone = ZONE_BODY;
+      movingChannel = 1;
+      say("\xE2\x96\xB2 \xE2\x96\xBC to move \xC2\xB7 \xE2\x97\x80 to the top \xC2\xB7 OK when done");
+      break;
     default: break;
   }
+}
+
+// The panel on the same broadcast elsewhere, its focus on channel `on` (the
+// playing one for -1).
+static void openAlso(int on) {
+  refreshAlso();
+  if (nAlso < 2) { say("Not showing anywhere else right now"); return; }
+  alsoMode = 1;
+  quickOpen = 1;
+  quickFromBar = barCtl >= 0;
+  quickZone = Q_LIST; gmOpen = 0;
+  quickRow = 0;
+  for (int i = 0; i < nAlso; i++) if (alsoCh[i] == (on >= 0 ? on : tuned)) quickRow = i;
+  quickSnap = 1;
 }
 
 static void control(int ctl) {
@@ -1867,7 +1967,9 @@ static void control(int ctl) {
       rememberFocus();
       fTime = nowSec(); winStart = slotFloor(fTime);
       break;
+    case CTL_ALSO: openAlso(-1); break;
     case CTL_CHANNELS:
+      alsoMode = 0;
       quickOpen = 1;
       quickFromBar = barCtl >= 0;
       quickZone = Q_LIST; gmOpen = 0;
@@ -1929,7 +2031,7 @@ static void quickGroup(int g) {
 static void closeQuick(void) {
   quickOpen = 0; gmOpen = 0;
   // From the bar's Channels button, Back returns to the bar and its button.
-  if (quickFromBar) focusBar(CTL_CHANNELS); else ov = OV_NONE;
+  if (quickFromBar) focusBar(alsoMode ? CTL_ALSO : CTL_CHANNELS); else ov = OV_NONE;
 }
 
 static void quickEvent(SDL_Keycode k) {
@@ -1942,6 +2044,19 @@ static void quickEvent(SDL_Keycode k) {
     return;
   }
   if (isBack(k)) { closeQuick(); return; }
+  if (alsoMode) {
+    // One list, no pill: ▲▼ along it, OK switches to that copy.
+    if (k == SDLK_UP && quickRow > 0) quickRow--;
+    else if (k == SDLK_DOWN && quickRow + 1 < nAlso) quickRow++;
+    else if (isOk(k) && quickRow < nAlso) {
+      int c = alsoCh[quickRow], r = viewIndex(c);
+      if (r >= 0) { fRow = r; rememberFocus(); }
+      if (c != tuned) tune(c, 1);
+      quickOpen = 0;
+      overlay(OV_TOAST);
+    }
+    return;
+  }
   if (k == SDLK_LEFT)  { quickGroup(group - 1); return; }
   if (k == SDLK_RIGHT) { quickGroup(group + 1); return; }
   if (k == SDLK_UP) { if (quickZone == Q_LIST && quickRow > 0) quickRow--; else quickZone = Q_PILL; return; }
@@ -2020,6 +2135,10 @@ static void fullEvent(SDL_Keycode k) {
     if (isOk(k)) {
       if (scrubbing) { seekTo(scrubAt); if (ov != OV_BAR) overlay(OV_BAR); }
       else { togglePause(); focusBar(CTL_PLAY); }
+    }
+    else if (k == SDLK_UP && alsoNoticeFor == tuned && SDL_GetTicks() < alsoNoticeUntil) {
+      alsoNoticeUntil = 0; toastUntil = 0;
+      openAlso(alsoNoticeCh);
     }
     else if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_i) focusBar(CTL_PLAY);
     else if (k == SDLK_LEFT || k == SDLK_RIGHT) { scrubbing = 0; zap(k == SDLK_RIGHT ? +1 : -1); overlay(OV_TOAST); }
@@ -2130,7 +2249,7 @@ static void toResults(void) {
 // when there are any, else the results.
 static void enterChips(void) {
   zone = ZONE_CHIPS;
-  if (searching && !chipShown(group)) { int q = stepShown(GROUP_FIRST - 1, +1); if (q >= 0) chooseGroup(gOrder[q]); }
+  if (searching && !chipShown(group)) { int q = stepShown(-1, +1); if (q >= 0) chooseGroup(gOrder[q]); }
 }
 static void belowHead(void) { if (searching && !anyChipShown()) toResults(); else enterChips(); }
 
@@ -2178,9 +2297,9 @@ static void chipsEvent(SDL_Keycode k) {
   if (movingGroup) {
     // Step past the next chip in SIGHT: while searching, the hidden ones between.
     int l = stepShown(p, -1), r = stepShown(p, +1);
-    if (k == SDLK_LEFT) { if (l >= GROUP_FIRST) moveChip(p, l); }
+    if (k == SDLK_LEFT) { if (l >= 0) moveChip(p, l); }
     else if (k == SDLK_RIGHT) { if (r >= 0) moveChip(p, r); }
-    else if (k == SDLK_UP) moveChip(p, GROUP_FIRST);
+    else if (k == SDLK_UP) moveChip(p, 0);
     else if (k == SDLK_DOWN) moveChip(p, nOrder - 1);
     else if (isOk(k) || isBack(k)) movingGroup = 0;
     return;
@@ -2198,6 +2317,24 @@ static void chipsEvent(SDL_Keycode k) {
     fTime = nowSec();
     keepWindowOnFocus();
   }
+}
+
+// Moving a favourite: it takes the place of the one at `row` in the list.
+static void moveFavouriteTo(int row) {
+  if (row < 0 || row >= nView || row == fRow) return;
+  iptv_move_favourite(view[fRow], view[row]);
+  rememberFocus();
+  rebuildView();
+  guideSettle();
+}
+static void movingEvent(SDL_Keycode k) {
+  if (k == SDLK_UP) moveFavouriteTo(fRow - 1);
+  else if (k == SDLK_DOWN) moveFavouriteTo(fRow + 1);
+  else if (k == SDLK_PAGEUP) moveFavouriteTo(fRow - 6 < 0 ? 0 : fRow - 6);
+  else if (k == SDLK_PAGEDOWN) moveFavouriteTo(fRow + 6 >= nView ? nView - 1 : fRow + 6);
+  else if (k == SDLK_LEFT) moveFavouriteTo(0);
+  else if (k == SDLK_RIGHT) moveFavouriteTo(nView - 1);
+  else if (isOk(k) || isBack(k)) movingChannel = 0;
 }
 
 // A repeat of a held ◀ on the chips: one chip left, or the first once held long.
@@ -2241,9 +2378,14 @@ void iptvui_event(const SDL_Event *e) {
       chipsEvent(e->key.keysym.sym);
     return;
   }
-  // Hold OK on a channel or programme: its menu; on a chip: move it. A tap is OK. The
-  // pinned chips (Favourites, All, Recent) arm too, so a hold on one is not
-  // taken for a tap that drops the focus into the list: it says why instead.
+  // Moving a favourite, the same: every key is the move's.
+  if (movingChannel && zone == ZONE_BODY) {
+    if (e->type == SDL_KEYUP) { hold_event(&hold, e, 0, &tap); return; }
+    if (e->type == SDL_KEYDOWN && !(e->key.repeat && isOk(e->key.keysym.sym)))
+      movingEvent(e->key.keysym.sym);
+    return;
+  }
+  // Hold OK on a channel or programme: its menu; on a chip: move it. A tap is OK.
   if (hold_event(&hold, e, (zone == ZONE_BODY && nView > 0) || (zone == ZONE_CHIPS && anyChipShown()), &tap)) {
     if (tap && zone == ZONE_CHIPS) chipsEvent(SDLK_RETURN);
     else if (tap) {
@@ -2269,19 +2411,18 @@ void iptvui_event(const SDL_Event *e) {
   if (k == SDLK_LEFT && !e->key.repeat) leftDownAt = SDL_GetTicks();
 
   if (isBack(k)) {
-    // Back climbs, one step at a time: the actions to their row; the guide to
-    // the list, which is the landing; a playing preview stops; then the chips;
-    // then out. Searching, Back lowers the keyboard and keeps what is typed;
-    // the next ends the search and brings every channel back.
+    // Back climbs, one step at a time: the actions to their row; the list or
+    // the guide up to the chips; the chips open the side bar. The preview
+    // plays on until the screen is left. Searching, Back lowers the keyboard
+    // and keeps what is typed; the next ends the search and brings every
+    // channel back.
     if (searching && ime_is_open()) { ime_close(); return; }
     if (searching && zone == ZONE_ACTIONS) { zone = ZONE_BODY; return; }
     if (searching) { closeSearch(); if (zone == ZONE_HEAD) headSel = HEAD_SEARCH; return; }
     if (zone == ZONE_ACTIONS) { zone = ZONE_BODY; return; }
     if (zone == ZONE_HEAD) { zone = ZONE_CHIPS; return; }
-    if (zone == ZONE_BODY && viewMode == VIEW_GUIDE) { setView(VIEW_LIST); fChan = 0; return; }
-    if (zone == ZONE_BODY && ownsVideo()) { stopStream(); tuned = -1; tunedName[0] = 0; return; }
-    if (zone == ZONE_BODY) { zone = ZONE_CHIPS; return; }
-    wantsExit = 1;
+    if (zone == ZONE_BODY) { zone = ZONE_CHIPS; fChan = 0; return; }
+    requestMenu = 1;
     return;
   }
   if (zone == ZONE_HEAD) { headEvent(k); return; }
@@ -2333,7 +2474,7 @@ static float followRow(float current, int row, int visible, int n) {
 #define Q_TEXT_W(f)  (NV_EPL_W - NV_EPL_PADX - Q_TEXT_X(f))
 
 static const IptvProgramme *quickProgramme(int row) {
-  return row >= 0 && row < nView ? programmeAt(view[row], nowMinute()) : NULL;
+  return row >= 0 && row < QN() ? programmeAt(QCH(row), nowMinute()) : NULL;
 }
 static int quickSynLines(const IptvProgramme *pg) {
   int n;
@@ -2353,15 +2494,15 @@ static float quickOpenExtra(const IptvProgramme *pg) {
 static void quickUpdate(float dt) {
   quickA = anim_spring(quickA, quickOpen ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
   if (!quickOpen && quickA < 0.005f) return;
-  if (quickOpenedCap < nView) {
-    float *o = realloc(quickOpened, (size_t)nView * sizeof *o);
+  if (quickOpenedCap < QN()) {
+    float *o = realloc(quickOpened, (size_t)QN() * sizeof *o);
     if (!o) return;
-    for (int i = quickOpenedCap; i < nView; i++) o[i] = 0.0f;
-    quickOpened = o; quickOpenedCap = nView;
+    for (int i = quickOpenedCap; i < QN(); i++) o[i] = 0.0f;
+    quickOpened = o; quickOpenedCap = QN();
   }
-  if (quickRow >= nView) quickRow = nView ? nView - 1 : 0;
+  if (quickRow >= QN()) quickRow = QN() ? QN() - 1 : 0;
   // Only the focused row opens, and none while the pill has the cursor.
-  for (int i = 0; i < nView; i++) {
+  for (int i = 0; i < QN(); i++) {
     float want = i == quickRow && quickZone == Q_LIST ? 1.0f : 0.0f;
     if (quickSnap) quickOpened[i] = want;
     else if (quickOpened[i] > 0.0f || want > 0.0f)
@@ -2371,14 +2512,48 @@ static void quickUpdate(float dt) {
   // list stopping at both ends, episodes.c's offset, measured where the rows
   // are heading.
   { float fh = NV_EPL_ROW_H + quickOpenExtra(quickProgramme(quickRow));
-    float total = nView * Q_PITCH - NV_EPL_ROW_GAP + (fh - NV_EPL_ROW_H);
+    float total = QN() * Q_PITCH - NV_EPL_ROW_GAP + (fh - NV_EPL_ROW_H);
     float max = total - Q_VIEW_H;
     float target = quickRow * Q_PITCH - (Q_VIEW_H - fh) * 0.5f;
     target = roundf(target / Q_PITCH) * Q_PITCH;
     if (target > max) target = max;
     if (target < 0) target = 0;
     quickScroll = quickSnap ? target : anim_spring(quickScroll, target, dt, NV_SPRING_GRID); }
-  if (nView) quickSnap = 0;
+  if (QN()) quickSnap = 0;
+}
+
+// What is decoding, noted against the channel (iptv_quality_note); then, full
+// screen, the notice when a copy elsewhere has a better picture than this one.
+static void alsoStep(Uint32 t) {
+  const IptvChannel *c = chan(tuned);
+  const IptvProgramme *pg;
+  char key[300], m[300], q[16];
+  int mine, best = -1;
+  if (!c || !ownsVideo() || playFailed || !srcReadyAt || srcKind == SRC_ARCHIVE) return;
+  // Before then video_height() may still be the channel before.
+  if (t - srcReadyAt < LIVE_SETTLE_MS || video_height() <= 0) return;
+  if (qualityNotedFor != tunedAt) {
+    qualityNotedFor = tunedAt;
+    iptv_quality_note(tuned, video_width(), video_height(), video_frame_rate_milli());
+    alsoFor = -1;
+  }
+  if (!full) return;
+  pg = programmeAt(tuned, nowSec());
+  snprintf(key, sizeof key, "%s\x01%lld", c->name, pg ? pg->start : 0LL);
+  if (!strcmp(key, alsoNoticeKey)) return;
+  snprintf(alsoNoticeKey, sizeof alsoNoticeKey, "%s", key);
+  refreshAlso();
+  mine = iptv_height_quality(video_height());
+  // Best first: the first that is not this one is the best of the rest.
+  for (int i = 0; i < nAlso && best < 0; i++) if (alsoCh[i] != tuned) best = alsoCh[i];
+  if (best < 0 || iptv_quality(best) <= mine) return;
+  snprintf(m, sizeof m, "Sharper elsewhere: %s on %s \xC2\xB7 \xE2\x96\xB2 to see",
+           iptv_quality_label(best, q, sizeof q), chan(best)->name);
+  say(m);
+  toastUntil = t + LIVE_NOTICE_MS;
+  alsoNoticeCh = best; alsoNoticeFor = tuned; alsoNoticeUntil = toastUntil;
+  printf("[live] %s: %s is sharper (%s)\n", c->name, chan(best)->name, q);
+  fflush(stdout);
 }
 
 void iptvui_update(float dt, Uint32 now) {
@@ -2391,7 +2566,8 @@ void iptvui_update(float dt, Uint32 now) {
     if (c < 0 && tuned >= 0) { stopStream(); tuned = -1; full = 0; }
     else tuned = c;
     rebuildView();
-    nOrder = 0; movingGroup = 0;
+    alsoFor = -1;
+    nOrder = 0; movingGroup = 0; movingChannel = 0;
     measureChips();
   }
   phoneStep(now);
@@ -2401,14 +2577,13 @@ void iptvui_update(float dt, Uint32 now) {
   { int id = ctx_requested_custom(); if (id >= 0) channelMenuChosen(id); }
   if (hold_fired(&hold, now)) {
     if (zone == ZONE_BODY) openChannelMenu();
-    else if (zone == ZONE_CHIPS && group < GROUP_FIRST) {
-      say("Favourites, All channels and Recent stay first");
-    } else if (zone == ZONE_CHIPS) {
+    else if (zone == ZONE_CHIPS) {
       movingGroup = 1;
       say("\xE2\x97\x80 \xE2\x96\xB6 to move \xC2\xB7 \xE2\x96\xB2 to the front \xC2\xB7 OK when done");
     }
   }
   if (zone != ZONE_CHIPS) movingGroup = 0;
+  if (zone != ZONE_BODY || group != GROUP_FAV || searching) movingChannel = 0;
 
   // Time moves on under a screen left open, unless the focus is on a past
   // programme, which catch-up made a place to be.
@@ -2435,6 +2610,7 @@ void iptvui_update(float dt, Uint32 now) {
     }
   }
   if (ownsVideo() && !srcReadyAt && video_ready()) srcReadyAt = now ? now : 1;
+  alsoStep(now);
   if (scrubbing && now >= scrubCommitAt) seekTo(scrubAt);
   // A programme from the archive ends: on with what follows, or live.
   if (ownsVideo() && srcKind == SRC_ARCHIVE && video_eos_count() > eosSeen) {
@@ -2856,7 +3032,7 @@ static void headField(GfxRect r, float e, int focused) {
       inkMid(TXT_LIVE_NAME, "Name or number", 0x6E757D, tx, r.y + r.h * 0.5f, maxW, ca);
     }
     if (ime_is_open() && (SDL_GetTicks() / 530u) % 2u == 0u)
-      gfx_color((GfxRect){ tx + (queryLen ? 4.0f : -2.0f), r.y + 13.0f, 2.0f, r.h - 26.0f }, 0.0f, 1, 1, 1, ca); }
+      gfx_color((GfxRect){ tx + (queryLen ? 1.0f : -2.0f), r.y + 13.0f, 2.0f, r.h - 26.0f }, 0.0f, 1, 1, 1, ca); }
 }
 
 // THE SWITCH: Guide | List on one track, the white pill under the view on
@@ -4303,9 +4479,9 @@ static void drawControls(float x, float cy, float a) {
   // The live glyphs at the film player's weight (live_ctl_*: stroke 24 on 256,
   // Phosphor's Bold, as subtitles/audio/aspect are); the header keeps its
   // lighter live_grid/live_list. Go live is Phosphor's clock-clockwise (Bold).
-  static const char *ICON[CTL_N] = { "pause", "live_ctl_restart", "live_ctl_live", "live_ctl_grid", "live_ctl_list",
+  static const char *ICON[CTL_N] = { "pause", "live_ctl_restart", "live_ctl_live", "live_ctl_grid", "live_ctl_list", "live_ctl_also",
                                      "subtitles", "audio", "aspect", "live_ctl_star" };
-  static const char *NAME[CTL_N] = { "Pause", "Start over", "Go live", "Guide", "Channels", "Subtitles",
+  static const char *NAME[CTL_N] = { "Pause", "Start over", "Go live", "Guide", "Channels", "Also showing", "Subtitles",
                                      "Audio", "Aspect Ratio", "Favourite" };
   float step = CTL_D + CTL_GAP, x0 = x + CTL_D * 0.5f;
   int fav = iptv_is_favourite(tuned), ids[CTL_N], n = shownControls(ids);
@@ -4685,7 +4861,7 @@ static float quickMeta(TxtStyle st, const char *text, float x, float y, int firs
 // the programme on now as the detail line, and the synopsis as the row opens.
 static void quickRowDraw(int row, float cx, float y, float h, int sel, float open, float a, float vt, float vb) {
   const IptvList *l = iptv_list();
-  int ch = view[row];
+  int ch = QCH(row);
   const IptvChannel *c = &l->ch[ch];
   const IptvProgramme *pg = quickProgramme(row);
   long long now = nowMinute();
@@ -4739,10 +4915,15 @@ static void quickRowDraw(int row, float cx, float y, float h, int sel, float ope
   // the programme on now and what is left of it.
   { float my = bt + NV_EPL_SUB_DY, x = tx;
     int first = 1;
+    // In the same-broadcast list, each copy's picture before anything else.
+    if (alsoMode) {
+      char q[16];
+      if (iptv_quality_label(ch, q, sizeof q)[0]) { x = quickMeta(TXT_SRC_STATE, q, x, my, 1, lit ? 244 : sub, dim, a); first = 0; }
+    }
     if (current) {
       quickEq(x, my + txt_baseline(TXT_SRC_META), a);
       x += Q_EQ_W + 9.0f;
-      x = quickMeta(TXT_SRC_STATE, "Playing", x, my, 1, 244, dim, a);
+      x = quickMeta(TXT_SRC_STATE, "Playing", x, my, first, 244, dim, a);
       first = 0;
     }
     if (pg) {
@@ -4824,23 +5005,33 @@ static void drawQuick(void) {
   // The episode panel's veil, heading and count.
   gfx_rect((GfxRect){ NV_SCREEN_W - NV_EPL_VEIL_W + slide, 0, NV_EPL_VEIL_W, NV_SCREEN_H }, 0, GFX_SRC_VEIL, 0,
            1, 0, 0, NV_SRC_INK_R, NV_SRC_INK_G, NV_SRC_INK_B, an * NV_SRC_VEIL_A);
-  { TxtLine t = txt_line(TXT_PANEL_TITLE, "Channels", 240, 241, 243, 255);
+  { TxtLine t = txt_line(TXT_PANEL_TITLE, alsoMode ? "Also showing" : "Channels", 240, 241, 243, 255);
     txt_draw_alpha(t, cx + NV_EPL_PADX, NV_TRK_TITLE_Y, an);
-    if (nView) {
+    if (QN()) {
       char c[32];
       float capT = txt_cap_inset(TXT_PANEL_TITLE), capC = txt_cap_inset(TXT_SRC_COUNT);
       float mid = NV_TRK_TITLE_Y + (capT + txt_baseline(TXT_PANEL_TITLE)) * 0.5f;
-      snprintf(c, sizeof c, "%d channel%s", nView, nView == 1 ? "" : "s");
+      snprintf(c, sizeof c, "%d channel%s", QN(), QN() == 1 ? "" : "s");
       txt_draw_alpha(txt_line(TXT_SRC_COUNT, c, 132, 135, 142, 255), cx + NV_EPL_PADX + (float)t.w + 18.0f,
                      mid - (capC + txt_baseline(TXT_SRC_COUNT)) * 0.5f, an);
     } }
-  pill = quickPill(cx + NV_EPL_PADX, NV_TRK_TABS_Y, an);
-  pointer_zone(pill.x, pill.y, pill.w, pill.h, pointQuickPill, 0, 0);
+  if (alsoMode) {
+    // Where the pill would be: what they all have on.
+    const IptvProgramme *pg = programmeAt(tuned, nowMinute());
+    const IptvChannel *c = chan(tuned);
+    TxtLine t = txt_line_trim(TXT_TRK_VALUE, pg ? pg->title : c ? c->name : "", 178, 178, 184, 255,
+                              NV_EPL_W - NV_EPL_PADX * 2);
+    pill = (GfxRect){ cx + NV_EPL_PADX, NV_TRK_TABS_Y, (float)t.w, NV_EPL_PILL_H };
+    txt_draw_alpha(t, pill.x, pill.y + (pill.h - t.h) * 0.5f, an);
+  } else {
+    pill = quickPill(cx + NV_EPL_PADX, NV_TRK_TABS_Y, an);
+    pointer_zone(pill.x, pill.y, pill.w, pill.h, pointQuickPill, 0, 0);
+  }
 
-  if (!nView) {
+  if (!QN()) {
     txt_block(TXT_TRK_OPTSUB, group == GROUP_FAV ? "No favourites yet." : "No channels in this group.",
               133, 134, 136, cx + NV_EPL_PADX, vt + 16.0f, NV_EPL_W - NV_EPL_PADX * 2, 28.0f, an, 3);
-  } else if (quickOpenedCap >= nView) {
+  } else if (quickOpenedCap >= QN()) {
     float fadeTop = NV_TRK_TABS_Y + NV_EPL_PILL_H + NV_RING_FOCUS;
     gfx_crop(0, fadeTop, NV_SCREEN_W, NV_SCREEN_H - fadeTop);
     pointer_clip(0, fadeTop, NV_SCREEN_W, NV_SCREEN_H - fadeTop);
@@ -4849,7 +5040,7 @@ static void drawQuick(void) {
       if (first < 0) first = 0;
       y = vt - quickScroll + first * Q_PITCH;
       // The rows above `first` are closed, bar the focused one which is below it.
-      for (int i = first; i < nView && y < NV_SCREEN_H; i++) {
+      for (int i = first; i < QN() && y < NV_SCREEN_H; i++) {
         float op = quickOpened[i], h = NV_EPL_ROW_H, edge;
         if (op > 0.001f) h += quickOpenExtra(quickProgramme(i)) * op;
         edge = anim_edge(y, fadeTop, vt - fadeTop);
@@ -4864,7 +5055,7 @@ static void drawQuick(void) {
     gfx_no_crop();
     pointer_no_clip();
   }
-  if (gmOpen) quickGroupMenu(pill, an);
+  if (gmOpen && !alsoMode) quickGroupMenu(pill, an);
 }
 
 // While the stream opens, the channel stands in for the picture: its logo in

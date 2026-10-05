@@ -89,29 +89,36 @@ typedef enum {
   SETTING_HERO_TRAILER_CW,
   SETTING_HERO_FULL, SETTING_HERO_AREA, SETTING_HERO_BAND, SETTING_HERO_TRAILER_SIZE,
   // Catalogue rows
-  SETTING_SUFFIX_KIND, SETTING_NAME_ADDON, SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME,
+  SETTING_SUFFIX_KIND, SETTING_HIDE_UNRELEASED, SETTING_SCORES_HOME,
   // Continue watching. SETTING_CW_ON leads and SETTING_CW_NOT_SHOWN closes: the
   // checks for "a row that needs Continue watching on" read that range.
   SETTING_CW_ON, SETTING_CW_ORDER, SETTING_CW_PLAY,
   SETTING_CW_STYLE, SETTING_CW_LOGO, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
   SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN,
   // Sidebar and navigation
-  SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_RAIL_BLUR, SETTING_DISCOVER,
+  SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_DISCOVER,
   SETTING_NAV_FAST, SETTING_ROW_SCROLL,
   SETTING_ANIM,
   // Posters
   SETTING_LANDSCAPE, SETTING_LABELS,
-  SETTING_EXPAND, SETTING_EXPAND_DELAY, SETTING_GRADIENT_CLASSIC,
-  SETTING_WIDTH_DP, SETTING_RADIUS_DP,
+  SETTING_EXPAND, SETTING_EXPAND_DELAY, SETTING_HOLD_BLUR, SETTING_FOCUS_GLOW, SETTING_FOCUS_GLOW_A,
+  SETTING_RADIUS_DP,
   // Depth
-  SETTING_DEPTH, SETTING_DEPTH_BORDER, SETTING_DEPTH_BRIGHTNESS, SETTING_DEPTH_COVERAGE,
+  SETTING_DEPTH, SETTING_DEPTH_BORDER, SETTING_DEPTH_BRIGHTNESS,
   SETTING_DEPTH_POSTERS, SETTING_DEPTH_CW, SETTING_DEPTH_EPS, SETTING_DEPTH_CAST, SETTING_DEPTH_TRAILERS,
   // Detail page
-  SETTING_DET_TRAILER, SETTING_DET_META_EXT, SETTING_DET_BLUR_NOT_WATCHED, SETTING_DET_DATE_FULL,
+  SETTING_DET_TRAILER, SETTING_DET_BLUR_NOT_WATCHED, SETTING_DET_DATE_FULL,
   // Account
   SETTING_PROFILE_ACTIVE, SETTING_PRIMARY_ADDONS, SETTING_SYNC, SETTING_TRAKT, SETTING_SIMKL, SETTING_EXIT,
   // About
   SETTING_VERSION_I, SETTING_UPDATES, SETTING_SPACE,
+  // NOT ON THE SCREEN: past the last section, so no section lists them. The
+  // web app's keys this port does not act on yet — kept, read and written like
+  // any other so a choice made in the web app survives the TV, but a row that
+  // changes nothing is not offered. Moving one up into a section is all it
+  // takes to show it again.
+  SETTING_NAME_ADDON, SETTING_RAIL_BLUR, SETTING_GRADIENT_CLASSIC, SETTING_WIDTH_DP,
+  SETTING_DEPTH_COVERAGE, SETTING_DET_META_EXT,
   SETTING_N
 } OptionId;
 
@@ -288,6 +295,9 @@ static const Option OPTIONS[SETTING_N] = {
 
   [SETTING_EXPAND] = ESC("Expand poster on focus",   V_ON, 2),   // focusedPosterBackdropExpandEnabled
   [SETTING_EXPAND_DELAY] = NUM("Expansion delay",         0, 10, 1, " s"), // ...ExpandDelaySeconds
+  [SETTING_HOLD_BLUR] = ESC("Hold menu blur",            V_ON, 2), // local: holdMenuBlur
+  [SETTING_FOCUS_GLOW] = ESC("Focus glow",                V_ON, 2), // local: focusGlow
+  [SETTING_FOCUS_GLOW_A] = NUM("Glow strength",            2, 60, 2, "%"), // local: focusGlowStrength
   [SETTING_NAV_FAST] = ESC("Fast horizontal navigation", V_ON, 2),  // fastHorizontalNavigationEnabled
   [SETTING_ROW_SCROLL] = ESC("Row scrolling",             V_ROW_SCROLL, 2), // local: rowScrollAnchor
 
@@ -376,6 +386,10 @@ static const char *KEY[] = {
   [SETTING_NAV_FAST] = "fastHorizontalNavigationEnabled",
   // Local to this port: the web app has no such key, so the blob never touches it.
   [SETTING_ROW_SCROLL] = "rowScrollAnchor",
+  // Local to this port as well: the web's hold menu is a centred dialog with no glass.
+  [SETTING_HOLD_BLUR] = "holdMenuBlur",
+  // And this: a faint light in the poster's colour behind the focused card.
+  [SETTING_FOCUS_GLOW] = "focusGlow", [SETTING_FOCUS_GLOW_A] = "focusGlowStrength",
   [SETTING_DEPTH] = "cardDepthEnabled", [SETTING_DEPTH_BORDER] = "cardDepthEdgeStrength", [SETTING_DEPTH_BRIGHTNESS] = "cardDepthSheenStrength",
   [SETTING_DEPTH_COVERAGE] = "cardDepthEdgeCoverage", [SETTING_DEPTH_POSTERS] = "cardDepthPostersEnabled",
   [SETTING_DEPTH_CW] = "cardDepthContinueWatchingEnabled", [SETTING_DEPTH_EPS] = "cardDepthEpisodeCardsEnabled",
@@ -418,18 +432,18 @@ static const struct { const char *group, *title; int start, n; const char *blurb
   // open the Home rows list (level 2) instead of a list of options.
   { NULL, "Home rows",               SETTING_N,                    0,
     "The order of the Home rows and which of them show. Saved to your account, so the web app follows it." },
-  { NULL, "Catalogue rows",          SETTING_SUFFIX_KIND,          4,
+  { NULL, "Catalogue rows",          SETTING_SUFFIX_KIND,          3,
     "What the catalogue rows say about themselves and which titles they leave out." },
   { NULL, "Continue watching",       SETTING_CW_ON,                9,
     "Whether the resume row appears, how it is sorted, how its cards look and what counts as next up." },
-  { "Interface", "Sidebar and navigation", SETTING_RAIL,           7,
+  { "Interface", "Sidebar and navigation", SETTING_RAIL,           6,
     "The sidebar, where Discover lives, how rows scroll and motion across the app." },
-  { NULL, "Posters",                 SETTING_LANDSCAPE,            7,
-    "Poster shape, labels, what a focused poster does and its size." },
-  { NULL, "Depth effect",            SETTING_DEPTH,                9,
+  { NULL, "Posters",                 SETTING_LANDSCAPE,           8,
+    "Poster shape, labels, what a focused poster does, the hold menu and its size." },
+  { NULL, "Depth effect",            SETTING_DEPTH,                8,
     "The lit edge and sheen on cards, and which cards get it." },
-  { NULL, "Detail page",             SETTING_DET_TRAILER,          4,
-    "The trailer button, metadata, spoilers and release dates on a title's page." },
+  { NULL, "Detail page",             SETTING_DET_TRAILER,          3,
+    "The trailer button, spoilers and release dates on a title's page." },
   { "Account", "Account",            SETTING_PROFILE_ACTIVE,       6,
     "Profile, addons, sync, Trakt, Simkl and signing out." },
   { NULL, "About",                   SETTING_VERSION_I,            3,
@@ -512,6 +526,9 @@ static int value[SETTING_N] = {
 
   [SETTING_EXPAND] = 0,                /* expand poster on focus: on (the web's DEFAULT) */
   [SETTING_EXPAND_DELAY] = 3,                /* delay: 3s */
+  [SETTING_HOLD_BLUR] = 0,                /* hold menu blur: on */
+  [SETTING_FOCUS_GLOW] = 1,                /* focus glow: off */
+  [SETTING_FOCUS_GLOW_A] = 14,             /* glow strength: faint */
   [SETTING_NAV_FAST] = 1,                /* fast horizontal navigation: off (factory) */
   [SETTING_ROW_SCROLL] = 0,                /* row scrolling: minimal, what it always did */
 
@@ -673,6 +690,9 @@ int   settings_expand_poster(void)   { return on(SETTING_EXPAND); }
 float settings_expand_poster_delay(void) { return (float)value[SETTING_EXPAND_DELAY]; }
 int   settings_navigation_horizontal_fast(void) { return on(SETTING_NAV_FAST); }
 int   settings_row_first_slot(void) { return value[SETTING_ROW_SCROLL] == 1; }
+int   settings_hold_menu_blur(void) { return on(SETTING_HOLD_BLUR); }
+int   settings_focus_glow(void) { return on(SETTING_FOCUS_GLOW); }
+float settings_focus_glow_strength(void) { return value[SETTING_FOCUS_GLOW_A] / 100.0f; }
 
 int   settings_depth(void)      { return on(SETTING_DEPTH); }
 float settings_depth_border(void)     { return value[SETTING_DEPTH_BORDER] / 100.0f; }
@@ -696,6 +716,11 @@ float settings_content_x(void) {
                                   : NV_LEGACY_RAIL_W + NV_CONTENT_PAD;
 }
 const char *settings_quality(void)   { return V_QUALITY[value[SETTING_QUALITY]]; }
+int settings_quality_max_height(void) {
+  static const int H[] = { 0, 2160, 1080, 720 };   /* V_QUALITY's order */
+  int i = value[SETTING_QUALITY];
+  return i >= 0 && i < (int)(sizeof H / sizeof *H) ? H[i] : 0;
+}
 
 // Where the settings live. Until the previous version nothing was written:
 // changing an option held only while the app was open, and coming back afterwards
@@ -1040,6 +1065,7 @@ static int inactive(int op) {
     // The Poster style draws plain poster cards, which have no title to replace.
     case SETTING_CW_LOGO: return !settings_cw_on() || settings_cw_style() == 2;
     case SETTING_EXPAND_DELAY: return !settings_expand_poster();
+    case SETTING_FOCUS_GLOW_A: return !settings_focus_glow();
     case SETTING_DEPTH_BORDER: case SETTING_DEPTH_BRIGHTNESS: case SETTING_DEPTH_COVERAGE:
     case SETTING_DEPTH_POSTERS: case SETTING_DEPTH_CW: case SETTING_DEPTH_EPS:
     case SETTING_DEPTH_CAST: case SETTING_DEPTH_TRAILERS:
@@ -1123,6 +1149,7 @@ static const char *helpOption(int op) {
         ? "Set the style to Card or Wide to show logos."
         : "Turn on Continue watching to adjust the resume cards.";
     if (op == SETTING_EXPAND_DELAY) return "Turn on Expand poster on focus to adjust the delay.";
+    if (op == SETTING_FOCUS_GLOW_A) return "Turn on Focus glow to adjust its strength.";
     if (op == SETTING_NEXT_COUNTDOWN) return "Turn on Autoplay next episode to set the countdown.";
     if (op == SETTING_NEXT_SECONDS) return "Set Up next appears to Before the end to use this.";
     if (op == SETTING_NEXT_PERCENT) return "Set Up next appears to Percentage watched to use this.";
@@ -1146,6 +1173,9 @@ static const char *helpOption(int op) {
     case SETTING_CW_STYLE: return "Card and Wide both draw 16:9 resume cards on this TV; Poster uses upright posters.";
     case SETTING_EXPAND: return "A focused poster opens out into its 16:9 art after the delay.";
     case SETTING_DEPTH: return "A lit edge and sheen on the focused card.";
+    case SETTING_HOLD_BLUR: return "The panel that opens when you hold OK on a poster shows the screen behind it blurred, like the sidebar. Off, it is a solid dark panel.";
+    case SETTING_FOCUS_GLOW_A: return "How bright the glow around the focused card is.";
+    case SETTING_FOCUS_GLOW: return "A faint light in the poster's own colour around the focused card.";
     case SETTING_ROW_SCROLL: return "First slot moves every row so the focused card sits at its start, and the rest slide sideways. Minimal scrolls only when the card would leave the screen.";
     case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead.";
     case SETTING_NEXT_COUNTDOWN: return "How long the Up next card waits before it plays the next episode.";
@@ -1162,13 +1192,19 @@ static const char *helpOption(int op) {
     case SETTING_LIVE_SOURCE: return "Your M3U playlist or Xtream Codes login, and extra TV guides for the channels it leaves without one. Opens Live TV's source screen, where a phone can fill it in too.";
     case SETTING_LIVE_BUFFER: return "Keeps the last minutes of a live channel on the TV so you can pause and rewind it. Works on MPEG-TS channels, and writes to the TV's storage while you watch.";
     case SETTING_LIVE_PREVIEW: return "Rest on a channel in the Live TV list or guide and it plays in the preview. It counts as watched only when you press OK.";
-    case SETTING_QUALITY: return "Sets the resolution preference. Availability depends on the addon sources.";
-    case SETTING_DV: case SETTING_ATMOS: return "Preference for compatible sources. The available format also depends on the file and the TV.";
+    case SETTING_QUALITY: return "The highest resolution the automatic source pick chooses. A source above it is only used when nothing else plays.";
+    case SETTING_DV: return "On prefers Dolby Vision sources the TV can show. Off picks other sources first, for a TV without Dolby Vision.";
+    case SETTING_ATMOS: return "On prefers sources with Dolby Atmos sound when everything else is equal.";
+    case SETTING_DISCOVER: return "Where Discover opens from: the button beside the search field, its own row in the sidebar, or nowhere.";
+    case SETTING_CW_THUMB: return "Shows the episode's own still on a series' resume card, in place of the series' art.";
+    case SETTING_CW_NOT_SHOWN: return "Offers the next episode before it has aired. Off, only episodes already out are suggested.";
     case SETTING_HERO_CATALOGS: return "How many catalogues the hero includes. This row is informational only.";
     case SETTING_PRIMARY_ADDONS: return "This profile uses the primary profile's addons instead of its own list. It has no effect on the primary profile.";
     case SETTING_CW_PLAY: return "Pressing OK on a resume card plays it straight away, skipping the title's page. Hold OK for the other options.";
     case SETTING_CW_LOGO: return "Shows the title's logo in place of its name on the resume cards. A title with no logo keeps its name.";
     case SETTING_CW_FURTHEST: return "Picks the next episode from the furthest one marked as watched.";
+    case SETTING_CW_ORDER: return "Streaming style puts upcoming episodes at the end, the soonest first. Default and Separate upcoming keep the most recently watched first.";
+    case SETTING_SCORES_HOME: return "Shows or hides the IMDb rating on the Home hero.";
     case SETTING_CW_BLUR_NEXT: case SETTING_DET_BLUR_NOT_WATCHED: return "Hides thumbnail detail to avoid spoilers for episodes you have not watched.";
     case SETTING_ANIM: return "Use Reduced for subtler motion when moving through the interface.";
     case SETTING_SPACE: return "Current memory used by the image cache, not space taken on the TV storage.";
@@ -1204,7 +1240,7 @@ static const char *groupOfOption(int op) {
     case SETTING_ANIM:           return "Motion";
     case SETTING_LANDSCAPE:      return "Posters";
     case SETTING_EXPAND:         return "Focus";
-    case SETTING_WIDTH_DP:       return "Size";
+    case SETTING_RADIUS_DP:      return "Size";
     case SETTING_DEPTH:          return "Effect";
     case SETTING_DEPTH_POSTERS:  return "Where it applies";
     case SETTING_DET_TRAILER:    return "Page";
@@ -1574,6 +1610,7 @@ static const char *needsOf(int op) {
     case SETTING_CW_BLUR_NEXT:   return settings_cw_on() ? "Episode thumbnail" : "Continue watching";
     case SETTING_CW_LOGO:        return settings_cw_on() ? "Card or Wide style" : "Continue watching";
     case SETTING_EXPAND_DELAY:   return "Expand poster";
+    case SETTING_FOCUS_GLOW_A:   return "Focus glow";
     case SETTING_NEXT_COUNTDOWN: return "Autoplay";
     case SETTING_NEXT_SECONDS:   return "Before the end";
     case SETTING_NEXT_PERCENT:   return "Percentage watched";
@@ -1859,27 +1896,9 @@ static int sceneOf(int s) {
   }
 }
 
-// Rows the port stores and syncs but does not act on yet: the web app reads
-// them, this app does not. Their preview marks nothing, and the panel says so —
-// a picture that changed for them would be promising an effect that is not there.
-static int notWired(int op) {
-  switch (op) {
-    case SETTING_QUALITY: case SETTING_DV: case SETTING_ATMOS:
-    case SETTING_RAIL_BLUR: case SETTING_DISCOVER: case SETTING_NAME_ADDON:
-    case SETTING_SCORES_HOME: case SETTING_GRADIENT_CLASSIC:
-    case SETTING_CW_THUMB: case SETTING_CW_BLUR_NEXT: case SETTING_CW_FURTHEST:
-    case SETTING_CW_NOT_SHOWN: case SETTING_CW_ORDER:
-    case SETTING_DET_BLUR_NOT_WATCHED: case SETTING_DET_META_EXT:
-    case SETTING_WIDTH_DP: case SETTING_DEPTH_COVERAGE: case SETTING_DEPTH_EPS:
-    case SETTING_DEPTH_CAST: case SETTING_DEPTH_TRAILERS:
-      return 1;
-    default: return 0;
-  }
-}
-
 static int highlightOf(void) {
   if (level == 2) return HL_ROWS;
-  if (level == 0 || notWired(focusOp)) return HL_NONE;
+  if (level == 0) return HL_NONE;
   switch (focusOp) {
     case SETTING_SUBS: case SETTING_SUBS_FORCED: return HL_SUBS;
     case SETTING_SEEK_COLOR: return HL_SEEK;
@@ -1887,15 +1906,19 @@ static int highlightOf(void) {
     case SETTING_NEXT_SECONDS: case SETTING_NEXT_PERCENT: return HL_NEXT;
     case SETTING_HERO_FULL: case SETTING_HERO_AREA: case SETTING_HERO_BAND: return HL_BACKDROP;
     case SETTING_HERO_TRAILER_SIZE: return HL_TRAILER;
-    case SETTING_RAIL: case SETTING_RAIL_MODERN: return HL_RAIL;
-    case SETTING_HERO: case SETTING_HERO_CATALOGS: return HL_HERO;
+    case SETTING_RAIL: case SETTING_RAIL_MODERN: case SETTING_DISCOVER: return HL_RAIL;
+    case SETTING_HERO: case SETTING_HERO_CATALOGS: case SETTING_SCORES_HOME: return HL_HERO;
     case SETTING_HERO_TRAILER: case SETTING_HERO_TRAILER_DELAY:
     case SETTING_HERO_TRAILER_CW: return HL_TRAILER;
     case SETTING_DET_TRAILER: return HL_BUTTONS;
     case SETTING_DET_DATE_FULL: return HL_META;
+    case SETTING_DET_BLUR_NOT_WATCHED: case SETTING_DEPTH_EPS: return HL_EPISODES;
+    // The pictures have no cast page or trailer row to point at.
+    case SETTING_DEPTH_CAST: case SETTING_DEPTH_TRAILERS: return HL_NONE;
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:
     case SETTING_HIDE_UNRELEASED: return HL_ROWS;
-    case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM:
+    case SETTING_QUALITY: case SETTING_DV: case SETTING_ATMOS:
+    case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM: case SETTING_HOLD_BLUR:
     case SETTING_PAUSE_DELAY: case SETTING_LIVE_ON: case SETTING_LIVE_SOURCE: case SETTING_LIVE_BUFFER:
     case SETTING_LIVE_PREVIEW: return HL_NONE;
     default:
@@ -2362,7 +2385,7 @@ static void drawEpisodesScene(Pv v, int hl) {
   static const char *DATE[] = { "9 August 2025", "16 August 2025", "23 August 2025", "30 August 2025" };
   const float x0 = 96.0f, tx = 96.0f + 320.0f + 56.0f;
   float y = 56.0f + 80.0f + 24.0f, k = v.k;
-  GfxRect metaR = { 0 };
+  GfxRect metaR = { 0 }, thumbR = { 0 };
   int i;
 
   pvGlow(v, 1500.0f, 200.0f, 500.0f, 0.06f);
@@ -2384,6 +2407,7 @@ static void drawEpisodesScene(Pv v, int hl) {
     snprintf(code, sizeof code, "EP %d", i + 1);
     snprintf(meta, sizeof meta, "52min");
     pvPlate(v, x0, y + 24.0f, 320.0f, 180.0f, 12.0f, 0.18f, 1.0f);
+    if (i == 0) thumbR = (GfxRect){ x0, y + 24.0f, 320.0f, 180.0f };
     pvWrite(v, TXT_DETWEB_EP_BADGE, code, 21.0f, 255, tx, y + 34.0f, 0.55f);
     pvWrite(v, TXT_DETWEB_EP_TITLE, "Episode Name", 34.0f, 255, tx, y + 62.0f, 1.0f);
     xm = pvMeta(v, TXT_DETWEB_EP_META, meta, 23.0f, 175, tx, y + 124.0f);
@@ -2396,6 +2420,7 @@ static void drawEpisodesScene(Pv v, int hl) {
   }
 
   if (hl == HL_META) pvMark(v, metaR);
+  if (hl == HL_EPISODES) pvMark(v, thumbR);
 }
 
 // The picture box: the screen at 16:9, a hairline edge, the scene clipped inside.
@@ -2579,21 +2604,16 @@ static void drawPanel(float hx, float hw) {
     help = helpOption(focusOp);
     scene = sceneOf(focusSec);
     // A picture with nothing marked is the same for every row — quality, the audio
-    // languages, animations — and says nothing about any of them. Nor does one for
-    // a row the app does not act on: nothing in it changes.
-    if (notWired(focusOp) || highlightOf() == HL_NONE) scene = PV_NONE;
+    // languages, animations — and says nothing about any of them.
+    if (highlightOf() == HL_NONE) scene = PV_NONE;
     // The full date is the episode list's: the page's own hero shows the year alone.
-    else if (focusOp == SETTING_DET_DATE_FULL) scene = PV_EPISODES;
+    else if (focusOp == SETTING_DET_DATE_FULL || focusOp == SETTING_DET_BLUR_NOT_WATCHED ||
+             focusOp == SETTING_DEPTH_EPS) scene = PV_EPISODES;
   }
 
   y += drawKicker(scene != PV_NONE ? "Preview" : level ? "Details" : "Section", hx, y, 0.0f, 1.0f) + 14.0f;
   y += txt_block(TXT_PANEL_TITLE, head, 246, 246, 248, hx, y, hw, 48, 1, 2) + 10.0f;
   if (help) y += txt_block(TXT_CAPTION, help, 170, 172, 178, hx, y, hw, 32, 1, 4);
-  if (level == 1 && notWired(focusOp)) {
-    if (help) y += 10.0f;
-    y += txt_block(TXT_CAPTION, "Saved to your account for the web app. The TV app does not use it yet.",
-                   SETTING_ACCENT_R * 255 + 40, SETTING_ACCENT_G * 255 + 60, 255, hx, y, hw, 32, 1, 2);
-  }
   y += 26.0f;
   // The choices must all fit under the picture: the chips step down a size, and
   // when even the smallest does not fit, the picture gives up the height.

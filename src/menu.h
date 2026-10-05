@@ -24,12 +24,16 @@
 // Home, which puts the secondary action above the default destination — and on a
 // D-pad that means getting back to the home costs one step more than going to
 // search.
+// Discover sits under Search, and only when Settings -> Discover location says
+// "In the sidebar" (discoverLocation in_sidebar); otherwise it is reached from
+// Search's compass, or not at all.
 // Live TV sits after the library and before Settings: it is content, like the
 // three above it, and Settings stays the last stop on the bar. Nothing stores a
 // destination by number (app.c switches on the names), so inserting is safe.
 typedef enum {
   MENU_START,
   MENU_FETCH,
+  MENU_DISCOVER,
   MENU_LIBRARY,
   MENU_LIVE,
   MENU_SETTINGS,

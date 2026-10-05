@@ -1656,3 +1656,137 @@ char *iptv_xtream_m3u(const char *streams, const char *categories, const char *b
   if (n < 0 || j.out.bad) { free(j.out.p); return NULL; }
   return j.out.p;
 }
+
+// --- The same thing elsewhere ------------------------------------------------------
+// A name's words, as looseName reads them: runs of letters and digits, bytes
+// past ASCII kept as letters. `fn` sees each one; nonzero stops the walk.
+static void eachWord(const char *s, int (*fn)(const char *w, size_t n, void *u), void *u) {
+  const char *p = s;
+  while (p && *p) {
+    const char *w;
+    if (!isalnum((unsigned char)*p) && (unsigned char)*p < 0x80) { p++; continue; }
+    w = p;
+    while (*p && (isalnum((unsigned char)*p) || (unsigned char)*p >= 0x80)) p++;
+    if (fn(w, (size_t)(p - w), u)) return;
+  }
+}
+
+static int wordIs(const char *w, size_t n, const char *s) { return strlen(s) == n && !strncasecmp(w, s, n); }
+
+typedef struct { int best; int fullBefore; } QualityScan;
+
+static int qualityOf(const char *w, size_t n, void *u) {
+  QualityScan *q = u;
+  int t = IPTV_Q_UNKNOWN, full = q->fullBefore;
+  q->fullBefore = wordIs(w, n, "full");
+  if (wordIs(w, n, "4k") || wordIs(w, n, "8k") || wordIs(w, n, "uhd") || wordIs(w, n, "2160p")
+      || wordIs(w, n, "2160") || wordIs(w, n, "3840p") || wordIs(w, n, "uhd4k"))
+    t = IPTV_Q_UHD;
+  else if (wordIs(w, n, "fhd") || wordIs(w, n, "fullhd") || wordIs(w, n, "1080p") || wordIs(w, n, "1080i")
+           || wordIs(w, n, "1080"))
+    t = IPTV_Q_FHD;
+  else if (wordIs(w, n, "hd"))
+    t = full ? IPTV_Q_FHD : IPTV_Q_HD;
+  else if (wordIs(w, n, "720p") || wordIs(w, n, "720") || wordIs(w, n, "hq"))
+    t = IPTV_Q_HD;
+  else if (wordIs(w, n, "sd") || wordIs(w, n, "576p") || wordIs(w, n, "576i") || wordIs(w, n, "480p")
+           || wordIs(w, n, "480i") || wordIs(w, n, "lq"))
+    t = IPTV_Q_SD;
+  if (t > q->best) q->best = t;
+  return 0;
+}
+
+int iptv_name_quality(const char *name) {
+  QualityScan q = { IPTV_Q_UNKNOWN, 0 };
+  eachWord(name, qualityOf, &q);
+  return q.best;
+}
+
+int iptv_height_quality(int height) {
+  return height >= 1800 ? IPTV_Q_UHD : height >= 1000 ? IPTV_Q_FHD : height >= 700 ? IPTV_Q_HD
+       : height > 0 ? IPTV_Q_SD : IPTV_Q_UNKNOWN;
+}
+
+int iptv_same_channel(const char *a, const char *b) {
+  char ka[256], kb[256];
+  return looseName(a, ka, sizeof ka) && looseName(b, kb, sizeof kb) && !strcmp(ka, kb);
+}
+
+// A TITLE AS A SET OF WORDS, for "is this the same programme": lower case, the
+// filler a schedule puts round a name dropped ("Live:", "the", a channel's
+// quality tag), and the words one sport is written with in every language
+// folded to one: "F1", "Formula 1", "Formule 1" and "Formel 1" are all
+// formula1; "Grand Prix" and "GP" are gp.
+#define TW_MAX 24
+#define TW_LEN 32
+typedef struct { char w[TW_MAX][TW_LEN]; int n; char held[TW_LEN]; } TitleWords;
+
+static void twAdd(TitleWords *t, const char *s) {
+  if (!s[0] || t->n == TW_MAX) return;
+  for (int i = 0; i < t->n; i++) if (!strcmp(t->w[i], s)) return;
+  snprintf(t->w[t->n++], TW_LEN, "%s", s);
+}
+
+static int twFiller(const char *w) {
+  static const char *stop[] = { "the", "a", "an", "of", "and", "at", "on", "in", "to", "live", "en", "de", "la",
+                                "le", "el", "il", "lo", "les", "los", "van", "het", "een", "der", "die", "das",
+                                "du", "des", "di", "del", "da", "und", "et", "y", "e", "direct", "directo", "vivo",
+                                "diretta", "direkt", "rediffusion", "replay", "new", "premiere", "s", "uur", "h" };
+  for (size_t i = 0; i < sizeof stop / sizeof *stop; i++) if (!strcmp(w, stop[i])) return 1;
+  return 0;
+}
+
+static int titleWord(const char *w, size_t n, void *u) {
+  TitleWords *t = u;
+  char s[TW_LEN];
+  size_t k = n < TW_LEN - 1 ? n : TW_LEN - 1;
+  for (size_t i = 0; i < k; i++) s[i] = (char)tolower((unsigned char)w[i]);
+  s[k] = 0;
+  // A word waiting on the next: "formula" for its "1", "grand" for its "prix".
+  if (t->held[0]) {
+    int formula = !strcmp(t->held, "formula");
+    if (formula && !strcmp(s, "1")) { t->held[0] = 0; twAdd(t, "formula1"); return 0; }
+    if (!formula && !strcmp(s, "prix")) { t->held[0] = 0; twAdd(t, "gp"); return 0; }
+    twAdd(t, t->held);
+    t->held[0] = 0;
+  }
+  if (!strcmp(s, "formula") || !strcmp(s, "formule") || !strcmp(s, "formel") || !strcmp(s, "f\xC3\xB3rmula")) {
+    snprintf(t->held, TW_LEN, "formula");
+    return 0;
+  }
+  if (!strcmp(s, "grand")) { snprintf(t->held, TW_LEN, "grand"); return 0; }
+  if (!strcmp(s, "f1") || !strcmp(s, "formula1") || !strcmp(s, "formule1") || !strcmp(s, "formel1")) {
+    twAdd(t, "formula1");
+    return 0;
+  }
+  if (!strcmp(s, "grandprix")) { twAdd(t, "gp"); return 0; }
+  if (twFiller(s) || qualityWord(s, k)) return 0;
+  twAdd(t, s);
+  return 0;
+}
+
+static void titleWords(const char *s, TitleWords *t) {
+  memset(t, 0, sizeof *t);
+  eachWord(s, titleWord, t);
+  if (t->held[0]) twAdd(t, t->held);
+}
+
+int iptv_same_title(const char *a, const char *b) {
+  TitleWords tx, ty, *x = &tx, *y = &ty;
+  int common = 0, least, strength = 0;
+  if (!a || !b) return 0;
+  titleWords(a, x);
+  titleWords(b, y);
+  for (int i = 0; i < x->n; i++)
+    for (int j = 0; j < y->n; j++)
+      if (!strcmp(x->w[i], y->w[j])) { common++; break; }
+  least = x->n < y->n ? x->n : y->n;
+  if (least && common == least && x->n == y->n) strength = least >= 2 ? 2 : 1;
+  // The shorter one whole inside the longer: "F1: Japanese GP" in "Formula 1
+  // Japanese Grand Prix - Race". Two words at least, or "Race" would be in
+  // every race.
+  else if (least >= 2 && common == least) strength = 2;
+  // Long titles that differ by a word or so of decoration.
+  else if (common >= 3 && common * 4 >= least * 3) strength = 2;
+  return strength;
+}

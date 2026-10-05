@@ -636,6 +636,37 @@ static void testCatchup(void) {
     assert(!iptv_xtream_parts("http://h/live/a/b/name.ts", 0, 0, 0, 0, 0, 0, 0, 0, 0)); }
 }
 
+// One broadcast on several channels: which copies, which titles, which tier.
+static void testSameElsewhere(void) {
+  assert(iptv_name_quality("UK: SKY SPORTS F1 UHD") == IPTV_Q_UHD);
+  assert(iptv_name_quality("Sky Sports F1 4K") == IPTV_Q_UHD);
+  assert(iptv_name_quality("4K| UHD 3840P") == IPTV_Q_UHD);
+  assert(iptv_name_quality("|NL| NPO 1 FHD [50fps]") == IPTV_Q_FHD);
+  assert(iptv_name_quality("Ziggo Sport Full HD") == IPTV_Q_FHD);
+  assert(iptv_name_quality("00s Replay (720p)") == IPTV_Q_HD);
+  assert(iptv_name_quality("BBC One HD") == IPTV_Q_HD);
+  assert(iptv_name_quality("BBC One SD") == IPTV_Q_SD);
+  assert(iptv_name_quality("Sky Sports F1") == IPTV_Q_UNKNOWN);
+  assert(iptv_name_quality("HDTV Shop") == IPTV_Q_UNKNOWN);   // a word, not a tag
+  assert(iptv_height_quality(2160) == IPTV_Q_UHD && iptv_height_quality(1080) == IPTV_Q_FHD);
+  assert(iptv_height_quality(720) == IPTV_Q_HD && iptv_height_quality(576) == IPTV_Q_SD);
+  assert(iptv_height_quality(0) == IPTV_Q_UNKNOWN);
+
+  assert(iptv_same_channel("UK: SKY SPORTS F1 UHD", "Sky Sports F1 HD"));
+  assert(iptv_same_channel("|NL| Ziggo Sport FHD", "Ziggo Sport"));
+  assert(!iptv_same_channel("Ziggo Sport 2", "Ziggo Sport"));
+  assert(!iptv_same_channel("Discovery +1", "Discovery"));
+
+  assert(iptv_same_title("Formula 1: Japanese Grand Prix - Race", "F1 Live: Japanese GP") == 2);
+  assert(iptv_same_title("Formule 1: Japanese GP", "FORMULA 1 JAPANESE GP (HD)") == 2);
+  assert(iptv_same_title("The Grand Prix of Japan", "Grand Prix Japan") == 2);
+  assert(iptv_same_title("Formula 1 Qualifying", "Formula 1 Race") == 0);
+  assert(iptv_same_title("News", "news") == 1);
+  assert(iptv_same_title("News", "Sky News Tonight") == 0);
+  assert(iptv_same_title("Race", "Formula 1 Race") == 0);
+  assert(iptv_same_title("", "Race") == 0);
+}
+
 int main(int argc, char **argv) {
   IptvList l;
   if (argc > 2 && !strcmp(argv[1], "--dump-big")) {
@@ -670,8 +701,9 @@ int main(int argc, char **argv) {
   testCatchup();
   testLooseMatch();
   testMoreGuides();
+  testSameElsewhere();
   if (argc > 1) testGunzip(argv[1]);
   testWindow(argc > 2 ? argv[2] : NULL);
-  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; loose guide matching; further guides; gzip; guides cut to the window while inflating.");
+  puts("PASS iptv_parse: M3U attributes, headers, groups; XMLTV times, entities, matching, tags, icons, window; Xtream API; stylised Latin; catch-up URLs; loose guide matching; further guides; the same broadcast elsewhere; gzip; guides cut to the window while inflating.");
   return 0;
 }

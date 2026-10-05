@@ -37,6 +37,9 @@ void app_event(const SDL_Event *e);
 void app_update(float dt, Uint32 now);
 void app_draw(Uint32 now);
 int  app_wants_exit(void);
+// The screen has something to show: the startup animation waits for this before
+// it flies into the app, rather than landing on "Preparing your catalogue…".
+int  app_ready_to_show(void);
 // Whether the current screen itself (library, search, settings…) or the "see
 // all" grid is what the keys reach right now, with nothing open over it. A
 // screen asks before scrolling on its own — the pointer's edge scrolling —

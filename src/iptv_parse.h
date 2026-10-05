@@ -179,4 +179,24 @@ void iptv_plain_text(char *s);
 // Decodes XML entities (&amp; &#233; &#x2019; …) in place, into UTF-8.
 void iptv_xml_unescape(char *s);
 
+// THE SAME THING ELSEWHERE: one broadcast carried by several channels.
+//
+// A picture's quality in four tiers, what a name claims or what the decoder
+// measured.
+enum { IPTV_Q_UNKNOWN, IPTV_Q_SD, IPTV_Q_HD, IPTV_Q_FHD, IPTV_Q_UHD };
+// The best tier a name (or a group label) claims: "Sky Sports F1 UHD", "4K|
+// SPORT", "NPO 1 FHD", "Full HD", "(720p)". UNKNOWN when it says nothing.
+int iptv_name_quality(const char *name);
+// The tier of a decoded picture `height` lines tall.
+int iptv_height_quality(int height);
+// Two copies of one channel: their names agree once the country tag and the
+// quality words are gone ("UK: SKY SPORTS F1 UHD", "Sky Sports F1 HD").
+int iptv_same_channel(const char *a, const char *b);
+// Whether two programme titles name the same programme: 2 when they surely do
+// (two or more words in common, the shorter title's all), 1 when they are one
+// and the same single word ("News", which needs the times to agree as well),
+// 0 when not. Case, punctuation, "Live", articles and quality words do not
+// count; "F1" / "Formula 1" / "Formule 1" and "Grand Prix" / "GP" are one.
+int iptv_same_title(const char *a, const char *b);
+
 #endif

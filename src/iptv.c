@@ -1082,9 +1082,22 @@ static int nameIndex(char **names, int n, const char *name) {
   return -1;
 }
 
-int iptv_is_favourite(int ch) {
-  if (!live || ch < 0 || ch >= live->nCh) return 0;
-  return nameIndex(favourites, nFavourites, live->ch[ch].name) >= 0;
+int iptv_favourite_rank(int ch) {
+  if (!live || ch < 0 || ch >= live->nCh) return -1;
+  return nameIndex(favourites, nFavourites, live->ch[ch].name);
+}
+
+int iptv_is_favourite(int ch) { return iptv_favourite_rank(ch) >= 0; }
+
+void iptv_move_favourite(int ch, int to) {
+  int from = iptv_favourite_rank(ch), at = iptv_favourite_rank(to);
+  char *name;
+  if (from < 0 || at < 0 || from == at) return;
+  name = favourites[from];
+  if (at > from) memmove(favourites + from, favourites + from + 1, (size_t)(at - from) * sizeof *favourites);
+  else memmove(favourites + at + 1, favourites + at, (size_t)(from - at) * sizeof *favourites);
+  favourites[at] = name;
+  writeNames(IPTV_FAV_FILE, favourites, nFavourites);
 }
 
 void iptv_toggle_favourite(int ch) {

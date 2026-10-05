@@ -673,6 +673,16 @@ void gfx_backdrop_grab(unsigned now);
 // Draws the last grab over `r`, tinted and filtered like the web app's plate.
 void gfx_backdrop(GfxRect r, float alpha, float sheen);
 void gfx_backdrop_shutdown(void);
+// THE SAME GLASS, FLOATING: the hold menu's pane, which opens beside whichever
+// card was held. `w`/`h` is the largest region it will ever be grabbed at; each
+// grab names where that region sits this frame, and a region that moved is
+// re-grabbed at once rather than on the clock. Same rule as the rail: grab BEFORE
+// drawing anything that belongs to the pane, its scrim included. `radius` is
+// gfx_color's, a fraction of the rect's shorter side.
+int  gfx_glass_start(float w, float h);
+void gfx_glass_grab(GfxRect region, unsigned now);
+void gfx_glass(GfxRect r, float radius, float alpha, float sheen);
+void gfx_glass_shutdown(void);
 void gfx_snap_begin(void);   // redirects the drawing into the snapshot
 void gfx_snap_finish(void);  // back to the screen
 void gfx_snap_draw(void);  // paints the snapshot over the whole screen
@@ -754,6 +764,10 @@ void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
 // fraction; offsetPx is the glow's y offset (18 on posters, the coverage size on
 // episode, cast and trailer cards).
 void gfx_card_depth(GfxRect card, float radius, float edge, float sheen, float offsetPx);
+// The same at opacity `a`, for a card that fades with its row (the detail page's
+// episode and cast lists dissolve at their top edge).
+void gfx_card_depth_a(GfxRect card, float radius, float edge, float sheen, float offsetPx,
+                      float a);
 // The same over a GFX_CW_CARD: the glow is held back by that card's scrim, as it
 // was when it was drawn UNDER the scrim rather than over the finished card.
 void gfx_card_depth_cw(GfxRect card, float radius, float edge, float sheen, float offsetPx);

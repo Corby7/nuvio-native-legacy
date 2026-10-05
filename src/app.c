@@ -569,9 +569,16 @@ void app_update(float dt, Uint32 now) {
   // Back out of Discover returns to the SEARCH screen, not to the home: it is
   // the reverse of the press that opened it, and the home is two steps away.
   // Hence a line of its own, before the generic close below.
+  // Opened from the side bar it is a destination of its own, and Back goes home
+  // like every other one.
   if (screen == SCREEN_DISCOVER && dui_wants_exit()) {
-    swapScreen(SCREEN_SEARCH);
-    menu_set_destination(MENU_FETCH);
+    if (settings_local_discover() == 1) {
+      swapScreen(SCREEN_HOME);
+      menu_set_destination(MENU_START);
+    } else {
+      swapScreen(SCREEN_SEARCH);
+      menu_set_destination(MENU_FETCH);
+    }
   }
 
   // Outside the home, Back has somewhere to go: the home. Only there does it close the app.
@@ -612,6 +619,11 @@ void app_update(float dt, Uint32 now) {
   if (menu_changed_destination()) {
     switch (menu_destination()) {
       case MENU_FETCH:     swapScreen(SCREEN_SEARCH);      break;
+      // Discover location: In the sidebar. dui_start answers as it does for the
+      // compass above, and a catalogue-less Discover is not opened.
+      case MENU_DISCOVER:
+        if (screen != SCREEN_DISCOVER && dui_start()) { leaveScreen(); screen = SCREEN_DISCOVER; }
+        break;
       case MENU_LIBRARY: swapScreen(SCREEN_LIBRARY); break;
       case MENU_LIVE:        swapScreen(SCREEN_LIVE);        break;
       case MENU_SETTINGS:    swapScreen(SCREEN_SETTINGS);    break;
@@ -1201,6 +1213,9 @@ void app_regions(void) {
 }
 
 int app_wants_exit(void) { return wantsExit; }
+int app_ready_to_show(void) {
+  return screen != SCREEN_HOME || (homeReady && cat_n() > 0);
+}
 
 void app_shutdown(void) {
   joinCheck();
