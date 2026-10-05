@@ -47,6 +47,15 @@ static unsigned packet(int fd) {
   return (unsigned)p[1] << 24 | (unsigned)p[2] << 16 | (unsigned)p[3] << 8 | p[4];
 }
 
+// Reads one packet of the burst upstream: its sequence number, past the PCR.
+static unsigned burstPacket(int fd) {
+  unsigned char p[188];
+  size_t n = 0;
+  while (n < sizeof p) { ssize_t r = read(fd, p + n, sizeof p - n); assert(r > 0); n += (size_t)r; }
+  assert(p[0] == 0x47 && p[1] == 0x01 && p[2] == 0x00);
+  return (unsigned)p[12] << 24 | (unsigned)p[13] << 16 | (unsigned)p[14] << 8 | p[15];
+}
+
 int main(int argc, char **argv) {
   char base[128], url[256], u[256];
   double lo, hi, lo2, hi2;
@@ -108,6 +117,24 @@ int main(int argc, char **argv) {
   sleep(4);
   assert(timeshift_range(&lo, &hi) && hi - lo > 3.0);
 
+  // Every reconnect opens with a replay of what was already recorded: the ring
+  // keeps none of it twice, so from the oldest byte on, across several
+  // reconnects, every packet follows the one before.
+  snprintf(url, sizeof url, "%s/burst/1.ts", base);
+  assert(timeshift_begin(url, "X-Auth: secret\n", 8 << 20));
+  waitState(TS_RECORDING, 10);
+  sleep(5);
+  assert(timeshift_range(&lo, &hi));
+  assert(timeshift_url(lo, u, sizeof u));
+  fd = openUrl(u);
+  a = burstPacket(fd);
+  for (int i = 0; i < 20000; i++) {   // ~3.6 MB: three reconnects at least
+    b = burstPacket(fd);
+    if (b != a + 1) { printf("packet %d: %u after %u\n", i, b, a); abort(); }
+    a = b;
+  }
+  close(fd);
+
   // A dead upstream fails after its retries; the end removes the file.
   snprintf(url, sizeof url, "%s/404/1.ts", base);
   assert(timeshift_begin(url, "X-Auth: secret\n", 8 << 20));
@@ -116,6 +143,6 @@ int main(int argc, char **argv) {
   assert(timeshift_state() == TS_OFF);
   { char path[512]; data_path(path, sizeof path, "timeshift.ts"); assert(access(path, F_OK) != 0); }
   assert(timeshift_budget(0) == 0);
-  puts("PASS timeshift: TS only, pause resumes in place, rewind, ring wrap, reconnect, failure, cleanup.");
+  puts("PASS timeshift: TS only, pause resumes in place, rewind, ring wrap, reconnect, no replayed burst, failure, cleanup.");
   return 0;
 }

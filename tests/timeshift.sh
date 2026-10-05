@@ -23,6 +23,8 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
         self.send_response(200); self.send_header("Content-Type", "video/mp2t")
         self.send_header("Connection", "close"); self.end_headers()
+        if self.path.startswith("/burst/"):
+            return self.burst()
         limit = 2 << 20 if self.path.startswith("/flaky/") else 1 << 40
         seq, sent = int(time.time() * 5600) & 0xffffff, 0
         try:
@@ -30,6 +32,26 @@ class H(http.server.BaseHTTPRequestHandler):
                 chunk = b"".join(b"\x47" + struct.pack(">I", seq + i) + PAD for i in range(56))
                 seq += 56
                 self.wfile.write(chunk); sent += len(chunk)
+                time.sleep(0.01)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+    # An Xtream server's habit: PCR on PID 0x100, the connection ends every
+    # 1 MB, and each new one opens with the last 2000 packets sent again.
+    newest = None
+    def burst(self):
+        seq = H.newest - 2000 if H.newest is not None else int(time.time() * 5600) & 0xffffff
+        sent = 0
+        try:
+            while sent < 1 << 20:
+                chunk = b""
+                for i in range(56):
+                    pcr = (seq + i) * 16
+                    chunk += (b"\x47\x01\x00\x30\x07\x10" +
+                              struct.pack(">IH", pcr >> 1, (pcr & 1) << 15) +
+                              struct.pack(">I", seq + i) + bytes(172))
+                seq += 56
+                self.wfile.write(chunk); sent += len(chunk)
+                H.newest = seq - 1 if H.newest is None or seq - 1 > H.newest else H.newest
                 time.sleep(0.01)
         except (BrokenPipeError, ConnectionResetError):
             pass

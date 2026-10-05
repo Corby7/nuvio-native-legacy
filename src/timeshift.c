@@ -30,6 +30,9 @@
 #define TS_ASSUMED_BPS (1250000LL)   // 10 Mbit/s: an HD channel, generously
 #define TS_MIN_BUDGET  (48LL * 1024 * 1024)   // below this, a budget is not worth it
 #define TS_MIN_RING    (4LL * 1024 * 1024)    // what timeshift_begin accepts (tests wrap it)
+#define TS_PCR_WRAP    (1LL << 33)
+#define TS_REJOIN_BACK (120LL * 90000)        // a burst goes back less than this
+#define TS_REJOIN_BLIND (4LL * 1024 * 1024)   // no PCR on its PID this long: give up looking
 
 typedef struct { double t; long long b; } Sample;
 
@@ -42,6 +45,20 @@ static int fd = -1;
 static long long cap, written, syncAt = -1;
 static Sample idx[TS_INDEX];
 static int idxHead, idxN;         // a ring: idx[(idxHead + i) % TS_INDEX], oldest first
+
+// REJOINING AFTER A RECONNECT. An Xtream server opens every connection with a
+// burst of what it already sent, 20-45 s of it measured, so a reconnect that
+// simply appended wrote that stretch twice and the picture played it again.
+// The recorder keeps the newest PCR it wrote; after a reconnect it drops whole
+// packets until the stream's clock is past it. A clock that went far back (a
+// real restart of the channel) is taken as it is, and so is a stream whose PCR
+// cannot be found again.
+static int pcrPid = -1;
+static long long lastPcr = -1;    // 90 kHz, 33 bits
+static int rejoin, rejoinSynced;
+static long long rejoinBlind;     // bytes skipped since the PCR PID was last seen
+static unsigned char carry[TS_PACKET];
+static int carryN;
 
 static int port;                  // 0 = not started, -1 = failed
 static int listener = -1;
@@ -132,9 +149,93 @@ static int looksHls(const Rec *r, const char *p, size_t n) {
   return n >= 7 && !strncmp(p, "#EXTM3U", 7);
 }
 
+// --- PCR (under mu) ---------------------------------------------------------------------
+// The packet's PCR when it carries one on the PCR PID (the first PID seen with
+// one becomes it); -1 otherwise. Needs the packet's first 12 bytes.
+static long long packetPcr(const unsigned char *p) {
+  int pid = ((p[1] & 0x1f) << 8) | p[2];
+  if (p[0] != 0x47 || !((p[3] >> 4) & 2) || p[4] < 7 || !(p[5] & 0x10)) return -1;
+  if (pcrPid < 0) pcrPid = pid;
+  if (pid != pcrPid) return -1;
+  return (long long)p[6] << 25 | (long long)p[7] << 17 | (long long)p[8] << 9 |
+         (long long)p[9] << 1 | p[10] >> 7;
+}
+
+// Notes the PCRs of `n` bytes just written at stream byte `at`.
+static void notePcrs(const unsigned char *p, size_t n, long long at) {
+  long long k;
+  if (syncAt < 0) return;
+  k = at < syncAt ? syncAt - at : (TS_PACKET - (at - syncAt) % TS_PACKET) % TS_PACKET;
+  for (; k + 12 <= (long long)n; k += TS_PACKET) {
+    long long v = packetPcr(p + k);
+    if (v >= 0) lastPcr = v;
+  }
+}
+
+// Writes `n` bytes at the ring's head. 0 when the disk refused.
+static int ringWrite(const unsigned char *p, size_t n) {
+  size_t done = 0;
+  while (done < n) {
+    long long at = written % cap;
+    size_t k = n - done;
+    ssize_t w;
+    if ((long long)k > cap - at) k = (size_t)(cap - at);
+    w = pwrite(fd, p + done, k, (off_t)at);
+    if (w <= 0) return 0;
+    done += (size_t)w;
+    written += w;
+  }
+  return 1;
+}
+
+// After a reconnect: is this packet past what the ring already has?
+static int rejoinsAt(const unsigned char *pk) {
+  long long v = packetPcr(pk), d;
+  if (lastPcr < 0) return 1;
+  if (v < 0) {
+    rejoinBlind += TS_PACKET;
+    return rejoinBlind > TS_REJOIN_BLIND;
+  }
+  rejoinBlind = 0;
+  d = ((v - lastPcr) % TS_PCR_WRAP + TS_PCR_WRAP) % TS_PCR_WRAP;
+  if (d >= TS_PCR_WRAP / 2) d -= TS_PCR_WRAP;
+  return d > 0 || d <= -TS_REJOIN_BACK;
+}
+
+// Drops the replayed burst of a new connection, a packet at a time; returns the
+// offset in `p` where writing goes on (n when all of it is dropped). A packet
+// split across two calls waits in `carry`; when that packet is the one that
+// rejoins, it is written here.
+static size_t rejoinSkip(const unsigned char *p, size_t n, int *fail) {
+  size_t k = 0;
+  if (!rejoinSynced) {
+    for (; k < n; k++)
+      if (p[k] == 0x47 && (k + TS_PACKET >= n || p[k + TS_PACKET] == 0x47)) break;
+    if (k == n) return n;
+    rejoinSynced = 1;
+  }
+  if (carryN) {
+    size_t need = TS_PACKET - (size_t)carryN;
+    if (n - k < need) { memcpy(carry + carryN, p + k, n - k); carryN += (int)(n - k); return n; }
+    memcpy(carry + carryN, p + k, need);
+    k += need; carryN = 0;
+    if (rejoinsAt(carry)) {
+      rejoin = 0;
+      if (!ringWrite(carry, TS_PACKET)) { *fail = 1; return n; }
+      notePcrs(carry, TS_PACKET, written - TS_PACKET);
+      return k;
+    }
+  }
+  for (; k + TS_PACKET <= n; k += TS_PACKET)
+    if (rejoinsAt(p + k)) { rejoin = 0; return k; }
+  memcpy(carry, p + k, n - k);
+  carryN = (int)(n - k);
+  return n;
+}
+
 static size_t onBody(char *p, size_t size, size_t count, void *u) {
   Rec *r = u;
-  size_t n = size * count, done = 0;
+  size_t n = size * count, from = 0;
   pthread_mutex_lock(&mu);
   if (r->session != session) { pthread_mutex_unlock(&mu); return 0; }
   if (r->code >= 400) { pthread_mutex_unlock(&mu); return 0; }
@@ -157,17 +258,23 @@ static size_t onBody(char *p, size_t size, size_t count, void *u) {
       return 0;
     }
   }
-  while (done < n) {
-    long long at = written % cap;
-    size_t k = n - done;
-    ssize_t w;
-    if ((long long)k > cap - at) k = (size_t)(cap - at);
-    w = pwrite(fd, p + done, k, (off_t)at);
-    if (w <= 0) { state = TS_FAILED; pthread_mutex_unlock(&mu); return 0; }
-    done += (size_t)w;
-    written += w;
-  }
   r->got = 1;
+  if (rejoin) {
+    int fail = 0;
+    from = rejoinSkip((const unsigned char *)p, n, &fail);
+    if (fail) { state = TS_FAILED; pthread_mutex_unlock(&mu); return 0; }
+    if (!rejoin) {
+      printf("[timeshift] rejoined past the replayed burst\n");
+      fflush(stdout);
+    }
+  }
+  if (from < n) {
+    long long at = written;
+    if (!ringWrite((const unsigned char *)p + from, n - from)) {
+      state = TS_FAILED; pthread_mutex_unlock(&mu); return 0;
+    }
+    notePcrs((const unsigned char *)p + from, n - from, at);
+  }
   if (syncAt >= 0) state = TS_RECORDING;
   samplePush(wallNow(), written);
   pthread_cond_broadcast(&grew);
@@ -197,6 +304,17 @@ static void *record(void *u) {
         state = TS_FAILED;
         pthread_cond_broadcast(&grew);
         live = 0;
+      } else if (syncAt >= 0) {
+        // The connection may have ended inside a packet: padded to the packet's
+        // end, the ring stays in whole packets, and the next connection's are
+        // written where a reader expects one to start.
+        long long part = (written - syncAt) % TS_PACKET;
+        if (part) {
+          unsigned char pad[TS_PACKET];
+          memset(pad, 0xFF, sizeof pad);
+          if (!ringWrite(pad, (size_t)(TS_PACKET - part))) { state = TS_FAILED; live = 0; }
+        }
+        rejoin = 1; rejoinSynced = 0; rejoinBlind = 0; carryN = 0;
       }
     }
     pthread_mutex_unlock(&mu);
@@ -373,6 +491,7 @@ int timeshift_begin(const char *url, const char *headers, long long capBytes) {
   if (fd < 0) { state = TS_OFF; pthread_mutex_unlock(&mu); free(r); return 0; }
   cap = capBytes; written = 0; syncAt = -1;
   idxHead = idxN = 0;
+  pcrPid = -1; lastPcr = -1; rejoin = 0; carryN = 0;
   state = TS_STARTING;
   r->session = session;
   pthread_cond_broadcast(&grew);
