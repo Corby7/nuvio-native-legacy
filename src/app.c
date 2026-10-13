@@ -1053,6 +1053,9 @@ void app_draw(Uint32 now) {
       !detail_is_open()) {
     GfxRect background = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
     TxtLine t, sb;
+    // Behind the open menu, dimmed by its veil (menu_veil: the menu does not
+    // draw one).
+    gfx_dim_group = gfx_content_dim = 1.0f - (menu_visible() ? menu_veil() : 0.0f);
     gfx_color(background, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
     t = txt_line(TXT_TITLE2, "Preparing your catalogue…", 255, 255, 255, 255);
     txt_draw(t, (NV_SCREEN_W - t.w) * 0.5f, 460.0f);
@@ -1062,6 +1065,7 @@ void app_draw(Uint32 now) {
                      : "If this does not move on, check your addons in the account.",
                    160, 162, 170, 255);
     txt_draw(sb, (NV_SCREEN_W - sb.w) * 0.5f, 546.0f);
+    gfx_dim_group = 1.0f;
     pointer_accept(owner == OWN_MENU || owner == OWN_SCREEN);
     if (menu_visible()) menu_draw(now);
     return;
@@ -1087,6 +1091,14 @@ void app_draw(Uint32 now) {
     // THE TITLE SCREEN'S BACKDROP FIRST, under the screen it is replacing. It is
     // the background of the transition, not a layer over it: drawn afterwards its
     // left boundary sweeps through the home's shelves and copy as a hard line.
+    // THE MENU'S VEIL, as a dim on everything under it instead of a black rect
+    // over the whole screen: the same pixels, one full-screen pass fewer, which
+    // at 4K is the difference between the open menu holding 60 or not. The
+    // condition is the one menu_draw is called under, below.
+    { int menuOver = menu_visible() && !detail_is_open() &&
+                     !(screen == SCREEN_LIVE && iptvui_fullscreen());
+      gfx_dim_group = gfx_content_dim = 1.0f - (menuOver ? menu_veil() : 0.0f);
+      gfx_clear_dimmed(); }
     pointer_accept(0);
     detail_draw_bg(now);
     if (!detail_covers_screen() && !seeall_covers_screen()) {
@@ -1128,6 +1140,7 @@ void app_draw(Uint32 now) {
     // the band", on the outside it meant "do not exist".
     // The collapsed rail belongs to the screen beside it as much as to the bar:
     // pointing at it is how the bar opens.
+    gfx_dim_group = 1.0f;
     pointer_accept(owner == OWN_MENU || owner == OWN_SCREEN);
     if (menu_visible() && !detail_is_open() &&
         !(screen == SCREEN_LIVE && iptvui_fullscreen()))

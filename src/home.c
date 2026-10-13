@@ -490,7 +490,11 @@ static void heroFitPar(GfxRect r, float *px, float *py) {
 // collapsed against the left edge.
 static void heroArtDraw(GfxRect r, GLuint tex, GfxMode mode, float alpha) {
   float px = 0.0f, py = 0.0f;
-  if (mode == GFX_HERO_FIT) heroFitPar(r, &px, &py);
+  if (mode == GFX_HERO_FIT) {
+    heroFitPar(r, &px, &py);
+    gfx_hero_fit(r, tex, px, py, alpha);
+    return;
+  }
   gfx_rect(r, tex, mode, 0, px, py, 0, 0, 0, 0, alpha);
 }
 
@@ -3951,6 +3955,9 @@ static void drawShortcuts(int r, float y) {
 }
 
 void home_draw(Uint32 now) {
+  // The dim the whole screen is under (the open menu's, app.c): each card's own
+  // dim multiplies into it and puts it back.
+  const float dimScreen = gfx_dim_group;
   drawBackground();
   float pd = detail_progress();
   if (settings_hero_on()) drawHero(now, pd);
@@ -4378,6 +4385,10 @@ void home_draw(Uint32 now) {
                          1.0f, 1.0f, 1.0f, f);
             }
           }
+          // THE DIM STARTS HERE, after the ring and the glow, which sit outside the
+          // art and were never under it. See the note where it ends.
+          if (f < 0.999f)
+            gfx_dim_group = dimScreen * (1.0f - (1.0f - NV_DIM_UNFOCUSED) * (1.0f - f));
           // A CARD WITH NO ART: a solid surface, not emptiness. Without this the card
           // took the background's colour — MEASURED: #242429 over #252629, a
           // difference of (1,2,0), a contrast of 1.0:1. It was literally invisible, and
@@ -4610,19 +4621,13 @@ void home_draw(Uint32 now) {
           // web's strongest focus cue, and it is global: cards in the other rows go
           // down too, and with focus parked outside the rows they all do.
           //
-          // Multiplying by 0.8 and compositing black at 0.2 over the same pixels are
-          // the same arithmetic (`c*0.8 + 0*0.2`), so this needs no shader work and no
-          // new GfxMode — it is one rounded rect over the art, LAST, so that it takes
-          // the label veil, the resume overlay and the editorial block down with it,
-          // exactly as a CSS filter on the article would.
-          //
-          // Over the ART and not the card box: the card's own background is transparent
-          // in the web, so the 4px gutter has nothing in it to darken, and covering it
-          // would only spill onto the page behind.
-          if (f < 0.999f) {
-            gfx_color(art, radiusA, 0, 0, 0,
-                      (1.0f - NV_DIM_UNFOCUSED) * (1.0f - f));
-          }
+          // It is gfx_dim_group, set where the art begins and lifted here, so it takes
+          // the label veil, the resume overlay and the editorial block down with the
+          // art, exactly as a CSS filter on the article would. Multiplying by 0.8 is
+          // what compositing black at 0.2 over them gave (`c*0.8 + 0*0.2`), but that
+          // black rect was a second pass over every card: half a screen of fill a
+          // frame on Home, 3 ms of the 17 at 4K on the Bravia (measured).
+          gfx_dim_group = dimScreen;
 
           // The hold's feedback is the focus ring filling with colour (holdFill,
           // above, where the ring is drawn). It used to be a bar along the card's
@@ -4635,6 +4640,7 @@ void home_draw(Uint32 now) {
     y += NV_LEGACY_ROW_HEAD_H + heightTotalOf(kind) + rowGap();
   }
   gfx_opacity_group=1;
+  gfx_dim_group = dimScreen;
   gfx_no_crop();
   pointer_no_clip();
 }

@@ -49,7 +49,6 @@ enum { CTX_PENDING = 1, CTX_CONFIRMED = 2, CTX_FAILURE = 3 };
 // CTX_MAX rows, so the open animation never runs off the edge of the picture.
 #define CTX_GLASS_W   (CTX_W + CTX_SLIDE * 2.0f)
 #define CTX_GLASS_H   720.0f
-#define CTX_SHEEN_H   18.0f     // NV_MENU_SHEEN_H: the rail's top glaze
 
 static float pxRadius(GfxRect r, float px) {
   float m = r.w < r.h ? r.w : r.h;
@@ -602,15 +601,16 @@ void ctx_draw(Uint32 now) {
       gfx_color((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, 0.0f, 0, 0, 0, CTX_SCRIM * a);
     }
 
-    // A hairline border: the same panel one pixel larger and a step lighter, under it.
+    // A hairline border: the same panel one pixel larger and a step lighter, under
+    // it. Only for the flat pane; the glass draws its own rim.
     { GfxRect panel = { x, y, CTX_W, height };
       GfxRect edge = { x - 1.0f, y - 1.0f, CTX_W + 2.0f, height + 2.0f };
       gfx_drop_shadow(panel, CTX_RADIUS, 40.0f, 12.0f, 0.5f * a);
-      gfx_color(edge, pxRadius(edge, CTX_RADIUS + 1.0f), 0.14f, 0.15f, 0.17f, a);
-      // The flat fill stays underneath: it is what shows if the glass could not
-      // be created, and where it does draw, the glass is opaque over it.
-      gfx_color(panel, pxRadius(panel, CTX_RADIUS), 0.055f, 0.059f, 0.071f, a);
-      if (glass) gfx_glass(panel, pxRadius(panel, CTX_RADIUS), a, CTX_SHEEN_H / height); }
+      if (!glass) gfx_color(edge, pxRadius(edge, CTX_RADIUS + 1.0f), 0.14f, 0.15f, 0.17f, a);
+      // The flat fill is what shows if the glass could not be created. Where the
+      // glass draws it is opaque, so the fill under it would be painted for nothing.
+      if (!glass || !gfx_glass(panel, pxRadius(panel, CTX_RADIUS), a, settings_glass_tinted()))
+        gfx_color(panel, pxRadius(panel, CTX_RADIUS), 0.055f, 0.059f, 0.071f, a); }
 
     cy = y + CTX_PAD;
     txt_draw_alpha(title, x + CTX_PAD, cy, a);

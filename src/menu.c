@@ -105,22 +105,20 @@
 // the total time, now tied to the same clock instead of a loose spring stiffness.
 #define NV_MENU_EXP_LENTO  1.6f
 
-// THE GLASS. `.home-sidebar::before` is
-//   backdrop-filter: blur(52px) saturate(160%) brightness(0.85)
-//   background: linear-gradient(180deg, rgba(255,255,255,.06) 0%, transparent 18%)
-//               top / 100% 100px no-repeat, rgba(8,12,24,.62)
-//   border-right: 1px solid rgba(255,255,255,.09)
-// The filter chain and the plate live in GFX_BACKDROP; what is left here is the
-// sheen's height (18% of the gradient's own 100px box) and the hairline.
-#define NV_MENU_SHEEN_H     18.0f
+// THE GLASS. The blur is the web app's `.home-sidebar::before` (52px); the tint
+// is not — it is thick near-black glass, and the right edge is a rim of light
+// rather than a flat hairline. Both live in GFX_BACKDROP; see the note there for
+// why the web's navy plate and top sheen went.
+//
+// NV_MENU_EDGE_A is the hairline for the frames where there is no glass at all
+// (no FBO on the device, or the strip has not been grabbed yet), with the plate
+// GFX_BACKDROP tints towards, one per Glass style. Without a fallback the bar
+// would be a hole in the screen rather than merely flat.
 #define NV_MENU_EDGE_A      0.09f
-// The plate GFX_BACKDROP paints, repeated for the frames where there is no glass
-// at all (no FBO on the device, or the strip has not been grabbed yet). Without a
-// fallback the bar would be a hole in the screen rather than merely flat.
-#define NV_MENU_PLATE_R     0.031f
-#define NV_MENU_PLATE_G     0.047f
-#define NV_MENU_PLATE_B     0.094f
-#define NV_MENU_PLATE_A     0.62f
+static const float PLATE[2][4] = {
+  { 0.035f, 0.036f, 0.042f, 0.72f },   // Dark
+  { 0.031f, 0.047f, 0.094f, 0.62f },   // Tinted: the web app's rgba(8,12,24,.62)
+};
 
 // THE BRAND. `.home-brand-wrap` is a ROW, 80 tall: a 54x54 mark, a 32 gap and a
 // 54-tall wordmark, all `object-fit: contain` under --legacy-sidebar-padding's 48
@@ -216,22 +214,29 @@ static float iconAxis(void) {
 // LIVE — it is whatever app_draw has already put behind this strip — so it has to
 // be drawn before anything of the bar's own.
 //
-// The hairline down the right edge is drawn here and not in the shader: at this
-// size it is a single layout pixel, and a `step()` in the fragment would land on
-// a different pixel depending on the panel's sub-pixel position, flickering while
-// the bar slides.
+// The rim down the right edge is the shader's, ramped over 1.25px rather than
+// cut with a `step()`: a hard single pixel would land on a different pixel
+// depending on the panel's sub-pixel position, flickering while the bar slides.
+// The flat hairline here is only for frames without glass.
+float menu_veil(void) {
+  if (!is_open && slides < 0.002f) return 0.0f;
+  return NV_MENU_VEIL * slides;
+}
+
 static void drawGlass(float w, float alpha) {
   GfxRect plate = { 0, 0, w, NV_SCREEN_H };
   GfxRect edge  = { w - 1.0f, 0, 1.0f, NV_SCREEN_H };
   if (w <= 1.0f || alpha <= 0.004f) return;
-  // The plate goes down FIRST and the glass over it. On the frames where the
-  // backdrop is unavailable the plate is all there is, and the bar is flat rather
-  // than transparent; where the glass does draw, it carries the same plate inside
-  // its own filter chain, so the two agree instead of stacking.
-  gfx_color(plate, 0.0f, NV_MENU_PLATE_R, NV_MENU_PLATE_G, NV_MENU_PLATE_B,
-            NV_MENU_PLATE_A * alpha);
-  gfx_backdrop(plate, alpha, NV_MENU_SHEEN_H / NV_SCREEN_H);
-  gfx_color(edge, 0.0f, 1.0f, 1.0f, 1.0f, NV_MENU_EDGE_A * alpha);
+  // The plate is only for the frames where the backdrop is unavailable: the bar
+  // is then flat rather than transparent. Where the glass draws it is opaque and
+  // carries the same tint in its own chain, so a plate under it was a fifth of the
+  // screen painted for nothing — measurable at 4K.
+  int tinted = settings_glass_tinted();
+  if (!gfx_backdrop(plate, alpha, tinted)) {
+    gfx_color(plate, 0.0f, PLATE[tinted][0], PLATE[tinted][1], PLATE[tinted][2],
+              PLATE[tinted][3] * alpha);
+    gfx_color(edge, 0.0f, 1.0f, 1.0f, 1.0f, NV_MENU_EDGE_A * alpha);
+  }
 }
 
 // Legacy keeps the 144px rail always visible. The expanded menu is an extra
@@ -600,8 +605,10 @@ void menu_draw(Uint32 now) {
   // here on is the menu, and the glass must not photograph itself.
   gfx_backdrop_grab((unsigned)now);
 
-  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-  gfx_color(screen, 0.0f, 0, 0, 0, NV_MENU_VEIL * slides);
+  // THE VEIL IS NOT DRAWN HERE. Everything under the menu is already darkened by
+  // menu_veil() — app.c draws it with gfx_dim_group — because a black rect over
+  // the whole screen was the single most expensive thing in the frame at 4K
+  // (~3.5 ms of fill on the Bravia, for a flat colour).
 
   // THE GLASS DOES NOT SLIDE. `backdrop-filter` samples what is under the element
   // AT THE POSITION IT IS IN, so while the panel travels in from the left the

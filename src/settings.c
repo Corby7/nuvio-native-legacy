@@ -13,6 +13,7 @@
 // (js/ui/screens/settings/settingsScreen.js), including the labels read off the
 // running screen.
 #include "settings.h"
+#include "data.h"
 #include "gfx.h"
 #include "text.h"
 #include "tex_cache.h"
@@ -99,7 +100,7 @@ typedef enum {
   SETTING_CW_STYLE, SETTING_CW_LOGO, SETTING_CW_THUMB, SETTING_CW_BLUR_NEXT,
   SETTING_CW_FURTHEST, SETTING_CW_NOT_SHOWN,
   // Sidebar and navigation
-  SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_DISCOVER,
+  SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_GLASS, SETTING_DISCOVER,
   SETTING_NAV_FAST, SETTING_ROW_SCROLL,
   SETTING_ANIM,
   // Posters
@@ -111,6 +112,8 @@ typedef enum {
   SETTING_DEPTH_POSTERS, SETTING_DEPTH_CW, SETTING_DEPTH_EPS, SETTING_DEPTH_CAST, SETTING_DEPTH_TRAILERS,
   // Detail page
   SETTING_DET_TRAILER, SETTING_DET_BLUR_NOT_WATCHED, SETTING_DET_DATE_FULL,
+  // Display
+  SETTING_UI_RES, SETTING_FPS_CAP, SETTING_FPS,
   // Account
   SETTING_PROFILE_ACTIVE, SETTING_PRIMARY_ADDONS, SETTING_SYNC, SETTING_TRAKT, SETTING_SIMKL, SETTING_EXIT,
   // About
@@ -187,6 +190,10 @@ static const char *V_ANIM[]      = { "Full", "Reduced" };
 // as far as the focused card needs to fit; "First slot" puts it in the row's first
 // slot on every step and slides the rest along.
 static const char *V_ROW_SCROLL[] = { "Minimal", "First slot" };
+static const char *V_GLASS[] = { "Dark", "Tinted" };
+static const char *V_UI_RES[] = { "1080p", "1440p", "4K" };
+static const char *V_FPS_CAP[] = { "60 fps", "30 fps" };
+static const int   UI_RES_H[] = { 1080, 1440, 2160 };
 // `collapseSidebar`: collapsed = the rail disappears and the content starts at 104.
 static const char *V_RAIL[]      = { "Collapsed", "Fixed" };
 // `continueWatchingCardStyle`, validated in layoutPreferences.js against exactly
@@ -265,6 +272,7 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_RAIL] = ESC("Sidebar",              V_RAIL, 2),   // collapseSidebar
   [SETTING_RAIL_MODERN] = ESC("Modern sidebar",      V_ON, 2),   // modernSidebar
   [SETTING_RAIL_BLUR] = ESC("Modern sidebar blur",  V_ON, 2),   // modernSidebarBlur
+  [SETTING_GLASS] = ESC("Glass style",           V_GLASS, 2), // local: glassStyle
   [SETTING_HERO] = ESC("Show hero",           V_ON, 2),   // heroSectionEnabled
   [SETTING_HERO_CATALOGS] = READ("Hero catalogues"),                   // heroCatalogKeys (a count)
   [SETTING_HERO_TRAILER] = ESC("Trailer previews",    V_ON, 2),   // local: the hero plays the trailer
@@ -295,6 +303,10 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_DET_TRAILER] = ESC("Trailer button",           V_ON, 2),   // detailPageTrailerButtonEnabled
   [SETTING_DET_META_EXT] = ESC("Prefer external metadata", V_ON, 2), // preferExternalMetaAddonDetail
   [SETTING_DET_DATE_FULL] = ESC("Full release date", V_ON, 2),  // showFullReleaseDate
+
+  [SETTING_UI_RES] = ESC("UI resolution",       V_UI_RES, 3), // the TV's own: ui-resolution.txt
+  [SETTING_FPS_CAP] = ESC("Frame rate",         V_FPS_CAP, 2), // local: frameRateCap
+  [SETTING_FPS] = ESC("Frame rate counter",     V_ON, 2),     // local: fpsCounter
 
   [SETTING_EXPAND] = ESC("Expand poster on focus",   V_ON, 2),   // focusedPosterBackdropExpandEnabled
   [SETTING_EXPAND_DELAY] = NUM("Expansion delay",         0, 10, 1, " s"), // ...ExpandDelaySeconds
@@ -389,6 +401,8 @@ static const char *KEY[] = {
   [SETTING_NAV_FAST] = "fastHorizontalNavigationEnabled",
   // Local to this port: the web app has no such key, so the blob never touches it.
   [SETTING_ROW_SCROLL] = "rowScrollAnchor",
+  // Local to this port as well: the web's sidebar has one glass.
+  [SETTING_GLASS] = "glassStyle",
   // Local to this port as well: the web's hold menu is a centred dialog with no glass.
   [SETTING_HOLD_BLUR] = "holdMenuBlur",
   // And this: a faint light in the poster's colour behind the focused card.
@@ -408,6 +422,14 @@ static const char *KEY[] = {
   [SETTING_PRIMARY_ADDONS] = "tvUsePrimaryAddons",
   [SETTING_SYNC] = "-sync", [SETTING_TRAKT] = "-trakt", [SETTING_SIMKL] = "-simkl", [SETTING_EXIT] = "-exit",
   [SETTING_VERSION_I] = "-version", [SETTING_UPDATES] = "-updates", [SETTING_SPACE] = "-space",
+  // NOT A PROFILE'S: the resolution belongs to the TV, and the shell that sizes
+  // the surface reads it before any profile exists. It lives in ui-resolution.txt
+  // (uiResReads / uiResWrites), so a profile switch neither loses nor changes it.
+  [SETTING_UI_RES] = "-uiResolution",
+  // Local to this port: a measuring aid with no counterpart in the web app.
+  [SETTING_FPS] = "fpsCounter",
+  // Local to this port as well: the web app runs at whatever the browser does.
+  [SETTING_FPS_CAP] = "frameRateCap",
 };
 
 // The compiler CHECKS that there is one key per option. Without this, adding an
@@ -442,14 +464,16 @@ static const struct { const char *group, *title; int start, n; const char *blurb
     "What the catalogue rows say about themselves and which titles they leave out." },
   { NULL, "Continue watching",       SETTING_CW_ON,                9,
     "Whether the resume row appears, how it is sorted, how its cards look and what counts as next up." },
-  { "Interface", "Sidebar and navigation", SETTING_RAIL,           6,
-    "The sidebar, where Discover lives, how rows scroll and motion across the app." },
+  { "Interface", "Sidebar and navigation", SETTING_RAIL,           7,
+    "The sidebar and its glass, where Discover lives, how rows scroll and motion across the app." },
   { NULL, "Posters",                 SETTING_LANDSCAPE,           8,
     "Poster shape, labels, what a focused poster does, the hold menu and its size." },
   { NULL, "Depth effect",            SETTING_DEPTH,                8,
     "The lit edge and sheen on cards, and which cards get it." },
   { NULL, "Detail page",             SETTING_DET_TRAILER,          3,
     "The trailer button, spoilers and release dates on a title's page." },
+  { NULL, "Display",                 SETTING_UI_RES,               3,
+    "The resolution the interface is drawn at, its frame rate, and a frame rate counter." },
   { "Account", "Account",            SETTING_PROFILE_ACTIVE,       6,
     "Profile, addons, sync, Trakt, Simkl and signing out." },
   { NULL, "About",                   SETTING_VERSION_I,            3,
@@ -529,6 +553,9 @@ static int value[SETTING_N] = {
   [SETTING_DET_TRAILER] = 0,                /* trailer button: on */
   [SETTING_DET_META_EXT] = 0,                /* external metadata: on */
   [SETTING_DET_DATE_FULL] = 0,                /* full date: on */
+  [SETTING_UI_RES] = 0,                /* UI resolution: 1080p, what every TV did */
+  [SETTING_FPS_CAP] = 0,                /* frame rate: 60 fps */
+  [SETTING_FPS] = 1,                /* frame rate counter: off */
 
   [SETTING_EXPAND] = 0,                /* expand poster on focus: on (the web's DEFAULT) */
   [SETTING_EXPAND_DELAY] = 3,                /* delay: 3s */
@@ -537,6 +564,7 @@ static int value[SETTING_N] = {
   [SETTING_FOCUS_GLOW_A] = 14,             /* glow strength: faint */
   [SETTING_NAV_FAST] = 1,                /* fast horizontal navigation: off (factory) */
   [SETTING_ROW_SCROLL] = 0,                /* row scrolling: minimal, what it always did */
+  [SETTING_GLASS] = 0,                     /* glass style: dark */
 
   [SETTING_DEPTH] = 1,                /* depth effect: off (factory) */
   [SETTING_DEPTH_BORDER] = 28,               /* edge brightness */
@@ -704,6 +732,31 @@ int   settings_expand_poster(void)   { return on(SETTING_EXPAND); }
 float settings_expand_poster_delay(void) { return (float)value[SETTING_EXPAND_DELAY]; }
 int   settings_navigation_horizontal_fast(void) { return on(SETTING_NAV_FAST); }
 int   settings_row_first_slot(void) { return value[SETTING_ROW_SCROLL] == 1; }
+int   settings_glass_tinted(void) { return value[SETTING_GLASS] == 1; }
+int   settings_fps_counter(void) { return on(SETTING_FPS); }
+int   settings_fps_cap30(void) { return value[SETTING_FPS_CAP] == 1; }
+
+// THE UI RESOLUTION. The surface is sized by the platform's shell before main()
+// runs, so the choice cannot take effect in this process: it is written where
+// the shell reads it on the next launch. The shell also says how tall the panel
+// is (NUVIO_UI_MAX_HEIGHT); without it — webOS, the Mac — the surface is whatever
+// the compositor hands over, and the row stays muted.
+static int uiResMax(void) {
+  const char *e = getenv("NUVIO_UI_MAX_HEIGHT");
+  return e ? atoi(e) : 0;
+}
+static void uiResReads(void) {
+  char *s = data_read("ui-resolution.txt");
+  int h = s ? atoi(s) : 0, i;
+  free(s);
+  value[SETTING_UI_RES] = 0;
+  for (i = 0; i < 3; i++) if (UI_RES_H[i] == h) value[SETTING_UI_RES] = i;
+}
+static void uiResWrites(void) {
+  char buf[16];
+  snprintf(buf, sizeof buf, "%d\n", UI_RES_H[value[SETTING_UI_RES]]);
+  data_write("ui-resolution.txt", buf);
+}
 int   settings_hold_menu_blur(void) { return on(SETTING_HOLD_BLUR); }
 int   settings_focus_glow(void) { return on(SETTING_FOCUS_GLOW); }
 float settings_focus_glow_strength(void) { return value[SETTING_FOCUS_GLOW_A] / 100.0f; }
@@ -840,6 +893,7 @@ static int readFile(const char *path) {
 static void loadProfile(void) {
   char path[600];
   memcpy(value, defaults, sizeof value);
+  uiResReads();
   settingsPath(path, sizeof path, settingsProfile, "txt");
   profileFresh = !readFile(path);
   if (!profileFresh || settingsProfile <= 1) return;
@@ -1069,6 +1123,7 @@ static int inactive(int op) {
   switch (op) {
     case SETTING_RAIL:         return settings_rail_modern();
     case SETTING_RAIL_BLUR:    return !settings_rail_modern();
+    case SETTING_UI_RES:       return uiResMax() <= 1080;
     case SETTING_HERO_CATALOGS: case SETTING_HERO_TRAILER: return !settings_hero_on();
     case SETTING_HERO_TRAILER_SIZE: return !settings_hero_trailer() || !settings_hero_top_band();
     case SETTING_HERO_TRAILER_DELAY: case SETTING_HERO_TRAILER_CW: return !settings_hero_trailer();
@@ -1192,6 +1247,7 @@ static const char *helpOption(int op) {
   if (inactive(op)) {
     if (op == SETTING_RAIL) return "Turn off the modern sidebar to choose between collapsed and fixed.";
     if (op == SETTING_RAIL_BLUR) return "Turn on the modern sidebar to use the blur.";
+    if (op == SETTING_UI_RES) return "This TV draws apps at 1080p, so the interface stays at 1080p.";
     if (op == SETTING_HERO_CATALOGS) return "Turn on Show hero to display catalogues at the top of Home.";
     if (op == SETTING_HERO_TRAILER)
       return "Turn on Show hero to play trailers at the top of Home.";
@@ -1236,6 +1292,10 @@ static const char *helpOption(int op) {
     case SETTING_HOLD_BLUR: return "The panel that opens when you hold OK on a poster shows the screen behind it blurred, like the sidebar. Off, it is a solid dark panel.";
     case SETTING_FOCUS_GLOW_A: return "How bright the glow around the focused card is.";
     case SETTING_FOCUS_GLOW: return "A faint light in the poster's own colour around the focused card.";
+    case SETTING_UI_RES: return "Sharper text and art at 1440p and 4K, at more work for the TV per frame. 4K can drop below 60 fps while scrolling. Applies the next time Nuvio starts.";
+    case SETTING_FPS_CAP: return "30 fps holds every frame for two refreshes of the screen: steadier where 60 cannot be held, but every movement steps more coarsely.";
+    case SETTING_FPS: return "Frame rate, the slowest frame and the resolution, in the top-right corner. Updated twice a second.";
+    case SETTING_GLASS: return "The frosted glass of the sidebar and the hold menu. Dark is thick and near-black; Tinted is thinner and navy, with more of the picture's colour coming through.";
     case SETTING_ROW_SCROLL: return "First slot moves every row so the focused card sits at its start, and the rest slide sideways. Minimal scrolls only when the card would leave the screen.";
     case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead.";
     case SETTING_NEXT_COUNTDOWN: return "How long the Up next card waits before it plays the next episode.";
@@ -1642,6 +1702,7 @@ void settings_event(const SDL_Event *e) {
       value[focusOp] = (value[focusOp] + (dir > 0 ? 1 : o->n - 1)) % o->n;
     }
     save();   // saves on every change: there is no "save" button on this screen
+    if (focusOp == SETTING_UI_RES) uiResWrites();
     // A different addon list: the next cycle reads it, and its arrival rebuilds
     // the home.
     if (focusOp == SETTING_PRIMARY_ADDONS) sync_resync();
@@ -1765,6 +1826,7 @@ static const char *needsOf(int op) {
   switch (op) {
     case SETTING_RAIL:           return "Modern sidebar off";
     case SETTING_RAIL_BLUR:      return "Modern sidebar";
+    case SETTING_UI_RES:         return "1080p only";
     case SETTING_HERO_CATALOGS:  case SETTING_HERO_TRAILER: return "Show hero";
     case SETTING_HERO_TRAILER_SIZE: return settings_hero_trailer() ? "Top band" : "Trailer previews";
     case SETTING_HERO_TRAILER_DELAY: case SETTING_HERO_TRAILER_CW: return "Trailer previews";
@@ -2124,6 +2186,7 @@ static int highlightOf(void) {
     case SETTING_HIDE_UNRELEASED: return HL_ROWS;
     case SETTING_QUALITY: case SETTING_DV: case SETTING_ATMOS:
     case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM: case SETTING_HOLD_BLUR:
+    case SETTING_GLASS: case SETTING_UI_RES: case SETTING_FPS: case SETTING_FPS_CAP:
     case SETTING_PAUSE_DELAY: case SETTING_LIVE_ON: case SETTING_LIVE_SOURCE: case SETTING_LIVE_BUFFER:
     case SETTING_LIVE_PREVIEW: return HL_NONE;
     default:

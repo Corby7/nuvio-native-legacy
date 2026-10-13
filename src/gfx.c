@@ -1,5 +1,6 @@
 #include "gfx.h"
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include "data.h"
 #include "mark.h"
@@ -13,7 +14,8 @@
 // shader that used the same variable.
 typedef struct {
   GLuint progress;
-  GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect, cell, aa;
+  GLint rect, screen, tex, focus, par, radius, color, aspect, texAspect, cell, aa, dim;
+  float dimLast;  // the last uDim uploaded to THIS program, like cellLast below
   // The last uCell uploaded to THIS program. Uniforms are per-program state, so
   // the cache has to be too — and it is what keeps the sprite sheet off the hot
   // path: exactly one card on the screen is ever animating, so every other
@@ -32,6 +34,11 @@ float gfx_tex_aspect_current = 0.0f;
 // drawing is immediate and the caller sets it before the rect.
 GfxRect gfx_tex_cell_current = {0.0f, 0.0f, 1.0f, 1.0f};
 float gfx_opacity_group = 1.0f;
+float gfx_dim_group = 1.0f;
+float gfx_content_dim = 1.0f;
+// The hero band's cache, at the end of the file.
+static void heroCacheBuilds(void);
+static void heroCacheForgets(GLuint tex);
 // The real size of the screen target (on retina, larger than 1920x1080). Kept
 // here because every return from an FBO has to restore the viewport with it.
 static int screenX = 0, screenY = 0;
@@ -65,6 +72,83 @@ static const char *VS =
   "  gl_Position = vec4(p.x/uScreen.x*2.0-1.0, 1.0-p.y/uScreen.y*2.0, 0.0, 1.0);\n"
   "}\n";
 
+// GFX_DETAIL's vertex stage: the cell mapping, cover and the closing zoom, which
+// the fragment stage used to do for every pixel of the screen (see GFX_DETAIL).
+// The same arithmetic, on the quad's corners. Its shared uniforms are mediump to
+// match the fragment stage, as in VS_COVER.
+static const char *VS_DETAIL =
+  "attribute vec2 aPos;\n"
+  "uniform vec4 uRect;\n"
+  "uniform vec2 uScreen;\n"
+  "uniform mediump vec2  uPar;\n"
+  "uniform mediump float uAspect;\n"
+  "uniform mediump float uTexAsp;\n"
+  "uniform mediump vec4  uCell;\n"
+  "varying NV_UV_P vec2 vUv;\n"
+  "varying NV_UV_P vec2 vUvz;\n"
+  "void main(){\n"
+  "  vUv = aPos;\n"
+  "  vec2 uvz = uCell.xy + aPos * uCell.zw;\n"
+  "  float rectAsp = uAspect * (uCell.w / uCell.z);\n"
+  "  if (uTexAsp > 0.0) {\n"
+  "    float ra = rectAsp / uTexAsp;\n"
+  "    if (ra > 1.0) uvz.y = (uvz.y - 0.5) / ra + 0.5;\n"
+  "    else          uvz.x = (uvz.x - 0.5) * ra + 0.5;\n"
+  "  }\n"
+  "  float z = max(uPar.x, 1.0);\n"
+  "  vUvz = (uvz - 0.5) / z + 0.5;\n"
+  "  vec2 p = uRect.xy + aPos * uRect.zw;\n"
+  "  gl_Position = vec4(p.x/uScreen.x*2.0-1.0, 1.0-p.y/uScreen.y*2.0, 0.0, 1.0);\n"
+  "}\n";
+
+// THE VERTEX STAGE OF THE BIG TEXTURED MODES: GFX_HERO_FIT, GFX_CARD and
+// GFX_CW_CARD. Part of what they computed per fragment was LINEAR in the quad's
+// position: cover()'s scale and offset, and the hero band's two ramp coordinates,
+// each the position minus a start over a length. A linear function worked out at
+// the four corners and interpolated is exact, so it moves here and costs four
+// vertices instead of millions of fragments. MEASURED on the Bravia at 3840x2160:
+// the band's per-fragment arithmetic was 6.4 ms of a 17.3 ms frame, and its
+// texture read and fill alone 0.2 ms. vRamp means nothing to the two card modes,
+// which do not read it, and vScrim nothing to the hero.
+//
+// THE RAMPS THEMSELVES ARE A LOOKUP (lutTex, below). Once the coordinates are
+// remapped here, the hero's two ramps and the resume card's scrim are fixed
+// curves, and on this GPU a texture read costs next to nothing while each
+// clamp-and-multiply stop does not: the hero's seven stops were still 4 ms at 4K
+// after the remap, the scrim's six 1.7 ms on a fifth of the screen. The
+// coordinates arrive already mapped onto the LUT's texel centres
+// ((x * 255 + 0.5) / 256), which is also linear and so also free here.
+//
+// The uniforms it shares with the fragment stage are declared mediump to match
+// that stage's default: GLSL ES refuses to link a uniform whose precision differs.
+static const char *VS_COVER =
+  "attribute vec2 aPos;\n"
+  "uniform vec4 uRect;\n"
+  "uniform vec2 uScreen;\n"
+  "uniform mediump vec2  uPar;\n"
+  "uniform mediump float uAspect;\n"
+  "uniform mediump float uTexAsp;\n"
+  "varying NV_UV_P vec2 vUv;\n"
+  "varying NV_UV_P vec2 vCov;\n"
+  "varying NV_UV_P vec2 vRamp;\n"
+  "varying mediump float vScrim;\n"
+  "void main(){\n"
+  "  vUv = aPos;\n"
+  "  vec2 c = aPos;\n"
+  "  if (uTexAsp > 0.0) {\n"
+  "    float ra = uAspect / uTexAsp;\n"
+  "    if (ra > 1.0) c.y = (c.y - 0.5) / ra + 0.5;\n"
+  "    else          c.x = (c.x - 0.5) * ra + 0.5;\n"
+  "  }\n"
+  "  vCov = c;\n"
+  "  float s = clamp(uPar.y, 0.05, 0.98);\n"
+  "  vec2 r = vec2(aPos.x / max(uPar.x, 0.02), (aPos.y - s) / (1.0 - s));\n"
+  "  vRamp = (r * 255.0 + 0.5) / 256.0;\n"
+  "  vScrim = ((1.0 - aPos.y) * 255.0 + 0.5) / 256.0;\n"
+  "  vec2 p = uRect.xy + aPos * uRect.zw;\n"
+  "  gl_Position = vec4(p.x/uScreen.x*2.0-1.0, 1.0-p.y/uScreen.y*2.0, 0.0, 1.0);\n"
+  "}\n";
+
 // The SDF corrects for the rect's aspect (uAspect), otherwise a landscape card's
 // corner comes out oval.
 // ONE PROGRAM PER MODE. This used to be a single shader with a `uniform int
@@ -84,6 +168,7 @@ static const char *FS_HEAD =
   "uniform float uAA;      // half-ramp of the edge, in the SDF's units\n"
   "uniform float uTexAsp;   // w/h of the TEXTURE; 0 = do not adjust\n"
   "uniform vec4  uCell;     // xy offset + zw scale into the texture; 0,0,1,1 = all\n"
+  "uniform mediump float uDim; // gfx_dim_group: every mode's colour times this\n"
   // DITHER FOR THE LONG SCRIMS. A black ramp over a LIGHT picture spends its
   // 8-bit alpha steps on large luminance jumps, and across a 600px veil each step
   // is a band several pixels wide with a straight edge the eye locks onto. On
@@ -176,11 +261,13 @@ static const char *FS_BODY[GFX_NMODES] = {
   // None of the three cost a focus cue anywhere: EVERY caller that passes a
   // non-zero focus already draws its own ring (home, library, search, seeall,
   // the two card rows in detail).
+  // vCov is cover(vUv), worked out in VS_COVER.
+  "varying NV_UV_P vec2 vCov;\n"
   "void main(){\n"
   "  float d = sdf(vUv, uRadius, uAspect);\n"
   "  float m = smoothstep(uAA,-uAA,d);\n"
   "  if (m <= 0.001) discard;\n"
-  "  vec2 uv = clamp(cover(vUv) + uPar, 0.0, 1.0);\n"
+  "  vec2 uv = clamp(vCov + uPar, 0.0, 1.0);\n"
   // AFTER the clamp, never before: the clamp is what stops the parallax reaching
   // past the edge, and mapping first would let a neighbouring cell of the sprite
   // sheet bleed in instead of the edge pixel repeating.
@@ -214,7 +301,22 @@ static const char *FS_BODY[GFX_NMODES] = {
   "}\n",
 
   // GFX_COLOR — a solid-colour rectangle/pill
+  //
+  // A NEGATIVE RADIUS is gfx_color's flag for a rect with no edge on screen (see
+  // there): no SDF, no smoothstep, no discard. The branch is on a uniform, so a
+  // whole draw takes one side of it.
+  //
+  // THE INSIDE SKIPS THE CORNER. sdf() is max(q) - r wherever both components of
+  // q are negative (and only there: past a corner's start the length() term is
+  // what rounds it), and once that is below -uAA the smoothstep is exactly 1 — so
+  // a pixel that deep in takes the colour without the length() and the curve,
+  // the same value either way. Only the ring along the edge pays for the SDF. On
+  // the sources sheet's 52 rows and pills that was 2.4 ms a frame at 4K.
   "void main(){\n"
+  "  if (uRadius < 0.0) { gl_FragColor = uColor; return; }\n"
+  "  NV_UV_P vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);\n"
+  "  NV_UV_P vec2 q = abs(p) - (vec2(0.5 * uAspect, 0.5) - uRadius);\n"
+  "  if (max(q.x, q.y) < min(0.0, uRadius - uAA)) { gl_FragColor = uColor; return; }\n"
   "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
   "  gl_FragColor = vec4(uColor.rgb, uColor.a*m);\n"
@@ -393,28 +495,18 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  u = mod(abs(u), 2.0);\n"
   "  return mix(u, 2.0 - u, step(1.0, u));\n"
   "}\n"
+  //
+  // THE FRAMING AND THE ZOOM ARE WORKED OUT IN VS_DETAIL, the vignette's nine
+  // stops are lutTex's alpha (lutDetail in C). Both were per-fragment arithmetic
+  // over the whole screen: 12 ms of a 16 ms frame at 3840x2160 on the Bravia. The
+  // cell mapping, cover and zoom are all linear in the quad's position, so they
+  // interpolate exactly; mir() is not, and stays here.
+  "varying NV_UV_P vec2 vUvz;\n"
+  "uniform sampler2D uLut;\n"
   "void main(){\n"
-  "  vec2 q = uCell.xy + vUv * uCell.zw;\n"
-  "  float rectAsp = uAspect * (uCell.w / uCell.z);\n"
-  "  vec2 uvz = q;\n"
-  "  if (uTexAsp > 0.0) {\n"
-  "    float ra = rectAsp / uTexAsp;\n"
-  "    if (ra > 1.0) uvz.y = (uvz.y - 0.5) / ra + 0.5;\n"
-  "    else          uvz.x = (uvz.x - 0.5) * ra + 0.5;\n"
-  "  }\n"
-  "  float z = max(uPar.x, 1.0);\n"
-  "  uvz = (uvz - 0.5) / z + 0.5;\n"
-  "  vec3 c = texture2D(uTex, mir(uvz)).rgb;\n"
+  "  vec3 c = texture2D(uTex, mir(vUvz)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
-  "  float x = vUv.x;\n"
-  "  float a = 1.0 - clamp(x/0.0780,0.0,1.0)*0.05\n"
-  "                - clamp((x-0.0780)/0.0936,0.0,1.0)*0.11\n"
-  "                - clamp((x-0.1716)/0.1092,0.0,1.0)*0.14\n"
-  "                - clamp((x-0.2808)/0.1248,0.0,1.0)*0.18\n"
-  "                - clamp((x-0.4056)/0.1092,0.0,1.0)*0.18\n"
-  "                - clamp((x-0.5148)/0.0936,0.0,1.0)*0.16\n"
-  "                - clamp((x-0.6084)/0.0936,0.0,1.0)*0.11\n"
-  "                - clamp((x-0.7020)/0.0780,0.0,1.0)*0.07;\n"
+  "  float a = texture2D(uLut, vec2((clamp(vUv.x, 0.0, 1.0) * 255.0 + 0.5) / 256.0, 0.25)).a;\n"
   // uFocus = the vignette's STRENGTH: 1 at the top, 0 with the page scrolled. In
   // the web app the vignette is a SIBLING LAYER of the backdrop and has its own
   // opacity — on scrolling, `.detail-scrolled` takes the art to 0.15 AND the
@@ -641,27 +733,69 @@ static const char *FS_BODY[GFX_NMODES] = {
 
   // GFX_BACKDROP — the side menu's frosted glass. The strip arrives already
   // blurred (gfx_backdrop ran the separable gaussian over it); what is left here
-  // is the rest of the web app's chain, in the order the browser applies it.
+  // is the tint and the rim. TWO LOOKS, picked by uPar.y (Settings > Glass style):
   //
-  // MEASURED from .home-sidebar::before: backdrop-filter is
-  // `blur(52px) saturate(160%) brightness(0.85)` and the background over it is
-  // `linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 18%)` on the
-  // top 100px, over a flat rgba(8,12,24,0.62).
+  //   0, DARK: thick, neutral glass, the tvOS menu's. A little saturation so the
+  //      art behind still tints it, then sunk 72% into a near-black that leans
+  //      only faintly blue. Rim 16% white at the top, 6% from 120px down.
+  //   1, TINTED: the web app's navy, thinner — 180% saturation and a 50% plate
+  //      where the web has 160% and 62% — with a soft light over the top 140px
+  //      and a rim from 24% down to 7% over 260px.
+  //
+  // The web's own chain had a 6% white band over the top 18px; it ended in a hard
+  // line, which is what both looks replace with something that fades.
+  //
+  // THE RIM is the glass's edge catching light, 1px wide. On the rounded pane it
+  // runs all the way round the SDF; the rail is square and only has an edge on
+  // the right. uFocus carries the rect's height in layout px, which is what turns
+  // "1px" into SDF units.
+  //
+  // THE DITHER. Sunk this far towards black, the whole blurred picture spans ten
+  // or so 8-bit levels, and each level is a flat patch the width of a poster. The
+  // Bravia's upscaler sharpened those into visible blocks. A 2x2 ordered pattern
+  // of +-0.375 of a level lets the steps blend: fract(x/2 + 3y/4) at pixel
+  // centres takes the four values 1/8, 3/8, 5/8, 7/8 over each 2x2 block.
+  //
+  // WRITTEN FOR THIS GPU'S ARITHMETIC, which is what the glass costs at 4K (3.1 ms
+  // for a fifth of the screen on the Bravia, before this). Saturation, brightness
+  // and the tint are each linear in the colour, so the chain is ONE matrix and an
+  // offset, worked out from the numbers above:
+  //   row i = brightness * (1 - tint) * (sat * e_i + (1 - sat) * luma)
+  //   offset = tint * tint colour,   luma = (0.2126, 0.7152, 0.0722)
+  // The clamp the saturation step had is gone with it; a blurred picture is never
+  // saturated enough to reach it, and the output clamps anyway. The rim is a
+  // straight 1.25px ramp instead of a smoothstep, which on one pixel is the same.
+  //
+  // uPar.x undoes a dim the picture was taken under (gfx_content_dim): behind
+  // the open menu the content is drawn darkened, and the glass shows it as it is.
   //
   // The source is an FBO, hence the vertical flip, and uCell narrows the strip to
   // the width the panel currently has.
   "void main(){\n"
   "  vec2 uv = uCell.xy + vec2(vUv.x, 1.0 - vUv.y) * uCell.zw;\n"
-  "  vec3 c = texture2D(uTex, uv).rgb;\n"
-  "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
-  "  c = clamp(mix(vec3(l), c, 1.60), 0.0, 1.0) * 0.85;\n"
-  "  c = mix(c, vec3(0.0314, 0.0471, 0.0941), 0.62);\n"
-  // The sheen is ADDED, not mixed: it is a white glaze at 6%, and mixing towards
-  // white at that strength washes the colour the saturation has just restored.
-  "  c += 0.06 * (1.0 - smoothstep(0.0, max(uPar.x, 0.0001), vUv.y));\n"
-  // The rail is square and passes radius 0, which skips the mask: an SDF edge
-  // would feather the strip's own border. The hold menu's pane is rounded.
-  "  float m = uRadius > 0.0 ? smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect)) : 1.0;\n"
+  "  vec3 c = texture2D(uTex, uv).rgb * uPar.x;\n"
+  "  float yp = vUv.y * uFocus;\n"
+  "  float d = uRadius > 0.0 ? sdf(vUv, uRadius, uAspect) : -(1.0 - vUv.x) * uAspect;\n"
+  "  float rim = clamp(1.0 + d * uFocus * 0.8, 0.0, 1.0);\n"
+  "  if (uPar.y < 0.5) {\n"
+  "    c = vec3(dot(c, vec3( 0.29455, -0.06408, -0.00647)),\n"
+  "             dot(c, vec3(-0.01905,  0.24952, -0.00647)),\n"
+  "             dot(c, vec3(-0.01905, -0.06408,  0.30713)))\n"
+  "      + vec3(0.0252, 0.02592, 0.03024);\n"
+  "    c = mix(c, vec3(1.0), rim * (0.16 - 0.10 * clamp(yp / 120.0, 0.0, 1.0)));\n"
+  "  } else {\n"
+  "    c = vec3(dot(c, vec3( 0.73346, -0.25747, -0.02599)),\n"
+  "             dot(c, vec3(-0.07654,  0.55253, -0.02599)),\n"
+  "             dot(c, vec3(-0.07654, -0.25747,  0.78401)))\n"
+  "      + vec3(0.0157, 0.02355, 0.04705);\n"
+  "    float t = 1.0 - clamp(yp / 140.0, 0.0, 1.0);\n"
+  "    c += 0.035 * t * t;\n"
+  "    c = mix(c, vec3(1.0), rim * (0.24 - 0.17 * clamp(yp / 260.0, 0.0, 1.0)));\n"
+  "  }\n"
+  "  c += (fract(dot(gl_FragCoord.xy, vec2(0.5, 0.75))) - 0.5) * (1.0 / 255.0);\n"
+  // The rail passes radius 0, which skips the mask: an SDF edge would feather the
+  // strip's own border. The hold menu's pane is rounded.
+  "  float m = uRadius > 0.0 ? smoothstep(uAA,-uAA, d) : 1.0;\n"
   "  gl_FragColor = vec4(c, uColor.a * m);\n"
   "}\n",
 
@@ -839,22 +973,19 @@ static const char *FS_BODY[GFX_NMODES] = {
   // The two are combined with `a + b - a*b` and not by adding: at the bottom-left
   // CORNER both are near 1 and a sum overshoots, which shows up as a hard step
   // where the two ramps meet.
+  //
+  // vCov and vRamp come from VS_COVER: the art's coordinate in cover, and the
+  // two ramps' own coordinates — x over the clearing point, y from its start
+  // over what is left below it — so every stop here is a constant.
+  // The stops themselves live in lutTex (lutHeroH and lutHeroV in C).
+  "varying NV_UV_P vec2 vCov;\n"
+  "varying NV_UV_P vec2 vRamp;\n"
+  "uniform sampler2D uLut;\n"
   "void main(){\n"
-  "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
+  "  vec3 c = texture2D(uTex, clamp(vCov, 0.0, 1.0)).rgb;\n"
   "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
-  "  float s = clamp(uPar.y, 0.05, 0.98);\n"
-  "  float d = 1.0 - s;\n"
-  "  float y = vUv.y;\n"
-  "  float av = clamp((y-s)/(d*0.34),0.0,1.0)*0.30\n"
-  "           + clamp((y-(s+d*0.34))/(d*0.30),0.0,1.0)*0.40\n"
-  "           + clamp((y-(s+d*0.64))/(d*0.36),0.0,1.0)*0.30;\n"
-  "  float cx = max(uPar.x, 0.02);\n"
-  "  float t = vUv.x/cx;\n"
-  "  float ah = 1.0 - clamp(t/0.22,0.0,1.0)*0.12\n"
-  "                 - clamp((t-0.22)/0.24,0.0,1.0)*0.12\n"
-  "                 - clamp((t-0.46)/0.30,0.0,1.0)*0.38\n"
-  "                 - clamp((t-0.76)/0.24,0.0,1.0)*0.38;\n"
-  "  ah *= step(vUv.x, cx);\n"
+  "  float ah = texture2D(uLut, vec2(vRamp.x, 0.25)).r;\n"
+  "  float av = texture2D(uLut, vec2(vRamp.y, 0.25)).g;\n"
   "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
   "  gl_FragColor = vec4(c, uColor.a);\n"
   "}\n",
@@ -895,13 +1026,12 @@ static const char *FS_BODY[GFX_NMODES] = {
   // five stops. See the note in gfx.h for why GFX_VEIL_BOTTOM could not be reused.
   //
   // uColor.a scales the whole ramp, so the caller still fades it with the controls.
+  // The four segments are lutTex's second row, red (lutVeilPlayer in C): the
+  // branches cost 4.7 ms for this band at 4K. The dither is unchanged.
+  "uniform sampler2D uLut;\n"
   "void main(){\n"
   "  float t = clamp(vUv.y, 0.0, 1.0);\n"
-  "  float g;\n"
-  "  if (t < 0.30)      g = mix(0.00, 0.18, t / 0.30);\n"
-  "  else if (t < 0.58) g = mix(0.18, 0.48, (t - 0.30) / 0.28);\n"
-  "  else if (t < 0.78) g = mix(0.48, 0.74, (t - 0.58) / 0.20);\n"
-  "  else               g = mix(0.74, 0.88, (t - 0.78) / 0.22);\n"
+  "  float g = texture2D(uLut, vec2((t * 255.0 + 0.5) / 256.0, 0.75)).r;\n"
   "  gl_FragColor = vec4(0.0, 0.0, 0.0, nvDither(g * uColor.a));\n"
   "}\n",
 
@@ -911,15 +1041,13 @@ static const char *FS_BODY[GFX_NMODES] = {
   // distance the CSS measures its stops along: 0 at the corner, 1 where the
   // gradient reaches zero. Anything past 1 is outside the pool and discarded, which
   // is what keeps the rest of the top of the frame completely untouched.
+  // The four segments are lutTex's second row, green (lutVeilPool in C).
+  "uniform sampler2D uLut;\n"
   "void main(){\n"
   "  vec2 p = vec2(1.0 - vUv.x, vUv.y);\n"
   "  float d = length(p);\n"
   "  if (d >= 1.0) discard;\n"
-  "  float g;\n"
-  "  if (d < 0.30)      g = mix(0.62, 0.50, d / 0.30);\n"
-  "  else if (d < 0.56) g = mix(0.50, 0.28, (d - 0.30) / 0.26);\n"
-  "  else if (d < 0.78) g = mix(0.28, 0.10, (d - 0.56) / 0.22);\n"
-  "  else               g = mix(0.10, 0.00, (d - 0.78) / 0.22);\n"
+  "  float g = texture2D(uLut, vec2((d * 255.0 + 0.5) / 256.0, 0.75)).g;\n"
   "  gl_FragColor = vec4(0.0, 0.0, 0.0, nvDither(g * uColor.a));\n"
   "}\n",
 
@@ -995,16 +1123,14 @@ static const char *FS_BODY[GFX_NMODES] = {
   // ordinary straight-alpha composite, and the guard on `oa` is not paranoia —
   // both layers are zero along the quad's left edge and the divide is taken every
   // pixel of it.
+  //
+  // THE SEVEN SEGMENTS ARE lutTex's second row, blue (lutSrcVeil in C): as
+  // branches they made this the dearest thing on the sheet, 8.8 ms of a 25 ms
+  // frame at 4K on the Bravia.
+  "uniform sampler2D uLut;\n"
   "void main(){\n"
   "  float t = clamp(vUv.x, 0.0, 1.0);\n"
-  "  float a1;\n"
-  "  if (t < 0.10)      a1 = mix(0.00, 0.16, t / 0.10);\n"
-  "  else if (t < 0.20) a1 = mix(0.16, 0.46, (t - 0.10) / 0.10);\n"
-  "  else if (t < 0.28) a1 = mix(0.46, 0.70, (t - 0.20) / 0.08);\n"
-  "  else if (t < 0.42) a1 = mix(0.70, 0.86, (t - 0.28) / 0.14);\n"
-  "  else if (t < 0.60) a1 = mix(0.86, 0.94, (t - 0.42) / 0.18);\n"
-  "  else if (t < 0.80) a1 = mix(0.94, 0.975, (t - 0.60) / 0.20);\n"
-  "  else               a1 = mix(0.975, 0.96, (t - 0.80) / 0.20);\n"
+  "  float a1 = texture2D(uLut, vec2((t * 255.0 + 0.5) / 256.0, 0.75)).b;\n"
   // The radii ARE the CSS's 90% and 120% of the box, so the ellipse is described
   // in the quad's own normalised space and needs no uniform of its own.
   "  float a2 = 0.0;\n"
@@ -1018,11 +1144,10 @@ static const char *FS_BODY[GFX_NMODES] = {
   // live in the top half of the screen; the sources sheet's list runs its full
   // height and passes 0, which leaves this out.
   "  if (uPar.y > 0.0) oa *= mix(1.0, 0.2, smoothstep(uPar.y, 1.0, vUv.y));\n"
-  "  vec3 lift = uColor.rgb;\n"
-  "  vec3 oc = oa > 0.0005\n"
-  "          ? (lift * a2 + uColor.rgb * a1 * (1.0 - a2)) / oa\n"
-  "          : uColor.rgb;\n"
-  "  gl_FragColor = vec4(oc, nvDither(oa * uColor.a));\n"
+  // Both layers are the same ink, so their composite colour IS uColor.rgb: the
+  // `(lift*a2 + ink*a1*(1-a2)) / oa` this used to work out per pixel came back to
+  // it every time, and only the alpha is left to compute.
+  "  gl_FragColor = vec4(uColor.rgb, nvDither(oa * uColor.a));\n"
   "}\n",
 
   // GFX_ROW_FADE — a wash, solid to uPar.x and eased out to zero at the right.
@@ -1236,19 +1361,17 @@ static const char *FS_BODY[GFX_NMODES] = {
   // GFX_CW_CARD — see gfx.h. GFX_CARD's sampling (no parallax: uPar carries the
   // bar), then GFX_CW_SCRIM's seven stops and GFX_CW_BAR's track and fill mixed
   // into the colour, so the one smoothstep at the end is the card's only edge.
+  // vCov is cover(vUv), worked out in VS_COVER; the scrim's seven stops are in
+  // lutTex (lutCwScrim in C), read at vScrim.
+  "varying NV_UV_P vec2 vCov;\n"
+  "varying mediump float vScrim;\n"
+  "uniform sampler2D uLut;\n"
   "void main(){\n"
   "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
-  "  vec2 uv = uCell.xy + clamp(cover(vUv), 0.0, 1.0) * uCell.zw;\n"
+  "  vec2 uv = uCell.xy + clamp(vCov, 0.0, 1.0) * uCell.zw;\n"
   "  vec4 t = texture2D(uTex, uv);\n"
-  "  float u = clamp(1.0 - vUv.y, 0.0, 1.0);\n"
-  "  float s = 0.96\n"
-  "          - clamp( u        / 0.12, 0.0, 1.0) * 0.06\n"
-  "          - clamp((u - 0.12)/ 0.16, 0.0, 1.0) * 0.16\n"
-  "          - clamp((u - 0.28)/ 0.18, 0.0, 1.0) * 0.26\n"
-  "          - clamp((u - 0.46)/ 0.18, 0.0, 1.0) * 0.26\n"
-  "          - clamp((u - 0.64)/ 0.18, 0.0, 1.0) * 0.16\n"
-  "          - clamp((u - 0.82)/ 0.18, 0.0, 1.0) * 0.06;\n"
+  "  float s = texture2D(uLut, vec2(vScrim, 0.25)).b;\n"
   "  vec3 c = mix(t.rgb, vec3(0.0314, 0.0314, 0.0392), s);\n"
   "  if (uPar.x > 0.0 && vUv.y >= 1.0 - uPar.x) {\n"
   "    float fill = step(vUv.x, uPar.y);\n"
@@ -1262,7 +1385,7 @@ static const char *FS_BODY[GFX_NMODES] = {
 // Each body declares what it uses; assembling only what is needed keeps the
 // shader lean.
 static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
-  {1,1}, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
+  {1,0} /* GFX_CARD: cover in VS_COVER */, {1,0}, {1,0}, {0,1}, {1,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0}, {0,0},
   {0,1}, {0,1},
   {1,0},   /* GFX_RING */
   {0,0},   /* GFX_EYE     — its own SDF, not the rectangle's */
@@ -1281,7 +1404,7 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,0},   /* GFX_EP_SCRIM — a vertical ramp, clipped by the thumbnail's corner */
   {1,0},   /* GFX_RING_INSET — the rect's own SDF, offset inward */
   {1,0},   /* GFX_CORNER_SCRIM — a dome, clipped by the host's own corner */
-  {0,1},   /* GFX_HERO_FIT — the art in cover; the band is the quad, no SDF */
+  {0,0},   /* GFX_HERO_FIT — cover is worked out in VS_COVER; no SDF */
   {1,0},   /* GFX_SKELETON — the block's own SDF; the shine is untextured */
   {0,0},   /* GFX_VEIL_PLAYER — a full-bleed vertical ramp: no SDF, no texture */
   {0,0},   /* GFX_VEIL_POOL   — its own radial distance, not the rect SDF */
@@ -1297,7 +1420,7 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,0},   /* GFX_CARD_DEPTH   — the card's SDF, and again 2px lower for the line */
   {1,0},   /* GFX_RING_INSET_FILL — the inset band, masked by perimeter progress */
   {0,0},   /* GFX_HERO_VEIL    — the hero's ramps alone: no SDF, no texture */
-  {1,1}    /* GFX_CW_CARD      — GFX_CARD's art, with the scrim and bar mixed in */
+  {1,0}    /* GFX_CW_CARD      — GFX_CARD's art, with the scrim and bar; cover in VS_COVER */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -1359,10 +1482,24 @@ static unsigned long long fnv(unsigned long long h, const char *s) {
 }
 
 // Builds each program's fragment source into `dst`, the same text both paths use.
+//
+// EVERY BODY IS WRAPPED so that gfx_dim_group reaches all of them without each
+// one learning about it: the body's own main() is renamed and a main() of the
+// wrapper's calls it, then scales the colour it wrote. A `discard` inside the
+// body still ends the fragment, as it should.
 static void fragSource(char *dst, size_t size, const char *uvp, int m) {
-  snprintf(dst, size, "%s%s%s%s%s%s", NV_GLSL_PREFIX, uvp, FS_HEAD,
+  static const char MAIN[] = "void main(){";
+  const char *body = FS_BODY[m], *at = strstr(body, MAIN);
+  if (!at) {
+    snprintf(dst, size, "%s%s%s%s%s%s", NV_GLSL_PREFIX, uvp, FS_HEAD,
+             NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "", body);
+    return;
+  }
+  snprintf(dst, size, "%s%s%s%s%s%.*svoid body(){%s"
+           "void main(){ body(); gl_FragColor.rgb *= uDim; }\n",
+           NV_GLSL_PREFIX, uvp, FS_HEAD,
            NEEDS[m].sdf ? FS_SDF : "", NEEDS[m].cover ? FS_COVER : "",
-           FS_BODY[m]);
+           (int)(at - body), body, at + sizeof MAIN - 1);
 }
 
 static void cachePath(char *dst, size_t size) {
@@ -1435,17 +1572,118 @@ static void programsToCache(unsigned long long key, GetProgramBinaryFn get) {
   if (ok) rename(tmp, path); else remove(tmp);
 }
 
+// THE RAMP LOOKUP. One 256x2 texture on unit 1 for the life of the context, each
+// channel a ramp the shaders used to evaluate per fragment, as a function of a
+// 0..1 coordinate. Row 0 (v = 0.25): R GFX_HERO_FIT's horizontal ramp, G its
+// vertical one, B GFX_CW_CARD's scrim, A GFX_DETAIL's vignette. Row 1 (v = 0.75):
+// R GFX_VEIL_PLAYER's band, G GFX_VEIL_POOL's falloff, B GFX_SRC_VEIL's ramp.
+// Past either end the texture clamps to its edge texel, which is what the
+// shaders' own clamps did.
+static GLuint lutTex;
+
+static float lutHeroH(float t) {
+  float ah = 1.0f;
+  #define RAMP(a, w, k) ah -= fminf(fmaxf((t - (a)) / (w), 0.0f), 1.0f) * (k)
+  RAMP(0.00f, 0.22f, 0.12f); RAMP(0.22f, 0.24f, 0.12f);
+  RAMP(0.46f, 0.30f, 0.38f); RAMP(0.76f, 0.24f, 0.38f);
+  #undef RAMP
+  return t > 1.0f ? 0.0f : ah;
+}
+static float lutHeroV(float v) {
+  return fminf(fmaxf(v / 0.34f, 0.0f), 1.0f) * 0.30f
+       + fminf(fmaxf((v - 0.34f) / 0.30f, 0.0f), 1.0f) * 0.40f
+       + fminf(fmaxf((v - 0.64f) / 0.36f, 0.0f), 1.0f) * 0.30f;
+}
+static float lutCwScrim(float u) {
+  float s = 0.96f;
+  #define STOP(a, w, k) s -= fminf(fmaxf((u - (a)) / (w), 0.0f), 1.0f) * (k)
+  STOP(0.00f, 0.12f, 0.06f); STOP(0.12f, 0.16f, 0.16f); STOP(0.28f, 0.18f, 0.26f);
+  STOP(0.46f, 0.18f, 0.26f); STOP(0.64f, 0.18f, 0.16f); STOP(0.82f, 0.18f, 0.06f);
+  #undef STOP
+  return s;
+}
+static float lutDetail(float x) {
+  float a = 1.0f;
+  #define STOP(s, w, k) a -= fminf(fmaxf((x - (s)) / (w), 0.0f), 1.0f) * (k)
+  STOP(0.0000f, 0.0780f, 0.05f); STOP(0.0780f, 0.0936f, 0.11f);
+  STOP(0.1716f, 0.1092f, 0.14f); STOP(0.2808f, 0.1248f, 0.18f);
+  STOP(0.4056f, 0.1092f, 0.18f); STOP(0.5148f, 0.0936f, 0.16f);
+  STOP(0.6084f, 0.0936f, 0.11f); STOP(0.7020f, 0.0780f, 0.07f);
+  #undef STOP
+  return a;
+}
+static float lutSeg(float t, const float *at, const float *g, int n) {
+  int i;
+  for (i = 0; i < n - 1; i++)
+    if (t < at[i + 1] || i == n - 2)
+      return g[i] + (g[i + 1] - g[i]) * fminf(fmaxf((t - at[i]) / (at[i + 1] - at[i]), 0.0f), 1.0f);
+  return g[n - 1];
+}
+static float lutVeilPlayer(float t) {
+  static const float at[] = { 0.00f, 0.30f, 0.58f, 0.78f, 1.00f };
+  static const float g[]  = { 0.00f, 0.18f, 0.48f, 0.74f, 0.88f };
+  return lutSeg(t, at, g, 5);
+}
+static float lutVeilPool(float d) {
+  static const float at[] = { 0.00f, 0.30f, 0.56f, 0.78f, 1.00f };
+  static const float g[]  = { 0.62f, 0.50f, 0.28f, 0.10f, 0.00f };
+  return lutSeg(d, at, g, 5);
+}
+static float lutSrcVeil(float t) {
+  static const float at[] = { 0.00f, 0.10f, 0.20f, 0.28f, 0.42f, 0.60f, 0.80f, 1.00f };
+  static const float g[]  = { 0.00f, 0.16f, 0.46f, 0.70f, 0.86f, 0.94f, 0.975f, 0.96f };
+  return lutSeg(t, at, g, 8);
+}
+static unsigned char lutByte(float f) {
+  f = fminf(fmaxf(f, 0.0f), 1.0f);
+  return (unsigned char)(f * 255.0f + 0.5f);
+}
+static void lutBuilds(void) {
+  unsigned char px[256 * 2 * 4];
+  for (int i = 0; i < 256; i++) {
+    float x = (float)i / 255.0f;
+    unsigned char *r0 = px + i * 4, *r1 = px + (256 + i) * 4;
+    r0[0] = lutByte(lutHeroH(x));
+    r0[1] = lutByte(lutHeroV(x));
+    r0[2] = lutByte(lutCwScrim(x));
+    r0[3] = lutByte(lutDetail(x));
+    r1[0] = lutByte(lutVeilPlayer(x));
+    r1[1] = lutByte(lutVeilPool(x));
+    r1[2] = lutByte(lutSrcVeil(x));
+    r1[3] = 255;
+  }
+  glGenTextures(1, &lutTex);
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, lutTex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glActiveTexture(GL_TEXTURE0);
+}
+// Put back on unit 1 each frame: nothing in the app binds there, but a library
+// sharing the context (libmpv's renderer on the Mac) is free to.
+static void lutBinds(void) {
+  if (!lutTex) return;
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_2D, lutTex);
+  glActiveTexture(GL_TEXTURE0);
+}
+
 int gfx_start(void) {
   char uvp[64];
-  char vsrc[1200];
+  char vsrc[1200], vsrcCover[1600], vsrcDetail[1600];
   char source[8000];
   unsigned long long key = 1469598103934665603ULL;
   ProgramBinaryFn load = NULL;
   GetProgramBinaryFn get = NULL;
   int cached = 0;
-  GLuint vs = 0;
+  GLuint vs = 0, vsCover = 0, vsDetail = 0;
   uvPrecision(uvp, sizeof uvp);
   snprintf(vsrc, sizeof vsrc, "%s%s%s", NV_GLSL_PREFIX, uvp, VS);
+  snprintf(vsrcCover, sizeof vsrcCover, "%s%s%s", NV_GLSL_PREFIX, uvp, VS_COVER);
+  snprintf(vsrcDetail, sizeof vsrcDetail, "%s%s%s", NV_GLSL_PREFIX, uvp, VS_DETAIL);
   { const char *ext = (const char *)glGetString(GL_EXTENSIONS);
     if (ext && strstr(ext, "GL_OES_get_program_binary")) {
       *(void **)&load = SDL_GL_GetProcAddress("glProgramBinaryOES");
@@ -1455,6 +1693,8 @@ int gfx_start(void) {
     key = fnv(key, (const char *)glGetString(GL_RENDERER));
     key = fnv(key, (const char *)glGetString(GL_VERSION));
     key = fnv(key, vsrc);
+    key = fnv(key, vsrcCover);
+    key = fnv(key, vsrcDetail);
     for (int m = 0; m < GFX_NMODES; m++) {
       fragSource(source, sizeof source, uvp, m);
       key = fnv(key, source);
@@ -1462,7 +1702,11 @@ int gfx_start(void) {
     cached = programsFromCache(key, load);
   }
   mark(cached ? "gfx: programs from cache" : "gfx: programs compiled");
-  if (!cached) vs = compiles(GL_VERTEX_SHADER, vsrc);
+  if (!cached) {
+    vs = compiles(GL_VERTEX_SHADER, vsrc);
+    vsCover = compiles(GL_VERTEX_SHADER, vsrcCover);
+    vsDetail = compiles(GL_VERTEX_SHADER, vsrcDetail);
+  }
   for (int m = 0; m < GFX_NMODES; m++) {
     GLuint p;
     if (cached) {
@@ -1470,7 +1714,8 @@ int gfx_start(void) {
     } else {
       fragSource(source, sizeof source, uvp, m);
       p = glCreateProgram();
-      glAttachShader(p, vs);
+      glAttachShader(p, m == GFX_HERO_FIT || m == GFX_CARD || m == GFX_CW_CARD ? vsCover
+                        : m == GFX_DETAIL ? vsDetail : vs);
       glAttachShader(p, compiles(GL_FRAGMENT_SHADER, source));
       glBindAttribLocation(p, 0, "aPos");
       glLinkProgram(p);
@@ -1490,6 +1735,8 @@ int gfx_start(void) {
     progs[m].aspect  = glGetUniformLocation(p, "uAspect");
     progs[m].texAspect = glGetUniformLocation(p, "uTexAsp");
     progs[m].cell      = glGetUniformLocation(p, "uCell");
+    progs[m].dim       = glGetUniformLocation(p, "uDim");
+    progs[m].dimLast   = 1.0f;
     progs[m].cellLast[0] = 0.0f; progs[m].cellLast[1] = 0.0f;
     progs[m].cellLast[2] = 1.0f; progs[m].cellLast[3] = 1.0f;
     glUseProgram(p);
@@ -1502,7 +1749,11 @@ int gfx_start(void) {
     // happened, so seeding the cache without seeding the uniform is what makes
     // the two disagree. Caught by tests/focus_sheet.c.
     if (progs[m].cell >= 0) glUniform4f(progs[m].cell, 0.0f, 0.0f, 1.0f, 1.0f);
+    if (progs[m].dim >= 0) glUniform1f(progs[m].dim, 1.0f);
+    { GLint lut = glGetUniformLocation(p, "uLut");
+      if (lut >= 0) glUniform1i(lut, 1); }
   }
+  lutBuilds();
   if (!cached && load && get) programsToCache(key, get);
   glUseProgram(progs[GFX_CARD].progress);
   progressCurrent = GFX_CARD;
@@ -1539,7 +1790,10 @@ static GLuint texCurrent = 0;
 // or when somebody has called glBindTexture outside gfx_rect (an art upload, a
 // glyph raster) — in both cases the cache would be lying.
 // tex = 0 means "forget everything": that is what the uploads use.
-void gfx_tex_forget(GLuint tex) { if (tex == 0 || texCurrent == tex) texCurrent = 0; }
+void gfx_tex_forget(GLuint tex) {
+  if (tex == 0 || texCurrent == tex) texCurrent = 0;
+  if (tex) heroCacheForgets(tex);
+}
 
 int    gfx_n_rect = 0, gfx_n_progress = 0, gfx_n_bind = 0, gfx_n_others = 0;
 double gfx_ms_rect = 0.0, gfx_ms_others = 0.0;
@@ -1551,6 +1805,15 @@ double gfx_ms_rect = 0.0, gfx_ms_others = 0.0;
 double gfx_fill = 0.0;
 int    gfx_n_full = 0;   // draws covering >= 50% of the screen
 static double gfxFreqMs = 0.0;
+// FILL BY MODE, in DEVICE pixels, for NUVIO_FILL=1. gfx_fill above counts layout
+// area, which is blind to two things that decide the bill at 4K: the buffer's
+// real size, and the off-screen passes (the blur's chain draws "full-screen"
+// rects into targets a fraction of the screen's size). Scaling each draw by the
+// viewport it actually lands in counts both. Off by default: it reads the
+// viewport back on every draw.
+static int    fillOn = -1;
+static double fillPx[GFX_NMODES], fillOffPx;
+static long   fillN[GFX_NMODES], fillFrames;
 // WHERE THE SKELETONS' LIGHT IS THIS FRAME, in screen pixels: the centre of the
 // band. Advanced once per frame by gfx_new_frame, read by every gfx_skeleton.
 static float skelSweep = 0.0f;
@@ -1566,6 +1829,42 @@ void gfx_new_frame(unsigned now) {
   gfx_n_rect = gfx_n_progress = gfx_n_bind = gfx_n_others = 0;
   gfx_ms_rect = gfx_ms_others = 0.0;
   gfx_fill = 0.0; gfx_n_full = 0;
+  gfx_dim_group = 1.0f; gfx_content_dim = 1.0f;
+  if (fillOn > 0) fillFrames++;
+  lutBinds();
+  heroCacheBuilds();
+}
+
+void gfx_fill_report(void) {
+  static const char *NAME[GFX_NMODES] = {
+    "card", "shadow", "color", "hero", "veil", "text", "background", "veil_top", "snap", "play", "blur", "detail",
+    "hero_full", "ring", "eye", "sources", "brand", "veil_bottom", "social", "avatar",
+    "portrait", "disk", "backdrop", "profile_bg", "ring_css", "cw_scrim", "cw_bar",
+    "ep_scrim", "ring_inset", "corner_scrim", "hero_fit", "skeleton", "veil_player",
+    "veil_pool", "menu_feather", "menu_scrim", "erail_scrim", "src_veil", "row_fade",
+    "logo", "drop", "scrim_hole", "ring_fill", "card_depth", "ring_inset_fill",
+    "hero_veil", "cw_card" };
+  double screen = (double)screenW * screenH, total = 0;
+  int order[GFX_NMODES], i, j;
+  char line[1024];
+  size_t at = 0;
+  if (fillOn < 0) fillOn = getenv("NUVIO_FILL") ? atoi(getenv("NUVIO_FILL")) : 0;
+  if (fillOn <= 0 || fillFrames <= 0 || screen <= 0) return;
+  for (i = 0; i < GFX_NMODES; i++) { order[i] = i; total += fillPx[i]; }
+  for (i = 0; i < GFX_NMODES; i++)
+    for (j = i + 1; j < GFX_NMODES; j++)
+      if (fillPx[order[j]] > fillPx[order[i]]) { int t = order[i]; order[i] = order[j]; order[j] = t; }
+  at += snprintf(line + at, sizeof line - at, "[fill] %dx%d per frame %.2f screens (off-screen %.2f):",
+                 screenW, screenH, total / fillFrames / screen, fillOffPx / fillFrames / screen);
+  for (i = 0; i < GFX_NMODES && at < sizeof line - 48; i++) {
+    double s = fillPx[order[i]] / fillFrames / screen;
+    if (s < 0.02) break;
+    at += snprintf(line + at, sizeof line - at, " %s=%.2f/%ld", NAME[order[i]], s,
+                   fillN[order[i]] / fillFrames);
+  }
+  printf("%s\n", line);
+  memset(fillPx, 0, sizeof fillPx); memset(fillN, 0, sizeof fillN);
+  fillOffPx = 0; fillFrames = 0;
 }
 // A clock for the GL points that are NOT gfx_rect: the clip, the snapshot's FBO
 // and the blur's three passes. On a tiled GPU, changing render target mid-frame
@@ -1608,6 +1907,12 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
               float parx, float pary, float radius,
               float cr, float cg, float cb, float ca) {
   if ((int)mode < 0 || (int)mode >= GFX_NMODES) return;
+  // MEASURING ONLY: NUVIO_SKIP_MODE=n drops every draw in mode n (99 drops them
+  // all), so a mode's real GPU cost is the frame time it gives back. Read with
+  // the frame rate uncapped (NUVIO_VSYNC=0, main.c), or the cap hides it.
+  { static int skip = -2;
+    if (skip == -2) skip = getenv("NUVIO_SKIP_MODE") ? atoi(getenv("NUVIO_SKIP_MODE")) : -1;
+    if ((int)mode == skip || skip == 99) return; }
   if (gfxFreqMs == 0.0) gfxFreqMs = 1000.0 / (double)SDL_GetPerformanceFrequency();
   (void)gfxFreqMs;
 #ifdef NV_PERF_FINE
@@ -1616,8 +1921,20 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
   gfx_n_rect++;
   { float area = (r.w * r.h) / (NV_SCREEN_W * NV_SCREEN_H);
     gfx_fill += area;
-    if (area >= 0.5f) gfx_n_full++; }
-  const Program *P = &progs[mode];
+    if (area >= 0.5f) gfx_n_full++;
+    if (fillOn < 0) fillOn = getenv("NUVIO_FILL") ? atoi(getenv("NUVIO_FILL")) : 0;
+    if (fillOn > 0) {
+      GLint vp[4], fb = 0;
+      glGetIntegerv(GL_VIEWPORT, vp);
+      glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fb);
+      double px = (double)area * vp[2] * vp[3];
+      fillPx[mode] += px; fillN[mode]++;
+      if (fb != 0) fillOffPx += px;
+      if (fillOn > 1 && fillFrames == 60 && area > 0.002f && mode != GFX_TEXT)
+        printf("[fill] mode=%d %.0f,%.0f %.0fx%.0f r=%.3f rgba=%.3f,%.3f,%.3f,%.3f\n",
+               (int)mode, r.x, r.y, r.w, r.h, radius, cr, cg, cb, ca);
+    } }
+  Program *P = &progs[mode];
   if (progressCurrent != (int)mode) { glUseProgram(P->progress); progressCurrent = (int)mode; gfx_n_progress++; }
   // A uniform the mode's shader does not declare comes back as -1 from the link;
   // passing -1 to glUniform is a valid no-op but still pays the GL call's
@@ -1642,6 +1959,10 @@ void gfx_rect(GfxRect r, GLuint tex, GfxMode mode, float focus,
     }
   }
   if (P->color >= 0)    glUniform4f(P->color, cr, cg, cb, ca * gfx_opacity_group);
+  if (P->dim >= 0 && P->dimLast != gfx_dim_group) {
+    glUniform1f(P->dim, gfx_dim_group);
+    P->dimLast = gfx_dim_group;
+  }
   if (tex && tex != texCurrent) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, tex);
@@ -1703,9 +2024,33 @@ void gfx_scrim_hole(GfxRect hole, float radiusPx, float featherPx, float alpha) 
   gfx_tex_cell_current = cell;
 }
 
+// A SQUARE RECT OVER THE WHOLE SCREEN has no edge to antialias, so it skips the
+// SDF (radius -1, see GFX_COLOR). The veils behind the menu, the hold menu and
+// the player are this: at 3840x2160 a full-screen fill through the SDF and its
+// discard cost ~6 ms on the Bravia, which is most of the frame for a flat colour.
+// Only the whole screen qualifies: a smaller square rect keeps its ramp, which is
+// what stops a sliding plate's edge stepping a pixel at a time.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) {
+  if (radius <= 0.0f && r.x <= 0.0f && r.y <= 0.0f &&
+      r.x + r.w >= NV_SCREEN_W && r.y + r.h >= NV_SCREEN_H)
+    radius = -1.0f;
   gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, radius, cr, cg, cb, ca);
 }
+// TWO FLAT LAYERS OF ONE SHAPE as one draw: (r1,g1,b1) at a1, then (r2,g2,b2) at
+// a2 over it. Straight-alpha compositing of two layers is itself one layer:
+//   A = 1 - (1 - a1)(1 - a2),  C = (C1 a1 (1 - a2) + C2 a2) / A
+// which is exact for the colour and for the alpha the compositor reads over
+// video; only the antialiased rim can differ, by a hair. Half the fill of drawing
+// both — the sources sheet's rows were 0.6 of a screen this way at 4K.
+void gfx_color_over(GfxRect r, float radius, float r1, float g1, float b1, float a1,
+                    float r2, float g2, float b2, float a2) {
+  float A = 1.0f - (1.0f - a1) * (1.0f - a2);
+  float w1 = a1 * (1.0f - a2);
+  if (A <= 0.0005f) return;
+  gfx_color(r, radius, (r1 * w1 + r2 * a2) / A, (g1 * w1 + g2 * a2) / A,
+            (b1 * w1 + b2 * a2) / A, A);
+}
+
 // A transparent hole for the device's video plane to show through.
 //
 // It has to be done with blending OFF. With blending on, writing alpha 0 merely
@@ -1728,16 +2073,39 @@ void gfx_card_depth_cw(GfxRect card, float radius, float edge, float sheen, floa
   gfx_rect(card, 0, GFX_CARD_DEPTH, 1.0f, card.h, offsetPx, radius, edge, sheen, 0, 1.0f);
 }
 
+// THE PAGE UNDER A DIM. The background is never drawn — it is main.c's clear —
+// so no dim reaches it; this clears again in the dimmed colour. Only before the
+// first draw of the frame, which on a tiled GPU makes it free.
+void gfx_clear_dimmed(void) {
+  if (gfx_dim_group >= 0.999f) return;
+  glClearColor(NV_COLOR_BACKGROUND_R * gfx_dim_group, NV_COLOR_BACKGROUND_G * gfx_dim_group,
+               NV_COLOR_BACKGROUND_B * gfx_dim_group, 1.0f);
+  glClear(GL_COLOR_BUFFER_BIT);
+}
+
+// A HOLE UNDER A DIM still has to take the video down with it, as the veil it
+// replaces did: black at (1 - dim) over the hole leaves the surface that much
+// opaque, and the compositor darkens the plane by exactly that.
+static void holeDims(GfxRect r, float radius) {
+  if (gfx_dim_group < 0.999f) gfx_color(r, radius, 0, 0, 0, 1.0f - gfx_dim_group);
+}
+
 void gfx_hole(GfxRect r) {
+  // The whole screen, as the player's is, skips the SDF like gfx_color's veils:
+  // through it, this one transparent rect cost 8 ms a frame at 4K on the Bravia.
+  float radius = r.x <= 0.0f && r.y <= 0.0f && r.x + r.w >= NV_SCREEN_W &&
+                 r.y + r.h >= NV_SCREEN_H ? -1.0f : 0.0f;
   glDisable(GL_BLEND);
-  gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, 0.0f, 0, 0, 0, 0);
+  gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, radius, 0, 0, 0, 0);
   glEnable(GL_BLEND);
+  holeDims(r, 0.0f);
 }
 
 void gfx_hole_round(GfxRect r, float radius) {
   glBlendFuncSeparate(GL_ZERO, GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE_MINUS_SRC_ALPHA);
   gfx_color(r, radius, 0, 0, 0, 1);
   glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+  holeDims(r, radius);
 }
 
 void gfx_texture(GfxRect r, GLuint tex) {
@@ -1769,8 +2137,13 @@ int gfx_snap_start(int w, int h) {
   return 1;
 }
 
+// What the screen's dim was when the snapshot began: the snapshot is drawn back
+// inside the same dim, so it has to be taken without it or it dims twice.
+static float snapDim = 1.0f;
+
 void gfx_snap_begin(void) {
   if (!snapFbo) return;
+  snapDim = gfx_dim_group; gfx_dim_group = 1.0f;
   GFX_OUTRO_START();
   glBindFramebuffer(GL_FRAMEBUFFER, snapFbo);
   // uScreen stays in full-screen coordinates: the smaller viewport does the
@@ -1785,6 +2158,7 @@ void gfx_snap_finish(void) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   viewportTarget();
   GFX_OUTRO_END();
+  gfx_dim_group = snapDim;
 }
 
 void gfx_snap_draw(void) {
@@ -1925,6 +2299,9 @@ void gfx_blur_generate(int via, unsigned int tex, float texAspect) {
   int a0 = via ? 2 : 0, a1 = via ? 3 : 1;
   if (!borderFbo[a0] || !tex) return;
   GfxRect full = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+  // The blurred art is KEPT across frames: a dim baked into it would stay.
+  float dim = gfx_dim_group;
+  gfx_dim_group = 1.0f;
   GFX_OUTRO_START();
   glDisable(GL_BLEND);
   glViewport(0, 0, borderW, borderH);
@@ -1947,6 +2324,7 @@ void gfx_blur_generate(int via, unsigned int tex, float texAspect) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   viewportTarget();
   GFX_OUTRO_END();
+  gfx_dim_group = dim;
 }
 
 void gfx_blur_draw(int via, GfxRect r, float alpha) {
@@ -2002,6 +2380,7 @@ typedef struct {
   int gw, gh;                          // the grab, in buffer pixels
   unsigned when;
   int has;
+  float gain;                          // 1 / gfx_content_dim at the last grab
 } Glass;
 static Glass glassRail, glassPanel;
 
@@ -2037,6 +2416,7 @@ static int glassStart(Glass *g, float w, float h, int fw, int fh) {
 // glass, and the reason glassGrab rations it by the clock.
 static void glassGenerates(Glass *g, GfxRect src) {
   float ex = (float)screenW / NV_SCREEN_W, ey = (float)screenH / NV_SCREEN_H;
+  float dim = gfx_dim_group;
   int gw = (int)(src.w * ex), gh = (int)(src.h * ey);
   // glCopyTexImage2D reads from the BOTTOM-left corner, and the letterbox moves
   // the origin — the same two conversions gfx_crop documents.
@@ -2047,6 +2427,10 @@ static void glassGenerates(Glass *g, GfxRect src) {
   int i;
   if (gw < 1 || gh < 1) return;
 
+  // The passes run undimmed whatever the screen is doing; the picture they take
+  // may already be dimmed (gfx_content_dim), which gain undoes when it is drawn.
+  g->gain = gfx_content_dim > 0.05f ? 1.0f / gfx_content_dim : 1.0f;
+  gfx_dim_group = 1.0f;
   GFX_OUTRO_START();
   glBindTexture(GL_TEXTURE_2D, g->grab);
   if (gw != g->gw || gh != g->gh) {
@@ -2099,6 +2483,7 @@ static void glassGenerates(Glass *g, GfxRect src) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   viewportTarget();
   GFX_OUTRO_END();
+  gfx_dim_group = dim;
 }
 
 // THE CLOCK, not the frame: the rail is on screen every frame of the app's life,
@@ -2127,11 +2512,11 @@ static void glassGrab(Glass *g, GfxRect src, unsigned now) {
 }
 
 // `radius` is gfx_color's: a fraction of the rect's shorter side; 0 is square.
-static void glassDraw(Glass *g, GfxRect r, float radius, float alpha, float sheen) {
+static int glassDraw(Glass *g, GfxRect r, float radius, float alpha, int tinted) {
   GfxRect s = g->src;
   float u0, u1, v0, v1;
   if (!g->fbo[0] || !g->has || s.w <= 1.0f || s.h <= 1.0f ||
-      r.w <= 1.0f || r.h <= 1.0f || alpha <= 0.004f) return;
+      r.w <= 1.0f || r.h <= 1.0f || alpha <= 0.004f) return 0;
   // The panel takes the slice of the grab it actually covers. Sampling the whole
   // region into a different rect would SQUEEZE the picture, and the glass would
   // stop lining up with the content beside it. Rows run bottom-up in the FBO,
@@ -2144,8 +2529,10 @@ static void glassDraw(Glass *g, GfxRect r, float radius, float alpha, float shee
   if (v1 > 1.0f) v1 = 1.0f;
   gfx_tex_cell_current = (GfxRect){ u0, v0, u1 - u0, v1 - v0 };
   gfx_tex_aspect_current = 0.0f;
-  gfx_rect(r, g->tex[GL_FINAL], GFX_BACKDROP, 0, sheen, 0.0f, radius, 0, 0, 0, alpha);
+  gfx_rect(r, g->tex[GL_FINAL], GFX_BACKDROP, r.h, g->gain > 0.0f ? g->gain : 1.0f,
+           tinted ? 1.0f : 0.0f, radius, 0, 0, 0, alpha);
   gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
+  return 1;
 }
 
 // The rail's strip: always anchored at the screen's top-left corner, at the
@@ -2156,8 +2543,8 @@ int gfx_backdrop_start(float w, float h) {
 void gfx_backdrop_grab(unsigned now) {
   glassGrab(&glassRail, (GfxRect){ 0, 0, glassRail.w, glassRail.h }, now);
 }
-void gfx_backdrop(GfxRect r, float alpha, float sheen) {
-  glassDraw(&glassRail, r, 0.0f, alpha, sheen);
+int gfx_backdrop(GfxRect r, float alpha, int tinted) {
+  return glassDraw(&glassRail, r, 0.0f, alpha, tinted);
 }
 void gfx_backdrop_shutdown(void) { glassShutdown(&glassRail); }
 
@@ -2169,7 +2556,127 @@ int gfx_glass_start(float w, float h) {
   return glassStart(&glassPanel, w, h, fw < 8 ? 8 : fw, fh < 8 ? 8 : fh);
 }
 void gfx_glass_grab(GfxRect region, unsigned now) { glassGrab(&glassPanel, region, now); }
-void gfx_glass(GfxRect r, float radius, float alpha, float sheen) {
-  glassDraw(&glassPanel, r, radius, alpha, sheen);
+int gfx_glass(GfxRect r, float radius, float alpha, int tinted) {
+  return glassDraw(&glassPanel, r, radius, alpha, tinted);
 }
 void gfx_glass_shutdown(void) { glassShutdown(&glassPanel); }
+
+// --- the hero band's cache ---------------------------------------------------
+//
+// GFX_HERO_FIT composites the art with its two ramps on every pixel of the band,
+// every frame, for a picture that changes only when the hero does. At 3840x2160
+// that was the largest single cost of a Home frame (3.9 ms of ~12 on the Bravia,
+// measured with NUVIO_SKIP_MODE). Here the composite is drawn ONCE into a texture
+// and the band becomes a plain textured quad.
+//
+// BUILT AT THE START OF A FRAME, never in the middle of one. Switching render
+// target mid-frame makes a tiled GPU write out everything drawn so far and read
+// it back afterwards, which at 4K costs more than the composite saves. So a band
+// the cache does not hold is drawn the old way on the frame it is asked for, and
+// queued; gfx_new_frame builds it before the screen is cleared, as a pass of its
+// own.
+//
+// ONLY WHAT HOLDS STILL is worth building: a band asked for on two frames running
+// with the same art, ramps and shape. While the hero animates (into the title
+// screen, or resizing) every frame is a new key, and those frames simply draw
+// direct, as they always did.
+//
+// The texture is capped at 1920 wide: the art itself is the w1920 rung, so a
+// larger target would only store the same detail magnified.
+#define HC_N 2
+typedef struct {
+  GLuint src;                  // the art; 0 = empty
+  float px, py, rw, rh, asp;   // the ramps, the band's shape, the art's aspect
+} HeroKey;
+typedef struct {
+  HeroKey k;
+  GLuint tex, fbo;
+  int w, h;                    // the target's size; reallocated when it changes
+  int ready, want;
+  unsigned used;
+} HeroCache;
+static HeroCache hc[HC_N];
+static struct { HeroKey k; unsigned frame; } hcAsked[HC_N];
+static unsigned hcClock;
+
+static int heroKeySame(const HeroKey *a, const HeroKey *b) {
+  return a->src == b->src && a->px == b->px && a->py == b->py &&
+         a->rw == b->rw && a->rh == b->rh && a->asp == b->asp;
+}
+
+static void heroCacheForgets(GLuint tex) {
+  for (int i = 0; i < HC_N; i++) {
+    if (hc[i].k.src == tex) { hc[i].k.src = 0; hc[i].ready = hc[i].want = 0; }
+    if (hcAsked[i].k.src == tex) hcAsked[i].k.src = 0;
+  }
+}
+
+static void heroCacheBuilds(void) {
+  hcClock++;
+  for (int i = 0; i < HC_N; i++) {
+    HeroCache *c = &hc[i];
+    int w, h;
+    float dim = gfx_dim_group, asp = gfx_tex_aspect_current;
+    if (!c->want || !c->k.src) continue;
+    c->want = 0;
+    w = (int)(c->k.rw * (float)screenW / NV_SCREEN_W + 0.5f);
+    if (w > 1920) w = 1920;
+    h = (int)(w * c->k.rh / c->k.rw + 0.5f);
+    if (w < 8 || h < 8) continue;
+    if (w != c->w || h != c->h || !c->fbo) {
+      if (c->fbo) { glDeleteFramebuffers(1, &c->fbo); c->fbo = 0; }
+      if (c->tex) { glDeleteTextures(1, &c->tex); c->tex = 0; }
+      if (!createsTargetIn(&c->tex, &c->fbo, w, h)) { c->w = c->h = 0; continue; }
+      c->w = w; c->h = h;
+    }
+    GFX_OUTRO_START();
+    glBindFramebuffer(GL_FRAMEBUFFER, c->fbo);
+    glViewport(0, 0, w, h);
+    glDisable(GL_BLEND);
+    gfx_dim_group = 1.0f;
+    // The band is drawn over the whole target, which is 16:9 as a quad and the
+    // band's shape as pixels. cover() works from the quad's aspect over the art's,
+    // so the art's is scaled by the same factor to keep the crop the band had.
+    gfx_tex_aspect_current = c->k.asp > 0.0f
+      ? c->k.asp * (NV_SCREEN_W / NV_SCREEN_H) / (c->k.rw / c->k.rh) : 0.0f;
+    gfx_rect((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, c->k.src, GFX_HERO_FIT, 0,
+             c->k.px, c->k.py, 0, 0, 0, 0, 1.0f);
+    gfx_tex_aspect_current = asp;
+    gfx_dim_group = dim;
+    glEnable(GL_BLEND);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    viewportTarget();
+    GFX_OUTRO_END();
+    c->ready = 1;
+  }
+}
+
+void gfx_hero_fit(GfxRect r, GLuint tex, float px, float py, float alpha) {
+  HeroKey k = { tex, px, py, r.w, r.h, gfx_tex_aspect_current };
+  int i, slot = -1;
+  if (!tex || r.w <= 1.0f || r.h <= 1.0f) return;
+  for (i = 0; i < HC_N; i++)
+    if (hc[i].ready && heroKeySame(&hc[i].k, &k)) {
+      hc[i].used = hcClock;
+      gfx_rect(r, hc[i].tex, GFX_SNAP, 0, 0.0f, 1.0f, 0.0f, 0, 0, 0, alpha);
+      return;
+    }
+  // Not held: drawn the old way, and queued if it was asked for last frame too.
+  gfx_rect(r, tex, GFX_HERO_FIT, 0, px, py, 0, 0, 0, 0, alpha);
+  for (i = 0; i < HC_N; i++)
+    if (heroKeySame(&hcAsked[i].k, &k)) break;
+  if (i < HC_N) {
+    if (hcAsked[i].frame + 1 == hcClock) {
+      for (int j = 0; j < HC_N; j++)
+        if (hc[j].want && heroKeySame(&hc[j].k, &k)) return;
+      // The slot used longest ago: a crossfade holds two bands, never three.
+      for (int j = 0; j < HC_N; j++)
+        if (slot < 0 || hc[j].used < hc[slot].used) slot = j;
+      hc[slot].k = k; hc[slot].ready = 0; hc[slot].want = 1; hc[slot].used = hcClock;
+    }
+    hcAsked[i].frame = hcClock;
+    return;
+  }
+  slot = hcAsked[0].frame <= hcAsked[1].frame ? 0 : 1;
+  hcAsked[slot].k = k; hcAsked[slot].frame = hcClock;
+}

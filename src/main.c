@@ -379,6 +379,46 @@ static void applySurface(SDL_Window *win) {
   pointer_set_box(bx, by, bw, bh, ww > 0 ? (float)dw / ww : 1.0f);
 }
 
+// THE FRAME RATE COUNTER (Settings > Display). It measures what the eye gets:
+// the time between one frame and the next, vsync wait included, so a frame the
+// GPU finished late shows as 33 ms rather than as the work it did. The text is
+// rebuilt twice a second and not every frame: each new string is a new glyph
+// texture, and a counter that cost frames would be measuring itself.
+static void fpsOverlay(void) {
+  static Uint64 last, windowStart;
+  static int frames;
+  static double worstMs;
+  static TxtLine line;
+  static int has;
+  Uint64 t = SDL_GetPerformanceCounter();
+  double freq = (double)SDL_GetPerformanceFrequency();
+  if (!settings_fps_counter()) { last = 0; has = 0; return; }
+  if (last) {
+    double ms = (double)(t - last) * 1000.0 / freq;
+    if (ms > worstMs) worstMs = ms;
+    frames++;
+  } else {
+    windowStart = t;
+  }
+  last = t;
+  if (!has || (double)(t - windowStart) * 1000.0 / freq >= 500.0) {
+    double span = (double)(t - windowStart) / freq;
+    char buf[64];
+    if (frames > 0 && span > 0.0)
+      snprintf(buf, sizeof buf, "%.0f fps \xc2\xb7 worst %.0f ms \xc2\xb7 %dp",
+               frames / span, worstMs, capH);
+    else
+      snprintf(buf, sizeof buf, "-- fps \xc2\xb7 %dp", capH);
+    line = txt_line(TXT_CAPTION, buf, 236, 238, 242, 255);
+    has = 1; frames = 0; worstMs = 0; windowStart = t;
+  }
+  { float padX = 14.0f, padY = 8.0f;
+    GfxRect plate = { NV_SCREEN_W - 24.0f - line.w - padX * 2.0f, 24.0f,
+                      line.w + padX * 2.0f, line.h + padY * 2.0f };
+    gfx_color(plate, 0.5f, 0.0f, 0.0f, 0.0f, 0.62f);
+    txt_draw(line, plate.x + padX, plate.y + padY); }
+}
+
 static void captureIfRequested(void) {
   static time_t blocked;
   if (!requestNew(devPath("nuvio-shot-req"), &blocked)) return;
@@ -662,7 +702,9 @@ int main(int argc, char **argv) {
   // is what keeps 60fps steady there.
   SDL_GL_SetSwapInterval(0);
 #else
-  SDL_GL_SetSwapInterval(1);
+  // MEASURING ONLY: NUVIO_VSYNC=0 uncaps the frame rate, so a cost below the
+  // 16.7 ms frame shows up in the FPS line instead of hiding under the cap.
+  SDL_GL_SetSwapInterval(getenv("NUVIO_VSYNC") && !atoi(getenv("NUVIO_VSYNC")) ? 0 : 1);
 #endif
   // The REAL buffer size matters more than the requested one: this TV is 4K, and
   // if the compositor hands over a 3840x2160 surface, every full-screen layer
@@ -898,7 +940,8 @@ int main(int argc, char **argv) {
                          pEv=fEv; pPump=fPump; pUpd=fUpd; pDraw=fDraw; pSwap=fSwap; pAux=fAux; pColor=fColor;
                          pGfxMs=fGfxMs; pTexMs=fTexMs; pNRect=fNRect; pNProgress=fNProgress;
                          pNBind=fNBind; pNSearch=fNSearch; pOutMs=fOutMs; pNOut=fNOut; pFill=fFill; pNFull=fNFull; }
-      if (workMs > 33.0) janks++;
+      // A missed frame is half a frame late: 33 ms at 60, 50 at the 30 cap.
+      if (workMs > (settings_fps_cap30() ? 50.0 : 33.0)) janks++;
     }
     // zeroes the counters of the frame that starts now; what was measured above
     // belongs to the previous frame, which is what has just cost dtms
@@ -939,6 +982,7 @@ int main(int argc, char **argv) {
     txt_new_frame();
     app_draw(now);
     splash_draw(now, app_ready_to_show());
+    fpsOverlay();
     fDraw = NV_DT(t0);
     fGfxMs = gfx_ms_rect; fTexMs = tex_ms_search;
     fNRect = gfx_n_rect; fNProgress = gfx_n_progress; fNBind = gfx_n_bind; fNSearch = tex_n_search;
@@ -952,6 +996,24 @@ int main(int argc, char **argv) {
     rectIfRequested();
     captureIfRequested();
     fAux = NV_DT(t0);
+    // THE 30 FPS CAP (Settings > Display > Frame rate). On the device, a swap
+    // interval of 2: the display's own vsync paces it, every other refresh, so the
+    // frames are evenly spaced — a sleep-based cap on top of interval 1 would land
+    // on 16 and 50 ms by turns. Applied when the setting changes, not every frame.
+    // NUVIO_VSYNC=0 (measuring) wins over both.
+#ifndef __APPLE__
+    { static int interval = 1;
+      int want = settings_fps_cap30() ? 2 : 1;
+      const char *v = getenv("NUVIO_VSYNC");
+      if (v && !atoi(v)) want = 0;
+      if (want != interval) {
+        int rc = SDL_GL_SetSwapInterval(want);
+        printf("[fps] swap interval %d -> %d (%s)\n", interval, want, rc ? SDL_GetError() : "ok");
+        interval = want;
+      } }
+#else
+    frameTicks = (Uint64)(perFreq / (settings_fps_cap30() ? 30.0 : 60.0));
+#endif
     t0 = NV_T0();
     SDL_GL_SwapWindow(win);
     fSwap = NV_DT(t0);
@@ -971,6 +1033,7 @@ int main(int argc, char **argv) {
              " | textures=%d pending=%d %.1fMB | evictions=%d\n",
              frames * 1000.0 / (double)(now - lastReport), worst, janks,
              worstTxtMs, worstTxtN, items, pending, bytes / 1048576.0, txt_evictions);
+      gfx_fill_report();
       fflush(stdout);
       // The SAME line goes to a file. On the device the standard output of an app
       // launched by applicationManager does not reach anywhere readable, and

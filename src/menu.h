@@ -59,6 +59,9 @@ int  menu_is_open(void);
 // 1 while there is still a pixel to draw (the exit included). It lets the loop
 // decide whether calling menu_draw is worth it at all.
 int  menu_visible(void);
+// How dark the screen behind the menu is (0 closed, NV_MENU_VEIL open). The menu
+// does not draw this veil: whoever draws what is behind it dims it by this much.
+float menu_veil(void);
 
 // The destination in force (a MenuDestination). menu_set_destination exists so
 // the app can impose the initial state or react to navigation that did not come

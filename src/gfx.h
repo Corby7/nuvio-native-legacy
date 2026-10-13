@@ -93,19 +93,19 @@ typedef enum {
   // A solid geometric disc. Used as the base of the avatar and the focus so that
   // the outline is always concentric, instead of being painted over the photo.
   GFX_DISK = 21,
-  // GFX_BACKDROP — the frosted glass of the side menu: a strip of the screen
-  // already blurred by gfx_backdrop, put back with the web app's filter chain on
-  // it — `backdrop-filter: blur(52px) saturate(160%) brightness(0.85)` and the
-  // rgba(8,12,24,0.62) plate over the result.
+  // GFX_BACKDROP — the frosted glass of the side menu and the hold menu: a strip
+  // of the screen already blurred by gfx_backdrop, saturated, tinted and given a
+  // 1px rim brighter at the top. uPar.y picks the look: 0 a thick near-black,
+  // 1 a thinner navy (see the shader).
   //
   // The saturation is not decoration. Blurring alone pulls every pixel towards
-  // the average and the strip comes out grey; the web app puts the colour back
-  // with the same 160%, which is what makes the glass pick up the poster art
-  // behind it instead of reading as one more dark band.
+  // the average and the strip comes out grey; putting some colour back is what
+  // makes the glass pick up the poster art behind it instead of reading as one
+  // more dark band.
   //
   // The source texture comes from an FBO, so it is sampled UPSIDE DOWN, and uCell
   // picks the part of the strip the panel actually covers (see gfx_backdrop).
-  // uPar.x carries the height of the white sheen at the top, in 0..1 of the rect.
+  // uFocus carries the rect's height in layout px, for the rim's width.
   GFX_BACKDROP = 22,
   // GFX_PROFILE_BG — the profile picker's page, washed with the colour of the
   // profile the cursor is on. It is a MODE and not two stacked quads because the
@@ -239,6 +239,9 @@ typedef enum {
   //   uPar.x = how far the scrim reaches along the width, in 0..1 of the host
   //   uPar.y = the same along the height
   //   uColor = the ink and, in its alpha, the depth at the corner itself
+  //
+  // UNUSED since 2026-10-13: the time moved into the card's kicker (resume.c).
+  // Kept so the shader table's numbering stays put.
   GFX_CORNER_SCRIM = 29,
   // GFX_HERO_FIT — the hero when the backdrop is NOT stretched over the screen:
   // the whole image, at its own aspect, hung from the TOP-RIGHT corner of a band
@@ -531,6 +534,25 @@ extern float gfx_tex_aspect_current;
 extern GfxRect gfx_tex_cell_current;
 // Group opacity: it must go back to 1 when the group ends.
 extern float gfx_opacity_group;
+// Group brightness: every mode's colour is multiplied by it, which is what
+// compositing black at (1 - dim) over the group would give, without the extra
+// pass over its pixels. Like the opacity, it must go back to 1 when the group ends.
+// A group inside a group multiplies into it and puts the outer value back.
+// Off-screen passes (snapshot, blur, glass) run at 1 whatever it is.
+extern float gfx_dim_group;
+// The dim the screen's content was drawn under this frame (behind the open menu),
+// for the glass to undo when it photographs that content. Both reset each frame.
+extern float gfx_content_dim;
+// Clears the screen to the page colour times gfx_dim_group, for the part of the
+// page nothing draws over. Call it before the first draw of the frame.
+void gfx_clear_dimmed(void);
+// GFX_HERO_FIT's band, through a cache: the art, its ramps (uPar) and the alpha.
+// Same picture as gfx_rect with GFX_HERO_FIT; gfx.c says why it is cheaper.
+void gfx_hero_fit(GfxRect r, GLuint tex, float px, float py, float alpha);
+// gfx_color twice over the same shape — the first colour, then the second over
+// it — in one draw (see gfx.c for the arithmetic).
+void gfx_color_over(GfxRect r, float radius, float r1, float g1, float b1, float a1,
+                    float r2, float g2, float b2, float a2);
 
 // Snapshot: renders a whole screen to a texture, so it can be redrawn as a
 // single quad. It exists because the home stays visible through the detail
@@ -670,8 +692,10 @@ int  gfx_backdrop_start(float w, float h);
 // because a blur this wide cannot be told apart at 20 updates a second and the
 // grab forces a tile flush on this GPU.
 void gfx_backdrop_grab(unsigned now);
-// Draws the last grab over `r`, tinted and filtered like the web app's plate.
-void gfx_backdrop(GfxRect r, float alpha, float sheen);
+// Draws the last grab over `r`, tinted, with the rim down its right edge.
+// `tinted` picks the navy look over the dark one. Returns 0 when there was
+// nothing to draw, so the caller can fall back.
+int  gfx_backdrop(GfxRect r, float alpha, int tinted);
 void gfx_backdrop_shutdown(void);
 // THE SAME GLASS, FLOATING: the hold menu's pane, which opens beside whichever
 // card was held. `w`/`h` is the largest region it will ever be grabbed at; each
@@ -681,7 +705,7 @@ void gfx_backdrop_shutdown(void);
 // gfx_color's, a fraction of the rect's shorter side.
 int  gfx_glass_start(float w, float h);
 void gfx_glass_grab(GfxRect region, unsigned now);
-void gfx_glass(GfxRect r, float radius, float alpha, float sheen);
+int  gfx_glass(GfxRect r, float radius, float alpha, int tinted);
 void gfx_glass_shutdown(void);
 void gfx_snap_begin(void);   // redirects the drawing into the snapshot
 void gfx_snap_finish(void);  // back to the screen
@@ -733,6 +757,9 @@ extern int    gfx_n_others;  // clip/FBO/blur calls
 extern double gfx_ms_others; // ms of CPU at those GL points
 extern double gfx_fill;      // area submitted this frame, in full screens
 extern int    gfx_n_full;   // draws covering >= 50% of the screen
+// NUVIO_FILL=1: prints the device pixels each mode filled per frame since the
+// last call, largest first. main.c calls it with the FPS line.
+void gfx_fill_report(void);
 // Opens the frame: zeroes the telemetry above AND advances the skeletons' shine.
 //
 // `now` is the frame's clock, read once in main.c's loop. The sweep is worked out

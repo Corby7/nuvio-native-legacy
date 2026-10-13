@@ -950,9 +950,10 @@ static void sheetRow(int row, float y, float cx, float cw, Uint32 now) {
 #if NV_SRC_CARDS
   { GfxRect card={cx,y,cw,NV_SRC_CARD_H};
     float rad=NV_SRC_CARD_R/NV_SRC_CARD_H;
-    gfx_color(card,rad,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,NV_SRC_CARD_BASE*anim);
-    gfx_color(card,rad,1,1,1,(i==current?NV_SRC_CARD_PLAYING:
-                              sel?NV_SRC_CARD_FOCUS:NV_SRC_CARD_FILL)*anim);
+    // The ink base and the white lift, composited into one draw (gfx_color_over).
+    gfx_color_over(card,rad,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,NV_SRC_CARD_BASE*anim,
+                   1,1,1,(i==current?NV_SRC_CARD_PLAYING:
+                          sel?NV_SRC_CARD_FOCUS:NV_SRC_CARD_FILL)*anim);
     if(sel) gfx_rect(card,0,GFX_RING_INSET,0,NV_SRC_CARD_RING/NV_SRC_CARD_H,0,
                      rad,1,1,1,0.95f*anim); }
   drawRow(&list[i],cx+NV_SRC_CARD_PADX,cw-2*NV_SRC_CARD_PADX,
@@ -984,8 +985,8 @@ static void placeholder(int nf, float cx, float cw, float fadeTop, Uint32 now) {
   if(a<=0.004f) return;
   p=0.5f+0.5f*sinf((float)now*0.0042f);
   ba=a*(0.06f+0.05f*p);
-  gfx_color(card,rad,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,NV_SRC_CARD_BASE*a);
-  gfx_color(card,rad,1,1,1,NV_SRC_CARD_FILL*NV_SRC_DIM*a);
+  gfx_color_over(card,rad,NV_SRC_INK_R,NV_SRC_INK_G,NV_SRC_INK_B,NV_SRC_CARD_BASE*a,
+                 1,1,1,NV_SRC_CARD_FILL*NV_SRC_DIM*a);
   for(x=left,k=0;k<3;k++) {
     gfx_color((GfxRect){x,top+NV_SRC_CHIP_Y,CHIP_W[k],NV_SRC_CHIP_H},
               NV_SRC_CHIP_R/NV_SRC_CHIP_H,1,1,1,ba);

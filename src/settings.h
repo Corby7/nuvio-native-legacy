@@ -45,6 +45,9 @@ int settings_animations_reduced(void);
 // "Hold menu blur" (Posters): 1 when the hold-OK panel draws the frosted glass,
 // 0 for the solid panel it had before. On by default.
 int settings_hold_menu_blur(void);
+int settings_glass_tinted(void);    // local: glassStyle, 0 Dark / 1 Tinted
+int settings_fps_counter(void);     // local: fpsCounter
+int settings_fps_cap30(void);       // local: frameRateCap, 1 = 30 fps
 // "Focus glow" (Posters): 1 when the focused home card gives off a faint light
 // in its poster's colour. Off by default.
 int settings_focus_glow(void);
