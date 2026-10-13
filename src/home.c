@@ -271,7 +271,9 @@ static int requestPlay = -1;   // "Play on select": see home_requested_play
 //
 // No footer when the rows fill FOCUS_MAX_ROWS: there is no focus row left for it.
 #define FOOT_N       2
-#define FOOT_TOP    24.0f   // the last row's cards -> the circles
+// The last row's cards -> the circles: the rows' own gap plus a title's gap, so
+// the footer stands off the last row as the next row's heading would.
+#define FOOT_TOP    (NV_ROW_GAP + NV_ROW_TITLE_GAP)
 // The title page's circles, measure for measure (detail.h): a 96 circle, a 44
 // glyph, 24 between buttons, and the tooltip box 16 off the circle, 7 + 24 + 7.
 #define FOOT_D      96.0f
@@ -4116,6 +4118,11 @@ void home_draw(Uint32 now) {
     // way back either.
     float yRest = y - slideDown + bumpV.x;
     float fade=anim_clamp((yRest-(NV_SHELF_TOP-80))/80,0,1);
+    // ON THE FOOTER the last row is lifted (footNudge) to make room for the
+    // circles, and that lift takes its heading into the mask. It is still the row
+    // the footer belongs to, and the hero copy it would collide with is faded out
+    // (footHideCopy), so it stays opaque, on the same clock as that fade.
+    if (r == nRows - 1) fade += (1.0f - fade) * anim_smooth(footHideCopy);
     // THEY GO DOWN AND THEY FADE, together and on the same clock. The movement is
     // what removes them — they clear the clip either way — and the fade is what
     // stops the lower rows reading as a solid block sliding over the title screen's

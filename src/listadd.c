@@ -31,7 +31,10 @@
 #define SEARCH_W  620.0f
 #define ROWS_TOP  256.0f
 #define ROWS_FADE  28.0f   // ends below the status line, so no poster runs into it
-#define CHIP_H     44.0f
+// A row's heading band: the list's name and its button, which is the controls'
+// pill above (CTRL_H tall, same type and padding), then HEAD_GAP down to the cards.
+#define HEAD_H     CTRL_H
+#define HEAD_GAP   28.0f
 #define FADE_MS   180.0f
 
 // --- previews ----------------------------------------------------------------------
@@ -142,7 +145,7 @@ static int landscape(void) { return settings_posters_landscape(); }
 static float cardW(void) { return landscape() ? NV_CARD_LAND_W : NV_CARD_W; }
 static float cardH(void) { return landscape() ? NV_CARD_LAND_H : NV_CARD_H; }
 static float rowStep(void) {
-  return NV_LEGACY_ROW_HEAD_H + cardH() + (landscape() ? NV_ROW_GAP_LAND : NV_ROW_GAP);
+  return HEAD_H + HEAD_GAP + cardH() + (landscape() ? NV_ROW_GAP_LAND : NV_ROW_GAP);
 }
 
 // The results on screen belong to the tab only when they came from its source.
@@ -471,29 +474,26 @@ static void drawRowHead(int i, const TlList *l, float y) {
   float cw, ink;
   GfxRect cr;
   // THE BUTTON IS THE FOCUS. Walking onto a row lands on this pill — OK acts on
-  // it, whichever poster the arrows have scrolled to — so it takes the focus the
-  // way every button in the app does (the tabs above, the title page's): a 4px
-  // white ring and the fill turning light. At rest a list already on the Home
-  // keeps a lighter fill and the tick, so the state reads without the focus.
+  // it, whichever poster the arrows have scrolled to — so it is drawn as the
+  // tabs and the search field above are (pill(): the 4px white ring and the fill
+  // turning light), at their height and in their type. A list already on the Home
+  // keeps the selected tab's lighter fill and a tick; under the focus it offers
+  // what OK will do, a minus and "Remove from Home".
   if (on) snprintf(chip, sizeof chip, f > 0.5f ? "Remove from Home" : "On your Home");
   else    snprintf(chip, sizeof chip, "Add to Home");
-  { float fill = on ? 0.32f : 0.133f;
-    int k;
-    fill += (0.961f - fill) * f;
-    ink = 1.0f + (0.067f - 1.0f) * f;
+  { int k;
+    tc = txt_line(TXT_CALLOUT, chip, 0, 0, 0, 255);
+    cw = roundf(CTRL_PADX * 2 + CTRL_ICON + CTRL_GAPI + tc.w);
+    cr = (GfxRect){ right - cw, y, cw, HEAD_H };
+    pill(cr, f, on, &ink);
     k = (int)(ink * 255.0f + 0.5f);
-    tc = txt_line(TXT_HERO_META, chip, k, k, k, 255);
-    cw = roundf(18 * 2 + 22 + 10 + tc.w);
-    cr = (GfxRect){ right - cw, y + (35.0f - CHIP_H) * 0.5f, cw, CHIP_H };
-    if (f > 0.01f)
-      gfx_color((GfxRect){ cr.x - 4, cr.y - 4, cr.w + 8, cr.h + 8 }, NV_RADIUS_PILL, 1, 1, 1, f);
-    gfx_color(cr, NV_RADIUS_PILL, fill, fill, fill, 1.0f); }
-  gfx_icon((GfxRect){ cr.x + 18, cr.y + (CHIP_H - 22) * 0.5f, 22, 22 },
-           on ? "lists_added" : "lists_add", ink, ink, ink, 1.0f);
-  txt_draw(tc, cr.x + 18 + 22 + 10, cr.y + (CHIP_H - tc.h) * 0.5f);
+    tc = txt_line(TXT_CALLOUT, chip, k, k, k, 255); }
+  gfx_icon((GfxRect){ cr.x + CTRL_PADX, cr.y + (HEAD_H - CTRL_ICON) * 0.5f, CTRL_ICON, CTRL_ICON },
+           on ? (f > 0.5f ? "lists_remove" : "lists_added") : "lists_add", ink, ink, ink, 1.0f);
+  txt_draw(tc, cr.x + CTRL_PADX + CTRL_ICON + CTRL_GAPI, cr.y + (HEAD_H - tc.h) * 0.5f);
 
   tl = txt_line_trim(TXT_ROW_TITLE, l->name, 245, 246, 249, 255, (right - cw - 40 - x) * 0.6f);
-  txt_draw(tl, x, y);
+  txt_draw(tl, x, y + (HEAD_H - tl.h) * 0.5f);
   { size_t w = 0;
     meta[0] = 0;
     if (l->user[0]) w += (size_t)snprintf(meta + w, sizeof meta - w, "by %s  \xc2\xb7  ", l->user);
@@ -501,7 +501,7 @@ static void drawRowHead(int i, const TlList *l, float y) {
     if (l->likes > 0 && w < sizeof meta)
       snprintf(meta + w, sizeof meta - w, "  \xc2\xb7  %d likes", l->likes); }
   tm = txt_line_trim(TXT_HERO_META, meta, 160, 165, 176, 255, right - cw - 40 - x - tl.w - 22);
-  txt_draw(tm, x + tl.w + 22, y + (tl.h - tm.h) * 0.5f);
+  txt_draw(tm, x + tl.w + 22, y + (HEAD_H - tm.h) * 0.5f);
 }
 
 static void drawRows(void) {
@@ -512,7 +512,7 @@ static void drawRows(void) {
   pointer_clip(0, clipTop, NV_SCREEN_W, NV_SCREEN_H - clipTop);
   for (i = 0; i < n; i++) {
     const TlList *l = tl_browse_item(i);
-    float y = y0 + i * step, cardY = y + NV_LEGACY_ROW_HEAD_H, fade, base = gfx_opacity_group;
+    float y = y0 + i * step, cardY = y + HEAD_H + HEAD_GAP, fade, base = gfx_opacity_group;
     Pv *pv;
     int st;
     if (!l || y > NV_SCREEN_H || y + step < clipTop) continue;
