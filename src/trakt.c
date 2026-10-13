@@ -706,6 +706,9 @@ int trakt_resume(CatItem *output, int max) {
 }
 
 // The fields every Trakt card shares, from the IMDb id alone.
+static void listArt(CatItem *d, const char *imdb, int series);
+void trakt_list_art(CatItem *d, const char *imdb, int series) { listArt(d, imdb, series); }
+
 static void listArt(CatItem *d, const char *imdb, int series) {
   snprintf(d->imdb, sizeof d->imdb, "%s", imdb);
   snprintf(d->kind, sizeof d->kind, "%s", series ? "series" : "movie");

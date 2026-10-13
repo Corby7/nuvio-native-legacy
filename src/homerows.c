@@ -55,7 +55,7 @@ static const struct { const char *key, *title; } TRAKT_ROWS[] = {
 // order that was saved. Read by the discovery thread too, hence the lock; the
 // file is tiny and read again only when the profile or the added lists change.
 static pthread_mutex_t lockTrakt = PTHREAD_MUTEX_INITIALIZER;
-typedef struct { char key[48], title[96], user[64]; int pos, on, list; } LocalRow;
+typedef struct { char key[48], title[96], user[64]; int pos, on, list, src; } LocalRow;
 static LocalRow local[N_LOCAL];
 static int nLocal;
 static int traktProfile = -1;
@@ -88,11 +88,12 @@ static void traktLoadLocked(void) {
     if (!tl_get(i, &l)) break;
     r = &local[nLocal++];
     memset(r, 0, sizeof *r);
-    tl_key(l.id, r->key, sizeof r->key);
+    tl_key(l.src, l.id, r->key, sizeof r->key);
     snprintf(r->title, sizeof r->title, "%s", l.name);
     snprintf(r->user, sizeof r->user, "%s", l.user);
     r->on = 1;
     r->list = 1;
+    r->src = l.src;
   }
   traktName(name, sizeof name);
   body = data_read(name);
@@ -122,12 +123,15 @@ int homerows_trakt_watchlist(void) { return localOn(TRAKT_ROWS[0].key); }
 int homerows_trakt_recs(void)      { return localOn(TRAKT_ROWS[1].key); }
 int homerows_list_on(const char *key) { return localOn(key); }
 
-int homerows_lists_shown(long *ids, int max) {
+int homerows_lists_shown(int *srcs, long *ids, int max) {
   int n = 0, i;
   pthread_mutex_lock(&lockTrakt);
   traktLoadLocked();
   for (i = 0; i < nLocal && n < max; i++)
-    if (local[i].list && local[i].on) ids[n++] = tl_id_of_key(local[i].key);
+    if (local[i].list && local[i].on) {
+      ids[n] = tl_id_of_key(local[i].key, &srcs[n]);
+      n++;
+    }
   pthread_mutex_unlock(&lockTrakt);
   return n;
 }
@@ -316,8 +320,10 @@ void homerows_open(void) {
       memset(&r, 0, sizeof r);
       snprintf(r.key, sizeof r.key, "%s", l->key);
       snprintf(r.title, sizeof r.title, "%s", l->title);
-      if (l->list && l->user[0]) snprintf(r.source, sizeof r.source, "Trakt list by %s", l->user);
-      else snprintf(r.source, sizeof r.source, l->list ? "Trakt list" : "Trakt");
+      if (l->list && l->user[0])
+        snprintf(r.source, sizeof r.source, "%s list by %s", tl_source_name(l->src), l->user);
+      else if (l->list) snprintf(r.source, sizeof r.source, "%s list", tl_source_name(l->src));
+      else snprintf(r.source, sizeof r.source, "Trakt");
       r.kind = l->list ? HR_LIST : HR_TRAKT;
       r.enabled = l->on;
       r.present = 1;
@@ -342,7 +348,8 @@ const char *homerows_kind(int i) {
   HomeRow *r = at(i);
   if (!r) return "";
   return r->kind == HR_COLLECTION ? "Collection" : r->kind == HR_TRAKT ? "Trakt"
-       : r->kind == HR_LIST ? "Trakt list" : "Catalogue";
+       : r->kind == HR_LIST ? (!strncmp(r->key, "mdblist_", 8) ? "MDBList list" : "Trakt list")
+       : "Catalogue";
 }
 int homerows_enabled(int i) { HomeRow *r = at(i); return r ? r->enabled : 0; }
 

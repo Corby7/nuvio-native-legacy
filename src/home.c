@@ -257,6 +257,50 @@ static float goalX[MAX_FILTER];
 static float velY = 0.0f;
 static int wantsExit = 0, requestOpen = 0, requestMenu = 0;
 static int requestPlay = -1;   // "Play on select": see home_requested_play
+
+// THE FOOTER: two round buttons centred under the last row, "Edit home" and "Add
+// lists", each naming itself in a tooltip under it while focused. It is not a
+// Row — it has no catalogue window, no art and no hero — only one more row of
+// FOCUS, at index nRows, so walking down past the last shelf lands on it. Every
+// rows[] read that follows focus.row is already guarded by `< nRows`, which is
+// what lets the extra focus row exist without a Row behind it.
+//
+// It does NOT take the shelf's resting line the way a row does: the last row stays
+// where it was and the footer is read under it. The scroll moves only as far as
+// the circles and the tooltip need to clear the bottom edge (footNudge).
+//
+// No footer when the rows fill FOCUS_MAX_ROWS: there is no focus row left for it.
+#define FOOT_N       2
+#define FOOT_TOP    24.0f   // the last row's cards -> the circles
+// The title page's circles, measure for measure (detail.h): a 96 circle, a 44
+// glyph, 24 between buttons, and the tooltip box 16 off the circle, 7 + 24 + 7.
+#define FOOT_D      96.0f
+#define FOOT_ICON   44.0f
+#define FOOT_GAP    24.0f
+#define FOOT_TIP_GAP 16.0f
+#define FOOT_TIP_PADY 7.0f
+#define FOOT_TIP_LH 24.0f
+#define FOOT_TIP_H  (FOOT_TIP_PADY * 2 + FOOT_TIP_LH)
+#define FOOT_BOTTOM 18.0f   // the tooltip's clearance from the screen's bottom edge
+static float footAnim[FOOT_N];
+// The hero's copy steps aside while the footer has the focus: the nudge lifts the
+// last row's heading into the band the description stands in, and on the footer
+// the copy describes a card the focus has already left.
+static float footHideCopy;
+static int requestEditRows, requestAddLists;
+static int footRow(void) { return nRows > 0 && nRows < FOCUS_MAX_ROWS ? nRows : -1; }
+static int onFoot(void)  { return footRow() >= 0 && focus.row == footRow(); }
+// How far past the last row's own resting place the scroll goes with the footer
+// focused: just enough for the circles and the tooltip to clear the bottom edge,
+// and nothing when they already do. Defined after heightTotalOf, below.
+static float footNudge(void);
+// focus_start with the footer's row after the shelves.
+static void focusRows(void) {
+  int cols[FOCUS_MAX_ROWS], i, n = nRows < FOCUS_MAX_ROWS ? nRows : FOCUS_MAX_ROWS;
+  for (i = 0; i < n; i++) cols[i] = rows[i].n;
+  if (footRow() >= 0) cols[n++] = FOOT_N;
+  focus_start(&focus, n, cols);
+}
 static Uint32 okSince = 0;
 static int okPressing = 0;
 static int okLongFired = 0;
@@ -816,6 +860,14 @@ static float gapOf(KindRow t) {
 // The vertical step between rows. `.home-modern-landscape-posters` tightens
 // `--home-row-gap` from 32 to 24 (components.css:6473) — the landscape row is shorter
 // and the upright poster's breathing room would be too much for it.
+static float footNudge(void) {
+  float bottom;
+  if (nRows < 1) return 0.0f;
+  bottom = NV_SHELF_TOP + NV_SHELF_PAD_TOP + NV_LEGACY_ROW_HEAD_H
+         + heightTotalOf(rows[nRows - 1].kind)
+         + FOOT_TOP + FOOT_D + FOOT_TIP_GAP + FOOT_TIP_H;
+  return bottom > NV_SCREEN_H - FOOT_BOTTOM ? bottom - (NV_SCREEN_H - FOOT_BOTTOM) : 0.0f;
+}
 static float rowGap(void) {
   return settings_posters_landscape() ? NV_ROW_GAP_LAND : NV_ROW_GAP;
 }
@@ -999,10 +1051,7 @@ int home_start(const char *dirArt) {
 
   // In the modern legacy layout the hero is informational; the navigation starts on
   // the first content row (as in buildModernNavigationRows()).
-  int cols[MAX_FILTER];
-  for (int i = 0; i < nRows; i++)
-    cols[i] = rows[i].n;
-  focus_start(&focus, nRows, cols);
+  focusRows();
   heroSwapIn = SDL_GetTicks() + NV_HERO_INTERVAL_MS;
   printf("home: %d backdrops, %d posters, %d rows\n", nBd, nPst, nRows);
   return 1;
@@ -1099,6 +1148,10 @@ void home_event(const SDL_Event *e) {
       okPressing = 0;
       okLongFired = 0;
       okHold = 0.0f;
+      if (onFoot()) {
+        if (focus.column == 0) requestEditRows = 1; else requestAddLists = 1;
+        return;
+      }
       if (focus.row < 0 || focus.row >= nRows) return;
       if(rows[focus.row].kind==ROW_TOP10 && rows[focus.row].stackN) {
         Row *s=&rows[focus.row];
@@ -1288,6 +1341,9 @@ static void syncRows(void) {
   keyFocus[0] = 0;
   if (!toTop && focus.row >= 0 && focus.row < nRows)
     snprintf(keyFocus, sizeof keyFocus, "%s", rows[focus.row].key);
+  // On the footer the focus stays on the footer: a list just added from it
+  // republishes the home, and the owner should still be standing on its button.
+  int wasFoot = !toTop && onFoot();
   // `nCat < 1` alone hid the COLLECTIONS: with no catalogue rows the function
   // returned right here, so a home that had only collections came out empty.
   if ((nCat < 1 && !col_n()) || (nCat == filtersApplied && sub == prefsApplied
@@ -1331,8 +1387,8 @@ static void syncRows(void) {
     // The opt-in Trakt rows likewise: the cached catalogue may still carry them.
     if (!strcmp(cf->key, "trakt_watchlist") && !homerows_trakt_watchlist()) continue;
     if (!strcmp(cf->key, "trakt_recommendations") && !homerows_trakt_recs()) continue;
-    // And a Trakt list that was removed or hidden since the cache was written.
-    if (!strncmp(cf->key, "traktlist_", 10) && !homerows_list_on(cf->key)) continue;
+    // And a list that was removed or hidden since the cache was written.
+    if (tl_id_of_key(cf->key, NULL) && !homerows_list_on(cf->key)) continue;
     snprintf(rows[destination].title, sizeof rows[destination].title, "%s", cf->title);
     // "Continue watching" is the only landscape one: it is the profile's
     // `continueWatchingCardStyle: "card"`. Everything else is a 2:3 poster.
@@ -1593,7 +1649,7 @@ static void syncRows(void) {
   }
   if (nRows < 1) return;
   {
-    int cols[MAX_FILTER], k;
+    int k;
     // PRESERVE THE FOCUS. focus_start does a memset and zeroes the row and column,
     // and discovery now publishes the catalogue ON EVERY ROW that arrives from the
     // network — that is ~16 publications in the first few seconds. With the reset,
@@ -1604,10 +1660,11 @@ static void syncRows(void) {
     // in the middle (the order comes from art/rows.txt), and the old index would then
     // point at something else.
     int found = -1;
-    for (k = 0; k < nRows; k++)
-      cols[k] = rows[k].n;
-    focus_start(&focus, nRows, cols);
-    if (keyFocus[0])
+    focusRows();
+    if (wasFoot && footRow() >= 0) {
+      focus.row = footRow();
+      focus.column = colFocus < FOOT_N ? colFocus : FOOT_N - 1;
+    } else if (keyFocus[0])
       for (k = 0; k < nRows; k++)
         if (!strcmp(rows[k].key, keyFocus)) { found = k; break; }
     if (found >= 0) {
@@ -2055,6 +2112,14 @@ void home_update(float dt, Uint32 now) {
   // The focus itself stays put — OK and the arrows carry on from that card.
   int onPaddle = pointer_over(pageLeft, focus.row, 0) ||
                  pointer_over(pageRight, focus.row, 0);
+  footHideCopy = motionReduced ? (onFoot() ? 1.0f : 0.0f)
+               : anim_ramp(footHideCopy, onFoot() ? 1.0f : 0.0f, dt, NV_HERO_FADE_MS);
+  for (int c = 0; c < FOOT_N; c++) {
+    float target = onFoot() && focus.column == c ? 1.0f : 0.0f;
+    footAnim[c] = motionReduced ? target
+                : anim_spring(footAnim[c], target, dt,
+                              target > footAnim[c] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
   for (int r = 0; r < nRows; r++) {
     int nAnim = rows[r].n > MAX_CARDS ? MAX_CARDS : rows[r].n;
     for (int c = 0; c < nAnim; c++) {
@@ -2115,10 +2180,10 @@ void home_update(float dt, Uint32 now) {
   // measured at 564.4 in the web whatever the scroll position). It still has a spring:
   // a hard jump between rows of different heights reads as a cut, not as navigation.
   float targetY = 0.0f;
-  { int r = focus.row;
+  { int r = onFoot() ? nRows - 1 : focus.row;
     for (int i = 0; i < r && i < nRows; i++)
       targetY += NV_LEGACY_ROW_HEAD_H + heightTotalOf(rows[i].kind) + rowGap();
-  }
+    if (onFoot()) targetY += footNudge(); }
   scrollY = anim_spring2_reduced(&velY, scrollY, targetY, dt,
                                 NV_SPRING2_SCROLL, motionReduced);
   anim_bump_step(&bumpH, dt, NV_EDGE_BUMP_W);
@@ -3418,7 +3483,8 @@ static void drawHero(Uint32 now, float output) {
   //
   // Drawn even at alpha 0: this is the call that ASKS text.c for the lines, and
   // without it the block could never become ready.
-  (void)drawHeroCopy(ci, anim_smooth(heroCopy) * aText * famIn, slideDownCopy, full, 0);
+  (void)drawHeroCopy(ci, anim_smooth(heroCopy) * aText * famIn * (1.0f - anim_smooth(footHideCopy)),
+                     slideDownCopy, full, 0);
 
   // THE NEXT TITLE'S COPY IS LAID OUT NOW, while this one is still up.
   //
@@ -3950,6 +4016,45 @@ static void drawShortcuts(int r, float y) {
     // it is `.focusable:not(.focused)` like any other.
     if (f < 0.999f) {
       gfx_color(card, radius, 0, 0, 0, (1.0f - NV_DIM_UNFOCUSED) * (1.0f - f));
+    }
+  }
+}
+
+// The footer under the last row: two circles centred on the screen. The title
+// page's round buttons are the model (detail.c, drawButton): #222 at rest with a
+// Bold glyph; focus is a 4px white ring, the fill turning light and the pencil
+// turning to its Fill twin, not a scale. The tooltip is theirs too — bold white
+// with a drop shadow, no pill, rising 4px as it fades in — but UNDER the circle,
+// since above it are the last row's posters.
+static void drawFooter(float y) {
+  static const char *const LABEL[FOOT_N] = { "Edit home", "Add lists" };
+  static const char *const ICON[FOOT_N]  = { "home_edit", "home_lists" };
+  // A list-plus has no solid form worth filling into — the same call the title
+  // page makes for its "+" (detail_library_add has no focused twin).
+  static const char *const FILLED[FOOT_N] = { "home_edit_filled", "home_lists" };
+  float x = roundf((NV_SCREEN_W - FOOT_N * FOOT_D - (FOOT_N - 1) * FOOT_GAP) * 0.5f);
+  int c;
+  for (c = 0; c < FOOT_N; c++, x += FOOT_D + FOOT_GAP) {
+    float f = footAnim[c];
+    float fill = 0.133f + (0.961f - 0.133f) * f, ink = 1.0f + (0.067f - 1.0f) * f;
+    GfxRect r = { x, roundf(y), FOOT_D, FOOT_D };
+    if (f > 0.01f)
+      gfx_color((GfxRect){ r.x - 4, r.y - 4, r.w + 8, r.h + 8 }, NV_RADIUS_PILL, 1, 1, 1, f);
+    gfx_color(r, NV_RADIUS_PILL, fill, fill, fill, 1.0f);
+    gfx_icon((GfxRect){ r.x + (FOOT_D - FOOT_ICON) * 0.5f, r.y + (FOOT_D - FOOT_ICON) * 0.5f,
+                        FOOT_ICON, FOOT_ICON }, f > 0.5f ? FILLED[c] : ICON[c],
+             ink, ink, ink, 1.0f);
+    pointer_zone(r.x, r.y, r.w, r.h, pointAt, footRow(), c);
+    if (f > 0.01f) {
+      TxtLine l = txt_line(TXT_DETWEB_TIP, LABEL[c], 255, 255, 255, 255);
+      TxtLine sh = txt_line(TXT_DETWEB_TIP, LABEL[c], 0, 0, 0, 255);
+      float tx = r.x + (r.w - l.w) * 0.5f;
+      float ty = r.y + r.h + FOOT_TIP_GAP + FOOT_TIP_PADY + (FOOT_TIP_LH - l.h) * 0.5f
+               + (1.0f - f) * 4.0f;
+      txt_draw_alpha(sh, tx, ty + 2.0f, f * 0.80f);
+      txt_draw_alpha(sh, tx - 1.0f, ty + 3.0f, f * 0.40f);
+      txt_draw_alpha(sh, tx + 1.0f, ty + 3.0f, f * 0.40f);
+      txt_draw_alpha(l, tx, ty, f * 0.92f);
     }
   }
 }
@@ -4639,6 +4744,14 @@ void home_draw(Uint32 now) {
     }
     y += NV_LEGACY_ROW_HEAD_H + heightTotalOf(kind) + rowGap();
   }
+  // `y` is past the last row's gap; the footer hangs FOOT_TOP under its cards.
+  y += FOOT_TOP - rowGap();
+  if (footRow() >= 0 && y < NV_SCREEN_H + 40) {
+    float yRest = y - slideDown + bumpV.x;
+    float fade = anim_clamp((yRest - (NV_SHELF_TOP - 80)) / 80, 0, 1);
+    gfx_opacity_group = fade * fade * (3 - 2 * fade) * (1.0f - shelfOut);
+    drawFooter(y);
+  }
   gfx_opacity_group=1;
   gfx_dim_group = dimScreen;
   gfx_no_crop();
@@ -4691,6 +4804,8 @@ const char *home_art(int i) { return (nBd && i >= 0 && i < nBd) ? bd[i] : NULL; 
 // only, even if the frame takes a while.
 int home_requested_open(void) { int v = requestOpen; requestOpen = 0; return v; }
 int home_requested_play(void) { int v = requestPlay; requestPlay = -1; return v; }
+int home_requested_edit_rows(void) { int v = requestEditRows; requestEditRows = 0; return v; }
+int home_requested_add_lists(void) { int v = requestAddLists; requestAddLists = 0; return v; }
 
 // Consumes the request to open the side menu: whoever reads it, clears it.
 int home_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }

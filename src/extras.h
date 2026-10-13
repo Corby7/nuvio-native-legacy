@@ -40,6 +40,9 @@ void extras_load(const char *dirArt);
 // comes from art/mdblist.txt (which is even mode 0600), the package distributes
 // the key of whoever built it.
 void extras_set_key(const char *key);
+// The mdbList key in use, "" without one. The list finder's MDBList source
+// (traktlists.h) asks with it too.
+const char *extras_mdb_key(void);
 
 // Tell this module that a key it fetches with has changed. extras.c refuses to
 // fetch the same title twice, and the TMDB half of a fetch is silently skipped when

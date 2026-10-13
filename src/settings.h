@@ -18,6 +18,10 @@ int  settings_start(void);
 // requests the last visit left pending are cleared. app.c decides which of the
 // two a visit is (swapScreen).
 void settings_resume(void);
+// Opens straight onto the Home rows list, for the Home's "Edit home" button; Back
+// from that list then leaves Settings for the Home. Call after the screen is
+// started or resumed.
+void settings_open_home_rows(void);
 
 // Folder the settings are read from and written to. Call once, at startup.
 void settings_dir(const char *dir);

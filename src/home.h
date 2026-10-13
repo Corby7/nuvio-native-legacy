@@ -76,6 +76,10 @@ int  home_requested_open(void);   // OK pressed: consumes the request
 // OK on a Continue watching card with "Play on select" on: the catalogue index
 // to play, or -1. Consumed once, like the open.
 int  home_requested_play(void);
+// OK on the footer's buttons under the last row. Consumed once each: app.c opens
+// Settings on the Home rows list, or the list finder (listadd.h).
+int  home_requested_edit_rows(void);
+int  home_requested_add_lists(void);
 int  home_requested_menu(void);    // LEFT in the first column: calls up the menu
 
 #endif

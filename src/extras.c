@@ -45,6 +45,8 @@ int extras_source_percentual(int source) {
   return source != EX_IMDB && source != EX_LETTERBOXD;
 }
 
+const char *extras_mdb_key(void) { return mdbKey; }
+
 void extras_set_key(const char *key) {
   if (!key || !*key) return;
   snprintf(mdbKey, sizeof mdbKey, "%s", key);

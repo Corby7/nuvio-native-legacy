@@ -16,6 +16,10 @@ const char *disc_prefs_title(const char *key) { (void)key; return NULL; }
 // The opt-in Trakt rows (homerows.c) are off, as on a first run.
 int         homerows_trakt_watchlist(void) { return 0; }
 int         homerows_trakt_recs(void) { return 0; }
+// No lists added (traktlists.h), as on a first run.
+int         homerows_list_on(const char *key) { (void)key; return 0; }
+unsigned    tl_generation(void) { return 0; }
+long        tl_id_of_key(const char *key, int *src) { (void)key; (void)src; return 0; }
 // The row styles' file (data.c) is one string in memory, for one profile.
 static char styleFile[4096];
 int   profiles_active(void) { return 1; }
@@ -55,7 +59,16 @@ int main(void) {
   cat_set_all(itemsTeste, 48, filters, 16);
   syncRows();
   assert(nRows == 16);
-  assert(focus.nRows == 16);
+  // One focus row more than shelves: the footer (Edit home / Add lists) under the
+  // last row, with its two buttons, and it survives a republication.
+  assert(focus.nRows == 17);
+  assert(footRow() == 16 && focus.nColumns[16] == FOOT_N);
+  focus.row = 15;
+  assert(focus_move(&focus, 0, 1) && onFoot());
+  focus_move(&focus, 1, 0);
+  filtersApplied = -1; syncRows();
+  assert(onFoot() && focus.column == 1);
+  focus.row = 0; focus.column = 0;
   assert(rows[1].kind == ROW_HIGHLIGHT);
   // THE OWNER'S ROW STYLE beats the guess, survives a reload and goes back to it
   // on "Automatic". Continue watching cannot take one.
@@ -87,6 +100,7 @@ int main(void) {
   focus.row = 0; focus.column = 0;
   for (int i = 0; i < 15; i++) assert(focus_move(&focus, 0, 1));
   assert(focus.row == 15);
+  assert(focus_move(&focus, 0, 1) && onFoot());   // the last shelf, then the footer
   assert(!focus_move(&focus, 0, 1));
   // Same count, different order: keep key, column and scroll.
   focus.row = 5; focus.column = 2; scrollX[5] = 123;

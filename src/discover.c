@@ -1777,11 +1777,11 @@ typedef struct {
   // The opt-in home rows, as windows into `items`: the watchlist is the head of
   // it (fetched first), the recommendations its tail. 0 when the row is off.
   int nWatch, recStart, nRecs;
-  // The Trakt lists the owner added (traktlists.h), in `listItems`: one window
-  // per shown list, in the order homerows_lists_shown gave them.
+  // The lists the owner added (traktlists.h), in `listItems`: one window per
+  // shown list, in the order homerows_lists_shown gave them.
   CatItem *listItems;
   int nList, nListItems;
-  struct { long id; int start, n; } list[TL_MAX];
+  struct { int src; long id; int start, n; } list[TL_MAX];
 } TraktLast;
 
 static int buildResume(CatItem *output, int max);
@@ -1798,20 +1798,22 @@ static int byAddedDesc(const void *a, const void *b) {
   return x < y ? 1 : x > y ? -1 : 0;
 }
 
-// The added Trakt lists. Public lists need no Trakt account, so these run with
-// or without one — which is why they are not behind traktLast's acclib branch.
+// The added lists. Public lists need no Trakt account, so these run with or
+// without one — which is why they are not behind traktLast's acclib branch.
 static void traktLists(TraktLast *t) {
   long ids[TL_MAX];
-  int n = homerows_lists_shown(ids, TL_MAX), i;
+  int srcs[TL_MAX];
+  int n = homerows_lists_shown(srcs, ids, TL_MAX), i;
   if (n <= 0) return;
   t->listItems = malloc(sizeof(CatItem) * (size_t)n * TL_ITEMS);
   if (!t->listItems) return;
   for (i = 0; i < n; i++) {
-    int got = trakt_public_list(ids[i], t->listItems + t->nListItems, TL_ITEMS);
+    int got = tl_items(srcs[i], ids[i], t->listItems + t->nListItems, TL_ITEMS);
     if (got <= 0) continue;
     // Same words-only pass as the watchlist: the cards keep metahub's art and
     // gain the synopsis, the score and the runtime the hero shows.
     trakt_describe_batch(t->listItems + t->nListItems, got);
+    t->list[t->nList].src = srcs[i];
     t->list[t->nList].id = ids[i];
     t->list[t->nList].start = t->nListItems;
     t->list[t->nList].n = got;
@@ -1890,9 +1892,10 @@ static void *build(void *u) {
   // has been read, and a catalogue loop that had filled the array would leave
   // them nowhere to go.
   long listIds[TL_MAX];
+  int listSrcs[TL_MAX];
   int traktSlots = (homerows_trakt_watchlist() ? 1 : 0)
                  + (homerows_trakt_recs() ? 1 : 0)
-                 + homerows_lists_shown(listIds, TL_MAX);
+                 + homerows_lists_shown(listSrcs, listIds, TL_MAX);
   (void)u;
   if (!lote) { searching = 0; return NULL; }
 
@@ -2182,9 +2185,9 @@ static void *build(void *u) {
                        "Recommended for You", base + last.recStart, last.nRecs);
       for (t = 0; t < last.nList; t++) {
         char key[48], title[96];
-        tl_key(last.list[t].id, key, sizeof key);
+        tl_key(last.list[t].src, last.list[t].id, key, sizeof key);
         homerows_list_title(key, title, sizeof title);
-        traktRowFilter(&rowsTrakt[nt++], key, title[0] ? title : "Trakt list",
+        traktRowFilter(&rowsTrakt[nt++], key, title[0] ? title : "List",
                        last.list[t].start, last.list[t].n);
       }
       for (t = 0; t < nt && nRowsBuilt < CAT_FILTER_MAX; t++) {

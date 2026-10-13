@@ -25,7 +25,7 @@ void homerows_open(void);
 
 int homerows_n(void);                       // rows shown in the list
 const char *homerows_title(int i);
-const char *homerows_kind(int i);           // "Catalogue", "Collection", "Trakt"
+const char *homerows_kind(int i);           // "Catalogue", "Collection", "Trakt", "Trakt list", "MDBList list"
 const char *homerows_source(int i);         // the addon's name, or ""
 int  homerows_enabled(int i);
 // 1 when the row is shown but falls past the Home's row cap, so it will not
@@ -44,11 +44,11 @@ void homerows_commit(void);
 int  homerows_trakt_watchlist(void);
 int  homerows_trakt_recs(void);
 
-// The Trakt lists the owner added (traktlists.h) are device-local rows too, keyed
-// "traktlist_<id>", stored next to the Trakt rows. Any thread.
+// The lists the owner added (traktlists.h) are device-local rows too, keyed
+// "traktlist_<id>" / "mdblist_<id>", stored next to the Trakt rows. Any thread.
 int  homerows_list_on(const char *key);
-// The ids of the added lists that are shown, up to `max`; returns how many.
-int  homerows_lists_shown(long *ids, int max);
+// The added lists that are shown, as source and id, up to `max`; returns how many.
+int  homerows_lists_shown(int *srcs, long *ids, int max);
 // The list's name for its row key, into dst ("" for an unknown key).
 const char *homerows_list_title(const char *key, char *dst, size_t n);
 // Puts a just-added list at the top and shown, whatever an earlier stay left.

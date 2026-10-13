@@ -102,6 +102,10 @@ int  trakt_recommendations(CatItem *output, int max);
 // application's client id alone, so this works for a profile that never linked
 // Trakt. BLOCKS — call from the discovery thread.
 int  trakt_public_list(long id, CatItem *output, int max);
+// A list card's art and kind from the IMDb id alone (metahub's deterministic
+// URLs), the way every Trakt list card gets it. For lists from elsewhere —
+// MDBList's carry an IMDb id and nothing to draw.
+void trakt_list_art(CatItem *d, const char *imdb, int series);
 
 // The headers for a request that needs only the APPLICATION (public lists,
 // list search): the version and the client id, plus the person's token when one

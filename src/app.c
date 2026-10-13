@@ -22,6 +22,7 @@
 #include "simklauth.h"
 #include "text.h"
 #include "seeall.h"
+#include "listadd.h"
 #include "ctxmenu.h"
 #include "mark.h"
 #include <string.h>
@@ -33,6 +34,7 @@
 #include "library.h"
 #include "iptvui.h"
 #include "settings.h"
+#include "iptv.h"
 #include "player.h"
 #include "trailers.h"
 #include "streams.h"
@@ -377,6 +379,8 @@ void app_event(const SDL_Event *e) {
   // The poster's menu sits ABOVE everything the home shows: it is modal.
   if (ctx_is_open())     { ctx_event(e);     return; }
   if (seeall_is_open()) { seeall_event(e); return; }
+  // The list finder covers the home it was opened from, like the grid above.
+  if (listadd_is_open()) { listadd_event(e); return; }
 
   switch (screen) {
     case SCREEN_SEARCH:      search_event(e);      break;
@@ -446,9 +450,30 @@ static void swapOfTitleIfRequested(void) {
     if (new >= 0) requestOpen(OPEN_BY_INDEX, new, NULL); }
 }
 
+// How long the Home stands before the TV guide starts loading (see app_update).
+#define NV_IPTV_EARLY_MS 10000
+
 void app_update(float dt, Uint32 now) {
   // A live channel never outlives its screen, whatever route left it.
   if (screen != SCREEN_LIVE) iptvui_background();
+  // THE TV GUIDE AHEAD OF THE FIRST VISIT. Loading it waited until Live TV was
+  // opened, so that visit sat through the download and parse of the provider's
+  // whole guide (68 MB on the owner's). With Live TV switched on, the load starts
+  // once the Home has stood NV_IPTV_EARLY_MS on screen — after its own art and
+  // network, not competing with them — and is usually done by the time anyone
+  // gets there. Live TV off, nothing is loaded.
+  { static Uint32 homeSince;
+    static int early;
+    if (!early && screen == SCREEN_HOME && homeReady && cat_n() > 0) {
+      if (!homeSince) homeSince = now;
+      else if (now - homeSince > NV_IPTV_EARLY_MS) {
+        early = 1;
+        if (settings_live_enabled()) {
+          iptv_start();
+          if (iptv_configured()) iptv_touch();
+        }
+      }
+    } }
   if (screen == SCREEN_LOGIN) {
     login_update(dt, now);
     // The swap only happens HERE, when the session really exists — not at the
@@ -958,6 +983,7 @@ void app_update(float dt, Uint32 now) {
   detail_update(dt, now);
   menu_update(dt, now);
   seeall_update(dt, now);
+  listadd_update(dt, now);
   ctx_update(dt, now);
   { int i = ctx_requested_details();
     HomeItem it;
@@ -1007,6 +1033,15 @@ void app_update(float dt, Uint32 now) {
   // is on the screen that is leaving.
   { int idx = seeall_requested_open();
     if (idx >= 0) requestOpen(OPEN_CENTRED, idx, NULL); }
+  // The home's footer: "Edit home" is Settings opened on Home rows, and Back from
+  // there comes straight back; "Add lists" is the finder over the home.
+  if (screen == SCREEN_HOME && home_requested_edit_rows()) {
+    swapScreen(SCREEN_SETTINGS);
+    menu_set_destination(MENU_SETTINGS);
+    settings_open_home_rows();
+  }
+  if (screen == SCREEN_HOME && home_requested_add_lists() && !listadd_is_open())
+    listadd_open();
   runOpen();
   switch (screen) {
     case SCREEN_SEARCH:      search_update(dt, now);      break;
@@ -1022,7 +1057,7 @@ void app_update(float dt, Uint32 now) {
 // follows it: only the layer that would receive the arrows registers hit zones,
 // so pointing at the home through an open title or sheet moves nothing.
 typedef enum {
-  OWN_SCREEN, OWN_SEEALL, OWN_CTX, OWN_MENU,
+  OWN_SCREEN, OWN_SEEALL, OWN_LISTADD, OWN_CTX, OWN_MENU,
   OWN_DETAIL, OWN_PLAYER, OWN_STREAMS, OWN_EPISODES, OWN_TRACKS
 } Owner;
 
@@ -1035,6 +1070,7 @@ static Owner keyOwner(void) {
   if (menu_is_open())                    return OWN_MENU;
   if (ctx_is_open())                     return OWN_CTX;
   if (seeall_is_open())                  return OWN_SEEALL;
+  if (listadd_is_open())                 return OWN_LISTADD;
   return OWN_SCREEN;
 }
 
@@ -1101,7 +1137,7 @@ void app_draw(Uint32 now) {
       gfx_clear_dimmed(); }
     pointer_accept(0);
     detail_draw_bg(now);
-    if (!detail_covers_screen() && !seeall_covers_screen()) {
+    if (!detail_covers_screen() && !seeall_covers_screen() && !listadd_covers_screen()) {
       pointer_accept(owner == OWN_SCREEN);
       switch (screen) {
         case SCREEN_SEARCH:      search_draw(now);      break;
@@ -1114,6 +1150,8 @@ void app_draw(Uint32 now) {
     }
     pointer_accept(owner == OWN_SEEALL);
     if (!detail_covers_screen()) seeall_draw(now);
+    pointer_accept(owner == OWN_LISTADD);
+    if (!detail_covers_screen()) listadd_draw(now);
     pointer_accept(owner == OWN_CTX);
     ctx_draw(now);
     pointer_accept(owner == OWN_DETAIL);
@@ -1215,6 +1253,7 @@ void app_where(char *out, size_t n) {
     return;
   }
   if (seeall_is_open()) { snprintf(out, n, "seeall"); return; }
+  if (listadd_is_open()) { snprintf(out, n, "listadd"); return; }
   if (menu_is_open())   { snprintf(out, n, "%s+menu", base); return; }
   snprintf(out, n, "%s", base);
 }

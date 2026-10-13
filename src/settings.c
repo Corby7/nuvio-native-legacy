@@ -627,6 +627,9 @@ static float stepLtX0, stepLtX1;
 static int wantsExit = 0;
 static int requestMenu = 0;   // LEFT on a row LEFT cannot change
 static int requestLiveSource; // OK on IPTV source: the app opens Live TV's source screen
+// Home rows was opened from the Home's footer (settings_open_home_rows): Back out
+// of the list goes back to the Home, not to a list of sections nobody asked for.
+static int rowsFromHome;
 
 // How many catalogues the hero uses. 0 = all, which is what the web app writes as
 // "All" when heroCatalogKeys is empty — and it is the owner's profile's case.
@@ -1171,7 +1174,7 @@ static int listRow(int i, TlList *out) {
     // The description is not stored; the results may still carry it.
     id = out->id;
     for (int j = 0; j < tl_browse_n(); j++)
-      if (tl_browse_item(j)->id == id) {
+      if (tl_browse_item(j)->src == out->src && tl_browse_item(j)->id == id) {
         snprintf(out->desc, sizeof out->desc, "%s", tl_browse_item(j)->desc);
         break;
       }
@@ -1195,8 +1198,11 @@ static void openLists(int s) {
   focusSec = s;
   listFocus = 0;
   listScroll = 0.0f;
-  // The popular page is fetched once per session; a failure is tried again.
-  if (tl_browse_state() == TLB_IDLE || tl_browse_state() == TLB_FAILED) tl_browse(listQuery);
+  // The popular page is fetched once per session; a failure is tried again, and
+  // so are results the list finder over the Home (listadd.h) left from MDBList.
+  if (tl_browse_state() == TLB_IDLE || tl_browse_state() == TLB_FAILED ||
+      tl_browse_src() != TL_TRAKT)
+    tl_browse(TL_TRAKT, listQuery);
 }
 
 // Leaving the Home rows list is when its edit applies: one rebuild and one push
@@ -1209,6 +1215,7 @@ static void leaveRows(void) {
 }
 
 static void openSection(int s) {
+  rowsFromHome = 0;
   leaveRows();
   leaveLists();
   if (isListsSection(s)) { openLists(s); return; }
@@ -1223,6 +1230,16 @@ static void openSection(int s) {
   focusSec = s;
   focusOp = SECTIONS[s].start;
   scrollY = 0.0f;
+}
+
+void settings_open_home_rows(void) {
+  int s;
+  for (s = 0; s < SETTING_N_SECTIONS; s++)
+    if (isRowsSection(s)) {
+      openSection(s);
+      rowsFromHome = 1;
+      return;
+    }
 }
 
 // The focus lands on the version installed, so the list opens on "where am I".
@@ -1529,9 +1546,9 @@ static void toggleList(int i) {
   int kind = listRow(i, &l), j;
   char key[48];
   if (kind == LR_SEARCH || l.id <= 0) return;
-  tl_key(l.id, key, sizeof key);
-  if (tl_has(l.id)) {
-    tl_remove(l.id);
+  tl_key(l.src, l.id, key, sizeof key);
+  if (tl_has(l.src, l.id)) {
+    tl_remove(l.src, l.id);
     listsDirty = 1;
     if (kind == LR_RESULT) listFocus--;
   } else if (tl_add(&l)) {
@@ -1550,7 +1567,7 @@ static void submitListSearch(void) {
   while (b > a && listQuery[b - 1] == ' ') b--;
   memmove(listQuery, listQuery + a, b - a);
   listQuery[b - a] = 0;
-  tl_browse(listQuery);
+  tl_browse(TL_TRAKT, listQuery);
 }
 
 static void eventLists(SDL_Keycode k, int back) {
@@ -1573,7 +1590,7 @@ static void eventLists(SDL_Keycode k, int back) {
       if (ime_usable())
         ime_open((GfxRect){ SETTING_LIST_X, SETTING_TOP - listScroll + yOfRow(0),
                             SETTING_LIST_W, SETTING_LINE_H });
-      else if (tl_browse_state() == TLB_FAILED) tl_browse(listQuery);
+      else if (tl_browse_state() == TLB_FAILED) tl_browse(TL_TRAKT, listQuery);
     } else toggleList(listFocus);
   }
   else if (k == SDLK_PAGEUP || k == SDLK_PAGEDOWN) {
@@ -1634,7 +1651,11 @@ void settings_event(const SDL_Event *e) {
     if (back) {
       // Back while holding only puts the row down: leaving the list mid-move
       // would apply an order the person did not finish choosing.
-      if (rowHolding) rowHolding = 0; else leaveRows();
+      if (rowHolding) rowHolding = 0;
+      else {
+        leaveRows();
+        if (rowsFromHome) { rowsFromHome = 0; wantsExit = 1; }
+      }
       return;
     }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { if (n) rowHolding = !rowHolding; }
@@ -2079,7 +2100,7 @@ static void drawListRow(int i, int rows, float y, float f) {
              : f > 0.02f ? (ime_usable() ? "OK types" : "") : "");
     c = st == TLB_FAILED ? 236 : 150;
   } else {
-    int on = tl_has(l.id);
+    int on = tl_has(l.src, l.id);
     drawLabel(l.name, y, 236, a);
     if (f > 0.02f) snprintf(v, sizeof v, "%s", on ? "Remove" : "Add to Home");
     else if (on) snprintf(v, sizeof v, "On Home");
@@ -2867,11 +2888,12 @@ static void drawListsPanel(float hx, float hw) {
               150, 152, 158, hx, y, hw, 32, 1, 5);
     return;
   }
-  { int on = tl_has(l.id), full = !on && tl_n() >= TL_MAX;
+  { int on = tl_has(l.src, l.id), full = !on && tl_n() >= TL_MAX;
     const char *act = on ? "OK takes it off your Home."
                     : full ? "Ten lists is the most the Home takes. Remove one first."
                     : "OK adds it to the top of your Home. Move it in Home rows.";
-    y += drawKicker(on ? "On your Home" : "Trakt list", hx, y, 0.0f, 1.0f) + 14.0f;
+    snprintf(line, sizeof line, "%s list", tl_source_name(l.src));
+    y += drawKicker(on ? "On your Home" : line, hx, y, 0.0f, 1.0f) + 14.0f;
     y += txt_block(TXT_PANEL_TITLE, l.name, 246, 246, 248, hx, y, hw, 48, 1, 3) + 6.0f;
     if (l.user[0]) snprintf(line, sizeof line, "by %s", l.user);
     else line[0] = 0;

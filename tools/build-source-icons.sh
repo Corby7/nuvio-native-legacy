@@ -18,6 +18,10 @@
 #
 # The set_* set is the Settings screen's group-header glyphs (src/settings.c).
 #
+# home_edit{,_filled} and home_lists are the home footer's circles (src/home.c),
+# Bold, the pencil filling on focus like the title page's; the
+# lists_* set is the list finder's (src/listadd.c), Phosphor Regular.
+#
 # The src_* set is Live TV's Source screen (src/iptvui.c): Refresh, and the
 # result line's tick, ! and cross. live_caret_{up,down} are Phosphor's carets (Bold),
 # the full-screen channel carousel's chevrons.
@@ -36,7 +40,8 @@ for name in instant reload reset close ep_watched stack detail_stack detail_stac
             ctx_play ctx_restart ctx_hide ctx_bell ctx_bell_off ctx_group ctx_layout ctx_move \
             chip_fav chip_all chip_recent \
             set_playback set_home set_appearance set_account set_live \
-            src_refresh src_ok src_warn src_fail live_caret_up live_caret_down; do
+            src_refresh src_ok src_warn src_fail live_caret_up live_caret_down \
+            home_edit home_edit_filled home_lists lists_search lists_added lists_add; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "assets/icons/$name.svg" -o "$OUT/$name.png"
   echo "    $name.png <- assets/icons/$name.svg"
 done

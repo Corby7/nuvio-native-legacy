@@ -107,6 +107,7 @@ static int cWatched, cLib, cCollections, hasSettingsProfile, hasCatHome;
 // keeps far more keys in that same object than this app knows about, and
 // choosing a ceiling here means choosing an account that will not work.
 static char *settingsBlob;
+static void mdbKeyFromBlob(const char *json);
 static int  hasSettingsBlob;
 static int  applySettings = 1;
 
@@ -1161,10 +1162,34 @@ static void applyEarly(void) {
   if (hasMdb)       { extras_set_key(mdbKey); hasMdb = 0; }
   if (hasSettingsBlob && settingsBlob) {
     settings_apply_blob(settingsBlob);
+    mdbKeyFromBlob(settingsBlob);
     free(settingsBlob);
     settingsBlob = NULL;
     hasSettingsBlob = 0;
     applySettings = 0;   // from here on, what the person changes on the TV stays
+  }
+}
+
+// THE mdbList KEY WHERE THE APPS ACTUALLY KEEP IT. The web app and Nuvio TV
+// store it in the profile's settings blob, under mdblist_settings, wrapped like
+// every other value there ({"type":"string","value":"..."}) — not as an
+// "mdblist" provider credential, which is the only place this app looked. With
+// a key set in either app the ratings and the list finder's MDBList tab still
+// had none. An empty value leaves whatever key the credential gave.
+static void mdbKeyFromBlob(const char *json) {
+  char wrapper[300], key[sizeof mdbKey];
+  const char *end = json + strlen(json);
+  key[0] = 0;
+  if (!js_raw(json, end, "mdblist_api_key", wrapper, sizeof wrapper)) return;
+  if (wrapper[0] == '{') js_text(wrapper, wrapper + strlen(wrapper), "value", key, sizeof key);
+  else if (wrapper[0] == '"') {
+    size_t n = strlen(wrapper);
+    if (n >= 2 && n - 2 < sizeof key) { memcpy(key, wrapper + 1, n - 2); key[n - 2] = 0; }
+  }
+  if (key[0]) {
+    printf("[sync] mdblist: key from the profile settings\n");
+    fflush(stdout);
+    extras_set_key(key);
   }
 }
 
