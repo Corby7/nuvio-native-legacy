@@ -443,6 +443,77 @@ static char *fetchGuide(const char *url, long long from, long long to) {
   return xml;
 }
 
+// --- the provider's own guide, kept on disk ---------------------------------------
+//
+// THE PROVIDER'S GUIDE WAS FETCHED WHOLE ON EVERY START. Measured 2026-10-13: the
+// owner's xmltv.php is 68.6 MB for 57,000 channels, and nothing of it was kept, so
+// the first visit to Live TV after every launch waited for that download and its
+// parse, on the TV's Wi-Fi and the TV's CPU. The countries' guides below have been
+// kept on disk all along; this does the same for the provider's.
+//
+// What is kept is the WINDOW, already cut (iptv_guide_window), stamped with the
+// time it was read, so the next start reads a file of a fraction of the size and
+// downloads nothing. It is fetched IPTV_GUIDE_KEEP_S further ahead than needed,
+// so a copy at the end of its life still covers the hours the screen shows.
+//
+// A FAILED DOWNLOAD FALLS BACK to a copy past its keep, up to IPTV_GUIDE_LAST_S
+// old: a guide a day old is still mostly right, and none at all is not.
+//
+// The file is named after a hash of the address, never the address itself: an
+// Xtream guide's address carries the login.
+#define IPTV_GUIDE_KEEP_S   (6 * 3600)
+#define IPTV_GUIDE_LAST_S   (30 * 3600)
+
+static void providerGuideName(const char *url, char *name, size_t size) {
+  unsigned long long h = 1469598103934665603ULL;
+  for (const char *c = url; *c; c++) { h ^= (unsigned char)*c; h *= 1099511628211ULL; }
+  snprintf(name, size, "iptv-guide-p%016llx.xml", h);
+}
+
+// The text after the stamp line when the stamp is younger than `maxAge`, else NULL.
+static char *providerGuideKept(const char *name, long long now, long long maxAge) {
+  char *kept = data_read(name), *nl;
+  long long at;
+  if (!kept) return NULL;
+  at = strtoll(kept, NULL, 10);
+  nl = strchr(kept, '\n');
+  if (nl && at > 0 && now - at >= 0 && now - at < maxAge) {
+    memmove(kept, nl + 1, strlen(nl + 1) + 1);
+    return kept;
+  }
+  free(kept);
+  return NULL;
+}
+
+static char *providerGuide(const char *url, long long from, long long to) {
+  char name[64], path[600], tmp[620], *xml;
+  long long now = (long long)time(NULL);
+  FILE *f;
+  providerGuideName(url, name, sizeof name);
+  if ((xml = providerGuideKept(name, now, IPTV_GUIDE_KEEP_S))) {
+    printf("[iptv] guide from disk (%s)\n", name);
+    return xml;
+  }
+  if (!(xml = fetchGuide(url, from, to + IPTV_GUIDE_KEEP_S))) {
+    if ((xml = providerGuideKept(name, now, IPTV_GUIDE_LAST_S)))
+      printf("[iptv] guide download failed; the copy on disk stands in\n");
+    return xml;
+  }
+  // The stamp and the text in two writes, not one string: the window can be tens
+  // of megabytes, and a stamped copy would hold it twice on a TV short of memory.
+  if (data_path(path, sizeof path, name)) {
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    if ((f = fopen(tmp, "w"))) {
+      int ok = fprintf(f, "%lld\n", now) > 0;
+      size_t n = strlen(xml);
+      ok = ok && fwrite(xml, 1, n, f) == n;
+      ok = fclose(f) == 0 && ok;
+      if (ok) rename(tmp, path); else remove(tmp);
+    }
+  }
+  return xml;
+}
+
 // --- guides found for the channels no other guide covers --------------------------
 //
 // Providers tag their channels with the country they come from, "UK: BBC One",
@@ -460,8 +531,12 @@ static char *fetchGuide(const char *url, long long from, long long to) {
 
 // The provider's country tags and the guide file for each. "AR" is left out on
 // purpose: on IPTV lists it means Arabic, not Argentina.
+//
+// The FILE NAMES ARE epgshare01's and they move: US1 and CA1 became US2 and CA2
+// (checked against the directory listing 2026-10-13), and until then every load
+// asked for the US guide and got a 404.
 static const struct { const char *tag, *file; } COUNTRIES[] = {
-  { "UK", "UK1" }, { "GB", "UK1" }, { "US", "US1" }, { "USA", "US1" }, { "CA", "CA1" },
+  { "UK", "UK1" }, { "GB", "UK1" }, { "US", "US2" }, { "USA", "US2" }, { "CA", "CA2" },
   { "NL", "NL1" }, { "BE", "BE2" }, { "DE", "DE1" }, { "AT", "AT1" }, { "CH", "CH1" },
   { "FR", "FR1" }, { "IT", "IT1" }, { "ES", "ES1" }, { "PT", "PT1" }, { "IE", "IE1" },
   { "SE", "SE1" }, { "NO", "NO1" }, { "DK", "DK1" }, { "FI", "FI1" }, { "PL", "PL1" },
@@ -730,7 +805,7 @@ static void *loader(void *arg) {
         } else {
           setStatus("Loading the TV guide\xE2\x80\xA6");
         }
-        xml = fetchGuide(guides.url[gi], from, to);
+        xml = providerGuide(guides.url[gi], from, to);
         got = xml != NULL;
         if (job.gen != atomic_load(&generation)) {
           free(xml);
@@ -909,6 +984,11 @@ static void writeNames(const char *file, char **names, int n) {
 
 // --- The API -------------------------------------------------------------------------
 void iptv_start(void) {
+  // Once: app.c starts it early to load the guide ahead of the first visit, and
+  // the screen starts it again on that visit.
+  static int started;
+  if (started) return;
+  started = 1;
   readConfig();
   nFavourites = readNames(IPTV_FAV_FILE, favourites, IPTV_MAX_FAVOURITES);
   nRecents = readNames(IPTV_RECENT_FILE, recents, IPTV_MAX_RECENT);
