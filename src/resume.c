@@ -98,23 +98,20 @@ void resume_draw(const CatItem *ci, GfxRect r, int baked) {
   // Over art drawn as GFX_CW_CARD it is already in the art's colour.
   if (!baked) gfx_rect(r, 0, GFX_CW_SCRIM, 0, 0, 0, radius, 0, 0, 0, 1.0f);
 
-  // THE REMAINING TIME: A SCRIM AND THE TYPE, WITH NOTHING AROUND IT.
+  // THE REMAINING TIME LIVES IN THE KICKER: "S1 E5 · 22M LEFT".
   //
-  // This corner has now been drawn four ways — the port's flat dark rectangle, the
-  // web's `.home-continue-badge` glass pill, a flat pill, and a frosted plate that
-  // blurred the artwork behind it — and the owner turned down all four. Reading
-  // the notes back, the objection was never the material: it was that ALL FOUR PUT
-  // A BOX THERE. A box on artwork reads as a control, something that could be
-  // pressed. What is being shown is a label.
+  // The top-right corner has been drawn five ways — the port's flat dark
+  // rectangle, the web's `.home-continue-badge` glass pill, a flat pill, a frosted
+  // plate, and finally bare type on a shaded dome (GFX_CORNER_SCRIM) — and the
+  // owner turned every one down. The first four put a box on the artwork, which
+  // reads as a control; the fifth darkened a corner of the frame for one word.
+  // Side by side against a bottom-right label, a shadow-only label and no label
+  // at all, the owner picked this: the time joins the line that already labels
+  // the episode, so the card gains no element and the top of the art stays clear.
   //
-  // So the container is gone and the GROUND does its job: the top-right corner of
-  // the card is shaded by a dome (GFX_CORNER_SCRIM) and the type floats on it. The
-  // card is left with one shape fewer, and the two scrims — this one and the copy's
-  // at the base — darken opposite corners and leave the middle of the frame clear.
+  // Do not put the corner back without asking.
   //
-  // Do not put a plate back here without asking. It has been asked four times.
-  //
-  // Never invent a premiere status: with no time known, no scrim and no label.
+  // Never invent a premiere status: with no time known, no label.
   //
   // "NEXT UP" IS NOT A TIME, and it is the one label here that is not measured.
   // An episode nobody has opened has its whole runtime left, so the arithmetic
@@ -122,28 +119,13 @@ void resume_draw(const CatItem *ci, GfxRect r, int baked) {
   // number is true and the sentence is a lie. The web says "Next Up" in that
   // state (buildProgressStatus, homeScreen.js) and drops the clock icon with it,
   // which is the same reasoning: it is a heading, not a measurement.
+  char left[24] = "";
   if (ci->remainingMin > 0 || ci->progress == 0) {
-    char badge[48];
     int h = ci->remainingMin / 60, m = ci->remainingMin % 60;
-    if (ci->progress == 0) snprintf(badge, sizeof badge, "Next Up");
-    else if (h && m) snprintf(badge, sizeof badge, "%dh %dm left", h, m);
-    else if (h) snprintf(badge, sizeof badge, "%dh left", h);
-    else snprintf(badge, sizeof badge, "%dm left", m);
-    float pad = NV_CW_PAD * scale;
-    TxtLine l = txt_line_trim(TXT_CW_BADGE, badge, 255, 255, 255, 255,
-                              r.w * NV_CW_TIME_W - pad);
-    if (l.tex) {
-      // The scrim takes the CARD's rect and the CARD's radius, for the reason
-      // GFX_CW_BAR does: the dome has to be cut by the same corner the artwork is,
-      // or it squares off the card's top-right.
-      gfx_rect(r, 0, GFX_CORNER_SCRIM, 0, NV_CW_TIME_W, NV_CW_TIME_H, radius,
-               0.0313f, 0.0313f, 0.0392f, NV_CW_TIME_INK);
-      // Full white and full strength. On a plate the label could be held back to
-      // 92% so it did not out-shout the title; floating on artwork there is nothing
-      // to spare — every point of contrast here is doing work.
-      txt_draw_alpha(l, r.x + r.w - pad - l.w,
-                        r.y + pad - NV_CW_TIME_RISE * scale, 1.0f);
-    }
+    if (ci->progress == 0) snprintf(left, sizeof left, "NEXT UP");
+    else if (h && m) snprintf(left, sizeof left, "%dH %dM LEFT", h, m);
+    else if (h) snprintf(left, sizeof left, "%dH LEFT", h);
+    else snprintf(left, sizeof left, "%dM LEFT", m);
   }
 
   // THE COPY: kicker, title, subtitle — three jobs, not three grey lines.
@@ -227,10 +209,18 @@ void resume_draw(const CatItem *ci, GfxRect r, int baked) {
   // "S1 E5", the web's `formatEpisodeCode` — a space, not a colon, and the
   // episode alone when the season is not known. Tracked out by 0.14em, which is
   // the whole difference between a label and a third line of text.
-  if (series) {
-    char code[24];
-    if (ci->season > 0) snprintf(code, sizeof code, "S%d E%d", ci->season, ci->episode);
-    else                snprintf(code, sizeof code, "E%d", ci->episode);
+  //
+  // The remaining time follows the code after a middle dot, written in capitals
+  // to match `.home-continue-kicker`'s uppercase. A movie has no code, so its
+  // kicker is the time alone.
+  if (series || left[0]) {
+    char code[48] = "";
+    if (series && ci->season > 0) snprintf(code, sizeof code, "S%d E%d", ci->season, ci->episode);
+    else if (series)              snprintf(code, sizeof code, "E%d", ci->episode);
+    if (left[0]) {
+      size_t n = strlen(code);
+      snprintf(code + n, sizeof code - n, "%s%s", n ? "  \xC2\xB7  " : "", left);
+    }
     float box = NV_CW_KICKER_LH * scale;
     base -= NV_CW_TITLE_GAP * scale;
     txt_tracking(TXT_CWC_KICKER, code, 255, 255, 255,

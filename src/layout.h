@@ -601,29 +601,9 @@
 // the shader crops (cover) instead of stretching; without that the image deforms,
 // which was exactly the defect that showed up on the first attempt.
 #define NV_HIGHLIGHT_W    419.0f
-// THE REMAINING TIME, WITH NO CONTAINER. There is no pill, no chip and no plate:
-// the corner of the artwork is shaded and the type sits on it. The card had a
-// container here through three attempts — the port's flat rectangle, the web's
-// `.home-continue-badge` glass, a frosted plate — and the objection each time was
-// the same one, that a box in the corner reads as a control. The time left is a
-// label, so it is set like one.
-//
-// The scrim reaches this far across the card from the TOP-RIGHT corner, as a
-// fraction of each side, and goes on at this depth in the corner itself. Both are
-// bigger than they look written down: the ramp is a dome (GFX_CORNER_SCRIM), so
-// the depth quoted here is reached only at the very corner and half of it is gone
-// by the middle of the label.
-#define NV_CW_TIME_W        0.58f
-#define NV_CW_TIME_H        0.58f
-#define NV_CW_TIME_INK      0.78f
-// The label's own inset from the top and the right edge. It is the badge's, not
-// the copy's — see NV_CW_COPY_X below.
-#define NV_CW_PAD          18.0f
-// The type sits high in its rasterised box (SDL_ttf gives every line the font's
-// full height, ascenders and descenders included), so hanging the box off the
-// inset puts the LETTERS further down than the number says. This is that
-// difference, measured on the capture rather than derived from the metrics.
-#define NV_CW_TIME_RISE     5.0f
+// THE REMAINING TIME has no place of its own on the card: it rides in the
+// kicker, after the episode code ("S1 E5 · 22M LEFT"). See resume.c for the five
+// corner treatments that came before it.
 
 // THE COPY AND THE BAR, read off `.home-screen-shell.home-layout-modern
 // .home-continue-*` (components.css:7709-7754) with the base block at 5892-6103.
@@ -660,8 +640,8 @@
 // Sized by AREA, not by height: at a fixed height a 10:1 wordmark is a thin strip
 // across the card and a 1.5:1 stacked logo is a block, and they read as two
 // different sizes. Equal area makes them weigh the same; the caps keep a stacked
-// logo from going taller than two title lines and a long wordmark off the
-// remaining-time corner. NV_CW_LOGO_AREA is a 3.2:1 mark at 46px tall.
+// logo from going taller than two title lines and a long wordmark from
+// crowding the card's right edge. NV_CW_LOGO_AREA is a 3.2:1 mark at 46px tall.
 #define NV_CW_LOGO_AREA  6770.0f   // px² at the resting card width
 #define NV_CW_LOGO_H       64.0f   // height cap
 #define NV_CW_LOGO_MAXW     0.62f  // width cap, of the card's width
