@@ -17,6 +17,7 @@
 // discovery thread calls during a build.
 #ifndef NV_HOMEROWS_H
 #define NV_HOMEROWS_H
+#include <stddef.h>
 
 // Builds the editable list from the account's order, the catalogues the addons
 // declare and the collections. Called when the Settings section opens.
@@ -43,7 +44,17 @@ void homerows_commit(void);
 int  homerows_trakt_watchlist(void);
 int  homerows_trakt_recs(void);
 
-// Inserts the Trakt rows into the order discover is being given, at their saved
+// The Trakt lists the owner added (traktlists.h) are device-local rows too, keyed
+// "traktlist_<id>", stored next to the Trakt rows. Any thread.
+int  homerows_list_on(const char *key);
+// The ids of the added lists that are shown, up to `max`; returns how many.
+int  homerows_lists_shown(long *ids, int max);
+// The list's name for its row key, into dst ("" for an unknown key).
+const char *homerows_list_title(const char *key, char *dst, size_t n);
+// Puts a just-added list at the top and shown, whatever an earlier stay left.
+void homerows_list_place(const char *key);
+
+// Inserts the local rows into the order discover is being given, at their saved
 // positions. sync.c calls it after applying the account's order, before
 // disc_prefs_end.
 void homerows_merge_trakt(void);

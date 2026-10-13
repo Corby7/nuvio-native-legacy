@@ -538,6 +538,10 @@ void ctx_draw(Uint32 now) {
   if (a < 0.01f) return;
   ci = custom ? NULL : indexCurrent() >= 0 ? cat_item(indexCurrent()) : NULL;
   if (!ci && !custom) return;
+  // NOT BUDGETED. Focus recolours a row's label and hint, and each colour is a new
+  // line to rasterise: two at a time (text.h), moving the focus blanked the rows
+  // for a frame — the flicker going up and down. Six short lines cost nothing.
+  txt_unbudgeted();
 
   // The labels already say "Adding to library..." while a write is in flight, so
   // the meta line only gives way to the outcome.

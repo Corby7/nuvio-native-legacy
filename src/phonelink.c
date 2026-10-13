@@ -355,6 +355,13 @@ static void serve(int fd, unsigned myGen, const char *peer) {
     n += (size_t)r;
   }
   req[n] = 0;
+  // A connection that never said anything gets no answer, only closed. Phone
+  // browsers open a spare connection ahead of time and leave it idle; answering
+  // it with a 400 after PL_RECV_S left that 400 waiting in the socket, and the
+  // browser read it as the reply to the form it sent there next, so a filled-in
+  // form came back "400 Bad Request" and never reached the TV. Closed silently,
+  // the browser sends the form again on a fresh connection.
+  if (n == 0) { free(req); return; }
   body = strstr(req, "\r\n\r\n");
   if (!body || sscanf(req, "%*15s %2047s", target) != 1) { respond(fd, 400, NULL); free(req); return; }
   body += 4;

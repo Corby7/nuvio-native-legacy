@@ -2148,9 +2148,8 @@
 #define NV_PJ_BOTTOM       60.0f   // bottom min(3.125vw,60)
 #define NV_PJ_BOTTOM_UP   236.0f   // .is-raised
 
-// Skip intro. The resting fill is rgba(30,30,30,0.85); focused it takes
+// Skip intro, a pill (radius 0.5 of its height). The resting fill is rgba(30,30,30,0.85); focused it takes
 // --secondary-color, the same inversion the track menus use.
-#define NV_SKIP_R          24.0f   // min(1.25vw,24)
 #define NV_SKIP_PADX       36.0f   // min(1.875vw,36)
 #define NV_SKIP_PADY       24.0f   // min(1.25vw,24)
 #define NV_SKIP_GAP        16.0f   // min(0.83vw,16)

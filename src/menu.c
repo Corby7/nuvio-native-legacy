@@ -560,14 +560,16 @@ static void drawFooter(float px, float w, float alpha, float focus) {
       // line sits at --text-tertiary (#808080), the same grey the unselected rows
       // use on the rail. The port had 150,152,160 here — a blue-tinted grey that
       // is in none of the theme's tokens.
-      int c = (int)(anim_blend(0.702f, 1.0f, focus) * 255.0f + 0.5f);
+      // White dimmed by alpha, as the rows' labels (see there): a grey that
+      // animates with `focus` was a new line to rasterise every frame.
+      float lum = anim_blend(0.702f, 1.0f, focus);
       TxtLine name = txt_line_trim(TXT_MENU_ITEM, p ? p->name : "Your account",
-                                      c, c, c, 255,
+                                      255, 255, 255, 255,
                                       NV_MENU_LABEL_W);
       // The name alone, CENTRED on the row. There used to be a "Switch user"
       // caption under it, which is why the name sat a line high; with the caption
       // gone that offset would leave it hanging above the avatar it belongs to.
-      txt_draw_alpha(name, cx + NV_MENU_LABEL_GAP, cy - name.h * 0.5f, aText);
+      txt_draw_alpha(name, cx + NV_MENU_LABEL_GAP, cy - name.h * 0.5f, aText * lum);
     } }
 }
 
@@ -583,6 +585,8 @@ void menu_draw(Uint32 now) {
   if (!is_open && settings_rail_collapsed())
     pointer_zone_hover(0, 0, NV_MENU_EDGE_ZONE_W, NV_SCREEN_H, pointEdge, 0, 0);
   if (!is_open && slides < 0.002f) return;
+  // Its labels all there the frame it opens, not two at a time (text.h).
+  txt_unbudgeted();
 
   float w = anim_blend(NV_MENU_W_ICON, NV_MENU_W_IS_OPEN, anim_smooth(expands));
   // The VEIL uses the RAW ramp: the reference's measurement is a straight line
@@ -649,12 +653,16 @@ void menu_draw(Uint32 now) {
     // against the icon.
     float aRot = expands * expands * entry;
     if (aRot > 0.01f) {
-      int c = (int)(luma * 255.0f + 0.5f);
       // `.home-nav-item.selected` is `font-weight: bold`; the rest inherit 400.
+      //
+      // WHITE, DIMMED BY ALPHA, not a grey per frame. `luma` animates with the
+      // focus, and baked into the colour it made every frame of the move a new
+      // line to rasterise — two a frame at most (text.h), so labels blanked out
+      // mid-move. On the bar's near-black the two read the same.
       TxtLine l = txt_line_trim(current ? TXT_MENU_SEL : TXT_MENU_ITEM, LABELS[i],
-                                   c, c, c, 255,
+                                   255, 255, 255, 255,
                                    NV_MENU_LABEL_W);
-      txt_draw_alpha(l, px + iconAxis() + NV_MENU_LABEL_GAP, cy - l.h * 0.5f, aRot);
+      txt_draw_alpha(l, px + iconAxis() + NV_MENU_LABEL_GAP, cy - l.h * 0.5f, aRot * luma);
     }
   }
 

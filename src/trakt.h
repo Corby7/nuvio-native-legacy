@@ -97,6 +97,18 @@ int  trakt_list(const char *which, CatItem *output, int max);
 // collection are left out by Trakt. BLOCKS — call from the discovery thread.
 int  trakt_recommendations(CatItem *output, int max);
 
+// A PUBLIC list's titles, in the list's own rank order, films and series mixed
+// (/lists/<id>/items). Needs no Trakt account: public lists answer to the
+// application's client id alone, so this works for a profile that never linked
+// Trakt. BLOCKS — call from the discovery thread.
+int  trakt_public_list(long id, CatItem *output, int max);
+
+// The headers for a request that needs only the APPLICATION (public lists,
+// list search): the version and the client id, plus the person's token when one
+// is linked. 0 when the build carries no client id.
+int  trakt_public_headers(const char **header, char *auth, size_t nAuth,
+                          char *key, size_t nKey);
+
 // Adds the title to, or removes it from, the owner's WATCHLIST. Does not block.
 // The read state already arrives in CatItem.inList, filled in by trakt_list
 // during discovery — what was missing was writing back: the "+" button only

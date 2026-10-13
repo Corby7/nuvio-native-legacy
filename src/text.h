@@ -249,6 +249,10 @@ void txt_shutdown(void);
 // Resets the frame's rasterisation budget. Call once per frame, before drawing;
 // without it the budget runs out and the text disappears.
 void txt_new_frame(void);
+// Lifts that budget for the rest of this frame. For screens whose text must be
+// there the frame they appear (Settings, the Sources sheet): one long frame as
+// they open is better than reading the copy fill in two lines at a time.
+void txt_unbudgeted(void);
 
 TxtLine txt_line(TxtStyle style, const char *s, int r, int g, int b, int a);
 

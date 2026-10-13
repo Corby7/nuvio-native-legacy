@@ -2566,6 +2566,12 @@ static GfxRect logoLast;
 static int logoLastValid = 0, logoHidden = 0;
 int detail_logo_rect(GfxRect *out) {
   if (!logoLastValid) return 0;
+  // NOT FROM OFF SCREEN. Play from the episode list runs with the page scrolled a
+  // whole screen down, so the logo's rect sits above the top edge: a flight from
+  // there dropped the logo in from nowhere. Less than half of it in view counts as
+  // not seen, and the player fades its logo in instead.
+  if (logoLast.y + logoLast.h * 0.5f < 0.0f || logoLast.y + logoLast.h * 0.5f > NV_SCREEN_H)
+    return 0;
   *out = logoLast;
   return 1;
 }

@@ -8,6 +8,7 @@
 #include "sync.h"
 #include "data.h"
 #include "js.h"
+#include "traktlists.h"
 #include "jsw.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +17,7 @@
 
 #define HR_MAX 512
 
-enum { HR_CATALOG, HR_COLLECTION, HR_TRAKT };
+enum { HR_CATALOG, HR_COLLECTION, HR_TRAKT, HR_LIST };
 
 typedef struct {
   char key[192];
@@ -44,16 +45,21 @@ static const struct { const char *key, *title; } TRAKT_ROWS[] = {
   { "trakt_recommendations", "Recommended for You" },
 };
 #define N_TRAKT (int)(sizeof TRAKT_ROWS / sizeof *TRAKT_ROWS)
+#define N_LOCAL (N_TRAKT + TL_MAX)
 
-// --- the Trakt rows' local state ----------------------------------------------
+// --- the device-local rows' state -------------------------------------------------
 //
-// One line per row, "<key> <position> <shown>". The position is the index in the
-// full order — the account's entries plus these — so re-inserting at it rebuilds
-// exactly the order that was saved. Read by the discovery thread too, hence the
-// lock; the file is tiny and read once per profile.
+// The Trakt rows and the Trakt lists the owner added (traktlists.h). One line per
+// row, "<key> <position> <shown>". The position is the index in the full order —
+// the account's entries plus these — so re-inserting at it rebuilds exactly the
+// order that was saved. Read by the discovery thread too, hence the lock; the
+// file is tiny and read again only when the profile or the added lists change.
 static pthread_mutex_t lockTrakt = PTHREAD_MUTEX_INITIALIZER;
-static struct { int pos, on; } trakt[N_TRAKT];
+typedef struct { char key[48], title[96], user[64]; int pos, on, list; } LocalRow;
+static LocalRow local[N_LOCAL];
+static int nLocal;
 static int traktProfile = -1;
+static unsigned listsSeen;
 
 static void traktName(char *dst, size_t n) {
   snprintf(dst, n, "home-rows-p%d.txt", profiles_active());
@@ -61,50 +67,121 @@ static void traktName(char *dst, size_t n) {
 
 static void traktLoadLocked(void) {
   char name[64], *body, *line, *save = NULL;
+  unsigned g = tl_generation();
   int i;
-  if (traktProfile == profiles_active()) return;
+  if (traktProfile == profiles_active() && listsSeen == g) return;
   traktProfile = profiles_active();
-  // Opt-in: both start hidden, at the top, so switching one on puts it where it
-  // can be seen.
-  for (i = 0; i < N_TRAKT; i++) { trakt[i].pos = 0; trakt[i].on = 0; }
+  listsSeen = g;
+  nLocal = 0;
+  // Opt-in: the Trakt rows start hidden, at the top, so switching one on puts it
+  // where it can be seen.
+  for (i = 0; i < N_TRAKT; i++) {
+    LocalRow *r = &local[nLocal++];
+    memset(r, 0, sizeof *r);
+    snprintf(r->key, sizeof r->key, "%s", TRAKT_ROWS[i].key);
+    snprintf(r->title, sizeof r->title, "%s", TRAKT_ROWS[i].title);
+  }
+  // An added list starts shown, at the top: it was added to be seen.
+  for (i = 0; i < tl_n() && nLocal < N_LOCAL; i++) {
+    TlList l;
+    LocalRow *r;
+    if (!tl_get(i, &l)) break;
+    r = &local[nLocal++];
+    memset(r, 0, sizeof *r);
+    tl_key(l.id, r->key, sizeof r->key);
+    snprintf(r->title, sizeof r->title, "%s", l.name);
+    snprintf(r->user, sizeof r->user, "%s", l.user);
+    r->on = 1;
+    r->list = 1;
+  }
   traktName(name, sizeof name);
   body = data_read(name);
   if (!body) return;
   for (line = strtok_r(body, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
     char key[64]; int pos, on;
     if (sscanf(line, "%63s %d %d", key, &pos, &on) != 3) continue;
-    for (i = 0; i < N_TRAKT; i++)
-      if (!strcmp(key, TRAKT_ROWS[i].key)) {
-        trakt[i].pos = pos < 0 ? 0 : pos;
-        trakt[i].on = on != 0;
+    for (i = 0; i < nLocal; i++)
+      if (!strcmp(key, local[i].key)) {
+        local[i].pos = pos < 0 ? 0 : pos;
+        local[i].on = on != 0;
       }
   }
   free(body);
 }
 
-static int traktOn(int i) {
-  int v;
+static int localOn(const char *key) {
+  int v = 0, i;
   pthread_mutex_lock(&lockTrakt);
   traktLoadLocked();
-  v = trakt[i].on;
+  for (i = 0; i < nLocal; i++) if (!strcmp(local[i].key, key)) { v = local[i].on; break; }
   pthread_mutex_unlock(&lockTrakt);
   return v;
 }
 
-int homerows_trakt_watchlist(void) { return traktOn(0); }
-int homerows_trakt_recs(void)      { return traktOn(1); }
+int homerows_trakt_watchlist(void) { return localOn(TRAKT_ROWS[0].key); }
+int homerows_trakt_recs(void)      { return localOn(TRAKT_ROWS[1].key); }
+int homerows_list_on(const char *key) { return localOn(key); }
 
-void homerows_merge_trakt(void) {
-  int order[N_TRAKT], i, j;
+int homerows_lists_shown(long *ids, int max) {
+  int n = 0, i;
   pthread_mutex_lock(&lockTrakt);
   traktLoadLocked();
-  // Ascending position, so each insert lands where the saved order had it.
-  for (i = 0; i < N_TRAKT; i++) order[i] = i;
-  for (i = 0; i < N_TRAKT; i++)
-    for (j = i + 1; j < N_TRAKT; j++)
-      if (trakt[order[j]].pos < trakt[order[i]].pos) { int t = order[i]; order[i] = order[j]; order[j] = t; }
-  for (i = 0; i < N_TRAKT; i++)
-    disc_prefs_insert(trakt[order[i]].pos, TRAKT_ROWS[order[i]].key, trakt[order[i]].on);
+  for (i = 0; i < nLocal && n < max; i++)
+    if (local[i].list && local[i].on) ids[n++] = tl_id_of_key(local[i].key);
+  pthread_mutex_unlock(&lockTrakt);
+  return n;
+}
+
+const char *homerows_list_title(const char *key, char *dst, size_t n) {
+  int i;
+  dst[0] = 0;
+  pthread_mutex_lock(&lockTrakt);
+  traktLoadLocked();
+  for (i = 0; i < nLocal; i++)
+    if (!strcmp(local[i].key, key)) { snprintf(dst, n, "%s", local[i].title); break; }
+  pthread_mutex_unlock(&lockTrakt);
+  return dst;
+}
+
+// Rewrites the file with `key` moved to the top and shown, keeping every other
+// line. A list added again after being hidden must come back visible, not into
+// the hidden place it left.
+void homerows_list_place(const char *key) {
+  char name[64], text[N_LOCAL * 80 + 1];
+  size_t w = 0;
+  int i;
+  pthread_mutex_lock(&lockTrakt);
+  traktLoadLocked();
+  text[0] = 0;
+  w += (size_t)snprintf(text + w, sizeof text - w, "%s 0 1\n", key);
+  // Everything else moves down one, so no other row shares position 0 and the
+  // new list really is first.
+  for (i = 0; i < nLocal && w < sizeof text; i++)
+    if (strcmp(local[i].key, key))
+      w += (size_t)snprintf(text + w, sizeof text - w, "%s %d %d\n",
+                            local[i].key, local[i].pos + 1, local[i].on);
+  traktName(name, sizeof name);
+  data_write(name, text);
+  traktProfile = -1;   // re-read on the next question
+  pthread_mutex_unlock(&lockTrakt);
+}
+
+// Ascending position, so each insert lands where the saved order had it.
+static void localOrder(int *order) {
+  int i, j;
+  for (i = 0; i < nLocal; i++) order[i] = i;
+  for (i = 0; i < nLocal; i++)
+    for (j = i + 1; j < nLocal; j++)
+      if (local[order[j]].pos < local[order[i]].pos) { int t = order[i]; order[i] = order[j]; order[j] = t; }
+}
+
+void homerows_merge_trakt(void) {
+  int order[N_LOCAL], i;
+  pthread_mutex_lock(&lockTrakt);
+  traktLoadLocked();
+  localOrder(order);
+  for (i = 0; i < nLocal; i++)
+    disc_prefs_insert(local[order[i]].pos, local[order[i]].key, local[order[i]].on);
   pthread_mutex_unlock(&lockTrakt);
 }
 
@@ -227,25 +304,24 @@ void homerows_open(void) {
              col_group_pinned(folder->group) ? "Pinned to the top" : "");
   }
 
-  // The Trakt rows, at their saved positions.
+  // The device-local rows — the Trakt rows and the added lists — at their saved
+  // positions.
   pthread_mutex_lock(&lockTrakt);
   traktLoadLocked();
-  { int order[N_TRAKT], a, b;
-    for (a = 0; a < N_TRAKT; a++) order[a] = a;
-    for (a = 0; a < N_TRAKT; a++)
-      for (b = a + 1; b < N_TRAKT; b++)
-        if (trakt[order[b]].pos < trakt[order[a]].pos) { int t = order[a]; order[a] = order[b]; order[b] = t; }
-    for (a = 0; a < N_TRAKT; a++) {
+  { int order[N_LOCAL], a;
+    localOrder(order);
+    for (a = 0; a < nLocal; a++) {
       HomeRow r;
-      int t = order[a];
+      const LocalRow *l = &local[order[a]];
       memset(&r, 0, sizeof r);
-      snprintf(r.key, sizeof r.key, "%s", TRAKT_ROWS[t].key);
-      snprintf(r.title, sizeof r.title, "%s", TRAKT_ROWS[t].title);
-      snprintf(r.source, sizeof r.source, "Trakt");
-      r.kind = HR_TRAKT;
-      r.enabled = trakt[t].on;
+      snprintf(r.key, sizeof r.key, "%s", l->key);
+      snprintf(r.title, sizeof r.title, "%s", l->title);
+      if (l->list && l->user[0]) snprintf(r.source, sizeof r.source, "Trakt list by %s", l->user);
+      else snprintf(r.source, sizeof r.source, l->list ? "Trakt list" : "Trakt");
+      r.kind = l->list ? HR_LIST : HR_TRAKT;
+      r.enabled = l->on;
       r.present = 1;
-      insertAt(trakt[t].pos, &r);
+      insertAt(l->pos, &r);
     } }
   pthread_mutex_unlock(&lockTrakt);
 
@@ -265,7 +341,8 @@ const char *homerows_source(int i) { HomeRow *r = at(i); return r ? r->source : 
 const char *homerows_kind(int i) {
   HomeRow *r = at(i);
   if (!r) return "";
-  return r->kind == HR_COLLECTION ? "Collection" : r->kind == HR_TRAKT ? "Trakt" : "Catalogue";
+  return r->kind == HR_COLLECTION ? "Collection" : r->kind == HR_TRAKT ? "Trakt"
+       : r->kind == HR_LIST ? "Trakt list" : "Catalogue";
 }
 int homerows_enabled(int i) { HomeRow *r = at(i); return r ? r->enabled : 0; }
 
@@ -278,9 +355,10 @@ int homerows_over_cap(int i) {
   int k, used = 0;
   HomeRow *r = at(i);
   if (!r || !r->enabled || r->kind == HR_COLLECTION) return 0;
-  // The Trakt rows have slots set aside for them, so they always fit.
-  if (r->kind == HR_TRAKT) return 0;
-  for (k = 0; k < nRows; k++) if (rows[k].kind == HR_TRAKT && rows[k].enabled) slots--;
+  // The Trakt rows and the lists have slots set aside for them, so they always fit.
+  if (r->kind == HR_TRAKT || r->kind == HR_LIST) return 0;
+  for (k = 0; k < nRows; k++)
+    if ((rows[k].kind == HR_TRAKT || rows[k].kind == HR_LIST) && rows[k].enabled) slots--;
   for (k = 0; k < nRows; k++) {
     if (!rows[k].present || !rows[k].enabled || rows[k].kind != HR_CATALOG) continue;
     used++;
@@ -315,14 +393,14 @@ static volatile int pushing;
 unsigned homerows_generation(void) { return generation; }
 int homerows_push_in_flight(void)  { return pushing; }
 
-// The account's items, in the list's order — every entry but the Trakt rows,
+// The account's items, in the list's order — every entry but the local rows,
 // unresolved ones included. The web's buildLocalPayload shape, field for field.
 static void writeItems(Jsw *w) {
   int i, order = 0;
   jsw_arr_start(w);
   for (i = 0; i < nRows; i++) {
     const HomeRow *r = &rows[i];
-    if (r->kind == HR_TRAKT) continue;
+    if (r->kind == HR_TRAKT || r->kind == HR_LIST) continue;
     jsw_obj_start(w);
     jsw_cs(w, "addon_id",   r->kind == HR_COLLECTION ? "" : r->addonId);
     jsw_cs(w, "type",       r->kind == HR_COLLECTION ? "" : r->type);
@@ -368,11 +446,12 @@ void homerows_commit(void) {
   dirty = 0;
   generation++;
 
-  // 1. The Trakt rows' positions and visibility, on this device.
-  { char name[64], text[256];
+  // 1. The local rows' positions and visibility, on this device.
+  { char name[64], text[N_LOCAL * 80 + 1];
     size_t w = 0;
+    text[0] = 0;
     for (i = 0; i < nRows && w < sizeof text; i++) {
-      if (rows[i].kind != HR_TRAKT) continue;
+      if (rows[i].kind != HR_TRAKT && rows[i].kind != HR_LIST) continue;
       w += (size_t)snprintf(text + w, sizeof text - w, "%s %d %d\n",
                             rows[i].key, i, rows[i].enabled);
     }

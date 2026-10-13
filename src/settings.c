@@ -28,6 +28,9 @@
 #include "simklauth.h"
 #include "js.h"
 #include "homerows.h"
+#include "traktlists.h"
+#include "ime.h"
+#include "discover.h"
 #include "pointer.h"
 #include "app.h"
 #include "appid.h"
@@ -432,6 +435,9 @@ static const struct { const char *group, *title; int start, n; const char *blurb
   // open the Home rows list (level 2) instead of a list of options.
   { NULL, "Home rows",               SETTING_N,                    0,
     "The order of the Home rows and which of them show. Saved to your account, so the web app follows it." },
+  // No options either: SETTING_N + 1 opens the Trakt list finder (LEVEL_LISTS).
+  { NULL, "Find lists",              SETTING_N + 1,                0,
+    "Public Trakt lists, like the IMDb Top 250, a director's films or a franchise, added to the Home as rows of their own. Kept on this TV." },
   { NULL, "Catalogue rows",          SETTING_SUFFIX_KIND,          3,
     "What the catalogue rows say about themselves and which titles they leave out." },
   { NULL, "Continue watching",       SETTING_CW_ON,                9,
@@ -559,6 +565,14 @@ static void leaveRows(void);
 // RIGHT moves into the notes on the panel (`reading`), OK asks before installing
 // (`confirming`).
 #define LEVEL_UPDATES 3
+// The Trakt list finder: a search row, the lists already on the Home, then the
+// popular lists or a search's results. See traktlists.h.
+#define LEVEL_LISTS 4
+#define LIST_ANIM 64
+static int listFocus, listsDirty;
+static float listScroll, listAnim[LIST_ANIM];
+static char listQuery[96];
+static void leaveLists(void);
 static int relFocus, relGeneration = -1;
 static float relScroll, relAnim[32];
 static int reading, confirming;
@@ -968,7 +982,7 @@ int settings_start(void) {
   return 1;
 }
 void settings_resume(void) { wantsExit = 0; requestMenu = 0; }
-void settings_shutdown(void) { leaveRows(); }
+void settings_shutdown(void) { leaveRows(); leaveLists(); }
 int settings_wants_exit(void) { return wantsExit; }
 int settings_requested_menu(void) { int v = requestMenu; requestMenu = 0; return v; }
 int settings_requested_live_source(void) { int v = requestLiveSource; requestLiveSource = 0; return v; }
@@ -1085,6 +1099,50 @@ static int mutable(int op)   { return OPTIONS[op].kind != OP_READ &&
                                       OPTIONS[op].kind != OP_ACTION && !inactive(op); }
 
 static int isRowsSection(int s) { return SECTIONS[s].start == SETTING_N; }
+static int isListsSection(int s) { return SECTIONS[s].start == SETTING_N + 1; }
+
+// --- the list finder's rows -----------------------------------------------------
+//
+// Row 0 is the search; then the lists already on the Home; then the results.
+enum { LR_SEARCH, LR_ADDED, LR_RESULT };
+static int listsRows(void) { return 1 + tl_n() + tl_browse_n(); }
+static int listRow(int i, TlList *out) {
+  int nA = tl_n();
+  memset(out, 0, sizeof *out);
+  if (i <= 0) return LR_SEARCH;
+  if (i <= nA) {
+    long id;
+    tl_get(i - 1, out);
+    // The description is not stored; the results may still carry it.
+    id = out->id;
+    for (int j = 0; j < tl_browse_n(); j++)
+      if (tl_browse_item(j)->id == id) {
+        snprintf(out->desc, sizeof out->desc, "%s", tl_browse_item(j)->desc);
+        break;
+      }
+    return LR_ADDED;
+  }
+  if (tl_browse_item(i - 1 - nA)) *out = *tl_browse_item(i - 1 - nA);
+  return LR_RESULT;
+}
+
+// Leaving the finder is when an add or a remove reaches the Home: one rebuild
+// for the whole visit.
+static void leaveLists(void) {
+  if (level != LEVEL_LISTS) return;
+  if (ime_is_open()) ime_close();
+  if (listsDirty) { listsDirty = 0; disc_rebuild(); }
+  level = 0;
+}
+
+static void openLists(int s) {
+  level = LEVEL_LISTS;
+  focusSec = s;
+  listFocus = 0;
+  listScroll = 0.0f;
+  // The popular page is fetched once per session; a failure is tried again.
+  if (tl_browse_state() == TLB_IDLE || tl_browse_state() == TLB_FAILED) tl_browse(listQuery);
+}
 
 // Leaving the Home rows list is when its edit applies: one rebuild and one push
 // for the whole session in the list, not one per key press.
@@ -1097,6 +1155,8 @@ static void leaveRows(void) {
 
 static void openSection(int s) {
   leaveRows();
+  leaveLists();
+  if (isListsSection(s)) { openLists(s); return; }
   if (isRowsSection(s)) {
     level = 2;
     focusSec = s;
@@ -1257,6 +1317,13 @@ static const char *groupOfOption(int op) {
 static const char *groupOfRow(int i) {
   if (level == 2) return i == 0 ? "Order and visibility" : NULL;
   if (level == LEVEL_UPDATES) return i == 0 ? "Releases" : NULL;
+  if (level == LEVEL_LISTS) {
+    int nA = tl_n();
+    if (i == 0) return "Search";
+    if (i == 1 && nA) return "On your Home";
+    if (i == 1 + nA) return tl_browse_query()[0] ? "Results" : "Popular on Trakt";
+    return NULL;
+  }
   if (level == 1) return groupOfOption(SECTIONS[focusSec].start + i);
   return SECTIONS[i].group;
 }
@@ -1333,6 +1400,17 @@ static void clickHomeRow(int i, int unused) {
   else sendKey(SDLK_RETURN);
 }
 
+static void pointList(int i, int unused) {
+  (void)unused;
+  if (level == LEVEL_LISTS && !ime_is_open()) { listFocus = i; follow = 0; }
+}
+static void clickList(int i, int unused) {
+  (void)unused;
+  if (level != LEVEL_LISTS || ime_is_open()) return;
+  listFocus = i;
+  sendKey(SDLK_RETURN);
+}
+
 static void pointRelease(int i, int unused) {
   (void)unused;
   if (level == LEVEL_UPDATES && !confirming && i != relFocus) {
@@ -1384,7 +1462,72 @@ static void eventUpdates(SDL_Keycode k, int back) {
   else if (ok && update_item(relFocus)->url[0]) confirming = 1;
 }
 
+// Adds the focused list, or takes it off the Home. The focus follows the list:
+// the "On your Home" group above the results grows or shrinks by one.
+static void toggleList(int i) {
+  TlList l;
+  int kind = listRow(i, &l), j;
+  char key[48];
+  if (kind == LR_SEARCH || l.id <= 0) return;
+  tl_key(l.id, key, sizeof key);
+  if (tl_has(l.id)) {
+    tl_remove(l.id);
+    listsDirty = 1;
+    if (kind == LR_RESULT) listFocus--;
+  } else if (tl_add(&l)) {
+    homerows_list_place(key);
+    listsDirty = 1;
+    listFocus++;
+  }
+  j = listsRows();
+  if (listFocus >= j) listFocus = j - 1;
+  if (listFocus < 0) listFocus = 0;
+}
+
+static void submitListSearch(void) {
+  size_t a = 0, b = strlen(listQuery);
+  while (listQuery[a] == ' ') a++;
+  while (b > a && listQuery[b - 1] == ' ') b--;
+  memmove(listQuery, listQuery + a, b - a);
+  listQuery[b - a] = 0;
+  tl_browse(listQuery);
+}
+
+static void eventLists(SDL_Keycode k, int back) {
+  int n = listsRows(), ok = k == SDLK_RETURN || k == SDLK_KP_ENTER;
+  int arrow = k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT;
+  if (ime_is_open()) {
+    // The LG keyboard can go down by itself; from then on the arrows are ours.
+    if (arrow && !ime_shown()) ime_close();
+    else {
+      if (back) ime_close();
+      else if (ok) { ime_close(); submitListSearch(); }
+      return;
+    }
+  }
+  if (back || k == SDLK_LEFT) { leaveLists(); return; }
+  if (k == SDLK_DOWN && listFocus < n - 1) listFocus++;
+  else if (k == SDLK_UP && listFocus > 0) listFocus--;
+  else if (ok) {
+    if (listFocus == 0) {
+      if (ime_usable())
+        ime_open((GfxRect){ SETTING_LIST_X, SETTING_TOP - listScroll + yOfRow(0),
+                            SETTING_LIST_W, SETTING_LINE_H });
+      else if (tl_browse_state() == TLB_FAILED) tl_browse(listQuery);
+    } else toggleList(listFocus);
+  }
+  else if (k == SDLK_PAGEUP || k == SDLK_PAGEDOWN) {
+    int sct = focusSec + (k == SDLK_PAGEDOWN ? 1 : -1);
+    if (sct >= 0 && sct < SETTING_N_SECTIONS) openSection(sct);
+  }
+}
+
 void settings_event(const SDL_Event *e) {
+  // The search field takes the keyboard's text before anything reads the keys.
+  if (level == LEVEL_LISTS && ime_is_open()) {
+    int len = (int)strlen(listQuery);
+    if (ime_edit(e, listQuery, &len, (int)sizeof listQuery)) return;
+  }
   if (e->type != SDL_KEYDOWN) return;
   SDL_Keycode k = e->key.keysym.sym;
   if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_LEFT || k == SDLK_RIGHT) follow = 1;
@@ -1422,6 +1565,7 @@ void settings_event(const SDL_Event *e) {
   }
 
   if (level == LEVEL_UPDATES) { eventUpdates(k, back); return; }
+  if (level == LEVEL_LISTS) { eventLists(k, back); return; }
 
   // Level 2: the Home rows. OK picks a row up and puts it down; up and down move
   // the focus, or the row while it is held; left and right show or hide it.
@@ -1508,6 +1652,13 @@ void settings_update(float dt, Uint32 now) {
   (void)now;
   int reduced = settings_animations_reduced();
   update_poll();
+  if (level == LEVEL_LISTS) {
+    int n = listsRows();
+    tl_browse_poll();
+    if (ime_is_open()) ime_pump();
+    if (listFocus >= n) listFocus = n - 1;
+    if (listFocus < 0) listFocus = 0;
+  }
   // A fresh list: the focus goes back to the installed version, unless the
   // person has already moved in the list being replaced.
   if (relGeneration != update_generation()) {
@@ -1523,13 +1674,14 @@ void settings_update(float dt, Uint32 now) {
       seenLevel = level;
       follow = 1;
       goalScroll = level == LEVEL_UPDATES ? relScroll : level == 2 ? rowScroll
-                 : level ? scrollY : scrollSec;
+                 : level == LEVEL_LISTS ? listScroll : level ? scrollY : scrollSec;
     } }
   // THE POINTER RESTING ON THE LIST'S EDGE scrolls it; the focus stays put.
   { float d = app_screen_in_front() && traktauth_state() != TRA_WAITING
             ? pointer_edge_scroll(SETTING_LIST_X, SETTING_LIST_X + SETTING_LIST_W,
                                   SETTING_TOP, SETTING_BASE, dt) : 0.0f;
     int rows = level == LEVEL_UPDATES ? update_n() : level == 2 ? homerows_n()
+             : level == LEVEL_LISTS ? listsRows()
              : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
     if (d != 0.0f && rows > 0) {
       float max = yOfRow(rows - 1) + SETTING_LINE_H - (SETTING_BASE - SETTING_TOP);
@@ -1558,8 +1710,17 @@ void settings_update(float dt, Uint32 now) {
     relAnim[i] = reduced ? target : anim_spring(relAnim[i], target, dt,
                           target > relAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
   }
+  for (int i = 0; i < LIST_ANIM; i++) {
+    float target = (level == LEVEL_LISTS && i == listFocus) ? 1.0f : 0.0f;
+    listAnim[i] = reduced ? target : anim_spring(listAnim[i], target, dt,
+                           target > listAnim[i] ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
+  }
   notesScroll = reduced ? notesGoal : anim_spring(notesScroll, notesGoal, dt, NV_SPRING_SCROLL);
-  if (level == LEVEL_UPDATES) {
+  if (level == LEVEL_LISTS) {
+    float target = follow ? scrollFor(listScroll, listFocus) : goalScroll;
+    goalScroll = target;
+    listScroll = reduced ? target : anim_spring(listScroll, target, dt, NV_SPRING_SCROLL);
+  } else if (level == LEVEL_UPDATES) {
     float target = follow ? scrollFor(relScroll, relFocus) : goalScroll;
     goalScroll = target;
     relScroll = reduced ? target : anim_spring(relScroll, target, dt, NV_SPRING_SCROLL);
@@ -1828,6 +1989,50 @@ static void drawHomeRow(int i, int rows, float y, float f) {
     TxtLine val = txt_line(TXT_BODY, v, c, c, c + 2, 255);
     txt_draw_alpha(val, xr - val.w, y + (SETTING_LINE_H - val.h) * 0.5f, a);
   }
+}
+
+// A row of the list finder. The search row shows the query (with a caret while
+// the keyboard is up) and the fetch's state; a list shows its name and, on the
+// right, whether it is on the Home — or, focused, what OK will do.
+static void drawListRow(int i, int rows, float y, float f) {
+  TlList l;
+  int kind = listRow(i, &l);
+  float a = rowAlpha(y, f), xr = SETTING_LIST_X + SETTING_LIST_W - SETTING_PAD;
+  char v[48];
+  int c, dot = 0;
+  if (a <= 0.005f) return;
+  drawPlate(y, f, i == listFocus, 0.0f, a);
+  drawRule(i, rows, listFocus, y, a);
+  if (kind == LR_SEARCH) {
+    int st = tl_browse_state(), typing = ime_is_open();
+    char label[112];
+    if (typing) snprintf(label, sizeof label, "%s|", listQuery);
+    else snprintf(label, sizeof label, "%s", listQuery[0] ? listQuery : "Search Trakt lists");
+    drawLabel(label, y, listQuery[0] || typing ? 240 : 170, a);
+    snprintf(v, sizeof v, "%s",
+             typing ? "OK searches"
+             : st == TLB_LOADING ? (listQuery[0] ? "Searching\xe2\x80\xa6" : "Loading\xe2\x80\xa6")
+             : st == TLB_FAILED ? "Couldn't reach Trakt"
+             : st == TLB_READY && !tl_browse_n() ? "Nothing found"
+             : f > 0.02f ? (ime_usable() ? "OK types" : "") : "");
+    c = st == TLB_FAILED ? 236 : 150;
+  } else {
+    int on = tl_has(l.id);
+    drawLabel(l.name, y, 236, a);
+    if (f > 0.02f) snprintf(v, sizeof v, "%s", on ? "Remove" : "Add to Home");
+    else if (on) snprintf(v, sizeof v, "On Home");
+    else snprintf(v, sizeof v, l.items == 1 ? "%d title" : "%d titles", l.items);
+    c = on || f > 0.02f ? 240 : 150;
+    dot = on;
+  }
+  c = (int)(c + (244 - c) * f);
+  if (!v[0]) return;
+  { TxtLine val = txt_line_trim(TXT_BODY, v, c, c, c + 2, 255, 360.0f);
+    float vx = xr - val.w;
+    if (dot)
+      gfx_color((GfxRect){ vx - 22.0f, y + SETTING_LINE_H * 0.5f - 5.0f, 10.0f, 10.0f }, 0.5f,
+                SETTING_ACCENT_R, SETTING_ACCENT_G, SETTING_ACCENT_B, a);
+    txt_draw_alpha(val, vx, y + (SETTING_LINE_H - val.h) * 0.5f, a); }
 }
 
 // A release on level 3: its version on the left; on the right where it stands
@@ -2578,12 +2783,59 @@ static void drawUpdatesPanel(float hx, float hw) {
   if (notesGoal > notesMax) notesGoal = notesMax;
 }
 
+// The finder's side panel: the focused list's owner, size, likes and
+// description, and what OK does to it.
+static void drawListsPanel(float hx, float hw) {
+  TlList l;
+  int kind = listRow(listFocus, &l);
+  float y = SETTING_TOP + 22.0f;
+  char line[160];
+  if (kind == LR_SEARCH) {
+    y += drawKicker("Search", hx, y, 0.0f, 1.0f) + 14.0f;
+    y += txt_block(TXT_PANEL_TITLE, "Find a list", 246, 246, 248, hx, y, hw, 48, 1, 2) + 10.0f;
+    y += txt_block(TXT_CAPTION,
+                   ime_usable()
+                   ? "Every public list on Trakt: the IMDb Top 250, a director's films, a franchise, an award. OK opens the keyboard and OK again searches. An empty search brings back the popular lists."
+                   : "This TV has no on-screen keyboard, so only the popular lists are here.",
+                   170, 172, 178, hx, y, hw, 32, 1, 5) + 26.0f;
+    y += drawKicker("Good to know", hx, y, 0.0f, 1.0f) + 14.0f;
+    txt_block(TXT_CAPTION,
+              "Lists you add stay on this TV and don't sync to the web app. Move or hide them in Home rows, like any other row. A list row shows its first 100 titles.",
+              150, 152, 158, hx, y, hw, 32, 1, 5);
+    return;
+  }
+  { int on = tl_has(l.id), full = !on && tl_n() >= TL_MAX;
+    const char *act = on ? "OK takes it off your Home."
+                    : full ? "Ten lists is the most the Home takes. Remove one first."
+                    : "OK adds it to the top of your Home. Move it in Home rows.";
+    y += drawKicker(on ? "On your Home" : "Trakt list", hx, y, 0.0f, 1.0f) + 14.0f;
+    y += txt_block(TXT_PANEL_TITLE, l.name, 246, 246, 248, hx, y, hw, 48, 1, 3) + 6.0f;
+    if (l.user[0]) snprintf(line, sizeof line, "by %s", l.user);
+    else line[0] = 0;
+    if (line[0]) y += txt_block(TXT_CAPTION, line, 150, 152, 158, hx, y, hw, 32, 1, 1) + 12.0f;
+    y += txt_block(TXT_CAPTION, act,
+                   full ? 236 : SETTING_ACCENT_R * 255 + 40, full ? 150 : SETTING_ACCENT_G * 255 + 60,
+                   full ? 120 : 255, hx, y, hw, 32, 1, 2) + 28.0f;
+    y += drawKicker("List", hx, y, 0.0f, 1.0f) + 14.0f;
+    snprintf(line, sizeof line, "%d", l.items);
+    y += drawPair("Titles", line, hx, y, hw);
+    if (l.likes > 0) {
+      snprintf(line, sizeof line, "%d", l.likes);
+      y += drawPair("Likes", line, hx, y, hw);
+    }
+    if (l.desc[0]) {
+      y += 18.0f;
+      txt_block(TXT_CAPTION, l.desc, 170, 172, 178, hx, y, hw, 32, 1, 8);
+    } }
+}
+
 static void drawPanel(float hx, float hw) {
   const char *head, *help;
   int scene, chipSize;
   float y = SETTING_TOP + 22.0f;
 
   if (level == LEVEL_UPDATES) { drawUpdatesPanel(hx, hw); return; }
+  if (level == LEVEL_LISTS) { drawListsPanel(hx, hw); return; }
 
   if (level == 0) {
     head = SECTIONS[focusSec].title;
@@ -2644,6 +2896,13 @@ static void drawPanel(float hx, float hw) {
       y += drawKicker("Currently", hx, y, 0.0f, 1.0f) + 14.0f;
       y += drawPair("Shown", a, hx, y, hw);
       drawPair("Hidden", h, hx, y, hw);
+      return;
+    }
+    if (isListsSection(s)) {
+      char c[16];
+      snprintf(c, sizeof c, "%d", tl_n());
+      y += drawKicker("Currently", hx, y, 0.0f, 1.0f) + 14.0f;
+      drawPair("On your Home", c, hx, y, hw);
       return;
     }
     y += drawKicker("Currently", hx, y, 0.0f, 1.0f) + 14.0f;
@@ -2872,6 +3131,13 @@ static void drawHeader(float right) {
     txt_draw(c, right - c.w, base - txt_baseline(TXT_CAPTION));
     return;
   }
+  if (level == LEVEL_LISTS) {
+    int nA = tl_n();
+    snprintf(count, sizeof count, "%d on Home", nA);
+    TxtLine c = txt_line(TXT_CAPTION, count, 150, 152, 158, 255);
+    txt_draw(c, right - c.w, base - txt_baseline(TXT_CAPTION));
+    return;
+  }
   int n = level == 2 ? homerows_n() : SECTIONS[focusSec].n;
   snprintf(count, sizeof count, level == 2 ? (n == 1 ? "%d row" : "%d rows")
                                            : (n == 1 ? "%d setting" : "%d settings"), n);
@@ -2880,6 +3146,8 @@ static void drawHeader(float right) {
 }
 
 void settings_draw(Uint32 now) {
+  // All of its copy on the first frame, not streaming in (text.h).
+  txt_unbudgeted();
   // An opaque background of its own: the screen covers everything and cannot
   // depend on whoever drew before it — without this the home shows between the
   // rows of the list.
@@ -2897,9 +3165,10 @@ void settings_draw(Uint32 now) {
   drawHeader(hw > 240.0f ? hx + hw : NV_SCREEN_W - NV_MARGIN_X);
 
   int rows = level == LEVEL_UPDATES ? update_n() : level == 2 ? homerows_n()
+           : level == LEVEL_LISTS ? listsRows()
            : level ? SECTIONS[focusSec].n : SETTING_N_SECTIONS;
   float scroll = level == LEVEL_UPDATES ? relScroll : level == 2 ? rowScroll
-               : level ? scrollY : scrollSec;
+               : level == LEVEL_LISTS ? listScroll : level ? scrollY : scrollSec;
   gfx_crop(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
                SETTING_LIST_W + NV_RING_FOCUS * 2, NV_SCREEN_H - SETTING_TOP);
   pointer_clip(SETTING_LIST_X - NV_RING_FOCUS, SETTING_TOP,
@@ -2914,6 +3183,9 @@ void settings_draw(Uint32 now) {
     else if (level == 2)
       pointer_zone_act(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H,
                        pointHomeRow, clickHomeRow, i, 0);
+    else if (level == LEVEL_LISTS)
+      pointer_zone_act(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H,
+                       pointList, clickList, i, 0);
     else if (level)
       pointer_zone_act(SETTING_LIST_X, y, SETTING_LIST_W, SETTING_LINE_H,
                        pointOption, clickOption, SECTIONS[focusSec].start + i, 0);
@@ -2923,6 +3195,8 @@ void settings_draw(Uint32 now) {
       drawRelease(i, rows, y, i < 32 ? relAnim[i] : 0.0f);
     } else if (level == 2) {
       drawHomeRow(i, rows, y, i < 512 ? rowAnim[i] : 0.0f);
+    } else if (level == LEVEL_LISTS) {
+      drawListRow(i, rows, y, i < LIST_ANIM ? listAnim[i] : 0.0f);
     } else if (level) {
       int op = SECTIONS[focusSec].start + i;
       drawLine(op, i, rows, y, animFocus[op]);

@@ -1011,6 +1011,8 @@ static void searchingDots(float x, float midY, Uint32 now) {
 
 void stream_sheet_draw(Uint32 now) {
   if(anim<.005f) return;
+  // Every row's copy on the first frame, not streaming in (text.h).
+  txt_unbudgeted();
   // The short slide the track menus use — see the update.
   float slide=(1-anim)*NV_SRC_VEIL_W*NV_TRK_SLIDE;
   float x=NV_SCREEN_W-NV_SRC_VEIL_W+slide;

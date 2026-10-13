@@ -1220,8 +1220,12 @@ static const char *FS_BODY[GFX_NMODES] = {
   // ANGLED, not upright: the ramp's width grows with the height, from about half
   // at the top edge to a little past its full width at the base, so the top-left
   // corner keeps most of the picture and the ground deepens down towards the copy.
-  "  float tS = vUv.x / (cx * mix(0.5, 1.15, clamp(vUv.y, 0.0, 1.0)));\n"
-  "  float ahS = 1.0 - smoothstep(0.0, 1.0, tS);\n"
+  // WIDE, with a long tail. At 0.5..1.15 of cx the ramp was ~220px at the top of a
+  // 65% trailer and still read as a vertical band on the Bravia; 0.9..1.5 spreads
+  // it to 400..660px, and raising the falloff to 1.5 thins the middle so the wider
+  // ramp does not darken more of the picture than the narrow one did.
+  "  float tS = vUv.x / (cx * mix(0.9, 1.5, clamp(vUv.y, 0.0, 1.0)));\n"
+  "  float ahS = pow(1.0 - smoothstep(0.0, 1.0, tS), 1.5);\n"
   "  float full = step(0.5, uFocus), fit = step(1.5, uFocus), soft = step(2.5, uFocus);\n"
   "  float av = mix(mix(avB, avF, full), avT, fit);\n"
   "  float ah = mix(mix(mix(ahB, ahF, full), ahT, fit), ahS, soft);\n"

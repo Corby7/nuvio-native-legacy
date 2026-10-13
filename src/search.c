@@ -588,6 +588,15 @@ static void applyHistory(int i) {
 }
 
 // --- Life cycle --------------------------------------------------------------
+// ARRIVING IS TYPING. The screen opens on the field with the keyboard already
+// up, as the web app's does, instead of waiting for an OK on a field that is
+// already focused. Where the platform has no keyboard (ime_usable) toHeader puts
+// the focus on the on-screen grid instead and nothing is raised.
+static void raiseField(void) {
+  toHeader();
+  if (panel == PANEL_FIELD) ime_open(rectField());
+}
+
 int search_start(void) {
   focus_start(&focusKb, SEARCH_KB_ROWS, KB_COLUMNS);
   toHeader();
@@ -607,6 +616,7 @@ int search_start(void) {
   historyLoad();
   { int one = 1; focus_start(&focusHist, 1, &one); }
   refilter();
+  raiseField();
   return 1;
 }
 
@@ -614,13 +624,15 @@ void search_resume(void) {
   wantsExit = 0; request = -1; requestDiscover = 0; requestMenu = 0;
   hasItemFocus = 0;
   // A keyboard left up by the last visit is not the viewer's: text input is
-  // global to the window (ime.h), and it would eat the D-pad on the way in.
+  // global to the window (ime.h), and it would eat the D-pad on the way in. A
+  // fresh one comes up below, pointed at this visit's field.
   ime_close();
   historyLoad();
   // The results hold CATALOGUE INDICES, and a rebuild while the screen was away
   // moves them. Filtering the same query again keeps the focused title (refilter
   // looks for it) and points every card at the right one.
   refilter();
+  raiseField();
 }
 
 void search_shutdown(void) {

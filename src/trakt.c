@@ -798,6 +798,74 @@ int trakt_list(const char *which, CatItem *output, int max) {
   return n;
 }
 
+#ifndef NV_TRAKT_CLIENT_ID
+#define NV_TRAKT_CLIENT_ID ""
+#endif
+
+int trakt_public_headers(const char **header, char *auth, size_t nAuth,
+                         char *key, size_t nKey) {
+  const char *cli = client[0] ? client : NV_TRAKT_CLIENT_ID;
+  int n = 0;
+  if (!cli[0]) return 0;
+  snprintf(key, nKey, "trakt-api-key: %s", cli);
+  header[n++] = "trakt-api-version: 2";
+  header[n++] = key;
+  if (on) { snprintf(auth, nAuth, "Authorization: Bearer %s", token); header[n++] = auth; }
+  header[n] = NULL;
+  return 1;
+}
+
+int trakt_public_list(long id, CatItem *output, int max) {
+  const char *header[4];
+  char auth[200], key[140], url[160], *body;
+  const char *p;
+  int n = 0;
+  if (id <= 0 || max < 1) return 0;
+  if (!trakt_public_headers(header, auth, sizeof auth, key, sizeof key)) return 0;
+  // No type in the path: one request brings films and series together, already
+  // in the list's rank order. Trakt pages at 100 by default, so the limit asks
+  // for exactly what fits.
+  snprintf(url, sizeof url, "https://api.trakt.tv/lists/%ld/items?limit=%d", id, max);
+  body = net_download_headers(url, 25, header);
+  if (!body) {
+    printf("[trakt] public list %ld: no answer\n", id);
+    fflush(stdout);
+    return 0;
+  }
+  p = strchr(body, '[');
+  p = p ? p + 1 : NULL;
+  while (p && *p && n < max) {
+    const char *f, *block;
+    char type[16] = "", imdb[24] = "";
+    int series;
+    CatItem *d = &output[n];
+    while (*p && (unsigned char)*p <= ' ') p++;
+    if (*p != '{') break;
+    f = js_end(p);
+    js_text(p, f, "type", type, sizeof type);
+    series = !strcmp(type, "show");
+    // A list may also hold seasons, episodes and people. Only whole films and
+    // series make a card.
+    if (series || !strcmp(type, "movie")) {
+      block = strstr(p, series ? "\"show\"" : "\"movie\"");
+      if (block && block < f && strchr(block, '{')) {
+        const char *fb = js_end(strchr(block, '{'));
+        memset(d, 0, sizeof *d);
+        js_text(block, fb, "title", d->title, sizeof d->title);
+        js_text(block, fb, "imdb", imdb, sizeof imdb);
+        d->year = (int)js_num(block, fb, "year", 0);
+        d->tmdb = (long)js_num(block, fb, "tmdb", 0);
+        if (imdb[0]) { listArt(d, imdb, series); n++; }
+      }
+    }
+    p = js_next(f);
+  }
+  free(body);
+  printf("[trakt] public list %ld: %d\n", id, n);
+  fflush(stdout);
+  return n;
+}
+
 int trakt_recommendations(CatItem *output, int max) {
   const char *header[4];
   char auth[200], key[140], url[200], *body;

@@ -174,6 +174,17 @@ int profiles_pull(void) {
   return n;
 }
 
+int profiles_repair_active(void) {
+  int i, pick;
+  if (n <= 0 || profiles_item_active()) return 0;
+  pick = list[0].index_;
+  for (i = 0; i < n; i++) if (list[i].primary) { pick = list[i].index_; break; }
+  printf("[profiles] active profile %d is gone from the account; switching to %d\n",
+         active, pick);
+  profiles_set_active(pick);
+  return 1;
+}
+
 int           profiles_n(void)         { return n; }
 const AccountProfile *profiles_item(int i)     { return (i >= 0 && i < n) ? &list[i] : NULL; }
 

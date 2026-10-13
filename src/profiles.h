@@ -58,6 +58,10 @@ int  profiles_active(void);                // profile_index; 1 when nothing has 
 // when it was made, and go stale.
 int  profiles_addon_profile(void);
 void profiles_set_active(int index_);
+// When the active profile is no longer on the account (deleted in the web app),
+// switches to the primary one, or the first. 1 if it switched. Main thread only:
+// it changes every per-profile store, which the UI is reading.
+int  profiles_repair_active(void);
 void profiles_load_active(void);       // reads from disk; call at startup
 
 // 1 when there is more than one profile and the user has not chosen yet on this

@@ -1224,6 +1224,10 @@ void sync_step(unsigned nowMs) {
     return;
   }
   if (!earlyApplied && __atomic_load_n(&earlyReady, __ATOMIC_ACQUIRE)) {
+    // The profile list has just arrived. If the active profile is not on it any
+    // more, this cycle pulled for a dead index: switch now, and the check at the
+    // top drops the cycle once its thread ends and begins one for the new profile.
+    if (profiles_repair_active()) return;
     earlyApplied = 1;
     applyEarly();
   }

@@ -2,6 +2,7 @@
 // the top, a fixed rail on the left and horizontal rows of posters. The native
 // infrastructure handles the asynchronous cache, focus and transitions.
 #include "home.h"
+#include "menu.h"
 #include "resume.h"
 #include "seeall.h"
 #include "ctxmenu.h"
@@ -15,6 +16,7 @@
 #include "layout.h"
 #include "settings.h"
 #include "homerows.h"
+#include "traktlists.h"
 #include "catalog.h"
 #include "collections.h"
 #include "discover.h"
@@ -1196,7 +1198,9 @@ static int subscriptionPrefs(void) {
        | (settings_posters_landscape() ? 8 : 0)
        | (settings_labels_poster() ? 16 : 0)
        | (homerows_trakt_watchlist() ? 64 : 0)
-       | (homerows_trakt_recs() ? 128 : 0);
+       | (homerows_trakt_recs() ? 128 : 0)
+       // Adding or removing a list changes the rows before the rebuild lands.
+       | (int)((tl_generation() & 0xffff) << 8);
 }
 // THE KNOWN CURATION. It no longer decides the ORDER — the account's list does —
 // and is left with two jobs: supplying the display name and the special kind of
@@ -1323,6 +1327,8 @@ static void syncRows(void) {
     // The opt-in Trakt rows likewise: the cached catalogue may still carry them.
     if (!strcmp(cf->key, "trakt_watchlist") && !homerows_trakt_watchlist()) continue;
     if (!strcmp(cf->key, "trakt_recommendations") && !homerows_trakt_recs()) continue;
+    // And a Trakt list that was removed or hidden since the cache was written.
+    if (!strncmp(cf->key, "traktlist_", 10) && !homerows_list_on(cf->key)) continue;
     snprintf(rows[destination].title, sizeof rows[destination].title, "%s", cf->title);
     // "Continue watching" is the only landscape one: it is the profile's
     // `continueWatchingCardStyle: "card"`. Everything else is a 2:3 poster.
@@ -2822,6 +2828,9 @@ static void heroTrailerStep(const CatItem *ci, GfxRect r, GfxMode mode,
   int want;
   ht.tick = now;
   ht.claimed = 1;
+  // THE SIDEBAR IS SOMEWHERE ELSE. Opening it stops the trailer, and closing it
+  // waits the full delay again rather than starting one the instant it slides out.
+  if (menu_is_open()) settled = 0;
   if (!settled) ht.restAt = 0;
   else if (!ht.restAt) ht.restAt = now;
   if (!ci || !ci->imdb[0] || strcmp(ht.imdb, ci->imdb)) {

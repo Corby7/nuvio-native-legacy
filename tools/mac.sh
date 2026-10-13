@@ -30,7 +30,15 @@ export NUVIO_DATA="${NUVIO_DATA:-$HOME/.nuvio}"
 # executable sits in — SDL_SetWindowIcon is ignored here, and a bare binary in
 # /tmp always draws the generic rocket. The bundle is still launched directly
 # (not through `open`), so stdout stays in this terminal like before.
-APP=/tmp/Nuvio-Legacy.app
+#
+# --install builds into /Applications instead, as an app that opens from the
+# Dock: art/ and fonts/ are copied into Contents/Resources, which is where
+# main.c looks when it is given no art path (SDL_GetBasePath on a bundle). It
+# still links Homebrew's SDL2 and mpv, so it runs on a Mac that has them. The
+# session is the same ~/.nuvio either way.
+INSTALL=""
+if [ "$1" = "--install" ]; then INSTALL=1; shift; fi
+if [ -n "$INSTALL" ]; then APP=/Applications/Nuvio.app; else APP=/tmp/Nuvio-Legacy.app; fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 # The icns comes from the BADGED master, the same file the webOS tiles are cut
@@ -58,8 +66,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>Nuvio Legacy</string>
-  <key>CFBundleDisplayName</key><string>Nuvio Legacy</string>
+  <key>CFBundleName</key><string>Nuvio</string>
+  <key>CFBundleDisplayName</key><string>Nuvio</string>
   <key>CFBundleIdentifier</key><string>io.github.corby7.nuvio</string>
   <key>CFBundleExecutable</key><string>nuvio-legacy</string>
   <key>CFBundleIconFile</key><string>nuvio</string>
@@ -79,7 +87,7 @@ else
   echo "mac.sh: libmpv not found (brew install mpv) -- building without video" >&2
 fi
 
-eval cc src/*.c -o "$APP/Contents/MacOS/nuvio-legacy" -O1 -g "$ENV_D" $MPV_FLAGS \
+eval cc src/*.c -o \"\$APP/Contents/MacOS/nuvio-legacy\" -O1 -g "$ENV_D" $MPV_FLAGS \
   -I/opt/homebrew/include -I/opt/homebrew/include/SDL2 \
   -L/opt/homebrew/lib -lSDL2 -lSDL2_image -lSDL2_ttf \
   -framework OpenGL -Wno-deprecated-declarations
@@ -87,7 +95,29 @@ eval cc src/*.c -o "$APP/Contents/MacOS/nuvio-legacy" -O1 -g "$ENV_D" $MPV_FLAGS
 # Rewriting the executable leaves the old ad-hoc signature stale, and the Dock
 # caches the icon per bundle: re-sign and touch, or the first run after a
 # rebuild can still show the previous icon.
+if [ -n "$INSTALL" ]; then
+  # The same art the .ipk ships, minus the runtime cache (hundreds of MB, the
+  # app rebuilds it) and the owner's key files, which live in ~/.nuvio now.
+  rsync -a --delete \
+    --exclude cache/ --exclude catalogo-rede.bin --exclude tmdb.txt --exclude trakt.txt \
+    --exclude mdblist.txt --exclude addons.txt --exclude ajustes.txt \
+    --exclude collections.json --exclude collections/ \
+    deploy/app/art/ "$APP/Contents/Resources/art/"
+  rsync -a --delete deploy/app/fonts/ "$APP/Contents/Resources/fonts/"
+fi
+
 codesign -f -s - "$APP" >/dev/null 2>&1 || true
 touch "$APP"
+
+if [ -n "$INSTALL" ]; then
+  # Into the Dock once; a second install must not add a second icon.
+  if ! defaults read com.apple.dock persistent-apps 2>/dev/null | grep -q "/Applications/Nuvio.app/"; then
+    defaults write com.apple.dock persistent-apps -array-add \
+      "<dict><key>tile-data</key><dict><key>file-data</key><dict><key>_CFURLString</key><string>file://${APP// /%20}/</string><key>_CFURLStringType</key><integer>15</integer></dict></dict></dict>"
+    killall Dock
+  fi
+  echo "installed: $APP"
+  exit 0
+fi
 
 exec "$APP/Contents/MacOS/nuvio-legacy" "$(pwd)/deploy/app/art" "$@"

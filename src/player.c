@@ -1108,6 +1108,10 @@ int  player_controls_visible(void) { return visible; }
 // was marked and the episode stayed unwatched (upstream issue #100). The last
 // 60 s stay in, for a title with no credits marker too short for 120 s to mean
 // anything.
+// Below this a position is not worth resuming, and writing it would only
+// overwrite a record that is.
+#define PLR_RESUME_MIN_S 5.0f
+
 static int watchedToEnd(double pos, double dur) {
   double credits = intro_credits_start();
   if (dur <= 1.0) return 0;
@@ -1120,7 +1124,15 @@ void player_shutdown(void) {
   // Save BEFORE stopping: video_stop unloads the pipeline and the position goes with
   // it. A title watched to the end counts as watched in full — going back to a card
   // saying "2 min left" when it has actually finished is worse than rounding.
-  if (hasVideo && video_ready() && durationSeg > 1.0f && !trailerMode) {
+  //
+  // NOT FROM A PLAYBACK THAT NEVER GOT GOING. Back pressed in the first seconds —
+  // before the resume seek has landed, or on the wrong episode — closes at 0, and
+  // saving that replaced the series' line (S1E10 at 80%) with one at 0%: the local
+  // half dropped it as not started, the newer instant made the Trakt half's copy
+  // look superseded (discover.c, supersededLocally), and the show left Continue
+  // watching altogether. The checkpoint's own floor, so both writers agree.
+  if (hasVideo && video_ready() && durationSeg > 1.0f && !trailerMode &&
+      posSeg >= PLR_RESUME_MIN_S) {
     int done = watchedToEnd(posSeg, durationSeg);
     float pos = done ? durationSeg : posSeg;
     const CatItem *ci;
@@ -1783,7 +1795,7 @@ static int traktId(char *id, size_t size) {
 
 static void checkpoint(Uint32 now, const char *why) {
   checkpointAt = now;
-  if (posSeg < 5.0f) return;   // nothing worth resuming yet
+  if (posSeg < PLR_RESUME_MIN_S) return;   // nothing worth resuming yet
   followTitle();
   cat_save_progress_ep(idx, posSeg, durationSeg, epT, epE);
   sync_dirty_progress();
@@ -2553,7 +2565,9 @@ static void drawSkipIntro(int kind) {
   float x = NV_SCREEN_W - NV_PJ_RIGHT - w, y = jumpBottom() - h;
   float c = hot ? 0.961f : NV_SKIP_BG, a = hot ? 1.0f : NV_SKIP_BG_A;
   float pad = (NV_SKIP_ICON - NV_SKIP_ICON_INK) * 0.5f;
-  gfx_color((GfxRect){ x, y, w, h }, NV_SKIP_R / h, c, c, c, a * entry);
+  // A PILL, like the next-episode card's pills that share this corner: the two
+  // prompts read as one family. It was a 24px-radius card.
+  gfx_color((GfxRect){ x, y, w, h }, 0.5f, c, c, c, a * entry);
   pointer_zone(x, y, w, h, pointCard, -1, 0);
   { float g = ink / 255.0f;
     gfx_icon((GfxRect){ x + NV_SKIP_PADX - pad, y + (h - NV_SKIP_ICON) * 0.5f,
@@ -2567,7 +2581,7 @@ static void drawSkipIntro(int kind) {
   //
   // Using the mode rather than two rectangles is what makes it fit. The mode cuts
   // the band with the HOST'S OWN corner SDF, so both ends round exactly as the
-  // button's 24px radius does. Drawn as plain rects it had to be inset by half the
+  // pill's ends do. Drawn as plain rects it had to be inset by half the
   // radius to keep its square corners from poking out through the pill, which left
   // a bar visibly narrower than the thing it measures.
   // IT INVERTS WITH THE BUTTON. The countdown only runs while the transport is
@@ -2583,7 +2597,7 @@ static void drawSkipIntro(int kind) {
     if (p < 0.0f) p = 0.0f;
     if (p > 1.0f) p = 1.0f;
     gfx_rect((GfxRect){ x, y, w, h }, 0, GFX_CW_BAR, 0,
-             NV_SKIP_BAR / h, p, NV_SKIP_R / h, br, bg, bb, entry); }
+             NV_SKIP_BAR / h, p, 0.5f, br, bg, bb, entry); }
 }
 
 static void drawNextCard(const CatEp *next) {
@@ -3484,8 +3498,9 @@ static void drawPlayer(Uint32 now) {
     // Only with a picture: until then video_width() and the HDR flags still
     // describe the PREVIOUS playback, and the line announced its 4K/Dolby Vision
     // over a source that had not opened yet. Not while the next-episode card is
-    // up either: it sits in that same corner.
-    if (player_has_video() && !nextCardUp() && streamFacts(facts, sizeof facts) > 0) {
+    // up either, nor the skip button: both sit in that same corner, and the raised
+    // skip button's base lands right on this line.
+    if (player_has_video() && !cardPresent() && streamFacts(facts, sizeof facts) > 0) {
       TxtLine lf = txt_line_trim(TXT_PLR_META3, facts, 255, 255, 255, 255, cw * .30f);
       // 0.72, not the sheet's 0.50: this is the line the owner reads to know
       // whether they got the good version, and at half white it was too faint.

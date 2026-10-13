@@ -98,10 +98,11 @@ static Entry cache[MAX_LINES];
 // 2 and not 4: with 4 the worst frame averaged 6 ms on text alone, and the aim
 // here is that NO single part eats more than a third of the frame.
 #define TXT_PER_FRAME 2
-static int traceThisFrame;
+static int traceThisFrame, unbudgeted;
 static unsigned long frameTxt = 1;
 
-void txt_new_frame(void) { traceThisFrame = 0; txt_misses = 0; frameTxt++; }
+void txt_new_frame(void) { traceThisFrame = 0; unbudgeted = 0; txt_misses = 0; frameTxt++; }
+void txt_unbudgeted(void) { unbudgeted = 1; }
 static unsigned long lruClock = 1;
 int    txt_rasterized = 0;
 // How many lines have been EVICTED to make room for others. Zero is the healthy
@@ -1082,7 +1083,7 @@ static TxtLine lineFamily(TxtStyle style, const char *s, int r, int g,
 
   // Budget blown: return empty and try again next frame. The line appears one
   // frame late instead of freezing the current one.
-  if (traceThisFrame >= TXT_PER_FRAME) return empty;
+  if (!unbudgeted && traceThisFrame >= TXT_PER_FRAME) return empty;
   traceThisFrame++;
   int slot = free_;
   if (slot < 0) {

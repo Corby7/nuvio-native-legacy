@@ -9,6 +9,7 @@
 #include "trakt.h"
 #include "settings.h"
 #include "homerows.h"
+#include "traktlists.h"
 #include "watchedep.h"
 #include "data.h"
 #include <stdio.h>
@@ -1776,6 +1777,11 @@ typedef struct {
   // The opt-in home rows, as windows into `items`: the watchlist is the head of
   // it (fetched first), the recommendations its tail. 0 when the row is off.
   int nWatch, recStart, nRecs;
+  // The Trakt lists the owner added (traktlists.h), in `listItems`: one window
+  // per shown list, in the order homerows_lists_shown gave them.
+  CatItem *listItems;
+  int nList, nListItems;
+  struct { long id; int start, n; } list[TL_MAX];
 } TraktLast;
 
 static int buildResume(CatItem *output, int max);
@@ -1792,6 +1798,28 @@ static int byAddedDesc(const void *a, const void *b) {
   return x < y ? 1 : x > y ? -1 : 0;
 }
 
+// The added Trakt lists. Public lists need no Trakt account, so these run with
+// or without one — which is why they are not behind traktLast's acclib branch.
+static void traktLists(TraktLast *t) {
+  long ids[TL_MAX];
+  int n = homerows_lists_shown(ids, TL_MAX), i;
+  if (n <= 0) return;
+  t->listItems = malloc(sizeof(CatItem) * (size_t)n * TL_ITEMS);
+  if (!t->listItems) return;
+  for (i = 0; i < n; i++) {
+    int got = trakt_public_list(ids[i], t->listItems + t->nListItems, TL_ITEMS);
+    if (got <= 0) continue;
+    // Same words-only pass as the watchlist: the cards keep metahub's art and
+    // gain the synopsis, the score and the runtime the hero shows.
+    trakt_describe_batch(t->listItems + t->nListItems, got);
+    t->list[t->nList].id = ids[i];
+    t->list[t->nList].start = t->nListItems;
+    t->list[t->nList].n = got;
+    t->nList++;
+    t->nListItems += got;
+  }
+}
+
 static void *traktLast(void *u) {
   TraktLast *t = (TraktLast *)u;
   int nWatch;
@@ -1802,6 +1830,7 @@ static void *traktLast(void *u) {
   // row is Trakt's.
   if (acclib_active()) {
     t->n = acclib_items(t->items, t->cap);
+    traktLists(t);
     return NULL;
   }
   nWatch = trakt_list("watchlist", t->items, t->cap);
@@ -1829,6 +1858,7 @@ static void *traktLast(void *u) {
     trakt_describe_batch(t->items, t->nWatch < 200 ? t->nWatch : 200);
   if (t->nRecs > 0)
     trakt_describe_batch(t->items + t->recStart, t->nRecs);
+  traktLists(t);
   return NULL;
 }
 
@@ -1859,8 +1889,10 @@ static void *build(void *u) {
   // Slots kept free for the opt-in Trakt rows: they land after every catalogue
   // has been read, and a catalogue loop that had filled the array would leave
   // them nowhere to go.
+  long listIds[TL_MAX];
   int traktSlots = (homerows_trakt_watchlist() ? 1 : 0)
-                 + (homerows_trakt_recs() ? 1 : 0);
+                 + (homerows_trakt_recs() ? 1 : 0)
+                 + homerows_lists_shown(listIds, TL_MAX);
   (void)u;
   if (!lote) { searching = 0; return NULL; }
 
@@ -2123,16 +2155,24 @@ static void *build(void *u) {
   // catalogue looking for the marks, so for it their position makes no difference.
   // The rows that go LAST, from thread B.
   if (okLast) pthread_join(thLast, NULL);
-  if (last.n > 0) {
-    int base = n;
-    ENSURES(last.n);
-    if (last.n > cap - n) last.n = cap - n;   // the realloc failed
-    memcpy(lote + n, last.items, sizeof(CatItem) * (size_t)last.n);
-    n += last.n;
+  if (last.n > 0 || last.nListItems > 0) {
+    int base = n, l;
+    // The list rows' cards go in right after the Trakt rows' — one block, so the
+    // windows below can point into it.
+    ENSURES(last.n + last.nListItems);
+    if (last.n + last.nListItems > cap - n) {   // the realloc failed
+      last.nList = last.nListItems = 0;
+      if (last.n > cap - n) last.n = cap - n;
+    }
+    if (last.n > 0) memcpy(lote + n, last.items, sizeof(CatItem) * (size_t)last.n);
+    if (last.nListItems > 0)
+      memcpy(lote + n + last.n, last.listItems, sizeof(CatItem) * (size_t)last.nListItems);
+    for (l = 0; l < last.nList; l++) last.list[l].start += n + last.n;
+    n += last.n + last.nListItems;
     // The opt-in Trakt rows go where the owner's order puts them (see
     // homerows.h): before the first catalogue row the order places after them.
     // With no position in the order, right after "Continue watching". Their slots were kept free above, so nRowsBuilt + 2 fits.
-    { CatRow rowsTrakt[2];
+    { CatRow rowsTrakt[2 + TL_MAX];
       int nt = 0, t, k;
       if (last.nWatch > 0 && last.nWatch <= last.n)
         traktRowFilter(&rowsTrakt[nt++], "trakt_watchlist", "Watchlist",
@@ -2140,6 +2180,13 @@ static void *build(void *u) {
       if (last.nRecs > 0 && last.recStart + last.nRecs <= last.n)
         traktRowFilter(&rowsTrakt[nt++], "trakt_recommendations",
                        "Recommended for You", base + last.recStart, last.nRecs);
+      for (t = 0; t < last.nList; t++) {
+        char key[48], title[96];
+        tl_key(last.list[t].id, key, sizeof key);
+        homerows_list_title(key, title, sizeof title);
+        traktRowFilter(&rowsTrakt[nt++], key, title[0] ? title : "Trakt list",
+                       last.list[t].start, last.list[t].n);
+      }
       for (t = 0; t < nt && nRowsBuilt < CAT_FILTER_MAX; t++) {
         int mine = prefIndex(rowsTrakt[t].key), at = 0;
         for (k = 0; k < nRowsBuilt; k++)
@@ -2154,10 +2201,15 @@ static void *build(void *u) {
                 sizeof(CatRow) * (size_t)(nRowsBuilt - at));
         filtersBuilt[at] = rowsTrakt[t];
         nRowsBuilt++;
+        printf("[disc] row %d: %s (%d) — local\n", at, rowsTrakt[t].title, rowsTrakt[t].n);
       }
+      for (; t < nt; t++)
+        printf("[disc] no room for local row %s\n", rowsTrakt[t].title);
+      fflush(stdout);
     }
   }
   free(last.items);
+  free(last.listItems);
 #undef ENSURES
 
   // A title in the account library is saved on EVERY card that shows it, not only
