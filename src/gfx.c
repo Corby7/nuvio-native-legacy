@@ -1199,7 +1199,9 @@ static const char *FS_BODY[GFX_NMODES] = {
   // uFocus FEATHERS the edge outward by that many pixels: 0 is a crisp hole.
   "  float a = smoothstep(-0.5, max(0.5, uFocus), d) * uColor.a;\n"
   "  if (a <= 0.002) discard;\n"
-  "  gl_FragColor = vec4(0.0, 0.0, 0.0, a);\n"
+  // The fill takes uColor's RGB: gfx_scrim_hole passes black, the splash's
+  // portal passes the page ground.
+  "  gl_FragColor = vec4(uColor.rgb, a);\n"
   "}\n",
 
   // GFX_RING_FILL — the ray from the centre through the fragment is taken to the
