@@ -522,6 +522,69 @@ static int queryTarget(const TargetSearch *a, const char *term,
   return n;
 }
 
+// --- a second try with the title spelt right --------------------------------
+// The addons match words: Cinemeta finds "whale ridr" but answers "whalerider"
+// with nothing, and neither do the others. IMDb's suggestion box does find it,
+// so a target that came back empty asks that box what the owner meant and
+// searches again with the real title.
+//
+// A suggestion is taken only when its title, squashed to letters and digits,
+// CONTAINS the squashed term. That is exactly the missing-space case, and it is
+// what keeps the box's other guesses out: for "whalerider" it also offers
+// "Pale Rider", and for "thedarkknight" its first answer is "Halloween Family
+// Fun". A real typo is not fixed here, but the addons already forgive those.
+static void squash(const char *s, char *dst, size_t size) {
+  size_t k = 0;
+  for (; *s && k + 1 < size; s++) {
+    unsigned char c = (unsigned char)*s;
+    if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + 32);
+    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) dst[k++] = (char)c;
+  }
+  dst[k] = 0;
+}
+
+// One lookup per term, shared by every search thread: the first to need it
+// holds the lock through the download and the others then read the answer.
+static pthread_mutex_t fixLock = PTHREAD_MUTEX_INITIALIZER;
+static char fixTerm[96], fixTitle[96];
+
+static int correctedTerm(const char *term, char *dst, size_t size) {
+  char sq[96];
+  int ok;
+  squash(term, sq, sizeof sq);
+  if (strlen(sq) < 4) return 0;
+  pthread_mutex_lock(&fixLock);
+  if (strcmp(fixTerm, term)) {
+    char url[400], esc[300], *body;
+    snprintf(fixTerm, sizeof fixTerm, "%s", term);
+    fixTitle[0] = 0;
+    urlEscape(term, esc, sizeof esc);
+    // The letter folder is IMDb's shard for the box; any letter answers.
+    snprintf(url, sizeof url, "https://v3.sg.media-imdb.com/suggestion/x/%s.json", esc);
+    body = net_download(url, 5);
+    if (body) {
+      const char *p = js_array(body, NULL, "d");
+      while (p && !fixTitle[0]) {
+        const char *f = js_end(p);
+        char title[96], st[96];
+        if (js_text(p, f, "l", title, sizeof title)) {
+          squash(title, st, sizeof st);
+          if (strstr(st, sq)) snprintf(fixTitle, sizeof fixTitle, "%s", title);
+        }
+        p = js_next(f);
+      }
+      free(body);
+    }
+    printf("[disc] search fix \"%s\" -> \"%s\"\n", term, fixTitle); fflush(stdout);
+  }
+  // A suggestion that only differs in case or punctuation would ask the same
+  // question twice.
+  ok = fixTitle[0] && strcasecmp(fixTitle, term);
+  if (ok) snprintf(dst, size, "%s", fixTitle);
+  pthread_mutex_unlock(&fixLock);
+  return ok;
+}
+
 static void *threadSearch(void *arg) {
   (void)arg;
   for (;;) {
@@ -544,6 +607,11 @@ static void *threadSearch(void *arg) {
     pthread_mutex_unlock(&searchLock);
 
     n = queryTarget(&a, term, found, SEARCH_PER_TARGET);
+    if (n == 0) {
+      char fixed[96];
+      if (correctedTerm(term, fixed, sizeof fixed))
+        n = queryTarget(&a, fixed, found, SEARCH_PER_TARGET);
+    }
 
     pthread_mutex_lock(&searchLock);
     // An old generation = the owner typed something else while this was coming

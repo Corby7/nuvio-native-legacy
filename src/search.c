@@ -274,6 +274,15 @@ static void normalize(const char *s, char *destination, size_t size) {
   destination[k] = 0;
 }
 
+// The normalized text with everything but letters and digits dropped, so a
+// title the owner typed as one word ("whalerider") still finds "Whale Rider".
+static void squash(const char *s, char *destination, size_t size) {
+  size_t k = 0;
+  for (; *s && k + 1 < size; s++)
+    if ((*s >= 'a' && *s <= 'z') || (*s >= '0' && *s <= '9')) destination[k++] = *s;
+  destination[k] = 0;
+}
+
 // --- Recent searches ---------------------------------------------------------
 // One term per line. A plain text file and not JSON because that is all the
 // shape needs, and because a half-written line is then one lost term rather than
@@ -342,13 +351,14 @@ static void toHeader(void) {
 // --- Filter ------------------------------------------------------------------
 // One row per CATALOGUE, exactly as the web app builds `.search-results-row`.
 static void refilter(void) {
-  char target[SEARCH_MAX_QUERY * 2];
+  char target[SEARCH_MAX_QUERY * 2], targetSquashed[SEARCH_MAX_QUERY * 2];
   int previous = -1, sameQuery = !strcmp(queryFiltered, query);
   if (sameQuery && panel == PANEL_RES && focusRes.row < nFilter &&
       focusRes.column < filter[focusRes.row].n)
     previous = filter[focusRes.row].items[focusRes.column];
   snprintf(queryFiltered, sizeof queryFiltered, "%s", query);
   normalize(query, target, sizeof target);
+  squash(target, targetSquashed, sizeof targetSquashed);
   nFilter = 0;
   // Fewer than 2 characters = the empty state, like the web app. Searching with
   // one letter returns the whole collection and does not help.
@@ -454,9 +464,11 @@ static void refilter(void) {
     for (int i = 0; i < cf->n && found < SEARCH_MAX_PER_FILTER; i++) {
       const CatItem *ci = cat_item(cf->start + i);
       if (!ci) continue;
-      char title[320];
+      char title[320], titleSquashed[320];
       normalize(ci->title, title, sizeof title);
-      if (strstr(title, target)) filter[nFilter].items[found++] = cf->start + i;
+      squash(title, titleSquashed, sizeof titleSquashed);
+      if (strstr(title, target) || (targetSquashed[0] && strstr(titleSquashed, targetSquashed)))
+        filter[nFilter].items[found++] = cf->start + i;
     }
     if (!found) continue;
     snprintf(filter[nFilter].title, sizeof filter[nFilter].title, "%s", cf->title);
