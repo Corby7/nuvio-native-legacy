@@ -1,5 +1,6 @@
 #include "splash.h"
 #include "splash_intro.h"
+#include "intro_sound.h"
 #include "gfx.h"
 #include "layout.h"
 #include "settings.h"
@@ -48,7 +49,7 @@ static const float letterCut[6] = { 273.0f, 448.0f, 603.5f, 775.5f, 833.0f, 1004
 #define T_REST     (T_WAVE + 700)  // the lockup is whole: the earliest the exit can start
 #define NV_SPLASH_MAX_MS 6000
 #define T_EXIT       480   // the dive through the "o"
-#define T_EXIT_SKIP  360
+#define T_EXIT_QUIET 360   // reduced motion: a fade, no dive
 // The finished mark's top-left on screen, in its place in the lockup.
 #define MARK_X (LOCK_X + INTRO_MARK_FILE_X * LOCK_W / LOCK_FILE_W)
 #define MARK_Y (LOCK_Y + INTRO_MARK_FILE_Y * LOCK_W / LOCK_FILE_W)
@@ -180,6 +181,8 @@ void splash_start(const char *dirArt) {
   rgba = loadArt(dirArt, "intro_ground.png", path, sizeof path);
   if (rgba) ground = upload(rgba);
   SDL_FreeSurface(rgba);
+  // The startup sound, ready before the first frame (see intro_sound.h).
+  if (atlas && settings_intro_sound()) intro_sound_load(dirArt);
 }
 
 int splash_active(void) { return tex && !done; }
@@ -194,16 +197,10 @@ static void release(void) {
 
 void splash_finish(void) {
   if (!splash_active()) return;
+  intro_sound_stop();
   release();
   printf("[splash] ended by the dev channel\n");
   fflush(stdout);
-}
-
-static void skip(void) {
-  if (exitAt) return;
-  exitAt = SDL_GetTicks();
-  exitLen = T_EXIT_SKIP;
-  if (!t0) t0 = exitAt;
 }
 
 int splash_event(const SDL_Event *e) {
@@ -213,18 +210,17 @@ int splash_event(const SDL_Event *e) {
       if (held[i] && held[i] == e->key.keysym.scancode) { held[i] = 0; return 1; }
   }
   if (!splash_active()) return 0;
+  // THE OPENING CANNOT BE SKIPPED: it is short, and a press only swallowed. A key
+  // pressed at an overlay you cannot see through must not move a focus you cannot
+  // see either.
   switch (e->type) {
     case SDL_KEYDOWN:
       for (i = 0; i < 8; i++)
         if (!held[i] || held[i] == e->key.keysym.scancode) {
           held[i] = e->key.keysym.scancode; break; }
-      skip();
       return 1;
     case SDL_KEYUP:
-      return 1;
     case SDL_MOUSEBUTTONDOWN:
-      skip();
-      return 1;
     case SDL_MOUSEBUTTONUP:
     case SDL_MOUSEWHEEL:
       return 1;
@@ -320,16 +316,21 @@ void splash_draw(Uint32 now, int ready) {
     quiet = settings_animations_reduced();
     printf("[splash] start%s\n", quiet ? " (reduced motion)" : "");
     fflush(stdout);
+    // The sound starts with the first frame, so its hit lands on the slam. Reduced
+    // motion has no slam to land on: no sound either.
+    if (quiet) intro_sound_drop();
+    else intro_sound_play();
   }
   t = (float)(now - t0);
   if (!exitAt && ((ready && t >= (quiet ? 0 : T_REST)) || t >= NV_SPLASH_MAX_MS)) {
     exitAt = now;
-    exitLen = quiet ? T_EXIT_SKIP : T_EXIT;
+    exitLen = quiet ? T_EXIT_QUIET : T_EXIT;
     if (!ready) printf("[splash] still not ready after %d ms: going in anyway\n",
                        NV_SPLASH_MAX_MS);
   }
-  // A skip or the exit freezes the choreography where it was and plays the exit
-  // over it, rather than jumping to the end of a part that had not happened yet.
+  // The exit freezes the choreography where it was and plays the exit over it,
+  // rather than jumping to the end of a part that had not happened yet (only the
+  // NV_SPLASH_MAX_MS limit can start it before the lockup is whole).
   tr = exitAt ? (float)(exitAt - t0) : t;
   // No frames to play (reduced motion, or no atlas): straight to the finished lockup.
   if (quiet || !atlas) tr = (float)T_REST;

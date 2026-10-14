@@ -13,9 +13,9 @@
 //
 // It waits for the screen under it to have something to show (see
 // app_ready_to_show) instead of landing on "Preparing your catalogue…", but
-// never longer than NV_SPLASH_MAX_MS. Any key or click skips it, and is
-// swallowed: a key pressed at an overlay you cannot see through must not move a
-// focus you cannot see either.
+// never longer than NV_SPLASH_MAX_MS. It cannot be skipped: keys and clicks
+// during it are swallowed, because a key pressed at an overlay you cannot see
+// through must not move a focus you cannot see either.
 #ifndef NV_SPLASH_H
 #define NV_SPLASH_H
 #include <SDL2/SDL.h>

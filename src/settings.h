@@ -46,6 +46,9 @@ void settings_shutdown(void);
 // anim_spring — it is an accessibility setting, not a taste, and a screen that
 // ignores it is no use to the person who turned it on.
 int settings_animations_reduced(void);
+// "Startup sound" (Sidebar and navigation): 1 when the opening animation plays
+// its sound (intro_sound.c). On by default; local to this TV.
+int settings_intro_sound(void);
 // "Hold menu blur" (Posters): 1 when the hold-OK panel draws the frosted glass,
 // 0 for the solid panel it had before. On by default.
 int settings_hold_menu_blur(void);

@@ -102,7 +102,7 @@ typedef enum {
   // Sidebar and navigation
   SETTING_RAIL, SETTING_RAIL_MODERN, SETTING_GLASS, SETTING_DISCOVER,
   SETTING_NAV_FAST, SETTING_ROW_SCROLL,
-  SETTING_ANIM,
+  SETTING_ANIM, SETTING_INTRO_SOUND,
   // Posters
   SETTING_LANDSCAPE, SETTING_LABELS,
   SETTING_EXPAND, SETTING_EXPAND_DELAY, SETTING_HOLD_BLUR, SETTING_HOLD_RING, SETTING_FOCUS_GLOW, SETTING_FOCUS_GLOW_A,
@@ -336,6 +336,7 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_RADIUS_DP] = NUM("Corner radius",              0, 40, 1, " dp"),   // posterCardCornerRadiusDp
 
   [SETTING_ANIM] = ESC("Animations",                  V_ANIM, 2),
+  [SETTING_INTRO_SOUND] = ESC("Startup sound",          V_ON, 2),   // local: startupSound
 
   [SETTING_PROFILE_ACTIVE] = READ("Profile"),
   [SETTING_PRIMARY_ADDONS] = ESC("Use primary profile's addons", V_ON, 2),   // local, per profile
@@ -420,6 +421,7 @@ static const char *KEY[] = {
   [SETTING_DEPTH_CAST] = "cardDepthCastEnabled", [SETTING_DEPTH_TRAILERS] = "cardDepthTrailersEnabled",
   [SETTING_WIDTH_DP] = "posterCardWidthDp", [SETTING_RADIUS_DP] = "posterCardCornerRadiusDp",
   [SETTING_ANIM] = "reducedAnimations",
+  [SETTING_INTRO_SOUND] = "startupSound",
   // Account: these are local rows; they neither come from nor go to the cloud profile.
   [SETTING_PROFILE_ACTIVE] = "-profile",
   // THE TV'S OWN, not the account's `uses_primary_addons`: it is kept in this
@@ -471,8 +473,8 @@ static const struct { const char *group, *title; int start, n; const char *blurb
     "What the catalogue rows say about themselves and which titles they leave out." },
   { NULL, "Continue watching",       SETTING_CW_ON,                9,
     "Whether the resume row appears, how it is sorted, how its cards look and what counts as next up." },
-  { "Interface", "Sidebar and navigation", SETTING_RAIL,           7,
-    "The sidebar and its glass, where Discover lives, how rows scroll and motion across the app." },
+  { "Interface", "Sidebar and navigation", SETTING_RAIL,           8,
+    "The sidebar and its glass, where Discover lives, how rows scroll, motion across the app and the startup sound." },
   { NULL, "Posters",                 SETTING_LANDSCAPE,           8,
     "Poster shape, labels, what a focused poster does, the hold menu and its size." },
   { NULL, "Depth effect",            SETTING_DEPTH,                8,
@@ -586,6 +588,7 @@ static int value[SETTING_N] = {
   [SETTING_RADIUS_DP] = 12,               /* corner rounding, dp */
 
   [SETTING_ANIM] = 0,                /* animations: full */
+  [SETTING_INTRO_SOUND] = 0,         /* startup sound: on */
   // The account and about rows hold no value; they are left at zero.
 };
 
@@ -646,6 +649,7 @@ static int heroCatalogs = 0;
 static int on(int op)  { return value[op] == 0; }
 
 int settings_animations_reduced(void) { return value[SETTING_ANIM] == 1; }
+int settings_intro_sound(void) { return value[SETTING_INTRO_SOUND] == 0; }
 int settings_dolby_vision(void)        { return on(SETTING_DV); }
 int settings_dolby_atmos(void)         { return on(SETTING_ATMOS); }
 int settings_subtitle_pref(void)       { return value[SETTING_SUBS]; }
@@ -1356,6 +1360,7 @@ static const char *helpOption(int op) {
     case SETTING_SCORES_HOME: return "Shows or hides the IMDb rating on the Home hero.";
     case SETTING_CW_BLUR_NEXT: case SETTING_DET_BLUR_NOT_WATCHED: return "Hides thumbnail detail to avoid spoilers for episodes you have not watched.";
     case SETTING_ANIM: return "Use Reduced for subtler motion when moving through the interface.";
+    case SETTING_INTRO_SOUND: return "A short sound with the opening animation when Nuvio starts. Silent with Reduced animations.";
     case SETTING_SPACE: return "Current memory used by the image cache, not space taken on the TV storage.";
     case SETTING_VERSION_I: return "Application version. This information cannot be changed.";
     case SETTING_UPDATES: return "Every published version with what changed in it. Install a newer one, or go back to an older one.";
@@ -2218,7 +2223,7 @@ static int highlightOf(void) {
     case SETTING_LANDSCAPE: case SETTING_LABELS: case SETTING_SUFFIX_KIND:
     case SETTING_HIDE_UNRELEASED: return HL_ROWS;
     case SETTING_QUALITY: case SETTING_DV: case SETTING_ATMOS:
-    case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM: case SETTING_HOLD_BLUR:
+    case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM: case SETTING_INTRO_SOUND: case SETTING_HOLD_BLUR:
     case SETTING_HOLD_RING:
     case SETTING_GLASS: case SETTING_UI_RES: case SETTING_FPS: case SETTING_FPS_CAP:
     case SETTING_PAUSE_DELAY: case SETTING_LIVE_ON: case SETTING_LIVE_SOURCE: case SETTING_LIVE_BUFFER:
