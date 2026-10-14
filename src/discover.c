@@ -2405,6 +2405,38 @@ static int stillTarget(int targetItem, const char *imdb) {
   return now && !strcmp(now->imdb, imdb);
 }
 
+// What fetchEps hands on once the episodes and the basic meta are published: the
+// cast photos and the episode scores, both optional, both slow.
+typedef struct { CatItem edit; char imdb[32]; int targetItem, isMovie; } Enrich;
+#define ENRICH_MAX 3
+static int enrichAlive;
+
+static void enrich(Enrich *en) {
+  CatItem *edit = &en->edit;
+  // The episode ratings and the TMDB title are two different hosts and neither
+  // needs the other, so they run side by side. The ratings used to wait for the
+  // whole TMDB chain because that chain was what found the id.
+  { EpScores sc = { edit->tmdb, en->targetItem };
+    pthread_t th;
+    int threaded = 0;
+    if (!en->isMovie && edit->tmdb > 0)
+      threaded = pthread_create(&th, NULL, threadEpisodeScores, &sc) == 0;
+    photosOfCast(edit, edit->tmdb, !en->isMovie);
+    if (threaded) pthread_join(th, NULL);
+    else if (!en->isMovie) episodeScores(edit->tmdb, en->targetItem); }
+  if (stillTarget(en->targetItem, en->imdb)) cat_update_item(en->targetItem, edit);
+  printf("[disc] %s: %d actors, dir='%s', %d seasons\n",
+         edit->title, edit->nCast, edit->directing, edit->nSeasons);
+  fflush(stdout);
+}
+
+static void *threadEnrich(void *u) {
+  enrich(u);
+  free(u);
+  __atomic_sub_fetch(&enrichAlive, 1, __ATOMIC_ACQ_REL);
+  return NULL;
+}
+
 static void *fetchEps(void *u) {
   int targetItem = epItem;
   const CatItem *orig = cat_item(targetItem);
@@ -2545,21 +2577,24 @@ static void *fetchEps(void *u) {
     // It publishes text, genres and seasons before the image enrichment.
     if (stillTarget(targetItem, it->imdb)) cat_update_item(targetItem, &edit);
     mark("detail: basic meta on screen");
-    // The episode ratings and the TMDB title are two different hosts and neither
-    // needs the other, so they run side by side. The ratings used to wait for the
-    // whole TMDB chain because that chain was what found the id.
-    { EpScores sc = { edit.tmdb, targetItem };
+    // THE ENRICHMENT RUNS ON ITS OWN THREAD and this one ends here. The episode
+    // thread is single, and the home's prefetchDetail starts it on every card the
+    // focus rests on: holding it through the cast photos and the ratings (12 s
+    // timeout) made the title the owner actually opened queue behind the one they
+    // passed, and its episodes came in seconds late. Inline only when the cap is hit.
+    { Enrich *en = malloc(sizeof *en);
       pthread_t th;
-      int threaded = 0;
-      if (!isMovie && edit.tmdb > 0)
-        threaded = pthread_create(&th, NULL, threadEpisodeScores, &sc) == 0;
-      photosOfCast(&edit, edit.tmdb, !isMovie);
-      if (threaded) pthread_join(th, NULL);
-      else if (!isMovie) episodeScores(edit.tmdb, targetItem); }
-    if (stillTarget(targetItem, it->imdb)) cat_update_item(targetItem, &edit);
-    printf("[disc] %s: %d actors, dir='%s', %d seasons\n",
-           edit.title, edit.nCast, edit.directing, edit.nSeasons);
-    fflush(stdout);
+      if (en) {
+        en->edit = edit; en->targetItem = targetItem; en->isMovie = isMovie;
+        snprintf(en->imdb, sizeof en->imdb, "%s", it->imdb);
+      }
+      if (en && __atomic_add_fetch(&enrichAlive, 1, __ATOMIC_ACQ_REL) <= ENRICH_MAX &&
+          pthread_create(&th, NULL, threadEnrich, en) == 0) {
+        pthread_detach(th);
+      } else {
+        if (en) { __atomic_sub_fetch(&enrichAlive, 1, __ATOMIC_ACQ_REL); enrich(en); free(en); }
+      }
+    }
   }
 
   free(body);

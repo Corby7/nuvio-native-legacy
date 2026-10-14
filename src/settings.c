@@ -105,7 +105,7 @@ typedef enum {
   SETTING_ANIM,
   // Posters
   SETTING_LANDSCAPE, SETTING_LABELS,
-  SETTING_EXPAND, SETTING_EXPAND_DELAY, SETTING_HOLD_BLUR, SETTING_FOCUS_GLOW, SETTING_FOCUS_GLOW_A,
+  SETTING_EXPAND, SETTING_EXPAND_DELAY, SETTING_HOLD_BLUR, SETTING_HOLD_RING, SETTING_FOCUS_GLOW, SETTING_FOCUS_GLOW_A,
   SETTING_RADIUS_DP,
   // Depth
   SETTING_DEPTH, SETTING_DEPTH_BORDER, SETTING_DEPTH_BRIGHTNESS,
@@ -170,10 +170,11 @@ typedef char anime_audio_names_match_lang[(N_AUDIO_ANIME == LANG_COUNT + 2) ? 1 
 // episode — the web app's nextEpisodeThresholdMode, same two modes, same default.
 // The credits marker brings the card up earlier in either mode.
 static const char *V_NEXT_MODE[] = { "Before the end", "Percentage watched" };
-// The player's seek bar: the fill and the playhead. Violet is the brand mark's
-// own colour and the default; White is what the bar was before. The RGB lives in
-// SEEK_RGB below, in the same order.
-static const char *V_SEEK[] = { "Violet", "White", "Blue", "Green", "Red", "Orange" };
+// The player's seek bar: the fill and the playhead. Nuvio is the default; Violet
+// was before it, and White before that. The RGB lives in
+// SEEK_RGB below, in the same order. Nuvio is the logo's colours as a ramp
+// (GFX_SEEK_BRAND); it is last so saved indices keep their colour.
+static const char *V_SEEK[] = { "Violet", "White", "Blue", "Green", "Red", "Orange", "Nuvio" };
 static const float SEEK_RGB[][3] = {
   { 0x83 / 255.0f, 0x67 / 255.0f, 0xF5 / 255.0f },   /* #8367F5 */
   { 0xF5 / 255.0f, 0xF5 / 255.0f, 0xF5 / 255.0f },   /* #F5F5F5, the old fill */
@@ -182,7 +183,11 @@ static const float SEEK_RGB[][3] = {
   { 0xE5 / 255.0f, 0x48 / 255.0f, 0x4D / 255.0f },   /* #E5484D */
   { 0xF5 / 255.0f, 0x9E / 255.0f, 0x0B / 255.0f },   /* #F59E0B */
 };
+enum { SEEK_BRAND = 6 };
 static const char *V_ON[]      = { "On", "Off" };
+// The hold's ring: the logo's colours (a thicker band, the sweep in the ramp and
+// a lap of it when the menu opens), or the plain white sweep it was before.
+static const char *V_HOLD_RING[] = { "Nuvio", "White" };
 // Live TV's pause buffer, in minutes (settings_live_buffer_minutes).
 static const char *V_LIVE_BUFFER[] = { "Off", "15 min", "30 min", "60 min" };
 static const char *V_ANIM[]      = { "Full", "Reduced" };
@@ -241,7 +246,7 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_AUDIO_ANIME] = ESC("Anime audio language",       V_AUDIO_ANIME, N_AUDIO_ANIME),
   [SETTING_SUBS] = ESC("Subtitles",                  V_SUBS, N_SUBS),
   [SETTING_SUBS_FORCED] = ESC("Forced subtitles",           V_ON, 2),
-  [SETTING_SEEK_COLOR] = ESC("Seek bar colour",            V_SEEK, 6),
+  [SETTING_SEEK_COLOR] = ESC("Seek bar colour",            V_SEEK, 7),
   [SETTING_NEXT_AUTOPLAY] = ESC("Autoplay next episode",      V_ON, 2),
   [SETTING_NEXT_COUNTDOWN] = NUM("Next episode countdown",     5, 30, 5, " s"),
   [SETTING_NEXT_MODE] = ESC("Up next appears",            V_NEXT_MODE, 2),
@@ -311,6 +316,7 @@ static const Option OPTIONS[SETTING_N] = {
   [SETTING_EXPAND] = ESC("Expand poster on focus",   V_ON, 2),   // focusedPosterBackdropExpandEnabled
   [SETTING_EXPAND_DELAY] = NUM("Expansion delay",         0, 10, 1, " s"), // ...ExpandDelaySeconds
   [SETTING_HOLD_BLUR] = ESC("Hold menu blur",            V_ON, 2), // local: holdMenuBlur
+  [SETTING_HOLD_RING] = ESC("Hold ring",                 V_HOLD_RING, 2), // local
   [SETTING_FOCUS_GLOW] = ESC("Focus glow",                V_ON, 2), // local: focusGlow
   [SETTING_FOCUS_GLOW_A] = NUM("Glow strength",            2, 60, 2, "%"), // local: focusGlowStrength
   [SETTING_NAV_FAST] = ESC("Fast horizontal navigation", V_ON, 2),  // fastHorizontalNavigationEnabled
@@ -405,6 +411,7 @@ static const char *KEY[] = {
   [SETTING_GLASS] = "glassStyle",
   // Local to this port as well: the web's hold menu is a centred dialog with no glass.
   [SETTING_HOLD_BLUR] = "holdMenuBlur",
+  [SETTING_HOLD_RING] = "holdRingStyle",
   // And this: a faint light in the poster's colour behind the focused card.
   [SETTING_FOCUS_GLOW] = "focusGlow", [SETTING_FOCUS_GLOW_A] = "focusGlowStrength",
   [SETTING_DEPTH] = "cardDepthEnabled", [SETTING_DEPTH_BORDER] = "cardDepthEdgeStrength", [SETTING_DEPTH_BRIGHTNESS] = "cardDepthSheenStrength",
@@ -497,7 +504,7 @@ static int value[SETTING_N] = {
   // would ship the same complaint with a switch next to it.
   [SETTING_SUBS] = 1,                /* subtitles: automatic (English) */
   [SETTING_SUBS_FORCED] = 1,                /* forced subtitles: off (the web's default) */
-  [SETTING_SEEK_COLOR] = 0,                /* seek bar colour: violet */
+  [SETTING_SEEK_COLOR] = SEEK_BRAND,       /* seek bar colour: Nuvio, the logo's ramp */
   [SETTING_NEXT_AUTOPLAY] = 0,                /* autoplay next episode: on */
   [SETTING_NEXT_COUNTDOWN] = 15,               /* next episode countdown: 15 s */
   [SETTING_NEXT_MODE] = 0,                /* up next appears: before the end (the web's default) */
@@ -560,6 +567,7 @@ static int value[SETTING_N] = {
   [SETTING_EXPAND] = 0,                /* expand poster on focus: on (the web's DEFAULT) */
   [SETTING_EXPAND_DELAY] = 3,                /* delay: 3s */
   [SETTING_HOLD_BLUR] = 0,                /* hold menu blur: on */
+  [SETTING_HOLD_RING] = 0,                /* hold ring: Nuvio */
   [SETTING_FOCUS_GLOW] = 1,                /* focus glow: off */
   [SETTING_FOCUS_GLOW_A] = 14,             /* glow strength: faint */
   [SETTING_NAV_FAST] = 1,                /* fast horizontal navigation: off (factory) */
@@ -672,8 +680,10 @@ void settings_set_live(int bufferMinutes, int preview) {
   value[SETTING_LIVE_PREVIEW] = preview ? 0 : 1;
   save();
 }
+int settings_seek_brand(void) { return value[SETTING_SEEK_COLOR] == SEEK_BRAND; }
 void settings_seek_color(float *r, float *g, float *b) {
   int i = value[SETTING_SEEK_COLOR];
+  if (i == SEEK_BRAND) { gfx_seek_brand_at(1.0f, r, g, b); return; }
   if (i < 0 || i >= (int)(sizeof SEEK_RGB / sizeof *SEEK_RGB)) i = 0;
   *r = SEEK_RGB[i][0]; *g = SEEK_RGB[i][1]; *b = SEEK_RGB[i][2];
 }
@@ -761,6 +771,7 @@ static void uiResWrites(void) {
   data_write("ui-resolution.txt", buf);
 }
 int   settings_hold_menu_blur(void) { return on(SETTING_HOLD_BLUR); }
+int   settings_hold_ring_brand(void) { return value[SETTING_HOLD_RING] == 0; }
 int   settings_focus_glow(void) { return on(SETTING_FOCUS_GLOW); }
 float settings_focus_glow_strength(void) { return value[SETTING_FOCUS_GLOW_A] / 100.0f; }
 
@@ -1306,6 +1317,7 @@ static const char *helpOption(int op) {
     case SETTING_CW_STYLE: return "Card and Wide both draw 16:9 resume cards on this TV; Poster uses upright posters.";
     case SETTING_EXPAND: return "A focused poster opens out into its 16:9 art after the delay.";
     case SETTING_DEPTH: return "A lit edge and sheen on the focused card.";
+    case SETTING_HOLD_RING: return "The ring that fills when you hold OK on a card. Nuvio fills it in the logo's colours and turns them once round the card as the menu opens; White is the plain white sweep.";
     case SETTING_HOLD_BLUR: return "The panel that opens when you hold OK on a poster shows the screen behind it blurred, like the sidebar. Off, it is a solid dark panel.";
     case SETTING_FOCUS_GLOW_A: return "How bright the glow around the focused card is.";
     case SETTING_FOCUS_GLOW: return "A faint light in the poster's own colour around the focused card.";
@@ -1314,7 +1326,7 @@ static const char *helpOption(int op) {
     case SETTING_FPS: return "Frame rate, the slowest frame and the resolution, in the top-right corner. Updated twice a second.";
     case SETTING_GLASS: return "The frosted glass of the sidebar and the hold menu. Dark is thick and near-black; Tinted is thinner and navy, with more of the picture's colour coming through.";
     case SETTING_ROW_SCROLL: return "First slot moves every row so the focused card sits at its start, and the rest slide sideways. Minimal scrolls only when the card would leave the screen.";
-    case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead.";
+    case SETTING_SEEK_COLOR: return "The colour of the player's progress bar and its playhead. Nuvio runs the logo's colours along it.";
     case SETTING_NEXT_COUNTDOWN: return "How long the Up next card waits before it plays the next episode.";
     case SETTING_AUDIO_LANG: return "The audio track to switch to when the file has one in this language. File default keeps the file's own choice.";
     case SETTING_AUDIO_ANIME: return "The same, for anime only: Japanese animation, or a title from an anime catalogue. Same as Audio language follows the row above.";
@@ -2207,6 +2219,7 @@ static int highlightOf(void) {
     case SETTING_HIDE_UNRELEASED: return HL_ROWS;
     case SETTING_QUALITY: case SETTING_DV: case SETTING_ATMOS:
     case SETTING_AUDIO_LANG: case SETTING_AUDIO_ANIME: case SETTING_ANIM: case SETTING_HOLD_BLUR:
+    case SETTING_HOLD_RING:
     case SETTING_GLASS: case SETTING_UI_RES: case SETTING_FPS: case SETTING_FPS_CAP:
     case SETTING_PAUSE_DELAY: case SETTING_LIVE_ON: case SETTING_LIVE_SOURCE: case SETTING_LIVE_BUFFER:
     case SETTING_LIVE_PREVIEW: return HL_NONE;
@@ -2489,7 +2502,11 @@ static void drawPlayerScene(Pv v, int hl) {
   pvPlate(v, barX, barY, barW, 8.0f, 4.0f, 1.0f, 0.26f);
   { GfxRect f = pvR(v, barX, barY, barW * 0.42f, 8.0f);
     GfxRect kn = pvR(v, barX + barW * 0.42f - 15.0f, barY + 4.0f - 15.0f, 30.0f, 30.0f);
-    gfx_color(f, 0.5f, r, g, bl, 1.0f);
+    if (settings_seek_brand()) {
+      float span = gfx_seek_brand_span(barW * 0.42f, barW);
+      gfx_seek_brand(f, 0.5f, span, 1.0f);
+      gfx_seek_brand_at(span, &r, &g, &bl);
+    } else gfx_color(f, 0.5f, r, g, bl, 1.0f);
     if (hl == HL_SEEK) gfx_color(kn, 0.5f, r, g, bl, 1.0f); }
 
   // The button row, from the bar's left edge, 90px circles 14 apart: the glyphs

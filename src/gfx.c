@@ -236,6 +236,23 @@ static const char *FS_COVER =
   "  return uv;\n"
   "}\n";
 
+// The logo's ramp (GFX_SEEK_BRAND's four stops) closed into a loop, for the
+// hold sweeps: magenta runs back into cyan, so a finished ring has no seam where
+// the lap starts. t is the position round the lap, 0..1 from the top-left corner.
+// THE STOPS ARE LIFTED 40% TOWARDS WHITE. At the seek bar's own values the blue
+// and the violet sat barely above the dimmed grey ring, and on a 4px band from
+// across the room the sweep could hardly be seen; the white it replaced had all
+// the contrast. Lighter tints keep the hues and get most of it back.
+#define NV_BRAND_LOOP \
+  "vec3 nvBrandLoop(float t){\n" \
+  "  vec3 c0 = vec3(0.400, 0.851, 0.961), c1 = vec3(0.314, 0.447, 0.961);\n" \
+  "  vec3 c2 = vec3(0.561, 0.333, 0.933), c3 = vec3(0.761, 0.310, 0.863);\n" \
+  "  float x = fract(t) * 4.0;\n" \
+  "  vec3 c = x < 1.0 ? mix(c0, c1, x) : x < 2.0 ? mix(c1, c2, x - 1.0)\n" \
+  "         : x < 3.0 ? mix(c2, c3, x - 2.0) : mix(c3, c0, x - 3.0);\n" \
+  "  return mix(c, vec3(1.0), 0.4);\n" \
+  "}\n"
+
 static const char *FS_BODY[GFX_NMODES] = {
   // GFX_CARD — artwork with rounded corners. `object-fit: cover`, and nothing
   // else on top of it.
@@ -1222,6 +1239,10 @@ static const char *FS_BODY[GFX_NMODES] = {
   // ramp, a fifth of the way round: at the eased top speed the head moves ~100px
   // a frame, and against a short ramp the edge was seen stepping — the lit part
   // brightens in rather than ending at a line.
+  // uPar.y = 1 paints the sweep in the logo's colours (nvBrandLoop) instead of
+  // uColor, counted from the start point: turning uFocus with the sweep whole
+  // turns the colours round the frame (the lap after the menu opens).
+  NV_BRAND_LOOP
   "void main(){\n"
   "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
@@ -1247,7 +1268,8 @@ static const char *FS_BODY[GFX_NMODES] = {
   // the ring still ends whole.
   "  a *= clamp(o / (0.08 * per) + smoothstep(0.6, 1.0, uPar.x), 0.0, 1.0);\n"
   "  if (a * m <= 0.002) discard;\n"
-  "  gl_FragColor = vec4(uColor.rgb, uColor.a * a * m);\n"
+  "  vec3 c = mix(uColor.rgb, nvBrandLoop(o / per), uPar.y);\n"
+  "  gl_FragColor = vec4(c, uColor.a * a * m);\n"
   "}\n",
 
   // GFX_CARD_DEPTH — see gfx.h. Both shadows are measured in PIXELS, so a focused
@@ -1282,6 +1304,9 @@ static const char *FS_BODY[GFX_NMODES] = {
 
   // GFX_RING_INSET_FILL — GFX_RING_FILL's sweep, masked to GFX_RING_INSET's band
   // (thickness in uPar.y) so it can sit on top of the art. See gfx.h.
+  // uFocus >= 1 paints it in the logo's colours, as uPar.y does there, and its
+  // fraction turns them round the lap (1.25 = a quarter on).
+  NV_BRAND_LOOP
   "void main(){\n"
   "  float d = sdf(vUv, uRadius, uAspect);\n"
   "  float m = smoothstep(uAA,-uAA, d) * smoothstep(-uPar.y - uAA, -uPar.y + uAA, d);\n"
@@ -1306,7 +1331,8 @@ static const char *FS_BODY[GFX_NMODES] = {
   // the ring still ends whole.
   "  a *= clamp(o / (0.08 * per) + smoothstep(0.6, 1.0, uPar.x), 0.0, 1.0);\n"
   "  if (a * m <= 0.002) discard;\n"
-  "  gl_FragColor = vec4(uColor.rgb, uColor.a * a * m);\n"
+  "  vec3 c = mix(uColor.rgb, nvBrandLoop(o / per - fract(uFocus)), step(0.5, uFocus));\n"
+  "  gl_FragColor = vec4(c, uColor.a * a * m);\n"
   "}\n",
 
   // GFX_HERO_VEIL — the three hero ramps without the art (see gfx.h). The stops
@@ -1380,6 +1406,18 @@ static const char *FS_BODY[GFX_NMODES] = {
   "    c = mix(c, vec3(mix(1.0, 0.9608, fill)), mix(0.16, 1.0, fill));\n"
   "  }\n"
   "  gl_FragColor = vec4(c, t.a * m * uColor.a);\n"
+  "}\n",
+
+  // GFX_SEEK_BRAND — see gfx.h. Three linear legs between the logo's four lit
+  // facets; SEEK_BRAND_RGB in C holds the same stops for the knob: change both.
+  "void main(){\n"
+  "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
+  "  if (m <= 0.001) discard;\n"
+  "  float t = clamp(vUv.x, 0.0, 1.0) * uPar.x * 3.0;\n"
+  "  vec3 c0 = vec3(0.400, 0.851, 0.961), c1 = vec3(0.314, 0.447, 0.961);\n"
+  "  vec3 c2 = vec3(0.561, 0.333, 0.933), c3 = vec3(0.761, 0.310, 0.863);\n"
+  "  vec3 c = t < 1.0 ? mix(c0, c1, t) : t < 2.0 ? mix(c1, c2, t - 1.0) : mix(c2, c3, t - 2.0);\n"
+  "  gl_FragColor = vec4(c, uColor.a * m);\n"
   "}\n"
 
 };
@@ -1422,7 +1460,8 @@ static const struct { int sdf, cover; } NEEDS[GFX_NMODES] = {
   {1,0},   /* GFX_CARD_DEPTH   — the card's SDF, and again 2px lower for the line */
   {1,0},   /* GFX_RING_INSET_FILL — the inset band, masked by perimeter progress */
   {0,0},   /* GFX_HERO_VEIL    — the hero's ramps alone: no SDF, no texture */
-  {1,0}    /* GFX_CW_CARD      — GFX_CARD's art, with the scrim and bar; cover in VS_COVER */
+  {1,0},   /* GFX_CW_CARD      — GFX_CARD's art, with the scrim and bar; cover in VS_COVER */
+  {1,0}    /* GFX_SEEK_BRAND   — a pill's SDF, the ramp along x */
 };
 
 static GLuint compiles(GLenum kind, const char *src) {
@@ -2037,6 +2076,25 @@ void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca) 
       r.x + r.w >= NV_SCREEN_W && r.y + r.h >= NV_SCREEN_H)
     radius = -1.0f;
   gfx_rect(r, 0, GFX_COLOR, 0, 0, 0, radius, cr, cg, cb, ca);
+}
+void gfx_seek_brand(GfxRect r, float radius, float span, float ca) {
+  gfx_rect(r, 0, GFX_SEEK_BRAND, 0, span, 0, radius, 1, 1, 1, ca);
+}
+float gfx_seek_brand_span(float fill, float rail) {
+  float s = rail > 0.0f ? fill / (rail * 0.5f) : 1.0f;
+  return s < 0.0f ? 0.0f : s > 1.0f ? 1.0f : s;
+}
+// GFX_SEEK_BRAND's stops: #66D9F5, #5072F5, #8F55EE, #C24FDC.
+static const float SEEK_BRAND_RGB[4][3] = {
+  { 0.400f, 0.851f, 0.961f }, { 0.314f, 0.447f, 0.961f },
+  { 0.561f, 0.333f, 0.933f }, { 0.761f, 0.310f, 0.863f },
+};
+void gfx_seek_brand_at(float t, float *r, float *g, float *b) {
+  float x = (t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t) * 3.0f;
+  int i = x >= 3.0f ? 2 : (int)x;
+  float f = x - (float)i;
+  const float *a = SEEK_BRAND_RGB[i], *c = SEEK_BRAND_RGB[i + 1];
+  *r = a[0] + (c[0] - a[0]) * f; *g = a[1] + (c[1] - a[1]) * f; *b = a[2] + (c[2] - a[2]) * f;
 }
 // TWO FLAT LAYERS OF ONE SHAPE as one draw: (r1,g1,b1) at a1, then (r2,g2,b2) at
 // a2 over it. Straight-alpha compositing of two layers is itself one layer:

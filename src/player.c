@@ -2190,19 +2190,29 @@ static float railRadius(float w, float h) {
 static float railCut[2];
 static int nRailCut;
 
-static void railLayer(GfxRect r, float cr, float cg, float cb, float ca) {
+// brand > 0: the fill as the logo's ramp (Settings > Seek bar colour > Nuvio),
+// showing its first `brand` of it and ignoring the colour. It spans r whole,
+// across the cuts.
+static void railShape(GfxRect r, float rad, float brand, float cr, float cg, float cb, float ca) {
+  if (brand > 0.0f) gfx_seek_brand(r, rad, brand, ca);
+  else gfx_color(r, rad, cr, cg, cb, ca);
+}
+static void railLayerAs(GfxRect r, float brand, float cr, float cg, float cb, float ca) {
   float rad = railRadius(r.w, r.h);
-  if (!nRailCut) { gfx_color(r, rad, cr, cg, cb, ca); return; }
+  if (!nRailCut) { railShape(r, rad, brand, cr, cg, cb, ca); return; }
   float from = barX;
   for (int i = 0; i <= nRailCut; i++) {
     float to = i < nRailCut ? railCut[i] - PLR_RAIL_GAP * 0.5f : barX + barW;
     if (to > from) {
       gfx_crop(from, r.y - r.h, to - from, r.h * 3.0f);
-      gfx_color(r, rad, cr, cg, cb, ca);
+      railShape(r, rad, brand, cr, cg, cb, ca);
     }
     if (i < nRailCut) from = railCut[i] + PLR_RAIL_GAP * 0.5f;
   }
   gfx_no_crop();
+}
+static void railLayer(GfxRect r, float cr, float cg, float cb, float ca) {
+  railLayerAs(r, 0, cr, cg, cb, ca);
 }
 
 static void colorSubtitle(int i,int *r,int *g,int *b){
@@ -2551,6 +2561,9 @@ static float jumpBottom(void) {
   return NV_SCREEN_H - (visible ? NV_PJ_BOTTOM_UP : NV_PJ_BOTTOM);
 }
 
+// THE CORNER PROMPT'S RECT this frame, for video_subtitle_occlude: zeroed at the
+// top of player_draw, set by whichever prompt draws.
+static GfxRect subOccl;
 static void drawSkipIntro(int kind) {
   const char *rot = kind == INTRO_SUMMARY ? "Skip recap" : "Skip intro";
   int hot = cardHot();
@@ -2564,6 +2577,7 @@ static void drawSkipIntro(int kind) {
   float w = NV_SKIP_PADX * 2 + NV_SKIP_ICON_INK + NV_SKIP_GAP + (float)t.w;
   float x = NV_SCREEN_W - NV_PJ_RIGHT - w, y = jumpBottom() - h;
   float c = hot ? 0.961f : NV_SKIP_BG, a = hot ? 1.0f : NV_SKIP_BG_A;
+  subOccl = (GfxRect){ x, y, w, h };
   float pad = (NV_SKIP_ICON - NV_SKIP_ICON_INK) * 0.5f;
   // A PILL, like the next-episode card's pills that share this corner: the two
   // prompts read as one family. It was a 24px-radius card.
@@ -2637,6 +2651,7 @@ static void drawNextCard(const CatEp *next) {
   w = NV_NEXT_PADX * 2 + NV_NEXT_THUMB_W + NV_NEXT_GAP + copyW;
   h = NV_NEXT_PAD * 2 + NV_NEXT_THUMB_H;
   x = NV_SCREEN_W - NV_PJ_RIGHT - w; y = jumpBottom() - h;
+  subOccl = (GfxRect){ x, y, w, h };
   tx0 = x + NV_NEXT_PADX; ty0 = y + NV_NEXT_PAD;
   cx = tx0 + NV_NEXT_THUMB_W + NV_NEXT_GAP;
 
@@ -3012,7 +3027,8 @@ static void drawPauseOverlay(Uint32 now) {
 }
 
 void player_draw(Uint32 now) {
-  if (!is_open) return;
+  if (!is_open) { video_subtitle_occlude(0, 0, 0, 0); return; }
+  subOccl = (GfxRect){ 0, 0, 0, 0 };
   // The audio and subtitle sheets, and the episode list, take the screen the
   // same way.
   { float sheet = stream_sheet_shown(), tracks = tracks_shown(), eps = episodes_shown();
@@ -3022,6 +3038,7 @@ void player_draw(Uint32 now) {
   drawPlayer(now);
   drawPauseOverlay(now);
   gfx_opacity_group = 1.0f;
+  video_subtitle_occlude(subOccl.x, subOccl.y, subOccl.w, subOccl.h);
 }
 static void drawPlayer(Uint32 now) {
   (void)now;
@@ -3449,10 +3466,14 @@ static void drawPlayer(Uint32 now) {
   // The fill and the playhead take the Settings colour (Playback -> Seek bar
   // colour); the track and the buffer stay neutral white, so only what has been
   // played carries it.
-  { float fwid = cw * frac, sr, sg, sb;
+  { float fwid = cw * frac, sr, sg, sb, span = 0.0f;
     settings_seek_color(&sr, &sg, &sb);
+    if (settings_seek_brand()) {
+      span = gfx_seek_brand_span(fwid, cw);
+      gfx_seek_brand_at(span, &sr, &sg, &sb);
+    }
     if (fwid > 0.5f)
-      railLayer((GfxRect){ cx, yBar, fwid, hRail }, sr, sg, sb, ab);
+      railLayerAs((GfxRect){ cx, yBar, fwid, hRail }, span, sr, sg, sb, ab);
     // THE PLAYHEAD. `transform: scale(0)` at rest and `scale(1)` when the shell has
     // focus, so the resting bar stays a hairline and the knob is what says the bar
     // is now the thing LEFT and RIGHT are driving. Centred on the track's middle,

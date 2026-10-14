@@ -8,6 +8,7 @@
 #include "tex_cache.h"
 #include "layout.h"
 #include "anim.h"
+#include <math.h>
 #include "settings.h"
 #include "cwremove.h"
 #include <stdio.h>
@@ -43,6 +44,17 @@ enum { CTX_PENDING = 1, CTX_CONFIRMED = 2, CTX_FAILURE = 3 };
 #define CTX_MARGIN    48.0f     // nearest the panel comes to a screen edge
 #define CTX_SLIDE     24.0f     // travel away from the card while it appears
 #define CTX_SCRIM      0.80f
+// THE ENTRANCE AND THE EXIT ARE DIFFERENT CURVES. One first-order spring drove
+// both: the exit was the entrance backwards, so the panel lingered on the way
+// out. In: a cubic ease-out over CTX_OPEN_S, then the title, the meta line and
+// each row rise CTX_RISE into place one after another. Out: quicker, in one
+// piece, sliding back towards the card as it fades.
+#define CTX_OPEN_S     0.32f
+#define CTX_CLOSE_S    0.16f
+#define CTX_RISE      10.0f     // how far each line rises as it arrives
+#define CTX_STAGGER_DELAY 60.0f // ms after the panel starts before the first line
+#define CTX_STAGGER_STEP  22.0f // ms between lines
+#define CTX_STAGGER_DUR  200.0f // ms each line takes
 // THE GLASS, the side menu's own: the same blur, saturation and tint, so the two
 // panels read as one material. The region grabbed is the panel's widest reach —
 // its own width plus the slide on either side — by the tallest it gets with
@@ -70,6 +82,11 @@ static float   holeR, holeFeather;
 static int     hasAnchor, hasAnchorNext;
 static int   reqSeeAll, reqRowStyle;
 static float anim;
+// The clocks behind it (see CTX_OPEN_S): the entrance's linear progress, the
+// exit's and the value it started from, ms since the entrance began (for the
+// lines' stagger), and whether the menu was open last frame.
+static float openP, closeP, closeFrom, openMs;
+static int wasOpen;
 static int   operation, intent, stateOperation;
 static int   mirrorApplied;
 static char  operationImdb[16];
@@ -463,10 +480,25 @@ void ctx_update(float dt, Uint32 now) {
   }
   if (holdActive && now - holdSince >= NV_HOLD_MS) holdReady = 1;
   cw_remove_step();
-  if (settings_animations_reduced())
+  if (settings_animations_reduced()) {
     anim = is_open ? 1.0f : 0.0f;
-  else
-    anim = anim_spring(anim, is_open ? 1.0f : 0.0f, dt, NV_SPRING_SCREEN);
+    openMs = 1e6f;
+  } else if (is_open) {
+    // Opening, or reopened mid-exit: pick the curve up where the panel is.
+    if (!wasOpen) {
+      openP = anim > 0.0f ? 1.0f - cbrtf(1.0f - anim) : 0.0f;
+      openMs = anim > 0.5f ? 1e6f : 0.0f;
+    }
+    openP = anim_clamp(openP + dt / CTX_OPEN_S, 0.0f, 1.0f);
+    { float u = 1.0f - openP; anim = 1.0f - u * u * u; }
+    openMs += dt * 1000.0f;
+  } else if (anim > 0.0f) {
+    if (wasOpen) { closeFrom = anim; closeP = 0.0f; }
+    closeP = anim_clamp(closeP + dt / CTX_CLOSE_S, 0.0f, 1.0f);
+    { float u = 1.0f - closeP; anim = closeFrom * u * u; }
+    if (anim < 0.002f) anim = 0.0f;
+  }
+  wasOpen = is_open;
   for (i = 0; i < CTX_MAX; i++)
     focusAnim[i] = settings_animations_reduced()
       ? (is_open && focus == i ? 1.0f : 0.0f)
@@ -521,6 +553,14 @@ static int metaPieces(const CatItem *ci, char out[4][32], int *bright) {
     snprintf(out[n++], 32, "%d min left", ci->remainingMin);
   }
   return n;
+}
+
+// Line k of the panel (0 the title, 1 the meta line, 2.. the rows) arriving,
+// 0..1. Only on the way in: the exit takes the panel in one piece.
+static float lineIn(int k) {
+  if (!is_open) return 1.0f;
+  return anim_stagger(openMs - CTX_STAGGER_DELAY, k, CTX_STAGGER_STEP, CTX_MAX + 2,
+                      CTX_STAGGER_DUR);
 }
 
 void ctx_draw(Uint32 now) {
@@ -613,18 +653,21 @@ void ctx_draw(Uint32 now) {
         gfx_color(panel, pxRadius(panel, CTX_RADIUS), 0.055f, 0.059f, 0.071f, a); }
 
     cy = y + CTX_PAD;
-    txt_draw_alpha(title, x + CTX_PAD, cy, a);
+    { float e = lineIn(0);
+      txt_draw_alpha(title, x + CTX_PAD, cy + (1.0f - e) * CTX_RISE, a * e); }
     cy += (float)title.h + CTX_META_GAP;
+    // The meta line, in whichever of its three forms, arriving second.
+    { float e = lineIn(1), ma = a * e, my = cy + (1.0f - e) * CTX_RISE;
 
     if (message) {
       int fail = stateOperation == CTX_FAILURE;
       TxtLine t = txt_line_trim(TXT_HERO_META, message,
                                 fail ? 255 : 225, fail ? 138 : 228, fail ? 128 : 235, 255,
                                 CTX_W - CTX_PAD * 2.0f);
-      txt_draw_alpha(t, x + CTX_PAD, cy, a);
+      txt_draw_alpha(t, x + CTX_PAD, my, ma);
     } else if (custom) {
       TxtLine t = txt_line_trim(TXT_HERO_META, customMeta, 150, 154, 162, 255, CTX_W - CTX_PAD * 2.0f);
-      if (customMeta[0]) txt_draw_alpha(t, x + CTX_PAD, cy, a);
+      if (customMeta[0]) txt_draw_alpha(t, x + CTX_PAD, my, ma);
     } else {
       char pieces[4][32];
       int bright, n = metaPieces(ci, pieces, &bright);
@@ -636,14 +679,14 @@ void ctx_draw(Uint32 now) {
         if (i > 0) {
           TxtLine dot = txt_line(TXT_HERO_META, "\xc2\xb7", 96, 100, 108, 255);
           mx += 14.0f;
-          txt_draw_alpha(dot, mx, cy, a);
+          txt_draw_alpha(dot, mx, my, ma);
           mx += (float)dot.w + 14.0f;
         }
         if (mx + (float)t.w > maxX) break;
-        txt_draw_alpha(t, mx, cy, a);
+        txt_draw_alpha(t, mx, my, ma);
         mx += (float)t.w;
       }
-    }
+    } }
     cy = y + CTX_PAD + headH;
   }
 
@@ -658,26 +701,30 @@ void ctx_draw(Uint32 now) {
     GfxRect r = { x + CTX_PAD, by, CTX_W - CTX_PAD * 2.0f, CTX_LINE };
     if (is_open) pointer_zone(r.x, r.y, r.w, r.h, pointOp, i, 0);
     float f = focusAnim[i];
+    // Each row arrives in turn, after the title and the meta line.
+    float ra = a;
+    { float e = lineIn(2 + i), rise = (1.0f - e) * CTX_RISE;
+      ra = a * e; by += rise; r.y += rise; }
     // The focused row INVERTS into a full pill, like every other button in the
     // app: a light capsule with dark ink.
     // The others sit bare on the panel.
     float ink = anim_blend(0.95f, 0.07f, f);
     int c = (int)(ink * 255.0f + 0.5f);
     if (f > 0.01f)
-      gfx_color(r, 0.5f, 0.945f, 0.949f, 0.957f, a * f);
+      gfx_color(r, 0.5f, 0.945f, 0.949f, 0.957f, ra * f);
     if (ops[i].icon)
       gfx_icon((GfxRect){ r.x + CTX_ICON_X, by + (CTX_LINE - CTX_ICON) * 0.5f,
                           CTX_ICON, CTX_ICON },
-               ops[i].icon, ink, ink, ink, a);
+               ops[i].icon, ink, ink, ink, ra);
     { float room = r.w - CTX_LABEL_X - CTX_ICON_X;
       if (ops[i].hint) {
         int hc = (int)(anim_blend(0.62f, 0.36f, f) * 255.0f + 0.5f);
         TxtLine h = txt_line(TXT_HERO_META, ops[i].hint, hc, hc, hc, 255);
         float hx = r.x + r.w - CTX_ICON_X - (float)h.w;
-        txt_draw_alpha(h, hx, by + (CTX_LINE - h.h) * 0.5f, a);
+        txt_draw_alpha(h, hx, by + (CTX_LINE - h.h) * 0.5f, ra);
         room -= (float)h.w + 16.0f;
       }
       { TxtLine t = txt_line_trim(TXT_DET_BUTTON, ops[i].rot, c, c, c, 255, room);
-        txt_draw_alpha(t, r.x + CTX_LABEL_X, by + (CTX_LINE - t.h) * 0.5f, a); } }
+        txt_draw_alpha(t, r.x + CTX_LABEL_X, by + (CTX_LINE - t.h) * 0.5f, ra); } }
   }
 }

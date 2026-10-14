@@ -306,8 +306,8 @@ static void focusPlate(GfxRect p, float r) {
     gfx_icon((GfxRect){ o.x - 30.0f, cy + 2.0f, 20.0f, 20.0f }, "live_caret_down", ar, ag, ab, 1.0f);
     return;
   }
-  if (hold.shown > 0.001f)
-    gfx_rect(plate, 0, GFX_RING_INSET_FILL, 0, hold.shown, 3.0f / plate.h, plateR / plate.h, 1, 1, 1, 1);
+  hold_sweep_inset(&hold, plate, (3.0f + NV_HOLD_RING_GROW * hold_grow(&hold)) / plate.h,
+                   plateR / plate.h, 1.0f);
 }
 static int barCtl = -1;         // the focused control's id, or BAR_TRACK or BAR_TITLE
 #define BAR_TRACK (-1)          // the programme's track
@@ -3787,7 +3787,7 @@ static void listRow(const IptvList *l, int r, float y, float listW) {
   if (focused) {
     // Held, the white ring steps back towards the page and the sweep refills
     // it, the home's feedback (hold.h).
-    float k = ringed ? NV_HOLD_DIM * hold.dim : 0.0f;
+    float k = ringed ? hold_dim_max() * hold.dim : 0.0f;
     float pr = ((C_PAPER >> 16) & 0xFF) / 255.0f, pg = ((C_PAPER >> 8) & 0xFF) / 255.0f, pb = (C_PAPER & 0xFF) / 255.0f;
     gfx_drop_shadow(row, C_ROW_R, 38.0f, 18.0f, 0.55f);
     gfx_color((GfxRect){ row.x - 3.0f, row.y - 3.0f, row.w + 6.0f, row.h + 6.0f },
@@ -4671,7 +4671,14 @@ static void drawBlock(float a) {
       if (hi < 1.0f && hi > 0.0f)
         gfx_color((GfxRect){ tx + tw * hi - 2.0f, top + th * 0.5f - 11.0f, 4.0f, 22.0f }, 0.5f, 1, 1, 1, 0.85f * fa);
     }
-    if (fx0 - tx > 0.5f) gfx_color((GfxRect){ tx, top, fx0 - tx, th }, 0.5f, sr, sg, sb, fa);
+    if (fx0 - tx > 0.5f) {
+      GfxRect fr = { tx, top, fx0 - tx, th };
+      if (settings_seek_brand()) {
+        float span = gfx_seek_brand_span(fr.w, tw);
+        gfx_seek_brand(fr, 0.5f, span, fa);
+        gfx_seek_brand_at(span, &sr, &sg, &sb);
+      } else gfx_color(fr, 0.5f, sr, sg, sb, fa);
+    }
     if (movable && (onTrack || scrubbing))
       gfx_color((GfxRect){ fx0 - 15.0f, top + th * 0.5f - 15.0f, 30.0f, 30.0f }, 0.5f, sr, sg, sb, fa);
     // Over the playhead, only when it says something the readout does not:

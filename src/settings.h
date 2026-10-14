@@ -49,6 +49,8 @@ int settings_animations_reduced(void);
 // "Hold menu blur" (Posters): 1 when the hold-OK panel draws the frosted glass,
 // 0 for the solid panel it had before. On by default.
 int settings_hold_menu_blur(void);
+// 1 for the hold ring in the logo's colours (Nuvio), 0 for the plain white sweep.
+int settings_hold_ring_brand(void);
 int settings_glass_tinted(void);    // local: glassStyle, 0 Dark / 1 Tinted
 int settings_fps_counter(void);     // local: fpsCounter
 int settings_fps_cap30(void);       // local: frameRateCap, 1 = 30 fps
@@ -81,7 +83,10 @@ int settings_next_autoplay(void);
 // `durationSeg` — from the fixed lead or the share-watched row, whichever is on.
 double settings_next_lead(double durationSeg);
 // The player's seek bar colour (fill and playhead), from the Playback row.
+// For Nuvio, the ramp's last colour; a rail's knob takes gfx_seek_brand_at(span).
 void settings_seek_color(float *r, float *g, float *b);
+// 1 when the fill is the logo's ramp (gfx_seek_brand) rather than one colour.
+int settings_seek_brand(void);
 // Seconds the Up next card counts down before it plays the next episode.
 int settings_next_countdown(void);
 // How long playback sits paused with no input before the pause overlay rises, in

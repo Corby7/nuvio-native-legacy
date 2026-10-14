@@ -250,6 +250,7 @@ void video_choose_subtitle(int i) { (void)i; }
 void video_subtitle_external(const char *u) { (void)u; }
 void video_subtitle_style(const VideoSubtitleStyle *e) { (void)e; }
 void video_subtitle_lift(int steps) { (void)steps; }
+void video_subtitle_occlude(float x, float y, float w, float h) { (void)x; (void)y; (void)w; (void)h; }
 void video_set_mp4(int m) { (void)m; }
 int  video_has_atmos(void) { return 0; }
 int  video_has_dolby_vision(void) { return 0; }
@@ -1641,6 +1642,8 @@ void video_subtitle_lift(int steps) {
   lift = steps;
   if (on && media[0] && hasStyle) sendPosition();
 }
+// The plane draws its subtitles UNDER the GL surface: the card covers them.
+void video_subtitle_occlude(float x, float y, float w, float h) { (void)x; (void)y; (void)w; (void)h; }
 
 static void applyStyle(void) {
   char b[256];

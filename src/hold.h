@@ -35,6 +35,7 @@ typedef struct {
   // The feedback, as home.c names it: how far round the sweep is, how far the
   // ring has stepped back, the confirming glow, and the press spring.
   float  shown, dim, pulse, scale, scaleV;
+  float  spin;             // 1 when the menu opens, to 0: the colours' lap
 } Hold;
 
 // Feed every event. `armable`: whether an OK press NOW would be over a card
@@ -58,6 +59,23 @@ void  hold_glow(const Hold *h, GfxRect card, float radiusPx);
 // takes them; `f` the focus amount the ring was drawn at.
 void  hold_ring(const Hold *h, GfxRect card, float thickness, float radius,
                 float r, float g, float b, float f);
+// The sweep and the lap alone, on an inset band (GFX_RING_INSET_FILL), for a
+// ring the screen draws itself. `thickness` normalised to the height.
+void  hold_sweep_inset(const Hold *h, GfxRect card, float thickness, float radius, float f);
+// How far the ring has thickened, 0..1: NV_HOLD_RING_GROW px at 1.
+float hold_grow(const Hold *h);
+// Settings > Hold ring: 1 for the logo's colours, and how far the ring dims
+// back under the sweep for the style in use.
+int   hold_brand(void);
+float hold_dim_max(void);
+// THE LAP, for the home's own hold state too: the colours' phase and the ring's
+// alpha for a spin value counting 1 -> 0.
+float hold_spin_phase(float spin);
+float hold_spin_alpha(float spin);
+// THE GLOW, for the home's own hold state too: its spread at pulse (1 -> 0), and
+// the draw itself, in the style Settings > Hold ring picks.
+float hold_glow_px(float pulse);
+void  hold_glow_draw(GfxRect card, float radiusPx, float pulse);
 // While the menu is open: keeps its scrim's hole on the card as it springs, and
 // feathered as far as the glow reaches.
 void  hold_track(const Hold *h, GfxRect card, float radiusPx);

@@ -460,6 +460,8 @@ typedef enum {
   //   uPar.x = how much of the perimeter is filled, 0..1
   //   focus  = where the fill starts, as a fraction of the lap past the
   //            top-left corner (0 for a hold; the clock for a busy spinner)
+  //   uPar.y = 1 for the logo's colours round the lap instead of the colour,
+  //            starting from `focus`
   GFX_RING_FILL = 42,
   // GFX_CARD_DEPTH — the card depth effect (`cardDepth*`), the web's two inset
   // shadows in one pass over the card's own quad, clipped by its corner:
@@ -483,6 +485,8 @@ typedef enum {
   //
   //   uPar.x = how much of the perimeter is filled, 0..1
   //   uPar.y = the band's thickness, normalised to the height like the radius
+  //   focus  = 1 + phase (0..1) for the logo's colours round the lap, turned
+  //            on by the phase; 0 for the colour
   GFX_RING_INSET_FILL = 44,
   // GFX_HERO_VEIL — the hero's ramps with NO art: the background colour at the
   // ramps' own alpha, and nothing where they clear. It goes over a hole onto the
@@ -508,7 +512,15 @@ typedef enum {
   //   uPar.x = the bar's height as a fraction of the card's, 0 for no bar
   //   uPar.y = the bar's fill, 0..1
   GFX_CW_CARD = 46,
-  GFX_NMODES = 47
+  // GFX_SEEK_BRAND — a pill like GFX_COLOR's, filled left to right with the
+  // logo's facets in turn: cyan, blue, violet, magenta. Settings > Seek bar
+  // colour > Nuvio.
+  //
+  //   uPar.x = how much of the ramp the quad shows, 0..1 from its left end. A
+  //            short fill showing the whole ramp crushed four colours into a few
+  //            pixels; gfx_seek_brand_span lets it unfold as the fill grows.
+  GFX_SEEK_BRAND = 47,
+  GFX_NMODES = 48
 } GfxMode;
 
 typedef struct {
@@ -787,6 +799,13 @@ void gfx_glow(GfxRect plate, float radiusPx, float blur,
 
 // Atalhos legiveis para os casos comuns.
 void gfx_color(GfxRect r, float radius, float cr, float cg, float cb, float ca);
+// GFX_SEEK_BRAND over r at alpha ca, showing the ramp's first `span` (0..1).
+void gfx_seek_brand(GfxRect r, float radius, float span, float ca);
+// The span for a fill `fill` px long on a rail `rail` px long: the full ramp
+// once the fill covers half the rail, its start before that.
+float gfx_seek_brand_span(float fill, float rail);
+// The ramp's colour at t (0..1): the knob's, at the span's end.
+void gfx_seek_brand_at(float t, float *r, float *g, float *b);
 // The card depth effect over `card` (see GFX_CARD_DEPTH). radius is the card's own
 // fraction; offsetPx is the glow's y offset (18 on posters, the coverage size on
 // episode, cast and trailer cards).

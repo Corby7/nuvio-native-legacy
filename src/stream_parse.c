@@ -140,9 +140,14 @@ static void availability(Stream *s, const char *text) {
 // HDR) and the separators left between them. The owner's names never contain
 // any of those, so they come out exactly as before.
 static int chipWord(const char *w, size_t n) {
+  // The release-source words too: "Dvdrip" was left as the service's NAME when an
+  // addon put the resolution and the source in its name field, and the source
+  // chip already says it.
   static const char *WORDS[] = { "4k", "uhd", "fhd", "hd", "sd", "2160p", "1440p", "1080p",
                                  "720p", "576p", "480p", "360p", "dv", "dovi", "hdr", "hdr10",
-                                 "hdr10+", "hlg", "sdr", "remux" };
+                                 "hdr10+", "hlg", "sdr", "remux", "dvd", "dvdrip", "bdrip",
+                                 "brrip", "bluray", "blu-ray", "web", "webdl", "web-dl",
+                                 "webrip", "hdtv", "hdrip" };
   for (size_t i = 0; i < sizeof WORDS / sizeof *WORDS; i++)
     if (strlen(WORDS[i]) == n && !strncasecmp(w, WORDS[i], n)) return 1;
   return 0;
@@ -194,7 +199,15 @@ static void serviceOf(const char *name, char *out, size_t cap) {
     }
     // Every space-like character becomes one plain space, so the words below
     // have a single thing to split on.
+    // NO-BREAK SPACES INCLUDED (U+00A0, U+202F, U+205F, U+3000). An addon padded
+    // its name with runs of U+00A0 ("1080P" and four of them): kept as letters,
+    // they glued the padding to the words, so "1080P" was no longer a chip word
+    // and the row's second line printed the whole padded name, a wide blank
+    // before the container.
     if (c < 32 || c == ' ') { buf[k++] = ' '; p++; continue; }
+    if (c == 0xC2 && (unsigned char)p[1] == 0xA0) { buf[k++] = ' '; p += 2; continue; }
+    if (!strncmp(p, "\xE2\x80\xAF", 3) || !strncmp(p, "\xE2\x81\x9F", 3) ||
+        !strncmp(p, "\xE3\x80\x80", 3)) { buf[k++] = ' '; p += 3; continue; }
     if (!strncmp(p, "\xE2\x80", 2) && (unsigned char)p[2] >= 0x80 &&
         (unsigned char)p[2] <= 0x8A) { buf[k++] = ' '; p += 3; continue; }
     buf[k++] = *p++;

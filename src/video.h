@@ -220,6 +220,13 @@ void video_subtitle_style(const VideoSubtitleStyle *e);
 // draws those cues, so this is the only way to move them. Cheap to call every
 // frame: it only reaches the pipeline when the value changes.
 void video_subtitle_lift(int steps);
+// A rect of the screen (layout units) the player's own UI covers this frame —
+// the Up next card, the Skip intro pill — where the EMBEDDED subtitle must not
+// show; w <= 0 for none. On webOS and the Mac the pipeline draws subtitles under
+// the UI, so the card covers them by itself and this does nothing; on Android
+// they are a view OVER it and this cuts the rect out of that view. Cheap to call
+// every frame: it only reaches the pipeline when the rect changes.
+void video_subtitle_occlude(float x, float y, float w, float h);
 
 // The truth about the stream, so the screen's badges do not lie.
 // THE FAILURE SIGNALS the player's log reads. A count and not a flag, so the

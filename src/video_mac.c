@@ -407,6 +407,8 @@ void video_subtitle_lift(int steps) {
   lift = steps;
   applyStyle();
 }
+// mpv draws its subtitles into the frame, under the UI: the card covers them.
+void video_subtitle_occlude(float x, float y, float w, float h) { (void)x; (void)y; (void)w; (void)h; }
 
 // --- events and state --------------------------------------------------------
 

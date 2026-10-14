@@ -917,18 +917,41 @@
 // where it is: the continue-watching card really does use white in the web.
 #define NV_FRAME_RING      4.0f
 #define NV_FRAME_RING_C    0.9608f  // 245/255
-// THE HOLD ON A HOME CARD (home.c, holdShown and friends). Monochrome: the focus
-// ring steps back to NV_HOLD_DIM less of itself and a white sweep refills it
-// (GFX_RING_FILL), eased. The card is pressed in to NV_HOLD_PRESS_SCALE and, when
-// the menu opens, springs back past 1 on an under-damped spring while a white glow
+// THE HOLD ON A HOME CARD (home.c, holdShown and friends). The focus
+// ring steps back to NV_HOLD_DIM less of itself and a sweep in the logo's colours
+// refills it (GFX_RING_FILL), eased. The card sinks to NV_HOLD_PRESS_SCALE with the hold and,
+// when the menu opens, pops out past 1 on an under-damped spring while a white glow
 // widens and fades behind it. Let go early and the sweep drains back.
-#define NV_HOLD_DIM          0.65f
+// Dimmed further under the Nuvio ring (Settings > Hold ring): its colours sit
+// lower than white and need the darker band to show against.
+#define NV_HOLD_DIM          0.80f
+#define NV_HOLD_DIM_PLAIN    0.65f
 #define NV_HOLD_DIM_K       25.0f     // the dimming's first-order spring
 #define NV_HOLD_DRAIN_S      0.15f
 #define NV_HOLD_PULSE_S      0.45f
-#define NV_HOLD_PRESS_SCALE  0.965f
-#define NV_HOLD_SPRING_W    26.0f     // rad/s
-#define NV_HOLD_SPRING_ZETA  0.42f    // < 1: it overshoots, once, visibly
+// The ring THICKENS by this many px while held, so the sweep has a band to be
+// seen in; it stays thick through the lap below and thins as that fades.
+#define NV_HOLD_RING_GROW    3.0f
+// When the menu opens: the ring stays whole in the logo's colours and they turn
+// one lap round it over this long, then it fades back to the plain ring.
+#define NV_HOLD_SPIN_S       0.9f
+// The card SINKS with the hold, fast at first and slowing to the end (eased
+// out, as if it cannot give much more), to NV_HOLD_PRESS_SCALE at the
+// moment the menu opens; then it lifts to NV_HOLD_POP_SCALE while the glow is in
+// its first 60% and the spring settles it back to 1. SMALL AND DAMPED ON PURPOSE:
+// 0.93 / 1.05 on a springy 0.42 read as a cartoon squash-and-stretch; a few
+// percent with barely an overshoot reads as the card being pressed and released.
+#define NV_HOLD_PRESS_SCALE  0.955f
+#define NV_HOLD_POP_SCALE    1.025f
+#define NV_HOLD_POP_PULSE    0.6f     // pops while the glow's pulse is above this
+// Two springs: a soft one that follows the press down, and a FAST one for the way
+// back (the pop after the menu opens, or letting go early). On the soft one the
+// return took as long as the press and read as the card drifting back, not
+// being let go.
+#define NV_HOLD_SPRING_W    18.0f     // rad/s, while pressing
+#define NV_HOLD_SPRING_ZETA  0.75f    // < 1, but only just: a trace of overshoot, no bounce
+#define NV_HOLD_RELEASE_W   36.0f     // rad/s, on the way back: settles in ~150ms
+#define NV_HOLD_RELEASE_ZETA 0.55f    // a quick, small overshoot: the snap of a release
 #define NV_FRAME_RING_A    1.0f
 // A CARD BUSY ON A REMOTE WRITE ("Remove from Continue watching"): the hold's
 // dimmed ring with an arc of its sweep, NV_BUSY_ARC of the perimeter, circling

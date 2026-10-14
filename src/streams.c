@@ -865,7 +865,11 @@ static void drawRow(const Stream *s, float left, float w, float top, int playing
   }
   // WHERE IT CAME FROM, trimmed: an addon's own name can be any length, and
   // untrimmed it ran under the size and the quality bar on the right.
-  { const char *who = s->service[0] ? s->service : s->provider;
+  // THE ADDON'S NAME ONLY WHEN IT TELLS ROWS APART: with one addon in the list,
+  // or one addon's tab picked, it was the same word on every row ("AIOStreams"),
+  // so then a row with no service of its own says nothing there.
+  { int several = !filter && nProviders > 2;
+    const char *who = s->service[0] ? s->service : several ? s->provider : "";
     if (who[0]) {
       TxtLine l;
       if (!first) {

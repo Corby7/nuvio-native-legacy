@@ -13,6 +13,7 @@
 #include "focus.h"
 #include "pointer.h"
 #include "anim.h"
+#include "hold.h"
 #include "layout.h"
 #include "settings.h"
 #include "homerows.h"
@@ -315,7 +316,32 @@ static float okHold = 0.0f;
 //   holdDim    how far the ring has stepped back to make room for the sweep
 //   holdPulse  1 the instant the menu opens, fading: the glow that confirms it
 //   holdScale  the card pressed IN while held, springing back past 1 on success
-static float holdShown, holdDim, holdPulse, holdScale = 1.0f, holdScaleV;
+//   holdSpin   1 the instant the menu opens, to 0: the colours' lap round the ring
+static float holdShown, holdDim, holdPulse, holdScale = 1.0f, holdScaleV, holdSpin;
+
+// The focused card's ring with the hold on it: thickened NV_HOLD_RING_GROW px
+// outward while held and through the lap, the base at (cr,cg,cb, baseA), the
+// sweep in the logo's colours, and after the menu opens the colours' lap.
+// `rPx` is the ring's corner in px.
+static void holdRingDraw(GfxRect ring, float rPx, int held, float cr, float cg, float cb,
+                         float baseA, float sweepFrom, float sweep, float sweepA) {
+  float rad, brand = hold_brand() ? 1.0f : 0.0f;
+  if (held && brand > 0.0f) {
+    float s = holdSpin > 0.0f ? hold_spin_alpha(holdSpin) : 0.0f;
+    float g = NV_HOLD_RING_GROW * (holdDim > s ? holdDim : s);
+    if (g > 0.01f) {
+      ring = (GfxRect){ ring.x - g, ring.y - g, ring.w + 2.0f * g, ring.h + 2.0f * g };
+      rPx += g;
+    }
+  }
+  rad = rPx / ring.h;
+  gfx_color(ring, rad, cr, cg, cb, baseA);
+  if (sweep > 0.0f)
+    gfx_rect(ring, 0, GFX_RING_FILL, sweepFrom, sweep, brand, rad, 1.0f, 1.0f, 1.0f, sweepA);
+  if (held && holdSpin > 0.0f)
+    gfx_rect(ring, 0, GFX_RING_FILL, 0.999f * hold_spin_phase(holdSpin), 1.0f, 1.0f, rad,
+             1.0f, 1.0f, 1.0f, sweepA * hold_spin_alpha(holdSpin));
+}
 
 // THE POINTER'S SETTER: the Magic Remote landed on card (r, c). It does what the
 // arrows would have done to get there — the row's column is remembered on the
@@ -1866,15 +1892,18 @@ void home_update(float dt, Uint32 now) {
                             : anim_spring(holdDim, pressing || holdShown > 0.0f ? 1.0f : 0.0f,
                                           dt, NV_HOLD_DIM_K);
     holdPulse = anim_clamp(holdPulse - dt / NV_HOLD_PULSE_S, 0.0f, 1.0f);
+    holdSpin = anim_clamp(holdSpin - dt / NV_HOLD_SPIN_S, 0.0f, 1.0f);
     // An UNDER-damped spring, unlike anim_spring2: the bounce past 1 on release
     // is the point. Stepped at 240Hz so a slow frame cannot blow it up.
     if (motionReduced) { holdScale = 1.0f; holdScaleV = 0.0f; }
     else {
-      float target = pressing ? NV_HOLD_PRESS_SCALE : 1.0f, left = dt;
+      float target = pressing ? 1.0f - (1.0f - NV_HOLD_PRESS_SCALE) * anim_ease_out(okHold)
+                   : holdPulse > NV_HOLD_POP_PULSE ? NV_HOLD_POP_SCALE : 1.0f, left = dt;
       while (left > 0.0f) {
         float s = left > 1.0f / 240.0f ? 1.0f / 240.0f : left;
-        float w = NV_HOLD_SPRING_W;
-        holdScaleV += (w * w * (target - holdScale) - 2.0f * NV_HOLD_SPRING_ZETA * w * holdScaleV) * s;
+        float w = pressing ? NV_HOLD_SPRING_W : NV_HOLD_RELEASE_W;
+        float z = pressing ? NV_HOLD_SPRING_ZETA : NV_HOLD_RELEASE_ZETA;
+        holdScaleV += (w * w * (target - holdScale) - 2.0f * z * w * holdScaleV) * s;
         holdScale += holdScaleV * s;
         left -= s;
       }
@@ -1885,7 +1914,7 @@ void home_update(float dt, Uint32 now) {
     // again with nothing left to draw over it. What marks the moment is the glow
     // and the card springing back out.
     holdShown = 0.0f; holdDim = 0.0f;
-    if (!motionReduced) holdPulse = 1.0f;
+    if (!motionReduced) { holdPulse = 1.0f; holdSpin = hold_brand() ? 1.0f : 0.0f; }
     okConsumeRelease = 1;
     okPressing = 0;
     okSince = 0;
@@ -3819,20 +3848,16 @@ static void drawShortcuts(int r, float y) {
       // THE HOLD, as on a poster: the ring is where the hold menu anchors, the
       // glow confirms it, and the sweep refills the dimmed ring in white.
       if (held) {
-        float glowPx = 10.0f + 28.0f * (1.0f - holdPulse);
+        float glowPx = hold_glow_px(holdPulse);
         ringFocus = ring; ringFocusR = ringPx; hasItemFocus = 1;
-        if (holdPulse > 0.0f)
-          gfx_glow(ring, ringFocusR, glowPx, 1.0f, 1.0f, 1.0f,
-                   0.55f * holdPulse * holdPulse);
+        hold_glow_draw(ring, ringFocusR, holdPulse);
         if (ctx_is_open())
           ctx_track_card(ring, ringFocusR, holdPulse > 0.0f ? glowPx * holdPulse : 0.0f);
       }
       if (f > .01f) {
-        float ringA = held ? 1.0f - NV_HOLD_DIM * holdDim : 1.0f;
-        gfx_color(ring, ringR, .96f, .97f, .98f, f * ringA);
-        if (held && holdShown > 0.0f)
-          gfx_rect(ring, 0, GFX_RING_FILL, 0.0f, holdShown, 0, ringR,
-                   1.0f, 1.0f, 1.0f, f);
+        float ringA = held ? 1.0f - hold_dim_max() * holdDim : 1.0f;
+        holdRingDraw(ring, ringPx, held, .96f, .97f, .98f, f * ringA,
+                     0.0f, held ? holdShown : 0.0f, f);
       } }
     // The SAME surface the poster rows sit on, and for the same reason: in the web
     // a collection card is `home-content-card home-poster-card home-collection-card`
@@ -4423,7 +4448,7 @@ void home_draw(Uint32 now) {
           }
           // The hold's ring: dimmed while the sweep refills it in white.
           int held = focus_index(&focus, r, c);
-          float ringA = held ? 1.0f - NV_HOLD_DIM * holdDim : 1.0f;
+          float ringA = held ? 1.0f - hold_dim_max() * holdDim : 1.0f;
           float sweep = held ? holdShown : 0.0f, sweepFrom = 0.0f;
           // BUSY: "Remove from Continue watching" is waiting on Trakt and the
           // account. The same dimmed ring, with a short arc of the hold's sweep
@@ -4432,15 +4457,13 @@ void home_draw(Uint32 now) {
             size_t nb = busy ? strlen(busy) : 0;
             if (held && busy && cItem && !strncmp(cItem->imdb, busy, nb) &&
                 (cItem->imdb[nb] == '\0' || cItem->imdb[nb] == ':')) {
-              ringA = 1.0f - NV_HOLD_DIM;
+              ringA = 1.0f - hold_dim_max();
               sweep = NV_BUSY_ARC;
               sweepFrom = (float)(now % NV_BUSY_LAP_MS) / NV_BUSY_LAP_MS;
             } }
           // The glow that confirms it, BEHIND the card: it widens as it fades.
-          float glowPx = 10.0f + 28.0f * (1.0f - holdPulse);
-          if (held && holdPulse > 0.0f)
-            gfx_glow(ringFocus, ringFocusR, glowPx,
-                     1.0f, 1.0f, 1.0f, 0.55f * holdPulse * holdPulse);
+          float glowPx = hold_glow_px(holdPulse);
+          if (held) hold_glow_draw(ringFocus, ringFocusR, holdPulse);
           if (ctx_is_open() && held)
             ctx_track_card(ringFocus, ringFocusR, holdPulse > 0.0f ? glowPx * holdPulse : 0.0f);
           if (f > 0.01f) {
@@ -4465,14 +4488,10 @@ void home_draw(Uint32 now) {
               if (in < 0.0f) in = 0.0f;
               in = roundf(in * scale);
               GfxRect frame = frameOf(card, in);
-              gfx_color(frame, radiusFocus(frame.h, in),
-                        NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
-                        NV_FRAME_RING_A * f * ringA);
-              if (sweep > 0.0f)
-                gfx_rect(frame, 0, GFX_RING_FILL, sweepFrom, sweep, 0,
-                         radiusFocus(frame.h, in),
-                         NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
-                         NV_FRAME_RING_A * f);
+              holdRingDraw(frame, radiusFocus(frame.h, in) * frame.h, held,
+                           NV_FRAME_RING_C, NV_FRAME_RING_C, NV_FRAME_RING_C,
+                           NV_FRAME_RING_A * f * ringA, sweepFrom, sweep,
+                           NV_FRAME_RING_A * f);
             } else {
               // 4 px of #FFFFFF, OUTSIDE the art. MEASURED on the reference device
               // (TCL, same card, same row): 4 solid px, x 102->105 with no ramp, and
@@ -4489,12 +4508,8 @@ void home_draw(Uint32 now) {
               // and pinched to under a pixel at each corner, which is the
               // "border doesn't apply" — it was there, just not on the corners.
               float rPx = radius * h + NV_RING_FOCUS;
-              gfx_color(border, rPx / (h + NV_RING_FOCUS * 2.0f),
-                        1.0f, 1.0f, 1.0f, f * ringA);
-              if (sweep > 0.0f)
-                gfx_rect(border, 0, GFX_RING_FILL, sweepFrom, sweep, 0,
-                         rPx / (h + NV_RING_FOCUS * 2.0f),
-                         1.0f, 1.0f, 1.0f, f);
+              holdRingDraw(border, rPx, held, 1.0f, 1.0f, 1.0f, f * ringA,
+                           sweepFrom, sweep, f);
             }
           }
           // THE DIM STARTS HERE, after the ring and the glow, which sit outside the

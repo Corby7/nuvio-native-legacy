@@ -125,6 +125,14 @@ static inline void anim_nudge_step(AnimBump n[2], float dt, float w) {
   anim_bump_step(&n[1], dt, w);
 }
 
+// Fast out of the gate and slowing all the way to the end (a cubic ease-out):
+// the hold's press, giving less and less as if it cannot go much further.
+static inline float anim_ease_out(float t) {
+  t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+  t = 1.0f - t;
+  return 1.0f - t * t * t;
+}
+
 // Symmetric acceleration and deceleration, for animation with its own clock.
 static inline float anim_smooth(float t) {
   t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
