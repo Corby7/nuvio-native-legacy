@@ -327,6 +327,8 @@ static float  seekShown = 0.0f, seekShownV = 0.0f;
 static Uint32 quickAt = 0;
 static float  quickDelta = 0.0f;
 static float  quickAnim = 0.0f;    // 0..1, the quick overlay's spring
+#define PLR_BUF_SPRING_OUT 45.0f   // the seek spinner's fade-out (95% in ~65ms)
+static float  bufShown = 0.0f;     // 0..1, the centred seek spinner (drawBufferSpinner)
 static float  quickPulse = 0.0f;   // 1 on each press, decays: the chevron's nudge
 static int    statsOpen = 0;   // the stream stats panel (#playerStatsOverlay)
 static float entry = 0.0f;       // 0..1 the screen's opening/closing fade
@@ -1185,7 +1187,7 @@ void player_shutdown(void) {
   statsOpen = 0;
   seekActive = 0; seekRepeats = 0; seekDir = 0;
   seekAt = seekEndAt = settleAt = 0;
-  quickAt = 0; quickDelta = 0.0f; quickAnim = 0.0f; quickPulse = 0.0f;
+  quickAt = 0; quickDelta = 0.0f; quickAnim = 0.0f; quickPulse = 0.0f; bufShown = 0.0f;
   startImage = 0; rolledMs = 0; rolledOnce = 0;
   episodes_close();
   intro_off(); introIdx=introT=introE=-1;
@@ -2092,6 +2094,13 @@ void player_update(float dt, Uint32 now) {
     quickAnim = anim_spring(quickAnim, q ? 1.0f : 0.0f, dt,
                             q ? NV_SPRING_FOCUS : NV_SPRING_BLUR);
     quickPulse *= expf(-dt / 0.12f); }
+  // The seek's spinner: in on the focus curve, OUT FASTER — once the picture
+  // moves it has nothing left to say, and an exponential tail kept a faint arc
+  // over the playing film for a few frames. Below 4% it is simply gone.
+  { int b = hasVideo && !player_loading() && video_buffering();
+    bufShown = anim_spring(bufShown, b ? 1.0f : 0.0f, dt,
+                           b ? NV_SPRING_FOCUS : PLR_BUF_SPRING_OUT);
+    if (!b && bufShown < 0.04f) bufShown = 0.0f; }
 
   // THE PAUSE OVERLAY. Rising, it takes the transport down with it: the controls
   // are what "paused" looked like until now, and the two stacked read as clutter.
@@ -2136,6 +2145,48 @@ static void iconFile(float cx, float cy, float a, float luma,
 // secondaries were each a size larger than the sheet says.
 static void iconPlayPause(float cx, float cy, float a, int pause, float luma) {
   iconFile(cx, cy, a, luma, pause ? "pause" : "play", PLR_ICON_H);
+}
+
+// WAITING FOR THE PICTURE AFTER A SEEK: a thin white arc, bare, in the middle of
+// the screen, BREATHING — it stretches to most of the circle and shrinks
+// back while it turns. The head runs ahead while the arc grows, then waits while
+// the tail catches up, so each breath also carries it PLR_BUF_REACH further round.
+// No disc behind it: it shows with the controls up or down — the left/right skip
+// raises no controls, and that is the seek it is mostly for.
+//
+// gfx has no arc mode, so the arc is a run of round dots, as on the opening button.
+#define PLR_BUF_R        22.0f    // the arc's radius
+#define PLR_BUF_DOT       5.0f    // its stroke
+#define PLR_BUF_BREATH 1600.0f    // ms per grow + shrink
+#define PLR_BUF_TURN   1500.0f    // ms per revolution of the steady turn under it
+#define PLR_BUF_MIN       0.35f   // radians, the arc at its shortest
+#define PLR_BUF_REACH     4.0f    // radians it grows by
+static float bufEase(float x) {
+  return x < 0.5f ? 4.0f * x * x * x : 1.0f - powf(-2.0f * x + 2.0f, 3.0f) * 0.5f;
+}
+static void drawBufferSpinner(Uint32 now, float a) {
+  const float cx = NV_SCREEN_W * 0.5f, cy = NV_SCREEN_H * 0.5f;
+  Uint32 per = (Uint32)PLR_BUF_BREATH;
+  float cyc = (float)(now % per) / PLR_BUF_BREATH;
+  float grow = cyc < 0.5f ? bufEase(cyc * 2.0f) : 1.0f - bufEase((cyc - 0.5f) * 2.0f);
+  float ahead = cyc < 0.5f ? bufEase(cyc * 2.0f) : 1.0f;
+  float head, span = PLR_BUF_MIN + PLR_BUF_REACH * grow;
+  int k, n;
+  if (a <= 0.005f) return;
+  // The steady turn and the breaths' advance, each taken modulo a turn: `now` in
+  // radians loses precision in a float after a few hours. The breaths' sum is
+  // taken in double for the same reason, and wraps without a jump.
+  head = (float)(now % (Uint32)PLR_BUF_TURN) * (6.2831853f / PLR_BUF_TURN)
+       + (float)fmod((double)(now / per) * PLR_BUF_REACH, 6.283185307179586)
+       + PLR_BUF_REACH * ahead;
+  n = (int)(span * PLR_BUF_R / 1.4f);
+  if (n < 2) n = 2;
+  for (k = 0; k <= n; k++) {
+    float ang = head - span * k / n;
+    gfx_color((GfxRect){ cx + cosf(ang) * PLR_BUF_R - PLR_BUF_DOT * 0.5f,
+                         cy + sinf(ang) * PLR_BUF_R - PLR_BUF_DOT * 0.5f,
+                         PLR_BUF_DOT, PLR_BUF_DOT }, 0.5f, 1, 1, 1, a);
+  }
 }
 
 static void iconSubtitles(float cx, float cy, float a, float luma) {
@@ -3350,6 +3401,7 @@ static void drawPlayer(Uint32 now) {
   pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, clickPicture, 0, 0);
   drawActionsEpisode();
   drawQuickSeek(q);
+  drawBufferSpinner(now, bufShown * entry);
   if (ab <= 0.005f) return;   // playing clean: nothing more over the image
 
   // The whole block slides together: title, bar and icons are ONE object that rises.

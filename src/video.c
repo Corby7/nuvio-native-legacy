@@ -118,6 +118,13 @@ static Uint32 mkvArmedMs, lastBufferingMs;
 // from a seek. Before `calmFrom` the pipeline is filling up for its own reasons.
 #define NV_CALM_MS 5000u
 static volatile int stallCount, stalled, netRetrying;
+// 1 between a bufferingStart and its bufferingEnd, seeks included (see video_buffering).
+static volatile int buffering;
+// 1 from video_fetch until the seek is SEEN to be over: its bufferingEnd, a
+// position report at the target, or its seekDone while paused. seekHold is not
+// that signal — it waits for the first report near the target, which comes up to
+// 200ms after the picture is already moving again.
+static volatile int seekWaiting;
 static volatile Uint32 calmFrom;
 // Set by video_mkv_hurry: an addon subtitle is waiting for the header to sync.
 static int mkvHurry;
@@ -232,6 +239,7 @@ double video_duration(void) { return 0; }
 double video_buffer_end(void) { return 0; }
 int  video_stall_count(void) { return 0; }
 int  video_stalled(void) { return 0; }
+int  video_buffering(void) { return 0; }
 int  video_net_retrying(void) { return 0; }
 void video_set_dv(int dv) { (void)dv; }
 unsigned video_session(void) { return 0; }
@@ -606,7 +614,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   if (strstr(p, "loadCompleted")) {
     mark("video loadCompleted");
     calmFrom = SDL_GetTicks() + NV_CALM_MS;
-    stalled = 0; netRetrying = 0;
+    stalled = 0; netRetrying = 0; buffering = 0;
     // ORDER: tracks first, position after. Switching track restarts the decode in
     // the pipeline; doing that AFTER the seek would throw the position away.
     if (audioOnLoad >= 0) {
@@ -660,6 +668,7 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   if (strstr(p, "bufferingStart")) {
     char m[64];
     lastBufferingMs = SDL_GetTicks();
+    buffering = 1;
     if (ready && (Sint32)(lastBufferingMs - calmFrom) >= 0) { stallCount++; stalled = 1; }
     snprintf(m, sizeof m, "buffering START (buffer %+.1fs ahead)%s",
              bufferSeg - posSeg, stalled ? ", a stall" : "");
@@ -668,7 +677,8 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   if (strstr(p, "bufferingEnd")) {
     char m[64];
     lastBufferingMs = SDL_GetTicks();
-    stalled = 0;
+    stalled = 0; buffering = 0;
+    if (!seekIn) seekWaiting = 0;   // a seek's own wait, once it was sent
     snprintf(m, sizeof m, "buffering END (buffer %+.1fs ahead)",
              bufferSeg - posSeg);
     mark(m);
@@ -682,6 +692,10 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
     // Flag it, and video_pump applies it on the right thread.
     windowDirty = 1;
   }
+  // PAUSED, a seek reports no position afterwards and may buffer nothing: its
+  // seekDone is the only sign it is over. Playing, the bufferingEnd or the first
+  // report at the target ends it instead (see seekWaiting).
+  if (strstr(p, "seekDone") && !playing && !seekIn) seekWaiting = 0;
   if (strstr(p, "paused")) {
     // It only stamps when it was NOT us who paused: a pause by the owner is
     // expected, a pause coming from the pipeline is the defect.
@@ -756,7 +770,10 @@ static int onEvent(LSHandle *h, LSMessage *m, void *u) {
   { double v = numberOf(p, "\"currentTime\":");
     if (v >= 0 && seekHold >= 0.0) {
       double d = v / 1000.0 - seekHold;
-      if ((d < 0 ? -d : d) <= SEEK_LAND_S || SDL_GetTicks() > seekHoldUntil) seekHold = -1.0;
+      if ((d < 0 ? -d : d) <= SEEK_LAND_S || SDL_GetTicks() > seekHoldUntil) {
+        seekHold = -1.0;
+        if (!seekIn) seekWaiting = 0;
+      }
       else v = -1;
     }
     if (v >= 0) {
@@ -1408,6 +1425,7 @@ void video_stop(void) {
   audioOnLoad = subOnLoad = -1;
   subUrlOnLoad[0] = 0;
   pauseRequested = 0; seekIn = 0; mkvPending = 0; mkvHurry = 0; seekHold = -1.0;
+  buffering = 0; seekWaiting = 0;
   embsub_stop();
   if (on && media[0]) {
     snprintf(b, sizeof b, "{\"mediaId\":\"%s\"}", media);
@@ -1445,6 +1463,7 @@ void video_fetch(double seconds) {
   seekHold = seconds;
   calmFrom = seekIn + NV_CALM_MS;
   stalled = 0;
+  seekWaiting = 1;
 }
 
 // Actually sends it. Called by video_pump when the rest period expires.
@@ -1528,6 +1547,14 @@ double video_duration(void)  { return durationSeg; }
 double video_buffer_end(void) { return bufferSeg; }
 int    video_stall_count(void) { return stallCount; }
 int    video_stalled(void)     { return stalled; }
+// WAITING FOR THE PICTURE AFTER A SEEK, or for data at any point: a seek still
+// resting (seekIn), one sent but not yet landed (seekHold), or the pipeline
+// between bufferingStart and bufferingEnd. Unlike video_stalled it counts the
+// seek's own wait, which is exactly the one the player shows a spinner for.
+int    video_buffering(void) {
+  if (seekWaiting && SDL_GetTicks() > seekHoldUntil) seekWaiting = 0;   // never landed
+  return ready && (seekIn || seekWaiting || buffering);
+}
 int    video_net_retrying(void) { return netRetrying; }
 unsigned video_session(void) { return session; }
 int    video_playing(void)  { return playing; }

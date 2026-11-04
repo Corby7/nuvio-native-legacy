@@ -87,6 +87,9 @@ double video_buffer_end(void); // how far the buffer reaches (s); 0 if unknown
 // after either) is not one. Counted per video_play.
 int    video_stall_count(void);
 int    video_stalled(void);     // 1 while a counted stall lasts
+// 1 while playback waits for data, a seek's own wait INCLUDED: the seek resting,
+// in flight, or the pipeline between bufferingStart and bufferingEnd.
+int    video_buffering(void);
 // 1 while a dropped connection is being retried (see video_reconnect).
 int    video_net_retrying(void);
 // The chosen SOURCE's Dolby Vision claim (the addon describes the file). Call it

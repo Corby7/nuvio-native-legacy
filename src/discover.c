@@ -1085,6 +1085,26 @@ static void hostOf(const char *url, char *dst, size_t size) {
   dst[n] = 0;
 }
 
+// THE LAST GOOD MANIFEST, KEPT ON DISK. AIOMetadata builds its manifest (151
+// catalogues for the owner) on the first request after its own cache expires:
+// MEASURED 2026-11-04, 27.8 s cold and 0.25 s warm. The 20 s timeout here lost
+// that race on every cold start, and the home came up without a single one of
+// its rows — "NO RESPONSE" in the log, nothing on screen to say why.
+//
+// So each manifest that arrives is saved, one file per URL, and the timeout
+// depends on whether there is one to fall back on: with a saved copy the server
+// gets MANIFEST_WAIT_SAVED_S and then the copy stands in (the request still warms
+// the server for next time); with none — the first run — it gets the long wait,
+// since without it there are no rows at all.
+#define MANIFEST_WAIT_SAVED_S  8
+#define MANIFEST_WAIT_FIRST_S 45
+static void manifestSavedName(const char *url, char *dst, size_t size) {
+  unsigned h = 2166136261u;   // FNV-1a: the URL carries the addon's config, and
+  const unsigned char *c;     // it is far too long for a file name
+  for (c = (const unsigned char *)url; *c; c++) { h ^= *c; h *= 16777619u; }
+  snprintf(dst, size, "manifest-%08x.json", h);
+}
+
 // Le <base>/manifest.json e acrescenta os catalogos declarados.
 static int readManifest(const char *base, Decl *output, int max) {
   char url[900], addonId[96] = "", name[96], kind[8], id[96];
@@ -1094,7 +1114,20 @@ static int readManifest(const char *base, Decl *output, int max) {
   int n = 0;
   snprintf(url, sizeof url, "%s/manifest.json", base);
   hostOf(url, host, sizeof host);
-  body = net_download_cached(url, 20, DISC_ADDON_TTL_S);
+  { char saved[40];
+    char *copy;
+    manifestSavedName(url, saved, sizeof saved);
+    copy = data_read(saved);
+    body = net_download_cached(url, copy ? MANIFEST_WAIT_SAVED_S : MANIFEST_WAIT_FIRST_S,
+                               DISC_ADDON_TTL_S);
+    if (body && body[0] == '{' && strstr(body, "\"id\"")) {
+      if (!copy || strcmp(copy, body)) data_write(saved, body);
+    } else if (!body && copy) {
+      printf("[disc] manifest %s: no answer in %d s, using the saved copy\n",
+             host, MANIFEST_WAIT_SAVED_S);
+      body = copy; copy = NULL;
+    }
+    free(copy); }
   // WHY THIS IS LOGGED. An addon that does not answer, or answers something with
   // no "catalogs", produced exactly the same visible result as an addon that
   // simply has no catalogues: the home fell back to the packaged catalogue and
