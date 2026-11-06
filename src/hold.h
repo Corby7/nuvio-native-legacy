@@ -35,7 +35,7 @@ typedef struct {
   // The feedback, as home.c names it: how far round the sweep is, how far the
   // ring has stepped back, the confirming glow, and the press spring.
   float  shown, dim, pulse, scale, scaleV;
-  float  spin;             // 1 when the menu opens, to 0: the colours' lap
+  float  spin;             // 1 when the menu opens, to 0: the colours fading out
 } Hold;
 
 // Feed every event. `armable`: whether an OK press NOW would be over a card

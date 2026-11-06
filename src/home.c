@@ -320,15 +320,15 @@ static float okHold = 0.0f;
 static float holdShown, holdDim, holdPulse, holdScale = 1.0f, holdScaleV, holdSpin;
 
 // The focused card's ring with the hold on it: thickened NV_HOLD_RING_GROW px
-// outward while held and through the lap, the base at (cr,cg,cb, baseA), the
-// sweep in the logo's colours, and after the menu opens the colours' lap.
+// outward with the sweep, the base at (cr,cg,cb, baseA), the sweep in the
+// logo's colours, and after the menu opens those colours fading back to white.
 // `rPx` is the ring's corner in px.
 static void holdRingDraw(GfxRect ring, float rPx, int held, float cr, float cg, float cb,
                          float baseA, float sweepFrom, float sweep, float sweepA) {
   float rad, brand = hold_brand() ? 1.0f : 0.0f;
   if (held && brand > 0.0f) {
     float s = holdSpin > 0.0f ? hold_spin_alpha(holdSpin) : 0.0f;
-    float g = NV_HOLD_RING_GROW * (holdDim > s ? holdDim : s);
+    float g = NV_HOLD_RING_GROW * (holdShown > s ? holdShown : s);
     if (g > 0.01f) {
       ring = (GfxRect){ ring.x - g, ring.y - g, ring.w + 2.0f * g, ring.h + 2.0f * g };
       rPx += g;
@@ -1882,10 +1882,9 @@ void home_update(float dt, Uint32 now) {
   } else if (!okPressing)
     okHold = 0.0f;
   { int pressing = okPressing && okHold > 0.0f && focus_can_press_long();
-    // Slow out of the gate and ACCELERATING all the way to the end (a cubic
-    // ease-in): the hold builds up and lands, where a linear sweep reads as a
-    // progress bar. Half the hold covers an eighth of the ring.
-    if (pressing) { float t = okHold; holdShown = t * t * t; }
+    // ACCELERATING to the end (NV_HOLD_EASE_POW): the hold builds up and
+    // lands, where a linear sweep reads as a progress bar.
+    if (pressing) holdShown = powf(okHold, NV_HOLD_EASE_POW);
     else if (holdShown > 0.0f)
       holdShown = anim_clamp(holdShown - dt / NV_HOLD_DRAIN_S, 0.0f, 1.0f);
     holdDim = motionReduced ? (pressing || holdShown > 0.0f ? 1.0f : 0.0f)

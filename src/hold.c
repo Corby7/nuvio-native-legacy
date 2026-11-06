@@ -66,7 +66,7 @@ void hold_animate(Hold *h, float dt, Uint32 now) {
   }
   pressing = h->pressing && t > 0.0f;
   // Slow out of the gate and accelerating to the end (a cubic ease-in).
-  if (pressing) h->shown = t * t * t;
+  if (pressing) h->shown = powf(t, NV_HOLD_EASE_POW);
   else if (h->shown > 0.0f)
     h->shown = anim_clamp(h->shown - dt / NV_HOLD_DRAIN_S, 0.0f, 1.0f);
   h->dim = reduced ? (pressing || h->shown > 0.0f ? 1.0f : 0.0f)
@@ -104,7 +104,7 @@ static float glowPx(const Hold *h) { return hold_glow_px(h->pulse); }
 // stronger than the white one: the moment the hold lands needs more than the
 // ring to say so, and white at 0.55 was barely there on a light poster.
 float hold_glow_px(float pulse) {
-  return 10.0f + (hold_brand() ? 48.0f : 28.0f) * (1.0f - pulse);
+  return 10.0f + (hold_brand() ? 32.0f : 20.0f) * (1.0f - pulse);
 }
 void hold_glow_draw(GfxRect card, float radiusPx, float pulse) {
   if (pulse <= 0.0f) return;
@@ -135,10 +135,11 @@ void hold_ring(const Hold *h, GfxRect card, float thickness, float radius,
   hold_sweep_inset(h, card, thickness, radius, f);
 }
 
-// Eased both ways, so the lap starts and settles rather than ticking round.
-float hold_spin_phase(float spin) { float t = 1.0f - spin; return t * t * (3.0f - 2.0f * t); }
-// Whole for most of the lap, fading back to the plain ring over its last 30%.
-float hold_spin_alpha(float spin) { return spin >= 0.3f ? 1.0f : spin / 0.3f; }
+// No lap any more (NV_HOLD_SPIN_S): the colours hold still while they fade.
+float hold_spin_phase(float spin) { (void)spin; return 0.0f; }
+// The menu's entrance is a cubic ease-out (1 - u^3); what the ring has left of
+// its colour is the rest of that, u^3, so the two finish together.
+float hold_spin_alpha(float spin) { return spin * spin * spin; }
 
 int hold_brand(void) { return settings_hold_ring_brand(); }
 float hold_dim_max(void) { return hold_brand() ? NV_HOLD_DIM : NV_HOLD_DIM_PLAIN; }
@@ -146,8 +147,9 @@ float hold_dim_max(void) { return hold_brand() ? NV_HOLD_DIM : NV_HOLD_DIM_PLAIN
 float hold_grow(const Hold *h) {
   float s;
   if (!hold_brand()) return 0.0f;
+  // With the sweep, and back as the colours fade (NV_HOLD_RING_GROW).
   s = h->spin > 0.0f ? hold_spin_alpha(h->spin) : 0.0f;
-  return h->dim > s ? h->dim : s;
+  return h->shown > s ? h->shown : s;
 }
 
 void hold_sweep_inset(const Hold *h, GfxRect card, float thickness, float radius, float f) {

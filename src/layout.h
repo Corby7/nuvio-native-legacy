@@ -928,13 +928,23 @@
 #define NV_HOLD_DIM_PLAIN    0.65f
 #define NV_HOLD_DIM_K       25.0f     // the dimming's first-order spring
 #define NV_HOLD_DRAIN_S      0.15f
-#define NV_HOLD_PULSE_S      0.45f
-// The ring THICKENS by this many px while held, so the sweep has a band to be
-// seen in; it stays thick through the lap below and thins as that fades.
-#define NV_HOLD_RING_GROW    3.0f
-// When the menu opens: the ring stays whole in the logo's colours and they turn
-// one lap round it over this long, then it fades back to the plain ring.
-#define NV_HOLD_SPIN_S       0.9f
+// THE HANDOFF TO THE MENU. Everything that marks the hold landing (the glow,
+// the pop, the ring going from the logo's colours back to white and thin) runs
+// over the menu's own entrance, CTX_OPEN_S in ctxmenu.c, so the card is at rest
+// when the panel is. A 0.9s colour lap and a 0.45s glow outlasted the panel and
+// read as two animations, one after the other.
+#define NV_HOLD_PULSE_S      0.32f
+// The ring THICKENS by this many px, WITH the sweep (not as soon as OK goes
+// down: 3px at once read as a jump before anything else had moved), and thins
+// back as the menu comes in.
+#define NV_HOLD_RING_GROW    2.0f
+// When the menu opens: the ring is whole in the logo's colours and fades back
+// to the plain white ring on the menu's curve (hold_spin_alpha). No lap.
+#define NV_HOLD_SPIN_S       0.32f
+// THE SWEEP'S PACE: t^NV_HOLD_EASE_POW. Still speeding up into the close, but
+// moving from the start: the cubic spent half the hold on an eighth of the ring
+// and then rushed the rest; at 1.7 half the hold covers about a third.
+#define NV_HOLD_EASE_POW     1.7f
 // The card SINKS with the hold, fast at first and slowing to the end (eased
 // out, as if it cannot give much more), to NV_HOLD_PRESS_SCALE at the
 // moment the menu opens; then it lifts to NV_HOLD_POP_SCALE while the glow is in
@@ -942,7 +952,7 @@
 // 0.93 / 1.05 on a springy 0.42 read as a cartoon squash-and-stretch; a few
 // percent with barely an overshoot reads as the card being pressed and released.
 #define NV_HOLD_PRESS_SCALE  0.955f
-#define NV_HOLD_POP_SCALE    1.025f
+#define NV_HOLD_POP_SCALE    1.015f
 #define NV_HOLD_POP_PULSE    0.6f     // pops while the glow's pulse is above this
 // Two springs: a soft one that follows the press down, and a FAST one for the way
 // back (the pop after the menu opens, or letting go early). On the soft one the
