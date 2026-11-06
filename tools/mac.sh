@@ -47,7 +47,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # desktop app is also called Nuvio and also lives in the Dock, so without it
 # cmd-tab shows the same mark twice. Rebuilt only when the master is newer,
 # because iconutil takes a second.
-ICON_SRC=assets/icon-1024-legacy.png
+# The MAC cut of it (assets/icon-1024-mac.png, also from build-icons.sh): the
+# same tile in Apple's 824-in-1024 rounded grid, which macOS 26 needs or it boxes
+# the square in a grey plate.
+ICON_SRC=assets/icon-1024-mac.png
 ICNS="$APP/Contents/Resources/nuvio.icns"
 if [ "$ICON_SRC" -nt "$ICNS" ]; then
   SET=$(mktemp -d)/nuvio.iconset; mkdir -p "$SET"

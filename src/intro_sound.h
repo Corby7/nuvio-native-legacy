@@ -1,5 +1,5 @@
 // The startup sound: art/sound/intro.wav, played with the opening animation
-// (splash.c). Its hit lands on the pyramid's slam, 360 ms in, so it starts on the
+// (splash.c). Its hit lands on the core's landing, 360 ms in, so it starts on the
 // animation's first frame and plays to its end (ended early, it fades out),
 // past the splash, while the camera dives into the app.
 //

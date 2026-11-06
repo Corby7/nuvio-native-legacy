@@ -56,6 +56,12 @@ void trakt_forget(void);
 // applied here, and each item is stamped with the `paused_at` instant.
 int  trakt_resume(CatItem *output, int max);
 
+// 1 when Trakt's playback or watched history has changed since the last call
+// (/sync/last_activities, one small GET) — something else scrobbled while this
+// app was open or asleep. The first call under a credential only takes the
+// baseline and returns 0. BLOCKS — call from the sync thread.
+int  trakt_activity_moved(void);
+
 // Deletes every Trakt resume point (/sync/playback) of the WORK `imdb` names —
 // all of a series' episodes. This is NOT the watch history: nothing is unmarked,
 // the title just stops being "in progress". BLOCKS; 1 when every delete landed

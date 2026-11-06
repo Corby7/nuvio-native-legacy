@@ -236,20 +236,21 @@ static const char *FS_COVER =
   "  return uv;\n"
   "}\n";
 
-// The logo's ramp (GFX_SEEK_BRAND's four stops) closed into a loop, for the
-// hold sweeps: magenta runs back into cyan, so a finished ring has no seam where
-// the lap starts. t is the position round the lap, 0..1 from the top-left corner.
+// GFX_SEEK_BRAND's ramp closed into a loop, for the hold sweeps: out along the
+// ramp for the first half of the lap and back down it for the second, so a
+// finished ring has no seam where the lap starts and never leaves cyan-blue-violet.
+// (It used to close violet -> magenta -> cyan, which put pink on every ring.)
+// t is the position round the lap, 0..1 from the top-left corner.
 // THE STOPS ARE LIFTED 40% TOWARDS WHITE. At the seek bar's own values the blue
 // and the violet sat barely above the dimmed grey ring, and on a 4px band from
 // across the room the sweep could hardly be seen; the white it replaced had all
 // the contrast. Lighter tints keep the hues and get most of it back.
 #define NV_BRAND_LOOP \
   "vec3 nvBrandLoop(float t){\n" \
-  "  vec3 c0 = vec3(0.400, 0.851, 0.961), c1 = vec3(0.314, 0.447, 0.961);\n" \
-  "  vec3 c2 = vec3(0.561, 0.333, 0.933), c3 = vec3(0.761, 0.310, 0.863);\n" \
-  "  float x = fract(t) * 4.0;\n" \
-  "  vec3 c = x < 1.0 ? mix(c0, c1, x) : x < 2.0 ? mix(c1, c2, x - 1.0)\n" \
-  "         : x < 3.0 ? mix(c2, c3, x - 2.0) : mix(c3, c0, x - 3.0);\n" \
+  "  vec3 c0 = vec3(0.400, 0.851, 0.961), c1 = vec3(0.314, 0.471, 0.961);\n" \
+  "  vec3 c2 = vec3(0.482, 0.310, 0.910);\n" \
+  "  float x = 1.0 - abs(fract(t) * 2.0 - 1.0);\n" \
+  "  vec3 c = x < 0.40 ? mix(c0, c1, x / 0.40) : mix(c1, c2, (x - 0.40) / 0.60);\n" \
   "  return mix(c, vec3(1.0), 0.4);\n" \
   "}\n"
 
@@ -360,7 +361,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   // hard edge visible instead of dissolving it.
   "void main(){\n"
   "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
-  "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
+  "  vec3 bg = " NV_COLOR_BACKGROUND_GLSL ";\n"   // #0d0d0d
   "  float y = vUv.y;\n"
   "  float av = clamp((y-0.820)/0.072,0.0,1.0)*0.25\n"
   "           + clamp((y-0.892)/0.063,0.0,1.0)*0.40\n"
@@ -522,7 +523,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "uniform sampler2D uLut;\n"
   "void main(){\n"
   "  vec3 c = texture2D(uTex, mir(vUvz)).rgb;\n"
-  "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
+  "  vec3 bg = " NV_COLOR_BACKGROUND_GLSL ";\n"   // #0d0d0d
   "  float a = texture2D(uLut, vec2((clamp(vUv.x, 0.0, 1.0) * 255.0 + 0.5) / 256.0, 0.25)).a;\n"
   // uFocus = the vignette's STRENGTH: 1 at the top, 0 with the page scrolled. In
   // the web app the vignette is a SIBLING LAYER of the backdrop and has its own
@@ -556,7 +557,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   // against 3.7) and arrives with none, so the art settles into the page.
   "void main(){\n"
   "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
-  "  vec3 bg = vec3(0.051,0.051,0.051);\n"
+  "  vec3 bg = " NV_COLOR_BACKGROUND_GLSL ";\n"
   "  float y = vUv.y;\n"
   "  float uz = 1.0 - clamp((y-0.856)/0.144,0.0,1.0);\n"
   "  float av = clamp((y-0.640)/0.108,0.0,1.0)*0.35\n"
@@ -831,7 +832,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   // divergent branch across a full-screen quad does not.
   "void main(){\n"
   "  vec3 a = uColor.rgb;\n"
-  "  vec3 bg = vec3(0.05098);\n"
+  "  vec3 bg = " NV_COLOR_BACKGROUND_GLSL ";\n"
   "  vec3 el = vec3(0.10196);\n"
   "  vec3 hi = mix(el, a, 0.30);\n"
   "  vec3 md = mix(bg, a, 0.14);\n"
@@ -1000,7 +1001,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "uniform sampler2D uLut;\n"
   "void main(){\n"
   "  vec3 c = texture2D(uTex, clamp(vCov, 0.0, 1.0)).rgb;\n"
-  "  vec3 bg = vec3(0.051,0.051,0.051);\n"   // #0d0d0d
+  "  vec3 bg = " NV_COLOR_BACKGROUND_GLSL ";\n"   // #0d0d0d
   "  float ah = texture2D(uLut, vec2(vRamp.x, 0.25)).r;\n"
   "  float av = texture2D(uLut, vec2(vRamp.y, 0.25)).g;\n"
   "  c = mix(c, bg, clamp(ah + av - ah*av, 0.0, 1.0));\n"
@@ -1383,7 +1384,7 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float av = mix(mix(avB, avF, full), avT, fit);\n"
   "  float ah = mix(mix(mix(ahB, ahF, full), ahT, fit), ahS, soft);\n"
   "  float a = clamp(ah + av - ah*av, 0.0, 1.0);\n"
-  "  gl_FragColor = vec4(0.051,0.051,0.051, a * uColor.a);\n"
+  "  gl_FragColor = vec4(" NV_COLOR_BACKGROUND_GLSL ", a * uColor.a);\n"
   "}\n",
 
   // GFX_CW_CARD — see gfx.h. GFX_CARD's sampling (no parallax: uPar carries the
@@ -1403,20 +1404,22 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  vec3 c = mix(t.rgb, vec3(0.0314, 0.0314, 0.0392), s);\n"
   "  if (uPar.x > 0.0 && vUv.y >= 1.0 - uPar.x) {\n"
   "    float fill = step(vUv.x, uPar.y);\n"
-  "    c = mix(c, vec3(mix(1.0, 0.9608, fill)), mix(0.16, 1.0, fill));\n"
+  "    c = mix(c, vec3(0.9608), fill);\n"
   "  }\n"
   "  gl_FragColor = vec4(c, t.a * m * uColor.a);\n"
   "}\n",
 
-  // GFX_SEEK_BRAND — see gfx.h. Three linear legs between the logo's four lit
-  // facets; SEEK_BRAND_RGB in C holds the same stops for the knob: change both.
+  // GFX_SEEK_BRAND — see gfx.h. Two linear legs: cyan to blue over the first 40%,
+  // then into a violet — mostly blue, no magenta. From the owner's reference
+  // bar, with the cyan shortened and the end deepened at their request. SEEK_BRAND_RGB in C holds the same stops for the
+  // knob, and NV_BRAND_LOOP for the hold ring: change all three.
   "void main(){\n"
   "  float m = smoothstep(uAA,-uAA, sdf(vUv, uRadius, uAspect));\n"
   "  if (m <= 0.001) discard;\n"
-  "  float t = clamp(vUv.x, 0.0, 1.0) * uPar.x * 3.0;\n"
-  "  vec3 c0 = vec3(0.400, 0.851, 0.961), c1 = vec3(0.314, 0.447, 0.961);\n"
-  "  vec3 c2 = vec3(0.561, 0.333, 0.933), c3 = vec3(0.761, 0.310, 0.863);\n"
-  "  vec3 c = t < 1.0 ? mix(c0, c1, t) : t < 2.0 ? mix(c1, c2, t - 1.0) : mix(c2, c3, t - 2.0);\n"
+  "  float t = clamp(vUv.x, 0.0, 1.0) * uPar.x;\n"
+  "  vec3 c0 = vec3(0.400, 0.851, 0.961), c1 = vec3(0.314, 0.471, 0.961);\n"
+  "  vec3 c2 = vec3(0.482, 0.310, 0.910);\n"
+  "  vec3 c = t < 0.40 ? mix(c0, c1, t / 0.40) : mix(c1, c2, (t - 0.40) / 0.60);\n"
   "  gl_FragColor = vec4(c, uColor.a * m);\n"
   "}\n"
 
@@ -2084,15 +2087,15 @@ float gfx_seek_brand_span(float fill, float rail) {
   float s = rail > 0.0f ? fill / (rail * 0.5f) : 1.0f;
   return s < 0.0f ? 0.0f : s > 1.0f ? 1.0f : s;
 }
-// GFX_SEEK_BRAND's stops: #66D9F5, #5072F5, #8F55EE, #C24FDC.
-static const float SEEK_BRAND_RGB[4][3] = {
-  { 0.400f, 0.851f, 0.961f }, { 0.314f, 0.447f, 0.961f },
-  { 0.561f, 0.333f, 0.933f }, { 0.761f, 0.310f, 0.863f },
+// GFX_SEEK_BRAND's stops: #66D9F5 at 0, #5078F5 at 0.40, #7B4FE8 at 1.
+static const float SEEK_BRAND_RGB[3][3] = {
+  { 0.400f, 0.851f, 0.961f }, { 0.314f, 0.471f, 0.961f },
+  { 0.482f, 0.310f, 0.910f },
 };
 void gfx_seek_brand_at(float t, float *r, float *g, float *b) {
-  float x = (t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t) * 3.0f;
-  int i = x >= 3.0f ? 2 : (int)x;
-  float f = x - (float)i;
+  float x = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+  int i = x < 0.40f ? 0 : 1;
+  float f = i == 0 ? x / 0.40f : (x - 0.40f) / 0.60f;
   const float *a = SEEK_BRAND_RGB[i], *c = SEEK_BRAND_RGB[i + 1];
   *r = a[0] + (c[0] - a[0]) * f; *g = a[1] + (c[1] - a[1]) * f; *b = a[2] + (c[2] - a[2]) * f;
 }

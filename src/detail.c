@@ -307,6 +307,9 @@ static int nSeasonsOf(void);
 static int nEpsOfSeason(int s2);
 static const CatEp *epOfSeason(int s2, int i);
 static int seasonNow(void);
+// The texture a row's thumbnail draws with, asked the way drawEpisodeRow asks it, so
+// warmEpisodeStills below warms the very entry the draw will look up.
+static GLuint episodeThumbTex(const CatEp *ep, float *aspect);
 static float baseOfTabActive(void);
 // The focused episode row's grown height, which the scroll in detail_update needs to
 // know the bottom of the list by; defined with the rest of the list.
@@ -711,7 +714,7 @@ static void drawArtDetail(GfxRect target, GLuint tex, const char *art,
                                int poster, float alpha, float pg, float zoom,
                                GfxRect cell) {
   if (!tex) {
-    gfx_color(target, 0.0f, 0.051f, 0.051f, 0.051f, alpha);
+    gfx_color(target, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, alpha);
     return;
   }
   gfx_tex_aspect_current = tex_aspect(art);
@@ -1861,6 +1864,32 @@ static void syncColumns(void) {
                 ? focus.nColumns[focus.row] - 1 : 0;
 }
 
+// THE STILLS ARE ASKED FOR BEFORE THE LIST IS ON SCREEN. The list sits below the
+// fold and drawSection skips a section it cannot see, so nothing requested a single
+// still until the page scrolled down to it — and then every visible row started its
+// download and decode in the same frame and the thumbnails arrived one at a time.
+// Now the rows around the list's scroll get their texture from the moment the
+// season's episodes are known, and the rest of the season goes to the disk lane
+// once per season, nearest first (the lane is a stack: pushed last, served first).
+#define EP_WARM_ROWS 6
+static void warmEpisodeStills(void) {
+  static int warmIdx = -1, warmSeason = -1, warmN = -1;
+  int s2 = seasonNow(), n = nEpsOfSeason(s2);
+  if (!isSeries() || n <= 0) return;
+  int first = (int)(scrollSec[SEC_EPISODES] / NV_DETEP_ROW_H);
+  if (first < 0) first = 0;
+  for (int c = first; c < n && c < first + EP_WARM_ROWS; c++) {
+    float aspect;
+    episodeThumbTex(epOfSeason(s2, c), &aspect);
+  }
+  if (warmIdx == idx && warmSeason == s2 && warmN == n) return;
+  warmIdx = idx; warmSeason = s2; warmN = n;
+  for (int c = n - 1; c >= EP_WARM_ROWS; c--) {
+    const CatEp *ep = epOfSeason(s2, c);
+    if (ep && ep->thumb[0]) tex_prefetch(ep->thumb);
+  }
+}
+
 void detail_update(float dt, Uint32 now) {
   if (!is_open) return;
   followTitle();
@@ -1872,6 +1901,7 @@ void detail_update(float dt, Uint32 now) {
   // It releases the episode request that was held because it arrived with another load
   // in flight.
   disc_episodes_pending();
+  warmEpisodeStills();
   // See EP_RETRY_MAX. The kind, as app.c asks: a kindless item is only a series
   // BY its episodes, and those are what is missing.
   { const CatItem *ci = cat_item(idx);
@@ -3544,6 +3574,20 @@ static int episodeBlurred(const CatEp *ep) {
   return !extras_ep_watched(ep->season, ep->episode) && episodeProgress(ep) < 98;
 }
 
+static GLuint episodeThumbTex(const CatEp *ep, float *aspect) {
+  const CatItem *series = cat_item(idx);
+  const char *art = (ep && ep->thumb[0]) ? ep->thumb
+                     : (series && series->backdrop[0] ? series->backdrop : NULL);
+  // The series' backdrop, the fallback, is no spoiler: only the episode's own
+  // still is blurred.
+  *aspect = 0.0f;
+  GLuint t = !art ? 0
+           : episodeBlurred(ep) ? tex_get_blurred(art, aspect)
+           : tex_get_width(art, NV_DETEP_THUMB_W * NV_DETEP_THUMB_GROW);
+  if (t && *aspect <= 0.0f) *aspect = tex_aspect(art);
+  return t;
+}
+
 static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
   const CatEp *ep = epOfSeason(seasonNow(), c);
   int focused = level >= 1 && focus.row == SEC_EPISODES && focus.column == c;
@@ -3567,16 +3611,8 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
     GfxRect ro = { th.x - ring, th.y - ring, th.w + ring * 2, th.h + ring * 2 };
     gfx_color(ro, (NV_DETEP_THUMB_R + ring) / ro.h, 1, 1, 1, f * a);
   }
-  { const CatItem *series = cat_item(idx);
-    const char *art = (ep && ep->thumb[0]) ? ep->thumb
-                       : (series && series->backdrop[0] ? series->backdrop : NULL);
-    // The series' backdrop, the fallback, is no spoiler: only the episode's own
-    // still is blurred.
-    float aspect = 0.0f;
-    GLuint t2 = !art ? 0
-              : episodeBlurred(ep) ? tex_get_blurred(art, &aspect)
-              : tex_get_width(art, NV_DETEP_THUMB_W * NV_DETEP_THUMB_GROW);
-    if (t2 && aspect <= 0.0f) aspect = tex_aspect(art);
+  { float aspect;
+    GLuint t2 = episodeThumbTex(ep, &aspect);
     if (t2) {
       gfx_tex_aspect_current = aspect;
       gfx_rect(th, t2, GFX_CARD, 0, 0, 0, radiusTh, 0, 0, 0, rowA);
@@ -4829,7 +4865,7 @@ void detail_draw_bg(Uint32 now) {
     // only then does the card dissolve, over a home at full brightness with
     // nothing stacked in front of it.
     GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-    gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f,
+    gfx_color(screen, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B,
               (exiting && sharedOrigin)
                 ? anim_clamp((s - NV_DETAIL_EXIT_GROUND)
                              / (1.0f - NV_DETAIL_EXIT_GROUND), 0.0f, 1.0f)
@@ -4876,7 +4912,7 @@ void detail_draw_bg(Uint32 now) {
   // is what fades it out.
   if (pg > 0.01f && !detail_covers_screen()) {
     GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
-    gfx_color(screen, 0.0f, 0.051f, 0.051f, 0.051f, pg);
+    gfx_color(screen, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, pg);
   }
   // The 4th parameter = the VIGNETTE's strength, not "focus". It goes to 0 along with
   // the scrolling, which is the pairing that was missing: the web app fades the art to

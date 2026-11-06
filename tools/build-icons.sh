@@ -75,5 +75,19 @@ rsvg-convert -w 1024 -h 1024 "$SVG" -o "$OUT"
 # survive, so check that one by eye after changing anything above.
 sips -z 80 80 "$OUT" --out deploy/app/icon.png >/dev/null
 sips -z 130 130 "$OUT" --out deploy/app/largeIcon.png >/dev/null
-echo "==> $BADGE: $OUT, deploy/app/icon.png (80), deploy/app/largeIcon.png (130)"
+# THE MAC ICON, in Apple's app-icon grid: the tile shrunk to 824x824 with a
+# rounded-square edge, on a transparent 1024 canvas. A full-bleed square is not
+# an app-icon shape to macOS 26, which shrinks it and boxes it in a grey plate of
+# its own — the Dock showed a small dark square inside a grey one. In the grid
+# shape the tile IS the plate. tools/mac.sh builds the icns from this file.
+MAC=assets/icon-1024-mac.png
+B64L=$(base64 -i "$OUT")
+cat > "$SVG" <<EOF2
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs><clipPath id="sq"><rect x="100" y="100" width="824" height="824" rx="185" ry="185"/></clipPath></defs>
+<image x="100" y="100" width="824" height="824" clip-path="url(#sq)" xlink:href="data:image/png;base64,$B64L"/>
+</svg>
+EOF2
+rsvg-convert -w 1024 -h 1024 "$SVG" -o "$MAC"
+echo "==> $BADGE: $OUT, $MAC, deploy/app/icon.png (80), deploy/app/largeIcon.png (130)"
 echo "    the TV only sees these after a new .ipk — bash tools/arm.sh --ipk"

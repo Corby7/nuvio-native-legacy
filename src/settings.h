@@ -56,6 +56,13 @@ int settings_hold_menu_blur(void);
 int settings_hold_ring_brand(void);
 int settings_glass_tinted(void);    // local: glassStyle, 0 Dark / 1 Tinted
 int settings_fps_counter(void);     // local: fpsCounter
+// The panel's height (2160 on a UHD TV, 1080 otherwise), found by main.c. It
+// is what unlocks the UI resolution row; 0 or 1080 keeps it at 1080p. Safe to
+// call from any thread.
+void settings_ui_panel_height(int h);
+// The height the running surface really is (the drawable). A UI resolution
+// other than this one asks to restart when focus leaves its row.
+void settings_ui_running_height(int h);
 int settings_fps_cap30(void);       // local: frameRateCap, 1 = 30 fps
 // "Focus glow" (Posters): 1 when the focused home card gives off a faint light
 // in its poster's colour. Off by default.

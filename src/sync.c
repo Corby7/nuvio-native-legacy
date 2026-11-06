@@ -895,6 +895,8 @@ static void pullSoRead(void) {
 // gesture on the TV asks for (sync_soon), and the other eight requests of a full
 // cycle have nothing to do with it.
 static int light;
+// Set by the cycle thread when trakt_activity_moved; read once threadReady is.
+static int traktActivity;
 
 static void *run(void *u) {
   (void)u;
@@ -915,6 +917,11 @@ static void *run(void *u) {
   pullTracker();
   pullProgress();
   pullSoRead();
+  // Something else scrobbled to Trakt (Kodi, Plex, the phone) since the last
+  // cycle: "Continue watching" reads /sync/playback only when the home is built,
+  // so without this it stayed behind until the next launch. sync_step refreshes
+  // the row alone.
+  if (trakt_active() && trakt_activity_moved()) traktActivity = 1;
   // Push AFTER pulling, like the web app's startupSyncService: pulling after
   // pushing would make the device overwrite with what it sent itself.
   // Not for a profile that has been left since the cycle began (see cycleProfile):
@@ -1203,6 +1210,7 @@ static void discardCycle(void) {
   traktToken[0] = 0; hasTraktRemote = 0;
   nProgressRemote = 0; progressComplete = 0;
   nPushedMark = 0;
+  traktActivity = 0;
 }
 
 void sync_resync(void) {
@@ -1272,7 +1280,10 @@ void sync_step(unsigned nowMs) {
     hasTraktRemote = 0;
   }
   char *progressBefore = NULL;
-  if (switchRebuild && !light) {
+  // nProgressRemote too: a pull that rewrote progress.txt after the home was built
+  // (another device watched something) refreshes "Continue watching" on its own.
+  int hadPull = nProgressRemote > 0 || progressComplete;
+  if ((switchRebuild && !light) || hadPull) {
     char name[64];
     progressBefore = data_read(cat_progress_file(profiles_active(), name, sizeof name));
   }
@@ -1379,8 +1390,20 @@ void sync_step(unsigned nowMs) {
     }
     free(after);
     switchRebuild = 0;
+  } else if (traktActivity) {
+    mark("refresh: trakt activity moved");
+    disc_cw_refresh();
+  } else if (hadPull) {
+    char name[64];
+    char *after = data_read(cat_progress_file(profiles_active(), name, sizeof name));
+    if (strcmp(progressBefore ? progressBefore : "", after ? after : "")) {
+      mark("refresh: account progress changed");
+      disc_cw_refresh();
+    }
+    free(after);
   }
   free(progressBefore);
+  traktActivity = 0;
   // The lines the push just put on the account are the account's now (origin 1
   // -> 2), so a delete made elsewhere later is followed here and never undone
   // by a second push. AFTER the apply above: the pull ran before the push, and

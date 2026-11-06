@@ -487,6 +487,13 @@ int cat_row_grow(int r, const CatItem *v, int count);
 // waiting for a full rebuild (~20 s on the C3). Returns how many cards went.
 int cat_row_drop(int r, const char *imdb);
 
+// Swaps the cards of the row whose key is `row->key` for `v` (count may differ,
+// and 0 takes the row out), moving every window after it. A row not there yet
+// goes in FIRST, as `row` with its window set here. ON THE DRAWING THREAD, like
+// cat_row_grow. It is how a fresh "Continue watching" lands over the cached home
+// at once, instead of waiting for every other catalogue to answer. 1 when done.
+int cat_row_replace(const CatRow *row, const CatItem *v, int count);
+
 // Replaces the episodes of ONE title. Called when the detail screen opens.
 void cat_set_episodes(int indexItem, const CatEp *list, int n);
 // Fills ONE episode's IMDb score (tenths) in place, matched on season+episode.

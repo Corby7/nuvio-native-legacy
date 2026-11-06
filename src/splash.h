@@ -1,15 +1,15 @@
-// The startup animation: the play mark arrives as a 3D stepped pyramid, lands as
-// the logo and hands over to the app.
+// The startup animation: the Facet Bands mark builds itself, the lockup completes
+// and the camera dives through the "o" into the app.
 //
 // webOS shows deploy/app/splash.png (appinfo.json's splashBackground) from the
 // launch until the app's first frame. That image is the bare ground (navy, with a
 // purple glow from the bottom), and so is this module's first frame, so the moment
-// the system's still gives way to the app is invisible. From there: the pyramid
-// slams down from close to the camera, tilted to show its sides, and lands flat
-// in its place in the lockup (frames rendered in Blender, played from
-// intro_atlas.png); the hit holds a beat, kicks the camera and lights the core
-// from within; a wave runs through the letters; the light breathes while the app
-// gets ready; and the camera dives through the "o" into the app, drawn underneath.
+// the system's still gives way to the app is invisible. From there: the core of
+// the mark falls in from close to the camera and lands in its place in the lockup;
+// the hit holds a beat and kicks the camera, and the middle and outer bands spring
+// out of the core like a ripple (intro_bands.png, all flat 2D, tools/build-brand.sh);
+// a wave runs through the letters; the bands breathe while the app gets ready; and
+// the camera dives through the "o" into the app, drawn underneath.
 //
 // It waits for the screen under it to have something to show (see
 // app_ready_to_show) instead of landing on "Preparing your catalogue…", but
@@ -20,7 +20,7 @@
 #define NV_SPLASH_H
 #include <SDL2/SDL.h>
 
-// Loads the lockup and the intro atlas SYNCHRONOUSLY, before the first frame.
+// Loads the lockup and the bands SYNCHRONOUSLY, before the first frame.
 // Through the texture cache they would arrive a few frames late, and the opening
 // would start with frames missing. NUVIO_INTRO=0 in the
 // environment turns it off (tools/dev.sh does, so captures are deterministic).

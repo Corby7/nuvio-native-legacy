@@ -1,5 +1,4 @@
 #include "splash.h"
-#include "splash_intro.h"
 #include "intro_sound.h"
 #include "gfx.h"
 #include "layout.h"
@@ -10,26 +9,37 @@
 #include <stdlib.h>
 #include <string.h>
 
-// WHERE THE LOCKUP SITS: the 1004x344 brand_lockup.png at 0.718 and centred, art
-// spanning x 600..1320 and y 416..663. The pyramid lands straight into its place
-// in it.
-#define LOCK_FILE_W 1004.0f
-#define LOCK_X 599.5f
-#define LOCK_Y 416.0f
-#define LOCK_W 721.0f
-#define LOCK_H 247.0f
-// The lockup's columns, as fractions of its width: the play mark is 9..247 of
-// 1004 (rows 26..294, centred on the letters) and the wordmark starts at 299. The
-// mark's clip ends in that gap, where there is no art for a hard scissor edge to
-// cut through.
-#define MARK_END  (273.0f / LOCK_FILE_W)
-#define MARK_W    (248.0f / LOCK_FILE_W * LOCK_W)
-#define MARK_MID_Y 160.0f
+// WHERE THE LOCKUP SITS: the 1149x378 brand_lockup.png (tools/build-brand.sh),
+// centred, at the scale that keeps the wordmark the size it has always had.
+#define LOCK_FILE_W 1149.0f
+#define LOCK_FILE_H 378.0f
+#define LOCK_K (721.0f / 1004.0f)
+#define LOCK_W (LOCK_FILE_W * LOCK_K)
+#define LOCK_H (LOCK_FILE_H * LOCK_K)
+#define LOCK_X ((NV_SCREEN_W - LOCK_W) * 0.5f)
+#define LOCK_Y ((NV_SCREEN_H - LOCK_H) * 0.5f)
+// The Facet Bands mark is the file's columns 23..302 (rows 31..346). Its clip ends
+// at 365, in the gap before the wordmark, where there is no art for a hard scissor
+// edge to cut through. The three bands are concentric about the point where the
+// facets meet, (122, 189) in the file: they grow and breathe about it.
+#define MARK_END 365.0f
+#define MARK_PX  122.03f
+#define MARK_PY  188.79f
+// intro_bands.png: the core, the middle band and the outer band apart, each in a
+// 312x362 cell that is the lockup's region from (8, 8), so a cell drawn there sits
+// exactly on its band in the lockup.
+#define BANDS 3
+#define BANDS_FILE_W 936
+#define BANDS_FILE_H 362
+#define BAND_FILE_X 8.0f
+#define BAND_FILE_Y 8.0f
+#define BAND_W 312.0f
+#define BAND_H 362.0f
 // The letters of the wordmark, as columns of the file, each clip meeting the next
-// in the gap between two letters: n 299..434, u 462..597, v 610..769, i 782..822,
-// o 844..1003. Their middle row is 160 (the letters span 96..224).
-static const float letterCut[6] = { 273.0f, 448.0f, 603.5f, 775.5f, 833.0f, 1004.0f };
-#define WORD_MID_Y 160.0f
+// in the gap between two letters: n 428..563, u 591..726, v 739..898, i 911..951,
+// o 973..1132. Their middle row is 177 (the letters span 113..241).
+static const float letterCut[6] = { 365.0f, 577.0f, 732.5f, 904.5f, 962.0f, 1149.0f };
+#define WORD_MID_Y 177.0f
 
 // THE GROUND: the banner's navy, #0d101e, with a purple glow rising from the bottom
 // (intro_ground.png, the purple at its own alpha, laid over the navy). The navy is
@@ -40,9 +50,12 @@ static const float letterCut[6] = { 273.0f, 448.0f, 603.5f, 775.5f, 833.0f, 1004
 #define GROUND_B (30.0f / 255.0f)
 
 // The timeline, in ms from the first frame.
-#define T_FRAMES   (INTRO_FRAMES * 1000 / INTRO_FPS)  // the pyramid, as rendered
-#define T_HIT      INTRO_HIT_MS  // it hits the ground: the frames after it are the rebound
-#define T_HOLD     33    // hit-stop: the pyramid holds on the contact frame this long
+#define T_DROP     110   // the core starts its fall toward the screen
+#define T_HIT      360   // it lands: the startup sound's hit is here (intro_sound.h)
+#define T_HOLD     33    // hit-stop: the bands hold on the contact this long
+#define T_BAND     40    // the middle band springs out of the core this long after the hit
+#define T_BAND_GAP 60    // and the outer band this much after the middle one
+#define T_BAND_POP 320   // each band's spring
 #define T_WAVE     (T_HIT + 130)  // the letters' wave starts, after the hit has had its beat
 #define T_WAVE_POP 230   // each letter's pop
 #define T_WAVE_GAP 34    // the next letter pops this much later
@@ -50,11 +63,11 @@ static const float letterCut[6] = { 273.0f, 448.0f, 603.5f, 775.5f, 833.0f, 1004
 #define NV_SPLASH_MAX_MS 6000
 #define T_EXIT       480   // the dive through the "o"
 #define T_EXIT_QUIET 360   // reduced motion: a fade, no dive
-// The finished mark's top-left on screen, in its place in the lockup.
-#define MARK_X (LOCK_X + INTRO_MARK_FILE_X * LOCK_W / LOCK_FILE_W)
-#define MARK_Y (LOCK_Y + INTRO_MARK_FILE_Y * LOCK_W / LOCK_FILE_W)
+// The mark's centre on screen, in its place in the lockup.
+#define MARK_X (LOCK_X + MARK_PX * LOCK_K)
+#define MARK_Y (LOCK_Y + MARK_PY * LOCK_K)
 
-static GLuint tex, atlas, ground;
+static GLuint tex, bands, ground;
 static Uint32 t0, exitAt, exitLen;
 static int done, quiet;
 // Scancodes whose KEYDOWN was swallowed: their KEYUP must not reach a screen that
@@ -72,32 +85,14 @@ static float easeOutBack(float p, float c) {
   return p <= 0.0f ? 0.0f : 1.0f + (c + 1.0f) * q * q * q + c * q * q;
 }
 
-// Two fixes to the file before it becomes a texture:
-//
-// 1. The play symbol inside the mark is a HOLE in the art, with a soft
-//    semi-transparent bevel, not dark paint. Every pixel between a row's first and
-//    last opaque pixel of the mark is flattened onto the ground colour; only the
-//    mark's outer edge keeps its antialiasing. (The mark is drawn from the lockup
-//    only when the intro atlas is missing.)
-// 2. Fully transparent pixels carry black RGB, and GL_LINEAR blends that black
-//    into the edge texels: a dark rim on anything lighter than black. Each one
-//    takes the colour of an opaque neighbour, a few pixels deep.
+// One fix to a file before it becomes a texture: fully transparent pixels carry
+// black RGB, and GL_LINEAR blends that black into the edge texels: a dark rim on
+// anything lighter than black. Each one takes the colour of an opaque neighbour, a
+// few pixels deep. (The bands are translucent on purpose, so nothing is flattened
+// onto the ground: the glow shows through them and through the gaps between them.)
 static void prepare(unsigned char *px, int w, int h) {
-  const int bg[3] = { 13, 16, 30 }, markEnd = (int)(MARK_END * w);
   unsigned char *has, *copy;
-  int x, y, pass, c;
-  for (y = 0; y < h; y++) {
-    unsigned char *row = px + (size_t)y * w * 4;
-    int first = -1, last = -1;
-    for (x = 0; x < markEnd; x++)
-      if (row[x * 4 + 3] >= 250) { if (first < 0) first = x; last = x; }
-    for (x = first + 1; first >= 0 && x < last; x++) {
-      unsigned char *p = row + x * 4;
-      int a = p[3];
-      for (c = 0; c < 3; c++) p[c] = (unsigned char)((p[c] * a + bg[c] * (255 - a)) / 255);
-      p[3] = 255;
-    }
-  }
+  int x, y, pass;
   // `has` marks a pixel whose RGB is real: opaque in the file, or filled by an
   // earlier pass. Each pass grows the filled band by one pixel.
   has = malloc((size_t)w * h);
@@ -165,33 +160,35 @@ void splash_start(const char *dirArt) {
     return;
   }
   prepare(rgba->pixels, rgba->w, rgba->h);
-  // The full 1004px file with no mipmap: drawn at 0.72 it is a mild minification
+  // The full 1149px file with no mipmap: drawn at 0.72 it is a mild minification
   // GL_LINEAR handles, and the exit magnifies it, where a mipmap would not help.
   tex = upload(rgba);
   SDL_FreeSurface(rgba);
 
-  // The pyramid's frames, its light and halo. Without them the opening starts on
+  // The three bands apart, for their entrance. Without them the opening starts on
   // the finished lockup and the rest (the breathing, the exit) plays as usual.
-  rgba = loadArt(dirArt, "intro_atlas.png", path, sizeof path);
-  if (rgba && rgba->w == INTRO_ATLAS_W && rgba->h == INTRO_ATLAS_H) atlas = upload(rgba);
-  else printf("[splash] no intro atlas at %s (or not %dx%d): starting on the lockup\n",
-              path, INTRO_ATLAS_W, INTRO_ATLAS_H);
+  rgba = loadArt(dirArt, "intro_bands.png", path, sizeof path);
+  if (rgba && rgba->w == BANDS_FILE_W && rgba->h == BANDS_FILE_H) {
+    prepare(rgba->pixels, rgba->w, rgba->h);
+    bands = upload(rgba);
+  } else printf("[splash] no intro bands at %s (or not %dx%d): starting on the lockup\n",
+                path, BANDS_FILE_W, BANDS_FILE_H);
   SDL_FreeSurface(rgba);
   // The ground's purple glow. Without it the ground is plain navy.
   rgba = loadArt(dirArt, "intro_ground.png", path, sizeof path);
   if (rgba) ground = upload(rgba);
   SDL_FreeSurface(rgba);
   // The startup sound, ready before the first frame (see intro_sound.h).
-  if (atlas && settings_intro_sound()) intro_sound_load(dirArt);
+  if (bands && settings_intro_sound()) intro_sound_load(dirArt);
 }
 
 int splash_active(void) { return tex && !done; }
 
 static void release(void) {
   if (tex) { glDeleteTextures(1, &tex); gfx_tex_forget(tex); }
-  if (atlas) { glDeleteTextures(1, &atlas); gfx_tex_forget(atlas); }
+  if (bands) { glDeleteTextures(1, &bands); gfx_tex_forget(bands); }
   if (ground) { glDeleteTextures(1, &ground); gfx_tex_forget(ground); }
-  tex = atlas = ground = 0;
+  tex = bands = ground = 0;
   done = 1;
 }
 
@@ -240,21 +237,21 @@ static GfxRect cam(GfxRect r) {
                     r.w * camZ, r.h * camZ };
 }
 // The counter of the "o" on screen, measured off brand_lockup.png (the clear
-// stadium inside the letter: x 886..962, y 127..193), pulled in a pixel so the
+// stadium inside the letter: x 1015..1091, y 144..210), pulled in a pixel so the
 // letter's own antialiased edge covers the seam.
-#define O_HOLE_X0 (LOCK_X + 887.0f * LOCK_W / LOCK_FILE_W)
-#define O_HOLE_Y0 (LOCK_Y + 128.0f * LOCK_W / LOCK_FILE_W)
-#define O_HOLE_X1 (LOCK_X + 961.0f * LOCK_W / LOCK_FILE_W)
-#define O_HOLE_Y1 (LOCK_Y + 192.0f * LOCK_W / LOCK_FILE_W)
+#define O_HOLE_X0 (LOCK_X + 1016.0f * LOCK_K)
+#define O_HOLE_Y0 (LOCK_Y + 145.0f * LOCK_K)
+#define O_HOLE_X1 (LOCK_X + 1090.0f * LOCK_K)
+#define O_HOLE_Y1 (LOCK_Y + 209.0f * LOCK_K)
 #define PORTAL_ZOOM 80.0f   // enough for the hole to hold the whole screen
 
 // The lockup, whole, clipped to the mark's columns, scaled by `s` about the mark's
-// centre: the mark when there are no frames to play.
+// centre: the mark when there are no bands to bring in.
 static void drawMark(float s, float a) {
-  const float mcx = LOCK_X + MARK_W * 0.5f, mcy = LOCK_Y + MARK_MID_Y * LOCK_W / LOCK_FILE_W;
-  GfxRect r = { mcx + (LOCK_X - mcx) * s, mcy + (LOCK_Y - mcy) * s, LOCK_W * s, LOCK_H * s };
+  GfxRect r = { MARK_X + (LOCK_X - MARK_X) * s, MARK_Y + (LOCK_Y - MARK_Y) * s,
+                LOCK_W * s, LOCK_H * s };
   const float pad = 4.0f * s;
-  GfxRect c = cam((GfxRect){ r.x - pad, r.y - pad, LOCK_W * MARK_END * s + pad, r.h + pad * 2.0f });
+  GfxRect c = cam((GfxRect){ r.x - pad, r.y - pad, MARK_END * LOCK_K * s + pad, r.h + pad * 2.0f });
   gfx_crop(c.x, c.y, c.w, c.h);
   gfx_logo(cam(r), tex, 0, 1, 1, 1, a);
   gfx_no_crop();
@@ -278,37 +275,27 @@ static void drawLetter(int i, float p, float a) {
   gfx_no_crop();
 }
 
-// One cell of the atlas, drawn into `r` (before the camera).
-static void drawCell(const IntroCell *c, GfxRect r, float a) {
-  if (c->w <= 0 || a <= 0.002f) return;
+// Band `i` of intro_bands.png (0 the core, 1 the middle band, 2 the outer band),
+// scaled by `s` about the mark's centre.
+static void drawBand(int i, float s, float a) {
+  const float x = LOCK_X + BAND_FILE_X * LOCK_K, y = LOCK_Y + BAND_FILE_Y * LOCK_K;
+  if (s <= 0.02f || a <= 0.002f) return;
   // The cell has to go back to the whole texture afterwards, or it crops
   // everything drawn next (see gfx_tex_cell_current).
   gfx_tex_aspect_current = 0.0f;
-  gfx_tex_cell_current = (GfxRect){ (float)c->x / INTRO_ATLAS_W, (float)c->y / INTRO_ATLAS_H,
-                                    (float)c->w / INTRO_ATLAS_W, (float)c->h / INTRO_ATLAS_H };
+  gfx_tex_cell_current = (GfxRect){ (float)i / BANDS, 0.0f, 1.0f / BANDS, 1.0f };
   gfx_opacity_group = a;
-  gfx_texture(cam(r), atlas);
+  gfx_texture(cam((GfxRect){ MARK_X + (x - MARK_X) * s, MARK_Y + (y - MARK_Y) * s,
+                             BAND_W * LOCK_K * s, BAND_H * LOCK_K * s }), bands);
   gfx_opacity_group = 1.0f;
   gfx_tex_cell_current = (GfxRect){ 0.0f, 0.0f, 1.0f, 1.0f };
 }
 
-// Where cell `c` goes on frame `f`: the light and the halo are made for the
-// finished mark, and on the rebound's frames they follow the mark's size, placed
-// as they sit on the last frame. Then scaled by `s` about the mark's centre.
-static GfxRect follow(const IntroCell *c, int f, float s) {
-  const IntroCell *fr = &introFrame[f], *last = &introFrame[INTRO_FRAMES - 1];
-  const float k = fr->sh / last->sh;
-  const float cx = MARK_X + INTRO_MARK_W * 0.5f, cy = MARK_Y + INTRO_MARK_H * 0.5f;
-  const float x = MARK_X + fr->dx + (c->dx - last->dx) * k;
-  const float y = MARK_Y + fr->dy + (c->dy - last->dy) * k;
-  return (GfxRect){ cx + (x - cx) * s, cy + (y - cy) * s, c->sw * k * s, c->sh * k * s };
-}
-
 void splash_draw(Uint32 now, int ready) {
-  float t, tr, tb, s = 1.0f, light = 0.0f, halo = 0.0f, grow = 1.22f;
-  float markA = 1.0f, bgA = 1.0f, glowA = 1.0f;
-  const float cx = MARK_X + INTRO_MARK_W * 0.5f, cy = MARK_Y + INTRO_MARK_H * 0.5f;
-  int i, f;
+  float t, tr, tb, s = 1.0f, markA = 1.0f, bgA = 1.0f, glowA = 1.0f;
+  float bs[BANDS], ba[BANDS];
+  const float cx = MARK_X, cy = MARK_Y;
+  int i;
   if (!splash_active()) return;
   if (!t0) {
     t0 = now;
@@ -332,29 +319,30 @@ void splash_draw(Uint32 now, int ready) {
   // rather than jumping to the end of a part that had not happened yet (only the
   // NV_SPLASH_MAX_MS limit can start it before the lockup is whole).
   tr = exitAt ? (float)(exitAt - t0) : t;
-  // No frames to play (reduced motion, or no atlas): straight to the finished lockup.
-  if (quiet || !atlas) tr = (float)T_REST;
-  // The hit-stop: the pyramid and the letters hold on the contact for a beat while
-  // the world (the camera, the light) reacts on the real clock, `tr`.
+  // Nothing to bring in (reduced motion, or no bands): straight to the finished lockup.
+  if (quiet || !bands) tr = (float)T_REST;
+  // The hit-stop: the bands and the letters hold on the contact for a beat while
+  // the world (the camera) reacts on the real clock, `tr`.
   tb = tr < T_HIT ? tr : (tr < T_HIT + T_HOLD ? (float)T_HIT : tr - T_HOLD);
-  f = (int)(tb * INTRO_FPS / 1000.0f);
-  if (f >= INTRO_FRAMES) f = INTRO_FRAMES - 1;
 
-  // The landing lights the core: up within 30 ms of the hit, fading over about
-  // 0.7 s, with a soft halo behind the mark that slowly spreads.
-  if (!quiet && atlas && tr >= T_HIT) {
-    const float u = tr - T_HIT, env = clamp01(u / 30.0f) * expf(-u / 300.0f);
-    light = env;
-    halo = 0.5f * env;
-    grow = 1.22f + 0.18f * clamp01(u / 400.0f);
+  // THE BANDS ARRIVE. The core falls in from close to the camera, gathering speed,
+  // and lands in its place at T_HIT; then the middle band and the outer one spring
+  // out of it like a ripple from the landing, overshooting a little and settling.
+  { const float p = phase(tb, T_DROP, T_HIT);
+    bs[0] = 1.0f + 1.6f * (1.0f - p * p);
+    ba[0] = clamp01(p * 3.0f); }
+  for (i = 1; i < BANDS; i++) {
+    const float at = (float)(T_HIT + T_BAND + (i - 1) * T_BAND_GAP);
+    const float q = phase(tb, at, at + T_BAND_POP);
+    bs[i] = 0.55f + 0.45f * easeOutBack(q, 1.7f);
+    ba[i] = clamp01(q * 3.0f);
   }
-  // Waiting for the app: the light breathes, so a slow catalogue does not look
-  // like a frozen frame.
+  // Waiting for the app: the bands breathe, each a little after the one inside it,
+  // so a slow catalogue does not look like a frozen frame.
   if (!quiet && tr >= T_REST) {
     const float w = clamp01((tr - T_REST) / 400.0f);
-    const float b = 0.5f + 0.5f * sinf((tr - T_REST) * 0.0045f - 1.5707963f);
-    if (w * (0.06f + 0.14f * b) > light) light = w * (0.06f + 0.14f * b);
-    if (w * (0.10f + 0.15f * b) > halo) halo = w * (0.10f + 0.15f * b);
+    for (i = 0; i < BANDS; i++)
+      bs[i] *= 1.0f + 0.012f * w * sinf((tr - T_REST) * 0.0045f - 0.6f * (float)i);
     s *= 1.0f + 0.012f * w * sinf((tr - T_REST) * 0.0045f);
   }
 
@@ -390,9 +378,7 @@ void splash_draw(Uint32 now, int ready) {
       // The purple lies over the hole too: it goes before the app shows through.
       glowA = 1.0f - easeInOut(clamp01(e / 0.35f));
     }
-    light *= quiet ? markA : 1.0f - clamp01(e * 4.0f);
-    halo *= quiet ? markA : 1.0f - clamp01(e * 4.0f);
-  } else if (!quiet && atlas && tr >= T_HIT) {
+  } else if (!quiet && bands && tr >= T_HIT) {
     // The hit: the camera kicks toward the viewer about the mark and jolts down,
     // both settling within a few frames.
     const float u = tr - T_HIT;
@@ -446,11 +432,8 @@ void splash_draw(Uint32 now, int ready) {
     const float at = (float)(T_WAVE + i * T_WAVE_GAP);
     drawLetter(i, phase(tb, at, at + T_WAVE_POP), markA);
   }
-  if (!atlas) { drawMark(s, markA); return; }
-  // The halo behind the mark, the pyramid, then the light over it.
-  if (halo > 0.002f) drawCell(&introHalo, follow(&introHalo, f, s * grow), halo * markA);
-  { const IntroCell *c = &introFrame[f];
-    drawCell(c, (GfxRect){ cx + (MARK_X + c->dx - cx) * s, cy + (MARK_Y + c->dy - cy) * s,
-                           c->sw * s, c->sh * s }, markA); }
-  if (light > 0.002f) drawCell(&introLight, follow(&introLight, f, s), light * markA);
+  if (!bands) { drawMark(s, markA); return; }
+  // Back to front: the outer band, the middle one, the core, so a band springing
+  // out of the core starts behind it.
+  for (i = BANDS - 1; i >= 0; i--) drawBand(i, bs[i], ba[i] * markA);
 }

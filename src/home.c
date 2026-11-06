@@ -1842,6 +1842,7 @@ void home_update(float dt, Uint32 now) {
   // BEFORE syncRows, which is what notices the row got longer: collecting after it
   // would leave the new posters waiting a frame for the next rebuild.
   disc_row_collect();
+  disc_cw_collect();
   // "ROW STYLE" FROM THE HOLD MENU: the styles open as a second menu beside the
   // same card, the current one marked. The choice lands before syncRows so the
   // row takes its new shape this very frame.
@@ -2993,7 +2994,7 @@ static void heroTrailerStep(const CatItem *ci, GfxRect r, GfxMode mode,
     // rest the hero is the trailer's band alone. Inside the trailer's rect this is
     // drawn over again just below.
     if (r.x < tr.x || r.y + r.h > tr.y + tr.h)
-      gfx_color(r, 0.0f, 0.051f, 0.051f, 0.051f, rv);
+      gfx_color(r, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, rv);
     if (frame) {
       // mpv applies the source crop itself and renders to the rect's size, so once
       // the crop is out the frame already has the rect's shape.
@@ -3025,17 +3026,17 @@ static void heroTrailerStep(const CatItem *ci, GfxRect r, GfxMode mode,
     if (rv < 0.999f) {
       float bgA = 1.0f - rv;
       if (r.x > tr.x)
-        gfx_color((GfxRect){ tr.x, tr.y, r.x - tr.x, tr.h }, 0.0f, 0.051f, 0.051f, 0.051f, bgA);
+        gfx_color((GfxRect){ tr.x, tr.y, r.x - tr.x, tr.h }, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, bgA);
       if (tr.y + tr.h > r.y + r.h)
         gfx_color((GfxRect){ r.x, r.y + r.h, r.w, tr.y + tr.h - (r.y + r.h) }, 0.0f,
-                  0.051f, 0.051f, 0.051f, bgA);
+                  NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, bgA);
       gfx_crop(tr.x, tr.y, tr.w, tr.h);
       if (still) {
         gfx_tex_aspect_current = tex_aspect(art);
         heroArtDraw(r, still, mode, bgA);
         gfx_tex_aspect_current = 0.0f;
       } else {
-        gfx_color(r, 0.0f, 0.051f, 0.051f, 0.051f, bgA);
+        gfx_color(r, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, bgA);
       }
       gfx_no_crop();
     } }
@@ -4643,7 +4644,7 @@ void home_draw(Uint32 now) {
           }
 
           if (resumeCard)
-            resume_draw(cItem, (GfxRect){px, py, w, h}, baked);
+            resume_draw(cItem, (GfxRect){px, py, w, h}, baked, f);
 
           // 4. HIGHLIGHT: title and metadata INSIDE the art, over a dark veil at the
           // base — as the Apple TV does. The title plays the part of the logo embedded

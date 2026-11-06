@@ -657,7 +657,12 @@
 // diverges from the web here on purpose. NV_CW_BAR_MINW is therefore the floor
 // for a REAL position, so a title two minutes in still shows something; it is
 // not the web's "always paint a 12px stub" state.
-#define NV_CW_BAR_H         6.0f
+#define NV_CW_BAR_H         6.0f   // the detail screen's episode stills
+// THE HOME CARD'S BAR IS FILL ONLY: 4px of #F5F5F5 along the base for the part
+// watched, and no track behind the rest. Picked by the owner against an inset bar,
+// a thin one that grows on focus, an artwork-tinted one and the old 6px full-bleed
+// bar with its track. GFX_CW_CARD draws no track at all.
+#define NV_CW_FILL_H        4.0f
 #define NV_CW_BAR_MINW     12.0f   // .home-continue-progress span { min-width }
 // Below this the title counts as NOT STARTED and gets no bar at all. The same 2
 // the detail screen's episode card has always used, where under it the dashed
@@ -1010,9 +1015,20 @@
 // sat at a distance of (1,2,0) from the background — a contrast of 1.0:1, that is,
 // INVISIBLE. The posters "that were not appearing" were appearing: as rectangles in
 // exactly the background's colour. See NV_COLOR_SKELETON just below.
-#define NV_COLOR_BACKGROUND_R   0.051f
-#define NV_COLOR_BACKGROUND_G   0.051f
-#define NV_COLOR_BACKGROUND_B   0.051f
+//
+// TRUE BLACK, NOT #0D0D0D. The TV this ships to is an OLED: at #0D0D0D every pixel
+// of the page is lit, at #000 it is off, and the hero's art dissolves into the
+// panel's own black instead of into a grey slab. The skeleton (#2C2C2C) and the
+// card gradient (#1c1c1c) only gain contrast against it. The scrims already dither
+// (nvDither in gfx.c), which is what keeps a ramp all the way down to 0 from
+// banding on the panel. To go back, set NV_COLOR_BACKGROUND_V to 0.051f and
+// NV_COLOR_BACKGROUND_GLSL to "vec3(0.051)": every surface that has to match the
+// page — the clear colour, the hero/detail scrims, the cover quads — reads these.
+#define NV_COLOR_BACKGROUND_V   0.0f
+#define NV_COLOR_BACKGROUND_GLSL "vec3(0.0)"
+#define NV_COLOR_BACKGROUND_R   NV_COLOR_BACKGROUND_V
+#define NV_COLOR_BACKGROUND_G   NV_COLOR_BACKGROUND_V
+#define NV_COLOR_BACKGROUND_B   NV_COLOR_BACKGROUND_V
 
 // The surface of a CARD WITH NO ART (#2C2C2C). MEASURED against the reference,
 // which draws it solid in the card's exact box while the image has not arrived —
@@ -2144,8 +2160,8 @@
 #define NV_TRK_EMBED_LIFT      4
 
 // --- THE PLAYER'S TWO "JUMP AHEAD" PROMPTS -----------------------------------
-// Skip intro and the next-episode card. They SHARE an anchor, and that is the
-// point rather than a coincidence: both are optional "jump past this" offers over
+// Skip intro, and until it moved to the top-right (NV_NEXT_TILE_W) the
+// next-episode card. They shared this anchor on purpose: both are optional "jump past this" offers over
 // the frame, so landing them in the same corner at the same height makes them read
 // as one affordance that returns to the same place, instead of two that arrive
 // from different corners. It also keeps the bottom LEFT clear, which is where the
@@ -2197,36 +2213,32 @@
 // Left and right match, so the copy column ends as far from the card's edge as
 // the thumbnail starts from it.
 #define NV_NEXT_PADX       24.0f
-#define NV_NEXT_GAP        24.0f   // thumbnail to copy column
-// The thumbnail sits INSIDE the card's padding at 16:9 with its own radius — a
-// picture on the card, not the card's left end. Its height is the copy stack's:
-// caption, title, pills.
-#define NV_NEXT_THUMB_H   148.0f
-#define NV_NEXT_THUMB_W   (NV_NEXT_THUMB_H * 16.0f / 9.0f)
-#define NV_NEXT_THUMB_R    12.0f
-// The copy column is as wide as the wider of the title and the pill row, capped
-// so a long episode name trims instead of stretching the card across the frame.
-#define NV_NEXT_COPY_MAX  440.0f
-#define NV_NEXT_TITLE_Y    28.0f   // caption top to title top
-#define NV_NEXT_TITLE_DOT_GAP 12.0f // either side of the dot in "S1 E12 · Name"
-#define NV_NEXT_PILL_H     56.0f
-#define NV_NEXT_PILL_PADX  28.0f
-#define NV_NEXT_PILL_GAP   12.0f
-// play.png's triangle is not centred in half its box the way the skip glyph is:
-// its ink runs from 25% to 94% of the width (x 32..120 of 128). Layout therefore
-// counts the INK width and hangs the box so the ink starts on the text column —
-// assuming the 2x rule put the triangle's tip against the "P".
-#define NV_NEXT_PLAY_BOX   18.0f
-#define NV_NEXT_PLAY_INK_X 0.25f
-#define NV_NEXT_PLAY_INK_W (NV_NEXT_PLAY_BOX * 0.6875f)
-#define NV_NEXT_PILL_ICON_GAP 12.0f
-#define NV_NEXT_PILL_RING   1.5f   // the Not now outline, in px
-// The countdown along the card's base, the same 6px band the skip button carries.
-#define NV_NEXT_BAR         6.0f
+// THE UP NEXT TILE. It used to be a 775x196 card with two pills in the bottom
+// corner Skip intro uses — the band the subtitles sit in, over the last two
+// minutes of an episode that is often still story. It is now the episode's still
+// alone, 288x162, hung from the TOP-right corner where subtitles never go, with
+// one round play button in the middle that says what OK does. "Not now" is Back,
+// or with autoplay off simply waiting: the tile leaves on its own.
+#define NV_NEXT_TILE_W    288.0f
+#define NV_NEXT_TILE_H    (NV_NEXT_TILE_W * 9.0f / 16.0f)   // 162
+#define NV_NEXT_TILE_R     14.0f
+// From the top with the controls down; with them up it drops below the clock and
+// "Ends at" (64 + their two lines, ~150), so the two never share the corner.
+#define NV_NEXT_TOP        56.0f
+#define NV_NEXT_TOP_UP    176.0f
+#define NV_NEXT_INSET      16.0f   // kicker and title from the tile's left edge
+#define NV_NEXT_KICK_Y     14.0f   // the kicker's top
+#define NV_NEXT_TITLE_B    16.0f   // the title's baseline box from the bottom
+#define NV_NEXT_TITLE_DOT_GAP 8.0f // either side of the dot in "S1 E12 · Name"
+// The play button: a dark disc inside a countdown ring.
+#define NV_NEXT_BTN        64.0f
+#define NV_NEXT_BTN_RING    4.0f
+// play.png's triangle runs from 25% to 94% of its box (x 32..120 of 128), so the
+// box is hung by the INK's centre, 0.595 across, to sit optically in the disc.
+#define NV_NEXT_PLAY_BOX   32.0f
+#define NV_NEXT_PLAY_INK_C 0.595f
 #define NV_FT_NEXT_KICK    17      // "UP NEXT"          17 / 700, ls .2em
-#define NV_FT_NEXT_COUNT   17      // "Playing in 8s"    17 / 700
-#define NV_FT_NEXT_TITLE   28      // "S1 E11 · Name"    28 / 700
-#define NV_FT_NEXT_PILL    23      // the action pills   23 / 700 (19 read too small from the sofa)
+#define NV_FT_NEXT_TITLE   22      // "S1 E11 · Name"    22 / 700, on the tile
 #define NV_NEXT_KICK_TRACK  3.4f   // 0.2em at 17px
 
 // THE PLAYER'S DROPDOWNS — the season pill here, the subtitle sheet's selects —

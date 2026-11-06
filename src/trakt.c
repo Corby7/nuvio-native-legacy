@@ -616,6 +616,58 @@ int trakt_playback_remove(const char *imdb) {
   return ok;
 }
 
+// THE LAST SIGNATURE /sync/last_activities gave, and the token it was taken
+// under: a different token (another account, a fresh pairing) is a new baseline,
+// not a change.
+static char activitySig[160], activityToken[128];
+static pthread_mutex_t lockActivity = PTHREAD_MUTEX_INITIALIZER;
+
+int trakt_activity_moved(void) {
+  const char *header[4];
+  char auth[200], key[140], sig[160], part[1024];
+  char mw[40] = "", mp[40] = "", ew[40] = "", ep[40] = "";
+  char *body;
+  int moved = 0;
+  if (!on) return 0;
+  snprintf(auth, sizeof auth, "Authorization: Bearer %s", token);
+  snprintf(key, sizeof key, "trakt-api-key: %s", client);
+  header[0] = auth;
+  header[1] = "trakt-api-version: 2";
+  header[2] = key;
+  header[3] = NULL;
+  body = net_download_headers("https://api.trakt.tv/sync/last_activities", 15, header);
+  if (!body) { printf("[trakt] last_activities: no response\n"); return 0; }
+  // Only what "Continue watching" is made of: a resume point (paused_at) and a
+  // finished play (watched_at, which moves next up), for films and episodes.
+  // The other stamps — ratings, watchlist, comments — would refresh it for nothing.
+  if (js_raw(body, body + strlen(body), "movies", part, sizeof part)) {
+    js_text(part, part + strlen(part), "watched_at", mw, sizeof mw);
+    js_text(part, part + strlen(part), "paused_at", mp, sizeof mp);
+  }
+  if (js_raw(body, body + strlen(body), "episodes", part, sizeof part)) {
+    js_text(part, part + strlen(part), "watched_at", ew, sizeof ew);
+    js_text(part, part + strlen(part), "paused_at", ep, sizeof ep);
+  }
+  free(body);
+  if (!mw[0] && !mp[0] && !ew[0] && !ep[0]) {
+    printf("[trakt] last_activities: unreadable\n");
+    return 0;
+  }
+  snprintf(sig, sizeof sig, "%s|%s|%s|%s", mw, mp, ew, ep);
+  pthread_mutex_lock(&lockActivity);
+  if (strcmp(activityToken, token)) {
+    // First look under this credential: the home built at launch already read
+    // /sync/playback, so this only sets the baseline.
+    snprintf(activityToken, sizeof activityToken, "%s", token);
+  } else if (strcmp(activitySig, sig)) {
+    moved = 1;
+  }
+  snprintf(activitySig, sizeof activitySig, "%s", sig);
+  pthread_mutex_unlock(&lockActivity);
+  if (moved) printf("[trakt] last_activities moved: %s\n", sig);
+  return moved;
+}
+
 int trakt_resume(CatItem *output, int max) {
   const char *header[4];
   char auth[200], key[140];

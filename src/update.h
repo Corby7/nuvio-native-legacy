@@ -64,4 +64,8 @@ void update_install_dismiss(void);
 #define NV_UPDATE_SINCE "1.6.0"
 int update_version_cmp(const char *a, const char *b);
 
+// Closes and reopens the app: spawns a helper that relaunches it once this
+// process has exited. 1 if the helper started; the caller must then quit.
+int update_restart(void);
+
 #endif

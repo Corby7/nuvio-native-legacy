@@ -421,17 +421,18 @@ static int reqDetails;   // the Details button: leave, and land on the title pag
 // reset that clears reqNext* when a title opens, so dismissing the offer on one
 // episode does not silently suppress it on the next.
 static int nextDismissed;
-// Which of the card's two pills has the focus: 0 = Play now, 1 = Not now. Play is
-// the primary and is where it starts — the same reasoning as the track menu's
-// steppers starting on the plus.
-enum { NEXT_PLAY, NEXT_DISMISS, NEXT_NPILLS };
-static int nextFocus = NEXT_PLAY;
 // THE CARD PLAYS THE NEXT EPISODE ON ITS OWN once the countdown runs out; its
-// length is the "Next episode countdown" setting. The "Playing in 8s" on the card
-// and the bar across its base are the same clock. It
+// length is the "Next episode countdown" setting, and the ring round the tile's
+// play button is that clock filling. It
 // holds while the video is paused or a sheet covers the card: nobody is ignoring
 // the offer then, and it would be spent while nobody could see it.
 #define PLR_NEXT_MS (settings_next_countdown() * 1000.0f)
+// WITH AUTOPLAY OFF the same clock runs the other way: the ring EMPTIES over this
+// long and then the tile goes, as the Skip intro button does. There is no "Not now"
+// pill any more, and a tile left over the credits until somebody pressed Back was
+// the panel parked over the picture this design exists to avoid. The Next button
+// on the controls still offers the episode afterwards.
+#define PLR_NEXT_HIDE_MS 10000.0f
 static float nextElapsed;
 static void reportReset(void);   // see REPORTING WHILE IT PLAYS
 
@@ -708,7 +709,7 @@ static void fraseFirst(char *dst, size_t n, const char *src, size_t maxBytes) {
 // looking at the TV saw. Checking zoom means looking at the device.
 enum { NOTE_GOOD, NOTE_WARN, NOTE_ERROR, NOTE_BUSY, NOTE_MODE };  // drawNotice
 static int    aspect = PLR_ASPECT_ORIGINAL;
-static Uint32 toastAte = 0;      // until when the mode notice stays up
+static Uint32 toastAte = 0;     // until when the mode notice stays up
 static char   toastText[96];     // its text when it is not the aspect mode's
 static int    toastKind;         // NOTE_*: what its ring says (drawNotice)
 static const char *toastIcon = "notice_check";
@@ -1084,7 +1085,7 @@ static void openSession(int indexCatalog, const char *url) {
   fromDetail = 0; flyFrom = (GfxRect){ 0, 0, 0, 0 }; flying = 0;
   reqSources = errorSource = reqTracks = reqNextT = reqNextE = reqDetails = 0;
   startImage = 0;
-  nextDismissed = 0; nextFocus = NEXT_PLAY; nextElapsed = 0;
+  nextDismissed = 0; nextElapsed = 0;
   reportReset();
   skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0; rolledMs = 0; rolledOnce = 0;
   resumeApplied=0;
@@ -1477,9 +1478,7 @@ static int cardHot(void) { return !visible || cardFocus; }
 static int activateCard(void) {
   double end; int kind;
   if (nextCardUp()) {
-    const CatEp *p;
-    if (nextFocus == NEXT_DISMISS) { nextDismissed = 1; return 1; }
-    p = player_next_episode();
+    const CatEp *p = player_next_episode();
     if (p) { reqNextT = p->season; reqNextE = p->episode; }
     return 1;
   }
@@ -1521,8 +1520,10 @@ static void skipTick(float dt) {
 // Advances the next-episode countdown and, when it runs out, asks for the next
 // episode exactly as OK on Play would. Called once a frame from player_update.
 //
-// With "Autoplay next episode" off the card still comes up, and waits: nothing
-// counts, and only Play now moves on — the web app's autoplayNextEpisode.
+// With "Autoplay next episode" off the card still comes up but plays nothing:
+// the clock then counts PLR_NEXT_HIDE_MS and the card dismisses itself. That
+// count holds while the controls are up, as the skip button's does — somebody
+// reading the scrubber is not ignoring the offer.
 // A playback that has REACHED ITS END still counts, although it no longer plays:
 // with a short lead the file can end inside the countdown, and a clock that
 // stopped there would leave the viewer on the last frame for good.
@@ -1530,9 +1531,18 @@ static void nextTick(float dt) {
   const CatEp *p;
   int ended = durationSeg > 1.0f && posSeg >= durationSeg - 1.0f;
   if (!nextCardUp()) { nextElapsed = 0; return; }
-  if (!settings_next_autoplay()) { nextElapsed = 0; return; }
   if ((!playing && !ended) || episodes_shown() > 0.0f || tracks_shown() > 0.0f ||
       stream_sheet_shown() > 0.0f) return;
+  if (!settings_next_autoplay()) {
+    if (visible) return;
+    nextElapsed += dt * 1000.0f;
+    if (nextElapsed < PLR_NEXT_HIDE_MS) return;
+    nextElapsed = 0; nextDismissed = 1;
+    printf("[player] up next offer timed out after %.0fs (autoplay off)\n",
+           PLR_NEXT_HIDE_MS / 1000.0f);
+    fflush(stdout);
+    return;
+  }
   nextElapsed += dt * 1000.0f;
   if (nextElapsed < PLR_NEXT_MS) return;
   nextElapsed = PLR_NEXT_MS;
@@ -1543,12 +1553,6 @@ static void nextTick(float dt) {
            p->season, p->episode);
     fflush(stdout);
   }
-}
-
-// No wrap-around, as on the button row.
-static void nextStep(int dir) {
-  int f = nextFocus + dir;
-  if (f >= 0 && f < NEXT_NPILLS) nextFocus = f;
 }
 
 // Every key wakes the controls, including one that has already carried out an
@@ -1681,13 +1685,11 @@ static void clickBar(int a, int b) {
   barDrag = 1;
   wake();
 }
-// The prompt's pills: "Play now" / "Not now", or the one "Skip intro". With the
-// controls up they take the card rung, as UP from the bar would; down, the card
-// is already what OK acts on.
-static void pointCard(int pill, int unused) {
-  (void)unused;
+// The prompt: the Up next tile or "Skip intro". With the controls up it takes the
+// card rung, as UP from the bar would; down, the card is already what OK acts on.
+static void pointCard(int unused1, int unused) {
+  (void)unused1; (void)unused;
   if (!is_open || exiting) return;
-  if (nextCardUp() && pill >= 0 && pill < NEXT_NPILLS) nextFocus = pill;
   if (visible) { barFocus = 0; cardFocus = 1; wake(); }
 }
 static void clickPicture(int a, int b) {
@@ -1716,6 +1718,14 @@ void player_event(const SDL_Event *e) {
 
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
       k == SDLK_DELETE) {
+    // BACK IS "NOT NOW" while the Up next tile is up — the tile has no pill for
+    // it — and only the next Back leaves the player.
+    if (nextCardUp()) {
+      nextDismissed = 1;
+      if (cardFocus) { cardFocus = 0; barFocus = 1; }
+      if (visible) wake();
+      return;
+    }
     exiting = 1; requestedExit = 1;
     return;
   }
@@ -1732,14 +1742,6 @@ void player_event(const SDL_Event *e) {
   if (k == SDLK_0 || k == SDLK_KP_0) { player_aspect_cycle(); return; }
 
   if (!visible) {
-    // THE CARD'S TWO PILLS ARE REAL TARGETS while the transport is down, so
-    // left/right belong to them rather than to waking the bar. This is the only
-    // state in which the card is what OK acts on, which is why the interception
-    // lives here and not above the `visible` test.
-    if (nextCardUp() && (k == SDLK_LEFT || k == SDLK_RIGHT)) {
-      nextStep(k == SDLK_RIGHT ? 1 : -1);
-      return;
-    }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
       if (activateCard()) return;
       // OK mid quick-seek is "go there now", as it is on the bar — pausing
@@ -1829,11 +1831,6 @@ void player_event(const SDL_Event *e) {
   // --- on the card, one rung above the bar ---------------------------------
   if (cardFocus) {
     if (k == SDLK_DOWN) { cardFocus = 0; barFocus = 1; wake(); return; }
-    if (nextCardUp() && (k == SDLK_LEFT || k == SDLK_RIGHT)) {
-      nextStep(k == SDLK_RIGHT ? 1 : -1);
-      wake();
-      return;
-    }
     wake();
     return;
   }
@@ -2705,9 +2702,9 @@ static void drawStats(float alpha) {
     } }
 }
 
-// THE TWO JUMP-AHEAD PROMPTS. Both hang off the SAME corner at the SAME two
-// heights — see the note at NV_PJ_RIGHT for why that is the design and not an
-// accident. This returns the bottom edge either one should sit on.
+// THE SKIP BUTTON'S CORNER, bottom-right at two heights (see NV_PJ_RIGHT). The
+// Up next tile used to share it; it now hangs from the top-right instead, out of
+// the subtitle band (see NV_NEXT_TILE_W). This returns the skip button's bottom.
 //
 // `visible` is the transport. While it is down these prompts are what OK acts on
 // (see the !visible branch in the key handler), so they are drawn in their
@@ -2736,8 +2733,7 @@ static void drawSkipIntro(int kind) {
   float c = hot ? 0.961f : NV_SKIP_BG, a = hot ? 1.0f : NV_SKIP_BG_A;
   subOccl = (GfxRect){ x, y, w, h };
   float pad = (NV_SKIP_ICON - NV_SKIP_ICON_INK) * 0.5f;
-  // A PILL, like the next-episode card's pills that share this corner: the two
-  // prompts read as one family. It was a 24px-radius card.
+  // A PILL. It was a 24px-radius card.
   gfx_color((GfxRect){ x, y, w, h }, 0.5f, c, c, c, a * entry);
   pointer_zone(x, y, w, h, pointCard, -1, 0);
   { float g = ink / 255.0f;
@@ -2771,138 +2767,96 @@ static void drawSkipIntro(int kind) {
              NV_SKIP_BAR / h, p, 0.5f, br, bg, bb, entry); }
 }
 
+// THE UP NEXT TILE: the next episode's still, "UP NEXT" over its top, the episode
+// under it, and a round play button in the middle. See NV_NEXT_TILE_W for why it
+// is this small and this high. The play button is the whole of the affordance —
+// OK plays, Back (or, with autoplay off, waiting) sends it away — so the ring
+// round it carries the clock: filling towards the autoplay, or with autoplay off
+// emptying towards the tile leaving.
 static void drawNextCard(const CatEp *next) {
-  struct { const char *label, *icon; } pill[NEXT_NPILLS] = {
-    { "Play now", "play" }, { "Not now", NULL } };
-  float pw[NEXT_NPILLS], lw[NEXT_NPILLS], rowW = 0, copyW, w, h, x, y, tx0, ty0, cx;
-  int hot = cardHot(), i;
+  float w = NV_NEXT_TILE_W, h = NV_NEXT_TILE_H;
+  float x = NV_SCREEN_W - NV_PJ_RIGHT - w, y = visible ? NV_NEXT_TOP_UP : NV_NEXT_TOP;
+  float rad = NV_NEXT_TILE_R / h;
+  GfxRect tr = { x, y, w, h };
   char code[24];
-  float titleW;
-  TxtLine codeL, dotL, title, l[NEXT_NPILLS];
+  TxtLine codeL, dotL, title;
 
-  // Measured first: the card is as wide as its copy needs.
-  for (i = 0; i < NEXT_NPILLS; i++) {
-    int sel = hot && nextFocus == i;
-    int ink = sel ? NV_TRK_FOCUS_INK : 226;
-    // Not now is Bold only while it is selected. Its width is always the Bold
-    // one's, so moving the focus does not resize the pill and shift the card.
-    TxtLine bold = txt_line(TXT_NEXT_PILL, pill[i].label, ink, ink, ink, 255);
-    l[i] = (i == NEXT_DISMISS && !sel)
-         ? txt_line(TXT_NEXT_PILL_MED, pill[i].label, ink, ink, ink, 255) : bold;
-    lw[i] = (float)bold.w;
-    pw[i] = NV_NEXT_PILL_PADX * 2 + lw[i]
-          + (pill[i].icon ? NV_NEXT_PLAY_INK_W + NV_NEXT_PILL_ICON_GAP : 0.0f);
-    rowW += pw[i] + (i ? NV_NEXT_PILL_GAP : 0.0f);
-  }
-  // "S1 E12", a dot, then the name, as three pieces so the dot gets real air on
-  // both sides instead of the font's own narrow spaces.
+  subOccl = tr;
+  pointer_zone(x, y, w, h, pointCard, 0, 0);
+
+  // THE STILL, with the Continue Watching card's base scrim baked into the same
+  // pass, so the title reads over any frame. No bar: the ring is the clock.
+  { const char *art = next->thumb[0] ? next->thumb
+                    : (item() && item()->backdrop[0] ? item()->backdrop : NULL);
+    GLuint tx = art ? tex_get_width(art, (int)w) : 0;
+    if (tx) {
+      gfx_tex_aspect_current = tex_aspect(art);
+      gfx_rect(tr, tx, GFX_CW_CARD, 0, 0, 0, rad, 1, 1, 1, entry);
+      gfx_tex_aspect_current = 0;
+    } else {
+      gfx_color(tr, rad, NV_TRK_INK_R, NV_TRK_INK_G, NV_TRK_INK_B, 0.97f * entry);
+    }
+    // A light hold-back over the whole still, so the kicker at the top and the
+    // button in the middle stay legible over a bright frame.
+    gfx_color(tr, rad, 0, 0, 0, 0.22f * entry); }
+  // Its edge: a hairline at rest, the white focus ring once UP has walked the
+  // ladder onto it with the controls up. With them down it is what OK means
+  // anyway, and a ring there would only be one more thing over the picture.
+  if (visible && cardFocus)
+    gfx_rect(tr, 0, GFX_RING_INSET, 0, 4.0f / h, 0, rad, 0.961f, 0.961f, 0.961f, entry);
+  else
+    gfx_rect(tr, 0, GFX_RING_INSET, 0, 1.5f / h, 0, rad, 1, 1, 1, 0.18f * entry);
+
+  txt_tracking(TXT_NEXT_KICK, "UP NEXT", 214, 216, 222,
+               x + NV_NEXT_INSET, y + NV_NEXT_KICK_Y, entry, NV_NEXT_KICK_TRACK);
+
+  // "S1 E3", a dot, the name trimmed to what is left of the tile's width.
   snprintf(code, sizeof code, "S%d E%d", next->season, next->episode);
   codeL = txt_line(TXT_NEXT_TITLE, code, 255, 255, 255, 255);
   dotL  = txt_line(TXT_NEXT_TITLE, "·", 150, 152, 158, 255);
-  { float cap = (NV_NEXT_COPY_MAX > rowW ? NV_NEXT_COPY_MAX : rowW)
-              - (float)codeL.w - (float)dotL.w - NV_NEXT_TITLE_DOT_GAP * 2;
-    title = txt_line_trim(TXT_NEXT_TITLE, next->name, 255, 255, 255, 255, cap); }
-  titleW = (float)codeL.w + (float)dotL.w + NV_NEXT_TITLE_DOT_GAP * 2 + (float)title.w;
-  copyW = titleW > rowW ? titleW : rowW;
-
-  w = NV_NEXT_PADX * 2 + NV_NEXT_THUMB_W + NV_NEXT_GAP + copyW;
-  h = NV_NEXT_PAD * 2 + NV_NEXT_THUMB_H;
-  x = NV_SCREEN_W - NV_PJ_RIGHT - w; y = jumpBottom() - h;
-  subOccl = (GfxRect){ x, y, w, h };
-  tx0 = x + NV_NEXT_PADX; ty0 = y + NV_NEXT_PAD;
-  cx = tx0 + NV_NEXT_THUMB_W + NV_NEXT_GAP;
-
-  gfx_color((GfxRect){ x, y, w, h }, NV_NEXT_R / h,
-            NV_TRK_INK_R, NV_TRK_INK_G, NV_TRK_INK_B, 0.97f * entry);
-  // A hairline edge, so the card separates from a dark frame behind it.
-  gfx_rect((GfxRect){ x, y, w, h }, 0, GFX_RING_INSET, 0, 1.0f / h, 0, NV_NEXT_R / h,
-           1, 1, 1, 0.10f * entry);
-
-  // The thumbnail, inset and rounded on all four corners. Only the PLACEHOLDER
-  // carries a fill: tinting the wrapper put a visible box behind every real still.
-  { GfxRect tr = { tx0, ty0, NV_NEXT_THUMB_W, NV_NEXT_THUMB_H };
-    float tr_r = NV_NEXT_THUMB_R / NV_NEXT_THUMB_H;
-    const char *art = next->thumb[0] ? next->thumb
-                    : (item() && item()->backdrop[0] ? item()->backdrop : NULL);
-    GLuint tx = art ? tex_get_width(art, (int)NV_NEXT_THUMB_W) : 0;
-    if (tx) {
-      gfx_tex_aspect_current = tex_aspect(art);
-      gfx_rect(tr, tx, GFX_CARD, 0, 0, 0, tr_r, 0, 0, 0, entry);
-      gfx_tex_aspect_current = 0;
-    } else {
-      gfx_color(tr, tr_r, 1, 1, 1, 0.06f * entry);
-    } }
-
-  // "UP NEXT · Playing in 8s". The caption stays quiet grey and the countdown
-  // beside it is the one piece of the line in full white, because it is the one
-  // that changes.
-  // With autoplay off there is no countdown to show: the kicker stands alone.
-  { char count[32];
-    int secs = (int)ceilf((PLR_NEXT_MS - nextElapsed) / 1000.0f);
-    float kx;
-    TxtLine dot, cl;
-    if (secs < 1) secs = 1;
-    snprintf(count, sizeof count, "Playing in %ds", secs);
-    kx = cx + txt_tracking(TXT_NEXT_KICK, "UP NEXT", 150, 152, 158,
-                           cx, ty0, entry, NV_NEXT_KICK_TRACK);
-    if (settings_next_autoplay()) {
-      dot = txt_line(TXT_NEXT_COUNT, "·", 80, 82, 88, 255);
-      cl  = txt_line(TXT_NEXT_COUNT, count, 255, 255, 255, 255);
-      txt_draw_alpha(dot, kx + 6.0f, ty0, entry);
-      txt_draw_alpha(cl, kx + 6.0f + (float)dot.w + 10.0f, ty0, entry);
-    } }
-
-  { float tx = cx, ty = ty0 + NV_NEXT_TITLE_Y;
+  { float cap = w - NV_NEXT_INSET * 2 - (float)codeL.w - (float)dotL.w
+              - NV_NEXT_TITLE_DOT_GAP * 2;
+    float tx = x + NV_NEXT_INSET, ty;
+    title = txt_line_trim(TXT_NEXT_TITLE, next->name, 255, 255, 255, 255,
+                          cap > 0 ? cap : 1);
+    ty = y + h - NV_NEXT_TITLE_B - (float)codeL.h;
     txt_draw_alpha(codeL, tx, ty, entry);
-    tx += (float)codeL.w + NV_NEXT_TITLE_DOT_GAP;
-    txt_draw_alpha(dotL, tx, ty, entry);
-    tx += (float)dotL.w + NV_NEXT_TITLE_DOT_GAP;
-    txt_draw_alpha(title, tx, ty, entry); }
-
-  // THE PAIR, on the thumbnail's bottom edge. The selected one inverts to white,
-  // and only while OK reaches this card at all; at rest both wear the same dark
-  // outlined fill.
-  { float py = ty0 + NV_NEXT_THUMB_H - NV_NEXT_PILL_H, px = cx, ph = NV_NEXT_PILL_H;
-    for (i = 0; i < NEXT_NPILLS; i++) {
-      int sel = hot && nextFocus == i;
-      float tx = px + NV_NEXT_PILL_PADX;
-      GfxRect pr = { px, py, pw[i], ph };
-      pointer_zone(pr.x, pr.y, pr.w, pr.h, pointCard, i, 0);
-      if (sel) {
-        gfx_color(pr, 0.5f, 0.961f, 0.961f, 0.961f, entry);
-      } else {
-        // INSET, not GFX_RING: that band straddles the edge and the quad clips
-        // its outer half, which left the outline broken along the pill.
-        gfx_color(pr, 0.5f, 0.110f, 0.114f, 0.129f, entry);
-        gfx_rect(pr, 0, GFX_RING_INSET, 0, NV_NEXT_PILL_RING / ph, 0, 0.5f,
-                 0.227f, 0.235f, 0.259f, entry);
-      }
-      if (pill[i].icon) {
-        float g = (sel ? NV_TRK_FOCUS_INK : 226) / 255.0f;
-        // Hung so the glyph's INK starts at tx — see NV_NEXT_PLAY_BOX.
-        // DECODED AT THE TRANSPORT'S SIZE, not its own. The cache keeps one
-        // texture per file at an exact width, and the transport draws this same
-        // play.png at PLR_ICON_H while paused: two widths in one frame re-decoded
-        // it every frame, and the transport's button came out blurry and jumping.
-        gfx_icon_at((GfxRect){ tx - NV_NEXT_PLAY_BOX * NV_NEXT_PLAY_INK_X,
-                               py + (ph - NV_NEXT_PLAY_BOX) * 0.5f,
-                               NV_NEXT_PLAY_BOX, NV_NEXT_PLAY_BOX },
-                    pill[i].icon, PLR_ICON_H, g, g, g, entry);
-        tx += NV_NEXT_PLAY_INK_W + NV_NEXT_PILL_ICON_GAP;
-      }
-      txt_draw_alpha(l[i], tx + (lw[i] - (float)l[i].w) * 0.5f,
-                     py + (ph - (float)l[i].h) * 0.5f, entry);
-      px += pw[i] + NV_NEXT_PILL_GAP;
+    if (next->name[0]) {
+      tx += (float)codeL.w + NV_NEXT_TITLE_DOT_GAP;
+      txt_draw_alpha(dotL, tx, ty, entry);
+      tx += (float)dotL.w + NV_NEXT_TITLE_DOT_GAP;
+      txt_draw_alpha(title, tx, ty, entry);
     } }
 
-  // THE COUNTDOWN along the card's base: the Continue Watching bar, white on a
-  // faint track, cut by the card's own corner SDF so both ends round with it.
-  if (settings_next_autoplay()) {
-    float p = nextElapsed / PLR_NEXT_MS;
+  // THE BUTTON. The track ring first, then the swept part as a filled wedge, then
+  // the disc over the middle so only the ring of the wedge shows — the way the
+  // home's hold draws its sweep under the art. `focus` 0.125 starts the sweep at
+  // twelve o'clock instead of GFX_RING_FILL's top-left corner.
+  { float d = NV_NEXT_BTN, cx = x + w * 0.5f, cy = y + h * 0.5f;
+    GfxRect br = { cx - d * 0.5f, cy - d * 0.5f, d, d };
+    GfxRect in = { br.x + NV_NEXT_BTN_RING, br.y + NV_NEXT_BTN_RING,
+                   d - NV_NEXT_BTN_RING * 2, d - NV_NEXT_BTN_RING * 2 };
+    float p = 0.0f, fillA = 1.0f;
+    if (settings_next_autoplay()) {
+      p = nextElapsed / PLR_NEXT_MS;
+    } else {
+      // Emptying, and a step quieter than the autoplay fill, so it reads as time
+      // left on screen and not as something about to start.
+      p = 1.0f - nextElapsed / PLR_NEXT_HIDE_MS;
+      fillA = 0.75f;
+    }
     if (p < 0.0f) p = 0.0f;
     if (p > 1.0f) p = 1.0f;
-    gfx_rect((GfxRect){ x, y, w, h }, 0, GFX_CW_BAR, 0,
-             NV_NEXT_BAR / h, p, NV_NEXT_R / h, 1, 1, 1, entry); }
+    gfx_color(br, 0.5f, 1, 1, 1, 0.22f * entry);
+    if (p > 0.0f)
+      gfx_rect(br, 0, GFX_RING_FILL, 0.125f, p, 0, 0.5f, 0.961f, 0.961f, 0.961f,
+               fillA * entry);
+    gfx_color(in, 0.5f, 0.06f, 0.06f, 0.07f, 0.92f * entry);
+    // Decoded at the transport's size, PLR_ICON_H: see the note this used to carry
+    // on the Play pill — one texture per file at one width, or it re-decodes.
+    { float ib = NV_NEXT_PLAY_BOX;
+      gfx_icon_at((GfxRect){ cx - ib * NV_NEXT_PLAY_INK_C, cy - ib * 0.5f, ib, ib },
+                  "play", PLR_ICON_H, 1, 1, 1, entry); } }
 }
 
 static void drawActionsEpisode(void){

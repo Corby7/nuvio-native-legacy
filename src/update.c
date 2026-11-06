@@ -422,6 +422,32 @@ static int spawnDetached(const char *logPath) {
   { int st = 0; waitpid(pid, &st, 0); return WIFEXITED(st) && WEXITSTATUS(st) == 0; }
 }
 
+// RESTART (the UI resolution only applies at startup). A detached shell waits
+// for this process to be gone, then asks webOS to open the app again: a launch
+// sent while the app still runs would only bring the dying one forward. The
+// caller then quits the main loop. luna-send-pub for the reason in video.c.
+int update_restart(void) {
+  char cmd[400];
+  pid_t pid;
+  snprintf(cmd, sizeof cmd,
+           "i=0; while kill -0 %d 2>/dev/null && [ $i -lt 50 ]; do sleep 0.2; i=$((i+1)); done; "
+           "sleep 0.5; /usr/bin/luna-send-pub -w 5000 -n 1 "
+           "luna://com.webos.applicationManager/launch '{\"id\":\"%s\"}'",
+           (int)getpid(), NV_APP_ID);
+  pid = fork();
+  if (pid < 0) return 0;
+  if (pid == 0) {
+    if (setsid() < 0) _exit(1);
+    pid = fork();
+    if (pid != 0) _exit(pid < 0 ? 1 : 0);
+    freopen("/dev/null", "w", stdout);
+    freopen("/dev/null", "w", stderr);
+    execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+    _exit(127);
+  }
+  { int st = 0; waitpid(pid, &st, 0); return WIFEXITED(st) && WEXITSTATUS(st) == 0; }
+}
+
 typedef struct { char url[512], sha256[65], version[32]; } Job;
 
 static void *installWork(void *arg) {

@@ -12,6 +12,7 @@
 #include "traktlists.h"
 #include "watchedep.h"
 #include "data.h"
+#include "profiles.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1871,6 +1872,7 @@ static int buildResume(CatItem *output, int max) {
 typedef struct {
   CatItem resume[8];
   int nResume;
+  unsigned seq;   // resumeFresh's, for cwShown
 } TraktFirst;
 typedef struct {
   CatItem *items;
@@ -1887,9 +1889,117 @@ typedef struct {
 
 static int buildResume(CatItem *output, int max);
 
+// --- "CONTINUE WATCHING" AHEAD OF THE REST ------------------------------------
+//
+// THE DEFECT. With the cache on screen (every launch but the first), build()
+// publishes nothing until the LAST catalogue and the Trakt lists have answered —
+// partialAllowed, for the good reason that 16 rows must not become 1. But that
+// held back "Continue watching" too, although it was ready after ~1.3 s: what was
+// last watched showed up 10-20 s after opening, behind the slowest addon.
+//
+// Now every result of buildResume is kept here with a sequence number, and the
+// drawing thread (disc_cw_collect, every frame) splices it into whatever home is
+// on screen, when that home is not one build() is still publishing in pieces.
+// The same buffer serves a refresh with no rebuild around it (disc_cw_refresh):
+// the account's progress landing after the build has read progress.txt.
+//
+// resumeLock also serialises buildResume itself: its buffers are static and
+// trakt_decorate_batch is not reentrant.
+static pthread_mutex_t resumeLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t cwLock = PTHREAD_MUTEX_INITIALIZER;
+static CatItem cwLatest[8];
+static int nCwLatest;
+static unsigned cwSeq, cwShownSeq;
+// The profile the kept row belongs to: a refresh still running across a switch
+// of profile must not splice the previous person's row into the new home.
+static int cwProfile;
+
+// buildResume, with the answer kept for disc_cw_collect. Returns the sequence it
+// was stored under.
+static unsigned resumeFresh(CatItem *output, int max, int *outN) {
+  unsigned seq;
+  int got, profile = profiles_active();
+  if (max > 8) max = 8;
+  pthread_mutex_lock(&resumeLock);
+  got = buildResume(output, max);
+  pthread_mutex_lock(&cwLock);
+  memcpy(cwLatest, output, sizeof(CatItem) * (size_t)got);
+  nCwLatest = got;
+  cwProfile = profile;
+  seq = ++cwSeq;
+  pthread_mutex_unlock(&cwLock);
+  pthread_mutex_unlock(&resumeLock);
+  *outN = got;
+  return seq;
+}
+
+// A publish of the whole home carried the row as of `seq` — and REPLACED whatever
+// disc_cw_collect had spliced in, so it is assigned, not raised: a newer result is
+// owed again and the next frame puts it back.
+static void cwShown(unsigned seq) {
+  pthread_mutex_lock(&cwLock);
+  cwShownSeq = seq;
+  pthread_mutex_unlock(&cwLock);
+}
+
+static volatile int cwRefreshAlive, cwRefreshAgain;
+static void *threadCwRefresh(void *u) {
+  static CatItem out[8];
+  int n;
+  (void)u;
+  do {
+    cwRefreshAgain = 0;
+    resumeFresh(out, 8, &n);
+    printf("[disc] continue watching refreshed: %d\n", n);
+    fflush(stdout);
+  } while (cwRefreshAgain);
+  __atomic_store_n(&cwRefreshAlive, 0, __ATOMIC_RELEASE);
+  return NULL;
+}
+
+void disc_cw_refresh(void) {
+  pthread_t t;
+  cwRefreshAgain = 1;
+  if (__atomic_exchange_n(&cwRefreshAlive, 1, __ATOMIC_ACQ_REL)) return;
+  if (pthread_create(&t, NULL, threadCwRefresh, NULL) != 0) cwRefreshAlive = 0;
+  else pthread_detach(t);
+}
+
+int disc_cw_collect(void) {
+  static CatItem v[8];
+  CatRow row;
+  int n, done;
+  unsigned seq;
+  // A home still being published in pieces gets the row from build() itself;
+  // splicing into it here would race the next piece.
+  if (partialAllowed()) return 0;
+  pthread_mutex_lock(&cwLock);
+  if (cwSeq == cwShownSeq) { pthread_mutex_unlock(&cwLock); return 0; }
+  seq = cwSeq;
+  if (cwProfile != profiles_active()) {
+    cwShownSeq = seq;
+    pthread_mutex_unlock(&cwLock);
+    return 0;
+  }
+  n = nCwLatest;
+  memcpy(v, cwLatest, sizeof(CatItem) * (size_t)n);
+  cwShownSeq = seq;
+  pthread_mutex_unlock(&cwLock);
+  // The row as build() makes it.
+  memset(&row, 0, sizeof row);
+  snprintf(row.key, sizeof row.key, "continue_watching");
+  snprintf(row.title, sizeof row.title, "Continue watching");
+  snprintf(row.kind, sizeof row.kind, "movie");
+  done = cat_row_replace(&row, v, n);
+  printf("[disc] continue watching spliced into the home: %d%s\n", n,
+         done ? "" : " (refused)");
+  if (done) mark("continue watching on screen (over the cache)");
+  return done;
+}
+
 static void *traktFirst(void *u) {
   TraktFirst *t = (TraktFirst *)u;
-  t->nResume = buildResume(t->resume, 8);
+  t->seq = resumeFresh(t->resume, 8, &t->nResume);
   mark("continue watching, both sources");
   return NULL;
 }
@@ -2138,6 +2248,7 @@ static void *build(void *u) {
           memcpy(filtersBuilt, filter, sizeof(CatRow) * (size_t)nFilter);
           nRowsBuilt = nFilter;
           cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
+          cwShown(first.seq);
           mark("continue watching on screen");
         }
 
@@ -2325,6 +2436,9 @@ static void *build(void *u) {
   }
   if (n) {
     cat_set_all(lote, n, filtersBuilt, nRowsBuilt);
+    // A refresh newer than this build's row stays owed: disc_cw_collect puts it
+    // over this publish on the next frame.
+    cwShown(first.seq);
     cat_cache_replaced();
     completeOnScreen = 1;
     mark("network catalog published");

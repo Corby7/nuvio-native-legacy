@@ -261,6 +261,7 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 30, WEIGHT_BOLD    },   // TXT_CWC_TITLE  .home-continue-title    30 / 600
   { 17, WEIGHT_BOLD    },   // TXT_CWC_KICKER .home-continue-kicker   17 / 600
   { 21, WEIGHT_REGULAR },   // TXT_CWC_SUB    .home-continue-subtitle 21 / 400
+  { 21, WEIGHT_BOLD    },   // TXT_CWC_CODE   the episode line's "S2 E4", 21 / 600
   // The transport row. The tooltip's sheet says `font-weight: bold` outright, so
   // this 700 is not a 600 being resolved and goes straight to Bold - the same
   // exception already recorded above for TXT_DETWEB_TIP, which is the same rule in
@@ -305,13 +306,7 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   // Bold elsewhere in this table has nothing to correct for here.
   { NV_FT_SKIP,       WEIGHT_MEDIUM },  // TXT_SKIP        .player-skip-intro-label
   { NV_FT_NEXT_KICK,  WEIGHT_BOLD   },  // TXT_NEXT_KICK   .player-next-episode-kicker
-  { NV_FT_NEXT_TITLE, WEIGHT_BOLD   },  // TXT_NEXT_TITLE  .player-next-episode-title
-  // Bold on both pills, against the Medium rule for dark ink on a light pill:
-  // the pair sit side by side, one inverted, and Medium on the white one read as
-  // a lighter label than its neighbour rather than the same weight.
-  { NV_FT_NEXT_PILL,  WEIGHT_BOLD   },  // TXT_NEXT_PILL   the card's action pills
-  { NV_FT_NEXT_PILL,  WEIGHT_MEDIUM },  // TXT_NEXT_PILL_MED the resting Not now
-  { NV_FT_NEXT_COUNT, WEIGHT_BOLD   },  // TXT_NEXT_COUNT  the card's countdown
+  { NV_FT_NEXT_TITLE, WEIGHT_BOLD   },  // TXT_NEXT_TITLE  the Up next tile's title
   // The episode rail.
   { NV_FT_ERAIL_META,  WEIGHT_BOLD   }, // TXT_ERAIL_META   .player-episode-detail-meta
   { NV_FT_ERAIL_TITLE, WEIGHT_BOLD   }, // TXT_ERAIL_TITLE  .player-episode-detail-title

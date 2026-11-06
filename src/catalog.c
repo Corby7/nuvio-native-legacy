@@ -937,6 +937,60 @@ int cat_row_drop(int r, const char *imdb) {
   return gone;
 }
 
+static void applyProgress(int from, int to);
+
+// See the note on the declaration in catalog.h. The same block swap and the same
+// drawing-thread rule as cat_row_grow and cat_row_drop above.
+int cat_row_replace(const CatRow *row, const CatItem *v, int count) {
+  static CatItem *garbage;
+  CatItem *new;
+  int r = -1, k, at, old, newN, shift;
+  if (!row || !row->key[0] || count < 0 || (count > 0 && !v) || n < 1) return 0;
+  for (k = 0; k < nFilters; k++)
+    if (!strcmp(filters[k].key, row->key)) { r = k; break; }
+  if (r < 0 && count < 1) return 0;
+  if (r < 0 && nFilters >= CAT_FILTER_MAX) return 0;
+  at = r >= 0 ? filters[r].start : 0;
+  old = r >= 0 ? filters[r].n : 0;
+  if (at < 0 || at + old > n) return 0;
+  newN = n - old + count;
+  if (newN > CAT_MAX) return 0;
+  // A catalogue of nothing but this row, emptied: cat_set_all refuses a count of
+  // 0 too, and the drawing has no shape for it.
+  if (newN < 1) return 0;
+  new = malloc(sizeof(CatItem) * (size_t)newN);
+  if (!new) return 0;
+  memcpy(new, items, sizeof(CatItem) * (size_t)at);
+  if (count > 0) memcpy(new + at, v, sizeof(CatItem) * (size_t)count);
+  memcpy(new + at + count, items + at + old, sizeof(CatItem) * (size_t)(n - at - old));
+  free(garbage);
+  garbage = items;
+  items = new;
+  nAllocated = newN;
+  n = newN;
+  shift = count - old;
+  // Windows that began at or after the END of the old one follow their items. A
+  // new row goes in at 0, so every existing window moves along with it.
+  for (k = 0; k < nFilters; k++)
+    if (k != r && filters[k].start >= at + (r >= 0 ? old : 0)) filters[k].start += shift;
+  if (r < 0) {
+    memmove(&filters[1], &filters[0], sizeof filters[0] * (size_t)nFilters);
+    filters[0] = *row;
+    filters[0].start = 0;
+    filters[0].n = count;
+    nFilters++;
+  } else if (count < 1) {
+    memmove(&filters[r], &filters[r + 1], sizeof filters[0] * (size_t)(nFilters - r - 1));
+    nFilters--;
+  } else {
+    filters[r].n = count;
+  }
+  nEps = 0;
+  ensureTracks(nAllocated);
+  if (count > 0) applyProgress(at, at + count);
+  return 1;
+}
+
 // Reapplies progress.txt over the items in [from, to).
 //
 // Every item that enters the catalogue is born ZEROED — the network's `metas`

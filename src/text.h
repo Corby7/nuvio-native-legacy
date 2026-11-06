@@ -82,6 +82,7 @@ typedef enum {
   TXT_CWC_TITLE,     // .home-continue-title    30 / 600
   TXT_CWC_KICKER,    // .home-continue-kicker   17 / 600, uppercase, ls 0.14em
   TXT_CWC_SUB,       // .home-continue-subtitle 21 / 400
+  TXT_CWC_CODE,      // the episode line's "S2 E4", 21 / 600
   // The player's TRANSPORT ROW, re-measured in NuvioWeb on 2026-09-17 against the
   // "Transport - clock, title block, scrubber" block, which is the last one in the
   // sheet and supersedes the ATV port these styles were first taken from.
@@ -117,10 +118,7 @@ typedef enum {
   // The two jump-ahead prompts and the episode rail. Appended, same reason.
   TXT_SKIP,          // .player-skip-intro-label            28 / 500
   TXT_NEXT_KICK,     // .player-next-episode-kicker         20 / 700, uppercase
-  TXT_NEXT_TITLE,    // .player-next-episode-title          32 / 700
-  TXT_NEXT_PILL,     // .player-next-episode-play/-dismiss  22 / 500
-  TXT_NEXT_PILL_MED, // the resting Not now label           19 / 500
-  TXT_NEXT_COUNT,    // the card's "Playing in 8s"          20 / 700
+  TXT_NEXT_TITLE,    // the Up next tile's "S1 E3 · Name"   22 / 700
   TXT_ERAIL_META,    // .player-episode-detail-meta         22 / 700, uppercase
   TXT_ERAIL_TITLE,   // .player-episode-detail-title        44 / 800
   TXT_ERAIL_OVER,    // .player-episode-detail-overview     22 / 500

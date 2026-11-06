@@ -513,7 +513,7 @@ typedef enum {
   //   uPar.y = the bar's fill, 0..1
   GFX_CW_CARD = 46,
   // GFX_SEEK_BRAND — a pill like GFX_COLOR's, filled left to right with the
-  // logo's facets in turn: cyan, blue, violet, magenta. Settings > Seek bar
+  // brand ramp: cyan into blue, ending in a soft violet. Settings > Seek bar
   // colour > Nuvio.
   //
   //   uPar.x = how much of the ramp the quad shows, 0..1 from its left end. A
@@ -617,8 +617,8 @@ void gfx_crop(float x, float y, float w, float h);
 // drawn, delete the file with the call — an unreferenced PNG in this folder is
 // invisible, because gfx_icon fails silently and nothing ever reports it missing.
 //
-// "brand_lockup" and "brand_mark" also live here and do NOT go through gfx_icon
-// (see below); "imdb_logo" is fetched by path too, for the same reason.
+// "brand_lockup", "brand_mark", "intro_bands" and "intro_ground" also live here and
+// do NOT go through gfx_icon (see below; the intro's are splash.c's); "imdb_logo" is fetched by path too, for the same reason.
 //
 // "brand_mark" also lives there but does NOT go through gfx_icon: it is a colour
 // gradient, and this function's GFX_BRAND would flatten it to one tint. Fetch its

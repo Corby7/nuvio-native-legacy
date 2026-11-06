@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <pthread.h>
 #include "gfx.h"
 #include "text.h"
 #include "mark.h"
@@ -494,6 +495,42 @@ static long processAgeMs(void) {
 #endif
 }
 
+#ifndef __APPLE__
+// IS THE PANEL 4K? SDL's desktop mode says 1920x1080 on the C3's 3840x2160
+// panel (measured), so it cannot answer. The TV's system properties can:
+// getSystemInfo {"keys":["UHD"]} -> "UHD": "true". Through luna-send-pub, the
+// route video.c uses, because LS2 from this process is shut (see video.c).
+//
+// On a thread, and CACHED in ui-panel.txt: luna-send-pub waits for its reply,
+// and the window has to be sized before any reply could arrive. So this launch
+// sizes from the previous launch's answer, and the answer only ever matters
+// once the user has picked something above 1080p — by which time it is cached.
+static void *panelProbe(void *arg) {
+  char out[512]; size_t n = 0; FILE *p;
+  (void)arg;
+  out[0] = 0;
+  p = popen("/usr/bin/luna-send-pub -w 3000 -n 1 "
+            "luna://com.webos.service.tv.systemproperty/getSystemInfo "
+            "'{\"keys\":[\"UHD\"]}' 2>&1", "r");
+  if (p) { n = fread(out, 1, sizeof out - 1, p); out[n] = 0; pclose(p); }
+  if (!strstr(out, "\"returnValue\":true") && !strstr(out, "\"returnValue\": true")) {
+    printf("[ui-res] UHD probe failed: %s\n", out); fflush(stdout);
+    return NULL;
+  }
+  int h = (strstr(out, "\"UHD\":\"true\"") || strstr(out, "\"UHD\": \"true\"")) ? 2160 : 1080;
+  char buf[16];
+  snprintf(buf, sizeof buf, "%d\n", h);
+  data_write("ui-panel.txt", buf);
+  settings_ui_panel_height(h);
+  printf("[ui-res] panel %d (asked the TV)\n", h); fflush(stdout);
+  return NULL;
+}
+static void panelProbeStart(void) {
+  pthread_t t;
+  if (pthread_create(&t, NULL, panelProbe, NULL) == 0) pthread_detach(t);
+}
+#endif
+
 int main(int argc, char **argv) {
   // THE MILESTONE CLOCK STARTS HERE. It used to start after the window and the
   // GL context existed, and with the shaders cached the first frame came 90 ms
@@ -558,6 +595,11 @@ int main(int argc, char **argv) {
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) { printf("SDL_Init: %s\n", SDL_GetError()); return 1; }
   mark("SDL_Init");
+  // The data folder is chosen BEFORE the window: the UI resolution the window is
+  // sized at lives there (ui-resolution.txt). It is also before gfx_start, which
+  // keeps its compiled shader programs there (see gfx.c). data_start depends on
+  // nothing drawn.
+  data_start(dirArt);
   // THE FLAG IS ASKED FOR AND THE C3 REFUSES IT. Kept deliberately, with the
   // measurement, so nobody spends the afternoon discovering this twice.
   //
@@ -594,26 +636,40 @@ int main(int argc, char **argv) {
   SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
   Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN;
 #endif
-  // 4K IS NOT POSSIBLE ON THIS DEVICE — MEASURED, not assumed.
+  // THE UI RESOLUTION (Settings > Display), read from ui-resolution.txt, which
+  // the settings row writes. It can only apply here, before the window exists.
   //
-  // The TV is 4K, and the idea (the owner's) was to render at 3840x2160 and draw
-  // everything at double size: the text would stop being rasterised at 1080p and
-  // enlarged by the panel, which is the blur you see next to the web app.
+  // History, because the answer changed with the firmware:
+  //   - webOS 4.10: SDL_CreateWindow at 3840x2160 and appinfo "resolution":
+  //     "3840x2160" both came back as drawable=1920x1080. The compositor pinned
+  //     native apps at 1080p and ignored both, silently.
+  //   - webOS 11.2 (the C3, 2026-11-06): a 3840x2160 window got
+  //     drawable=3840x2160. The surface is whatever size the window asks for.
+  // So the window asks for the chosen size and the log line further down
+  // ("window=... drawable=...") says what the compositor actually gave. A
+  // firmware that still pins 1080p hands back 1080p and nothing else changes:
+  // surfaceBox and the text/texture scales all follow the real drawable.
   //
-  // Both routes were tried, on the TV, with the app's own frame counter writing to
-  // /tmp/nuvio-fps.txt:
-  //   1. SDL_CreateWindow with 3840x2160  -> drawable=1920x1080
-  //   2. appinfo.json "resolution": "3840x2160" -> drawable=1920x1080
-  // The webOS 4.10 compositor pins a native app's surface at 1080p and ignores
-  // both requests, silently. There is nothing to optimise here: the outcome would
-  // be the panel receiving 1080p and scaling it, which is what already happens.
-  //
-  // A baseline for future comparison, measured on this screen (home, not scrolling):
-  //   drawable=1920x1080 FPS=50.0 worst=21ms janks=0
-  //
-  // txt_start still receives the drawable's scale: on the device it is 1 and
-  // changes nothing, on the Mac (retina) it is 2 and the preview stops lying.
+  // The ceiling is the panel's own height, so a 1080p TV never gets a 4K window
+  // to downscale. SDL cannot say it (its desktop mode is 1920x1080 on the C3's
+  // 4K panel — measured), so panelProbe asks the TV and caches the answer.
   int winW = (int)NV_SCREEN_W, winH = (int)NV_SCREEN_H;
+#ifndef __APPLE__
+  {
+    int panelH = 0, want = 1080;
+    char *f = data_read("ui-panel.txt");
+    if (f) { panelH = atoi(f); free(f); }
+    f = data_read("ui-resolution.txt");
+    if (f) { want = atoi(f); free(f); }
+    if (want != 1440 && want != 2160) want = 1080;
+    if (want > panelH) want = 1080;
+    winH = want;
+    winW = want * 16 / 9;
+    if (panelH > 0) settings_ui_panel_height(panelH);
+    printf("[ui-res] panel %d (cached), asking for %dx%d\n", panelH, winW, winH);
+    panelProbeStart();
+  }
+#endif
 #ifdef __APPLE__
   // 1920x1080 is bigger than the screen it has to fit inside. SDL takes those
   // numbers as POINTS, and a 14" MacBook Pro reports 1512x982 of them — the
@@ -714,6 +770,9 @@ int main(int argc, char **argv) {
   SDL_GetWindowSize(win, &jw, &jh);
   printf("GPU: %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
   printf("window=%dx%d drawable=%dx%d\n", jw, jh, dw, dh);
+#ifndef __APPLE__
+  settings_ui_running_height(dh);
+#endif
   // Asking for SDL_GL_ALPHA_SIZE does not guarantee getting it: EGL picks the
   // closest config and may hand over 0 bits of alpha silently. With 0 here, the
   // hole in the surface is impossible and the video plane will NEVER appear,
@@ -732,9 +791,6 @@ int main(int argc, char **argv) {
 
   // BEFORE tex_start and app_start, which are what create the network threads.
   net_prepare();
-  // The data folder is chosen BEFORE gfx_start, which keeps its compiled shader
-  // programs there (see gfx.c). data_start depends on nothing drawn.
-  data_start(dirArt);
   mark("gfx_start");
   if (!gfx_start()) return 1;
   mark("gfx_start done");

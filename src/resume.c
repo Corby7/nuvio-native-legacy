@@ -70,7 +70,7 @@ int resume_bar(const CatItem *ci, GfxRect r, float *band, float *fill) {
   *band = 0.0f; *fill = 0.0f;
   // See the note on the bar at the end of resume_draw for the 2% line.
   if (!ci || ci->progress <= NV_CW_BAR_MIN_PCT || r.h <= 0.0f || r.w <= 0.0f) return 0;
-  *band = NV_CW_BAR_H * scale / r.h;
+  *band = NV_CW_FILL_H * scale / r.h;
   *fill = resume_fill(ci->imdb[0] ? ci->imdb : ci->title, ci->season, ci->episode,
                       anim_clamp(ci->progress / 100.f, 0, 1));
   min = NV_CW_BAR_MINW * scale / r.w;
@@ -78,9 +78,11 @@ int resume_bar(const CatItem *ci, GfxRect r, float *band, float *fill) {
   return 1;
 }
 
-void resume_draw(const CatItem *ci, GfxRect r, int baked) {
+void resume_draw(const CatItem *ci, GfxRect r, int baked, float focus) {
   if (!ci) return;
   float scale = r.w / NV_HIGHLIGHT_W;
+  if (focus < 0.0f) focus = 0.0f;
+  if (focus > 1.0f) focus = 1.0f;
   // The card's OWN radius, not the NV_RADIUS_CARD constant. The corner comes
   // from `posterCardCornerRadiusDp` (12dp x 2 = 24px by default) while the
   // constant is 0.055 of the height — 13px on this card. The scrim and the bar
@@ -90,62 +92,68 @@ void resume_draw(const CatItem *ci, GfxRect r, int baked) {
   // is a fraction of the height.
   float radius = r.h > 0.0f ? settings_radius_poster_px() / r.h : NV_RADIUS_CARD;
 
-  // THE SCRIM, and not a flat veil. `.home-continue-media::after` is a seven-stop
-  // ramp that is opaque at the base and gone by the top; what stood here was one
-  // GFX_VEIL at 0.85 over the WHOLE card, so the artwork was dimmed uniformly and
-  // the card read as a grey plate with a picture faintly behind it. See the note
-  // on GFX_CW_SCRIM in gfx.h for the stops.
+  // THE SCRIM, and not a flat veil. See the note on GFX_CW_SCRIM in gfx.h.
   // Over art drawn as GFX_CW_CARD it is already in the art's colour.
   if (!baked) gfx_rect(r, 0, GFX_CW_SCRIM, 0, 0, 0, radius, 0, 0, 0, 1.0f);
 
-  // THE REMAINING TIME LIVES IN THE KICKER: "S1 E5 · 22M LEFT".
+  // THE STATUS: "34M LEFT", "1H 12M LEFT" or "UP NEXT", ONLY ON THE FOCUSED
+  // CARD, as its own small label above the title.
   //
-  // The top-right corner has been drawn five ways — the port's flat dark
-  // rectangle, the web's `.home-continue-badge` glass pill, a flat pill, a frosted
-  // plate, and finally bare type on a shaded dome (GFX_CORNER_SCRIM) — and the
-  // owner turned every one down. The first four put a box on the artwork, which
-  // reads as a control; the fifth darkened a corner of the frame for one word.
-  // Side by side against a bottom-right label, a shadow-only label and no label
-  // at all, the owner picked this: the time joins the line that already labels
-  // the episode, so the card gains no element and the top of the art stays clear.
+  // On every card it made a busy row; the owner wanted it on focus only. At the
+  // end of the episode line it cut the episode's name short to make room, so it
+  // has a line of its own, which never trims anything.
   //
-  // Do not put the corner back without asking.
+  // The top-right corner has been turned down five times before (see git
+  // history): do not put a badge on the art without asking.
   //
-  // Never invent a premiere status: with no time known, no label.
+  // "UP NEXT" IS NOT A TIME. An episode nobody has opened has its whole runtime
+  // left, so "22M LEFT" there is a true number and a false sentence.
   //
-  // "NEXT UP" IS NOT A TIME, and it is the one label here that is not measured.
-  // An episode nobody has opened has its whole runtime left, so the arithmetic
-  // below would put "22m left" on a card where nothing is left of anything — the
-  // number is true and the sentence is a lie. The web says "Next Up" in that
-  // state (buildProgressStatus, homeScreen.js) and drops the clock icon with it,
-  // which is the same reasoning: it is a heading, not a measurement.
-  char left[24] = "";
-  if (ci->remainingMin > 0 || ci->progress == 0) {
+  // Never invent a status: with no time known, nothing is drawn.
+  char status[24] = "";
+  if (ci->progress == 0) snprintf(status, sizeof status, "UP NEXT");
+  else if (ci->remainingMin > 0) {
     int h = ci->remainingMin / 60, m = ci->remainingMin % 60;
-    if (ci->progress == 0) snprintf(left, sizeof left, "NEXT UP");
-    else if (h && m) snprintf(left, sizeof left, "%dH %dM LEFT", h, m);
-    else if (h) snprintf(left, sizeof left, "%dH LEFT", h);
-    else snprintf(left, sizeof left, "%dM LEFT", m);
+    if (h && m) snprintf(status, sizeof status, "%dH %dM LEFT", h, m);
+    else if (h) snprintf(status, sizeof status, "%dH LEFT", h);
+    else snprintf(status, sizeof status, "%dM LEFT", m);
   }
 
-  // THE COPY: kicker, title, subtitle — three jobs, not three grey lines.
-  //
-  // It is built BOTTOM-UP from `.home-continue-copy`'s baseline, because that is
-  // how the web anchors it: the box hangs 22px off the base and a second line of
-  // title grows UPWARD into the scrim instead of pushing the subtitle down onto
-  // the progress bar.
+  // THE COPY: the status (focused only), the title, the episode line — built
+  // BOTTOM-UP from 22px above the base, as `.home-continue-copy` anchors it, so a
+  // second line of title grows UPWARD into the scrim instead of pushing the
+  // episode line onto the bar.
   float padX  = NV_CW_COPY_X * scale;
   float width = r.w - padX * 2;
   float x     = r.x + padX;
   float base  = r.y + r.h - NV_CW_COPY_BOTTOM * scale;
 
   int series = !strcmp(ci->kind, "series") && ci->episode > 0;
-  const char *sub = series && ci->nameEpisode[0] ? ci->nameEpisode : NULL;
+  int sub = series;
 
+  // THE EPISODE LINE: "S2 E4  ·  Woe's Hollow" on ONE line — the code in bold
+  // white, the episode's name regular and dimmed after it. Picked by the owner
+  // over the code as a tracked-out kicker above the title, a single dimmed style
+  // for both, and a brighter or smaller line. The code is `formatEpisodeCode`: a
+  // space, not a colon, the episode alone when the season is not known. Only the
+  // name is ever trimmed; the code always shows whole.
   if (sub) {
+    char code[24];
+    if (ci->season > 0) snprintf(code, sizeof code, "S%d E%d", ci->season, ci->episode);
+    else                snprintf(code, sizeof code, "E%d", ci->episode);
     float box = NV_CW_SUB_LH * scale;
-    TxtLine l = txt_line_trim(TXT_CWC_SUB, sub, 255, 255, 255, 255, width);
-    txt_draw_alpha(l, x, base - box + halfLead(TXT_CWC_SUB, box), NV_CW_DIM);
+    float y = base - box + halfLead(TXT_CWC_SUB, box);
+    TxtLine lc = txt_line(TXT_CWC_CODE, code, 255, 255, 255, 255);
+    txt_draw(lc, x, y);
+    if (ci->nameEpisode[0]) {
+      char rest[160];
+      snprintf(rest, sizeof rest, "  \xC2\xB7  %s", ci->nameEpisode);
+      float room = width - (float)lc.w;
+      if (room > 0.0f) {
+        TxtLine ln = txt_line_trim(TXT_CWC_SUB, rest, 255, 255, 255, 255, room);
+        txt_draw_alpha(ln, x + (float)lc.w, y, NV_CW_DIM);
+      }
+    }
     base -= box + NV_CW_SUB_GAP * scale;
   }
 
@@ -191,11 +199,9 @@ void resume_draw(const CatItem *ci, GfxRect r, int baked) {
     }
     base -= used;
   } else {
-    // The title wraps to NV_CW_TITLE_LINES. txt_block always draws, so the height
-    // comes from a measuring pass first — txt_block_dir with a negative x breaks
-    // the same lines and returns what they use without putting them on screen. The
-    // lines it rasterises are exactly the ones the drawing pass then asks for, so
-    // the second call is a cache hit and the double pass costs two lookups.
+    // The title wraps to NV_CW_TITLE_LINES and the block grows UPWARD into the
+    // scrim. txt_block always draws, so the height comes from a measuring pass
+    // first (txt_block_dir with a negative x); the drawing pass is a cache hit.
     float lead = NV_CW_TITLE_LH * scale;
     float used = txt_block_dir(TXT_CWC_TITLE, ci->title, 255, 255, 255,
                                -1.0f, 0.0f, width, lead, 1.0f, NV_CW_TITLE_LINES);
@@ -206,55 +212,30 @@ void resume_draw(const CatItem *ci, GfxRect r, int baked) {
     base -= used;
   }
 
-  // "S1 E5", the web's `formatEpisodeCode` — a space, not a colon, and the
-  // episode alone when the season is not known. Tracked out by 0.14em, which is
-  // the whole difference between a label and a third line of text.
-  //
-  // The remaining time follows the code after a middle dot, written in capitals
-  // to match `.home-continue-kicker`'s uppercase. A movie has no code, so its
-  // kicker is the time alone.
-  if (series || left[0]) {
-    char code[48] = "";
-    if (series && ci->season > 0) snprintf(code, sizeof code, "S%d E%d", ci->season, ci->episode);
-    else if (series)              snprintf(code, sizeof code, "E%d", ci->episode);
-    if (left[0]) {
-      size_t n = strlen(code);
-      snprintf(code + n, sizeof code - n, "%s%s", n ? "  \xC2\xB7  " : "", left);
-    }
+  // THE STATUS LABEL, above the title, on the focused card only: tracked-out
+  // capitals at 17/600, dimmed, fading in with the focus. Nothing else moves when
+  // it arrives — the block is built bottom-up, so it simply takes the space
+  // above the title.
+  if (status[0] && focus > 0.01f) {
     float box = NV_CW_KICKER_LH * scale;
     base -= NV_CW_TITLE_GAP * scale;
-    txt_tracking(TXT_CWC_KICKER, code, 255, 255, 255,
+    txt_tracking(TXT_CWC_KICKER, status, 255, 255, 255,
                  x, base - box + halfLead(TXT_CWC_KICKER, box),
-                 NV_CW_DIM, NV_CW_KICKER_TRACK * scale);
+                 NV_CW_DIM * focus, NV_CW_KICKER_TRACK * scale);
   }
 
-  // THE PROGRESS BAR, full-bleed against the base — but ONLY on something that
-  // has actually been started.
+  // THE PROGRESS BAR: fill only, along the base — and ONLY on something that has
+  // actually been started.
   //
-  // This is a DELIBERATE DIVERGENCE from the web, which renders
-  // `.home-continue-progress` unconditionally: the track is a child of the media
-  // element, and its span carries `min-width: 12px`, so a next-up episode at 0%
-  // still shows an empty rail with a 12px stub lit at the left. The owner's call
-  // is that an episode nobody has opened yet must not claim a position — the
-  // stub reads as "you are 5% in" on a card where the right answer is "you have
-  // not started this".
+  // A DELIBERATE DIVERGENCE from the web, which renders `.home-continue-progress`
+  // unconditionally with a 12px stub at 0%. The owner's call is that an episode
+  // nobody has opened must not claim a position. The line is 2%, not 1: trakt.c
+  // truncates /sync/playback's float and a play pressed and thought better of
+  // arrives as 1%. detail.c's episode card draws the same line at 2.
   //
-  // So there is no track-only state: no progress, no bar at all. Do not "restore
-  // the web's behaviour" here without asking.
-  //
-  // AND THE LINE IS 2%, NOT 1. It was `progress > 0`, and the sources round the
-  // wrong way for that: trakt.c TRUNCATES /sync/playback's float and discover.c's
-  // window opens at 1, so anything from 1.0% up arrived as a started title. A
-  // fifty-minute episode is 1% thirty seconds in — a play pressed and thought
-  // better of — and because the fill is floored at NV_CW_BAR_MINW it came up as a
-  // deliberate 12px stub, which is exactly the "you are a little way in" claim the
-  // note above refuses to make for 0%. The detail screen has drawn that line at 2
-  // since it was written ("under it the episode counts as not started", detail.c's
-  // episode card, which puts a dashed not-started ring there instead), so the two
-  // screens now agree about what STARTED means.
-  //
-  // GFX_CW_BAR takes the CARD's rect so the ends round with the corner; see the
-  // note in gfx.h for why a plain rectangle cannot.
+  // Over art the bar is baked into GFX_CW_CARD. A card with no art falls back to
+  // GFX_CW_BAR, which still draws its faint track: that shader is shared with the
+  // skip button's countdown.
   { float band, fill;
     if (!baked && resume_bar(ci, r, &band, &fill))
       gfx_rect(r, 0, GFX_CW_BAR, 0, band, fill, radius, 1, 1, 1, 1.0f); }

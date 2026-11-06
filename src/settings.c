@@ -756,11 +756,20 @@ int   settings_fps_cap30(void) { return value[SETTING_FPS_CAP] == 1; }
 // THE UI RESOLUTION. The surface is sized by the platform's shell before main()
 // runs, so the choice cannot take effect in this process: it is written where
 // the shell reads it on the next launch. The shell also says how tall the panel
-// is (NUVIO_UI_MAX_HEIGHT); without it — webOS, the Mac — the surface is whatever
-// the compositor hands over, and the row stays muted.
+// is (NUVIO_UI_MAX_HEIGHT). On webOS nothing sets that: main.c asks the TV
+// whether the panel is UHD and passes the answer in through
+// settings_ui_panel_height. Without either — the Mac — the row stays muted.
+static volatile int uiPanelH;   // from settings_ui_panel_height; 0 = not known
+void settings_ui_panel_height(int h) { uiPanelH = h; }
+// The height this process is actually drawing at, and the restart question:
+// asked when focus leaves the row with a resolution other than the running one,
+// and not again for a value already answered "Later".
+static int uiRunningH, restartAsk, restartDeclined;
+void settings_ui_running_height(int h) { uiRunningH = h; }
 static int uiResMax(void) {
   const char *e = getenv("NUVIO_UI_MAX_HEIGHT");
-  return e ? atoi(e) : 0;
+  if (e) return atoi(e);
+  return uiPanelH;
 }
 static void uiResReads(void) {
   char *s = data_read("ui-resolution.txt");
@@ -1647,6 +1656,17 @@ void settings_event(const SDL_Event *e) {
   int back = k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
              k == SDLK_DELETE;
 
+  if (restartAsk) {
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+      restartAsk = 0;
+      if (update_restart()) { SDL_Event q; SDL_zero(q); q.type = SDL_QUIT; SDL_PushEvent(&q); }
+    } else if (back) {
+      restartAsk = 0;
+      restartDeclined = UI_RES_H[value[SETTING_UI_RES]];
+    }
+    return;
+  }
+
   // Level 0: the list of sections. OK or RIGHT opens one; LEFT is the way out to
   // the side menu, as on every other list with no value to step.
   if (level == 0) {
@@ -1689,8 +1709,14 @@ void settings_event(const SDL_Event *e) {
     return;
   }
 
-  // Level 1: one section's options. Back returns to the list of sections, with
-  // focus still on the section that was open.
+  // Level 1: one section's options. Leaving the UI resolution row with a new
+  // value asks to restart first: the press that would have left is spent on it.
+  if (focusOp == SETTING_UI_RES && k != SDLK_LEFT && k != SDLK_RIGHT && uiRunningH > 0) {
+    int h = UI_RES_H[value[SETTING_UI_RES]];
+    if (h != uiRunningH && h != restartDeclined) { restartAsk = 1; return; }
+  }
+  // Back returns to the list of sections, with focus still on the section that
+  // was open.
   if (back) { level = 0; return; }
   int first = SECTIONS[focusSec].start;
   int last  = first + SECTIONS[focusSec].n - 1;
@@ -2378,10 +2404,11 @@ static void drawHomeScene(Pv v, int hl) {
         pvPlate(v, x, cy, ww, h, rad, focus ? 0.32f : 0.18f, 1.0f);
         if (cw) {
           // The resume card's copy, bottom-up from 22 above its base as resume.c
-          // builds it: the episode's name (21, dimmed), the title's logo or its
-          // name (30/600), the "S1 E3" kicker (17) — then the progress bar.
+          // builds it: the episode line ("S1 E3" bold, the name dimmed), the
+          // title's logo or its name (30/600) — then the fill-only bar.
           float base = cy + h - 22.0f;
-          pvWrite(v, TXT_CWC_SUB, "Episode Name", 21.0f, 255, x + 24.0f, base - 27.0f, 0.62f);
+          pvWrite(v, TXT_CWC_CODE, "S1 E3", 21.0f, 255, x + 24.0f, base - 27.0f, 1.0f);
+          pvWrite(v, TXT_CWC_SUB, "\xC2\xB7  Episode Name", 21.0f, 255, x + 24.0f + 70.0f, base - 27.0f, 0.62f);
           base -= 30.0f;
           if (settings_cw_logo()) {
             pvWrite(v, TXT_TITLE1, "Title Logo", 44.0f, 255, x + 24.0f, base - 58.0f, 1.0f);
@@ -2390,8 +2417,7 @@ static void drawHomeScene(Pv v, int hl) {
             pvWrite(v, TXT_CWC_TITLE, "Series Title", 30.0f, 255, x + 24.0f, base - 37.0f, 1.0f);
             base -= 37.0f;
           }
-          pvWrite(v, TXT_CWC_KICKER, "S1 E3", 17.0f, 255, x + 24.0f, base - 26.0f, 0.62f);
-          pvPlate(v, x, cy + h - 6.0f, ww * 0.45f, 6.0f, 0.0f, 0.92f, 0.9f);
+          pvPlate(v, x, cy + h - NV_CW_FILL_H, ww * 0.45f, NV_CW_FILL_H, 0.0f, 0.92f, 0.9f);
         }
         // Labels are the landscape card's only: its name (22) and genre (15)
         // inside the frame, 14 in and 12 up. home.c draws none under a poster.
@@ -2523,58 +2549,30 @@ static void drawPlayerScene(Pv v, int hl) {
     gfx_icon(pvR(v, cx - 24.0f, cy - 24.0f, 48.0f, 48.0f), ICONS[i], lum, lum, lum, 0.94f);
   }
 
-  // The card, as drawNextCard builds it: the still, "UP NEXT · Playing in Ns"
-  // (the count only with autoplay on), the episode's title, the two pills — and
-  // as wide as its copy, anchored to the raised prompt corner.
+  // The tile, as drawNextCard builds it: the still in the top-right corner, below
+  // the clock (the controls are up here), "UP NEXT" over it, the episode under it
+  // and the round play button in the middle, its ring part-filled.
   if (hl == HL_NEXT) {
-    char count[32];
-    TxtLine kick, dot = { 0 }, cnt = { 0 }, code, sep, name, play, notNow;
-    float k = v.k, titleW, pillPlay, pillNot, rowW, copyW, w, h, x, y, cx, py, ph;
-    snprintf(count, sizeof count, "Playing in %ds", settings_next_countdown());
-    kick = pvLine(v, TXT_NEXT_KICK, "UP NEXT", 17.0f, 150);
-    if (settings_next_autoplay()) {
-      dot = pvLine(v, TXT_NEXT_COUNT, "\xc2\xb7", 17.0f, 82);
-      cnt = pvLine(v, TXT_NEXT_COUNT, count, 17.0f, 255);
-    }
-    code = pvLine(v, TXT_NEXT_TITLE, "S1 E4", 28.0f, 255);
-    sep  = pvLine(v, TXT_NEXT_TITLE, "\xc2\xb7", 28.0f, 150);
-    name = pvLine(v, TXT_NEXT_TITLE, "Next Episode", 28.0f, 255);
-    play = pvLine(v, TXT_NEXT_PILL, "Play now", 23.0f, 226);
-    notNow = pvLine(v, TXT_NEXT_PILL, "Not now", 23.0f, 226);
-    titleW = code.w + sep.w + name.w + 24.0f * k;
-    pillPlay = (28.0f * 2 + 18.0f * 0.6875f + 12.0f) * k + play.w;
-    pillNot = 28.0f * 2 * k + notNow.w;
-    rowW = pillPlay + 12.0f * k + pillNot;
-    copyW = titleW > rowW ? titleW : rowW;
-    w = (24.0f * 2 + 148.0f * 16.0f / 9.0f + 24.0f) * k + copyW;
-    h = (24.0f * 2 + 148.0f) * k;
-    x = v.box.x + (NV_SCREEN_W - 64.0f) * k - w;
-    y = v.box.y + (NV_SCREEN_H - 236.0f) * k - h;
-    nextR = (GfxRect){ (x - v.box.x) / k, (y - v.box.y) / k, w / k, h / k };
-    pvPlate(v, nextR.x, nextR.y, nextR.w, nextR.h, 20.0f, 0.043f, 0.97f);
-    pvPlate(v, nextR.x + 24.0f, nextR.y + 24.0f, 148.0f * 16.0f / 9.0f, 148.0f, 12.0f, 0.28f, 1.0f);
-    cx = x + (24.0f + 148.0f * 16.0f / 9.0f + 24.0f) * k;
-    y += 24.0f * k;
-    txt_draw(kick, cx, y);
-    if (cnt.tex) {
-      txt_draw(dot, cx + kick.w + 6.0f * k, y);
-      txt_draw(cnt, cx + kick.w + (16.0f) * k + dot.w, y);
-    }
-    txt_draw(code, cx, y + 28.0f * k);
-    txt_draw(sep, cx + code.w + 12.0f * k, y + 28.0f * k);
-    txt_draw(name, cx + code.w + sep.w + 24.0f * k, y + 28.0f * k);
-    ph = 56.0f * k;
-    py = y + (148.0f - 56.0f) * k;
-    { GfxRect p1 = { cx, py, pillPlay, ph }, p2 = { cx + pillPlay + 12.0f * k, py, pillNot, ph };
-      float ib = 18.0f * k;
-      gfx_color(p1, 0.5f, 0.110f, 0.114f, 0.129f, 1.0f);
-      gfx_color(p2, 0.5f, 0.110f, 0.114f, 0.129f, 1.0f);
-      gfx_rect(p1, 0, GFX_RING_INSET, 0, 1.5f / ph, 0, 0.5f, 0.227f, 0.235f, 0.259f, 1.0f);
-      gfx_rect(p2, 0, GFX_RING_INSET, 0, 1.5f / ph, 0, 0.5f, 0.227f, 0.235f, 0.259f, 1.0f);
-      gfx_icon((GfxRect){ p1.x + 28.0f * k - ib * 0.25f, py + (ph - ib) * 0.5f, ib, ib },
-               "play", 0.886f, 0.886f, 0.886f, 1.0f);
-      txt_draw(play, p1.x + (28.0f + 18.0f * 0.6875f + 12.0f) * k, py + (ph - play.h) * 0.5f);
-      txt_draw(notNow, p2.x + 28.0f * k, py + (ph - notNow.h) * 0.5f); }
+    float tw = NV_NEXT_TILE_W, th = NV_NEXT_TILE_H, k = v.k, d = NV_NEXT_BTN;
+    float tx = NV_SCREEN_W - NV_PJ_RIGHT - tw, ty = NV_NEXT_TOP_UP;
+    TxtLine code = pvLine(v, TXT_NEXT_TITLE, "S1 E4 \xc2\xb7 Next Episode", NV_FT_NEXT_TITLE, 255);
+    GfxRect btn;
+    nextR = (GfxRect){ tx, ty, tw, th };
+    pvPlate(v, tx, ty, tw, th, NV_NEXT_TILE_R, 0.28f, 1.0f);
+    pvWrite(v, TXT_NEXT_KICK, "UP NEXT", NV_FT_NEXT_KICK, 214,
+            tx + NV_NEXT_INSET, ty + NV_NEXT_KICK_Y, 1.0f);
+    { GfxRect at = pvR(v, tx + NV_NEXT_INSET, ty + th - NV_NEXT_TITLE_B, 0, 0);
+      txt_draw(code, at.x, at.y - code.h); }
+    btn = pvR(v, tx + (tw - d) * 0.5f, ty + (th - d) * 0.5f, d, d);
+    gfx_color(btn, 0.5f, 1, 1, 1, 0.22f);
+    gfx_rect(btn, 0, GFX_RING_FILL, 0.125f, settings_next_autoplay() ? 0.45f : 0.7f, 0, 0.5f,
+             0.961f, 0.961f, 0.961f, settings_next_autoplay() ? 1.0f : 0.75f);
+    { float r = NV_NEXT_BTN_RING * k, ib = NV_NEXT_PLAY_BOX * k;
+      gfx_color((GfxRect){ btn.x + r, btn.y + r, btn.w - r * 2, btn.h - r * 2 }, 0.5f,
+                0.06f, 0.06f, 0.07f, 0.92f);
+      gfx_icon((GfxRect){ btn.x + btn.w * 0.5f - ib * NV_NEXT_PLAY_INK_C,
+                          btn.y + btn.h * 0.5f - ib * 0.5f, ib, ib },
+               "play", 1, 1, 1, 1.0f); }
   }
 
   switch (hl) {
@@ -3163,6 +3161,24 @@ static void clickBox(int ok, int unused) {
   sendKey(ok ? SDLK_RETURN : SDLK_ESCAPE);
 }
 
+static void drawRestartBox(void) {
+  GfxRect screen = { 0, 0, NV_SCREEN_W, NV_SCREEN_H };
+  GfxRect card = { (NV_SCREEN_W - 1000.0f) * 0.5f, 340.0f, 1000.0f, 360.0f };
+  float x = card.x + 72.0f, w = card.w - 144.0f, y = card.y + 64.0f;
+  char t[96];
+  if (!restartAsk) return;
+  gfx_color(screen, 0.0f, 0.0f, 0.0f, 0.0f, 0.92f);
+  gfx_color(card, 0.045f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
+  pointer_zone_click(0, 0, NV_SCREEN_W, NV_SCREEN_H, clickBox, 0, 0);
+  pointer_zone_click(card.x, card.y, card.w, card.h, clickBox, 1, 0);
+  snprintf(t, sizeof t, "Restart Nuvio for %s?", V_UI_RES[value[SETTING_UI_RES]]);
+  y += txt_block(TXT_TITLE3, t, 255, 255, 255, x, y, w, 64, 1, 1) + 24.0f;
+  txt_block(TXT_BODY, "The UI resolution changes when Nuvio starts. It closes and opens again on its own.",
+            196, 198, 206, x, y, w, 44, 1, 3);
+  TxtLine l = txt_line(TXT_CALLOUT, "OK  Restart        Back  Later", 150, 152, 158, 255);
+  txt_draw(l, x, card.y + card.h - 56.0f - l.h);
+}
+
 static void drawUpdateBox(void) {
   UpdateInstallState st = update_install_state();
   const UpdateRelease *r = update_item(relFocus);
@@ -3330,6 +3346,7 @@ void settings_draw(Uint32 now) {
 
   if (hw > 240.0f) drawPanel(hx, hw);
   if (level == LEVEL_UPDATES) drawUpdateBox();
+  drawRestartBox();
 
   // Above everything: while a link is in progress, it is the screen's question.
   { TraState ta = traktauth_state();

@@ -231,6 +231,14 @@ int  disc_row_ended(const char *key);
 // how many items went in. Called once a frame by the home.
 int  disc_row_collect(void);
 
+// "Continue watching" ahead of the rest of the home (see the note in discover.c).
+// disc_cw_collect: ON THE DRAWING THREAD, every frame — splices the newest row
+// into the home on screen when one is owed; 1 when it did. disc_cw_refresh:
+// builds the row again on a thread of its own, without rebuilding the home —
+// for when the account's progress lands after the home was built.
+int  disc_cw_collect(void);
+void disc_cw_refresh(void);
+
 // --- SEE ALL: a whole catalogue, in pages ------------------------------------
 //
 // The home shows 12 items per row (MAX_PER_ROW). The catalogue has more, and the

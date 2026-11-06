@@ -418,7 +418,7 @@ static void psLayout(PsLayout *L, int n) {
 }
 
 // The brand lockup: `.profile-logo` is 380x88 with `object-fit: contain`, and
-// the art is 1085x344, so what is actually on screen is 277.6x88 centred in that
+// the art is 1149x378, so what is actually on screen is 267.5x88 centred in that
 // box. The file is the web app's own asset, drawn through GFX_TEXT — the play
 // mark is a colour gradient and gfx_icon's GFX_BRAND would flatten it to one
 // tint, the trap gfx.h records for brand_mark.

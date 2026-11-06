@@ -548,7 +548,7 @@ void listadd_draw(Uint32 now) {
   (void)now;
   if (!isOpen) return;
   gfx_opacity_group = base * anim_smooth(shown);
-  gfx_color((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, 0.0f, 0.051f, 0.051f, 0.051f, 1.0f);
+  gfx_color((GfxRect){ 0, 0, NV_SCREEN_W, NV_SCREEN_H }, 0.0f, NV_COLOR_BACKGROUND_R, NV_COLOR_BACKGROUND_G, NV_COLOR_BACKGROUND_B, 1.0f);
   // The page title as Search and Library set theirs: 48/600, 1px letter-spacing.
   txt_tracking(TXT_TITLE3, "Add lists", 255, 255, 255, settings_content_x(), NV_SEARCH_TOP,
                1.0f, NV_SEARCH_TITLE_LS);

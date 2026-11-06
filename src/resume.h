@@ -6,7 +6,8 @@
 // Content over the cover art; the home stays responsible for the image and focus.
 // `baked`: the art was drawn as GFX_CW_CARD, which already carries the scrim
 // and the progress bar (resume_bar), so neither is drawn again here.
-void resume_draw(const CatItem *item, GfxRect card, int baked);
+// `focus` is the card's focus amount, 0..1: the status fades in with it.
+void resume_draw(const CatItem *item, GfxRect card, int baked, float focus);
 
 // The progress bar for GFX_CW_CARD: its height as a fraction of the card's and
 // its fill, or 0 with *band = 0 when the title has no bar.
