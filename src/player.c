@@ -706,10 +706,13 @@ static void fraseFirst(char *dst, size_t n, const char *src, size_t maxBytes) {
 // glReadPixels does not see it. And it was that blindness that let the mistake
 // through — the log said success, the capture was black either way, and only someone
 // looking at the TV saw. Checking zoom means looking at the device.
+enum { NOTE_GOOD, NOTE_WARN, NOTE_ERROR, NOTE_BUSY, NOTE_MODE };  // drawNotice
 static int    aspect = PLR_ASPECT_ORIGINAL;
 static Uint32 toastAte = 0;      // until when the mode notice stays up
 static char   toastText[96];     // its text when it is not the aspect mode's
-static int    toastGood;         // its dot: 1 green, 0 amber
+static int    toastKind;         // NOTE_*: what its ring says (drawNotice)
+static const char *toastIcon = "notice_check";
+static Uint32 toastFrom;         // when it came up, for its entrance
 static char   dirPrefs[512];
 
 // Short labels for the on-screen notice. The web app's are "Fit (Original)",
@@ -945,24 +948,126 @@ void player_aspect_set(int mode) {
 
 void player_aspect_cycle(void) {
   player_aspect_set((aspect + 1) % PLR_ASPECT_N);
+  // A press while the mode notice is still up changes the word, not the plate:
+  // no second entrance.
+  if (toastAte <= SDL_GetTicks() || toastText[0]) toastFrom = SDL_GetTicks();
   toastText[0] = 0;
   toastAte = SDL_GetTicks() + PLR_TOAST_MS;
 }
 
 // Twice the aspect notice's time: that one confirms a key just pressed, this one
 // announces something nobody asked for, and has to be read from the sofa.
-void player_toast(const char *text, int good) {
+static void toastSet(const char *text, const char *icon, int kind, Uint32 ms) {
+  Uint32 now = SDL_GetTicks();
+  // Replacing a notice still on screen keeps its plate where it is: only a notice
+  // arriving on an empty top edge drops in.
+  if (toastAte <= now) toastFrom = now;
   snprintf(toastText, sizeof toastText, "%s", text ? text : "");
-  toastGood = good;
-  toastAte = SDL_GetTicks() + 2 * PLR_TOAST_MS;
+  toastIcon = icon;
+  toastKind = kind;
+  toastAte = now + ms;
+}
+
+void player_toast(const char *text, int good) {
+  toastSet(text, good ? "notice_check" : "notice_alert", good ? NOTE_GOOD : NOTE_WARN,
+           2 * PLR_TOAST_MS);
 }
 
 // A hint to read rather than a confirmation to glance at: the toast's place, held
 // long enough to read from the sofa.
 #define PLR_HINT_MS 6000u
-static void hint(const char *text) {
-  player_toast(text, 0);
-  toastAte = SDL_GetTicks() + PLR_HINT_MS;
+static void hint(const char *text, const char *icon, int kind) {
+  toastSet(text, icon, kind, PLR_HINT_MS);
+}
+
+// THE NOTICE: a compact pill at the top centre, led by a round badge drawn as the
+// hold ring — the logo's loop of colours, lifted towards white (GFX_RING_INSET_FILL
+// with its brand flag) — with a glyph inside. It replaces a navy pill with a
+// traffic-light dot, a tint and three colours that appeared nowhere else in the app.
+//   NOTE_GOOD, NOTE_MODE  the full brand ring
+//   NOTE_BUSY             a dim track with a brand-coloured arc running round it,
+//                         the seek spinner's run of dots at badge size
+//   NOTE_WARN, NOTE_ERROR the ring and glyph solid amber / red: the only places
+//                         a notice uses a colour that is not the logo's
+// The text is split at its first " · ": what happened in white, the detail after it
+// in grey. NOTE_MODE (the aspect key) is the same shape a size up, lower down.
+// `a` is the caller's fade; `from` is when it came up, for the drop-in.
+#define PLR_NOTE_TOP       52.0f
+#define PLR_NOTE_TOP_MODE 150.0f
+#define PLR_NOTE_DROP      14.0f    // px it drops in from
+#define PLR_NOTE_IN_MS    320.0f
+#define PLR_NOTE_SPIN_MS  1000.0f   // ms per turn of the busy arc
+#define PLR_NOTE_ARC       4.2f     // radians, the busy arc's length
+static void drawNotice(const char *text, const char *icon, int kind, float a,
+                       Uint32 from, Uint32 now) {
+  char head[160];
+  const char *tail = NULL, *sep;
+  int mode = kind == NOTE_MODE;
+  float d = mode ? 88.0f : 64.0f, pad = mode ? 16.0f : 12.0f, padR = mode ? 56.0f : 40.0f;
+  float gap = 20.0f, tgap = 14.0f, ring = mode ? 5.0f : 4.0f;
+  float el = (float)(Uint32)(now - from), u, in, pw, ph, tx;
+  float ir = 0.96f, ig = 0.96f, ib = 0.96f;
+  TxtLine t, s = { 0, 0, 0 };
+  GfxRect pill, badge;
+  if (!text || !*text) return;
+  u = anim_clamp(el / PLR_NOTE_IN_MS, 0.0f, 1.0f);
+  in = 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u);
+  a *= anim_clamp(el / 200.0f, 0.0f, 1.0f);
+  if (a <= 0.005f) return;
+
+  sep = mode ? NULL : strstr(text, "\xC2\xB7");
+  if (sep) {
+    size_t n = (size_t)(sep - text);
+    while (n && text[n - 1] == ' ') n--;
+    if (n >= sizeof head) n = sizeof head - 1;
+    memcpy(head, text, n); head[n] = 0;
+    tail = sep + 2;
+    while (*tail == ' ') tail++;
+    if (!*tail) tail = NULL;
+  } else snprintf(head, sizeof head, "%s", text);
+
+  t = txt_line_trim(mode ? TXT_PLR_TITLE : TXT_TRK_OPT, head, 245, 245, 245, 255, 1100);
+  if (tail) s = txt_line_trim(TXT_PLR_ENDS, tail, 156, 156, 163, 255, 1400.0f - (float)t.w);
+  pw = pad + d + gap + (float)t.w + (tail ? tgap + (float)s.w : 0.0f) + padR;
+  ph = d + pad * 2.0f;
+  pill = (GfxRect){ (NV_SCREEN_W - pw) * 0.5f,
+                    (mode ? PLR_NOTE_TOP_MODE : PLR_NOTE_TOP) - PLR_NOTE_DROP * (1.0f - in),
+                    pw, ph };
+  gfx_drop_shadow(pill, ph * 0.5f, 28.0f, 10.0f, 0.45f * a);
+  gfx_color(pill, 0.5f, 20 / 255.0f, 20 / 255.0f, 22 / 255.0f, 0.94f * a);
+  gfx_rect(pill, 0, GFX_RING_INSET, 0, 1.5f / ph, 0, 0.5f, 1, 1, 1, 0.07f * a);
+
+  badge = (GfxRect){ pill.x + pad, pill.y + pad, d, d };
+  gfx_color(badge, 0.5f, 0.11f, 0.11f, 0.12f, a);
+  if (kind == NOTE_WARN || kind == NOTE_ERROR) {
+    if (kind == NOTE_WARN) { ir = 1.0f; ig = 0.71f; ib = 0.28f; }
+    else                   { ir = 1.0f; ig = 0.48f; ib = 0.42f; }
+    gfx_rect(badge, 0, GFX_RING_INSET, 0, ring / d, 0, 0.5f, ir, ig, ib, a);
+  } else if (kind == NOTE_BUSY) {
+    float cx = badge.x + d * 0.5f, cy = badge.y + d * 0.5f, rr = d * 0.5f - ring * 0.5f;
+    float head0 = (float)(now % (Uint32)PLR_NOTE_SPIN_MS) * (6.2831853f / PLR_NOTE_SPIN_MS);
+    int k, n = (int)(PLR_NOTE_ARC * rr / 1.4f);
+    gfx_rect(badge, 0, GFX_RING_INSET, 0, ring / d, 0, 0.5f, 1, 1, 1, 0.12f * a);
+    for (k = 0; k <= n; k++) {
+      float f = (float)k / (float)n, ang = head0 - PLR_NOTE_ARC * f, cr, cg, cb;
+      // The ramp from the head back, lifted 40% towards white like the hold ring's
+      // loop, and the tail thinning out so the arc has a direction.
+      gfx_seek_brand_at(1.0f - f, &cr, &cg, &cb);
+      cr += (1.0f - cr) * 0.4f; cg += (1.0f - cg) * 0.4f; cb += (1.0f - cb) * 0.4f;
+      gfx_color((GfxRect){ cx + cosf(ang) * rr - ring * 0.5f, cy + sinf(ang) * rr - ring * 0.5f,
+                           ring, ring }, 0.5f, cr, cg, cb, a * (1.0f - 0.75f * f));
+    }
+  } else {
+    gfx_rect(badge, 0, GFX_RING_INSET_FILL, 1.0f, 1.0f, ring / d, 0.5f, 1, 1, 1, a);
+  }
+  { float is = d * 0.44f;
+    gfx_icon((GfxRect){ badge.x + (d - is) * 0.5f, badge.y + (d - is) * 0.5f, is, is },
+             icon, ir, ig, ib, a); }
+
+  tx = badge.x + d + gap;
+  txt_draw_alpha(t, tx, pill.y + (ph - (float)t.h) * 0.5f, a);
+  if (tail)
+    txt_draw_alpha(s, tx + (float)t.w + tgap, pill.y + (ph - (float)s.h) * 0.5f, a);
 }
 
 static void openSession(int indexCatalog, const char *url) {
@@ -1903,7 +2008,7 @@ void player_update(float dt, Uint32 now) {
       if (video_net_retrying()) {
         snprintf(r, sizeof r, "connection dropped, reconnecting (pipeline error: %s)", e);
         reportFailure(startImage ? "playback" : "load", r, 0);
-        if (!netSaid) { netSaid = 1; hint("Connection dropped \xC2\xB7 reconnecting"); }
+        if (!netSaid) { netSaid = 1; hint("Connection dropped \xC2\xB7 Reconnecting", "notice_wifi_off", NOTE_BUSY); }
       } else player_report_failure(startImage ? "playback" : "load", r);
     }
     { int sc = video_stall_count();
@@ -1922,8 +2027,9 @@ void player_update(float dt, Uint32 now) {
           const Stream *st = (stream_n() > 0 && !trailerMode) ? stream_item(stream_current()) : NULL;
           int uhd = st && (strstr(st->res, "4K") || strstr(st->res, "2160"));
           slowHintAt = now;
-          hint(uhd ? "Your connection can't keep up \xC2\xB7 a 1080p source plays smoother"
-                   : "Your connection can't keep up with this source");
+          hint(uhd ? "Your connection can't keep up \xC2\xB7 A 1080p source plays smoother"
+                   : "Your connection can't keep up with this source",
+               "notice_wifi", NOTE_WARN);
           printf("[player] slow-connection hint (%s, %d stall%s)\n", lasting ? "a long stall" : "stalls close together",
                  sc, sc == 1 ? "" : "s");
           fflush(stdout);
@@ -3258,90 +3364,36 @@ static void drawPlayer(Uint32 now) {
     txt_draw_alpha(aj,(NV_SCREEN_W-aj.w)*.5f,448,entry);
   }
 
-  // --- the aspect-mode change notice ---------------------------------------
-  // The web app's #playerAspectToast, with the measurements of the CSS's TV block:
-  //   top min(8.33vw,160px)=160  height min(6.67vw,128px)=128
-  //   side padding min(3.33vw,64px)=64  font min(2.92vw,56px)=56
-  //   background rgba(9,13,20,0.88), border rgba(255,255,255,0.18), radius 999 (a pill)
-  // It is drawn BEFORE the cut by `a`: the aspect key works with the controls hidden,
-  // and a notice that only appeared with the bar up would leave the change with no
-  // confirmation at all in the most common case.
-  if (toastAte > now) {
-    // It fades out over the last 200ms, which is the TV block's
-    // `transition: opacity 200ms`. Appearing and disappearing instantly reads as a
-    // drawing fault.
-    float remains = (float)(toastAte - now);
-    float at = (remains < 200.0f ? remains / 200.0f : 1.0f) * entry;
-    if (toastText[0]) {
-      // Not a mode change but a report, so the failure notice's size and place:
-      // it takes over from the "Syncing subtitles" pill without jumping.
-      TxtLine l = txt_line_trim(TXT_PLR_STAT, toastText, 255, 255, 255, 255, 1100);
-      float dot = 12.0f, padX = 28.0f, gap = 14.0f;
-      float pw = padX * 2.0f + dot + gap + (float)l.w, ph = (float)l.h + 28.0f;
-      GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 48.0f, pw, ph };
-      gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.90f * at);
-      if (toastGood)
-        gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
-                  90 / 255.0f, 200 / 255.0f, 120 / 255.0f, at);
-      else
-        gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
-                  240 / 255.0f, 160 / 255.0f, 60 / 255.0f, at);
-      txt_draw_alpha(l, pil.x + padX + dot + gap, pil.y + (ph - (float)l.h) * 0.5f, at);
-    } else {
-      TxtLine l = txt_line(TXT_PLR_TITLE, player_aspect_label(aspect),
-                             243, 248, 255, 242);
-      float pw = (float)l.w + 128.0f, ph = 128.0f;
-      GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 160.0f, pw, ph };
-      // The radius is a FRACTION of the smaller side (see gfx.h): 0.5 is the full pill.
-      gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.88f * at);
-      txt_draw_alpha(l, pil.x + (pw - l.w) * 0.5f,
-                         pil.y + (ph - (float)l.h) * 0.5f, at);
-    }
-  }
-
-  // --- the FAILURE NOTICE ----------------------------------------------------
-  // A pill at the top centre, the aspect notice's plate at a quieter size, with
-  // an amber dot so it reads as a report and not as a mode change. It is drawn
-  // outside the controls' alpha for the same reason as that notice: most
-  // failures happen with the controls hidden, and a notice tied to them would
-  // be missed exactly when it matters. It only says THAT something was logged
-  // and the short reason — the full record is in the log.
-  // --- AUTOSYNC AT WORK ------------------------------------------------------
-  // The failure notice's pill, with a slow pulsing blue dot instead of the amber
-  // one: something is under way, nothing is wrong. It gives way to any other
-  // notice, and AutoSync's own result replaces it as a toast.
-  { static Uint32 syncSince;
+  // --- THE NOTICES ------------------------------------------------------------
+  // All of them in one shape (drawNotice): the aspect mode, the hints and toasts,
+  // AutoSync at work and the failure notice. They are drawn BEFORE the cut by `a`:
+  // the aspect key works with the controls hidden, and most failures happen with
+  // them hidden too — a notice tied to the bar would be missed exactly when it
+  // matters. One at a time, in this order of precedence: a toast, the failure
+  // notice, AutoSync at work.
+  { int failUp = failNoticeAt && now - failNoticeAt < PLR_FAIL_NOTICE_MS;
+    static Uint32 syncSince;
     const char *st = autosync_status();
-    if (!st || toastAte > now || (failNoticeAt && now - failNoticeAt < PLR_FAIL_NOTICE_MS)) {
-      if (!st) syncSince = 0;
-    } else {
-      float na, pulse;
-      TxtLine l = txt_line(TXT_PLR_STAT, st, 255, 255, 255, 255);
-      float dot = 12.0f, padX = 28.0f, gap = 14.0f;
-      float pw = padX * 2.0f + dot + gap + (float)l.w, ph = (float)l.h + 28.0f;
-      GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 48.0f, pw, ph };
+    if (!st) syncSince = 0;
+    if (toastAte > now) {
+      // It fades out over the last 200ms: appearing and disappearing instantly
+      // reads as a drawing fault.
+      float remains = (float)(toastAte - now);
+      float at = (remains < 200.0f ? remains / 200.0f : 1.0f) * entry;
+      if (toastText[0])
+        drawNotice(toastText, toastIcon, toastKind, at, toastFrom, now);
+      else
+        drawNotice(player_aspect_label(aspect), "aspect", NOTE_MODE, at, toastFrom, now);
+    } else if (failUp) {
+      float rest = (float)PLR_FAIL_NOTICE_MS - (float)(now - failNoticeAt);
+      drawNotice(failNotice, "notice_alert", NOTE_ERROR,
+                 anim_clamp(rest / 300.0f, 0.0f, 1.0f) * entry, failNoticeAt, now);
+    } else if (st) {
+      // Something under way, nothing wrong: the ring turns. AutoSync's own result
+      // replaces it as a toast.
       if (!syncSince) syncSince = now;
-      na = anim_clamp((float)(now - syncSince) / 200.0f, 0.0f, 1.0f) * entry;
-      pulse = 0.45f + 0.55f * (0.5f + 0.5f * sinf((float)(now - syncSince) * 0.005f));
-      gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.90f * na);
-      gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
-                110 / 255.0f, 170 / 255.0f, 255 / 255.0f, na * pulse);
-      txt_draw_alpha(l, pil.x + padX + dot + gap, pil.y + (ph - (float)l.h) * 0.5f, na);
+      drawNotice(st, "subtitles", NOTE_BUSY, entry, syncSince, now);
     }
-  }
-
-  if (failNoticeAt && now - failNoticeAt < PLR_FAIL_NOTICE_MS) {
-    float el = (float)(now - failNoticeAt), rest = (float)PLR_FAIL_NOTICE_MS - el;
-    float na = anim_clamp(el / 200.0f, 0.0f, 1.0f) * anim_clamp(rest / 300.0f, 0.0f, 1.0f)
-             * entry;
-    TxtLine l = txt_line_trim(TXT_PLR_STAT, failNotice, 255, 255, 255, 255, 1100);
-    float dot = 12.0f, padX = 28.0f, gap = 14.0f;
-    float pw = padX * 2.0f + dot + gap + (float)l.w, ph = (float)l.h + 28.0f;
-    GfxRect pil = { (NV_SCREEN_W - pw) * 0.5f, 48.0f, pw, ph };
-    gfx_color(pil, 0.5f, 9.0f / 255.0f, 13.0f / 255.0f, 20.0f / 255.0f, 0.90f * na);
-    gfx_color((GfxRect){ pil.x + padX, pil.y + (ph - dot) * 0.5f, dot, dot }, 0.5f,
-              240 / 255.0f, 160 / 255.0f, 60 / 255.0f, na);
-    txt_draw_alpha(l, pil.x + padX + dot + gap, pil.y + (ph - (float)l.h) * 0.5f, na);
   }
 
   /* They stay when the controls disappear: they are content, not player chrome. */

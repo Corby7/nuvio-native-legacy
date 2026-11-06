@@ -1,0 +1,3 @@
+<!-- A player notice glyph (player.c, drawNotice), in the ring badge. Phosphor BOLD
+     weight like the transport row. THE ALPHA IS THE GLYPH. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" stroke="#ffffff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"><path d="M48 136L104 192L216 72"/></svg>
