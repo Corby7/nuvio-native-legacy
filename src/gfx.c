@@ -550,6 +550,15 @@ static const char *FS_BODY[GFX_NMODES] = {
   // coverage (65% of the width instead of 45%) and the depth. That makes sense:
   // with the art filling the whole screen, the text needs more dark ground under it.
   //
+  // THE VERTICAL RAMP IS NO LONGER THE WEB'S, deliberately (option 7 of the
+  // "Continue watching over the hero" sheet, picked by the owner 2026-11-06). The
+  // web's opened at 64% (y 691), which left the top 76px of the first row's cards
+  // (y 615) on untouched art: on a bright backdrop their top edges dissolved into
+  // the picture while their scrims read as slabs. It now lays a BED under the row:
+  // nothing above y 500, 0.42 at the row's title (590), 0.62 at 680, 0.80 at 808,
+  // 0.93 at 920, solid by 1010 — the art stays as texture behind the shelf.
+  // GFX_HERO_VEIL's avF carries the same stops for the trailer.
+  //
   // EXCEPT THE LAST PIECE, which EASES OUT instead of running straight. Here the art
   // reaches down behind the first row of cards, and a linear ramp arriving at solid
   // on a slope leaves a line where it lands: the picture visibly stopped at the
@@ -559,10 +568,12 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  vec3 c = texture2D(uTex, clamp(cover(vUv), 0.0, 1.0)).rgb;\n"
   "  vec3 bg = " NV_COLOR_BACKGROUND_GLSL ";\n"
   "  float y = vUv.y;\n"
-  "  float uz = 1.0 - clamp((y-0.856)/0.144,0.0,1.0);\n"
-  "  float av = clamp((y-0.640)/0.108,0.0,1.0)*0.35\n"
-  "           + clamp((y-0.748)/0.108,0.0,1.0)*0.40\n"
-  "           + (1.0 - uz*uz)*0.25;\n"
+  "  float uz = 1.0 - clamp((y-0.852)/0.083,0.0,1.0);\n"
+  "  float av = clamp((y-0.463)/0.083,0.0,1.0)*0.42\n"
+  "           + clamp((y-0.546)/0.084,0.0,1.0)*0.20\n"
+  "           + clamp((y-0.630)/0.118,0.0,1.0)*0.18\n"
+  "           + clamp((y-0.748)/0.104,0.0,1.0)*0.13\n"
+  "           + (1.0 - uz*uz)*0.07;\n"
   "  float t = vUv.x/0.65;\n"
   "  float ah = 1.0 - clamp(t/0.22,0.0,1.0)*0.10\n"
   "                 - clamp((t-0.22)/0.24,0.0,1.0)*0.10\n"
@@ -1344,10 +1355,12 @@ static const char *FS_BODY[GFX_NMODES] = {
   "  float avB = clamp((y-0.820)/0.072,0.0,1.0)*0.25\n"
   "            + clamp((y-0.892)/0.063,0.0,1.0)*0.40\n"
   "            + clamp((y-0.955)/0.045,0.0,1.0)*0.35;\n"
-  "  float uzF = 1.0 - clamp((y-0.856)/0.144,0.0,1.0);\n"
-  "  float avF = clamp((y-0.640)/0.108,0.0,1.0)*0.35\n"
-  "            + clamp((y-0.748)/0.108,0.0,1.0)*0.40\n"
-  "            + (1.0 - uzF*uzF)*0.25;\n"
+  "  float uzF = 1.0 - clamp((y-0.852)/0.083,0.0,1.0);\n"
+  "  float avF = clamp((y-0.463)/0.083,0.0,1.0)*0.42\n"
+  "            + clamp((y-0.546)/0.084,0.0,1.0)*0.20\n"
+  "            + clamp((y-0.630)/0.118,0.0,1.0)*0.18\n"
+  "            + clamp((y-0.748)/0.104,0.0,1.0)*0.13\n"
+  "            + (1.0 - uzF*uzF)*0.07;\n"
   "  float s = clamp(uPar.y, 0.05, 0.98), d = 1.0 - s;\n"
   "  float avT = clamp((y-s)/(d*0.34),0.0,1.0)*0.30\n"
   "            + clamp((y-(s+d*0.34))/(d*0.30),0.0,1.0)*0.40\n"

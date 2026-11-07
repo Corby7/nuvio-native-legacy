@@ -88,6 +88,9 @@ static float anim;
 static float openP, closeP, closeFrom, openMs;
 static int wasOpen;
 static int   operation, intent, stateOperation;
+// A watched mark that landed, for Continue watching: the title and which way.
+static char  cwOwed[24];
+static int   cwOwedMark;
 static int   mirrorApplied;
 static char  operationImdb[16];
 static volatile int holdActive, holdCancelled, holdReady;
@@ -143,7 +146,7 @@ static char customTitle[160], customMeta[160];
 static char customLabel[CTX_MAX][64], customHint[CTX_MAX][32];
 static int customId[CTX_MAX];
 enum { OP_DETAILS, OP_LIST, OP_WATCHED, OP_SEEALL, OP_RESUME, OP_START_OVER,
-       OP_REMOVE_CW, OP_ROW_STYLE };
+       OP_REMOVE_CW, OP_ROW_STYLE, OP_EP_WATCHED };
 
 // IN PROGRESS by the player's own measure: player_set_episode resumes only between
 // 1% and 90%, so outside that window "Resume" would be a lie.
@@ -210,17 +213,28 @@ static void build(void) {
   }
   // The web app only offers "watched" on films and series — not on channels or
   // events, which are types the owner's addons also declare.
+  // THE EPISODE ON THE CARD, in Continue watching: seen elsewhere, or not worth
+  // finishing — the card moves on to the next one. The option below it marks the
+  // whole series, and says so when both are here.
+  { int epCard = row.continueRow && !strcmp(ci->kind, "series") &&
+                 ci->season > 0 && ci->episode > 0;
+    if (epCard) {
+      static char epHint[24];
+      snprintf(epHint, sizeof epHint, "S%d E%d", ci->season, ci->episode);
+      addOp("Mark episode as watched", "ctx_check", OP_EP_WATCHED);
+      ops[nOps - 1].hint = epHint;
+    }
   if (ci->imdb[0] && (!strcmp(ci->kind, "movie") || !strcmp(ci->kind, "series"))) {
     if (stateOperation == CTX_PENDING && operation == CTX_OP_HISTORY)
       ops[nOps].rot = intent ? "Marking as watched..."
                                : "Unmarking as watched...";
     else
       ops[nOps].rot = cat_history_state_item(i) == 1
-                        ? "Unmark as watched"
-                        : "Mark as watched";
+                        ? (epCard ? "Unmark series as watched" : "Unmark as watched")
+                        : (epCard ? "Mark series as watched" : "Mark as watched");
     ops[nOps].icon = cat_history_state_item(i) == 1 ? "ctx_x" : "ctx_check";
     ops[nOps].action = OP_WATCHED; nOps++;
-  }
+  } }
   // THE ROW, LAST. It is the only option here that does not act on the title in
   // the header, so it goes below the three that do rather than between them.
   //
@@ -392,6 +406,8 @@ static void apply(void) {
     // The menu closes at once and hands the wait to the card: its ring circles
     // until the remote deletes answer, and then it leaves the row (cwremove.h).
     case OP_REMOVE_CW:   cw_remove(current); break;
+    // Local and at once; the menu closes and the card moves on (cwremove.h).
+    case OP_EP_WATCHED:  cw_episode_watched(current); break;
     case OP_LIST:
       // Capture the intent BEFORE any write. The same value goes on to the
       // POST and only reaches the local mirror after a 2xx response.
@@ -419,7 +435,7 @@ static void apply(void) {
   }
   if (action == OP_DETAILS || action == OP_SEEALL || action == OP_RESUME ||
       action == OP_START_OVER || action == OP_REMOVE_CW ||
-      action == OP_ROW_STYLE) is_open = 0;
+      action == OP_ROW_STYLE || action == OP_EP_WATCHED) is_open = 0;
   // The details bring a transition of their own — the zoom out of the card on the
   // home, a fade elsewhere — and the menu easing out over it would be two
   // animations at once. It goes in the same frame instead, scrim and all.
@@ -480,6 +496,14 @@ void ctx_update(float dt, Uint32 now) {
   }
   if (holdActive && now - holdSince >= NV_HOLD_MS) holdReady = 1;
   cw_remove_step();
+  // The row learns of the mark AS THE MODAL CLOSES, not under it: the card the
+  // modal is about leaves the row then, while "Marked as watched" is still being
+  // read it stays put. Settled by the last mark, so a mark undone in the same
+  // visit ends where it started.
+  if (!is_open && cwOwed[0]) {
+    cw_watched(cwOwed, cwOwedMark);
+    cwOwed[0] = 0;
+  }
   if (settings_animations_reduced()) {
     anim = is_open ? 1.0f : 0.0f;
     openMs = 1e6f;
@@ -520,6 +544,9 @@ void ctx_update(float dt, Uint32 now) {
             cat_set_in_list(current, intent);
           } else {
             cat_history_set_id(ci->imdb, ci->kind, intent);
+            // Owed to Continue watching once the modal closes (see cwOwed).
+            snprintf(cwOwed, sizeof cwOwed, "%s", ci->imdb);
+            cwOwedMark = intent;
           }
         }
         mirrorApplied = 1;

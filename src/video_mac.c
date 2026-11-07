@@ -73,7 +73,7 @@ static void renderLoopStart(void);
 static VideoSubtitleStyle style = { 120, 0, 0, 3, 1, 0, 0, 0 };
 static int lift;
 
-enum { OBS_TIME = 1, OBS_DURATION, OBS_CACHE, OBS_PAUSE, OBS_TRACKS, OBS_AID, OBS_SID, OBS_STARVED };
+enum { OBS_TIME = 1, OBS_DURATION, OBS_CACHE, OBS_PAUSE, OBS_TRACKS, OBS_AID, OBS_SID, OBS_STARVED, OBS_EOF };
 
 // STALLS (video.h): mpv's paused-for-cache once the load has settled and away
 // from a seek. Before `calmFrom` the cache is filling up for its own reasons.
@@ -104,6 +104,12 @@ int video_start(void) {
   // so mpv fills it instead of letterboxing a second time.
   mpv_set_option_string(mpv, "keepaspect", "no");
   mpv_set_option_string(mpv, "idle", "yes");
+  // THE FILE STAYS OPEN AT ITS END, paused on the last frame — the TV's pipeline
+  // does the same. Without it mpv unloaded the file at EOF while `paused` stayed 0,
+  // so video_playing() went on saying "playing" and the player never saw the end
+  // (player.c, endTick). It also keeps a scrub back from the end possible. The end
+  // is counted from `eof-reached` (OBS_EOF), since END_FILE no longer comes.
+  mpv_set_option_string(mpv, "keep-open", "yes");
   // Addon URLs are direct files; a failed one should fail, not go to youtube-dl.
   mpv_set_option_string(mpv, "ytdl", "no");
   mpv_set_option_string(mpv, "terminal", "no");
@@ -133,6 +139,7 @@ int video_start(void) {
   mpv_observe_property(mpv, OBS_AID,      "aid",                MPV_FORMAT_NONE);
   mpv_observe_property(mpv, OBS_SID,      "sid",                MPV_FORMAT_NONE);
   mpv_observe_property(mpv, OBS_STARVED,  "paused-for-cache",   MPV_FORMAT_FLAG);
+  mpv_observe_property(mpv, OBS_EOF,      "eof-reached",        MPV_FORMAT_FLAG);
   { char *v = mpv_get_property_string(mpv, "mpv-version");
     printf("[mpv] ready (%s)\n", v ? v : "?"); fflush(stdout); mpv_free(v); }
   video_subtitle_style(&style);
@@ -467,6 +474,10 @@ void video_pump(void) {
           stallCount++; stalled = 1;
           printf("[mpv] stall: waiting for data (%d this load)\n", stallCount); fflush(stdout);
         } else if (!on) stalled = 0;
+      } else if (ev->reply_userdata == OBS_EOF && pr->format == MPV_FORMAT_FLAG) {
+        // Rising edge only: it falls again on a seek back, and a second end is a
+        // second count.
+        if (*(int *)pr->data && ready) { eosCount++; printf("[mpv] end of file\n"); fflush(stdout); }
       } else if (ev->reply_userdata == OBS_PAUSE && pr->format == MPV_FORMAT_FLAG) {
         paused = *(int *)pr->data;
       } else if ((ev->reply_userdata == OBS_TRACKS || ev->reply_userdata == OBS_AID ||
@@ -595,6 +606,9 @@ double video_duration(void)   { return durationSeg; }
 double video_buffer_end(void) { return bufferSeg; }
 int  video_stall_count(void)  { return stallCount; }
 int  video_stalled(void)      { return stalled; }
+// The seek spinner's question (video.h): a seek not yet landed, or mpv waiting on
+// its cache. Missing here at first, and the Mac build broke at link time.
+int  video_buffering(void)    { return ready && (seeking || stalled); }
 int  video_net_retrying(void) { return 0; }   // no reconnect here (video_reconnect)
 unsigned video_session(void)  { return session; }
 int  video_playing(void)      { return active && ready && !paused; }

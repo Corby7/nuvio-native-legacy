@@ -663,6 +663,15 @@
 // a thin one that grows on focus, an artwork-tinted one and the old 6px full-bleed
 // bar with its track. GFX_CW_CARD draws no track at all.
 #define NV_CW_FILL_H        4.0f
+// SEATED ON THE HERO: every Continue watching card carries a fallen shadow and a
+// 1px light hairline on its own edge, so it reads as an object in front of the
+// backdrop rather than a hole cut into it. Option 7 of the "Continue watching
+// over the hero" sheet, with the bed in GFX_HERO_FULL's vertical ramp.
+#define NV_CW_SHADOW_BLUR  30.0f
+#define NV_CW_SHADOW_DROP  14.0f
+#define NV_CW_SHADOW_A      0.50f
+#define NV_CW_HAIRLINE      1.0f
+#define NV_CW_HAIRLINE_A    0.12f
 #define NV_CW_BAR_MINW     12.0f   // .home-continue-progress span { min-width }
 // Below this the title counts as NOT STARTED and gets no bar at all. The same 2
 // the detail screen's episode card has always used, where under it the dashed
@@ -2264,7 +2273,10 @@
 #define NV_EPL_W          780.0f   // the content column, set against the right margin
 #define NV_EPL_PAD         48.0f   // the column's right margin
 #define NV_EPL_VEIL_W    1100.0f
-#define NV_EPL_ROW_H      144.0f   // a closed row
+// Every row, focused or not: it no longer opens (the title page's S3, 2026-11-07).
+// 156 and not 144: the focused row now holds the name, the detail line and two
+// synopsis lines (128) inside its own height, with 14 of air above and below.
+#define NV_EPL_ROW_H      156.0f
 #define NV_EPL_ROW_GAP      4.0f
 #define NV_EPL_PADX        16.0f   // the band's left edge to the thumb
 #define NV_EPL_THUMB_W    208.0f
@@ -2282,7 +2294,7 @@
 #define NV_EPL_SYN_DY      78.0f   // the synopsis
 #define NV_EPL_BLOCK_H     66.0f   // a closed row's block: the name and the detail line
 #define NV_EPL_PADY        20.0f   // an open row's air above and below its block
-#define NV_EPL_SYN_LINES    3
+#define NV_EPL_SYN_LINES    2      // then an ellipsis
 #define NV_EPL_SYN_LD      28.0f   // 20px type x 1.4
 #define NV_EPL_BAND         0.09f  // the focused row's band, white at this alpha
 #define NV_EPL_BAND_LEAD   80.0f   // how far left of the column the band starts

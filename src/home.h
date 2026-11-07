@@ -68,6 +68,9 @@ void home_shutdown(void);
 // Records the interrupted title for the contextual "Resume now" band. The band
 // only exists while the progress makes sense (neither the start nor the end).
 void home_record_return(int index_, double posSeg, double durationSeg);
+// After a title played to the end from Continue watching: keep the focus on that
+// title's card while the row reorders under it, until the next key.
+void home_focus_title(const char *imdb);
 int  home_wants_exit(void);
 // Back to the first row, first card, scrolled to the top, with no animation —
 // entering a freshly switched profile's home, which starts where a launch does.

@@ -67,10 +67,13 @@ static const char *devPath(const char *name) {
   static char ring[4][600];
   static int next;
   char *out = ring[next++ & 3];
-  const char *dir = "/tmp";
+  const char *dir = "/tmp", *env = getenv("NUVIO_DEV_DIR");
 #ifndef __APPLE__
   if (data_dir()[0]) dir = data_dir();
 #endif
+  // A folder of its own: a test build next to an installed app on the same Mac
+  // would otherwise share /tmp, and keys meant for one would drive the other.
+  if (env && *env) dir = env;
   snprintf(out, sizeof ring[0], "%s/%s", dir, name);
   return out;
 }

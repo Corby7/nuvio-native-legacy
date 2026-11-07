@@ -9,6 +9,8 @@
 #ifndef NV_CATALOG_H
 #define NV_CATALOG_H
 
+#include <stddef.h>
+
 // 40 titles today (14 from the owner's history + 26 from the catalogues). The
 // slack avoids the silent truncation that already happened once: with 32 the
 // last eight disappeared without warning.
@@ -164,6 +166,10 @@ typedef struct {
   // Whoever draws shortens it to the year alone when `showFullReleaseDate` is off
   // (settings_date_full()); the year is the last 4 characters.
   char date[40];
+  // THE AIR DATE AS CINEMETA SENDS IT, "YYYY-MM-DD", empty when it sends none. `date`
+  // above is for reading; this one is for asking whether the episode is out yet
+  // (cat_ep_unaired).
+  char aired[12];
   char synopsis[420];
   char thumb[512];     // the episode's still; empty falls back to the title's art
   // The episode's IMDb score in TENTHS (85 = 8.5); 0 = none. It is the field the web
@@ -396,6 +402,11 @@ void cat_progress_mark_synced(const char *imdb, long long ms);
 // discovery thread asks, the UI thread records.
 void cat_cw_dismiss(const char *imdb);
 int  cat_cw_dismissed(const char *imdb, long long whenMs);
+// Lifts a dismissal: "Unmark as watched" puts the title back where its progress
+// says, as "Mark as watched" took it out (cw_watched in cwremove.h).
+void cat_cw_undismiss(const char *imdb);
+// 1 watched, 0 not, -1 not known — the title's history (Trakt or the account).
+int  cat_history_state_item(int index_);
 
 // Reads progress.txt into `out`, MOST RECENT FIRST, and returns how many. A
 // missing or unreadable file is 0 and not an error: a fresh install has no
@@ -524,5 +535,18 @@ int           cat_similar(int index_, int *output, int max);
 
 int           cat_n_episodes(int indexItem);
 const CatEp  *cat_episode(int indexItem, int i);   // circular index; NULL if the catalogue is empty
+
+// 1 watched, 0 unwatched, -1 not known — the context menu's own reading of the
+// title's history (Trakt, or the Nuvio account), by IMDb id and kind.
+int cat_history_state_id(const char *imdb, const char *kind);
+
+// HAS THE EPISODE AIRED? 0 yes (or nothing says otherwise), 1 not yet with a date
+// to give, 2 not yet and no date announced. An episode with no air date counts as
+// unaired only when it carries no real name either (none, "TBA" or "TBD"): an old
+// episode Cinemeta simply has no date for is still an episode.
+int cat_ep_unaired(const CatEp *ep);
+// The line for an unaired episode: "Airs Sat 14 Nov", or "Date not announced".
+// Empty for an episode that has aired.
+void cat_ep_airs_label(const CatEp *ep, char *out, size_t size);
 
 #endif

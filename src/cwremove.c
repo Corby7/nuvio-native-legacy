@@ -3,6 +3,10 @@
 #include "discover.h"
 #include "trakt.h"
 #include "sync.h"
+#include "home.h"
+#include "acclib.h"
+#include "watchedep.h"
+#include <stdlib.h>
 #include <SDL2/SDL.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -149,3 +153,81 @@ const char *cw_remove_busy(void) {
 }
 
 void cw_remove_gone(void) { if (!localOwed) spinning = 0; }
+
+void cw_watched(const char *imdb, int watched) {
+  char w[24];
+  if (!imdb || !imdb[0]) return;
+  snprintf(w, sizeof w, "%.*s", (int)strcspn(imdb, ":"), imdb);
+  if (watched) {
+    int r, nr = cat_n_rows();
+    cat_cw_dismiss(w);
+    for (r = 0; r < nr; r++) {
+      const CatRow *c = cat_row(r);
+      if (c && !strcmp(c->key, "continue_watching")) { cat_row_drop(r, w); break; }
+    }
+  } else {
+    cat_cw_undismiss(w);
+  }
+  printf("[cw] %s %s\n", watched ? "watched, out of the row:" : "unwatched, back:", w);
+  fflush(stdout);
+  disc_cw_refresh();
+}
+
+typedef struct { char work[24]; WatchedPair pair; } EpMark;
+static void *runEpisode(void *u) {
+  EpMark *m = u;
+  int ok = trakt_mark_episodes(m->work, &m->pair, 1, 1);
+  printf("[cw] episode %s S%dE%d watched on trakt: %s\n", m->work,
+         m->pair.season, m->pair.episode, ok ? "ok" : "FAILED");
+  fflush(stdout);
+  free(m);
+  return NULL;
+}
+
+int cw_episode_watched(int index_) {
+  const CatItem *ci = cat_item(index_);
+  char w[24];
+  int s, e, front = 0;
+  if (!ci || !ci->imdb[0] || ci->season <= 0 || ci->episode <= 0) return 0;
+  snprintf(w, sizeof w, "%.*s", (int)strcspn(ci->imdb, ":"), ci->imdb);
+  s = ci->season; e = ci->episode;
+  watchedep_set(w, s, e, 1);
+  // A CARD IN PROGRESS has its line in progress.txt, at the position it stopped:
+  // left there, the next build would put the same episode straight back. It is
+  // written as finished, at its own duration — this device's doing, now — and
+  // the card comes to the front, as a viewing would. A next-up card has no line
+  // of its own and needs none: the tick is what moves the resolver past it.
+  if (ci->progress > 0) {
+    CatProgress regs[CAT_PROGRESS_MAX];
+    int i, n = cat_progress_read(regs, CAT_PROGRESS_MAX);
+    for (i = 0; i < n; i++)
+      if (!strcmp(regs[i].imdb, w) && regs[i].season == s && regs[i].episode == e &&
+          regs[i].durationSeg >= 60.0) {
+        if (cat_save_progress_id(w, regs[i].durationSeg, regs[i].durationSeg, s, e, 0, 1)) {
+          sync_dirty_progress();
+          front = 1;
+        }
+        break;
+      }
+  }
+  if (trakt_active()) {
+    EpMark *m = malloc(sizeof *m);
+    pthread_t t;
+    if (m) {
+      snprintf(m->work, sizeof m->work, "%s", w);
+      m->pair.season = (short)s; m->pair.episode = (short)e;
+      if (pthread_create(&t, NULL, runEpisode, m) == 0) pthread_detach(t);
+      else free(m);
+    }
+  } else if (acclib_active()) {
+    acclib_watched(w, "series", s, e, 1);
+  }
+  printf("[cw] episode watched: %s S%dE%d\n", w, s, e);
+  fflush(stdout);
+  // The focus goes with the card: it may move to the front, and the row is
+  // restored by column — it would land on whatever slid into the old slot.
+  home_focus_title(w);
+  disc_cw_played(index_, s, e, 100.0, 100.0, front);
+  disc_cw_refresh();
+  return 1;
+}

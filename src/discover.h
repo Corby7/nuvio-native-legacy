@@ -238,6 +238,12 @@ int  disc_row_collect(void);
 // for when the account's progress lands after the home was built.
 int  disc_cw_collect(void);
 void disc_cw_refresh(void);
+// THE PLAYER CLOSED on item `idx` at `pos` of `dur` (S`season`E`episode` on a
+// series, 0/0 on a film): recomposes the row from what is known here and now —
+// the next episode on a finished one, the card in front — for disc_cw_collect to
+// put on screen next frame, ahead of the rebuild that confirms it. UI thread.
+// `front` 0 keeps the card where it stands (a mark, not a viewing).
+void disc_cw_played(int idx, int season, int episode, double pos, double dur, int front);
 
 // --- SEE ALL: a whole catalogue, in pages ------------------------------------
 //

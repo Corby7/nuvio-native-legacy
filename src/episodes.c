@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>   // strcasecmp
 
 // The distance from one closed row's top to the next. The measurements are in
 // layout.h under NV_EPL_*; the column and the header are the track menus'.
@@ -174,6 +175,8 @@ void episodes_event(const SDL_Event *ev) {
       if (ev->type == SDL_KEYUP && okHeld) {
         const CatEp *ep = epLine(focus);
         okHeld = 0;
+        // Nothing to play in an episode that has not aired: OK stays on the row.
+        if (ep && cat_ep_unaired(ep)) return;
         if (ep) {
           if (ep->season != currentT || ep->episode != currentE) {
             requestT = ep->season; requestE = ep->episode;
@@ -229,12 +232,10 @@ static float fullBlock(const CatEp *ep) {
   int lines = synLines(ep);
   return lines > 0 ? synBlock(lines) : NV_EPL_BLOCK_H;
 }
-// How much taller a row is when it is open: its synopsis, up to three lines, and
-// NV_EPL_PADY above and below the block. A row with no synopsis does not grow.
-static float openExtra(const CatEp *ep) {
-  float h = fullBlock(ep) + NV_EPL_PADY * 2 - NV_EPL_ROW_H;
-  return h > 0.0f ? h : 0.0f;
-}
+// ROWS NEVER GROW, as on the title page (S3): the focused row's synopsis, two
+// lines and an ellipsis, fits inside NV_EPL_ROW_H, so only the list moves. `opened`
+// still runs: it fades the synopsis in and lets the name make room for it.
+static float openExtra(const CatEp *ep) { (void)ep; return 0.0f; }
 static float openedAt(int i) {
   return i < EP_MAX ? opened[i] : (i == focus && zone == Z_LIST ? 1.0f : 0.0f);
 }
@@ -353,6 +354,11 @@ static void rowDraw(const CatEp *ep, float cx, float y, float h, int sel, int ne
 
   gfx_color(th, rt, 1, 1, 1, 0.07f * a);
   art = ep->thumb[0] ? ep->thumb : (ci ? ci->backdrop : "");
+  // Not out yet: the title page's date card (T1), on the series' art.
+  if (cat_ep_unaired(ep)) {
+    detail_unaired_thumb(th, rt, ep, ci ? ci->backdrop : NULL, a * (lit ? 1.0f : NV_EPL_DIM_THUMB));
+    tex = 0;
+  } else
   tex = art && art[0] ? tex_get_width(art, NV_EPL_THUMB_W * NV_EPL_THUMB_GROW) : 0;
   if (tex) {
     gfx_tex_aspect_current = tex_aspect(art);
@@ -395,7 +401,9 @@ static void rowDraw(const CatEp *ep, float cx, float y, float h, int sel, int ne
   }
 
   // "EP4 · What the River Keeps" — the season is on the pill already.
-  snprintf(line, sizeof line, "EP%d%s%s", ep->episode, ep->name[0] ? " \xc2\xb7 " : "", ep->name);
+  { const char *nm = ep->name;
+    if (cat_ep_unaired(ep) && (!nm[0] || !strcasecmp(nm, "TBD"))) nm = "TBA";
+    snprintf(line, sizeof line, "EP%d%s%s", ep->episode, nm[0] ? " \xc2\xb7 " : "", nm); }
   txt_draw_alpha(txt_line_trim(TXT_TRK_VALUE, line, ink, ink, ink, 255, right - tx), tx, bt, a);
 
   // The detail line, in the sources sheet's meta type and spacing: the runtime
@@ -411,6 +419,10 @@ static void rowDraw(const CatEp *ep, float cx, float y, float h, int sel, int ne
         snprintf(line, sizeof line, "%d min left", left < 1 ? 1 : left);
         metaItem(TXT_SRC_META, line, x, my, 0, sub, dim, a);
       }
+    } else if (cat_ep_unaired(ep)) {
+      char airs[48];
+      cat_ep_airs_label(ep, airs, sizeof airs);
+      metaItem(TXT_SRC_META, airs, x, my, 1, sub, dim, a);
     } else {
       x = metaItem(TXT_SRC_META, ep->duration, x, my, 1, sub, dim, a);
       if (watched) metaItem(TXT_SRC_META, "watched", x, my, !ep->duration[0], sub, dim, a);

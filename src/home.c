@@ -110,6 +110,12 @@ static Row rows[MAX_FILTER] = {
 static int nRows = 4;
 static int resumeIndex = -1;
 static char resumeId[64];
+// THE CARD TO KEEP UNDER THE FOCUS after a title played to the end from Continue
+// watching (home_focus_title). The rebuild that follows moves the series to the
+// front and swaps its card for the next episode, and the focus is restored by
+// COLUMN — it would be left on whatever slid into the old slot. Held across every
+// republication until the next key, since the reorder may take more than one.
+static char focusWantId[64];
 static unsigned resumeRev, resumeApplied;
 
 // It classifies only the catalogue's public names. It never inspects the URL (which
@@ -226,6 +232,19 @@ static int styleable(KindRow kind, const char *key) {
 
 
 static Focus focus;
+static const CatItem *cat_item_exact(int i);
+// Onto the wanted card, if row `r` is Continue watching and has it. The id is
+// compared on the title's part: a series card may carry ":season:episode".
+static void focusWanted(int r) {
+  size_t nb = strcspn(focusWantId, ":");
+  if (!focusWantId[0] || r < 0 || r >= nRows || strcmp(rows[r].key, "continue_watching"))
+    return;
+  for (int k = 0; k < rows[r].n && k < focus.nColumns[r]; k++) {
+    const CatItem *c = cat_item_exact(rows[r].start + k);
+    if (c && !strncmp(c->imdb, focusWantId, nb) &&
+        (c->imdb[nb] == 0 || c->imdb[nb] == ':')) { focus.column = k; return; }
+  }
+}
 static HomeItem itemFocus;      // filled in while drawing, read by the transition
 static int  hasItemFocus = 0;
 // The focused card's OUTER edge, ring included: the continue watching ring sits
@@ -1134,6 +1153,7 @@ static void rowCatalog(int r, CtxCatalog *out) {
 
 void home_event(const SDL_Event *e) {
   if (e->type == SDL_QUIT) { wantsExit = 1; return; }
+  if (e->type == SDL_KEYDOWN) focusWantId[0] = 0;
 
   // HOLDING OK OPENS THE POSTER'S MENU.
   //
@@ -1701,6 +1721,7 @@ static void syncRows(void) {
       focus.column = colFocus < focus.nColumns[found] ? colFocus
                   : (focus.nColumns[found] > 0 ? focus.nColumns[found] - 1 : 0);
     }
+    if (found >= 0) focusWanted(found);
   }
   printf("[home] %d rows from the catalog\n", nRows);
 }
@@ -1861,6 +1882,11 @@ void home_update(float dt, Uint32 now) {
       if (id >= 0 || !ctx_is_open()) styleMenuKey[0] = 0;
     } }
   syncRows();
+  // THE CARD THE FOCUS FOLLOWS (home_focus_title), every frame until the next key.
+  // syncRows only restores it when the rows' SHAPE changed — and a Continue
+  // watching splice that only reorders the same eight cards changes nothing it
+  // measures, so the focus stayed in the slot and the card left it.
+  if (focusWantId[0]) focusWanted(focus.row);
   // One pass is enough: the rows are the new profile's from here on, and any
   // later publication keeps the focus where the viewer has put it.
   toTop = 0;
@@ -4461,6 +4487,10 @@ void home_draw(Uint32 now) {
               sweep = NV_BUSY_ARC;
               sweepFrom = (float)(now % NV_BUSY_LAP_MS) / NV_BUSY_LAP_MS;
             } }
+          // A resume card's fallen shadow, under everything else it draws.
+          if (resumeCard)
+            gfx_drop_shadow(card, radius * h, NV_CW_SHADOW_BLUR, NV_CW_SHADOW_DROP,
+                            NV_CW_SHADOW_A);
           // The glow that confirms it, BEHIND the card: it widens as it fades.
           float glowPx = hold_glow_px(holdPulse);
           if (held) hold_glow_draw(ringFocus, ringFocusR, holdPulse);
@@ -4572,24 +4602,26 @@ void home_draw(Uint32 now) {
           // home — without it there is no way to scan a row and see what has already
           // been watched, which is the screen's main use.
           //
-          // >= 90% is "watched", not 100%: almost nobody watches the credits, and the
-          // player itself already rounds to the end when less than a minute is left
-          // (player_close). Marking only at 100% would leave out precisely what has
-          // just been watched.
-          if (cItem && cItem->progress >= 90 && kind != ROW_CONTINUE) {
+          // "Watched" is the TITLE'S HISTORY, the same reading the hold menu's
+          // "Mark / Unmark as watched" makes — not progress >= 90. A resume point is
+          // not proof of having watched (see CatHistory in catalog.c): a 100% point
+          // synced in from another client put the tick on a film never seen, and the
+          // menu, reading the history, had no "Unmark" to take it off with.
+          if (cItem && kind != ROW_CONTINUE &&
+              cat_history_state_id(cItem->imdb, cItem->kind) == 1) {
             float d = art.w * 0.16f;             // proportional to the card
             float mx = art.x + art.w - d - 10.0f, my = art.y + 10.0f;
             GfxRect disk = { mx, my, d, d };
             gfx_color(disk, 0.5f, 1, 1, 1, 0.94f);
-            // The tick drawn with two strokes: the font's glyph will not do here
-            // because it would need a whole line of text just for this, and the line
-            // cache has 256 entries already fought over by the titles.
-            { float cx = mx + d * 0.5f, cy = my + d * 0.5f;
-              float e = d * 0.085f;              // thickness
-              GfxRect a1 = { cx - d * 0.20f, cy - e * 0.5f, d * 0.20f, e };
-              GfxRect a2 = { cx - d * 0.02f, cy - e * 0.5f, d * 0.34f, e };
-              gfx_rect(a1, 0, GFX_COLOR, 0, 0, 0, 0.5f, 0.07f, 0.07f, 0.07f, 0.94f);
-              gfx_rect(a2, 0, GFX_COLOR, 0, 0, 0, 0.5f, 0.07f, 0.07f, 0.07f, 0.94f); }
+            // The tick is `ep_watched`, the same bare tick the episode cards tint dark
+            // on their white disc. It used to be two axis-aligned strokes laid end to
+            // end on one line — with no rotation they never bent, and the badge read
+            // as a MINUS. The request is a fixed width, not d: the card scales with
+            // focus, and an exact request that animates re-decodes and vanishes for
+            // the length of the spring (see gfx_icon_at).
+            { float t = d * 0.66f;
+              GfxRect tk = { mx + (d - t) * 0.5f, my + (d - t) * 0.5f, t, t };
+              gfx_icon_at(tk, "ep_watched", 48.0f, 0.07f, 0.07f, 0.07f, 0.94f); }
           }
 
           // `cardDepthEnabled` plus the per-section switch: `cardDepthPosters` on the
@@ -4642,6 +4674,11 @@ void home_draw(Uint32 now) {
               txt_draw(number,nx+dx,ny+dy);
             txt_draw(ink,nx,ny);
           }
+
+          // Its hairline, over the copy's scrim. It gives way to the focus ring.
+          if (resumeCard && f < 0.99f && art.h > 0.0f)
+            gfx_rect(art, 0, GFX_RING_INSET, 0, NV_CW_HAIRLINE / art.h, 0, radiusA,
+                     1, 1, 1, NV_CW_HAIRLINE_A * (1.0f - f));
 
           if (resumeCard)
             resume_draw(cItem, (GfxRect){px, py, w, h}, baked, f);
@@ -4791,6 +4828,15 @@ void home_record_return(int index_, double posSeg, double durationSeg) {
   else if (new >= 0) resumeRev++; // updates the same session's bar/time
   const CatItem *c = new >= 0 ? cat_item_exact(new) : NULL;
   snprintf(resumeId, sizeof resumeId, "%s", c ? c->imdb : "");
+}
+void home_focus_title(const char *imdb) {
+  focusWantId[0] = 0;
+  if (!imdb || !imdb[0] || focus.row < 0 || focus.row >= nRows ||
+      strcmp(rows[focus.row].key, "continue_watching")) return;
+  snprintf(focusWantId, sizeof focusWantId, "%s", imdb);
+  // Now as well: the save at the end may already have rebuilt the row while the
+  // player was still holding the last frame.
+  focusWanted(focus.row);
 }
 int home_wants_exit(void) { return wantsExit; }
 

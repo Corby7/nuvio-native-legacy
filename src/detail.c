@@ -26,6 +26,7 @@
 #include "settings.h"
 #include "home.h"
 #include "extras.h"
+#include "watchedep.h"
 #include "person.h"
 #include "streams.h"
 #include "discover.h"
@@ -44,6 +45,7 @@
 #include "pointer.h"
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>   // strcasecmp
 #include <math.h>
 
 // A ceiling of items per section. 24 and not 8: a season of "Silo" has 10 episodes
@@ -87,6 +89,18 @@
 static HomeItem item;
 static int  is_open = 0, exiting = 0;
 static int  idx = 0;                 // the current title within the collection
+
+// WATCHED, PER EPISODE, for this title. The episode map (watchedep) first: it is
+// filled from the same Trakt answer as extras' grid, from the account without
+// Trakt, and by playback here — and it has no size limit. extras' grid is bounded
+// seasons by 40 episodes (EX_VIS_T/EX_VIS_E), so a long series like South Park
+// never showed a tick on any season past S19. The grid stays as the fallback for a
+// series the map has not heard of.
+static int epWatched(int season, int episode) {
+  const CatItem *ci = cat_item(idx);
+  int m = ci && ci->imdb[0] ? watchedep_state(ci->imdb, season, episode) : -1;
+  return m >= 0 ? m : extras_ep_watched(season, episode);
+}
 // THE TITLE, NOT THE SLOT. `idx` is a position in the catalogue, and the
 // catalogue is rebuilt under the screen — a finished episode reorders Continue
 // watching, and discovery republishes while a film plays. Held across that, the
@@ -990,7 +1004,7 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
   // catalogue item carries 0/0, because the only writer of these fields is the
   // progress record.
   if (ci && ci->progress < 90 && ci->season > 0 && ci->episode > 0 &&
-      !extras_ep_watched(ci->season, ci->episode)) {
+      !epWatched(ci->season, ci->episode)) {
     if (temp) *temp = ci->season;
     if (eps) *eps = ci->episode;
     if (origin) *origin = 2;
@@ -1011,7 +1025,7 @@ static int episodeTarget(int *temp, int *eps, int *origin) {
       int tn = extras_season_number(t), ne = extras_n_eps(t);
       for (i = 0; i < ne; i++) {
         int en = extras_ep_number(t, i);
-        if (en > 0 && !extras_ep_watched(tn, en)) {
+        if (en > 0 && !epWatched(tn, en)) {
           if (temp) *temp = tn;
           if (eps) *eps = en;
           if (origin) *origin = 3;
@@ -1082,6 +1096,51 @@ static int landOnNextUp(void) {
     scrollSec[SEC_EPISODES] = y > 0.0f ? y : 0.0f; }
   velSec[SEC_EPISODES] = 0.0f;
   return 1;
+}
+
+// AFTER AN EPISODE PLAYED TO THE END (the player closed itself, app.c): the page
+// underneath stands on the episode that follows, in the list, focused — so the
+// one OK that plays it is the only thing between the viewer and "next", and
+// autoplay being off still means nothing plays by itself.
+//
+// Not landOnNextUp: that answers from the focus first, and the focus is usually
+// on the episode just watched (it was how it got played). This is told the
+// episode outright. The season follows it even if one was picked by hand — the
+// picked season is the one just finished, and the next episode may be the next
+// season's first.
+void detail_focus_episode(int t, int e) {
+  const CatItem *ci = cat_item(idx);
+  int k, c, n;
+  if (!is_open || exiting || !ci || !isSeries() || t <= 0 || e <= 0) return;
+  if (t != seasonNow()) {
+    for (k = 0; k < ci->nSeasons && k < nSeasonsOf(); k++)
+      if (ci->seasons[k] == t) break;
+    if (k >= ci->nSeasons || k >= nSeasonsOf()) return;
+    season = k; seasonByHand = 0;
+    syncColumns();
+  }
+  n = nEpsOfSeason(seasonNow());
+  for (c = 0; c < n; c++) {
+    const CatEp *ep = epOfSeason(seasonNow(), c);
+    if (ep && ep->season == t && ep->episode == e) break;
+  }
+  if (c >= n) return;
+  seasonMenuOpen = 0;
+  level = 1;
+  if (focus.row != SEC_EPISODES) focus.columnRemembered[focus.row] = focus.column;
+  focus.row = SEC_EPISODES; focus.column = c;
+  focus.columnRemembered[SEC_EPISODES] = c;
+  epLanded = 1; epLandedAt = c;
+  follow = 1;
+  // Placed, not scrolled: the player's fade uncovers it standing there already.
+  { float max = sectionN(SEC_EPISODES) * NV_DETEP_ROW_H - NV_DETEP_LIST_H
+              + episodeFullH(c) - NV_DETEP_ROW_H;
+    float y = c * NV_DETEP_ROW_H;
+    if (y > max) y = max;
+    scrollSec[SEC_EPISODES] = y > 0.0f ? y : 0.0f; }
+  velSec[SEC_EPISODES] = 0.0f;
+  printf("[detail] after the end: focus on S%dE%d\n", t, e);
+  fflush(stdout);
 }
 
 int detail_settled(void) {
@@ -1710,7 +1769,10 @@ void detail_event(const SDL_Event *e) {
     } else if (focus.row == SEC_EPISODES) {
       // The focused row carries a Resume / Play pill, so OK does what it says: it plays
       // THIS episode (episodeTarget answers the focused row first). Held, it opens the
-      // sources sheet — the same split as the hero's primary button.
+      // sources sheet — the same split as the hero's primary button. An episode that
+      // has not aired has nothing to play, and its pill says so.
+      const CatEp *epF = epOfSeason(seasonNow(), focus.column);
+      if (epF && cat_ep_unaired(epF)) return;
       if (duration >= NV_HOLD_MS) reqSources = 1; else reqPlay = 1;
     }
     return;
@@ -1743,7 +1805,20 @@ void detail_event(const SDL_Event *e) {
       // DOWN again brought it into view. Parked on the empty row, the picker appears
       // focused where you are the moment the data lands; DOWN skips on past it and UP
       // returns to the hero, as focus_move already does for an empty row.
-      if (isSeries() && sectionColumns(SEC_SEASONS) == 0 && disc_episodes_loading(idx)) {
+      //
+      // NOT ONLY WHILE THE REQUEST IS IN FLIGHT. It used to need
+      // disc_episodes_loading too, and in the first frames of a new show the request
+      // has not gone out yet (app.c asks when the source target changes, and the
+      // single episode thread may still be busy with a card the home prefetched), so
+      // a quick DOWN found nothing loading, went past to the tabs on page 3, and the
+      // picker arrived a page above, never seen. A series with no seasons yet parks
+      // here whatever the reason; one that honestly has none is left by DOWN as any
+      // empty row is. A title whose KIND is not known yet parks too while its
+      // episodes are on the way, since it may turn out to be a series.
+      const CatItem *ciD = cat_item(idx);
+      int maybeSeries = isSeries() ||
+                        (ciD && !ciD->kind[0] && disc_episodes_loading(idx));
+      if (maybeSeries && sectionColumns(SEC_SEASONS) == 0) {
         focus.row = SEC_SEASONS; focus.column = 0; level = 1;
       } else
         for (int r = 0; r < N_SECTIONS; r++)
@@ -1773,6 +1848,12 @@ void detail_event(const SDL_Event *e) {
   }
   if (k == SDLK_RIGHT)      focus_move(&focus, 1, 0);
   else if (k == SDLK_LEFT)  focus_move(&focus, -1, 0);
+  // PARKED ON A PICKER STILL WAITING FOR ITS SEASONS (see the DOWN from the hero),
+  // a second quick DOWN would skip the empty row and land on page 3 again. It holds
+  // while the episodes are on their way, or for the opening's first seconds before
+  // the request has gone out; after that an honestly empty row is skipped as usual.
+  else if (k == SDLK_DOWN && focus.row == SEC_SEASONS && sectionColumns(SEC_SEASONS) == 0 &&
+           (disc_episodes_loading(idx) || SDL_GetTicks() - skelSince < 2500u)) return;
   else if (k == SDLK_DOWN)  focus_move(&focus, 0, 1);
   else if (k == SDLK_UP)    { if (!focus_move(&focus, 0, -1)) level = 0; }
   // In the list before the progress arrived: from here on it is the owner's list, and
@@ -2212,6 +2293,12 @@ static int progressOf(int i) {
   const CatItem *c = cat_item(i);
   return c ? c->progress : 0;
 }
+// Watched, as the eye button and the hold menu both read it: the title's history,
+// or a finished resume point where no history is known (app.c, the toggle).
+static int seenOf(int i) {
+  int h = cat_history_state_item(i);
+  return h >= 0 ? h == 1 : progressOf(i) >= 90;
+}
 
 // The resting fill and the focused fill, the only two colours in this row. They are
 // the SAME pair for the pill and for the circles — see the NV_DETWEB_* block.
@@ -2308,7 +2395,7 @@ static void drawButton(GfxRect r, const char *rot, int icon, int focused, float 
       // unwatched.png any more — a different, thinner set that predates the web's.
       // The files stay in art/icons; they are 3KB each and removing a shipped asset
       // is not this change.
-      int seen = progressOf(idx) >= 90;
+      int seen = seenOf(idx);
       gfx_icon(ig, seen ? (focused ? "detail_watched_off_filled" : "detail_watched_off")
                         : (focused ? "detail_watched_filled"     : "detail_watched"),
                ink, ink, ink, a);
@@ -2417,7 +2504,7 @@ static const char *tooltipOf(int action) {
         return (ci && ci->inList) ? "Remove from Watchlist" : "Add to Watchlist";
       return (ci && ci->inList) ? "Remove from Library" : "Add to Library";
     case ACTION_WATCHED:
-      return progressOf(idx) >= 90 ? "Mark Unwatched" : "Mark Watched";
+      return seenOf(idx) ? "Mark Unwatched" : "Mark Watched";
     // NuvioWeb has no sources button on the hero — there the stream chooser opens
     // from the play button. This port keeps it, so the label is this port's, written
     // to the same shape as the others.
@@ -3423,6 +3510,19 @@ typedef struct {
 static void episodeActions(const CatEp *ep, EpActions *o) {
   int started = episodeStarted(ep);
   int ink = (int)(NV_DETWEB_FOCUS_INK * 255.0f + 0.5f);
+  // NOT OUT YET: the pill says when it airs, outlined and with no play icon, because
+  // there is nothing to play (OK on it does nothing).
+  if (ep && cat_ep_unaired(ep)) {
+    char airs[48];
+    cat_ep_airs_label(ep, airs, sizeof airs);
+    o->label = txt_line(TXT_ROW_TITLE, airs, 255, 255, 255, 255);
+    o->pill.w = NV_DETEP_BTN_PADX * 2 + o->label.w;
+    o->pill.x = NV_DETEP_RIGHT - o->pill.w;
+    o->pill.y = 0.0f; o->pill.h = NV_DETEP_BTN_H;
+    o->xStart = o->pill.x;
+    o->left = (TxtLine){0};
+    return;
+  }
   o->label = txt_line(TXT_ROW_TITLE, started ? "Resume" : "Play", ink, ink, ink, 255);
   o->pill.w = NV_DETEP_BTN_PADX * 2 + NV_DETEP_BTN_ICON + NV_DETEP_BTN_GAPI
             + o->label.w;
@@ -3462,26 +3562,22 @@ static float episodeInkH(int lines) {
   if (lines > 0) h += NV_DETEP_DESC_DY + (lines - 1) * NV_DETEP_DESC_LD;
   return h;
 }
-// How many lines the WHOLE synopsis takes on the focused row.
+// How many synopsis lines the focused row shows: the whole text up to
+// NV_DETEP_SYN_LINES, the last of them ending on an ellipsis when it is cut.
 static int episodeFullLines(const CatEp *ep) {
+  int n;
   if (!ep || !ep->synopsis[0]) return 0;
-  return txt_block_lines(TXT_DETWEB_EPD, ep->synopsis,
-                         episodeCopyRight(ep, 1) - episodeCopyX(1.0f));
+  n = txt_block_lines(TXT_DETWEB_EPD, ep->synopsis,
+                      episodeCopyRight(ep, 1) - episodeCopyX(1.0f));
+  return n > NV_DETEP_SYN_LINES ? NV_DETEP_SYN_LINES : n;
 }
-// The row's height focused: its whole synopsis plus the air, never under the resting
-// height.
-static float episodeFullH(int c) {
-  float h = episodeInkH(episodeFullLines(epOfSeason(seasonNow(), c)))
-          + NV_DETEP_PADY * 2.0f;
-  return h > NV_DETEP_ROW_H ? h : NV_DETEP_ROW_H;
-}
-// The height it has THIS frame, on its focus spring, so the rows under a row that is
-// opening slide down with it instead of jumping.
-static float episodeRowH(int c) {
-  float f = c < N_ITEMS ? epGrow[c] : 0.0f;
-  if (f < 0.001f) return NV_DETEP_ROW_H;
-  return NV_DETEP_ROW_H + (episodeFullH(c) - NV_DETEP_ROW_H) * f;
-}
+// ROWS NEVER CHANGE HEIGHT (the owner's S3, 2026-11-07). The focused row used to
+// open to its whole synopsis and push every row under it down while the list was
+// sliding to it — two movements at two speeds. Now the focused row shows its
+// synopsis in its own height, cut with an ellipsis, and only the list moves.
+// epGrow is kept: it still crossfades the one resting line into the focused two.
+static float episodeFullH(int c) { (void)c; return NV_DETEP_ROW_H; }
+static float episodeRowH(int c)  { (void)c; return NV_DETEP_ROW_H; }
 
 // The "·" between two items of the meta line. It is only drawn BETWEEN items, so the
 // caller passes whether one is already on the line.
@@ -3504,6 +3600,15 @@ static void drawEpisodeMeta(const CatEp *ep, float x, float base, float xEnd,
   int any = 0;
   float y = base - txt_baseline(TXT_DETWEB_EP_META);
   if (!ep) return;
+  // Not out yet: when it airs takes the whole line, in place of a runtime and a date
+  // that are guesses at best.
+  if (cat_ep_unaired(ep)) {
+    char airs[48];
+    cat_ep_airs_label(ep, airs, sizeof airs);
+    TxtLine l = txt_line_trim(TXT_DETWEB_EP_META, airs, 175, 175, 175, 255, xEnd - x);
+    txt_draw_alpha(l, x, y, a);
+    return;
+  }
   if (ep->duration[0]) {
     TxtLine l = txt_line(TXT_DETWEB_EP_META, ep->duration, 175, 175, 175, 255);
     txt_draw_alpha(l, x, y, a);
@@ -3571,7 +3676,7 @@ static void drawDepth(GfxRect card, float radius, int onHere, float a) {
 // Watched is what NuvioTV counts — marked watched, or played to the end.
 static int episodeBlurred(const CatEp *ep) {
   if (!settings_blur_unwatched() || !ep || !ep->thumb[0]) return 0;
-  return !extras_ep_watched(ep->season, ep->episode) && episodeProgress(ep) < 98;
+  return !epWatched(ep->season, ep->episode) && episodeProgress(ep) < 98;
 }
 
 static GLuint episodeThumbTex(const CatEp *ep, float *aspect) {
@@ -3586,6 +3691,42 @@ static GLuint episodeThumbTex(const CatEp *ep, float *aspect) {
            : tex_get_width(art, NV_DETEP_THUMB_W * NV_DETEP_THUMB_GROW);
   if (t && *aspect <= 0.0f) *aspect = tex_aspect(art);
   return t;
+}
+
+void detail_unaired_thumb(GfxRect th, float radius, const CatEp *ep, const char *art, float a) {
+  static const char *MON[12] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                 "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
+  float aspect = 0.0f, midY = th.y + th.h * 0.5f;
+  GLuint t = (art && art[0]) ? tex_get_blurred(art, &aspect) : 0;
+  int y, m, d;
+  if (t) {
+    gfx_tex_aspect_current = aspect > 0.0f ? aspect : tex_aspect(art);
+    gfx_rect(th, t, GFX_CARD, 0, 0, 0, radius, 0, 0, 0, a);
+    gfx_tex_aspect_current = 0.0f;
+  } else gfx_color(th, radius, 0.133f, 0.133f, 0.133f, a);
+  gfx_color(th, radius, 0, 0, 0, 0.55f * a);
+  // The big figure is the pause overlay's 64/700 on the title page's thumbnail, and
+  // the quick-seek's 44/700 on anything smaller (the player's picker is 208 wide).
+  { TxtStyle big = th.h >= 150.0f ? TXT_PAUSE_TITLE : TXT_PLR_QUICK;
+    if (ep && cat_ep_unaired(ep) == 1 && sscanf(ep->aired, "%d-%d-%d", &y, &m, &d) == 3 &&
+        m >= 1 && m <= 12) {
+      char day[4];
+      float ls = NV_DETEP_KICK_LS;
+      float wMon = txt_tracking(TXT_DETWEB_EP_BADGE, MON[m - 1], 255, 255, 255, -1.0f, 0.0f, 0.0f, ls);
+      TxtLine lm = txt_line(TXT_DETWEB_EP_BADGE, MON[m - 1], 255, 255, 255, 255);
+      TxtLine ld;
+      float hTot, y0;
+      snprintf(day, sizeof day, "%d", d);
+      ld = txt_line(big, day, 255, 255, 255, 255);
+      hTot = lm.h + ld.h * 0.86f;
+      y0 = midY - hTot * 0.5f;
+      txt_tracking(TXT_DETWEB_EP_BADGE, MON[m - 1], 255, 255, 255,
+                   th.x + (th.w - wMon) * 0.5f, y0, 0.8f * a, ls);
+      txt_draw_alpha(ld, th.x + (th.w - ld.w) * 0.5f, y0 + lm.h * 0.92f, a);
+    } else {
+      TxtLine l = txt_line(big, "TBA", 255, 255, 255, 255);
+      txt_draw_alpha(l, th.x + (th.w - l.w) * 0.5f, midY - l.h * 0.5f, a);
+    } }
 }
 
 static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
@@ -3611,6 +3752,10 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
     GfxRect ro = { th.x - ring, th.y - ring, th.w + ring * 2, th.h + ring * 2 };
     gfx_color(ro, (NV_DETEP_THUMB_R + ring) / ro.h, 1, 1, 1, f * a);
   }
+  if (ep && cat_ep_unaired(ep)) {
+    const CatItem *series = cat_item(idx);
+    detail_unaired_thumb(th, radiusTh, ep, series ? series->backdrop : NULL, rowA);
+  } else
   { float aspect;
     GLuint t2 = episodeThumbTex(ep, &aspect);
     if (t2) {
@@ -3634,7 +3779,7 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
   }
   // THE WATCHED MARK, in the thumbnail's top-right corner and scaling with it: a
   // plain white disc with `ep_watched`, the bare tick, tinted dark on it.
-  if (ep && extras_ep_watched(ep->season, ep->episode)) {
+  if (ep && epWatched(ep->season, ep->episode)) {
     float sc2 = th.w / NV_DETEP_THUMB_W, d = NV_DETEP_CHECK * sc2;
     float in = NV_DETEP_CHECK_INSET * sc2, t = d * NV_DETEP_CHECK_TICK;
     GfxRect st = { th.x + th.w - in - d, th.y + in, d, d };
@@ -3649,6 +3794,12 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
     EpActions ac; episodeActions(ep, &ac);
     float aAct = f * a;
     GfxRect pill = { ac.pill.x, mid - NV_DETEP_BTN_H * 0.5f, ac.pill.w, NV_DETEP_BTN_H };
+    if (ep && cat_ep_unaired(ep)) {
+      // Outlined, label only: "Airs Sat 14 Nov" is information, not a button.
+      gfx_rect(pill, 0, GFX_RING_INSET, 0, 3.0f / pill.h, 0, NV_RADIUS_PILL,
+               1, 1, 1, 0.55f * aAct);
+      txt_draw_alpha(ac.label, pill.x + NV_DETEP_BTN_PADX, mid - ac.label.h * 0.5f, aAct);
+    } else {
     gfx_color(pill, NV_RADIUS_PILL, NV_DETWEB_FOCUS, NV_DETWEB_FOCUS,
               NV_DETWEB_FOCUS, aAct);
     { GfxRect ic = { pill.x + NV_DETEP_BTN_PADX, mid - NV_DETEP_BTN_ICON * 0.5f,
@@ -3657,6 +3808,7 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
                NV_DETWEB_FOCUS_INK, aAct); }
     txt_draw_alpha(ac.label, pill.x + NV_DETEP_BTN_PADX + NV_DETEP_BTN_ICON
                              + NV_DETEP_BTN_GAPI, mid - ac.label.h * 0.5f, aAct);
+    }
     if (ac.left.w > 0.0f)
       txt_draw_alpha(ac.left, ac.xStart, mid - ac.left.h * 0.5f, aAct);
   }
@@ -3683,6 +3835,7 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
     // series' text.
     if (!name) { snprintf(fallback, sizeof fallback, "Episode %d", epNum);
                  name = fallback; }
+    if (ep && cat_ep_unaired(ep) && (!ep->name[0] || !strcasecmp(ep->name, "TBD"))) name = "TBA";
     float wKick = txt_tracking(TXT_DETWEB_EP_BADGE, kick, 170, 170, 170,
                                -1.0f, 0.0f, 0.0f, NV_DETEP_KICK_LS);
     float xTitle = tx + wKick + NV_DETEP_KICK_GAP;
@@ -3705,8 +3858,8 @@ static void drawEpisodeRow(float y, float h, int c, float f, float g, float a) {
       txt_draw_alpha(l, tx, yD, rowA * (1.0f - aFull));
     }
     if (aFull > 0.01f)
-      txt_block(TXT_DETWEB_EPD, syn, 225, 225, 225, tx, yD, right - episodeCopyX(1.0f),
-                NV_DETEP_DESC_LD, rowA * aFull, 0);
+      txt_block_trim(TXT_DETWEB_EPD, syn, 225, 225, 225, tx, yD, right - episodeCopyX(1.0f),
+                     NV_DETEP_DESC_LD, rowA * aFull, NV_DETEP_SYN_LINES);
   }
 }
 

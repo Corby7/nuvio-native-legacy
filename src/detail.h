@@ -49,6 +49,14 @@ int  detail_settled(void);
 int  detail_index(void);
 // The season and episode in focus (1 = there is an episode; 0 = a title with none).
 int  detail_ep_focus(int *season, int *episode);
+// After an episode played to the end: the focus goes onto `episode` of `season` in
+// the episode list, so OK plays it. Does nothing if the page has no such episode.
+void detail_focus_episode(int season, int episode);
+// AN UNAIRED EPISODE'S THUMBNAIL (T1, the date card): the series' art blurred and
+// dimmed, the air date large in the middle ("NOV" over "14"), or "TBA" when there
+// is no date. One drawing for the title page and the player's episode picker.
+// `radius` is a fraction of the rect's height, as gfx_color takes it.
+void detail_unaired_thumb(GfxRect th, float radius, const CatEp *ep, const char *art, float a);
 int  detail_requested_play(void);   // consumes the request
 // The IMDb trailer (trailers.h index) OK asked to play, -1 for none; consumes it.
 int  detail_requested_trailer(void);
@@ -445,6 +453,7 @@ void detail_tooltip(GfxRect btn, const char *label, float opacity, float a);
 #define NV_DETEP_META_DY      42.0f   // title baseline -> meta baseline
 #define NV_DETEP_DESC_DY      44.0f   // meta baseline -> the synopsis' first baseline
 #define NV_DETEP_DESC_LD      35.0f
+#define NV_DETEP_SYN_LINES     2      // the focused row's synopsis, then an ellipsis
 #define NV_DETEP_DOT_SEP      16.0f   // each side of the "·" on the meta line
 // The mark's height; the width follows the art. 23, a little over the score's digits,
 // as in the owner's reference: at 26 the badge outweighed the number it labels, and at

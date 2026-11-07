@@ -20,7 +20,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${NUVIO_SHOTS:-$ROOT/.macref}"
 LOG="${NUVIO_LOG:-$ROOT/.macref/app.log}"
 BIN=/tmp/nuvio-native-legacy-mac
-mkdir -p "$OUT"
+# The request files' folder (NUVIO_DEV_DIR in main.c). Set it to test beside an
+# installed Nuvio, which watches /tmp and would otherwise take these keys too.
+DEV="${NUVIO_DEV_DIR:-/tmp}"
+mkdir -p "$OUT" "$DEV"
 
 # requestNew() in main.c tests st_size > 0, so an EMPTY request file is never
 # seen. Everything written here carries a payload for that reason.
@@ -60,30 +63,30 @@ case "$1" in
     done
     echo "did not become ready; see $LOG" >&2; exit 1 ;;
 
-  goto)  say "$2" /tmp/nuvio-goto ;;
+  goto)  say "$2" $DEV/nuvio-goto ;;
   where) grep '^\[nav\]' "$LOG" | tail -1 ;;
   rects)
-    say regions /tmp/nuvio-key
+    say regions $DEV/nuvio-key
     sleep 0.6
     # Only the lines from THIS request: the log keeps every earlier dump.
     awk '/^\[rect\]/{n++; a[n]=$0} END{for(i=1;i<=n;i++) print a[i]}' "$LOG" | tail -8 ;;
   key)
     shift
-    for k in "$@"; do say "$k" /tmp/nuvio-key; sleep 0.45; done ;;
+    for k in "$@"; do say "$k" $DEV/nuvio-key; sleep 0.45; done ;;
 
   shot)
     name="${2:-shot}"
     region="$3"
     # The .bmp belongs to the app and /tmp is sticky, so it cannot be deleted
     # here: wait for its MTIME to change, or the previous capture comes back.
-    before=$(stat -f %m /tmp/nuvio-shot.bmp 2>/dev/null || echo 0)
-    say shot /tmp/nuvio-shot-req
+    before=$(stat -f %m $DEV/nuvio-shot.bmp 2>/dev/null || echo 0)
+    say shot $DEV/nuvio-shot-req
     for _ in $(seq 1 40); do
       sleep 0.25
-      now=$(stat -f %m /tmp/nuvio-shot.bmp 2>/dev/null || echo 0)
+      now=$(stat -f %m $DEV/nuvio-shot.bmp 2>/dev/null || echo 0)
       [ "$now" != "$before" ] && break
     done
-    sips -s format png /tmp/nuvio-shot.bmp --out "$OUT/$name.png" >/dev/null
+    sips -s format png $DEV/nuvio-shot.bmp --out "$OUT/$name.png" >/dev/null
     if [ -n "$region" ]; then
       line=$("$0" rects | awk -v r="$region" '$2==r{print; exit}')
       [ -n "$line" ] || { echo "no region '$region' on this screen" >&2; exit 1; }

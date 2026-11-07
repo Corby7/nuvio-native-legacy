@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <strings.h>   // strcasecmp
 
 // Allocated as it arrives, not sized by a guessed number.
 static CatItem *items;
@@ -26,9 +27,7 @@ void cat_backdrop_shrink(char *url, unsigned size, unsigned width) {
   snprintf(url, size, "%s", new);
 }
 
-// Makes sure there is room for `want` items. Returns 0 if it could not (and the
-// caller carries on with what it had, which beats losing everything).
-static void ensureTracks(int count);
+static void keepSeasons(CatItem *v, int count);
 // Defined below, next to cat_set_all — the two callers that put items in are
 // there and it reads `items`, which is declared above this line.
 static void applyProgress(int from, int to);
@@ -54,9 +53,37 @@ static char dirWriting[512];
 // most of which are films with no episodes at all.
 #define CAT_EP_MAX 600
 static CatEp eps[CAT_EP_MAX];
-// Episode ranges per title, the same size as the item array — which now grows,
-// so these do too.
-static int  *epStart, *epCount, nEps;
+static int nEps;
+// THE EPISODE RANGES ARE KEPT BY TITLE, NOT BY SLOT. They used to be two arrays
+// indexed like items[], and every catalogue change — discovery publishing a row,
+// a search result or a credit appended, the rebuild after the player closes —
+// zeroed all of them, because the indices no longer meant the same titles. The
+// title page then sat with no episode list (the picker and the rows gone) until
+// its retry asked again, seconds later or, with the tries spent, never. Keyed by
+// the id, a range survives every swap; eps[] is only emptied when it is full.
+#define CAT_EP_TITLES 48
+typedef struct { char imdb[24]; int start, count; unsigned used; } EpRange;
+static EpRange epRanges[CAT_EP_TITLES];
+static unsigned epClock;
+static const char *itemId(int indexItem);
+static EpRange *rangeById(const char *id) {
+  if (!id || !id[0]) return NULL;
+  for (int k = 0; k < CAT_EP_TITLES; k++)
+    if (epRanges[k].count > 0 && !strcmp(epRanges[k].imdb, id)) return &epRanges[k];
+  return NULL;
+}
+static EpRange *rangeOf(int indexItem) { return rangeById(itemId(indexItem)); }
+// The title's slot, or the least recently written one to reuse.
+static EpRange *rangeClaim(const char *id) {
+  EpRange *r = rangeById(id), *old = &epRanges[0];
+  if (r) return r;
+  for (int k = 0; k < CAT_EP_TITLES; k++) {
+    if (epRanges[k].count == 0) return &epRanges[k];
+    if (epRanges[k].used < old->used) old = &epRanges[k];
+  }
+  return old;
+}
+static void rangesClear(void) { memset(epRanges, 0, sizeof epRanges); nEps = 0; }
 
 // Playback progress is a position, not proof that the title was marked as
 // watched. Trakt's history is kept separate, by stable identity, so that a
@@ -111,6 +138,16 @@ int cat_history_state_item(int index_) {
   return p >= 0 && history[p].known ? history[p].watched : -1;
 }
 
+// The same reading by identity, for callers that hold a CatItem and not its index
+// (the home's watched badge). It MUST be the modal's reading: the badge once took
+// progress >= 90 instead, so a title with a stray 100% resume point synced in from
+// elsewhere wore the tick while the modal, reading the real history, offered only
+// "Mark as watched" — a mark that could not be taken off.
+int cat_history_state_id(const char *imdb, const char *kind) {
+  int p = history_pos(imdb, kind, 0);
+  return p >= 0 && history[p].known ? history[p].watched : -1;
+}
+
 // Updates the history snapshot only after a 2xx from Trakt. The key is the IMDb
 // id with no episode suffix, never the array index.
 void cat_history_set_id(const char *imdb, const char *kind, int watched) {
@@ -129,17 +166,30 @@ const char *cat_kind_by_imdb(const char *imdb) {
   return (imdb && strchr(imdb, ':')) ? "series" : "movie";
 }
 
-static void ensureTracks(int count) {
-  int *a, *b;
-  if (count < 1) return;
-  a = realloc(epStart, sizeof(int) * (size_t)count);
-  b = realloc(epCount, sizeof(int) * (size_t)count);
-  if (a) epStart = a;
-  if (b) epCount = b;
-  if (epStart) memset(epStart, 0, sizeof(int) * (size_t)count);
-  if (epCount) memset(epCount, 0, sizeof(int) * (size_t)count);
-}
 static int n = 0;
+static const char *itemId(int indexItem) {
+  int m = n;
+  if (m < 1 || !items) return NULL;
+  indexItem = ((indexItem % m) + m) % m;
+  return items[indexItem].imdb;
+}
+
+// MAY THIS PROGRESS LINE GO ONTO THIS CARD? A card whose id names its episode
+// ("tt…:29:4" — every series card in Continue watching) takes only THAT episode's
+// line; a bare id ("tt…", a catalogue row) takes any line of its work.
+//
+// Every path that puts progress onto items asks this, and must. The sync did not:
+// it re-applied the account's rows every five minutes onto the FIRST item of each
+// work — the Continue watching card — so a next-up "S29 E4" turned back into the
+// finished "S29 E3" at 100%, its episode name wiped, and stayed so (the line on
+// disk was unchanged, so nothing asked the row to rebuild).
+static int lineFitsCard(const char *itemImdb, int season, int episode) {
+  const char *dp = strchr(itemImdb, ':');
+  int s2, e2;
+  if (!dp || season <= 0 || episode <= 0) return 1;
+  if (sscanf(dp, ":%d:%d", &s2, &e2) != 2) return 1;
+  return s2 == season && e2 == episode;
+}
 
 // Copies the field up to the next '|' (or end of line), without overflowing the
 // destination.
@@ -321,6 +371,7 @@ int cat_load(const char *dirArt) {
           // the title's prefix, which is what identifies the work.
           if (!strncmp(items[i].imdb, id, strlen(id)) &&
               (items[i].imdb[strlen(id)] == 0 || items[i].imdb[strlen(id)] == ':')) {
+            if (!lineFitsCard(items[i].imdb, season, episode)) continue;
             items[i].progress = cat_pct(pos, duration);
             items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
             items[i].resumedMs = ms;
@@ -346,8 +397,7 @@ int cat_load(const char *dirArt) {
   // title, as in the other files, would waste most of the lines.
   snprintf(path, sizeof path, "%s/episodes.txt", dirArt);
   { FILE *fe2 = fopen(path, "r");
-    nEps = 0;
-    ensureTracks(nAllocated);
+    rangesClear();
     if (fe2) {
       while (nEps < CAT_EP_MAX && fgets(line, sizeof line, fe2)) {
         char c1[8], c2[8], c3[8];
@@ -369,8 +419,15 @@ int cat_load(const char *dirArt) {
         { char rel[512] = "";
           field(q, rel, sizeof rel);
           if (rel[0]) snprintf(ep->thumb, sizeof ep->thumb, "%s/%s", dirArt, rel); }
-        if (!epCount[target]) epStart[target] = nEps;
-        epCount[target]++;
+        { EpRange *r = items[target].imdb[0] ? rangeClaim(items[target].imdb) : NULL;
+          if (r) {
+            if (strcmp(r->imdb, items[target].imdb)) {
+              snprintf(r->imdb, sizeof r->imdb, "%s", items[target].imdb);
+              r->count = 0;
+            }
+            if (!r->count) r->start = nEps;
+            r->count++; r->used = ++epClock;
+          } }
         nEps++;
       }
       fclose(fe2);
@@ -674,52 +731,65 @@ void cat_save_progress_at(int index_, double posSeg, double durationSeg,
     const char *dp = strchr(it->imdb, ':');
     if (dp) sscanf(dp + 1, "%d:%d", &season, &episode);
   }
-  if (!cat_save_progress_id(it->imdb, posSeg, durationSeg, season, episode,
+  char id[24];
+  snprintf(id, sizeof id, "%s", it->imdb);
+  if (!cat_save_progress_id(id, posSeg, durationSeg, season, episode,
                             whenMs, origin)) return;
 
-  items[index_].progress = cat_pct(posSeg, durationSeg);
-  items[index_].remainingMin = (int)((durationSeg - posSeg) / 60.0 + 0.5);
-  // The instant goes onto the item as well as into the file. The line just
-  // written is what the next build will read, but the item in memory is what
-  // the screen holds until then, and leaving it stale means the same record
-  // reports two different instants depending on who asks.
-  items[index_].resumedMs = whenMs > 0 ? whenMs
-                          : (origin == 1 ? (long long)time(NULL) * 1000 : 0);
-  if(season>0 && episode>0) {
-    if (items[index_].season != season || items[index_].episode != episode) {
-      items[index_].nameEpisode[0] = 0;
-      items[index_].thumbEp[0] = 0;
-    }
-    items[index_].season=season;
-    items[index_].episode=episode;
-    for (int e = 0; e < cat_n_episodes(index_); e++) {
-      const CatEp *ep = cat_episode(index_, e);
-      if (ep && ep->season == season && ep->episode == episode) {
-        snprintf(items[index_].nameEpisode, sizeof items[index_].nameEpisode, "%s", ep->name);
-        // The still travels with the name. This is the path that feeds the
-        // "Resume now" band, which points at a CATALOGUE item and so never went
-        // through trakt.c's decorate: without this it drew the series' backdrop
-        // while the row below it, built from the same progress, drew the episode.
-        snprintf(items[index_].thumbEp, sizeof items[index_].thumbEp, "%s", ep->thumb);
-        break;
+  // WHICH ITEMS TAKE IT. Playback here (origin 1) updates the item that is
+  // playing — the screen under the player is that card. Anything else (the
+  // account's rows, replayed by the sync on every cycle) is not about any one
+  // card: `index_` is merely the first item of the work, which is the Continue
+  // watching card, and writing a finished episode onto a next-up card is what
+  // turned "S29 E4" back into "S29 E3" at 100%. Those go, under lineFitsCard,
+  // onto every item of the work — the same rule applyProgress keeps.
+  for (i = 0; i < n; i++) {
+    if (origin == 1 ? i != index_
+                    : (!sameTitle(items[i].imdb, id) ||
+                       !lineFitsCard(items[i].imdb, season, episode)))
+      continue;
+    items[i].progress = cat_pct(posSeg, durationSeg);
+    items[i].remainingMin = (int)((durationSeg - posSeg) / 60.0 + 0.5);
+    // The instant goes onto the item as well as into the file. The line just
+    // written is what the next build will read, but the item in memory is what
+    // the screen holds until then, and leaving it stale means the same record
+    // reports two different instants depending on who asks.
+    items[i].resumedMs = whenMs > 0 ? whenMs
+                       : (origin == 1 ? (long long)time(NULL) * 1000 : 0);
+    if (season > 0 && episode > 0) {
+      if (items[i].season != season || items[i].episode != episode) {
+        items[i].nameEpisode[0] = 0;
+        items[i].thumbEp[0] = 0;
+      }
+      items[i].season = season;
+      items[i].episode = episode;
+      for (int e = 0; e < cat_n_episodes(i); e++) {
+        const CatEp *ep = cat_episode(i, e);
+        if (ep && ep->season == season && ep->episode == episode) {
+          snprintf(items[i].nameEpisode, sizeof items[i].nameEpisode, "%s", ep->name);
+          // The still travels with the name. This is the path that feeds the
+          // "Resume now" band, which points at a CATALOGUE item and so never went
+          // through trakt.c's decorate: without this it drew the series' backdrop
+          // while the row below it, built from the same progress, drew the episode.
+          snprintf(items[i].thumbEp, sizeof items[i].thumbEp, "%s", ep->thumb);
+          break;
+        }
       }
     }
   }
 }
 
 int cat_n_episodes(int indexItem) {
-  int m = cat_n();
-  if (m < 1) return 0;
-  indexItem = ((indexItem % m) + m) % m;
-  return epCount[indexItem];
+  const EpRange *r = cat_n() > 0 ? rangeOf(indexItem) : NULL;
+  return r ? r->count : 0;
 }
 
 int cat_set_ep_score(int indexItem, int season, int episode, int tenths) {
   int m = cat_n();
   if (m < 1 || tenths <= 0) return 0;
-  indexItem = ((indexItem % m) + m) % m;
-  for (int i = 0; i < epCount[indexItem]; i++) {
-    CatEp *e = &eps[epStart[indexItem] + i];
+  const EpRange *r = rangeOf(indexItem);
+  for (int i = 0; r && i < r->count; i++) {
+    CatEp *e = &eps[r->start + i];
     if (e->season == season && e->episode == episode) { e->imdb = tenths; return 1; }
   }
   return 0;
@@ -728,9 +798,9 @@ int cat_set_ep_score(int indexItem, int season, int episode, int tenths) {
 int cat_set_ep_runtime(int indexItem, int season, int episode, int minutes) {
   int m = cat_n();
   if (m < 1 || minutes <= 0) return 0;
-  indexItem = ((indexItem % m) + m) % m;
-  for (int i = 0; i < epCount[indexItem]; i++) {
-    CatEp *e = &eps[epStart[indexItem] + i];
+  const EpRange *r = rangeOf(indexItem);
+  for (int i = 0; r && i < r->count; i++) {
+    CatEp *e = &eps[r->start + i];
     if (e->season == season && e->episode == episode) {
       // Only into an EMPTY field: one the addon already filled is left as it said.
       if (!e->duration[0]) snprintf(e->duration, sizeof e->duration, "%d min", minutes);
@@ -741,11 +811,9 @@ int cat_set_ep_runtime(int indexItem, int season, int episode, int minutes) {
 }
 
 const CatEp *cat_episode(int indexItem, int i) {
-  int m = cat_n();
-  if (m < 1) return NULL;
-  indexItem = ((indexItem % m) + m) % m;
-  if (i < 0 || i >= epCount[indexItem]) return NULL;
-  return &eps[epStart[indexItem] + i];
+  const EpRange *r = cat_n() > 0 ? rangeOf(indexItem) : NULL;
+  if (!r || i < 0 || i >= r->count) return NULL;
+  return &eps[r->start + i];
 }
 
 int cat_n_rows(void) { return nFilters; }
@@ -808,7 +876,6 @@ int cat_append_batch(const CatItem *v, int count, int *outputIdx) {
   items = new;
   nAllocated = newN;
   n = newN;
-  ensureTracks(nAllocated);
   return count;
 }
 
@@ -828,7 +895,6 @@ int cat_append(const CatItem *item) {
   items = new;
   nAllocated = newN;
   n = newN;
-  ensureTracks(nAllocated);
   return newN - 1;
 }
 
@@ -890,10 +956,7 @@ int cat_row_grow(int r, const CatItem *v, int count) {
   // row, and leaving it where it was would hand it this row's new page.
   for (k = 0; k < nFilters; k++)
     if (k != r && filters[k].start >= at) filters[k].start += count;
-  // The episode ranges are indexed by ITEM, so the shift invalidates them all —
-  // and ensureTracks zeroes them anyway. They are refetched when a title opens.
-  nEps = 0;
-  ensureTracks(nAllocated);
+  // The episode ranges are kept by title id, so the shift leaves them standing.
   applyProgress(at, at + count);
   return count;
 }
@@ -932,8 +995,6 @@ int cat_row_drop(int r, const char *imdb) {
     memmove(&filters[r], &filters[r + 1], sizeof filters[0] * (size_t)(nFilters - r - 1));
     nFilters--;
   }
-  nEps = 0;
-  ensureTracks(nAllocated);
   return gone;
 }
 
@@ -962,6 +1023,7 @@ int cat_row_replace(const CatRow *row, const CatItem *v, int count) {
   if (!new) return 0;
   memcpy(new, items, sizeof(CatItem) * (size_t)at);
   if (count > 0) memcpy(new + at, v, sizeof(CatItem) * (size_t)count);
+  if (count > 0) keepSeasons(new + at, count);
   memcpy(new + at + count, items + at + old, sizeof(CatItem) * (size_t)(n - at - old));
   free(garbage);
   garbage = items;
@@ -985,8 +1047,6 @@ int cat_row_replace(const CatRow *row, const CatItem *v, int count) {
   } else {
     filters[r].n = count;
   }
-  nEps = 0;
-  ensureTracks(nAllocated);
   if (count > 0) applyProgress(at, at + count);
   return 1;
 }
@@ -1023,11 +1083,7 @@ static void applyProgress(int from, int to) {
         // that episode's line. The prefix match handed it the line of the one
         // just FINISHED: next up S1E2 came out as S1E1 at 100%, and OK on it
         // restarted S1E1 from the top, since a finished episode plays from 0.
-        int s2, e2;
-        if (items[i].imdb[L] == ':' && season > 0 && episode > 0 &&
-            sscanf(items[i].imdb + L, ":%d:%d", &s2, &e2) == 2 &&
-            (s2 != season || e2 != episode))
-          continue;
+        if (!lineFitsCard(items[i].imdb, season, episode)) continue;
         items[i].progress = cat_pct(pos, duration);
         items[i].remainingMin = (int)((duration - pos) / 60.0 + 0.5);
         items[i].resumedMs = ms;
@@ -1044,6 +1100,21 @@ static void applyProgress(int from, int to) {
   fclose(fp);
 }
 
+
+// THE SEASON LIST SURVIVES A SWAP. It is filled in on the title (cat_update_item)
+// when the title page fetches its meta, and a swap brings every title in fresh
+// from the network, without it — the page's picker went blank with the list.
+// Copied from the title's copy in the catalogue going out, before it goes.
+static void keepSeasons(CatItem *v, int count) {
+  for (int i = 0; i < n && items; i++) {
+    if (items[i].nSeasons <= 0 || !items[i].imdb[0]) continue;
+    for (int k = 0; k < count; k++)
+      if (v[k].nSeasons <= 0 && !strcmp(v[k].imdb, items[i].imdb)) {
+        memcpy(v[k].seasons, items[i].seasons, sizeof v[k].seasons);
+        v[k].nSeasons = items[i].nSeasons;
+      }
+  }
+}
 
 void cat_set_all(const CatItem *list, int count,
                       const CatRow *newFilters, int nNew) {
@@ -1067,6 +1138,7 @@ void cat_set_all(const CatItem *list, int count,
     static CatItem *garbage;
     if (!new) return;
     memcpy(new, list, sizeof(CatItem) * (size_t)newN);
+    keepSeasons(new, newN);
     // The rows fall TOGETHER with `n`. They are (start,n) windows into the item
     // array; leaving the old ones standing for one frame while the array swaps
     // makes the drawing read out of range.
@@ -1093,34 +1165,32 @@ void cat_set_all(const CatItem *list, int count,
       nFilters = v;
     }
   }
-  // Episodes from the previous catalogue do not apply to the new one: the
-  // indices have changed.
-  nEps = 0;
-  ensureTracks(nAllocated);
-  (void)0;
+  // The episodes survive: their ranges are kept by title id (see EpRange).
   // Progress comes from a file and is keyed by imdb, so it survives the swap —
   // but it has to be reapplied, because the new items were born zeroed.
   applyProgress(0, n);
 }
 
 void cat_set_episodes(int indexItem, const CatEp *list, int count) {
-  int m = cat_n();
-  if (!list || count < 1 || m < 1) return;
-  indexItem = ((indexItem % m) + m) % m;
+  const char *id;
+  EpRange *r;
+  if (!list || count < 1 || cat_n() < 1) return;
+  id = itemId(indexItem);
+  if (!id || !id[0]) return;
   if (count > CAT_EP_MAX) count = CAT_EP_MAX;
-  // Appends at the end of the shared array. Switching season several times
+  // Appends at the end of the shared array. Asking again for the same title
   // accumulates, but the CAT_EP_MAX ceiling holds it and compacting does not pay
-  // for itself.
-  if (nEps + count > CAT_EP_MAX) {
-    nEps = 0;
-    // Invalidate the indices before reusing the storage: otherwise another
-    // series starts showing the episodes of the work that has just been loaded.
-    memset(epCount,0,(size_t)nAllocated*sizeof *epCount);
-    memset(epStart,0,(size_t)nAllocated*sizeof *epStart);
-  }
+  // for itself. Full, every range goes: otherwise another series starts showing
+  // the episodes of the one that has just been loaded.
+  if (nEps + count > CAT_EP_MAX) rangesClear();
   memcpy(&eps[nEps], list, sizeof(CatEp) * (size_t)count);
-  epStart[indexItem] = nEps;
-  epCount[indexItem] = count;
+  r = rangeClaim(id);
+  // The count falls first and rises last: the drawing thread reads these.
+  r->count = 0;
+  snprintf(r->imdb, sizeof r->imdb, "%s", id);
+  r->start = nEps;
+  r->used = ++epClock;
+  r->count = count;
   nEps += count;
 }
 
@@ -1335,9 +1405,23 @@ static void cwRemovedReset(void) {
   pthread_mutex_unlock(&lockCwRemoved);
 }
 
-void cat_cw_dismiss(const char *imdb) {
+// Writes the list back. With lockCwRemoved held.
+static void cwRemovedSave(void) {
   char path[600], tmp[600];
   FILE *fp;
+  int i;
+  if (!dirWriting[0]) return;
+  profilePath(path, sizeof path, "cw-removed", "txt");
+  profilePath(tmp, sizeof tmp, "cw-removed", "tmp");
+  fp = fopen(tmp, "w");
+  if (!fp) return;
+  for (i = 0; i < nCwRemoved; i++)
+    fprintf(fp, "%s\t%lld\n", cwRemoved[i].imdb, cwRemoved[i].ms);
+  fclose(fp);
+  rename(tmp, path);
+}
+
+void cat_cw_dismiss(const char *imdb) {
   long long now = (long long)time(NULL) * 1000;
   int i, found = -1;
   if (!imdb || !imdb[0]) return;
@@ -1357,17 +1441,22 @@ void cat_cw_dismiss(const char *imdb) {
              (int)strcspn(imdb, ":"), imdb);
   }
   cwRemoved[found].ms = now;
-  if (dirWriting[0]) {
-    profilePath(path, sizeof path, "cw-removed", "txt");
-    profilePath(tmp, sizeof tmp, "cw-removed", "tmp");
-    fp = fopen(tmp, "w");
-    if (fp) {
-      for (i = 0; i < nCwRemoved; i++)
-        fprintf(fp, "%s\t%lld\n", cwRemoved[i].imdb, cwRemoved[i].ms);
-      fclose(fp);
-      rename(tmp, path);
+  cwRemovedSave();
+  pthread_mutex_unlock(&lockCwRemoved);
+}
+
+void cat_cw_undismiss(const char *imdb) {
+  int i;
+  if (!imdb || !imdb[0]) return;
+  pthread_mutex_lock(&lockCwRemoved);
+  cwRemovedLoad();
+  for (i = 0; i < nCwRemoved; i++)
+    if (sameTitle(cwRemoved[i].imdb, imdb)) {
+      memmove(&cwRemoved[i], &cwRemoved[i + 1], sizeof cwRemoved[0] * (size_t)(nCwRemoved - i - 1));
+      nCwRemoved--;
+      cwRemovedSave();
+      break;
     }
-  }
   pthread_mutex_unlock(&lockCwRemoved);
 }
 
@@ -1385,4 +1474,40 @@ int cat_cw_dismissed(const char *imdb, long long whenMs) {
     }
   pthread_mutex_unlock(&lockCwRemoved);
   return v;
+}
+
+// --- UNAIRED EPISODES -----------------------------------------------------------
+// See catalog.h. "Today" is the local date: an episode that airs tonight here is
+// out tomorrow morning, which is what the viewer means by it.
+static int epNamed(const CatEp *ep) {
+  return ep->name[0] && strcasecmp(ep->name, "TBA") && strcasecmp(ep->name, "TBD");
+}
+int cat_ep_unaired(const CatEp *ep) {
+  char today[12];
+  time_t now;
+  struct tm lt;
+  if (!ep) return 0;
+  if (!ep->aired[0]) return epNamed(ep) ? 0 : 2;
+  now = time(NULL);
+  localtime_r(&now, &lt);
+  snprintf(today, sizeof today, "%04d-%02d-%02d", lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday);
+  return strncmp(ep->aired, today, 10) > 0 ? 1 : 0;
+}
+void cat_ep_airs_label(const CatEp *ep, char *out, size_t size) {
+  static const char *DAY[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+  static const char *MON[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+  int kind = cat_ep_unaired(ep), y, m, d;
+  struct tm t;
+  if (!out || size < 1) return;
+  out[0] = 0;
+  if (!kind) return;
+  if (kind == 2 || sscanf(ep->aired, "%d-%d-%d", &y, &m, &d) != 3 || m < 1 || m > 12) {
+    snprintf(out, size, "Date not announced");
+    return;
+  }
+  memset(&t, 0, sizeof t);
+  t.tm_year = y - 1900; t.tm_mon = m - 1; t.tm_mday = d; t.tm_hour = 12; t.tm_isdst = -1;
+  if (mktime(&t) == (time_t)-1) { snprintf(out, size, "Airs %d %s", d, MON[m - 1]); return; }
+  snprintf(out, size, "Airs %s %d %s", DAY[t.tm_wday], d, MON[m - 1]);
 }

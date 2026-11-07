@@ -121,8 +121,8 @@ static struct { char title[120], year[8], imdb[16], poster[200]; } rel[EX_REL_MA
 // Watched: one bit per episode, up to 40 episodes across 20 seasons. A fixed
 // array because the lookup happens while DRAWING each card, every frame — a
 // list search there would cost more than the answer.
-#define EX_VIS_T 20
-#define EX_VIS_E 40
+#define EX_VIS_T 64   // South Park is past 29 seasons; 20 cut its ticks off at S19
+#define EX_VIS_E 128
 static unsigned char watched[EX_VIS_T][EX_VIS_E];
 static int progressReady, nextT, nextE;
 static int  nRel;
@@ -244,7 +244,10 @@ static void taskProgress(Job *j, int arg) {
     while (p) {
       const char *f = js_end(p);
       int t = (int)js_num(p, f, "number", -1.0);
-      if (t >= 0 && t < EX_VIS_T) {
+      // EVERY SEASON is read: the bound below is the grid's alone. It used to
+      // wrap the whole loop, so a season past EX_VIS_T reached neither the grid
+      // nor the episode map — South Park's S20 on never had a single tick.
+      if (t >= 0) {
         const char *q = js_array(p, f, "episodes");
         while (q) {
           const char *qf = js_end(q);
@@ -257,11 +260,11 @@ static void taskProgress(Job *j, int arg) {
           if (c && c < qf) { const char *v = c + 12;
                              while (*v == ' ' || *v == ':') v++;
                              watched = (*v == 't'); }
-          if (watched && en > 0 && en < EX_VIS_E) new[t][en] = 1;
+          if (watched && t < EX_VIS_T && en > 0 && en < EX_VIS_E) new[t][en] = 1;
           // THE SAME PARSE FEEDS THE EPISODE MAP, with no second request.
           //
-          // `new` above is this title's grid and it is bounded: EX_VIS_T 20
-          // seasons by EX_VIS_E 40 episodes, so a long-running series loses
+          // `new` above is this title's grid and it is bounded: EX_VIS_T 64
+          // seasons by EX_VIS_E 128 episodes, so a longer series still loses
           // its later marks silently. It also dies when the screen changes
           // title. watchedep has neither limit and holds for the session,
           // which is what the marking gestures need — they have to enumerate

@@ -37,4 +37,23 @@ const char *cw_remove_busy(void);
 // while the local half is still owed: the card is SUPPOSED to be there then.
 void cw_remove_gone(void);
 
+// "MARK / UNMARK AS WATCHED" REACHES THE ROW AT ONCE. Called once the mark has
+// landed (Trakt confirmed, or the account's mirror written), from the UI thread.
+//
+// Marking a title watched — a film, or a series whole, which is the scope both the
+// hold menu and the title page mark — takes it out of Continue watching NOW (the
+// card leaves on this frame) and keeps it out (cat_cw_dismiss) until it is played
+// again: Trakt's resume point and an older next-up seed would otherwise bring it
+// straight back on the next build. Unmarking lifts that. Either way the row is then
+// rebuilt from its sources (disc_cw_refresh), off the critical path.
+void cw_watched(const char *imdb, int watched);
+
+// "MARK EPISODE AS WATCHED", from a series card in Continue watching: the
+// episode on the card (S`season`E`episode` of catalogue item `index_`), not the
+// show. Local at once — the episode's tick, and a card in progress written as
+// finished — then Trakt (or, without it, the account) on a thread of its own. The
+// card moves on to the episode after it on the next frame; the row is then
+// rebuilt from its sources to confirm. 1 when it went ahead.
+int cw_episode_watched(int index_);
+
 #endif

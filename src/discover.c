@@ -1513,7 +1513,9 @@ static int resumeLocal(CatItem *output, int max) {
 // everything already in progress. That is what "South Park first, with the next
 // episode on it" means, and appending next-up after the in-progress half would
 // not deliver it.
-#define NEXTUP_MAX 4
+// AS MANY AS THE ROW HOLDS (CONT_MAX). It was 4, so with five series finished
+// recently the oldest lost its next-up card although the row had room for it.
+#define NEXTUP_MAX 8
 
 // One seed and its answer. The download is per series and there are at most
 // NEXTUP_MAX of them, so each gets a thread rather than a queue: the pool
@@ -1524,6 +1526,7 @@ typedef struct {
   long long ms;            // when it finished; the next-up card inherits it
   int  found, nextS, nextE;
   long long airs;          // the found episode's release, 0 once it is out
+  int  failed;             // the episode list did not arrive: not an answer
 } NextUp;
 
 
@@ -1576,23 +1579,15 @@ static int nextUpAllowed(const char *released, int anchorSeason, int season) {
     return (long)(when - now) <= (long)NEXTUP_NEW_SEASON_WINDOW_DAYS * 86400L; }
 }
 
-static void *threadNextUp(void *u) {
-  NextUp *t = u;
-  char url[600], *body;
+// The FIRST episode after the anchor that survives every rule — found as a
+// minimum rather than by walking in order, because `videos` arrives in whatever
+// order the addon felt like and publishEpisodes below sorts its own copy. Sorting
+// a second copy here to walk it once would cost more than the comparison does.
+static void resolveNext(const char *body, NextUp *t) {
   const char *v;
   int bestS = 0, bestE = 0;
   char bestReleased[28] = "";
-
-  snprintf(url, sizeof url, "%s/meta/series/%s.json", CINEMETA, t->imdb);
-  // 8 s, the same ceiling trakt.c's decorate uses, and for the same reason:
-  // this sits on the path to the home's FIRST row.
-  body = net_download_cached(url, 8, DISC_META_TTL_S);
-  if (!body) return NULL;
-  // The FIRST episode after the anchor that survives every rule — found as a
-  // minimum rather than by walking in order, because `videos` arrives in
-  // whatever order the addon felt like and publishEpisodes below sorts its own
-  // copy. Sorting a second copy here to walk it once would cost more than the
-  // comparison does.
+  t->found = 0; t->airs = 0;
   for (v = js_array(body, NULL, "videos"); v; v = js_next(js_end(v))) {
     const char *f = js_end(v);
     int s = (int)js_num(v, f, "season", -1);
@@ -1610,7 +1605,6 @@ static void *threadNextUp(void *u) {
     bestS = s; bestE = e;
     snprintf(bestReleased, sizeof bestReleased, "%s", released);
   }
-  free(body);
   if (bestS) {
     char today[12];
     t->found = 1; t->nextS = bestS; t->nextE = bestE;
@@ -1620,6 +1614,33 @@ static void *threadNextUp(void *u) {
       time_t when = releaseTime(bestReleased);
       t->airs = when == (time_t)-1 ? 0 : (long long)when;
     }
+  }
+}
+
+// HOW STALE A "NOTHING NEW YET" MAY BE. The episode list is cached for three
+// hours (DISC_META_TTL_S), which is right for everything else that reads it but
+// not for the one question that changes on a schedule: a series caught up, or
+// waiting on an unaired episode, would show the new episode up to three hours
+// after it came out — on a TV left on all evening, the whole evening. That answer
+// alone is asked again from a copy no older than this.
+#define NEXTUP_WAITING_TTL_S 900
+
+static void *threadNextUp(void *u) {
+  NextUp *t = u;
+  char url[600], *body;
+
+  snprintf(url, sizeof url, "%s/meta/series/%s.json", CINEMETA, t->imdb);
+  // 8 s, the same ceiling trakt.c's decorate uses, and for the same reason:
+  // this sits on the path to the home's FIRST row.
+  body = net_download_cached(url, 8, DISC_META_TTL_S);
+  if (!body || !js_array(body, NULL, "videos")) { t->failed = 1; free(body); return NULL; }
+  resolveNext(body, t);
+  free(body);
+  if (!t->found || t->airs) {
+    // A failure here keeps the first answer: it was a real one, only older.
+    body = net_download_cached(url, 8, NEXTUP_WAITING_TTL_S);
+    if (body && js_array(body, NULL, "videos")) resolveNext(body, t);
+    free(body);
   }
   return NULL;
 }
@@ -1632,41 +1653,100 @@ static void *threadNextUp(void *u) {
 // not also get a next-up card — the web excludes the same set
 // (inProgressSeriesIds), and without it a person halfway through E15 would see
 // both E15 and E16.
+// TRAKT'S HISTORY IS A SOURCE OF SEEDS TOO. progress.txt only knows what a Nuvio
+// device played; a series finished in another Trakt client left no line here and
+// never got its next episode. The web reads the same history for the same purpose
+// (fetchTraktProgressSnapshot's historyItems), with its continueWatchingDaysCap
+// default — 60 days — so a show dropped long ago does not come back from it.
+#define NEXTUP_TRAKT_DAYS 60
+
+static int seedNewestFirst(const void *a, const void *b) {
+  const NextUp *x = a, *y = b;
+  return x->ms > y->ms ? -1 : x->ms < y->ms ? 1 : 0;
+}
+
+// One finished episode offered as a seed: it opens a series' seed, or moves the
+// series' seed on — to a NEWER episode normally, to a FURTHER one with
+// nextUpFromFurthestEpisode on (the newer one's instant is kept either way: it is
+// when the series was last watched, which is what orders the row).
+static int offerSeed(NextUp *out, int n, int cap, const CatItem *busy, int nBusy,
+                     const char *imdb, int season, int episode, long long ms, int furthest) {
+  int j;
+  for (j = 0; j < nBusy; j++) if (sameWork(busy[j].imdb, imdb)) return n;
+  for (j = 0; j < n; j++)
+    if (sameWork(out[j].imdb, imdb)) {
+      int further = season > out[j].season ||
+                    (season == out[j].season && episode > out[j].episode);
+      if (furthest ? further : ms > out[j].ms) {
+        out[j].season = season; out[j].episode = episode;
+      }
+      if (ms > out[j].ms) out[j].ms = ms;
+      return n;
+    }
+  if (n >= cap) return n;
+  memset(&out[n], 0, sizeof out[n]);
+  snprintf(out[n].imdb, sizeof out[n].imdb, "%.*s", (int)strcspn(imdb, ":"), imdb);
+  out[n].season = season; out[n].episode = episode; out[n].ms = ms;
+  return n + 1;
+}
+
 static int nextUpSeeds(const CatItem *busy, int nBusy, NextUp *out, int max) {
   static CatProgress regs[CAT_PROGRESS_MAX];
-  int k, i, j, n = 0, furthest = settings_cw_do_episode_more_alto();
+  static TraktEpSeen fromTrakt[100];
+  static NextUp all[CAT_PROGRESS_MAX + 100];
+  int k, i, n = 0, furthest = settings_cw_do_episode_more_alto();
+  long long cutoff = ((long long)time(NULL) - NEXTUP_TRAKT_DAYS * 86400LL) * 1000;
   k = cat_progress_read(regs, CAT_PROGRESS_MAX);
-  // With `furthest`, the scan goes on past `max`: an older record further into a
-  // series already seeded can still move that seed forward.
-  for (i = 0; i < k && (n < max || furthest); i++) {
+  for (i = 0; i < k; i++) {
     const CatProgress *r = &regs[i];
-    int repeated = 0;
     if (r->durationSeg < 60.0) continue;
     if (r->season <= 0 || r->episode <= 0) continue;        // a film has no "next"
     if (cat_pct(r->posSeg, r->durationSeg) < 90) continue;  // not finished
-    for (j = 0; j < nBusy; j++)
-      if (sameWork(busy[j].imdb, r->imdb)) { repeated = 1; break; }
-    for (j = 0; j < n && !repeated; j++)
-      if (sameWork(out[j].imdb, r->imdb)) {
-        repeated = 1;
-        // Most recent first, so the seed already there is newer: it gives way
-        // only to an episode further on.
-        if (furthest && (r->season > out[j].season ||
-                         (r->season == out[j].season && r->episode > out[j].episode))) {
-          out[j].season = r->season;
-          out[j].episode = r->episode;
-          out[j].ms = r->lastWatchedMs;
-        }
-      }
-    if (repeated || n >= max) continue;
-    memset(&out[n], 0, sizeof out[n]);
-    snprintf(out[n].imdb, sizeof out[n].imdb, "%s", r->imdb);
-    out[n].season = r->season;
-    out[n].episode = r->episode;
-    out[n].ms = r->lastWatchedMs;
-    n++;
+    n = offerSeed(all, n, (int)(sizeof all / sizeof all[0]), busy, nBusy,
+                  r->imdb, r->season, r->episode, r->lastWatchedMs, furthest);
   }
+  k = trakt_recent_episodes(fromTrakt, 100);
+  for (i = 0; i < k; i++) {
+    if (fromTrakt[i].ms < cutoff) continue;
+    n = offerSeed(all, n, (int)(sizeof all / sizeof all[0]), busy, nBusy,
+                  fromTrakt[i].imdb, fromTrakt[i].season, fromTrakt[i].episode,
+                  fromTrakt[i].ms, furthest);
+  }
+  // The most recently watched series first, and as many as the row can use.
+  if (n > 1) qsort(all, (size_t)n, sizeof all[0], seedNewestFirst);
+  if (n > max) n = max;
+  memcpy(out, all, sizeof all[0] * (size_t)n);
   return n;
+}
+
+// THE LAST GOOD ANSWER PER SERIES. A seed whose episode list did not arrive (8 s
+// timeout, no network for a moment) — or whose card the decorator could not
+// describe — used to drop out silently, and the series left the row until the
+// next build. Now it keeps the card the previous build gave it, as long as that
+// card answered the SAME anchor: a series finished further since is a different
+// question, and an old answer to it would be wrong rather than late.
+// Only touched under resumeLock (buildResume's callers hold it).
+typedef struct { char work[24]; int anchorS, anchorE; CatItem item; long long airs; } NextKept;
+static NextKept nextKept[NEXTUP_MAX];
+static int nNextKept, nextKeptProfile;
+
+static NextKept *keptFor(const char *work) {
+  for (int i = 0; i < nNextKept; i++)
+    if (sameWork(nextKept[i].work, work)) return &nextKept[i];
+  return NULL;
+}
+static void keep(const NextUp *seed, const CatItem *item, long long airs) {
+  NextKept *k = keptFor(seed->imdb);
+  if (!k) {
+    if (nNextKept == NEXTUP_MAX) {   // full: the oldest goes
+      memmove(&nextKept[0], &nextKept[1], sizeof nextKept[0] * (NEXTUP_MAX - 1));
+      nNextKept--;
+    }
+    k = &nextKept[nNextKept++];
+  }
+  snprintf(k->work, sizeof k->work, "%s", seed->imdb);
+  k->anchorS = seed->season; k->anchorE = seed->episode;
+  k->item = *item; k->airs = airs;
 }
 
 // Resolves every seed at once and writes the ones that answered into `output` as
@@ -1678,9 +1758,10 @@ static int buildNextUp(const CatItem *busy, int nBusy, CatItem *output, long lon
   NextUp seeds[NEXTUP_MAX];
   pthread_t threads[NEXTUP_MAX];
   int created[NEXTUP_MAX];
-  int n, i, k = 0;
+  int n, i, k = 0, reused = 0;
 
   if (max <= 0) return 0;
+  if (nextKeptProfile != profiles_active()) { nNextKept = 0; nextKeptProfile = profiles_active(); }
   n = nextUpSeeds(busy, nBusy, seeds, NEXTUP_MAX);
   if (n <= 0) return 0;
   for (i = 0; i < n; i++) {
@@ -1708,15 +1789,39 @@ static int buildNextUp(const CatItem *busy, int nBusy, CatItem *output, long lon
   }
   k = trakt_decorate_batch(output, k);
   // The decorator drops what it cannot describe but keeps the order; the seed is
-  // found again by its work.
+  // found again by its work. What survived is this build's answer, and kept.
   for (i = 0; i < k; i++) {
     int s2;
     airs[i] = 0;
     for (s2 = 0; s2 < n; s2++)
       if (seeds[s2].found && sameWork(seeds[s2].imdb, output[i].imdb)) {
-        airs[i] = seeds[s2].airs; break; }
+        airs[i] = seeds[s2].airs;
+        keep(&seeds[s2], &output[i], airs[i]);
+        break; }
   }
-  if (k) printf("[disc] next up: %d of %d series finished an episode\n", k, n);
+  // NO ANSWER THIS TIME: the previous one, for the same anchor. A seed that DID
+  // answer "nothing next" (caught up, nothing aired) is an answer and takes none.
+  for (i = 0; i < n && k < max; i++) {
+    const NextKept *kp;
+    int j, there = 0;
+    if (!seeds[i].failed && !seeds[i].found) continue;
+    for (j = 0; j < k && !there; j++) there = sameWork(output[j].imdb, seeds[i].imdb);
+    if (there) continue;
+    kp = keptFor(seeds[i].imdb);
+    // Still a true answer: the card is AFTER the episode last finished, and not
+    // watched since. That holds for the previous build's card and for one taken
+    // off the screen at launch (disc_start), whose anchor nobody recorded.
+    if (!kp || kp->item.season <= 0 || kp->item.episode <= 0) continue;
+    if (kp->item.season < seeds[i].season ||
+        (kp->item.season == seeds[i].season && kp->item.episode <= seeds[i].episode)) continue;
+    if (watchedep_state(seeds[i].imdb, kp->item.season, kp->item.episode) == 1) continue;
+    output[k] = kp->item;
+    output[k].resumedMs = seeds[i].ms;
+    airs[k] = kp->airs;
+    k++; reused++;
+  }
+  if (k) printf("[disc] next up: %d of %d series finished an episode%s\n", k, n,
+                reused ? " (some from the last build: no answer this time)" : "");
   return k;
 }
 
@@ -1995,6 +2100,137 @@ int disc_cw_collect(void) {
          done ? "" : " (refused)");
   if (done) mark("continue watching on screen (over the cache)");
   return done;
+}
+
+// --- THE ROW, THE MOMENT THE PLAYER CLOSES --------------------------------------
+//
+// The rebuild the player asks for (disc_rebuild) is what settles the row, and it
+// takes its time: Trakt, the account, a Cinemeta request per next-up series. Until
+// it lands the card said what was true BEFORE — the episode just finished sat on
+// it at 100%, a series watched just now stayed wherever it was in the row.
+//
+// Everything needed to say what is true NOW is already here: the position just
+// saved, and, on a series, the episode list the title page loaded. So the row is
+// recomposed locally and handed to disc_cw_collect like any other result; the
+// rebuild then confirms it, or corrects it in the rare case it disagrees.
+//
+// The next episode is chosen as the resolver does (threadNextUp): the first one
+// after, seasons included, not already watched — and only one that has aired. An
+// unaired one depends on settings and dates the resolver weighs; that case, and
+// a series whose episode list is not loaded, leave the row to the rebuild.
+
+// The first aired, unwatched episode after S`s`E`e` in item `idx`'s list, or NULL.
+static const CatEp *nextAired(int idx, const char *work, int s, int e) {
+  const CatEp *best = NULL;
+  int i, n = cat_n_episodes(idx);
+  for (i = 0; i < n; i++) {
+    const CatEp *ep = cat_episode(idx, i);
+    if (!ep || ep->season <= 0 || ep->episode <= 0) continue;
+    if (ep->season < s || (ep->season == s && ep->episode <= e)) continue;
+    if (best && (ep->season > best->season ||
+                 (ep->season == best->season && ep->episode >= best->episode))) continue;
+    if (watchedep_state(work, ep->season, ep->episode) == 1) continue;
+    if (cat_ep_unaired(ep)) continue;
+    // nextUpAllowed's rollover rule: a LATER season with no date is a placeholder
+    // Cinemeta lists for an announced season, never "next".
+    if (!ep->aired[0] && ep->season != s) continue;
+    best = ep;
+  }
+  // An unaired episode BEFORE the one found means the resolver might pick it.
+  if (best) for (i = 0; i < n; i++) {
+    const CatEp *ep = cat_episode(idx, i);
+    if (!ep || ep->season <= 0 || ep->episode <= 0 || !cat_ep_unaired(ep)) continue;
+    if (ep->season < s || (ep->season == s && ep->episode <= e)) continue;
+    if (ep->season < best->season ||
+        (ep->season == best->season && ep->episode < best->episode)) return NULL;
+  }
+  return best;
+}
+
+// The item holding this work's episode list: `idx` itself, or another copy of
+// the same series (a catalogue row's, the title page's) — lists are kept per id.
+static int withEpisodes(int idx, const char *work) {
+  int i, n = cat_n();
+  if (cat_n_episodes(idx) > 0) return idx;
+  for (i = 0; i < n; i++) {
+    const CatItem *c = cat_item(i);
+    if (c && sameWork(c->imdb, work) && cat_n_episodes(i) > 0) return i;
+  }
+  return idx;
+}
+
+void disc_cw_played(int idx, int season, int episode, double pos, double dur, int front) {
+  static CatItem v[8];
+  const CatItem *src = cat_item(idx), *have = NULL;
+  const CatRow *cw = NULL;
+  CatItem card;
+  char work[24];
+  int r, nr = cat_n_rows(), k, n = 0, pct, drop = 0;
+  if (!src || !src->imdb[0] || dur <= 1.0 || partialAllowed()) return;
+  snprintf(work, sizeof work, "%.*s", (int)strcspn(src->imdb, ":"), src->imdb);
+  for (r = 0; r < nr; r++) {
+    const CatRow *c = cat_row(r);
+    if (c && !strcmp(c->key, "continue_watching")) { cw = c; break; }
+  }
+  if (cw) for (k = 0; k < cw->n; k++) {
+    const CatItem *c = cat_item(cw->start + k);
+    if (c && sameWork(c->imdb, work)) { have = c; break; }
+  }
+  // The row's own card keeps its art (the episode still, the logo); a title
+  // played from elsewhere brings the catalogue's.
+  card = have ? *have : *src;
+  pct = cat_pct(pos, dur);
+  if (front || !have) card.resumedMs = (long long)time(NULL) * 1000;
+  if (pct >= 90) {
+    if (season > 0 && episode > 0) {
+      const CatEp *next = nextAired(withEpisodes(idx, work), work, season, episode);
+      if (!next) return;                    // the rebuild knows better
+      snprintf(card.imdb, sizeof card.imdb, "%s:%d:%d", work, next->season, next->episode);
+      card.season = next->season; card.episode = next->episode;
+      card.progress = 0; card.remainingMin = 0;
+      snprintf(card.nameEpisode, sizeof card.nameEpisode, "%s", next->name);
+      snprintf(card.thumbEp, sizeof card.thumbEp, "%s", next->thumb);
+    } else {
+      drop = 1;                             // a finished film leaves the row
+    }
+  } else if (pct >= 1) {
+    if (season > 0 && episode > 0) {
+      snprintf(card.imdb, sizeof card.imdb, "%s:%d:%d", work, season, episode);
+      if (card.season != season || card.episode != episode) {
+        const CatEp *ep = NULL;
+        int at = withEpisodes(idx, work);
+        for (k = 0; k < cat_n_episodes(at); k++) {
+          const CatEp *x = cat_episode(at, k);
+          if (x && x->season == season && x->episode == episode) { ep = x; break; }
+        }
+        snprintf(card.nameEpisode, sizeof card.nameEpisode, "%s", ep ? ep->name : "");
+        snprintf(card.thumbEp, sizeof card.thumbEp, "%s", ep ? ep->thumb : "");
+      }
+      card.season = season; card.episode = episode;
+    }
+    card.progress = pct;
+    card.remainingMin = (int)((dur - pos) / 60.0 + 0.5);
+  } else {
+    return;
+  }
+  // The work in front (just now is the newest instant there is), the rest after
+  // it in the order they had. Not `front`: the card changes where it stands.
+  if (!drop && (front || !have)) v[n++] = card;
+  if (cw) for (k = 0; k < cw->n && n < 8; k++) {
+    const CatItem *c = cat_item(cw->start + k);
+    if (!c) continue;
+    if (!sameWork(c->imdb, work)) v[n++] = *c;
+    else if (!drop && !front && have) v[n++] = card;
+  }
+  pthread_mutex_lock(&cwLock);
+  memcpy(cwLatest, v, sizeof(CatItem) * (size_t)n);
+  nCwLatest = n;
+  cwProfile = profiles_active();
+  ++cwSeq;
+  pthread_mutex_unlock(&cwLock);
+  printf("[disc] continue watching, at once: %s %s\n", card.imdb,
+         drop ? "finished, out" : pct >= 90 ? "next up" : "in progress");
+  fflush(stdout);
 }
 
 static void *traktFirst(void *u) {
@@ -2458,6 +2694,31 @@ static void *build(void *u) {
 
 void disc_start(void) {
   if (searching) return;
+  // The row on screen (the cache at launch, the last build after) is the art to
+  // fall back on if describing a card fails this time (trakt_decorate_batch).
+  { int r, nr = cat_n_rows(), k;
+    for (r = 0; r < nr; r++) {
+      const CatRow *c = cat_row(r);
+      if (!c || strcmp(c->key, "continue_watching")) continue;
+      for (k = 0; k < c->n; k++) trakt_decorate_remember(cat_item(c->start + k));
+      // ...and its next-up cards, the answer to fall back on if the episode list
+      // does not arrive (buildNextUp). A launch has no previous build: without
+      // these, an outage at launch emptied the row of every next-up card.
+      if (!pthread_mutex_trylock(&resumeLock)) {
+        if (nextKeptProfile != profiles_active()) { nNextKept = 0; nextKeptProfile = profiles_active(); }
+        for (k = 0; k < c->n; k++) {
+          const CatItem *it = cat_item(c->start + k);
+          NextUp anchor;
+          if (!it || it->progress != 0 || it->season <= 0 || it->episode <= 0 ||
+              strcmp(it->kind, "series") || keptFor(it->imdb)) continue;
+          memset(&anchor, 0, sizeof anchor);
+          snprintf(anchor.imdb, sizeof anchor.imdb, "%.*s", (int)strcspn(it->imdb, ":"), it->imdb);
+          keep(&anchor, it, 0);
+        }
+        pthread_mutex_unlock(&resumeLock);
+      }
+      break;
+    } }
   searching = 1;
   if (pthread_create(&thread, NULL, build, NULL) != 0) searching = 0;
   else pthread_detach(thread);
@@ -2581,6 +2842,8 @@ static int publishEpisodes(const char *body, int targetItem, const char *title) 
       js_text(p, f, "thumbnail", e->thumb, sizeof e->thumb);
       js_text(p, f, "released", d, sizeof d);
       disc_date_long(d, e->date, sizeof e->date);
+      if (strlen(d) >= 10 && d[4] == '-' && d[7] == '-')
+        snprintf(e->aired, sizeof e->aired, "%.10s", d);
       // THE EPISODE'S IMDb SCORE, in tenths. Cinemeta sends it as a STRING ("8.5"),
       // under "rating" on the videos entries and "imdbRating" on the meta itself —
       // both are read, because which one is present varies by addon.

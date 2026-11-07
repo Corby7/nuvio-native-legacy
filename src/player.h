@@ -33,6 +33,9 @@ int player_requested_sources(void);
 // The Details button: the catalogue index whose title page should open once the
 // player has left, or -1. Read once — it clears itself.
 int player_requested_details(void);
+// The player closed itself at the end of the file: 1 once, with the episode that
+// follows in season/episode (0/0 for a film or the last episode).
+int player_requested_finished(int *season, int *episode);
 int player_requested_next(int *season, int *episode);
 const CatEp *player_next_episode(void);
 // The next episode, once this one is close enough to its end that the next

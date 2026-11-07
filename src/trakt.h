@@ -142,5 +142,19 @@ int trakt_mark_episodes(const char *imdb, const WatchedPair *pairs, int count,
 // it used trakt_mark with a duration of 1.0 — a value that function's own guard
 // rejects, so nothing ever reached Trakt.
 void trakt_watched(const char *imdb, int mark);
+// The same with the kind given, and the answer to wait on: 1 when the mark was
+// sent (or, without Trakt, written to the account's mirror). trakt_operation_state
+// (2 = history) then reads 1 in flight, 2 confirmed, 3 failed.
+int  trakt_watched_kind(const char *imdb, const char *kind, int mark);
+int  trakt_operation_state(int kind);
+
+// Episodes Trakt's history says were WATCHED, newest first (the last 100 history
+// entries, from the read trakt_resume makes). Copies up to `max`; 0 without Trakt.
+typedef struct { char imdb[24]; int season, episode; long long ms; } TraktEpSeen;
+int  trakt_recent_episodes(TraktEpSeen *out, int max);
+
+// Remembers a card's art by its work, for trakt_decorate_batch to fall back on
+// when describing it fails (the network, for a moment). Any thread.
+void trakt_decorate_remember(const CatItem *c);
 
 #endif

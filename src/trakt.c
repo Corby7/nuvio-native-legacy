@@ -399,8 +399,87 @@ static pthread_mutex_t batchLock = PTHREAD_MUTEX_INITIALIZER;
 
 static int runBatch(CatItem *output, int n, int (*fn)(CatItem *, const char *));
 
+// THE LAST GOOD DECORATION PER WORK. A card the decorator cannot describe is
+// dropped — and when that is the network failing for a moment, not the title
+// being unknown, every in-progress card went with it: the row came back shorter,
+// and that shorter row replaced the good one on screen. Now a failed card takes
+// the art its work had the last time it was described (or was on screen, see
+// trakt_decorate_remember), keeping its own id, episode and progress.
+#define GOOD_MAX 32
+static pthread_mutex_t lockGood = PTHREAD_MUTEX_INITIALIZER;
+static CatItem good[GOOD_MAX];
+static int nGood;
+
+static int sameWorkTk(const char *a, const char *b) {
+  size_t la = strcspn(a, ":"), lb = strcspn(b, ":");
+  return la && la == lb && !strncmp(a, b, la);
+}
+
+void trakt_decorate_remember(const CatItem *c) {
+  int i;
+  if (!c || !c->imdb[0] || !(c->backdrop[0] || c->poster[0])) return;
+  pthread_mutex_lock(&lockGood);
+  for (i = 0; i < nGood; i++) if (sameWorkTk(good[i].imdb, c->imdb)) break;
+  if (i == nGood) {
+    if (nGood == GOOD_MAX) { memmove(&good[0], &good[1], sizeof good[0] * (GOOD_MAX - 1)); nGood--; }
+    i = nGood++;
+  }
+  good[i] = *c;
+  pthread_mutex_unlock(&lockGood);
+}
+
+// The remembered art onto `d`, which keeps what is its own. 1 when there was some.
+static int fromGood(CatItem *d) {
+  int i, ok = 0;
+  pthread_mutex_lock(&lockGood);
+  for (i = 0; i < nGood; i++)
+    if (sameWorkTk(good[i].imdb, d->imdb)) {
+      CatItem own = *d;
+      *d = good[i];
+      snprintf(d->imdb, sizeof d->imdb, "%s", own.imdb);
+      snprintf(d->kind, sizeof d->kind, "%s", own.kind);
+      d->progress = own.progress; d->remainingMin = own.remainingMin;
+      d->resumedMs = own.resumedMs;
+      if (d->season != own.season || d->episode != own.episode) {
+        d->nameEpisode[0] = 0; d->thumbEp[0] = 0;
+      }
+      if (own.nameEpisode[0]) snprintf(d->nameEpisode, sizeof d->nameEpisode, "%s", own.nameEpisode);
+      d->season = own.season; d->episode = own.episode;
+      ok = 1;
+      break;
+    }
+  pthread_mutex_unlock(&lockGood);
+  return ok;
+}
+
 int trakt_decorate_batch(CatItem *output, int n) {
-  return runBatch(output, n, decorate);
+  int i, k;
+  CatItem *raw = n > 0 ? malloc(sizeof *raw * (size_t)n) : NULL;
+  if (raw) memcpy(raw, output, sizeof *raw * (size_t)n);
+  k = runBatch(output, n, decorate);
+  for (i = 0; i < k; i++) trakt_decorate_remember(&output[i]);
+  // What the batch dropped, from memory — put back IN ORDER, since callers rely
+  // on the batch keeping the order it was given.
+  if (raw && k < n) {
+    int r, w = 0, kept = 0;
+    CatItem *merged = malloc(sizeof *merged * (size_t)n);
+    if (merged) {
+      for (r = 0, i = 0; r < n; r++) {
+        if (i < k && !strcmp(output[i].imdb, raw[r].imdb)) { merged[w++] = output[i++]; continue; }
+        if (fromGood(&raw[r])) { merged[w++] = raw[r]; kept++; }
+      }
+      // Every described card must have been matched in order; if the decorator
+      // ever renamed one, the merge cannot be trusted and the plain result stands.
+      if (i == k) {
+        memcpy(output, merged, sizeof *merged * (size_t)w);
+        if (kept) { printf("[trakt] %d card(s) kept their last art (no answer now)\n", kept); fflush(stdout); }
+        k = w;
+      }
+      free(merged);
+    }
+  }
+  free(raw);
+  return k;
 }
 
 int trakt_describe_batch(CatItem *output, int n) {
@@ -526,9 +605,42 @@ int trakt_mark_episodes(const char *imdb, const WatchedPair *pairs, int count,
 // cycle so the modal does not treat high progress as proof of having watched.
 // For series, records with `episode` are deliberately ignored: having seen one
 // episode does not mean the whole series was marked as watched.
+// THE EPISODES IN THAT SAME HISTORY, newest first: what was FINISHED, anywhere
+// Trakt hears of — the seeds for next up that this device's progress.txt cannot
+// know (a series finished in another Trakt client never wrote a line here). Read
+// by discover.c's nextUpSeeds through trakt_recent_episodes. Swapped whole under
+// the lock; a history that did not arrive keeps the previous one.
+static pthread_mutex_t lockSeen = PTHREAD_MUTEX_INITIALIZER;
+static TraktEpSeen seen[100];
+static int nSeen;
+
+int trakt_recent_episodes(TraktEpSeen *out, int max) {
+  int n;
+  if (!on || !out || max <= 0) return 0;
+  pthread_mutex_lock(&lockSeen);
+  n = nSeen < max ? nSeen : max;
+  memcpy(out, seen, sizeof *out * (size_t)n);
+  pthread_mutex_unlock(&lockSeen);
+  return n;
+}
+
+// `"key": {` inside [p, f): the object's start, or NULL. A plain strstr for
+// "episode" would also land on the record's `"type": "episode"`.
+static const char *objectAt(const char *p, const char *f, const char *key) {
+  size_t k = strlen(key);
+  for (const char *q = p; q && q < f && (q = strstr(q, key)) && q < f; q += k) {
+    const char *c = q + k;
+    while (c < f && (*c == ' ' || *c == ':')) c++;
+    if (c < f && *c == '{') return c;
+  }
+  return NULL;
+}
+
 static void loadHistoryReal(const char *const *header) {
   char *body = net_download_headers("https://api.trakt.tv/sync/history?limit=100&extended=full", 25, header);
   const char *p;
+  static TraktEpSeen got[100];
+  int nGot = 0;
   if (!body) return;
   p = strchr(body, '[');
   p = p ? p + 1 : NULL;
@@ -540,6 +652,21 @@ static void loadHistoryReal(const char *const *header) {
     if (*p != '{') break;
     f = js_end(p);
     if (strstr(p, "\"episode\"") && strstr(p, "\"episode\"") < f) {
+      const char *ep = objectAt(p, f, "\"episode\"");
+      const char *show = objectAt(p, f, "\"show\"");
+      if (ep && show && nGot < 100) {
+        const char *fe = js_end(ep), *fs = js_end(show);
+        const char *ids = objectAt(show, fs, "\"ids\"");
+        char when[40] = "";
+        TraktEpSeen *g = &got[nGot];
+        memset(g, 0, sizeof *g);
+        g->season = (int)js_num(ep, fe, "season", 0);
+        g->episode = (int)js_num(ep, fe, "number", 0);
+        if (ids) js_text(ids, js_end(ids), "imdb", g->imdb, sizeof g->imdb);
+        js_text(p, f, "watched_at", when, sizeof when);
+        g->ms = js_ms_iso(when);
+        if (g->imdb[0] && g->season > 0 && g->episode > 0 && g->ms > 0) nGot++;
+      }
       p = js_next(f);
       continue;
     }
@@ -557,6 +684,10 @@ static void loadHistoryReal(const char *const *header) {
     p = js_next(f);
   }
   free(body);
+  pthread_mutex_lock(&lockSeen);
+  memcpy(seen, got, sizeof *got * (size_t)nGot);
+  nSeen = nGot;
+  pthread_mutex_unlock(&lockSeen);
 }
 
 int trakt_playback_remove(const char *imdb) {

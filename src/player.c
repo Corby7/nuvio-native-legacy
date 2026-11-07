@@ -413,6 +413,13 @@ static int    epRefetches;
 static Uint32 epRefetchAt;
 static int epT, epE, reqSources, errorSource, reqNextT, reqNextE;
 static int reqDetails;   // the Details button: leave, and land on the title page
+// THE END OF THE FILE — see endTick and the note above saveProgress.
+#define PLR_END_HOLD_MS 1500u
+static Uint32 endAt;      // when the end was reached; 0 while it has not been
+static int    endHeld;    // a key kept the player open at the end
+static int    endSaved;   // the progress went out at the end; shutdown skips it
+static int    endEosSeen; // video_eos_count() as of the last playback that rolled
+static int    finT, finE, finPending; // the hand-off, read by app.c
 // THE CARD CAN BE SENT AWAY. It is offered for the last two minutes of an episode,
 // or for the whole of the credits, and that is a long time to keep a panel in the
 // corner of a frame somebody is still watching.
@@ -1086,6 +1093,7 @@ static void openSession(int indexCatalog, const char *url) {
   reqSources = errorSource = reqTracks = reqNextT = reqNextE = reqDetails = 0;
   startImage = 0;
   nextDismissed = 0; nextElapsed = 0;
+  endAt = 0; endHeld = 0; endSaved = 0; endEosSeen = video_eos_count();
   reportReset();
   skipElapsed = 0; skipChunkEnd = 0; skipAutoHidden = 0; rolledMs = 0; rolledOnce = 0;
   resumeApplied=0;
@@ -1228,10 +1236,27 @@ static int watchedToEnd(double pos, double dur) {
   return dur - pos <= 120.0;
 }
 
-void player_shutdown(void) {
-  // Save BEFORE stopping: video_stop unloads the pipeline and the position goes with
-  // it. A title watched to the end counts as watched in full — going back to a card
-  // saying "2 min left" when it has actually finished is worse than rounding.
+// THE END OF THE FILE, with nothing to play after it (autoplay off, the Up next
+// card sent away, the last episode, a film). It used to be nothing at all: the
+// picture stopped on its last frame and stayed there until somebody pressed Back —
+// a still image on an OLED, the pause overlay calling a finished title "paused",
+// and the progress not saved until the player closed, so a TV switched off on
+// that frame never recorded the episode as watched.
+//
+// Now the progress is saved the moment it ends, the last shot is held for
+// PLR_END_HOLD_MS so the close does not cut it off, and the player leaves the way
+// Back does. On the way out it hands app.c the episode that follows (see
+// player_requested_finished), so the page underneath stands on it and one OK
+// plays it — "next" a press away, without playing anything by itself.
+//
+// Any key but Back during the hold keeps the player open, paused at the end: a
+// scrub to the end on purpose should not throw the viewer out.
+// (The state is declared with the other playback state, above: see PLR_END_HOLD_MS.)
+
+// Save BEFORE stopping: video_stop unloads the pipeline and the position goes with
+// it. A title watched to the end counts as watched in full — going back to a card
+// saying "2 min left" when it has actually finished is worse than rounding.
+static void saveProgress(void) {
   //
   // NOT FROM A PLAYBACK THAT NEVER GOT GOING. Back pressed in the first seconds —
   // before the resume seek has landed, or on the wrong episode — closes at 0, and
@@ -1248,6 +1273,10 @@ void player_shutdown(void) {
     ci = cat_item(idx);
     home_record_return(idx, pos, durationSeg);
     cat_save_progress_ep(idx, pos, durationSeg,epT,epE);
+    // The row shows it NOW; the rebuild below confirms it (discover.c).
+    disc_cw_played(idx, epT, epE, pos, durationSeg, 1);
+    // And the home's focus follows the card there, Back or the end alike.
+    if (ci && ci->imdb[0]) home_focus_title(ci->imdb);
     // And to Trakt too, which is where "continue watching" comes from: recording only
     // here would leave this app disagreeing with the owner's other devices.
     if (ci && ci->imdb[0]) {
@@ -1287,6 +1316,14 @@ void player_shutdown(void) {
     // once, at the end, as a single swap.
     disc_rebuild();
   }
+}
+
+void player_shutdown(void) {
+  // ONCE. A playback that ran out saved at the end (endTick); a second save on
+  // the way out would send Trakt a second scrobble for the same viewing. A viewer
+  // who stayed and scrubbed back has a new position, and that one is saved.
+  if (!(endSaved && watchedToEnd(posSeg, durationSeg))) saveProgress();
+  endAt = 0; endHeld = 0; endSaved = 0;
   if (hasVideo) video_stop();
   reportReset();
   hasVideo = 0; waitingSource = 0; is_open = 0; exiting = 0; requestedExit = 0;
@@ -1555,6 +1592,61 @@ static void nextTick(float dt) {
   }
 }
 
+// THE END OF THE FILE — see PLR_END_HOLD_MS. Called once a frame from
+// player_update, after the position and `playing` have been read from the pipeline.
+//
+// "Ended" is the pipeline's endOfStream, or — where there is none (no pipeline, or
+// a position that the platform stops a fraction short) — stopped within the last
+// second. Not mid-seek: a scrub that lands at the end is still landing.
+// THE HAND-OFF: the episode after this one, for the page underneath to stand on.
+// Not for a trailer: it is not the title, and the page already stands where it was.
+static void endHandOff(void) {
+  const CatEp *p = player_next_episode();
+  finT = p ? p->season : 0; finE = p ? p->episode : 0; finPending = !trailerMode;
+  if (finT) printf("[player] leaving at the end; next up S%dE%d\n", finT, finE);
+  else      printf("[player] leaving at the end; nothing follows\n");
+  fflush(stdout);
+}
+
+static void endTick(Uint32 now) {
+  int eo = video_eos_count();
+  int atEnd = durationSeg > 1.0f && posSeg >= durationSeg - 1.0f;
+  int ended;
+  // Rolling again (a seek back, then play) is a new run at the end.
+  if (playing) { endAt = 0; endHeld = 0; endEosSeen = eo; return; }
+  ended = (eo != endEosSeen || atEnd) && !seekActive && !settleAt &&
+          !waitingSource && !errorSource && playbackReady() && !player_loading();
+  if (!ended || endHeld || exiting) return;
+  // AUTOPLAY HAS IT. The card's countdown carries on past the end (nextTick) and
+  // asks for the next episode itself; this only steps in when nothing will.
+  if (reqNextT || (settings_next_autoplay() && nextCardUp())) return;
+  // Not out from under a sheet the viewer is using: the hold waits for it.
+  if (episodes_shown() > 0.0f || tracks_shown() > 0.0f || stream_sheet_shown() > 0.0f)
+    return;
+  if (!endAt) {
+    endAt = now ? now : 1;
+    if (!trailerMode && !endSaved) { saveProgress(); endSaved = 1; }
+    printf("[player] reached the end (%s), closing in %.1fs\n",
+           eo != endEosSeen ? "endOfStream" : "position", PLR_END_HOLD_MS / 1000.0f);
+    fflush(stdout);
+    return;
+  }
+  if (msSince(now, endAt) < PLR_END_HOLD_MS) return;
+  endHandOff();
+  exiting = 1; requestedExit = 1;
+}
+
+// The player closed itself at the end of the file. `season`/`episode` name the
+// episode that follows, or 0/0 when there is none (a film, the last episode).
+// Consumes the request.
+int player_requested_finished(int *season, int *episode) {
+  if (!finPending) return 0;
+  finPending = 0;
+  if (season) *season = finT;
+  if (episode) *episode = finE;
+  return 1;
+}
+
 // Every key wakes the controls, including one that has already carried out an
 // action: on the device there is no command that happens with the bar hidden without
 // bringing the bar along — the user needs to see the effect of what they pressed.
@@ -1716,6 +1808,18 @@ void player_event(const SDL_Event *e) {
     return;
   }
 
+  // THE HOLD AT THE END: any key but Back keeps the player open, paused at the
+  // end, and does nothing else — the key that stops the close must not also seek
+  // or toggle. Back carries on below and leaves, which is what it was going to do.
+  if (endAt && !endHeld && k != SDLK_ESCAPE && k != SDLK_AC_BACK &&
+      k != SDLK_BACKSPACE && k != SDLK_DELETE) {
+    endHeld = 1;
+    printf("[player] stayed at the end (key during the hold)\n");
+    fflush(stdout);
+    wake();
+    return;
+  }
+
   if (k == SDLK_ESCAPE || k == SDLK_AC_BACK || k == SDLK_BACKSPACE ||
       k == SDLK_DELETE) {
     // BACK IS "NOT NOW" while the Up next tile is up — the tile has no pill for
@@ -1726,6 +1830,8 @@ void player_event(const SDL_Event *e) {
       if (visible) wake();
       return;
     }
+    // Back at the end is the same departure the hold would have made.
+    if (endAt) endHandOff();
     exiting = 1; requestedExit = 1;
     return;
   }
@@ -2120,6 +2226,7 @@ void player_update(float dt, Uint32 now) {
     if (step < 0.0f || step > 1.0f || settleAt) rolledMs = 0;
     else if (playing && playbackReady() && !player_loading()) rolledMs += dt * 1000.0f;
     if (rolledMs >= PLR_SKIP_LEAD_MS) rolledOnce = 1; }
+  endTick(now);
 
   // THE SUBTITLE CHOOSES ITSELF, once per playback, from the Settings row. Held
   // back until the first frame with a picture: before that the pipeline has no

@@ -161,6 +161,37 @@ static void shareUnlock(void *h, int data, void *u) {
   pthread_mutex_unlock(&shareLocks[data & 7]);
 }
 
+static void hostOf(const char *url, char *dst, size_t size);
+
+// NUVIO_NET_BLOCK="host1,host2" — A TEST SWITCH: requests to a host containing
+// any of these fail at once, as an unreachable network would (logged as such).
+// It is how the Mac build is tested against an outage, or with the remote
+// writes (Trakt, the account) cut off so a test cannot touch a real account.
+// Unset, it costs one getenv per process.
+static int blockedHost(const char *url) {
+  static const char *list;
+  static int read;
+  char host[256];
+  const char *p;
+  if (!read) { list = getenv("NUVIO_NET_BLOCK"); read = 1; }
+  if (!list || !*list || !url) return 0;
+  hostOf(url, host, sizeof host);
+  for (p = list; *p; ) {
+    char one[128];
+    size_t n = strcspn(p, ",");
+    if (n && n < sizeof one) {
+      memcpy(one, p, n); one[n] = 0;
+      if (strstr(host, one)) {
+        printf("[net] blocked by NUVIO_NET_BLOCK: %s\n", host);
+        fflush(stdout);
+        return 1;
+      }
+    }
+    p += n; if (*p == ',') p++;
+  }
+  return 0;
+}
+
 // "https://host:port/path" -> "host:port". Empty when there is no scheme.
 static void hostOf(const char *url, char *dst, size_t size) {
   const char *p = url ? strstr(url, "://") : NULL;
@@ -567,7 +598,7 @@ static char *net_download_internal2(const char *url, int seconds, long *size,
   double t0;
   if (status) *status = 0;
   timedOut = 0;
-  if (!url || !*url || !openHandle()) return NULL;
+  if (!url || !*url || blockedHost(url) || !openHandle()) return NULL;
   b.cap = cap;
   c = handleTake(url, &own);
   if (!c) return NULL;
@@ -655,7 +686,7 @@ int net_url_final(const char *url, int seconds, char *dst, unsigned size) {
   char *end = NULL;
   int r, own;
   double t0;
-  if (!url || !*url || !openHandle() || !curl_getinfo) return 0;
+  if (!url || !*url || blockedHost(url) || !openHandle() || !curl_getinfo) return 0;
   c = handleTake(url, &own);
   if (!c) return 0;
   curl_setopt(c, OPT_URL, url);
@@ -752,7 +783,7 @@ static char *sendBody(const char *method, const char *url, int seconds,
   int r, own;
   double t0;
   if (status) *status = 0;
-  if (!url || !*url || !openHandle()) return NULL;
+  if (!url || !*url || blockedHost(url) || !openHandle()) return NULL;
   c = handleTake(url, &own);
   if (!c) return NULL;
   curl_setopt(c, OPT_URL, url);

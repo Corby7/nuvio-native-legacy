@@ -44,6 +44,7 @@
 #include "addons.h"
 #include "discover.h"
 #include "trakt.h"
+#include "cwremove.h"
 #include "tracks.h"
 #include "episodes.h"
 #include "proxy.h"
@@ -417,13 +418,23 @@ void app_event(const SDL_Event *e) {
 // and tells Trakt, which is the source the owner uses on their other devices. It
 // lives in the router for the same reason as everything else: it is the router
 // that knows the catalogue and Trakt, and the detail screen need know neither.
+// The mark in flight, for Continue watching once it lands: the title and which way.
+static char watchedOwed[24];
+static int  watchedOwedMark;
+
 static void markWatchedIfRequested(void) {
   const CatItem *c;
   int i;
+  // A mark sent earlier has answered: Continue watching hears of it now.
+  if (watchedOwed[0]) {
+    int st = trakt_operation_state(2);
+    if (st == 2) cw_watched(watchedOwed, watchedOwedMark);
+    if (st == 2 || st == 3) watchedOwed[0] = 0;
+  }
   if (!detail_requested_watched()) return;
   i = detail_index();
   c = cat_item(i);
-  if (!c) return;
+  if (!c || !c->imdb[0]) return;
   // It used to call trakt_mark (which is /scrobble/pause) with a duration of 1.0
   // — and that function starts with `durationSeg <= 1.0 -> return`. The button
   // changed only the local mirror and Trakt was NEVER told: it looked like it
@@ -432,9 +443,18 @@ static void markWatchedIfRequested(void) {
   //
   // And it toggles rather than only marking: the icon already shows both states,
   // so a button that only adds would have no way to undo a mistaken press.
-  { int watched = (c->progress >= 90);
-    cat_save_progress(i, watched ? 0.0 : 1.0, 1.0);
-    if (c->imdb[0]) trakt_watched(c->imdb, !watched);
+  //
+  // THE STATE IS THE TITLE'S HISTORY, the hold menu's reading — not progress. The
+  // toggle used to write a 1-second "progress" of 0 or 1 to flip itself, and the
+  // file refuses any duration under a second, so nothing was written: the icon
+  // never turned and the button could only ever mark. A resume point at 100% still
+  // counts where the history is not known (no Trakt, no account).
+  { int h = cat_history_state_item(i);
+    int watched = h >= 0 ? h == 1 : c->progress >= 90;
+    if (trakt_watched_kind(c->imdb, c->kind, !watched)) {
+      snprintf(watchedOwed, sizeof watchedOwed, "%s", c->imdb);
+      watchedOwedMark = !watched;
+    }
     printf("[app] watched %s: %s\n", watched ? "unmarked" : "marked",
            c->title); fflush(stdout); }
 }
@@ -970,6 +990,18 @@ void app_update(float dt, Uint32 now) {
   tracks_update(dt, now);
   stream_sheet_update(dt, now);
 
+  // THE PLAYER CLOSED ITSELF AT THE END (player.c, PLR_END_HOLD_MS). Read the frame
+  // it starts its exit, while the page underneath is still covered: the title page
+  // steps onto the next episode, the home keeps its focus on the show's card.
+  { int t, e;
+    if (player_requested_finished(&t, &e)) {
+      if (detail_is_open() && !detail_is_exiting()) {
+        if (t > 0) detail_focus_episode(t, e);
+      } else {
+        const CatItem *ci = cat_item(player_index());
+        if (ci) home_focus_title(ci->imdb);
+      }
+    } }
   if (player_wants_exit() && !player_is_open()) player_shutdown();
   // DETAILS FROM THE PLAYER. Opened from the title page, the page is still under
   // the player and the exit fade uncovers it, exactly as Back does. Opened from
