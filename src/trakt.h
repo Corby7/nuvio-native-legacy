@@ -157,4 +157,6 @@ int  trakt_recent_episodes(TraktEpSeen *out, int max);
 // when describing it fails (the network, for a moment). Any thread.
 void trakt_decorate_remember(const CatItem *c);
 
+// Waits, at most `maxMs`, for the queued scrobbles to be sent. For the exit only.
+void trakt_drain(unsigned maxMs);
 #endif

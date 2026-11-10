@@ -9,6 +9,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <time.h>
 #include <sys/stat.h>
 #include "data.h"
@@ -1204,6 +1205,24 @@ static void scrobble(const char *imdb, double posSeg, double durationSeg, int ac
     else pthread_detach(thread);
   }
   pthread_mutex_unlock(&lockBrand);
+}
+
+// THE LAST SCROBBLE GETS OUT BEFORE THE PROCESS DOES. The sender is a detached
+// thread, and quitting from the player queued the closing pause/stop and then
+// returned from main — the thread died with the request unsent, so Trakt went on
+// showing "watching now" and never took the position. Bounded: a dead network
+// must not hold the exit.
+void trakt_drain(unsigned maxMs) {
+  unsigned waited = 0;
+  for (;;) {
+    int alive;
+    pthread_mutex_lock(&lockBrand);
+    alive = threadBrandAlive;
+    pthread_mutex_unlock(&lockBrand);
+    if (!alive || waited >= maxMs) return;
+    usleep(20000);
+    waited += 20;
+  }
 }
 
 void trakt_mark(const char *imdb, double posSeg, double durationSeg) {

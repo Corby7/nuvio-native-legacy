@@ -117,8 +117,8 @@ typedef enum {
   TXT_TRK_STEP,      // .player-dialog-step, "+" / "-" 34 / 700
   // The two jump-ahead prompts and the episode rail. Appended, same reason.
   TXT_SKIP,          // .player-skip-intro-label            28 / 500
-  TXT_NEXT_KICK,     // .player-next-episode-kicker         20 / 700, uppercase
-  TXT_NEXT_TITLE,    // the Up next tile's "S1 E3 · Name"   22 / 700
+  TXT_NEXT_KICK,     // the Up next card's "UP NEXT · S1 E4" 18 / 700, tracked
+  TXT_NEXT_TITLE,    // the Up next card's episode name     28 / 700
   TXT_ERAIL_META,    // .player-episode-detail-meta         22 / 700, uppercase
   TXT_ERAIL_TITLE,   // .player-episode-detail-title        44 / 800
   TXT_ERAIL_OVER,    // .player-episode-detail-overview     22 / 500
@@ -198,6 +198,7 @@ typedef enum {
   TXT_SRCP_NOTE,     // "optional — only for channels …"     16 / 400
   TXT_SRCP_PRIMARY,  // Save and load                        21 / 600
   TXT_SRCP_GHOST,    // Cancel                               21 / 500
+  TXT_NEXT_BTN,      // the Up next card's "Next episode in 9" 24 / 500
   TXT_NFONTS
 } TxtStyle;
 

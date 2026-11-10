@@ -344,7 +344,13 @@ int app_start(const char *dirArt) {
 }
 
 void app_event(const SDL_Event *e) {
-  if (e->type == SDL_QUIT) { wantsExit = 1; return; }
+  if (e->type == SDL_QUIT) {
+    // In the log, because it is the only evidence of HOW a session ended: the
+    // system closing the app or switching the TV off arrives here, a kill does not.
+    printf("[app] quit asked by the system (player %s)\n", player_is_open() ? "open" : "closed");
+    fflush(stdout);
+    wantsExit = 1; return;
+  }
 
   // Login comes before everything, the player included: while there is no account
   // the rest of the app has no data to work with. Choosing a profile comes right
@@ -1305,6 +1311,10 @@ void app_shutdown(void) {
   joinCheck();
   waitingSource = 0;
   player_shutdown();
+  // What that just saved goes out before the process does: Trakt's closing
+  // scrobble and the account's copy. Both bounded.
+  trakt_drain(1500);
+  sync_flush_progress(2500);
   settings_shutdown();
   iptvui_shutdown();
   library_shutdown();

@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <time.h>
 
 #define SY_ADD_MAX   32
@@ -900,6 +901,14 @@ static int traktActivity;
 
 static void *run(void *u) {
   (void)u;
+  // 2: THE PROGRESS ALONE (sync_push_progress) — one request, which is why it is
+  // the only kind allowed beside an open player.
+  if (light == 2) {
+    pushProgress();
+    state = SYNC_READY;
+    threadReady = 1;
+    return NULL;
+  }
   if (light) {
     acclib_sync();
     state = SYNC_READY;
@@ -928,7 +937,13 @@ static void *run(void *u) {
   // the flags stay up, and the cycle sync_step starts in its place pushes them.
   if (profiles_active() == cycleProfile) {
     if (dirtyAddons)    pushAddons();
-    if (dirtyProgress) pushProgress();
+    // EVERY full cycle, not only when the flag is up. The flag lives in memory:
+    // an app killed mid-film, or a TV switched off, came back with it down, and
+    // the checkpoint on disk — playback here, origin 1 — stayed off the account
+    // until something else was watched on this TV. The file is the record of
+    // what is owed: pushProgress sends only origin-1 lines and returns without a
+    // request when there are none, and a pushed line becomes origin 2.
+    pushProgress();
   }
 
   { char lists[64] = "";
@@ -971,6 +986,9 @@ int sync_delete_progress(const char *const *keys, int n) {
 static int soon;
 static unsigned soonSeen;
 
+// A progress push asked for while a cycle was running: it goes when that ends.
+static int pushWanted;
+
 static void begin(int isLight, const char *why) {
   if (threadAlive || !session_loggedin()) return;
   if (cloud_brake_active()) return;
@@ -978,7 +996,7 @@ static void begin(int isLight, const char *why) {
   cycleProfile = profiles_active();
   // A full cycle carries the library and watched list too, so it answers any
   // pending gesture as well.
-  soon = 0;
+  if (isLight != 2) soon = 0;
   state = SYNC_RUNNING;
   threadReady = 0;
   __atomic_store_n(&earlyReady, 0, __ATOMIC_RELEASE);
@@ -986,12 +1004,56 @@ static void begin(int isLight, const char *why) {
   // SYNC.LOG in the data folder, readable over ssh: the periodic cycle was
   // implemented and never seen firing on the TV, because nothing on the device
   // recorded that it had.
-  data_log("sync.log", "cycle start (%s%s)", why, isLight ? ", light" : "");
+  // Not the progress push: it fires every minute of a film and would be the log.
+  if (isLight != 2)
+    data_log("sync.log", "cycle start (%s%s)", why, isLight ? ", light" : "");
   if (pthread_create(&thread, NULL, run, NULL) == 0) { pthread_detach(thread); threadAlive = 1; }
   else { state = SYNC_FAILED; snprintf(summary, sizeof summary, "no thread to sync with"); }
 }
 
 void sync_start(void) { begin(0, "requested"); }
+
+// THE POSITION REACHES THE ACCOUNT WHILE THE FILM IS STILL ON, and the moment
+// the player closes. It used to wait for the next full cycle, which never runs
+// beside an open player and is up to five minutes away after one — so the phone
+// showed the old position until then, and after a TV switched off, until this
+// app was opened again. One small request, not a cycle: the rule about keeping
+// HTTP away from the decoder is about the burst of nine.
+void sync_push_progress(void) {
+  if (!session_loggedin()) return;
+  if (threadAlive) { pushWanted = 1; return; }
+  begin(2, "progress");
+}
+
+static void pushedMarksApply(void) {
+  int i;
+  for (i = 0; i < nPushedMark; i++)
+    cat_progress_mark_synced(pushedMark[i].imdb, pushedMark[i].ms);
+  nPushedMark = 0;
+}
+
+// THE EXIT: whatever was watched here is on the account before the process goes.
+// Waits out a cycle already on its way, pushes, and waits for that — `maxMs` in
+// all, because a dead network must not hold the exit. Nothing is lost if time
+// runs out: the line stays origin 1 on disk and the next launch pushes it.
+void sync_flush_progress(unsigned maxMs) {
+  unsigned waited = 0;
+  int pass;
+  if (!session_loggedin()) return;
+  for (pass = 0; pass < 2; pass++) {
+    while (threadAlive && !threadReady && waited < maxMs) { usleep(20000); waited += 20; }
+    if (threadAlive && !threadReady) {
+      printf("[sync] exit: progress push still in flight after %u ms\n", waited);
+      fflush(stdout);
+      return;
+    }
+    threadAlive = 0; threadReady = 0;
+    pushedMarksApply();
+    if (pass == 0) begin(2, "exit");
+  }
+  printf("[sync] exit: progress flushed to the account in %u ms\n", waited);
+  fflush(stdout);
+}
 
 void sync_soon(void) { soon = 1; soonSeen = 0; }
 
@@ -1291,6 +1353,7 @@ void sync_step(unsigned nowMs) {
     static CatProgress mine[CAT_PROGRESS_MAX];
     int nMine = cat_progress_read(mine, CAT_PROGRESS_MAX);
     int i, applied = 0, kept = 0;
+    cat_progress_batch(1);
     for (i = 0; i < nProgressRemote; i++) {
       int idx = cat_index_by_imdb(progressRemote[i].imdb), j;
       long long local = 0;
@@ -1378,6 +1441,7 @@ void sync_step(unsigned nowMs) {
       }
       if (dropped) printf("[sync] %d progress line(s) gone from the account: dropped\n", dropped);
     }
+    cat_progress_batch(0);
     nProgressRemote = 0;
   }
   progressComplete = 0;
@@ -1408,20 +1472,17 @@ void sync_step(unsigned nowMs) {
   // -> 2), so a delete made elsewhere later is followed here and never undone
   // by a second push. AFTER the apply above: the pull ran before the push, and
   // until this point origin 1 is what kept that older pull from overwriting them.
-  if (nPushedMark) {
-    int i;
-    for (i = 0; i < nPushedMark; i++)
-      cat_progress_mark_synced(pushedMark[i].imdb, pushedMark[i].ms);
-    nPushedMark = 0;
-  }
+  pushedMarksApply();
   // The account library: a title saved or removed on another device changes
   // which cards the catalogue has to carry.
   if (acclib_step()) { mark("rebuild: account library"); disc_rebuild(); }
-  if (state == SYNC_READY) {
+  // A progress push is not a cycle: it must not put off the next real one.
+  if (state == SYNC_READY && light != 2) {
     lastOk = nowMs;
     data_log("sync.log", "cycle done: %s", light ? "library and watched" : summary);
   }
-  if (againWanted) { againWanted = 0; begin(0, "addon source changed"); }
+  if (againWanted) { againWanted = 0; pushWanted = 0; begin(0, "addon source changed"); }
+  else if (pushWanted) { pushWanted = 0; begin(2, "progress"); }
 }
 
 SyncState  sync_state(void)      { return state; }

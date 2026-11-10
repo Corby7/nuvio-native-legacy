@@ -58,6 +58,11 @@ const char *sync_summary(void);   // one line for the settings screen
 // Marks a surface dirty: the next cycle pushes it. Call when the user changes
 // something locally.
 void sync_dirty_progress(void);
+// Sends this device's own playback to the account now, as one request beside
+// whatever is on screen (the player included). Queued behind a running cycle.
+void sync_push_progress(void);
+// The same at exit, waited for: at most `maxMs`.
+void sync_flush_progress(unsigned maxMs);
 // Deletes watch-progress rows from the ACCOUNT by their progress_key — the web's
 // keys, "tt123" for a film and "tt123_s2e5" for an episode (see pushProgress).
 // The account's own RPC, sync_delete_watch_progress, the one the web and Android

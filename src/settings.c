@@ -2549,30 +2549,47 @@ static void drawPlayerScene(Pv v, int hl) {
     gfx_icon(pvR(v, cx - 24.0f, cy - 24.0f, 48.0f, 48.0f), ICONS[i], lum, lum, lum, 0.94f);
   }
 
-  // The tile, as drawNextCard builds it: the still in the top-right corner, below
-  // the clock (the controls are up here), "UP NEXT" over it, the episode under it
-  // and the round play button in the middle, its ring part-filled.
+  // The card, as drawNextCard builds it (controls up, so below the clock): the
+  // still, "UP NEXT · S1 E4" and the name beside it, and the two buttons on the
+  // still's base — "Next episode in 9" part-filled with autoplay on, plain "Next
+  // episode" with it off, and the round close.
   if (hl == HL_NEXT) {
-    float tw = NV_NEXT_TILE_W, th = NV_NEXT_TILE_H, k = v.k, d = NV_NEXT_BTN;
+    float pad = NV_NEXT_PANEL_PAD, bh = NV_NEXT_BTN_H, colW = 330.0f, pillW;
+    float tw = pad + NV_NEXT_STILL_W + NV_NEXT_COL_GAP + colW + pad;
+    float th = pad + NV_NEXT_STILL_H + pad;
     float tx = NV_SCREEN_W - NV_PJ_RIGHT - tw, ty = NV_NEXT_TOP_UP;
-    TxtLine code = pvLine(v, TXT_NEXT_TITLE, "S1 E4 \xc2\xb7 Next Episode", NV_FT_NEXT_TITLE, 255);
-    GfxRect btn;
+    float sx = tx + pad, sy = ty + pad, cx = sx + NV_NEXT_STILL_W + NV_NEXT_COL_GAP;
+    float by = sy + NV_NEXT_STILL_H - bh, ib = NV_NEXT_PLAY_BOX;
+    int on = settings_next_autoplay();
+    const char *label = on ? "Next episode in 9" : "Next episode";
+    TxtLine lw = pvLine(v, TXT_NEXT_BTN, label, NV_FT_NEXT_BTN, 255);
+    TxtLine ld = pvLine(v, TXT_NEXT_BTN, label, NV_FT_NEXT_BTN, 11);
+    GfxRect pill, s2;
     nextR = (GfxRect){ tx, ty, tw, th };
-    pvPlate(v, tx, ty, tw, th, NV_NEXT_TILE_R, 0.28f, 1.0f);
-    pvWrite(v, TXT_NEXT_KICK, "UP NEXT", NV_FT_NEXT_KICK, 214,
-            tx + NV_NEXT_INSET, ty + NV_NEXT_KICK_Y, 1.0f);
-    { GfxRect at = pvR(v, tx + NV_NEXT_INSET, ty + th - NV_NEXT_TITLE_B, 0, 0);
-      txt_draw(code, at.x, at.y - code.h); }
-    btn = pvR(v, tx + (tw - d) * 0.5f, ty + (th - d) * 0.5f, d, d);
-    gfx_color(btn, 0.5f, 1, 1, 1, 0.22f);
-    gfx_rect(btn, 0, GFX_RING_FILL, 0.125f, settings_next_autoplay() ? 0.45f : 0.7f, 0, 0.5f,
-             0.961f, 0.961f, 0.961f, settings_next_autoplay() ? 1.0f : 0.75f);
-    { float r = NV_NEXT_BTN_RING * k, ib = NV_NEXT_PLAY_BOX * k;
-      gfx_color((GfxRect){ btn.x + r, btn.y + r, btn.w - r * 2, btn.h - r * 2 }, 0.5f,
-                0.06f, 0.06f, 0.07f, 0.92f);
-      gfx_icon((GfxRect){ btn.x + btn.w * 0.5f - ib * NV_NEXT_PLAY_INK_C,
-                          btn.y + btn.h * 0.5f - ib * 0.5f, ib, ib },
-               "play", 1, 1, 1, 1.0f); }
+    pvPlate(v, tx, ty, tw, th, NV_NEXT_PANEL_R, NV_NEXT_PANEL_C, NV_NEXT_PANEL_A);
+    pvPlate(v, sx, sy, NV_NEXT_STILL_W, NV_NEXT_STILL_H, NV_NEXT_STILL_R, 0.28f, 1.0f);
+    pvWrite(v, TXT_NEXT_KICK, "UP NEXT \xc2\xb7 S1 E4", NV_FT_NEXT_KICK, 201, cx, sy - 4.0f, 1.0f);
+    pvWrite(v, TXT_NEXT_TITLE, "Next Episode", NV_FT_NEXT_TITLE, 255, cx, sy + 22.0f, 1.0f);
+    pillW = NV_NEXT_BTN_PADL + ib * NV_NEXT_PLAY_INK_W + NV_NEXT_BTN_GAP + NV_NEXT_BTN_PADR +
+            (float)lw.w / v.k;
+    pvPlate(v, cx, by, pillW, bh, bh * 0.5f, NV_NEXT_BTN_GREY, 1.0f);
+    pill = pvR(v, cx, by, pillW, bh);
+    s2 = pvR(v, cx + NV_NEXT_BTN_PADL - ib * NV_NEXT_PLAY_INK_X, by + (bh - ib) * 0.5f, ib, ib);
+    { float lx = pill.x + (NV_NEXT_BTN_PADL + ib * NV_NEXT_PLAY_INK_W + NV_NEXT_BTN_GAP) * v.k;
+      float ly = pill.y + (pill.h - (float)lw.h) * 0.5f;
+      gfx_icon(s2, "play", 1, 1, 1, 1.0f);
+      txt_draw(lw, lx, ly);
+      if (on) {   // the fill at 40%: white, the label dark under it
+        gfx_crop(pill.x, pill.y, pill.w * 0.4f, pill.h);
+        gfx_color(pill, 0.5f, NV_NEXT_BTN_WHITE, NV_NEXT_BTN_WHITE, NV_NEXT_BTN_WHITE, 1.0f);
+        gfx_icon(s2, "play", NV_NEXT_BTN_INK, NV_NEXT_BTN_INK, NV_NEXT_BTN_INK, 1.0f);
+        txt_draw(ld, lx, ly);
+        gfx_no_crop();
+      } }
+    pvPlate(v, cx + pillW + NV_NEXT_BTNS_GAP, by, bh, bh, bh * 0.5f, NV_NEXT_BTN_GREY, 1.0f);
+    gfx_icon(pvR(v, cx + pillW + NV_NEXT_BTNS_GAP + (bh - NV_NEXT_CLOSE_BOX) * 0.5f,
+                 by + (bh - NV_NEXT_CLOSE_BOX) * 0.5f, NV_NEXT_CLOSE_BOX, NV_NEXT_CLOSE_BOX),
+             "ctx_x", 1, 1, 1, 1.0f);
   }
 
   switch (hl) {

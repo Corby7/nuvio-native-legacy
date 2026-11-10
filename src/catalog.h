@@ -549,4 +549,7 @@ int cat_ep_unaired(const CatEp *ep);
 // Empty for an episode that has aired.
 void cat_ep_airs_label(const CatEp *ep, char *out, size_t size);
 
+// Many progress writes in one go (the sync applying the account's rows): between
+// (1) and (0) they skip the per-write fsync, and (0) syncs the file once.
+void cat_progress_batch(int on);
 #endif

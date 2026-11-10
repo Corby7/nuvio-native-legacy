@@ -6,6 +6,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include <strings.h>   // strcasecmp
+#include <unistd.h>    // fsync
+#include <fcntl.h>
 
 // Allocated as it arrives, not sized by a guessed number.
 static CatItem *items;
@@ -620,6 +622,50 @@ int cat_index_by_imdb(const char *imdb) {
   return -1;
 }
 
+// THE PROGRESS FILE REACHES THE FLASH BEFORE IT TAKES THE OLD ONE'S PLACE.
+//
+// Temporary-and-rename alone protects against a write cut in half, but not
+// against the TV being switched off at the wall: fclose leaves the bytes in the
+// page cache, and the rename can be on disk seconds before the data it points
+// at. Power lost in between came back with an empty or truncated progress.txt
+// — every title's position, not just the one being written. So: flush and
+// fsync the temporary, rename, then fsync the folder so the rename itself is
+// down. A few dozen lines, a handful of times a minute at most.
+//
+// EXCEPT INSIDE A BATCH (cat_progress_batch): the sync applies the account's
+// rows one write each, dozens in a single frame, and an fsync apiece is a
+// visible hitch on the drawing thread. Those writes skip it and the batch's end
+// syncs the file once.
+static int progressBatch, progressOwed;
+
+static void progressSyncDir(void) {
+  int d = open(dirWriting, O_RDONLY);
+  if (d >= 0) { fsync(d); close(d); }
+}
+
+static int progressCommit(FILE *s, const char *tmp, const char *path) {
+  int ok = fflush(s) == 0;
+  if (ok && !progressBatch) ok = fsync(fileno(s)) == 0;
+  if (fclose(s) != 0) ok = 0;
+  if (!ok || rename(tmp, path) != 0) { remove(tmp); return 0; }
+  if (progressBatch) progressOwed = 1;
+  else progressSyncDir();
+  return 1;
+}
+
+void cat_progress_batch(int on) {
+  progressBatch = on;
+  if (!on && progressOwed && dirWriting[0]) {
+    char path[600];
+    int f;
+    profilePath(path, sizeof path, "progress", "txt");
+    f = open(path, O_RDONLY);
+    if (f >= 0) { fsync(f); close(f); }
+    progressSyncDir();
+  }
+  if (!on) progressOwed = 0;
+}
+
 void cat_save_progress(int index_, double posSeg, double durationSeg) {
   cat_save_progress_ep(index_,posSeg,durationSeg,0,0);
 }
@@ -710,11 +756,9 @@ int cat_save_progress_id(const char *imdb, double posSeg, double durationSeg,
           whenMs > 0 ? whenMs
                      : (origin == 1 ? (long long)time(NULL) * 1000 : 0),
           origin);
-  fclose(s);
   // Write to a temporary and rename: a power cut mid-write would leave the file
   // half-written and the app would come up with no progress at all.
-  rename(tmp, path);
-  return 1;
+  return progressCommit(s, tmp, path);
 }
 
 void cat_save_progress_at(int index_, double posSeg, double durationSeg,
@@ -1339,8 +1383,7 @@ void cat_progress_mark_synced(const char *imdb, long long ms) {
     fputs(line, s);
   }
   fclose(e);
-  fclose(s);
-  rename(tmp, path);
+  progressCommit(s, tmp, path);
 }
 
 void cat_progress_remove(const char *imdb) {
@@ -1360,8 +1403,7 @@ void cat_progress_remove(const char *imdb) {
       fputs(line, s);
     }
     fclose(e);
-    fclose(s);
-    rename(tmp, path);
+    progressCommit(s, tmp, path);
   }
   // The items on screen as well, so the card's bar and "min left" go with it.
   n = cat_n();

@@ -2222,33 +2222,51 @@
 // Left and right match, so the copy column ends as far from the card's edge as
 // the thumbnail starts from it.
 #define NV_NEXT_PADX       24.0f
-// THE UP NEXT TILE. It used to be a 775x196 card with two pills in the bottom
-// corner Skip intro uses — the band the subtitles sit in, over the last two
-// minutes of an episode that is often still story. It is now the episode's still
-// alone, 288x162, hung from the TOP-right corner where subtitles never go, with
-// one round play button in the middle that says what OK does. "Not now" is Back,
-// or with autoplay off simply waiting: the tile leaves on its own.
-#define NV_NEXT_TILE_W    288.0f
-#define NV_NEXT_TILE_H    (NV_NEXT_TILE_W * 9.0f / 16.0f)   // 162
-#define NV_NEXT_TILE_R     14.0f
+// THE UP NEXT CARD (owner's sketch, picked on the options sheet 2026-11-08). The
+// next episode's still on the left; to its right "UP NEXT · S1 E4" level with the
+// still's top, the episode's name, and two buttons whose base is the still's base:
+// "Next episode" and a round close. It replaced a 288x162 tile whose 17/22px copy
+// sat straight on the picture and whose clock was a 4px ring nobody could read
+// from the sofa.
+//
+// ONE RULE FOR BOTH PROMPTS. A button that FILLS will act by itself when it is
+// full, and says when ("Next episode in 9"). A thin bar that EMPTIES means the
+// prompt will go away (Skip intro). White is what OK presses. Pressing onto a
+// prompt stops its countdown for good: you are choosing now.
+#define NV_NEXT_PANEL_PAD  18.0f
+#define NV_NEXT_PANEL_R    22.0f
+#define NV_NEXT_PANEL_C     0.078f // #141417
+#define NV_NEXT_PANEL_A     0.95f
+#define NV_NEXT_STILL_W   256.0f
+#define NV_NEXT_STILL_H   (NV_NEXT_STILL_W * 9.0f / 16.0f)   // 144
+#define NV_NEXT_STILL_R    12.0f
+#define NV_NEXT_COL_GAP    18.0f   // still to copy
+#define NV_NEXT_COL_MAX   420.0f   // the copy column at its widest; the name trims to it
+#define NV_NEXT_NAME_GAP    8.0f   // kicker to name
 // From the top with the controls down; with them up it drops below the clock and
 // "Ends at" (64 + their two lines, ~150), so the two never share the corner.
 #define NV_NEXT_TOP        56.0f
 #define NV_NEXT_TOP_UP    176.0f
-#define NV_NEXT_INSET      16.0f   // kicker and title from the tile's left edge
-#define NV_NEXT_KICK_Y     14.0f   // the kicker's top
-#define NV_NEXT_TITLE_B    16.0f   // the title's baseline box from the bottom
-#define NV_NEXT_TITLE_DOT_GAP 8.0f // either side of the dot in "S1 E12 · Name"
-// The play button: a dark disc inside a countdown ring.
-#define NV_NEXT_BTN        64.0f
-#define NV_NEXT_BTN_RING    4.0f
-// play.png's triangle runs from 25% to 94% of its box (x 32..120 of 128), so the
-// box is hung by the INK's centre, 0.595 across, to sit optically in the disc.
-#define NV_NEXT_PLAY_BOX   32.0f
-#define NV_NEXT_PLAY_INK_C 0.595f
-#define NV_FT_NEXT_KICK    17      // "UP NEXT"          17 / 700, ls .2em
-#define NV_FT_NEXT_TITLE   22      // "S1 E11 · Name"    22 / 700, on the tile
-#define NV_NEXT_KICK_TRACK  3.4f   // 0.2em at 17px
+// The buttons: a pill fitted to its label, and a circle the same height.
+#define NV_NEXT_BTN_H      56.0f
+#define NV_NEXT_BTN_PADL   22.0f
+#define NV_NEXT_BTN_PADR   24.0f
+#define NV_NEXT_BTN_GAP    14.0f   // play glyph to label
+#define NV_NEXT_BTNS_GAP   12.0f   // pill to circle
+#define NV_NEXT_BTN_GREY    0.173f // #2C2C31, resting
+#define NV_NEXT_BTN_WHITE   0.961f // #F5F5F5, selected / the fill
+#define NV_NEXT_BTN_INK     0.043f // the label on white
+// play.png's triangle runs from 25% to 94% of its box across: an 18px triangle
+// wants a 26px box hung 25% to the left of where the ink starts.
+#define NV_NEXT_PLAY_BOX   26.0f
+#define NV_NEXT_PLAY_INK_X  0.25f
+#define NV_NEXT_PLAY_INK_W  0.69f
+#define NV_NEXT_CLOSE_BOX  30.0f
+#define NV_FT_NEXT_KICK    18      // "UP NEXT · S1 E4"  18 / 700, ls .17em
+#define NV_FT_NEXT_TITLE   28      // the episode's name 28 / 700
+#define NV_FT_NEXT_BTN     24      // "Next episode in 9" 24 / 500
+#define NV_NEXT_KICK_TRACK  3.0f
+// Skip intro's leaving bar: 6px along the pill's base, emptying over PLR_SKIP_MS.
 
 // THE PLAYER'S DROPDOWNS — the season pill here, the subtitle sheet's selects —
 // are the title page's, but see-through: over the picture and the veil a solid

@@ -306,7 +306,7 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   // Bold elsewhere in this table has nothing to correct for here.
   { NV_FT_SKIP,       WEIGHT_MEDIUM },  // TXT_SKIP        .player-skip-intro-label
   { NV_FT_NEXT_KICK,  WEIGHT_BOLD   },  // TXT_NEXT_KICK   .player-next-episode-kicker
-  { NV_FT_NEXT_TITLE, WEIGHT_BOLD   },  // TXT_NEXT_TITLE  the Up next tile's title
+  { NV_FT_NEXT_TITLE, WEIGHT_BOLD   },  // TXT_NEXT_TITLE  the Up next card's episode name
   // The episode rail.
   { NV_FT_ERAIL_META,  WEIGHT_BOLD   }, // TXT_ERAIL_META   .player-episode-detail-meta
   { NV_FT_ERAIL_TITLE, WEIGHT_BOLD   }, // TXT_ERAIL_TITLE  .player-episode-detail-title
@@ -370,6 +370,8 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 16, WEIGHT_REGULAR },   // TXT_SRCP_NOTE
   { 21, WEIGHT_BOLD    },   // TXT_SRCP_PRIMARY
   { 21, WEIGHT_MEDIUM  },   // TXT_SRCP_GHOST
+  // The Up next card's button label: Skip intro's weight, on the same kind of pill.
+  { NV_FT_NEXT_BTN, WEIGHT_MEDIUM },   // TXT_NEXT_BTN
 };
 
 // A FALLBACK FOR WHAT INTER DOES NOT HAVE.
