@@ -2620,4 +2620,12 @@
 // The player's own corner clock size (NV_FT_PG_CLOCK); 44 dominated the screen.
 #define NV_FT_PAUSE_CLOCK  32
 
+// THE "SOMETHING NEW" DOT: on Settings in the side menu and on the rows that lead
+// to a waiting update. The settings accent (#8367F5), the violet the Updates list
+// already marks "Installed" and "New" with. It was red first; the owner turned
+// that down as an alarm for something that is good news (2026-11-10).
+#define NV_BADGE_R (0x83 / 255.0f)
+#define NV_BADGE_G (0x67 / 255.0f)
+#define NV_BADGE_B (0xF5 / 255.0f)
+
 #endif

@@ -58,6 +58,27 @@ const char *update_install_error(void);
 // Back to UPI_IDLE after a failure has been read.
 void update_install_dismiss(void);
 
+// --- TELLING THE VIEWER -------------------------------------------------------
+//
+// The list used to be fetched only by opening Settings > About > Updates, so a
+// new version was something you had to go looking for. Now the app asks once,
+// a few seconds after the home is up (and again every 12 hours for a TV that
+// is never switched off), and says so twice:
+// - a notice (notice.h), ONCE per version, ever: the version it announced is
+//   kept in update-seen.txt, so the next launch stays quiet;
+// - a violet dot on Settings in the side menu, on About and on the Updates row,
+//   for as long as the newer version is not the one installed. That comes back
+//   at once on the next launch, from the same file, before any request.
+//
+// Call every frame. `quiet` is 1 while the home is on screen with nothing over
+// it: the check waits for that, and so does the notice.
+void update_tick(unsigned nowMs, int quiet);
+// 1 while a version newer than the running one is known.
+int update_available(void);
+// The notice's text while it is up, else NULL. `from` is when it came up and
+// `alpha` its fade, both for notice_draw.
+const char *update_notice(unsigned nowMs, unsigned *from, float *alpha);
+
 // The first version that can update itself. Installing an older one leaves the
 // TV without this screen: getting back means Developer Mode or the Homebrew
 // Channel.

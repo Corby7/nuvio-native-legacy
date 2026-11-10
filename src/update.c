@@ -265,6 +265,72 @@ int update_latest(void) {
   return -1;
 }
 
+// --- TELLING THE VIEWER (see update.h) ----------------------------------------
+#define UPD_CHECK_DELAY_MS      8000u   // after the home is first up
+#define UPD_CHECK_EVERY_MS  43200000u   // 12 h, for a TV that never closes the app
+#define UPD_NOTICE_MS           9000u
+#define UPD_SEEN_FILE "update-seen.txt"
+
+static int  tickStarted, available, announcePending;
+static char seenVersion[32], newVersion[32], noticeText[96];
+static unsigned quietSince, askedAt, noticeFrom, noticeUntil;
+static int  askedOnce, judgedGeneration = -1;
+
+void update_tick(unsigned nowMs, int quiet) {
+  if (!tickStarted) {
+    char *seen = data_read(UPD_SEEN_FILE);
+    tickStarted = 1;
+    if (seen) {
+      sscanf(seen, "%31s", seenVersion);
+      free(seen);
+      // Announced on an earlier launch and still not installed: the dot is up
+      // from the first frame, with no request made.
+      if (update_version_cmp(seenVersion, NV_APP_VERSION) > 0) available = 1;
+    }
+  }
+  if (quiet && !quietSince) quietSince = nowMs ? nowMs : 1;
+  if (quietSince && ((!askedOnce && nowMs - quietSince >= UPD_CHECK_DELAY_MS) ||
+                     (askedOnce && nowMs - askedAt >= UPD_CHECK_EVERY_MS))) {
+    askedOnce = 1; askedAt = nowMs;
+    update_fetch();
+  }
+  update_poll();
+  if (listState == UPD_READY && judgedGeneration != generation) {
+    int l = update_latest();
+    judgedGeneration = generation;
+    available = l >= 0 && shown[l].cmp > 0;
+    if (available && strcmp(shown[l].version, seenVersion)) {
+      snprintf(newVersion, sizeof newVersion, "%s", shown[l].version);
+      announcePending = 1;
+    }
+    printf("[update] latest %s, running %s: %s\n", l >= 0 ? shown[l].version : "?",
+           NV_APP_VERSION, !available ? "up to date" : announcePending ? "new, to announce" : "new, already announced");
+    fflush(stdout);
+  }
+  // Said when the home is there to say it over, and written down at that moment:
+  // a notice that was never on screen has not been shown.
+  if (announcePending && quiet) {
+    announcePending = 0;
+    snprintf(seenVersion, sizeof seenVersion, "%s", newVersion);
+    data_write(UPD_SEEN_FILE, seenVersion);
+    snprintf(noticeText, sizeof noticeText,
+             "Nuvio %s is available \xC2\xB7 Settings \xE2\x80\xBA About \xE2\x80\xBA Updates", newVersion);
+    noticeFrom = nowMs;
+    noticeUntil = nowMs + UPD_NOTICE_MS;
+  }
+}
+
+int update_available(void) { return available; }
+
+const char *update_notice(unsigned nowMs, unsigned *from, float *alpha) {
+  unsigned left;
+  if (!noticeUntil || nowMs >= noticeUntil) return NULL;
+  left = noticeUntil - nowMs;
+  if (from) *from = noticeFrom;
+  if (alpha) *alpha = left < 300u ? (float)left / 300.0f : 1.0f;
+  return noticeText;
+}
+
 // --- SHA-256 ------------------------------------------------------------------
 //
 // The package is checked against the digest GitHub computes for every release

@@ -1,0 +1,4 @@
+<!-- "A new version is available" (app.c, notice_draw), in the ring badge: an arrow
+     down into a tray. Phosphor BOLD weight like the other notice glyphs.
+     THE ALPHA IS THE GLYPH. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" stroke="#ffffff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"><path d="M128 36V152"/><path d="M80 108L128 156L176 108"/><path d="M40 164V212H216V164"/></svg>

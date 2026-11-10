@@ -357,6 +357,14 @@ static const struct { int body, weight; } STYLES[TXT_NFONTS] = {
   { 17, WEIGHT_MEDIUM  },   // TXT_LIVE_NOTE
   { 16, WEIGHT_MEDIUM  },   // TXT_LIVE_TIME
   { 13, WEIGHT_BOLD    },   // TXT_LIVE_TAG
+  { 40, WEIGHT_BOLD    },   // TXT_LIVE_H1
+  { 28, WEIGHT_BOLD    },   // TXT_LIVE_H2
+  { 23, WEIGHT_MEDIUM  },   // TXT_LIVE_BODY
+  { 23, WEIGHT_BOLD    },   // TXT_LIVE_BODY_B
+  { 28, WEIGHT_MEDIUM  },   // TXT_LIVE_PIN
+  { 17, WEIGHT_BOLD    },   // TXT_LIVE_LABEL
+  { 16, WEIGHT_BOLD    },   // TXT_LIVE_NUM
+  { 18, WEIGHT_BOLD    },   // TXT_LIVE_Q
   { 25, WEIGHT_BOLD    },   // TXT_SRCP_NAME
   { 12, WEIGHT_BOLD    },   // TXT_SRCP_BADGE
   { 28, WEIGHT_BOLD    },   // TXT_SRCP_NUM

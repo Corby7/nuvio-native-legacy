@@ -3,11 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if defined(__APPLE__) || defined(__ANDROID__)
+// On every platform, webOS included (see intro_sound.h for what was measured).
 #define NV_INTRO_SOUND 1
-#else
-#define NV_INTRO_SOUND 0
-#endif
 
 // HOW EARLY THE SOUND STARTS, in ms: that much of the file's head is skipped, so
 // the hit still lands on the slam when the platform's audio path is slower than

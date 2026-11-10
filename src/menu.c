@@ -30,6 +30,7 @@
 #include "layout.h"
 #include "settings.h"
 #include "pointer.h"
+#include "update.h"
 
 // Widths: the collapsed one fits only the icon; the open one is in layout.h,
 // because main.c sizes the backdrop's grab from it.
@@ -41,6 +42,7 @@
 // which are drawn thin, on a 256 grid — 38 read as a smaller icon than the web's,
 // not merely a smaller box.
 #define NV_MENU_ICON      44.0f
+#define NV_MENU_BADGE     16.0f   // the "something new" dot on Settings
 // THE RAIL'S MIDPOINT, and a DELIBERATE departure from the web: `.home-nav-item`
 // there has `padding: 0 36px` and a 44 icon, so the glyph sits at 36..80, left of
 // centre — which is invisible in the browser, where the collapsed bar has width 0
@@ -410,6 +412,16 @@ static void icon(int d, int filled, float cx, float cy, float s, float a) {
   if (d < 0 || d >= MENU_N) return;
   gfx_icon((GfxRect){cx-s*.5f, cy-s*.5f, s, s}, filled ? fills[d] : names[d],
            1.0f, 1.0f, 1.0f, a);
+  // SOMETHING NEW IN THERE: a violet dot on the cog's shoulder while a newer
+  // version is waiting (update.h). At full strength on a dimmed glyph too — it
+  // is the one thing on the bar that is asking to be noticed — with a ring of
+  // the bar's own dark under it so it reads as sitting ON the icon.
+  if (d == MENU_SETTINGS && update_available()) {
+    float dd = NV_MENU_BADGE, da = a * 2.0f > 1.0f ? 1.0f : a * 2.0f;
+    float bx = cx + s * 0.5f - dd * 0.62f, by = cy - s * 0.5f - dd * 0.30f;
+    gfx_color((GfxRect){ bx - 3.0f, by - 3.0f, dd + 6.0f, dd + 6.0f }, 0.5f, 0.05f, 0.05f, 0.06f, da);
+    gfx_color((GfxRect){ bx, by, dd, dd }, 0.5f, NV_BADGE_R, NV_BADGE_G, NV_BADGE_B, da);
+  }
 }
 
 // THE BRAND LOCKUP, `.home-brand-wrap`: mark and wordmark side by side on one

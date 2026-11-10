@@ -180,6 +180,15 @@ typedef enum {
   TXT_LIVE_NOTE,     // "Next · …", "Watching — …"           17 / 500
   TXT_LIVE_TIME,     // a programme block's times            16 / 500
   TXT_LIVE_TAG,      // LIVE, ON NOW, the now line's cap     13 / 700
+  // The 2026-11 redesign's three levels and its two small marks (iptvui.c).
+  TXT_LIVE_H1,       // 1 · the focused programme            40 / 700
+  TXT_LIVE_H2,       // 2 · a channel's name                 28 / 700
+  TXT_LIVE_BODY,     // 3 · what's on, times, the groups     23 / 500
+  TXT_LIVE_BODY_B,   // the same, bold: the guide's names    23 / 700
+  TXT_LIVE_PIN,      // the pinned groups at rest            28 / 500
+  TXT_LIVE_LABEL,    // ON NOW, LATER: tracked caps          17 / 700
+  TXT_LIVE_NUM,      // the number tag on a logo's corner    16 / 700
+  TXT_LIVE_Q,        // "4K" after a name                    18 / 700
   // Live TV's Source screen (the Z1/Z2 mockups). The sizes it shares with
   // styles above borrow them: the page title is TXT_TITLE3 (48/600), the
   // kicker and Refresh TXT_SRC_CHIP (18/700), the host and the switch's resting

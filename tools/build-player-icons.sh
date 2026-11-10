@@ -74,7 +74,7 @@ echo "    stats.png <- assets/icons/stats.svg"
 
 # The notice badge's glyphs (player.c, drawNotice). Our own, like stats: the web
 # app has no notices of this kind to take them from.
-for n in notice_wifi notice_wifi_off notice_check notice_alert; do
+for n in notice_wifi notice_wifi_off notice_check notice_alert notice_update; do
   rsvg-convert -w "$SIZE" -h "$SIZE" "assets/icons/$n.svg" -o "$OUT/$n.png"
   echo "    $n.png <- assets/icons/$n.svg"
 done

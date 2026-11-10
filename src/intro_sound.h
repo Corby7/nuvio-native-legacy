@@ -3,9 +3,11 @@
 // animation's first frame and plays to its end (ended early, it fades out),
 // past the splash, while the camera dives into the app.
 //
-// Only on the Mac and Android for now: on webOS the media pipeline owns the
-// audio, and whether a short sound can play at launch without delaying the first
-// frame has not been measured there yet.
+// On every platform. webOS was held back until it was measured, and on the C3
+// (2026-11-10) SDL's audio device opens in 30-100 ms on its thread and the sound
+// starts 0-31 ms after the animation's first frame, well inside the 300 ms limit.
+// Whether the hit lands on the slam BY EAR on a TV's audio path is the lead
+// (NV_INTRO_SOUND_LEAD_MS, 0 there), which nobody has tuned yet.
 #ifndef NV_INTRO_SOUND_H
 #define NV_INTRO_SOUND_H
 

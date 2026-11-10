@@ -18,6 +18,8 @@
 #include "profiles.h"
 #include "profile_select.h"
 #include "sync.h"
+#include "notice.h"
+#include "update.h"
 #include "traktauth.h"
 #include "simklauth.h"
 #include "text.h"
@@ -600,6 +602,10 @@ void app_update(float dt, Uint32 now) {
   // And the automatic cycle — never with the player open: a burst of HTTP in the
   // middle of the video competes for CPU and network with the decoder.
   if (!player_is_open()) sync_periodic((unsigned)now);
+  // Is there a newer version? Asked once the home is up with nothing over it,
+  // and said there too (update.h).
+  update_tick((unsigned)now, screen == SCREEN_HOME && homeReady && cat_n() > 0 &&
+                             !player_is_open() && !detail_is_open() && !menu_is_open());
 
   // During verification, do not replace the list the workers are reading.
   if (waitingSource != 2) addons_state();
@@ -1222,6 +1228,12 @@ void app_draw(Uint32 now) {
         !(screen == SCREEN_LIVE && iptvui_fullscreen()))
       menu_draw(now);
   }
+  // "A new version is available": once per version, over whatever screen is up
+  // but never over a film.
+  { unsigned from = 0; float a = 1.0f;
+    const char *t = update_notice((unsigned)now, &from, &a);
+    if (t && !player_is_open() && !(screen == SCREEN_LIVE && iptvui_fullscreen()))
+      notice_draw(t, "notice_update", NOTE_GOOD, a, from, now); }
   pointer_accept(owner == OWN_PLAYER);
   player_draw(now);
   pointer_accept(owner == OWN_EPISODES);

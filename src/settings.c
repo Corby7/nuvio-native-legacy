@@ -2061,6 +2061,10 @@ static void drawLine(int op, int i, int rows, float y, float f) {
     TxtLine val = txt_line_trim(TXT_BODY, v, 170, 172, 178, 255, 360.0f);
     txt_draw_alpha(chev, xr - chev.w, y + (SETTING_LINE_H - chev.h) * 0.5f, a * (0.6f + 0.4f * f));
     txt_draw_alpha(val, xr - chev.w - 24.0f - val.w, y + (SETTING_LINE_H - val.h) * 0.5f, a);
+    // The end of the update dot's trail from the side menu (update.h).
+    if (op == SETTING_UPDATES && update_available())
+      gfx_color((GfxRect){ xr - chev.w - 24.0f - val.w - 26.0f, y + SETTING_LINE_H * 0.5f - 6.0f, 12.0f, 12.0f },
+                0.5f, NV_BADGE_R, NV_BADGE_G, NV_BADGE_B, a);
     return;
   }
 
@@ -2203,6 +2207,10 @@ static void drawSection(int s, float y, float f) {
   int cc = (int)(120 + 110 * f);
   TxtLine chev = txt_line(TXT_CALLOUT, "\xe2\x80\xba", cc, cc, cc + 2, 255);
   txt_draw_alpha(chev, xr - chev.w, y + (SETTING_LINE_H - chev.h) * 0.5f, a);
+  // About, while a newer version is waiting behind it (update.h).
+  if (SECTIONS[s].start == SETTING_VERSION_I && update_available())
+    gfx_color((GfxRect){ xr - chev.w - 36.0f, y + SETTING_LINE_H * 0.5f - 6.0f, 12.0f, 12.0f },
+              0.5f, NV_BADGE_R, NV_BADGE_G, NV_BADGE_B, a);
 }
 
 // --- THE PREVIEW -------------------------------------------------------------
